@@ -231,7 +231,7 @@ class AbortSignal:
     def throw_if_aborted(self):
         if self.aborted:
             raise Exception("aborted")
-
+   
 @dataclass
 class BannerHolder:
     publish: Optional[Callable[[BannerDataPatch], None]] = None
@@ -703,6 +703,7 @@ async def main() -> int:
                 f"warning: could not persist tooling_profile: {err}",
                 file=sys.stderr,
             )
+            
     # Tạo đối tượng cấu hình opts
     opts = AgentOptions(
         client=client,

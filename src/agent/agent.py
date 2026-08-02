@@ -1656,12 +1656,13 @@ class Agent:
                 req.tools = self.tools.as_llm_tools()
 
             # LLM Response
+            print("RUN_INNER BEFORE CHAT")
             resp, streamed = await self.chat(
                 req,
                 signal,
                 emit,
             )
-
+            print("RUN_INNER AFTER CHAT")
             resp.message.content = strip_thinking_tags(
                 resp.message.content
             )
@@ -2213,7 +2214,7 @@ class Agent:
                             "text": visible,
                         }
                     )
-
+            print("CHAT_STREAM RETURNED")
             resp = await c.chat_stream(
                 ChatRequest(
                     model=req.model,
@@ -2296,7 +2297,7 @@ class Agent:
 
             # Gọi LLM
             resp = await self.client.chat(req, signal)
-
+            print("CHAT RETURNED")
             # Lấy summary
             summary = strip_thinking_tags(
                 resp.message.content

@@ -12,7 +12,7 @@ GROQ_DEFAULT_BASE_URL: Final[str] = (
 )
 
 GROQ_DEFAULT_MODEL: Final[str] = (
-    "openai/gpt-oss-20b"
+    "openai/gpt-oss-120b"
 )
 
 GROQ_MODELS: Final[tuple[str, ...]] = (

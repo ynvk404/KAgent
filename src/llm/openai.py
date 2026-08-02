@@ -63,15 +63,22 @@ class OpenAIClient(Client):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def ping(self) -> None:
-        # Short, one-shot, non-cancellable check — fine to keep sync/blocking.
+    async def ping(self) -> None:
+        # Short, one-shot health check — vẫn dùng requests (sync) nhưng
+        # chạy trong thread pool để không block event loop.
         import requests
 
-        resp = requests.get(
-            f"{self.base_url}/models",
-            headers=self.headers(),
-            timeout=10,
-        )
+        loop = asyncio.get_running_loop()
+
+        def _do_request():
+            return requests.get(
+                f"{self.base_url}/models",
+                headers=self.headers(),
+                timeout=10,
+            )
+
+        resp = await loop.run_in_executor(None, _do_request)
+
         if resp.status_code >= 500:
             raise RuntimeError(f"{self.label} status {resp.status_code}")
 

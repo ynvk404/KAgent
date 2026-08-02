@@ -70,7 +70,7 @@ TranscriptFilter = Literal["all", "compact", "findings", "errors", "current"]
 TRANSCRIPT_FILTERS: list[TranscriptFilter] = ["all", "compact", "findings", "errors", "current"]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class TranscriptEntry:
     kind: TranscriptKind
     text: str

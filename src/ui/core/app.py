@@ -109,7 +109,23 @@ CONTEXT_SNAPSHOT_INTERVAL = 5 * 60
 # Types & Data Structures
 # ==========================================================
 
+class AbortEvent(asyncio.Event):
+    """asyncio.Event mở rộng thêm interface AbortSignal (`.aborted`,
+    `.abort()`, `.throw_if_aborted()`) mà agent.py cần, đồng thời vẫn giữ
+    `.wait()` / `.set()` / `.is_set()` để dùng như asyncio.Event thông
+    thường ở các chỗ khác trong app.py."""
 
+    @property
+    def aborted(self) -> bool:
+        return self.is_set()
+
+    def abort(self) -> None:
+        self.set()
+
+    def throw_if_aborted(self) -> None:
+        if self.is_set():
+            raise Exception("aborted")
+        
 @dataclass(slots=True)
 class ProviderChange:
     backend: Backend
@@ -323,7 +339,7 @@ class Pentestagent(App):
 
         # useRef
         self.run_task: asyncio.Task | None = None
-        self.run_abort_event: asyncio.Event | None = None
+        self.run_abort_event: AbortEvent | None = None
         self.snapshot_task: asyncio.Task | None = None
 
         # Live terminal width (tương đương useTerminalSize()); cập nhật
@@ -1099,10 +1115,9 @@ class Pentestagent(App):
             )
         )
 
-        abort_event = asyncio.Event()
+        abort_event = AbortEvent()
         self.run_abort_event = abort_event
-
-        async def handle_event(
+        def handle_event(
             ev: AgentEvent,
         ) -> None:
             if self.session_debug is not None:
@@ -1270,10 +1285,10 @@ class Pentestagent(App):
         )
 
     async def _run_agent_compact(self) -> None:
-        abort_event = asyncio.Event()
+        abort_event = AbortEvent()
         self.run_abort_event = abort_event
 
-        async def handle_event(event: AgentEvent) -> None:
+        def handle_event(event: AgentEvent) -> None:
             if self.session_debug is not None:
                 self.session_debug.agent_event(dataclasses.asdict(event))
 

@@ -1,8 +1,8 @@
-from typing import Any, cast
-
+from src.ask.ask import Question
+from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.commands.provider_picker import open_provider_picker
-from src.ui.core.state import SetAsk
 from src.ui.core.app import ConfigSnapshot
+from src.ui.core.state import SetAsk
 from src.config.config import Backend
 
 
@@ -37,6 +37,18 @@ def test_open_provider_picker_dispatches_state_actions():
     assert isinstance(dispatched[0], SetAsk)
     assert dispatched[0].req is not None
 
-    req = cast(dict[str, Any], dispatched[0].req)
+    req = dispatched[0].req
 
-    assert req["question"]["header"] == "provider"
+    assert isinstance(req, AskRequest)
+    assert isinstance(req.question, Question)
+
+    assert req.question.header == "provider"
+    assert req.question.question == "Which LLM backend should pentestagent use?"
+
+    assert len(req.question.options) == 9
+
+    assert req.question.options[0].label.startswith("Ollama")
+    assert req.question.options[0].description == "local — /api/tags + /api/chat"
+
+    assert callable(req.resolve)
+    assert callable(req.reject)

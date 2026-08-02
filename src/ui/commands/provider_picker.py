@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Coroutine, TypedDict
-
+from typing import Any, Callable, Coroutine
 from src.ui.core.app import ConfigSnapshot
+from src.ask.ask import Question, Option
+from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.core.state import Action, Append, SetAsk, TranscriptEntry
 from src.ui.widgets.secret_input_modal import SecretInputRequest
 # ============================================================
@@ -20,12 +21,6 @@ ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
 # ============================================================
 # Types
 # ============================================================
-
-class AskRequest(TypedDict, total=False):
-    question: dict[str, Any]
-    resolve: Any
-    reject: Any
-
 
 # ============================================================
 # Provider picker
@@ -309,57 +304,30 @@ def open_provider_picker(
     def on_resolve(picked: str) -> None:
         asyncio.ensure_future(resolve(picked))
 
-    def reject() -> None:
+    def reject(_err: Exception) -> None:
         dispatch(SetAsk(req=None))
-
-    req: Any = {
-        "question": {
-            "header": "provider",
-            "question": "Which LLM backend should pentestagent use?",
-            "options": [
-                {
-                    "label": label_ollama,
-                    "description": "local — /api/tags + /api/chat",
-                },
-                {
-                    "label": label_lm,
-                    "description": "local — /v1/models + /v1/chat/completions",
-                },
-                {
-                    "label": label_kimi,
-                    "description": "remote — api.moonshot.ai OpenAI-compatible API",
-                },
-                {
-                    "label": label_groq,
-                    "description": "remote — api.groq.com OpenAI-compatible Chat API",
-                },
-                {
-                    "label": label_gemini,
-                    "description": "remote — Gemini API with native tool calls",
-                },
-                {
-                    "label": label_claude,
-                    "description": "remote — Anthropic Messages API",
-                },
-                {
-                    "label": label_openrouter,
-                    "description": "remote — OpenRouter API",
-                },
-                {
-                    "label": label_deepseek,
-                    "description": "remote — DeepSeek API",
-                },
-                {
-                    "label": label_oai,
-                    "description": (
-                        "remote — needs base URL + API key "
-                        "(uses current config values)"
-                    ),
-                },
+        
+    req = AskRequest(
+        question=Question(
+            header="provider",
+            question="Which LLM backend should pentestagent use?",
+            options=[
+                Option(label=label_ollama, description="local — /api/tags + /api/chat"),
+                Option(label=label_lm, description="local — /v1/models + /v1/chat/completions"),
+                Option(label=label_kimi, description="remote — api.moonshot.ai OpenAI-compatible API"),
+                Option(label=label_groq, description="remote — api.groq.com OpenAI-compatible Chat API"),
+                Option(label=label_gemini, description="remote — Gemini API with native tool calls"),
+                Option(label=label_claude, description="remote — Anthropic Messages API"),
+                Option(label=label_openrouter, description="remote — OpenRouter API"),
+                Option(label=label_deepseek, description="remote — DeepSeek API"),
+                Option(
+                    label=label_oai,
+                    description="remote — needs base URL + API key (uses current config values)",
+                ),
             ],
-        },
-        "resolve": on_resolve,
-        "reject": reject,
-    }
+        ),
+        resolve=on_resolve,
+        reject=reject,
+    )
 
     dispatch(SetAsk(req=req))
