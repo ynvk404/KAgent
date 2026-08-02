@@ -1,0 +1,558 @@
+from __future__ import annotations
+
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import pytest
+
+from llm.openai import OpenAIClient
+from llm.types import ChatRequest, Message
+
+
+# =====================================================
+# Mock OpenAI-compatible server
+# =====================================================
+
+server: HTTPServer | None = None
+base_url = ""
+
+last_body: dict[str, object] = {}
+last_headers: dict[str, str] = {}
+
+proxy_rate_limit_calls = 0
+
+
+class Handler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+
+        if self.path == "/v1/models":
+
+            self.send_response(200)
+            self.send_header(
+                "Content-Type",
+                "application/json",
+            )
+            self.end_headers()
+
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "data": []
+                    }
+                ).encode()
+            )
+
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+
+    def do_POST(self):
+
+        global last_body
+        global last_headers
+        global proxy_rate_limit_calls
+
+        length = int(
+            self.headers["Content-Length"]
+        )
+
+        body = self.rfile.read(length)
+
+        last_body = json.loads(
+            body.decode()
+        )
+
+        last_headers = dict(
+            self.headers
+        )
+
+
+        if self.path != "/v1/chat/completions":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+
+        model = last_body["model"]
+
+
+        # ============================
+        # Streaming
+        # ============================
+
+        if last_body.get("stream"):
+
+            self.send_response(200)
+
+            self.send_header(
+                "Content-Type",
+                "text/event-stream",
+            )
+
+            self.end_headers()
+
+
+            def send(obj):
+
+                self.wfile.write(
+                    (
+                        "data: "
+                        + json.dumps(obj)
+                        + "\n\n"
+                    ).encode()
+                )
+
+
+            if model == "reasoning-stream":
+
+                send(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "reasoning_content":
+                                        "Let me think..."
+                                }
+                            }
+                        ]
+                    }
+                )
+
+                send(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "content":
+                                        "The answer "
+                                }
+                            }
+                        ]
+                    }
+                )
+
+                send(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "content":
+                                        "is 42."
+                                }
+                            }
+                        ]
+                    }
+                )
+
+            else:
+
+                send(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "content":
+                                        "Working"
+                                }
+                            }
+                        ]
+                    }
+                )
+
+                send(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "content":
+                                        " on it"
+                                }
+                            }
+                        ]
+                    }
+                )
+
+                send(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_abc",
+                                            "function": {
+                                                "name": "http",
+                                                "arguments":
+                                                    '{"url":'
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                )
+
+                send(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "function": {
+                                                "arguments":
+                                                    '"https://x.example.com"}'
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                )
+
+
+            send(
+                {
+                    "choices": [
+                        {
+                            "delta": {},
+                            "finish_reason":
+                                "tool_calls",
+                        }
+                    ]
+                }
+            )
+
+
+            self.wfile.write(
+                b"data: [DONE]\n\n"
+            )
+
+            return
+
+
+        # ============================
+        # Normal response
+        # ============================
+
+        if model == "proxy-200-ratelimit":
+
+            proxy_rate_limit_calls += 1
+
+            if proxy_rate_limit_calls == 1:
+
+                response = {
+                    "error": {
+                        "message":
+                            "Rate limit exceeded"
+                    }
+                }
+
+            else:
+
+                response = {
+                    "choices": [
+                        {
+                            "message": {
+                                "role":
+                                    "assistant",
+                                "content":
+                                    "recovered",
+                            },
+                            "finish_reason":
+                                "stop",
+                        }
+                    ]
+                }
+
+
+        elif model == "glm-leak":
+
+            response = {
+                "choices": [
+                    {
+                        "message": {
+                            "role":
+                                "assistant",
+                            "content":
+                                "Hi!<|user|>hello",
+                        }
+                    }
+                ]
+            }
+
+
+        else:
+
+            response = {
+                "choices": [
+                    {
+                        "message": {
+                            "role":
+                                "assistant",
+                            "content":
+                                "hi",
+                        },
+                        "finish_reason":
+                            "stop",
+                    }
+                ]
+            }
+
+
+        self.send_response(200)
+
+        self.send_header(
+            "Content-Type",
+            "application/json",
+        )
+
+        self.end_headers()
+
+
+        self.wfile.write(
+            json.dumps(response).encode()
+        )
+
+
+
+@pytest.fixture(scope="module", autouse=True)
+def start_server():
+
+    global server
+    global base_url
+
+
+    server = HTTPServer(
+        (
+            "127.0.0.1",
+            0,
+        ),
+        Handler,
+    )
+
+
+    port = server.server_address[1]
+
+
+    base_url = (
+        f"http://127.0.0.1:{port}/v1"
+    )
+
+
+    thread = threading.Thread(
+        target=server.serve_forever,
+        daemon=True,
+    )
+
+    thread.start()
+
+
+    yield
+
+
+    server.shutdown()
+
+
+
+# =====================================================
+# Helpers
+# =====================================================
+
+
+def _req(
+    model: str,
+    content: str = "hi",
+) -> ChatRequest:
+
+    return ChatRequest(
+        model=model,
+        messages=[
+            Message(
+                role="user",
+                content=content,
+            )
+        ],
+    )
+
+
+
+pytestmark = pytest.mark.asyncio
+
+
+
+# =====================================================
+# Tests
+# =====================================================
+
+
+async def test_non_stream_chat():
+
+    c = OpenAIClient(
+        base_url,
+        "",
+        "qwen",
+    )
+
+
+    out = await c.chat(
+        _req("qwen")
+    )
+
+
+    assert out.message.content == "hi"
+
+
+
+async def test_stream_reasoning_content():
+
+    c = OpenAIClient(
+        base_url,
+        "",
+        "reasoning-stream",
+    )
+
+
+    deltas = []
+
+
+    out = await c.chat_stream(
+        _req(
+            "reasoning-stream",
+            "go",
+        ),
+        lambda x: deltas.append(x),
+    )
+
+
+    assert (
+        "Let me think..."
+        in "".join(deltas)
+    )
+
+
+    assert (
+        out.message.content
+        ==
+        "The answer is 42."
+    )
+
+
+
+async def test_stream_tool_call_fragment():
+
+    c = OpenAIClient(
+        base_url,
+        "",
+        "qwen",
+    )
+
+
+    out = await c.chat_stream(
+        _req(
+            "qwen",
+            "scan",
+        ),
+        lambda x: None,
+    )
+
+
+    assert out.message.tool_calls is not None
+
+    tool = out.message.tool_calls[0]
+
+
+    assert tool.id == "call_abc"
+
+    assert (
+        tool.function.name
+        ==
+        "http"
+    )
+
+
+    assert (
+        tool.function.arguments
+        ==
+        '{"url":"https://x.example.com"}'
+    )
+
+
+
+async def test_proxy_error_body():
+
+    c = OpenAIClient(
+        base_url,
+        "sk",
+        "proxy-200-ratelimit",
+        "openrouter",
+    )
+
+
+    with pytest.raises(
+        RuntimeError
+    ):
+
+        await c.chat(
+            _req(
+                "proxy-200-ratelimit"
+            )
+        )
+
+async def test_temperature():
+
+    c = OpenAIClient(
+        base_url,
+        "",
+        "qwen",
+        gen_opts={
+            "temperature": 0.3
+        },
+    )
+
+
+    await c.chat(
+        _req("qwen")
+    )
+
+
+    assert (
+        last_body["temperature"]
+        ==
+        0.3
+    )
+
+
+
+async def test_extra_headers():
+
+    c = OpenAIClient(
+        base_url,
+        "sk-or",
+        "openrouter",
+        "openrouter",
+        {
+            "HTTP-Referer":
+                "https://github.com/pentestagent/agent"
+        },
+    )
+
+
+    await c.chat(
+        _req("openrouter")
+    )
+
+
+    assert (
+        last_headers["HTTP-Referer"]
+        ==
+        "https://github.com/pentestagent/agent"
+    )

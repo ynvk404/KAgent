@@ -1,0 +1,195 @@
+# Pins the scope guard,
+# the OWASP / VRT / PortSwigger playbook markers, the thinking toggle,
+# the active-engagement injection, and now the tooling-profile stanza
+# so future trims of the prompt can't silently widen the assistant's
+# behavior or invert the curl-first default.
+
+from ..skills.registry import Registry
+from ..target.target import Target
+from .system_prompt import BuildOptions, build_system_prompt
+
+
+class Testbuild_system_prompt:
+    def test_thinking_toggle_injects_the_right_directive(self):
+        on = build_system_prompt(
+            BuildOptions(skills=Registry(), thinking_enabled=True, target=None)
+        )
+        assert "Thinking is enabled" in on
+        off = build_system_prompt(
+            BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
+        )
+        assert "Thinking is disabled" in off
+
+    def test_injects_active_engagement_section_when_target_is_set(self):
+        t = Target()
+        t.set_base_url("https://app.example.com")
+        p = build_system_prompt(
+            BuildOptions(skills=Registry(), thinking_enabled=False, target=t)
+        )
+        assert "Active engagement" in p
+        assert "https://app.example.com" in p
+
+    def test_omits_engagement_section_when_target_is_empty(self):
+        p = build_system_prompt(
+            BuildOptions(
+                skills=Registry(),
+                thinking_enabled=False,
+                target=Target(),
+            )
+        )
+        assert "Active engagement" not in p
+
+    def test_enforces_the_four_domain_scope_guard(self):
+        p = build_system_prompt(
+            BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
+        )
+        for want in [
+            "Scope of work",
+            "Penetration testing",
+            "Bug bounty",
+            "Code review",
+            "Coding",
+            "REFUSE",
+        ]:
+            assert want in p, f"missing scope marker {want}"
+
+    def test_does_not_refuse_normal_authorized_tester_workflows(self):
+        p = build_system_prompt(
+            BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
+        )
+        assert "Do not refuse normal tester workflows" in p
+        assert "Authorized testing" in p
+        assert "proceed within that scope" in p
+
+    def test_carries_the_bug_bounty_owasp_vrt_portswigger_playbook(self):
+        p = build_system_prompt(
+            BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
+        )
+        for want in [
+            "Bug bounty + web app security playbook",
+            "OWASP Top 10",
+            "A01 Broken Access Control",
+            "A03 Injection",
+            "A10 SSRF",
+            "Bugcrowd VRT",
+            "P1 (critical)",
+            "P5 (informational)",
+            "HTTP request smuggling",
+            "Single-packet race conditions",
+            "Server-side prototype pollution",
+            "PortSwigger research",
+            "James Kettle",
+            "Bug bounty discipline",
+        ]:
+            assert want in p, f"missing playbook marker {want}"
+
+    def test_carries_the_api_security_and_llm_owasp_top_10_frameworks(self):
+        p = build_system_prompt(
+            BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
+        )
+        for want in [
+            "OWASP API Security Top 10 (2023)",
+            "API1 Broken Object Level Authorization",
+            "BFLA",
+            "API9 Improper Inventory Management",
+            "OWASP LLM Top 10 (2025)",
+            "LLM01 Prompt Injection",
+            "LLM06 Excessive Agency",
+            "LLM07 System Prompt Leakage",
+            "MCP-specific",
+        ]:
+            assert want in p, f"missing OWASP framework marker {want}"
+
+    def test_defaults_to_curl_first_minimal_with_no_scanner_override_stanza(self):
+        p = build_system_prompt(
+            BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
+        )
+        # The base curl-first ban must always be present.
+        assert "Tool selection: curl-first" in p
+        assert "Do NOT reach for ffuf" in p
+        # No 'full' override stanza when profile is missing.
+        assert "Tooling profile: scanners enabled" not in p
+
+    def test_warns_against_gnu_only_grep_p_in_shell_commands(self):
+        p = build_system_prompt(
+            BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
+        )
+        assert "macOS/BSD and Linux" in p
+        assert "grep -P" in p
+        assert "grep -E" in p
+
+    def test_appends_the_scanner_override_stanza_when_tooling_profile_is_full(self):
+        p = build_system_prompt(
+            BuildOptions(
+                skills=Registry(),
+                thinking_enabled=False,
+                target=None,
+                tooling_profile="full",
+            )
+        )
+        # Base curl-first stays — it's the dominant guidance.
+        assert "Tool selection: curl-first" in p
+        # Override stanza lifts the ban with explicit guardrails.
+        assert "Tooling profile: scanners enabled" in p
+        assert "ffuf, nuclei, sqlmap" in p
+
+    def test_does_not_append_the_scanner_override_when_tooling_profile_is_minimal(self):
+        p = build_system_prompt(
+            BuildOptions(
+                skills=Registry(),
+                thinking_enabled=False,
+                target=None,
+                tooling_profile="minimal",
+            )
+        )
+        assert "Tooling profile: scanners enabled" not in p
+
+    def test_supports_a_compact_profile_for_small_request_budget_providers(self):
+        full = build_system_prompt(
+            BuildOptions(
+                skills=Registry(),
+                thinking_enabled=False,
+                target=None,
+            )
+        )
+        compact = build_system_prompt(
+            BuildOptions(
+                skills=Registry(),
+                thinking_enabled=False,
+                target=None,
+                prompt_profile="compact",
+            )
+        )
+        assert "Human-in-the-Loop Agentic AI CLI assistant" in compact
+        assert "OWASP API Top 10" in compact
+        assert "Bugcrowd VRT-style severity" in compact
+        assert "Creative hunter mindset" not in compact
+        assert len(compact) < len(full) / 3
+
+    def test_carries_the_creative_hunter_mindset_section_with_all_subheadings(self):
+        # These markers are load-bearing for the model's behavior on
+        # engagements — chain thinking, quiet wins, tech-stack hot spots,
+        # adversarial inversion. Future trims must keep them intact or the
+        # model loses its creative-hunter scaffolding.
+        p = build_system_prompt(
+            BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
+        )
+        for want in [
+            "Creative hunter mindset",
+            "Questions to ask of every endpoint",
+            "Chain thinking",
+            "boring bugs become submission gold when combined",
+            "Quiet high-impact categories",
+            "Subdomain takeover",
+            "Dependency confusion",
+            "Tech-stack quick reference",
+            "Spring Boot",
+            "Rails",
+            "Next.js",
+            "AWS",
+            "Adversarial inversion",
+            "2025-2026 attention areas",
+            "HTTP/3 desync",
+            "WebAuthn / passkey",
+        ]:
+            assert want in p, f"creative-hunter marker {want} missing"
