@@ -45,10 +45,24 @@ def test_open_provider_picker_dispatches_state_actions():
     assert req.question.header == "provider"
     assert req.question.question == "Which LLM backend should pentestagent use?"
 
-    assert len(req.question.options) == 9
+    # Ollama + LM Studio đã được loại khỏi provider picker
+    assert len(req.question.options) == 7
 
-    assert req.question.options[0].label.startswith("Ollama")
-    assert req.question.options[0].description == "local — /api/tags + /api/chat"
+    labels = [
+        option.label
+        for option in req.question.options
+    ]
+
+    assert labels[0].startswith("Kimi")
+    assert labels[1].startswith("Groq")
+    assert labels[2].startswith("Gemini")
+    assert labels[3].startswith("Claude")
+    assert labels[4].startswith("OpenRouter")
+    assert labels[5].startswith("DeepSeek")
+    assert labels[6].startswith("OpenAI-compatible")
+
+    assert "Ollama" not in labels
+    assert "LM Studio" not in labels
 
     assert callable(req.resolve)
     assert callable(req.reject)

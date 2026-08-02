@@ -4,7 +4,8 @@ Port từ decision.ts sang Python
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+import re
+from typing import List, Optional, TypedDict
 
 from ..skills.registry import Skill
 from ..target.target import Target
@@ -22,113 +23,184 @@ class DecisionPlan:
     guidance: str
 
 
+class SkillRecommendation(TypedDict):
+    name: str
+    reason: str
+
+
+class IntentScore(TypedDict):
+    skill_name: str
+    score: int
+    strong_count: int
+    hits: List[str]
+
+
 # ==========================
-# Keyword mapping
+# Intent mapping
 # ==========================
 
-SKILL_KEYWORDS = {
-    "recon": [
-        "recon",
-        "subdomain",
-        "subdomains",
-        "enumerate",
-        "enumeration",
-        "attack surface",
-        "crt",
-        "liveness",
-        "fingerprint",
-        "fingerprinting",
-        "content discovery",
-        "apex",
-        "domain",
-    ],
-    "webvuln": [
-        "web",
-        "vuln",
-        "vulnerability",
-        "hunt",
-        "idor",
-        "bola",
-        "bac",
-        "xss",
-        "sqli",
-        "injection",
-        "auth",
-        "authorization",
-        "ssrf",
-        "cve",
-        "api",
-        "endpoint",
-    ],
-    "jwt": [
-        "jwt",
-        "token",
-        "bearer",
-        "alg",
-        "kid",
-        "jku",
-        "jwks",
-        "hs256",
-        "rs256",
-    ],
-    "ssrf": [
-        "ssrf",
-        "webhook",
-        "callback",
-        "url",
-        "metadata",
-        "169.254.169.254",
-        "imds",
-    ],
-    "ssti": [
-        "ssti",
-        "template",
-        "jinja",
-        "twig",
-        "freemarker",
-        "velocity",
-        "handlebars",
-    ],
-    "graphql": [
-        "graphql",
-        "gql",
-        "introspection",
-        "query",
-        "mutation",
-        "alias",
-        "schema",
-    ],
-    "race": [
-        "race",
-        "concurrent",
-        "parallel",
-        "coupon",
-        "redeem",
-        "balance",
-        "double spend",
-    ],
-    "takeover": [
-        "takeover",
-        "dangling",
-        "cname",
-        "nxdomain",
-        "subdomain takeover",
-    ],
-    "supabase": [
-        "supabase",
-        "rls",
-        "anon key",
-        "postgrest",
-        "storage bucket",
-    ],
-    "deserialize": [
-        "deserialize",
-        "deserialization",
-        "pickle",
-        "unserialize",
-        "binaryformatter",
-        "yaml",
-    ],
+STRONG_KEYWORD_WEIGHT = 5
+WEAK_KEYWORD_WEIGHT = 1
+MIN_RECOMMEND_SCORE = 5
+
+INTENT_TO_SKILL: dict[str, str] = {
+    "recon": "recon",
+    "graphql": "graphql",
+    "ssrf": "ssrf",
+    "injection": "webvuln",
+    "web_testing": "webvuln",
+    "authentication": "jwt",
+    "ssti": "ssti",
+    "race": "race",
+    "takeover": "takeover",
+    "supabase": "supabase",
+    "deserialize": "deserialize",
+}
+
+INTENT_KEYWORDS: dict[str, dict[str, List[str]]] = {
+    "recon": {
+        "strong": [
+            "recon",
+            "subdomain",
+            "subdomains",
+            "enumerate",
+            "enumeration",
+            "attack surface",
+            "crt",
+            "liveness",
+            "fingerprint",
+            "fingerprinting",
+            "content discovery",
+            "apex",
+        ],
+        "weak": [],
+    },
+    "graphql": {
+        "strong": [
+            "graphql",
+            "gql",
+            "introspection",
+            "mutation",
+            "schema",
+        ],
+        "weak": [
+            "resolver",
+        ],
+    },
+    "ssrf": {
+        "strong": [
+            "ssrf",
+            "webhook",
+            "callback",
+            "metadata",
+            "169.254.169.254",
+            "imds",
+        ],
+        "weak": [
+            "internal service",
+            "cloud metadata",
+        ],
+    },
+    "injection": {
+        "strong": [
+            "xss",
+            "sqli",
+            "sql injection",
+            "injection",
+            "csrf",
+        ],
+        "weak": [
+            "parameter",
+            "payload",
+        ],
+    },
+    "web_testing": {
+        "strong": [
+            "idor",
+            "bola",
+            "bac",
+            "cve",
+        ],
+        "weak": [
+            "web",
+            "vuln",
+            "vulnerability",
+            "authorization",
+        ],
+    },
+    "authentication": {
+        "strong": [
+            "jwt",
+            "token",
+            "bearer",
+            "jwks",
+            "jku",
+            "hs256",
+            "rs256",
+        ],
+        "weak": [
+            "alg",
+            "kid",
+        ],
+    },
+    "ssti": {
+        "strong": [
+            "ssti",
+            "jinja",
+            "twig",
+            "freemarker",
+            "velocity",
+            "handlebars",
+        ],
+        "weak": [
+            "template",
+        ],
+    },
+    "race": {
+        "strong": [
+            "race",
+            "concurrent",
+            "parallel",
+            "double spend",
+        ],
+        "weak": [
+            "coupon",
+            "redeem",
+            "balance",
+        ],
+    },
+    "takeover": {
+        "strong": [
+            "takeover",
+            "dangling",
+            "cname",
+            "nxdomain",
+            "subdomain takeover",
+        ],
+        "weak": [],
+    },
+    "supabase": {
+        "strong": [
+            "supabase",
+            "rls",
+            "anon key",
+            "postgrest",
+            "storage bucket",
+        ],
+        "weak": [],
+    },
+    "deserialize": {
+        "strong": [
+            "deserialize",
+            "deserialization",
+            "pickle",
+            "unserialize",
+            "binaryformatter",
+        ],
+        "weak": [
+            "yaml",
+        ],
+    },
 }
 
 HIGH_RISK_TERMS = [
@@ -214,11 +286,7 @@ def build_decision_plan(
     if recommended:
         reason = recommended["reason"]
     else:
-        reason = (
-            "no specialized skill matched strongly; "
-            "use the general web testing workflow "
-            "and ask only for missing scope or credentials"
-        )
+        reason = "no specialized intent detected with sufficient confidence"
 
     return DecisionPlan(
         recommended_skill=recommended["name"] if recommended else None,
@@ -238,27 +306,20 @@ def build_decision_plan(
 # Skill recommendation
 # ==========================================================
 
-def recommend_skill(normalized: str, skills: List[Skill]):
+def recommend_skill(
+    normalized: str,
+    skills: List[Skill],
+) -> Optional[SkillRecommendation]:
     """
-    Chọn skill có số keyword khớp nhiều nhất.
+    Recommend an available skill from curated intent keywords only.
     """
 
-    best = None
-
-    for skill in skills:
-
-        hits = score_skill(normalized, skill)
-        score = len(hits)
-
-        if score == 0:
-            continue
-
-        if best is None or score > best["score"]:
-            best = {
-                "skill": skill,
-                "score": score,
-                "hits": hits,
-            }
+    available_skill_names = {
+        skill.name
+        for skill in skills
+    }
+    scores = detect_intent(normalized, available_skill_names)
+    best = confidence_check(scores)
 
     if best is None:
         return None
@@ -266,35 +327,105 @@ def recommend_skill(normalized: str, skills: List[Skill]):
     top_hits = ", ".join(best["hits"][:4])
 
     return {
-        "name": best["skill"].name,
-        "reason": f"matched {best['skill'].name} signals: {top_hits}",
+        "name": best["skill_name"],
+        "reason": f"matched {best['skill_name']} signals: {top_hits}",
     }
 
 
-def score_skill(normalized: str, skill: Skill) -> List[str]:
+def detect_intent(
+    normalized: str,
+    available_skill_names: set[str],
+) -> List[IntentScore]:
     """
-    Đếm số keyword khớp của skill.
+    Score curated intent keywords and aggregate by routable skill.
     """
 
-    hits = set()
+    by_skill: dict[str, IntentScore] = {}
 
-    keywords = SKILL_KEYWORDS.get(skill.name, []) + [skill.name]
+    for intent_name, keyword_groups in INTENT_KEYWORDS.items():
+        skill_name = INTENT_TO_SKILL.get(intent_name)
 
-    for keyword in keywords:
-        if normalize(keyword) in normalized:
-            hits.add(keyword)
+        if skill_name not in available_skill_names:
+            continue
 
-    desc_tokens = [
-        t
-        for t in normalize(skill.description).split()
-        if len(t) >= 5
+        strong_hits = matching_keywords(
+            normalized,
+            keyword_groups["strong"],
+        )
+        weak_hits = matching_keywords(
+            normalized,
+            keyword_groups["weak"],
+        )
+
+        if not strong_hits and not weak_hits:
+            continue
+
+        skill_score = by_skill.setdefault(
+            skill_name,
+            {
+                "skill_name": skill_name,
+                "score": 0,
+                "strong_count": 0,
+                "hits": [],
+            },
+        )
+        skill_score["score"] += (
+            len(strong_hits) * STRONG_KEYWORD_WEIGHT
+            + len(weak_hits) * WEAK_KEYWORD_WEIGHT
+        )
+        skill_score["strong_count"] += len(strong_hits)
+        skill_score["hits"].extend(strong_hits + weak_hits)
+
+    return [
+        {
+            **score,
+            "hits": sorted(set(score["hits"])),
+        }
+        for score in by_skill.values()
     ]
 
-    for token in desc_tokens:
-        if token in normalized:
-            hits.add(token)
 
-    return list(hits)
+def confidence_check(scores: List[IntentScore]) -> Optional[IntentScore]:
+    candidates = [
+        score
+        for score in scores
+        if score["strong_count"] > 0
+        and score["score"] >= MIN_RECOMMEND_SCORE
+    ]
+
+    if not candidates:
+        return None
+
+    return sorted(
+        candidates,
+        key=lambda item: (
+            -item["score"],
+            -item["strong_count"],
+            item["skill_name"],
+        ),
+    )[0]
+
+
+def matching_keywords(
+    normalized: str,
+    keywords: List[str],
+) -> List[str]:
+    return [
+        keyword
+        for keyword in keywords
+        if contains_keyword(normalized, keyword)
+    ]
+
+
+def contains_keyword(normalized: str, keyword: str) -> bool:
+    normalized_keyword = normalize(keyword)
+    pattern = (
+        r"(?<!\w)"
+        + re.escape(normalized_keyword)
+        + r"(?!\w)"
+    )
+
+    return re.search(pattern, normalized) is not None
 
 
 # ==========================================================
@@ -409,8 +540,6 @@ def has_host_like_text(s: str) -> bool:
     """
     Kiểm tra chuỗi có chứa URL hoặc domain.
     """
-
-    import re
 
     if re.search(r"https?://[^\s]+", s, re.I):
         return True

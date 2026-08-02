@@ -80,21 +80,21 @@ class TestStatusBarBusyLine:
 
 
 @pytest.mark.asyncio
-class TestStatusBarSuperModeBadge:
+class TestStatusBarAutoApproveBadge:
     async def test_shows_supermode_on_the_same_line_as_status_pinned_right(self) -> None:
         frame = await render_frame(props(yolo=True, api_ready=True))
-        assert "SuperMode" in frame
+        assert "AutoApprove" in frame
         # It shares the status row - the line with "ready" also carries it.
         ready_line = next((line for line in frame.split("\n") if "ready" in line), "")
-        assert "SuperMode" in ready_line
+        assert "AutoApprove" in ready_line
         # ...and it's pushed to the right of the status text (space-between).
-        assert ready_line.index("SuperMode") > ready_line.index("ready")
+        assert ready_line.index("AutoApprove") > ready_line.index("ready")
 
     async def test_shows_supermode_while_busy_too(self) -> None:
         frame = await render_frame(props(yolo=True, busy=True))
-        assert "SuperMode" in frame
+        assert "AutoApprove" in frame
         assert "Esc to cancel" in frame
 
     async def test_hides_supermode_when_yolo_is_off(self) -> None:
         frame = await render_frame(props(yolo=False))
-        assert "SuperMode" not in frame
+        assert "AutoApprove" not in frame

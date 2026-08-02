@@ -6,14 +6,6 @@ from typing import Sequence
 
 @dataclass(frozen=True, slots=True)
 class SlashItem:
-    """
-    Một slash command.
-
-    Ví dụ:
-        /help
-        /model <id|list>
-    """
-
     name: str
     description: str
     args: str | None = None
@@ -87,8 +79,8 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
         name="/target",
-        args="<url>",
-        description="pin an engagement base URL",
+        args="[<url>|clear]",
+        description="show, set, or clear engagement target",
     ),
 
     SlashItem(
@@ -99,14 +91,14 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
         name="/maxsteps",
-        args="<n>",
-        description="per-turn tool-call cap",
+        args="[<n>|default]",
+        description="show or set per-turn tool-call limit",
     ),
 
     SlashItem(
         name="/thinking",
-        args="on|off",
-        description="toggle show-thinking directive",
+        args="[on|off|default]",
+        description="show or set reasoning mode",
     ),
 
     SlashItem(
@@ -117,8 +109,8 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
         name="/yolo",
-        args="[on|off]",
-        description="toggle auto-approve for every tool call",
+        args="[on|off|default]",
+        description="show or set auto-approve mode for tool calls",
     ),
 
     SlashItem(
@@ -136,20 +128,6 @@ def filter_slash(
     input_text: str,
     extras: Sequence[SlashItem] = (),
 ) -> list[SlashItem]:
-    """
-    Lọc command theo input.
-
-    Ví dụ:
-
-        "/he"
-            -> [/help]
-
-        "/mo"
-            -> [/model]
-
-        "/"
-            -> toàn bộ command
-    """
 
     trimmed = input_text.strip()
 

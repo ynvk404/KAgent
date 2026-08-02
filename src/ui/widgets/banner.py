@@ -234,6 +234,12 @@ class Banner:
         output: list[BannerLine] = []
 
 
+        logo_width = max(
+            len(row)
+            for row in LOGO
+        )
+
+
         for i, row in enumerate(labels):
 
             label, value, accent = row
@@ -245,22 +251,9 @@ class Banner:
             )
 
 
-            if logo:
-                output.append(
-                    BannerLine(
-                        text=f"{logo:<10}",
-                        color="magenta",
-                    )
-                )
-
-
             if accent:
-                output.append(
-                    BannerLine(
-                        text=label,
-                        color="magenta",
-                    )
-                )
+                text = label
+                color = "magenta"
 
             else:
 
@@ -269,18 +262,27 @@ class Banner:
                 )
 
 
-                if pill:
+                if pill and label == "Model":
                     text += (
                         f" [{pill.text}]"
                     )
 
+                color = "white"
 
-                output.append(
-                    BannerLine(
-                        text=text,
-                        color="white",
-                    )
+
+            prefix = (
+                f"{logo:<{logo_width}}  "
+                if logo
+                else f"{'':<{logo_width}}  "
+            )
+
+
+            output.append(
+                BannerLine(
+                    text=f"{prefix}{text}",
+                    color=color,
                 )
+            )
 
 
         return output

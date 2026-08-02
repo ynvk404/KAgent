@@ -41,9 +41,9 @@ class CoverageTool(Tool):
             [
                 "Track which (endpoint, parameter, vuln_class) tuples have been tested this session, and figure out what still needs to be tried. Persists across resumes.",
                 "",
-                "Use this as a working set as you sweep a target. After each test call action='mark'. Before the next test call action='untested'.",
+                "Use this as a working set as you sweep a target. After each test (whether it confirmed a bug, came back clean, or hit a WAF), call action='mark'. Before picking the next test, call action='untested' with the candidates you have and the vuln classes you want to cover — it returns only the tuples you haven't tried.",
                 "",
-                "Vuln classes are free-form lowercase strings.",
+                "Vuln classes are free-form lowercase strings; the convention is to match a loaded skill name where possible (sqli, xss, ssti, idor, ssrf, jwt, deserialize, graphql, race, ...).",
             ]
         )
 
@@ -54,28 +54,83 @@ class CoverageTool(Tool):
                 "action": {
                     "type": "string",
                     "enum": list(ACTIONS),
+                    "description": (
+                        "'mark' records one test; 'list' shows all recorded "
+                        "entries (filterable); 'untested' returns the "
+                        "candidate x vuln-class tuples that have not been "
+                        "marked yet; 'summary' returns counts; 'clear' wipes "
+                        "the session's coverage state."
+                    ),
                 },
                 "endpoint": {
                     "type": "string",
+                    "description": (
+                        "For mark: target endpoint, ideally 'METHOD /path' "
+                        "(e.g. 'GET /api/users/{id}'). Query string is "
+                        "stripped automatically. For list: optional filter "
+                        "substring. For untested: not used here — provide "
+                        "endpoints inside each item of 'candidates' instead."
+                    ),
                 },
                 "param": {
                     "type": "string",
+                    "description": (
+                        "Parameter under test (header, query, body, or "
+                        "cookie name). For list: exact filter. For "
+                        "untested: not used here — provide params inside "
+                        "each item of 'candidates' instead."
+                    ),
                 },
                 "vuln_class": {
                     "type": "string",
+                    "description": (
+                        "Vulnerability class label, lowercase. Match a "
+                        "skill name when possible (e.g. 'sqli', 'xss', "
+                        "'jwt', 'ssrf', 'idor'). For list: filter."
+                    ),
                 },
                 "status": {
                     "type": "string",
                     "enum": list(STATUSES),
+                    "description": (
+                        "Result: 'tried' (attempted, inconclusive), "
+                        "'passed' (confirmed vuln), 'failed' (definitely "
+                        "not vulnerable), 'waf-blocked' (could not test), "
+                        "'skipped' (out of scope / not applicable)."
+                    ),
                 },
                 "notes": {
                     "type": "string",
+                    "description": "Optional short note (payload class, reason).",
                 },
                 "candidates": {
                     "type": "array",
+                    "description": (
+                        "For action='untested': list of {endpoint, param} "
+                        "pairs to cross with vuln_classes. Each item must "
+                        "be an object with only 'endpoint' and 'param' "
+                        "keys — do NOT put vuln_class inside these items, "
+                        "it goes in the separate 'vuln_classes' field. "
+                        "Example: [{\"endpoint\": \"/rest/products\", "
+                        "\"param\": \"search\"}]"
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {"type": "string"},
+                            "param": {"type": "string"},
+                        },
+                        "required": ["endpoint", "param"],
+                    },
                 },
                 "vuln_classes": {
                     "type": "array",
+                    "description": (
+                        "For action='untested': list of vuln class labels "
+                        "(strings) to check against every candidate. "
+                        "Example: [\"sqli\"]"
+                    ),
+                    "items": {"type": "string"},
                 },
             },
             "required": ["action"],
@@ -132,8 +187,8 @@ class CoverageTool(Tool):
 
         if not endpoint or not param or not vuln_class:
             return (
-                "error: mark requires endpoint, "
-                "param, vuln_class"
+                "error: mark requires endpoint, param, vuln_class "
+                '(status optional, defaults to "tried")'
             )
 
         if status not in STATUSES:
@@ -218,16 +273,35 @@ class CoverageTool(Tool):
         args: dict[str, Any],
     ) -> str:
 
-        candidates = args.get("candidates", [])
-        vuln_classes = args.get("vuln_classes", [])
+        raw_candidates = args.get("candidates", [])
+        raw_vuln_classes = args.get("vuln_classes", [])
+
+        candidates = (
+            raw_candidates
+            if isinstance(raw_candidates, list)
+            else []
+        )
+        vuln_classes = (
+            raw_vuln_classes
+            if isinstance(raw_vuln_classes, list)
+            else []
+        )
 
         pairs = []
 
         for c in candidates:
+            if not isinstance(c, dict):
+                continue
+
             endpoint = c.get("endpoint", "")
             param = c.get("param", "")
 
-            if endpoint and param:
+            if (
+                isinstance(endpoint, str)
+                and isinstance(param, str)
+                and endpoint
+                and param
+            ):
                 pairs.append(
                     {
                         "endpoint": endpoint,
@@ -243,8 +317,9 @@ class CoverageTool(Tool):
 
         if not pairs or not classes:
             return (
-                "error: untested requires candidates "
-                "and vuln_classes"
+                "error: untested requires `candidates` (non-empty list "
+                "of {endpoint, param}) and `vuln_classes` (non-empty "
+                "list of strings)"
             )
 
         out = await self.store.untested(

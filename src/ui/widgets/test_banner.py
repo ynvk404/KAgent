@@ -3,6 +3,7 @@
 from ui.widgets.banner import (
     Banner,
     BannerData,
+    LOGO,
     model_pill,
 )
 
@@ -192,6 +193,34 @@ def test_banner_status():
 
 
     assert "Status: ready" in text
+
+
+
+def test_banner_keeps_logo_and_text_on_same_rows():
+
+    banner = Banner(
+        BannerData(
+            provider="Groq",
+            model="openai/gpt-oss-120b",
+            endpoint="https://api.groq.com/openai/v1",
+            cwd="/mnt/d/DOANTOTNGHIEP/pentestagent",
+            status="Session e77ed62c - type /help to begin",
+            tool_support="yes",
+        )
+    )
+
+
+    lines = banner.render()
+    text_lines = [
+        line.text
+        for line in lines
+    ]
+
+
+    assert len(lines) == 6
+    assert all(line.strip() not in LOGO for line in text_lines)
+    assert "Model: openai/gpt-oss-120b [tools ✓]" in text_lines[2]
+    assert "[tools ✓]" not in text_lines[1]
 
 
 

@@ -15,7 +15,7 @@ Chức năng:
 import ipaddress
 import socket
 from urllib.parse import urlparse
-
+from src.permission.permission import PermissionRequest, Decision
 
 # ============================================================
 # Parse HTTP URL
@@ -69,22 +69,22 @@ async def gate_private_request(
         return ""
 
     decision = await prompter.ask(
-        {
-            "tool": tool_name,
-            "summary":
-                f"{tool_name}: private/internal URL {parsed.geturl()}",
-            "detail":
+        PermissionRequest(
+            tool=tool_name,
+            summary=f"{tool_name}: private/internal URL {parsed.geturl()}",
+            detail=(
                 f"host: {parsed.hostname}\n"
                 f"reason: {reason}\n\n"
                 "This points at a private/internal/metadata address, "
                 "a classic SSRF target. Approve only if this host "
-                "is intentionally in scope.",
-            "noSessionCache": True,
-        },
+                "is intentionally in scope."
+            ),
+            no_session_cache=True,
+        ),
         signal,
     )
 
-    if decision == "deny":
+    if decision == Decision.DENY:
         raise Exception(
             f"request to private/internal URL denied: "
             f"{parsed.geturl()}"

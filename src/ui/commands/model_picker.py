@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from src.ask.ask import Option, Question
 from src.config.config import Backend
@@ -182,16 +182,18 @@ async def fetch_and_pick_model(
     )
 
     async def resolve(picked: str) -> None:
+        from src.ui.core.app import ProviderChange
+
         dispatch(SetAsk(req=None))
 
         try:
             result = apply_provider(
-                {
-                    "backend": backend,
-                    "model": picked,
-                    "baseURL": base_url,
-                    "apiKey": api_key,
-                }
+                ProviderChange(
+                    backend=cast(Backend, backend),
+                    model=picked,
+                    base_url=base_url,
+                    api_key=api_key,
+                )
             )
             if inspect.isawaitable(result):
                 await result
