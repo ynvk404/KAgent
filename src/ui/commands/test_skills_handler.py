@@ -1,8 +1,10 @@
 import asyncio
 from typing import cast
 
+import pytest
+
 from src.ui.commands.skills_handler import handle_skills_command
-from src.ui.core.state import Append
+from src.ui.core.state import Append, SetActiveSkill
 from src.agent.agent import Agent   # sửa path này nếu Agent nằm chỗ khác
 
 
@@ -43,10 +45,16 @@ class StubAgent:
             items=[type("Skill", (), {"name": "demo"})()]
         )
         self._enabled = True
+        self.active_skills = set()
+        self.pending_skills = set()
 
     async def set_skill_enabled(self, name, enabled):
         self._enabled = enabled
-        return True
+        changed = self.skills.set_disabled(name, not enabled)
+        if changed and not enabled:
+            self.active_skills.discard(name)
+            self.pending_skills.discard(name)
+        return changed
 
     def rebuild_from_skills(self):
         return None
@@ -91,3 +99,28 @@ def test_unknown_skill_dispatches_error():
         dispatched[0].entry.text
         == '/skills: unknown skill "missing". Run /skills to list available skills.'
     )
+
+
+@pytest.mark.asyncio
+async def test_disable_active_skill_refreshes_status_state():
+    dispatched = []
+    agent = StubAgent()
+    agent.active_skills.add("demo")
+
+    handle_skills_command(
+        cast(Agent, agent),
+        ["disable", "demo"],
+        dispatched.append,
+        None,
+        None,
+    )
+
+    await asyncio.sleep(0)
+
+    assert agent.skills.is_disabled("demo")
+    assert any(
+        isinstance(action, SetActiveSkill) and action.name is None
+        for action in dispatched
+    )
+    assert isinstance(dispatched[-1], Append)
+    assert dispatched[-1].entry.text == "/skills: demo disabled"

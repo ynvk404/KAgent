@@ -77,6 +77,58 @@ def test_includes_provider():
     ]
 
 
+def test_target_catalog_entry():
+
+    item = next(
+        s
+        for s in SLASH_ITEMS
+        if s.name == "/target"
+    )
+
+
+    assert item.args == "[<url>|clear]"
+    assert item.description == "show, set, or clear engagement target"
+
+
+def test_maxsteps_catalog_entry():
+
+    item = next(
+        s
+        for s in SLASH_ITEMS
+        if s.name == "/maxsteps"
+    )
+
+
+    assert item.args == "[<n>|default]"
+    assert item.description == "show or set per-turn tool-call limit"
+
+
+def test_thinking_catalog_entry():
+
+    item = next(
+        s
+        for s in SLASH_ITEMS
+        if s.name == "/thinking"
+    )
+
+
+    assert item.args == "[on|off|default]"
+    assert item.description == "show or set reasoning mode"
+
+
+def test_yolo_catalog_entry():
+
+    item = next(
+        s
+        for s in SLASH_ITEMS
+        if s.name == "/yolo"
+    )
+
+
+    assert item.args == "[on|off|default]"
+    assert item.description == "show or set auto-approve mode for tool calls"
+
+
 
 def test_hides_menu_when_typing_arguments():
 

@@ -114,6 +114,9 @@ EventSink = Callable[[AgentEvent], None]
 # Constants
 # ==========================================================
 
+DEFAULT_MAX_STEPS = 20
+
+
 # Map "type" -> event dataclass tương ứng.
 _EVENT_FACTORIES = {
     "assistant-text": AssistantTextEvent,
@@ -275,7 +278,7 @@ class AgentOptions:
         store: Optional[Store],
         target: Target,
         thinking_enabled: bool = False,
-        max_steps: int = 20,
+        max_steps: int = DEFAULT_MAX_STEPS,
         auto_compact_threshold: int = 16000,
         tooling_profile: Optional[PromptToolingProfile] = None,
         prompt_profile: Optional[PromptProfile] = None,
@@ -343,7 +346,7 @@ class Agent:
         self.max_steps = (
             opts.max_steps
             if opts.max_steps > 0
-            else 20
+            else DEFAULT_MAX_STEPS
         )
 
         # Session memory
@@ -893,6 +896,10 @@ class Agent:
 
         if not changed:
             return False
+
+        if not enabled:
+            self.active_skills.discard(name)
+            self.pending_skills.discard(name)
 
         # Cập nhật System Prompt
         self.rebuild_system_prompt()

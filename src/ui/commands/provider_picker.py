@@ -38,16 +38,6 @@ def open_provider_picker(
     cur = read_config()
     current_backend = cur.get("backend", "")
 
-    label_ollama = (
-        "Ollama (current)"
-        if current_backend in ("ollama", "")
-        else "Ollama"
-    )
-    label_lm = (
-        "LM Studio (current)"
-        if current_backend == "lmstudio"
-        else "LM Studio"
-    )
     label_oai = (
         "OpenAI-compatible (current)"
         if current_backend == "openai-compat"
@@ -312,8 +302,6 @@ def open_provider_picker(
             header="provider",
             question="Which LLM backend should pentestagent use?",
             options=[
-                Option(label=label_ollama, description="local — /api/tags + /api/chat"),
-                Option(label=label_lm, description="local — /v1/models + /v1/chat/completions"),
                 Option(label=label_kimi, description="remote — api.moonshot.ai OpenAI-compatible API"),
                 Option(label=label_groq, description="remote — api.groq.com OpenAI-compatible Chat API"),
                 Option(label=label_gemini, description="remote — Gemini API with native tool calls"),

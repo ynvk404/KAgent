@@ -1,6 +1,7 @@
 import asyncio
 
 from src.ui.commands import model_picker
+from src.ui.core.app import ProviderChange
 from src.ui.core.state import Append, SetAsk
 
 
@@ -33,7 +34,7 @@ def test_fetch_and_pick_model_reports_listing_errors(monkeypatch):
 def test_fetch_and_pick_model_dispatches_model_picker(monkeypatch):
     async def run() -> None:
         dispatched: list[object] = []
-        seen_payloads: list[dict[str, object]] = []
+        seen_payloads: list[ProviderChange] = []
 
         def dispatch(action: object) -> None:
             dispatched.append(action)
@@ -41,7 +42,7 @@ def test_fetch_and_pick_model_dispatches_model_picker(monkeypatch):
         def fake_list_models(*_args, **_kwargs):
             return ["model-a", "model-b"]
 
-        async def fake_apply_provider(payload: dict[str, object]) -> None:
+        async def fake_apply_provider(payload: ProviderChange) -> None:
             seen_payloads.append(payload)
 
         monkeypatch.setattr(model_picker, "list_models", fake_list_models)
@@ -64,7 +65,10 @@ def test_fetch_and_pick_model_dispatches_model_picker(monkeypatch):
         req.resolve("model-b")
         await asyncio.sleep(0.01)
 
-        assert seen_payloads[0]["model"] == "model-b"
+        assert seen_payloads[0].backend == "ollama"
+        assert seen_payloads[0].model == "model-b"
+        assert seen_payloads[0].base_url == "http://localhost:11434"
+        assert seen_payloads[0].api_key == ""
         assert isinstance(dispatched[-1], Append)
         assert dispatched[-1].entry.kind == "system"
 

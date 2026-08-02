@@ -161,7 +161,7 @@ def idle_line(p: StatusProps) -> Text:
 
 
 class StatusBar(Widget):
-    """Right-aligned SuperMode badge + left-aligned status content."""
+    """Right-aligned AutoApprove badge + left-aligned status content."""
 
     DEFAULT_CSS = """
     StatusBar {
@@ -217,7 +217,7 @@ class StatusBar(Widget):
         if not props.yolo:
             return content
 
-        badge = Text("SuperMode", style=f"bold {SUPERMODE_COLOR}")
+        badge = Text("AutoApprove", style=f"bold {SUPERMODE_COLOR}")
         width = self.size.width or 80
         pad = max(1, width - content.cell_len - badge.cell_len)
         line = content.copy()

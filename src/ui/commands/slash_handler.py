@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import re
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
-from src.agent.agent import AgentRunOptions
+from src.agent.agent import DEFAULT_MAX_STEPS, AgentRunOptions
 from src.llm.models import list_models
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.state import Append, Clear, TranscriptEntry
@@ -11,6 +14,12 @@ from src.ui.core.state import Append, Clear, TranscriptEntry
 if TYPE_CHECKING:
     from src.agent.agent import Agent
     from src.ui.core.app import Pentestagent, RunAgentOptions
+
+DEFAULT_THINKING_ENABLED = False
+DEFAULT_YOLO_ENABLED = False
+_DOMAIN_LABEL_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
+)
 
 
 # ==========================================================
@@ -133,6 +142,46 @@ def build_help_text(agent: "Agent", read_config) -> str:
     out.append("Type / for the live command menu.")
 
     return "\n".join(out)
+
+
+def normalize_target_url(raw: str) -> str | None:
+    candidate = raw.strip()
+    if not candidate or any(ch.isspace() for ch in candidate):
+        return None
+
+    if not (candidate.startswith("http://") or candidate.startswith("https://")):
+        candidate = f"http://{candidate}"
+
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+
+    try:
+        host = parsed.hostname
+        _ = parsed.port
+    except ValueError:
+        return None
+
+    if not host:
+        return None
+
+    if host == "localhost":
+        return candidate
+
+    try:
+        ipaddress.ip_address(host)
+        return candidate
+    except ValueError:
+        pass
+
+    labels = host.split(".")
+    if len(labels) < 2:
+        return None
+
+    if all(_DOMAIN_LABEL_RE.fullmatch(label) for label in labels):
+        return candidate
+
+    return None
 
 
 # ==========================================================
@@ -263,22 +312,51 @@ def handle_slash(app: "Pentestagent", raw: str) -> bool:
         return True
 
     # ---------------------------------------------------
-    # /yolo [on|off]
+    # /yolo [on|off|default]
     # ---------------------------------------------------
     if cmd == "/yolo":
-        arg = rest[0].lower() if rest else None
-        next_state = True if arg == "on" else False if arg == "off" else not app.state.yolo
+        if not rest:
+            current = "on" if app.state.yolo else "off"
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text=f"yolo currently {current}",
+                    )
+                )
+            )
+            return True
+
+        arg = rest[0].lower()
+        if arg not in ("on", "off", "default"):
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text="usage: /yolo <on|off|default>",
+                    )
+                )
+            )
+            return True
+
+        next_state = DEFAULT_YOLO_ENABLED if arg == "default" else arg == "on"
         app.apply_yolo(next_state)
+
+        if arg == "default":
+            text = "YOLO reset to default (off)"
+        elif next_state:
+            text = (
+                "YOLO enabled. Tool calls will be auto-approved. "
+                "Authorized / lab targets only."
+            )
+        else:
+            text = "YOLO disabled. Tool calls will prompt for confirmation."
+
         dispatch(
             Append(
                 entry=TranscriptEntry(
                     kind="system",
-                    text=(
-                        "YOLO on — every tool call will auto-approve. "
-                        "Authorized / lab targets only."
-                        if next_state
-                        else "YOLO off — tool calls will prompt again."
-                    ),
+                    text=text,
                 )
             )
         )
@@ -489,54 +567,169 @@ def handle_slash(app: "Pentestagent", raw: str) -> bool:
         return True
 
     # ---------------------------------------------------
-    # /target [<url>]
+    # /target [<url>|clear]
     # ---------------------------------------------------
     if cmd == "/target":
         u = " ".join(rest).strip()
         if not u:
-            async def _target_clear():
-                await agent.clear_target()
-            asyncio.create_task(_target_clear())
-            dispatch(Append(entry=TranscriptEntry(kind="system", text="target cleared")))
-        else:
-            async def _target_set():
-                await agent.set_target_base_url(u)
-            asyncio.create_task(_target_set())
-            dispatch(Append(entry=TranscriptEntry(kind="system", text=f"target set to {u}")))
-        return True
-
-    # ---------------------------------------------------
-    # /maxsteps <n>
-    # ---------------------------------------------------
-    if cmd == "/maxsteps":
-        n = None
-        if rest:
-            try:
-                n = int(rest[0])
-            except ValueError:
-                n = None
-
-        if n is not None and n > 0:
-            agent.set_max_steps(n)
-            dispatch(Append(entry=TranscriptEntry(kind="system", text=f"max steps set to {n}")))
-        else:
-            dispatch(Append(entry=TranscriptEntry(kind="error", text="usage: /maxsteps <n>")))
-        return True
-
-    # ---------------------------------------------------
-    # /thinking on|off
-    # ---------------------------------------------------
-    if cmd == "/thinking":
-        v = rest[0].lower() if rest else ""
-        if v not in ("on", "off"):
-            dispatch(Append(entry=TranscriptEntry(kind="error", text="usage: /thinking on|off")))
+            current = agent.target.base_url()
+            text = f"target currently: {current}" if current else "no target configured"
+            dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
             return True
 
+        if u.lower() == "clear":
+            agent.target.clear()
+
+            async def _target_clear():
+                try:
+                    await agent.clear_target()
+                except Exception as err:
+                    dispatch(
+                        Append(
+                            entry=TranscriptEntry(
+                                kind="error",
+                                text=f"target clear failed: {err}",
+                            )
+                        )
+                    )
+
+            asyncio.create_task(_target_clear())
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text="target cleared (no target configured)",
+                    )
+                )
+            )
+            return True
+
+        normalized = normalize_target_url(u)
+        if normalized is None:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text="usage: /target <url|clear>",
+                    )
+                )
+            )
+            return True
+
+        async def _target_set():
+            try:
+                await agent.set_target_base_url(normalized)
+            except Exception as err:
+                dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="error",
+                            text=f"target set failed: {err}",
+                        )
+                    )
+                )
+
+        agent.target.set_base_url(normalized)
+        asyncio.create_task(_target_set())
+        dispatch(
+            Append(
+                entry=TranscriptEntry(
+                    kind="system",
+                    text=f"target set to {normalized}",
+                )
+            )
+        )
+        return True
+
+    # ---------------------------------------------------
+    # /maxsteps [<n>|default]
+    # ---------------------------------------------------
+    if cmd == "/maxsteps":
+        if not rest:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text=f"max steps currently {agent.get_max_steps()}",
+                    )
+                )
+            )
+            return True
+
+        arg = rest[0].lower()
+        if arg == "default":
+            agent.set_max_steps(DEFAULT_MAX_STEPS)
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text=f"max steps reset to default ({DEFAULT_MAX_STEPS})",
+                    )
+                )
+            )
+            return True
+
+        try:
+            n = int(arg)
+        except ValueError:
+            n = 0
+
+        if n <= 0:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text="usage: /maxsteps <n|default>",
+                    )
+                )
+            )
+            return True
+
+        agent.set_max_steps(n)
+        dispatch(Append(entry=TranscriptEntry(kind="system", text=f"max steps set to {n}")))
+        return True
+
+    # ---------------------------------------------------
+    # /thinking [on|off|default]
+    # ---------------------------------------------------
+    if cmd == "/thinking":
+        if not rest:
+            current = "on" if agent.thinking_is_enabled() else "off"
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text=f"thinking currently {current}",
+                    )
+                )
+            )
+            return True
+
+        v = rest[0].lower()
+        if v not in ("on", "off", "default"):
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text="usage: /thinking <on|off|default>",
+                    )
+                )
+            )
+            return True
+
+        enabled = DEFAULT_THINKING_ENABLED if v == "default" else v == "on"
+
         async def _thinking():
-            await agent.set_thinking_enabled(v == "on")
+            await agent.set_thinking_enabled(enabled)
             
         asyncio.create_task(_thinking())
-        dispatch(Append(entry=TranscriptEntry(kind="system", text=f"thinking {v}")))
+
+        if v == "default":
+            text = "thinking reset to default (off)"
+        else:
+            text = "thinking enabled" if enabled else "thinking disabled"
+
+        dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
         return True
 
     # ---------------------------------------------------

@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable
 
 from src.agent.agent import Agent
 from src.skills.template import render_skill_template
-from src.ui.core.state import Append, SetSkillsPicker, TranscriptEntry
+from src.ui.core.state import Append, SetActiveSkill, SetSkillsPicker, TranscriptEntry
 
 
 def handle_skills_command(
@@ -126,6 +126,7 @@ def handle_skills_command(
         if verb == "disable"
         else agent.skills.is_disabled(name)
     )
+    was_active = name in getattr(agent, "active_skills", set())
 
     async def _apply() -> None:
         try:
@@ -170,6 +171,15 @@ def handle_skills_command(
                     )
                 )
                 return
+
+        if not target_enabled and was_active:
+            active_skills = getattr(agent, "active_skills", set())
+            next_active = (
+                sorted(active_skills)[0]
+                if active_skills
+                else None
+            )
+            dispatch(SetActiveSkill(name=next_active))
 
         dispatch(
             Append(
