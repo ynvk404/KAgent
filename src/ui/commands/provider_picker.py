@@ -7,16 +7,19 @@ from src.ask.ask import Question, Option
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.core.state import Action, Append, SetAsk, TranscriptEntry
 from src.ui.widgets.secret_input_modal import SecretInputRequest
+from src.llm.providers import (
+    KIMI_DEFAULT_BASE_URL,
+    GROQ_DEFAULT_BASE_URL,
+    GEMINI_DEFAULT_BASE_URL,
+    OPENROUTER_DEFAULT_BASE_URL,
+    DEEPSEEK_DEFAULT_BASE_URL,
+    ANTHROPIC_DEFAULT_BASE_URL,
+)
 # ============================================================
 # Constants
 # ============================================================
-
-KIMI_DEFAULT_BASE_URL = "https://api.moonshot.ai/v1"
-GROQ_DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
-GEMINI_DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
-ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
+# Base URLs are imported from src.llm.providers (single source of truth),
+# shared with src/llm/factory.py and src/llm/models.py.
 
 # ============================================================
 # Types
@@ -305,9 +308,9 @@ def open_provider_picker(
                 Option(label=label_kimi, description="remote — api.moonshot.ai OpenAI-compatible API"),
                 Option(label=label_groq, description="remote — api.groq.com OpenAI-compatible Chat API"),
                 Option(label=label_gemini, description="remote — Gemini API with native tool calls"),
-                Option(label=label_claude, description="remote — Anthropic Messages API"),
-                Option(label=label_openrouter, description="remote — OpenRouter API"),
-                Option(label=label_deepseek, description="remote — DeepSeek API"),
+                Option(label=label_claude, description="remote — api.anthropic.com Messages API with native tool calls"),
+                Option(label=label_openrouter, description="remote — openrouter.ai OpenAI-compatible API"),
+                Option(label=label_deepseek, description="remote — api.deepseek.com OpenAI-compatible API"),
                 Option(
                     label=label_oai,
                     description="remote — needs base URL + API key (uses current config values)",

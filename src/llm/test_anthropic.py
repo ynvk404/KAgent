@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import threading
+from .types import ToolCall
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, cast
@@ -141,16 +142,20 @@ async def test_encodes_system_prompt_tool_turns_and_parses_tool_use(base_url, mo
     out = await c.chat(req)
 
     assert captured.last_api_key_header == "test-key"
-    assert captured.last_version_header  # some non-empty anthropic-version value
+    assert captured.last_version_header
 
     assert out.message.content == "working"
-    assert out.finish_reason == "tool_calls"  # stop_reason "tool_use" maps to this
+    assert out.finish_reason == "tool_calls"
 
+    # Response parsing
     assert out.message.tool_calls is not None
-    tool_call = cast(dict, out.message.tool_calls[0])
-    assert tool_call["id"] == "toolu_abc123"
-    assert tool_call["function"]["name"] == "http"
-    assert json.loads(tool_call["function"]["arguments"]) == {"url": "https://example.com"}
+    tool_call = cast(ToolCall, out.message.tool_calls[0])
+
+    assert tool_call.id == "toolu_abc123"
+    assert tool_call.function.name == "http"
+    assert json.loads(tool_call.function.arguments) == {
+        "url": "https://example.com"
+    }
 
     assert captured.last_body is not None
     body = captured.last_body
@@ -162,16 +167,31 @@ async def test_encodes_system_prompt_tool_turns_and_parses_tool_use(base_url, mo
     messages = body["messages"]
     assert len(messages) == 3
 
-    assert messages[0] == {"role": "user", "content": [{"type": "text", "text": "test"}]}
+    assert messages[0] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "test"}],
+    }
 
+    # Request encoding
     assert messages[1]["role"] == "assistant"
     assert messages[1]["content"] == [
-        {"type": "tool_use", "id": "toolu_grep1", "name": "grep", "input": {"pattern": "x"}}
+        {
+            "type": "tool_use",
+            "id": "toolu_grep1",
+            "name": "grep",
+            "input": {"pattern": "x"},
+        }
     ]
 
     assert messages[2] == {
         "role": "user",
-        "content": [{"type": "tool_result", "tool_use_id": "toolu_grep1", "content": "matched"}],
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_grep1",
+                "content": "matched",
+            }
+        ],
     }
 
     # Tools are encoded with input_schema, not "parameters".
@@ -188,7 +208,6 @@ async def test_encodes_system_prompt_tool_turns_and_parses_tool_use(base_url, mo
     ]
 
     assert body["temperature"] == 0.5
-
 
 @pytest.mark.asyncio
 async def test_drops_empty_assistant_turns_from_the_request(base_url, monkeypatch):
