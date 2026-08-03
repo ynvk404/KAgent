@@ -1531,21 +1531,23 @@ class Agent:
         else:
             tools_tokens = self.tools_token_estimate()
 
+        history_tokens = self.approx_tokens()
+        trigger_tokens = history_tokens + incoming_tokens + tools_tokens
+
         # Kiểm tra có cần Auto Compact không
         if (
             self.auto_compact_threshold > 0
             and self.consecutive_compact_failures
             < MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
-            and (
-                self.approx_tokens()
-                + incoming_tokens
-                + tools_tokens
-                >= self.auto_compact_threshold
-            )
+            and trigger_tokens >= self.auto_compact_threshold
         ):
             await self.auto_compact(
                 signal,
                 emit,
+                trigger_tokens=trigger_tokens,
+                history_tokens=history_tokens,
+                incoming_tokens=incoming_tokens,
+                tools_tokens=tools_tokens,
             )
 
 
@@ -2426,20 +2428,31 @@ class Agent:
         self,
         signal,
         emit,
+        trigger_tokens: int | None = None,
+        history_tokens: int | None = None,
+        incoming_tokens: int = 0,
+        tools_tokens: int = 0,
     ) -> None:
         """
         Tự động compact lịch sử hội thoại khi vượt ngưỡng token.
         """
 
         tokens_before = self.approx_tokens()
+        displayed_tokens = trigger_tokens if trigger_tokens is not None else tokens_before
+        displayed_history_tokens = (
+            history_tokens if history_tokens is not None else tokens_before
+        )
 
         emit(
             {
                 "type": "compact",
                 "summary": (
                     f"auto-compact triggered "
-                    f"(~{tokens_before} tokens >= "
-                    f"threshold {self.auto_compact_threshold})..."
+                    f"(~{displayed_tokens} tokens >= "
+                    f"threshold {self.auto_compact_threshold}; "
+                    f"history: {displayed_history_tokens} + "
+                    f"input: {incoming_tokens} + "
+                    f"tools: {tools_tokens})..."
                 ),
                 "tokensBefore": tokens_before,
             }

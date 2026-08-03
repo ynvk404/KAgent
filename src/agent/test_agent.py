@@ -730,6 +730,18 @@ async def test_auto_compacts_before_next_turn_when_over_threshold():
     # 2. auto-compacted
     assert len(compact_events) >= 2
 
+    triggered_summary = compact_events[0]["summary"]
+    history_tokens = compact_events[0]["tokensBefore"]
+    input_tokens = len("hi") // 4
+    tools_tokens = agent.tools_token_estimate()
+    trigger_tokens = history_tokens + input_tokens + tools_tokens
+
+    assert f"~{trigger_tokens} tokens >= threshold 1" in triggered_summary
+    assert (
+        f"history: {history_tokens} + input: {input_tokens} + "
+        f"tools: {tools_tokens}"
+    ) in triggered_summary
+
     assert "auto-compacted" in compact_events[-1]["summary"]
 
 @pytest.mark.asyncio
