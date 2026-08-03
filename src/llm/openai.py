@@ -64,8 +64,7 @@ class OpenAIClient(Client):
         return headers
 
     async def ping(self) -> None:
-        # Short, one-shot health check — vẫn dùng requests (sync) nhưng
-        # chạy trong thread pool để không block event loop.
+        # Health check đồng bộ chạy trong thread pool để không block event loop
         import requests
 
         loop = asyncio.get_running_loop()
@@ -82,9 +81,7 @@ class OpenAIClient(Client):
         if resp.status_code >= 500:
             raise RuntimeError(f"{self.label} status {resp.status_code}")
 
-    # ============================================================
-    # Retry glue
-    # ============================================================
+    # --- Retry Utilities ---
 
     def _on_retry(self, info: RetryInfo) -> None:
         if not self.log_error:
@@ -110,9 +107,7 @@ class OpenAIClient(Client):
             err.retry_after_ms = ms
 
     async def _run_cancellable(self, coro: Awaitable[T], signal: Any) -> T:
-        """Run `coro` as a task and poll `signal.aborted` so an abort can
-        actually interrupt an in-flight HTTP call — not just skip the next
-        retry sleep."""
+        """Chạy `coro` dưới dạng task, liên tục poll `signal.aborted` để có thể ngắt request HTTP đang chạy."""
         task: asyncio.Task[T] = asyncio.ensure_future(coro)
         if signal is None:
             return await task
@@ -125,9 +120,7 @@ class OpenAIClient(Client):
             await asyncio.wait({task}, timeout=_ABORT_POLL_INTERVAL)
         return task.result()
 
-    # ============================================================
-    # Non-streaming
-    # ============================================================
+    # --- Non-streaming ---
 
     async def chat(
         self,
@@ -161,11 +154,7 @@ class OpenAIClient(Client):
                         self.label, None, resp.status_code, f"invalid JSON: {resp.text}"
                     ) from err
 
-                # NOTE: an "error" field inside a 200 body is intentionally
-                # NOT classified/retried here — it's checked below, after
-                # with_retry, and raised as a plain RuntimeError on the
-                # first successful HTTP response. Only transport failures
-                # and HTTP status >= 400 go through classify_backend/retry.
+                # Lỗi API trả về status 200 sẽ không tự động retry tại đây mà được check sau with_retry
                 return data
 
         async def attempt() -> dict[str, Any]:
@@ -186,8 +175,7 @@ class OpenAIClient(Client):
         choice = choices[0]
         message = choice.get("message", {})
 
-        # Prefer content; fall back to reasoning_content only when content is
-        # empty, so a reasoning-only non-streaming response isn't blank.
+        # Ưu tiên lấy content; fallback sang reasoning_content để tránh message trống
         raw_content = message.get("content") or message.get("reasoning_content") or ""
 
         msg = Message(role="assistant", content=raw_content)
@@ -206,9 +194,7 @@ class OpenAIClient(Client):
 
         return ChatResponse(message=msg, finish_reason=choice.get("finish_reason", ""))
 
-    # ============================================================
-    # Streaming
-    # ============================================================
+    # --- Streaming ---
 
     async def chat_stream(
         self,
@@ -218,9 +204,7 @@ class OpenAIClient(Client):
     ) -> ChatResponse:
         body = self.encode_request(req, True)
 
-        # --- Phase 1: open the connection. Retried on transient failure.
-        # Once we have a live 200 stream, no more retries — already-streamed
-        # deltas may be lost/duplicated otherwise.
+        # Phase 1: Mở kết nối stream (chỉ retry các lỗi tạm thời)
         async def open_stream() -> tuple[httpx.AsyncClient, httpx.Response]:
             client = httpx.AsyncClient(timeout=CHAT_TIMEOUT)
             try:
@@ -260,8 +244,7 @@ class OpenAIClient(Client):
         tool_parts: dict[int, dict[str, str]] = {}
         fallback_index = -1
 
-        # --- Phase 2: consume the stream. Cancellable via `signal`, but not
-        # retried — a mid-stream drop propagates as-is.
+        # Phase 2: Đọc dữ liệu stream (có thể huỷ ngang, không tự động retry để tránh lặp/mất data)
         async def consume() -> None:
             nonlocal finish, fallback_index
 
@@ -289,10 +272,7 @@ class OpenAIClient(Client):
 
                 delta = choice.get("delta", {})
 
-                # Reasoning models stream chain-of-thought here before any
-                # `content`. Surface it as progress but never accumulate it
-                # into chunks — the returned message must stay
-                # reasoning-free so it doesn't poison the next request.
+                # Phát luồng reasoning content ra UI nhưng không lưu vào chuỗi message cuối cùng
                 if delta.get("reasoning_content"):
                     on_delta(delta["reasoning_content"])
 
@@ -348,9 +328,7 @@ class OpenAIClient(Client):
 
         return ChatResponse(message=msg, finish_reason=finish)
 
-    # ============================================================
-    # Request encoding
-    # ============================================================
+    # --- Request Encoding ---
 
     def encode_request(self, req: ChatRequest, stream: bool) -> dict[str, Any]:
         messages: list[dict[str, Any]] = []
@@ -404,13 +382,12 @@ class OpenAIClient(Client):
 
             body["tools"] = encoded_tools
 
+        # Tắt reasoning trace đối với các model hỗ trợ để nhận trực tiếp câu trả lời
         if self.label == "kimi" and kimi_supports_thinking_toggle(self.model_id):
-            # kimi-k2.6 / k2.5 are reasoning models: left alone they stream a
-            # `reasoning_content` trace and only then the answer. `thinking:
-            # disabled` suppresses that so `content` carries the answer
-            # directly (verified against the live API).
             body["thinking"] = {"type": "disabled"}
-
+        elif self.label == "deepseek":
+            body["thinking"] = {"type": "disabled"}
+            
         if self.temperature is not None and not (
             self.label == "kimi" and kimi_locks_temperature(self.model_id)
         ):

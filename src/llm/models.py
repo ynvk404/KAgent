@@ -24,7 +24,6 @@ from .providers import (
 DEFAULT_TIMEOUT_S: float = 5.0
 
 DEFAULT_BASE_URL: dict[str, str] = {
-    "lmstudio": "http://localhost:1234/v1",
     "openai-compat": "",
     "kimi": KIMI_DEFAULT_BASE_URL,
     "groq": GROQ_DEFAULT_BASE_URL,
