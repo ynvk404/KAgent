@@ -24,7 +24,7 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
         name="/provider",
-        description="interactive picker: select LLM backend, then a model from its catalog",
+        description="configure LLM backend, API settings, models, and connection",
     ),
 
     SlashItem(

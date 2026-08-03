@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Coroutine
+from typing import Any, Awaitable, Callable
 from src.ui.core.app import ConfigSnapshot
 from src.ask.ask import Question, Option
 from src.ui.bridges.ask_bridge import AskRequest
@@ -55,15 +55,15 @@ def open_provider_picker(
     apply_provider: Callable[..., Any],
     prompt_text: Callable[
         [TextInputRequest],
-        Coroutine[Any, Any, str | None],
+        Awaitable[str | None],
     ],
     update_provider_api_key: Callable[
         [str, str],
-        Coroutine[Any, Any, None],
+        Awaitable[None],
     ] | None = None,
     test_connection: Callable[
         [],
-        Coroutine[Any, Any, None],
+        Awaitable[None],
     ] | None = None,
 ) -> None:
     cur = read_config()
