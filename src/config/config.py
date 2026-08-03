@@ -67,7 +67,7 @@ class Config:
     backend: Backend | str = Backend.EMPTY
     model: str = ""
     base_url: str = ""
-    api_key: str = ""
+    api_keys: dict[str, str] = field(default_factory=dict)
     skills_dirs: list[str] = field(
         default_factory=list
     )
@@ -91,6 +91,20 @@ class Config:
     max_tokens: int | None = None
     gemini_thinking_budget: int | None = None
     tooling_profile: ToolingProfile | None = None
+
+    @property
+    def api_key(self) -> str:
+        return self.api_keys.get(
+            str(self.backend),
+            "",
+        )
+
+    @api_key.setter
+    def api_key(self, value: str) -> None:
+        backend = str(self.backend)
+        if not backend:
+            return
+        self.api_keys[backend] = value
 
 # ============================================================================
 # Validation
@@ -156,11 +170,33 @@ def config_to_dict(
 def config_from_dict(
     data: dict[str, Any],
 ) -> Config:
-    return Config(
-        backend=data.get(
-            "backend",
+    backend = data.get(
+        "backend",
+        "",
+    )
+    api_keys = data.get(
+        "api_keys",
+    )
+
+    if isinstance(api_keys, dict):
+        normalized_api_keys = {
+            str(k): str(v)
+            for k, v in api_keys.items()
+            if isinstance(k, str) and isinstance(v, str)
+        }
+    else:
+        normalized_api_keys = {}
+
+    if not isinstance(api_keys, dict):
+        old_api_key = data.get(
+            "api_key",
             "",
-        ),
+        )
+        if old_api_key and backend:
+            normalized_api_keys[str(backend)] = str(old_api_key)
+
+    return Config(
+        backend=backend,
         model=data.get(
             "model",
             "",
@@ -169,10 +205,7 @@ def config_from_dict(
             "base_url",
             "",
         ),
-        api_key=data.get(
-            "api_key",
-            "",
-        ),
+        api_keys=normalized_api_keys,
         skills_dirs=data.get(
             "skills_dirs",
             [],

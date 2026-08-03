@@ -4,12 +4,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 
-# ==========================================================
-# Request
-# ==========================================================
-
 @dataclass(slots=True)
-class SecretInputRequest:
+class TextInputRequest:
     header: str
     question: str
     placeholder: str | None
@@ -18,39 +14,9 @@ class SecretInputRequest:
     reject: Callable[[Exception], None]
 
 
-# ==========================================================
-# Helpers
-# ==========================================================
-
-def mask_secret(value: str) -> str:
+class TextInputModal:
     """
-    Mask secret value.
-
-    Examples:
-        abc     -> ***
-        abcd    -> ****
-        password123 -> *******d123
-    """
-
-    if not value:
-        return ""
-
-    if len(value) <= 4:
-        return "*" * len(value)
-
-    return (
-        "*" * (len(value) - 4)
-        + value[-4:]
-    )
-
-
-# ==========================================================
-# Widget
-# ==========================================================
-
-class SecretInputModal:
-    """
-    Secret input modal.
+    Plain text input modal.
 
     Keys:
         normal key -> append character
@@ -59,37 +25,29 @@ class SecretInputModal:
         Esc -> cancel
     """
 
-
     def __init__(
         self,
-        req: SecretInputRequest,
+        req: TextInputRequest,
     ):
         self.req = req
         self.value = ""
 
-
-    # ------------------------------------------------------
-    # Input handling
-    # ------------------------------------------------------
-
     def handle_key(
         self,
         key: str,
+        text: str = "",
     ) -> None:
-
         if key in ("escape", "esc"):
             self.req.reject(
                 Exception("cancelled")
             )
             return
 
-
         if key in ("enter", "return"):
             self.req.resolve(
                 self.value.strip()
             )
             return
-
 
         if key in (
             "backspace",
@@ -98,30 +56,28 @@ class SecretInputModal:
             self.value = self.value[:-1]
             return
 
+        printable = text or (
+            key
+            if len(key) == 1
+            else ""
+        )
 
-        if key:
+        if printable:
             self.value += (
-                key
+                printable
                 .replace("\r", "")
                 .replace("\n", "")
             )
 
-
-    # ------------------------------------------------------
-    # Render
-    # ------------------------------------------------------
-
     def render(self) -> list[str]:
-
         shown = (
-            mask_secret(self.value)
+            self.value
             if self.value
             else (
                 self.req.placeholder
                 or ""
             )
         )
-
 
         return [
             f"[{self.req.header}]",

@@ -894,6 +894,19 @@ async def main() -> int:
         asyncio.create_task(
             run_probes(root_ctl)
         )
+
+    async def update_provider_api_key(provider: str, api_key: str) -> None:
+        cfg.api_keys[provider] = api_key
+        await config.save(cfg)
+
+    async def test_connection() -> None:
+        ping = getattr(agent.client, "ping", None)
+        if not callable(ping):
+            raise RuntimeError("current provider does not support ping")
+
+        result = ping()
+        if inspect.isawaitable(result):
+            await result
     
     probe_task = asyncio.create_task(
         run_probes(root_ctl)
@@ -934,12 +947,15 @@ async def main() -> int:
                 "backend": Backend(cfg.backend),
                 "base_url": cfg.base_url,
                 "api_key": cfg.api_key,
+                "api_keys": dict(cfg.api_keys),
                 "model": cfg.model,
             },
 
             persist_disabled_skills=persist_disabled_skills,
 
             apply_provider=apply_provider,
+            update_provider_api_key=update_provider_api_key,
+            test_connection=test_connection,
 
             start_burp_bridge=start_burp_bridge,
         )

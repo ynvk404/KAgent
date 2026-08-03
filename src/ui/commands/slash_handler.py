@@ -286,7 +286,7 @@ def suggest_closest(target: str, known: list[str]) -> str | None:
 # Port của handleSlash() bên TS. Nhận thẳng instance App thay vì danh
 # sách ~15 tham số rời rạc như bản TS — vì trong kiến trúc Textual hiện
 # tại (xem app.py), toàn bộ các "dependency" đó (agent, dispatch,
-# read_config, apply_provider, prompt_secret, run_agent_turn,
+# read_config, apply_provider, prompt_text, run_agent_turn,
 # run_agent_compact, start_burp_bridge, persist_disabled_skills,
 # on_skill_created) đã là thuộc tính/method có sẵn trên self (Pentestagent).
 #
@@ -556,7 +556,14 @@ def handle_slash(app: "Pentestagent", raw: str) -> bool:
     # ---------------------------------------------------
     if cmd == "/provider":
         from src.ui.commands.provider_picker import open_provider_picker
-        open_provider_picker(dispatch, app.read_config, app.apply_provider, app.prompt_secret)
+        open_provider_picker(
+            dispatch,
+            app.read_config,
+            app.apply_provider,
+            app.prompt_text,
+            app.update_provider_api_key,
+            app.test_connection,
+        )
         return True
 
     # ---------------------------------------------------

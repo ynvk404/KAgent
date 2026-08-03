@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -38,6 +39,60 @@ def test_returns_default_config_when_missing(
 
     assert cfg.backend == Backend.EMPTY
     assert cfg.mcp_servers == []
+
+
+def test_migrates_legacy_api_key(
+    temp_config,
+):
+    temp_config.write_text(
+        json.dumps(
+            {
+                "backend": "groq",
+                "api_key": "old-key",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load()
+
+    assert cfg.api_keys["groq"] == "old-key"
+    assert cfg.api_key == "old-key"
+
+
+def test_api_key_tracks_backend_without_dropping_other_keys(
+    temp_config,
+):
+    cfg = default_config()
+
+    cfg.backend = Backend.GROQ
+    cfg.api_key = "groq-key"
+
+    cfg.backend = Backend.KIMI
+    cfg.api_key = "kimi-key"
+
+    assert cfg.api_keys == {
+        "groq": "groq-key",
+        "kimi": "kimi-key",
+    }
+
+
+def test_switching_provider_returns_current_backend_key(
+    temp_config,
+):
+    cfg = default_config()
+
+    cfg.backend = Backend.GROQ
+    cfg.api_key = "groq-key"
+
+    cfg.backend = Backend.KIMI
+    cfg.api_key = "kimi-key"
+
+    cfg.backend = Backend.GROQ
+    assert cfg.api_key == "groq-key"
+
+    cfg.backend = Backend.KIMI
+    assert cfg.api_key == "kimi-key"
 
 
 @pytest.mark.asyncio
@@ -83,6 +138,40 @@ async def test_round_trips_save_load(
         reloaded.mcp_servers[0].command
         == "npx"
     )
+
+
+@pytest.mark.asyncio
+async def test_round_trips_multiple_provider_api_keys(
+    temp_config,
+):
+    cfg = default_config()
+
+    cfg.backend = Backend.GROQ
+    cfg.api_key = "xxx"
+
+    cfg.backend = Backend.KIMI
+    cfg.api_key = "yyy"
+
+    await save(cfg)
+
+    saved = json.loads(
+        temp_config.read_text(
+            encoding="utf-8",
+        )
+    )
+
+    assert saved["api_keys"] == {
+        "groq": "xxx",
+        "kimi": "yyy",
+    }
+    assert "api_key" not in saved
+
+    reloaded = load()
+
+    assert reloaded.api_keys == {
+        "groq": "xxx",
+        "kimi": "yyy",
+    }
 
 
 @pytest.mark.asyncio

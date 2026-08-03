@@ -90,9 +90,8 @@ from src.ui.widgets.banner import BannerData
 from src.ui.widgets.input_box import InputBox
 from src.ui.widgets.mention_menu import MentionMenu
 from src.ui.widgets.permission_modal import PermissionModal
-from src.ui.widgets.secret_input_modal import SecretInputModal
 from src.ui.widgets.skills_modal import SkillsModal
-from src.ui.widgets.secret_input_modal import SecretInputRequest
+from src.ui.widgets.text_input_modal import TextInputModal, TextInputRequest
 from src.ui.widgets.slash_menu import SlashMenu
 from src.ui.widgets.status_bar import StatusBar, StatusProps
 from src.ui.widgets.transcript import Transcript, entry_view
@@ -136,12 +135,15 @@ class ProviderChange:
 
 ApplyProvider = Callable[[ProviderChange], Awaitable[None]]
 PersistDisabledSkills = Callable[[list[str]], Awaitable[None]]
+UpdateProviderApiKey = Callable[[str, str], Awaitable[None]]
+TestConnection = Callable[[], Awaitable[None]]
 
 
 class ConfigSnapshot(TypedDict):
     backend: Backend
     base_url: str
     api_key: str
+    api_keys: dict[str, str]
     model: str
 
 
@@ -158,6 +160,8 @@ class AppProps:
     parent_signal: asyncio.Event
     read_config: Callable[[], ConfigSnapshot]
     apply_provider: ApplyProvider
+    update_provider_api_key: UpdateProviderApiKey | None = None
+    test_connection: TestConnection | None = None
 
     bind_perm_publisher: (
         Callable[[Callable[[BridgedPermissionRequest  | None], None]], None] | None
@@ -191,7 +195,7 @@ class RunAgentOptions:
 # Textual view-sync adapters (port của phần render JSX bên TS)
 #
 # Các class dưới đây (Transcript, InputBox, entry_view, AskModal,
-# PermissionModal, SkillsModal, SecretInputModal, MentionMenu, SlashMenu)
+# PermissionModal, SkillsModal, TextInputModal, MentionMenu, SlashMenu)
 # đều là PURE RENDERER — không phải Textual Widget, chỉ tính ra
 # text/dataclass thuần. Phần adapter này chịu trách nhiệm nối chúng vào
 # cây widget Textual thật (RichLog/Static) trong class Pentestagent.
@@ -294,6 +298,8 @@ class Pentestagent(App):
 
         self.read_config = props.read_config
         self.apply_provider = props.apply_provider
+        self.update_provider_api_key = props.update_provider_api_key
+        self.test_connection = props.test_connection
 
         self.set_yolo = props.set_yolo
         self.bind_banner_publisher = props.bind_banner_publisher
@@ -325,7 +331,7 @@ class Pentestagent(App):
         # useState
         self.slash_idx = 0
         self.mention_idx = 0
-        self.secret_input = None
+        self.text_input = None
 
         # derived menu state (được _recompute_menus() cập nhật mỗi khi
         # input value đổi — tương đương phần tính slashMatches/mentionMatches
@@ -373,13 +379,13 @@ class Pentestagent(App):
         self.pasted_text: dict[int, str] = {}
         self.pasted_text_seq = 0
 
-        # secret prompt
-        self.secret_future: asyncio.Future[str] | None = None
+        # text prompt
+        self.text_input_future: asyncio.Future[str] | None = None
 
         # --- Textual view-sync state (port của phần render JSX) ---
         # Cache modal có state nội bộ (value gõ dở, idx đang chọn...) —
         # phải tái sử dụng instance qua nhiều lần vẽ, xem _get_active_modal().
-        self._secret_modal: SecretInputModal | None = None
+        self._text_input_modal: TextInputModal | None = None
         self._ask_modal: AskModal | None = None
         self._perm_modal: PermissionModal | None = None
         self._skills_modal: SkillsModal | None = None
@@ -414,7 +420,7 @@ class Pentestagent(App):
         self.live_entry_static = Static(id="live-entry")
         yield self.live_entry_static
 
-        # Overlay: đúng MỘT trong {secret input, ask, perm, skills, mention
+        # Overlay: đúng MỘT trong {text input, ask, perm, skills, mention
         # menu, slash menu} hiện tại một thời điểm — nội dung được thay
         # trong _sync_overlay(), không mount/remove widget con vì các modal
         # không phải Widget.
@@ -496,50 +502,50 @@ class Pentestagent(App):
         )
 
     # ==========================================================
-    # Secret input
+    # Text input
     # ==========================================================
 
-    async def prompt_secret(
+    async def prompt_text(
         self,
-        input_req: SecretInputRequest,
+        input_req: TextInputRequest,
     ) -> str:
         loop = asyncio.get_running_loop()
 
-        self.secret_future = loop.create_future()
+        self.text_input_future = loop.create_future()
 
-        self.secret_input = SecretInputRequest(
+        self.text_input = TextInputRequest(
             header=input_req.header,
             question=input_req.question,
             placeholder=input_req.placeholder,
-            resolve=lambda value: self.resolve_secret(value),
-            reject=lambda err: self.reject_secret(err),
+            resolve=lambda value: self.resolve_text_input(value),
+            reject=lambda err: self.reject_text_input(err),
         )
 
         self.refresh()
 
-        return await self.secret_future
+        return await self.text_input_future
 
-    def resolve_secret(
+    def resolve_text_input(
         self,
         value: str,
     ) -> None:
-        if self.secret_future and not self.secret_future.done():
-            self.secret_future.set_result(value)
+        if self.text_input_future and not self.text_input_future.done():
+            self.text_input_future.set_result(value)
 
-        self.secret_future = None
-        self.secret_input = None
+        self.text_input_future = None
+        self.text_input = None
 
         self.refresh()
 
-    def reject_secret(
+    def reject_text_input(
         self,
         err: Exception,
     ) -> None:
-        if self.secret_future and not self.secret_future.done():
-            self.secret_future.set_exception(err)
+        if self.text_input_future and not self.text_input_future.done():
+            self.text_input_future.set_exception(err)
 
-        self.secret_future = None
-        self.secret_input = None
+        self.text_input_future = None
+        self.text_input = None
 
         self.refresh()
 
@@ -646,7 +652,7 @@ class Pentestagent(App):
             return
 
         # 1. Modal overlays consume keys before us.
-        if await self._handle_modal_key(key):
+        if await self._handle_modal_key(key, raw_input):
             return
 
         # 2. History scrolling is the terminal's own job now — the transcript
@@ -853,17 +859,17 @@ class Pentestagent(App):
     # ==========================================================
 
     def _get_active_modal(self):
-        """Đúng MỘT modal đang active, ưu tiên secretInput > pendingAsk >
+        """Đúng MỘT modal đang active, ưu tiên textInput > pendingAsk >
         pendingPerm > pendingSkills — khớp thứ tự gốc. Tái sử dụng
         instance cũ nếu request chưa đổi (so identity `is`, không phải
         `==`) vì các modal này giữ state nội bộ (value gõ dở, idx đang
         chọn) cần sống xuyên suốt nhiều lần vẽ."""
 
-        if self.secret_input:
-            if self._secret_modal is None or self._secret_modal.req is not self.secret_input:
-                self._secret_modal = SecretInputModal(self.secret_input)
-            return self._secret_modal
-        self._secret_modal = None
+        if self.text_input:
+            if self._text_input_modal is None or self._text_input_modal.req is not self.text_input:
+                self._text_input_modal = TextInputModal(self.text_input)
+            return self._text_input_modal
+        self._text_input_modal = None
 
         if self.state.pending_ask:
             if self._ask_modal is None or self._ask_modal.req is not self.state.pending_ask:
@@ -889,7 +895,11 @@ class Pentestagent(App):
 
         return None
 
-    async def _handle_modal_key(self, key: str) -> bool:
+    async def _handle_modal_key(
+        self,
+        key: str,
+        raw_input: str = "",
+    ) -> bool:
         """True nếu có modal active và đã xử lý phím này (caller nên
         return luôn, không rơi xuống các bước xử lý input thường).
         modal.handle_key() có thể trả về coroutine chưa await (trường
@@ -899,7 +909,10 @@ class Pentestagent(App):
         if modal is None:
             return False
 
-        result = modal.handle_key(key)
+        if isinstance(modal, TextInputModal):
+            result = modal.handle_key(key, raw_input)
+        else:
+            result = modal.handle_key(key)
         if asyncio.iscoroutine(result):
             await result
 

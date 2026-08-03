@@ -6,7 +6,7 @@ from src.ui.core.app import ConfigSnapshot
 from src.ask.ask import Question, Option
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.core.state import Action, Append, SetAsk, TranscriptEntry
-from src.ui.widgets.secret_input_modal import SecretInputRequest
+from src.ui.widgets.text_input_modal import TextInputRequest
 from src.llm.providers import (
     KIMI_DEFAULT_BASE_URL,
     GROQ_DEFAULT_BASE_URL,
@@ -14,6 +14,16 @@ from src.llm.providers import (
     OPENROUTER_DEFAULT_BASE_URL,
     DEEPSEEK_DEFAULT_BASE_URL,
     ANTHROPIC_DEFAULT_BASE_URL,
+)
+
+REMOTE_PROVIDERS: tuple[tuple[str, str, str], ...] = (
+    ("kimi", "Kimi", "sk-..."),
+    ("groq", "Groq", "gsk_..."),
+    ("gemini", "Gemini", "AIza..."),
+    ("anthropic", "Claude", "sk-ant-..."),
+    ("openrouter", "OpenRouter", "sk-or-..."),
+    ("deepseek", "DeepSeek", "sk-..."),
+    ("openai-compat", "OpenAI-compatible", "sk-..."),
 )
 # ============================================================
 # Constants
@@ -29,14 +39,32 @@ from src.llm.providers import (
 # Provider picker
 # ============================================================
 
+def mask_api_key(value: str) -> str:
+    if not value:
+        return "(empty)"
+
+    if len(value) <= 8:
+        return "*" * len(value)
+
+    return f"{value[:4]}****{value[-5:]}"
+
+
 def open_provider_picker(
     dispatch: Callable[[Action], None],
     read_config: Callable[[], ConfigSnapshot],
     apply_provider: Callable[..., Any],
-    prompt_secret: Callable[
-        [SecretInputRequest],
+    prompt_text: Callable[
+        [TextInputRequest],
         Coroutine[Any, Any, str | None],
     ],
+    update_provider_api_key: Callable[
+        [str, str],
+        Coroutine[Any, Any, None],
+    ] | None = None,
+    test_connection: Callable[
+        [],
+        Coroutine[Any, Any, None],
+    ] | None = None,
 ) -> None:
     cur = read_config()
     current_backend = cur.get("backend", "")
@@ -89,6 +117,18 @@ def open_provider_picker(
 
         backend = "openai-compat"
 
+        if picked.startswith("Change API key"):
+            open_change_api_key_picker()
+            return
+
+        if picked.startswith("Show current config"):
+            show_current_config()
+            return
+
+        if picked.startswith("Test connection"):
+            await run_test_connection()
+            return
+
         for prefix, value in backend_map.items():
             if picked.startswith(prefix):
                 backend = value
@@ -96,7 +136,15 @@ def open_provider_picker(
 
         config = read_config()
         config_base_url = config.get("base_url") or ""
-        config_api_key = config.get("api_key") or ""
+        config_api_keys = config.get("api_keys", {}) or {}
+        config_api_key = (
+            config_api_keys.get(backend, "")
+            if isinstance(config_api_keys, dict)
+            else ""
+        )
+
+        if not config_api_key and config.get("backend") == backend:
+            config_api_key = config.get("api_key") or ""
 
         if (
             backend == "openai-compat"
@@ -125,14 +173,11 @@ def open_provider_picker(
         ) -> bool:
             if (
                 backend == target_backend
-                and (
-                    config.get("backend") != target_backend
-                    or not config.get("api_key")
-                )
+                and not config_api_key
             ):
                 try:
-                    api_key = await prompt_secret(
-                        SecretInputRequest(
+                    api_key = await prompt_text(
+                        TextInputRequest(
                             header=header,
                             question=question,
                             placeholder=placeholder,
@@ -276,7 +321,7 @@ def open_provider_picker(
 
         api_key = (
             config_api_key
-            if backend == "openai-compat" or config.get("backend") == backend
+            if backend == "openai-compat" or backend in default_urls
             else ""
         )
 
@@ -294,6 +339,176 @@ def open_provider_picker(
             apply_provider,
         )
 
+    async def change_api_key(
+        provider: str,
+        label: str,
+        placeholder: str,
+    ) -> None:
+        dispatch(SetAsk(req=None))
+
+        if update_provider_api_key is None:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text="Change API key is not available in this session.",
+                    )
+                )
+            )
+            return
+
+        try:
+            api_key = await prompt_text(
+                TextInputRequest(
+                    header=f"{label} API key",
+                    question=f"Enter new {label} API key",
+                    placeholder=placeholder,
+                    resolve=lambda _value: None,
+                    reject=lambda _err: None,
+                )
+            )
+        except Exception:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text=f"{label} API key update cancelled.",
+                    )
+                )
+            )
+            return
+
+        if not api_key:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text=f"{label} key cannot be empty.",
+                    )
+                )
+            )
+            return
+
+        await update_provider_api_key(provider, api_key)
+
+        dispatch(
+            Append(
+                entry=TranscriptEntry(
+                    kind="system",
+                    text=f"{label} API key updated.",
+                )
+            )
+        )
+
+    def open_change_api_key_picker() -> None:
+        def on_change_resolve(picked_provider: str) -> None:
+            for provider, label, placeholder in REMOTE_PROVIDERS:
+                if picked_provider.startswith(label):
+                    asyncio.ensure_future(
+                        change_api_key(provider, label, placeholder)
+                    )
+                    return
+
+            dispatch(SetAsk(req=None))
+
+        req = AskRequest(
+            question=Question(
+                header="provider key",
+                question="Which provider API key should be changed?",
+                options=[
+                    Option(
+                        label=label,
+                        description=f"update stored {provider} API key",
+                    )
+                    for provider, label, _placeholder in REMOTE_PROVIDERS
+                ],
+            ),
+            resolve=on_change_resolve,
+            reject=lambda _err: dispatch(SetAsk(req=None)),
+        )
+
+        dispatch(SetAsk(req=req))
+
+    def show_current_config() -> None:
+        config = read_config()
+        api_keys = config.get("api_keys", {}) or {}
+
+        if isinstance(api_keys, dict) and api_keys:
+            key_lines = [
+                f"- {provider}: {mask_api_key(value)}"
+                for provider, value in sorted(api_keys.items())
+            ]
+        else:
+            key_lines = ["- (none)"]
+
+        dispatch(
+            Append(
+                entry=TranscriptEntry(
+                    kind="system",
+                    text="\n".join(
+                        [
+                            "Backend:",
+                            f"{config.get('backend') or '(unset)'}",
+                            "Model:",
+                            f"{config.get('model') or '(unset)'}",
+                            "Base URL:",
+                            f"{config.get('base_url') or '(unset)'}",
+                            "",
+                            "API keys:",
+                            *key_lines,
+                        ]
+                    ),
+                )
+            )
+        )
+
+    async def run_test_connection() -> None:
+        config = read_config()
+
+        if test_connection is None:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text="Test connection is not available in this session.",
+                    )
+                )
+            )
+            return
+
+        try:
+            await test_connection()
+        except Exception as err:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text="\n".join(
+                            [
+                                "✗ Connection failed",
+                                str(err),
+                            ]
+                        ),
+                    )
+                )
+            )
+            return
+
+        dispatch(
+            Append(
+                entry=TranscriptEntry(
+                    kind="system",
+                    text="\n".join(
+                        [
+                            "✓ Connection OK",
+                            f"Provider: {config.get('backend') or '(unset)'}",
+                            f"Model: {config.get('model') or '(unset)'}",
+                        ]
+                    ),
+                )
+            )
+        )
+
     def on_resolve(picked: str) -> None:
         asyncio.ensure_future(resolve(picked))
 
@@ -303,8 +518,11 @@ def open_provider_picker(
     req = AskRequest(
         question=Question(
             header="provider",
-            question="Which LLM backend should pentestagent use?",
+            question="Select LLM provider or manage provider settings",
             options=[
+                Option(label="Change API key", description="update a saved provider key"),
+                Option(label="Test connection", description="ping the current provider"),
+                Option(label="Show current config", description="display current provider settings"),
                 Option(label=label_kimi, description="remote — api.moonshot.ai OpenAI-compatible API"),
                 Option(label=label_groq, description="remote — api.groq.com OpenAI-compatible Chat API"),
                 Option(label=label_gemini, description="remote — Gemini API with native tool calls"),
