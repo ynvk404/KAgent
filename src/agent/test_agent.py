@@ -108,6 +108,36 @@ class EchoTool:
         )
 
 
+class NamedTool:
+
+    def __init__(self, name: str, description: str):
+        self._name = name
+        self._description = description
+
+    def name(self) -> str:
+        return self._name
+
+    def description(self) -> str:
+        return self._description
+
+    def schema(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {},
+        }
+
+    def requires_permission(self) -> bool:
+        return False
+
+    async def run(
+        self,
+        args: dict[str, Any],
+        signal,
+        prompter,
+    ) -> str:
+        return ""
+
+
 def make_agent_with_client(
     scripted: list[ChatResponse],
 ):
@@ -183,6 +213,43 @@ def collect():
         "events": events,
         "sink": sink,
     }
+
+
+def test_tools_token_estimate_cache_key_tracks_tool_names_not_only_count():
+
+    tools = ToolRegistry()
+    tools.register(
+        NamedTool(
+            "a",
+            "x",
+        )
+    )
+
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=tools,
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+        )
+    )
+
+    first = agent.tools_token_estimate()
+
+    agent.tools.tools.clear()
+    agent.tools.register(
+        NamedTool(
+            "very_long_replacement_tool_name",
+            "y" * 1000,
+        )
+    )
+
+    second = agent.tools_token_estimate()
+
+    assert second != first
+    assert second > first
 
 
 @pytest.mark.asyncio
@@ -711,6 +778,19 @@ async def test_auto_compacts_before_next_turn_when_over_threshold():
         )
     )
 
+    agent.history.append(
+        Message(
+            role="user",
+            content="previous useful turn",
+        )
+    )
+    agent.history.append(
+        Message(
+            role="assistant",
+            content="previous useful answer",
+        )
+    )
+
     collector = collect()
 
     await agent.run(
@@ -743,6 +823,44 @@ async def test_auto_compacts_before_next_turn_when_over_threshold():
     ) in triggered_summary
 
     assert "auto-compacted" in compact_events[-1]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_auto_compact_skip_does_not_emit_success_when_history_is_empty():
+
+    agent = make_agent([])
+
+    skipped = await agent.compact_in_place(
+        FakeSignal()
+    )
+
+    assert skipped is False
+
+    collector = collect()
+
+    await agent.auto_compact(
+        FakeSignal(),
+        collector["sink"],
+        trigger_tokens=1,
+        history_tokens=agent.approx_tokens(),
+        incoming_tokens=0,
+        tools_tokens=0,
+    )
+
+    compact_events = [
+        e
+        for e in collector["events"]
+        if e["type"] == "compact"
+    ]
+
+    assert len(compact_events) == 2
+    assert "auto-compact triggered" in compact_events[0]["summary"]
+    assert compact_events[1]["summary"] == "auto-compact skipped: nothing to compact"
+    assert not any(
+        "auto-compacted" in e["summary"]
+        for e in compact_events
+    )
+    assert agent.consecutive_compact_failures == 0
 
 @pytest.mark.asyncio
 async def test_stores_structured_memory_after_manual_compaction():

@@ -391,8 +391,8 @@ class Agent:
         self.pending_skills: set[str] = set()
 
         # Tool token cache
-        self.tools_tokens_cache = 0
-        self.tools_tokens_key = -1
+        self.tools_tokens_cache: int = 0
+        self.tools_tokens_key: tuple[str, ...] | None = None
 
         # Đánh dấu turn hiện tại có chạy tool hay chưa
         self.turn_executed_tool = False
@@ -1127,11 +1127,12 @@ class Agent:
         Kết quả được cache và chỉ tính lại khi số lượng tool thay đổi.
         """
 
-        # Số lượng tool hiện tại
-        count = len(self.tools.names())
+        # names() đã sort sẵn, dùng tuple làm key để phát hiện
+        # đúng khi tool set thay đổi (không chỉ số lượng).
+        tools_key = tuple(self.tools.names())
 
-        # Nếu số tool thay đổi thì tính lại
-        if count != self.tools_tokens_key:
+        # Nếu tool set thay đổi thì tính lại
+        if tools_key != self.tools_tokens_key:
 
             # Chuyển toàn bộ Tool Schema thành JSON
             tools_json = json.dumps(
@@ -1143,7 +1144,7 @@ class Agent:
             self.tools_tokens_cache = len(tools_json) // 4
 
             # Cập nhật cache key
-            self.tools_tokens_key = count
+            self.tools_tokens_key = tools_key
 
         return self.tools_tokens_cache
 
@@ -2459,13 +2460,14 @@ class Agent:
         )
 
         compaction_succeeded = False
+        compaction_error: Exception | None = None
 
         try:
-            await self.compact_in_place(signal)
-            compaction_succeeded = True
+            compaction_succeeded = await self.compact_in_place(signal)
 
         except Exception as err:
 
+            compaction_error = err
             self.consecutive_compact_failures += 1
 
             log_error(
@@ -2510,24 +2512,36 @@ class Agent:
                 }
             )
 
+        elif compaction_error is None:
+
+            emit(
+                {
+                    "type": "compact",
+                    "summary": "auto-compact skipped: nothing to compact",
+                    "tokensBefore": tokens_before,
+                }
+            )
+
 
     async def compact_in_place(
         self,
         signal,
-    ) -> None:
+    ) -> bool:
         """
         Thực hiện compact history tại chỗ.
 
+        Trả về False nếu không có gì để compact (skip, không
+        phải lỗi). Trả về True nếu compact thành công.
+
         Không emit event.
-        Không bắt exception.
-        Mọi lỗi sẽ throw ra ngoài để auto_compact()
+        Mọi lỗi thật sự sẽ throw ra ngoài để auto_compact()
         hoặc caller xử lý.
         """
 
         history_snap = self.history.copy()
 
         if len(history_snap) <= 1:
-            return
+            return False
 
         req = ChatRequest(
             model=self.client.model(),
@@ -2597,6 +2611,8 @@ class Agent:
         await self.save_context_snapshot(
             "auto compact"
         )
+
+        return True
 
 # ==========================================================
 # Module-level Helper Functions
