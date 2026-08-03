@@ -1247,6 +1247,7 @@ class Pentestagent(App):
                 value,
                 signal=abort_event,
                 emit=handle_event,
+                opts=opts.run_options if opts else None,
             )
 
         except Exception as err:

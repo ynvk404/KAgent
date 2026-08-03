@@ -43,6 +43,9 @@ class DummyAgent:
     def thinking_is_enabled(self) -> bool:
         return self.thinking
 
+    def is_running(self) -> bool:
+        return False
+
     async def set_thinking_enabled(self, enabled: bool) -> None:
         self.thinking = enabled
 
@@ -52,18 +55,25 @@ class DummyAgent:
     async def clear_target(self) -> None:
         self.target.clear()
 
+    async def coverage_context(self, signal) -> str:
+        return "coverage fixture"
+
 
 @dataclass(slots=True)
 class DummyApp:
     agent: DummyAgent = field(default_factory=DummyAgent)
     state: DummyState = field(default_factory=DummyState)
     actions: list[object] = field(default_factory=list)
+    turns: list[tuple[str, object | None]] = field(default_factory=list)
 
     def dispatch(self, action: object) -> None:
         self.actions.append(action)
 
     def apply_yolo(self, on: bool) -> None:
         self.state.yolo = on
+
+    async def run_agent_turn(self, value: str, opts=None) -> None:
+        self.turns.append((value, opts))
 
 
 def last_text(app: DummyApp) -> str:
@@ -309,3 +319,43 @@ def test_target_invalid_input_shows_usage():
 
     assert app.agent.target.base_url() == ""
     assert last_text(app) == "usage: /target <url|clear>"
+
+
+def test_plan_turn_disables_agent_tools():
+    async def run() -> None:
+        app = DummyApp()
+
+        assert handle_slash(cast(Pentestagent, app), "/plan fix auth flow")
+        await asyncio.sleep(0)
+
+        assert len(app.turns) == 1
+        prompt, opts = app.turns[0]
+        assert "Plan this objective:" in prompt
+        assert "fix auth flow" in prompt
+        assert opts is not None
+        assert opts.transcript_user_text == "/plan fix auth flow"
+        assert opts.system_text == "planning only — tools disabled"
+        assert opts.run_options is not None
+        assert opts.run_options.tools is False
+
+    asyncio.run(run())
+
+
+def test_next_turn_disables_agent_tools():
+    async def run() -> None:
+        app = DummyApp()
+
+        assert handle_slash(cast(Pentestagent, app), "/next test checkout")
+        await asyncio.sleep(0)
+
+        assert len(app.turns) == 1
+        prompt, opts = app.turns[0]
+        assert "Objective for next steps:" in prompt
+        assert "coverage fixture" in prompt
+        assert opts is not None
+        assert opts.transcript_user_text == "/next test checkout"
+        assert opts.system_text == "coverage-driven next steps — tools disabled"
+        assert opts.run_options is not None
+        assert opts.run_options.tools is False
+
+    asyncio.run(run())
