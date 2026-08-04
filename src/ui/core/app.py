@@ -1289,6 +1289,15 @@ class Pentestagent(App):
             self.session_debug.write("compact_start")
 
         self.dispatch(
+            Append(
+                entry=TranscriptEntry(
+                    kind="system",
+                    text="Compacting conversation...",
+                )
+            )
+        )
+
+        self.dispatch(
             SetBusy(
                 busy=True,
             )

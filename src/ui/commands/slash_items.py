@@ -102,12 +102,6 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     ),
 
     SlashItem(
-        name="/update",
-        args="[version]",
-        description="fetch GitHub release updates and install",
-    ),
-
-    SlashItem(
         name="/yolo",
         args="[on|off|default]",
         description="show or set auto-approve mode for tool calls",

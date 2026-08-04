@@ -294,7 +294,7 @@ class BrowserCaptureClearTool(BaseCaptureTool):
     def requires_permission(self) -> bool:
         return True  # Thao tác xóa dữ liệu cần xác nhận quyền
 
-    def summarize(self) -> dict[str, str]:
+    def summarize(self, args: dict[str, Any]) -> dict[str, str]:
         return {
             "summary": "clear browser capture store",
             "detail": (
@@ -304,7 +304,7 @@ class BrowserCaptureClearTool(BaseCaptureTool):
             ),
         }
 
-    def permission_hints(self) -> dict[str, bool]:
+    def permission_hints(self, args: dict[str, Any]) -> dict[str, bool]:
         return {"noSessionCache": True}
 
     async def run(self, args=None, signal=None, prompter=None) -> str:

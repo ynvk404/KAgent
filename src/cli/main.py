@@ -253,7 +253,7 @@ class ParsedFlags:
     yolo: bool = False
     browser: bool = False
     burp: bool = False
-    burp_port: int = 0  # Cổng mặc định 8080 nếu dùng TS parser
+    burp_port: int = 0 
     no_stream: bool = False
     log_path: str = ""
     debug_session: bool = False
@@ -276,7 +276,7 @@ notice_holder = NoticeHolder()
 
 def parse_flags(argv: list[str]) -> ParsedFlags:
     out = ParsedFlags(
-        burp_port=9999,
+        burp_port=8888,
         debug_session=os.getenv("PENTESTAGENT_DEBUG_SESSION") == "1",
         debug_session_path=os.getenv("PENTESTAGENT_DEBUG_SESSION_PATH", ""),
     )
@@ -632,7 +632,7 @@ async def main() -> int:
                 old_port=old_port,
             )
 
-        ingest_handle = create_bridge(port or 9999)
+        ingest_handle = create_bridge(port or 8888)
         return BurpBridgeResult(
             status="started",
             state=BurpBridgeState(
