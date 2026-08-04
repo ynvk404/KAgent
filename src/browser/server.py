@@ -6,7 +6,7 @@ import logging
 import re
 import secrets
 import threading
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
@@ -17,6 +17,18 @@ logger = logging.getLogger(__name__)
 
 # 4 MiB — bigger than any reasonable single response body slice
 MAX_BODY_BYTES = 4 * 1024 * 1024
+
+
+class DataclassJSONEncoder(json.JSONEncoder):
+    """CaptureStore returns dataclass instances (CapturedRequest, EndpointSummary,
+    BurpTask, BurpIssue, ...) from its list_*/status methods. json.dumps() doesn't
+    know how to serialize those out of the box, so every GET endpoint that returns
+    them would raise TypeError without this encoder."""
+
+    def default(self, o: Any) -> Any:
+        if is_dataclass(o) and not isinstance(o, type):
+            return asdict(o)
+        return super().default(o)
 
 
 @dataclass(slots=True)
@@ -63,7 +75,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def send_json(self, payload: Any, status: int = 200, extra_headers: dict[str, str] | None = None) -> None:
-        body = json.dumps(payload).encode("utf-8")
+        body = json.dumps(payload, cls=DataclassJSONEncoder).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -177,9 +189,11 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             length = int(content_length_str)
+            if length < 0:
+                raise ValueError("negative content-length")
             if length > MAX_BODY_BYTES:
                 raise ValueError("payload too large")
-            
+
             body = self.rfile.read(length).decode("utf-8")
             parsed = json.loads(body)
 
@@ -192,6 +206,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         except ValueError as exc:
+            logger.warning(
+                "burp bridge bad request",
+                extra={"err": str(exc)},
+            )
             self.send_text(
                 "bad request",
                 status=400,
@@ -338,8 +356,10 @@ def constant_time_equal(a: str, b: str) -> bool:
 
 
 def valid_loopback_host(raw: str | None) -> bool:
+    # HTTP/1.1 clients are required to send Host. Treat a missing header as
+    # untrusted rather than allowing it through — fail closed, not open.
     if not raw:
-        return True
+        return False
 
     host = raw
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from typing import cast
-
+from src.ui.core.app import Pentestagent, RunAgentOptions
 from src.ui.commands.slash_handler import handle_slash
 from src.ui.core.app import Pentestagent
 from src.ui.core.state import Append
@@ -64,8 +64,7 @@ class DummyApp:
     agent: DummyAgent = field(default_factory=DummyAgent)
     state: DummyState = field(default_factory=DummyState)
     actions: list[object] = field(default_factory=list)
-    turns: list[tuple[str, object | None]] = field(default_factory=list)
-
+    turns: list[tuple[str, RunAgentOptions | None]] = field(default_factory=list)
     def dispatch(self, action: object) -> None:
         self.actions.append(action)
 
