@@ -427,9 +427,12 @@ def handle_slash(app: "Pentestagent", raw: str) -> bool:
     # ---------------------------------------------------
     if cmd == "/burp":
         bridge = app.start_burp_bridge
-        if bridge is None:
+        stop_bridge = app.close_burp_bridge
+        status_bridge = app.burp_bridge_status
+
+        if bridge is None or stop_bridge is None or status_bridge is None:
             dispatch(
-                Append(
+                Append( 
                     entry=TranscriptEntry(
                         kind="error",
                         text="/burp is unavailable in this runtime.",
@@ -438,7 +441,37 @@ def handle_slash(app: "Pentestagent", raw: str) -> bool:
             )
             return True
 
-        port_raw = rest[0] if rest else ""
+        sub = rest[0] if rest else ""
+
+        if sub == "status":
+            async def _status():
+                r = await status_bridge()
+                if r.status == "not_running":
+                    text = "Burp bridge: not running."
+                else:
+                    text = (
+                        f"Burp bridge: running at {r.state.url} (port {r.state.port})\n"
+                        f"Token: {r.state.token}"
+                    )
+                dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
+
+            asyncio.create_task(_status())
+            return True
+
+        if sub == "stop":
+            async def _stop():
+                r = await stop_bridge()
+                text = (
+                    f"Burp bridge stopped (was on port {r.old_port})."
+                    if r.status == "stopped"
+                    else "Burp bridge: nothing to stop (not running)."
+                )
+                dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
+
+            asyncio.create_task(_stop())
+            return True
+
+        port_raw = sub
         port: int | None = None
         if port_raw:
             try:
@@ -451,7 +484,7 @@ def handle_slash(app: "Pentestagent", raw: str) -> bool:
                     Append(
                         entry=TranscriptEntry(
                             kind="error",
-                            text="usage: /burp [port]",
+                            text="usage: /burp [port] | /burp stop | /burp status",
                         )
                     )
                 )
@@ -459,24 +492,25 @@ def handle_slash(app: "Pentestagent", raw: str) -> bool:
 
         async def _burp():
             try:
-                result = await bridge(port)
-                already = result.get("already_running")
-
-                dispatch(
-                    Append(
-                        entry=TranscriptEntry(
-                            kind="system",
-                            text=(
-                                f"Burp bridge already listening at {result['url']}\n"
-                                f"Token: {result['token']}"
-                                if already
-                                else
-                                f"Burp bridge listening at {result['url']}\n"
-                                f"Token: {result['token']}"
-                            ),
+                r = await bridge(port)
+                match r.status:
+                    case "restarted":
+                        text = (
+                            f"Burp bridge stopped on port {r.old_port}, "
+                            f"restarted at {r.state.url}\n"
+                            f"Token: {r.state.token}"
                         )
-                    )
-                )
+                    case "already_running":
+                        text = (
+                            f"Burp bridge already running at {r.state.url}\n"
+                            f"Token: {r.state.token}"
+                        )
+                    case _:  # "started"
+                        text = (
+                            f"Burp bridge listening at {r.state.url}\n"
+                            f"Token: {r.state.token}"
+                        )
+                dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
             except Exception as err:
                 dispatch(
                     Append(

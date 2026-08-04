@@ -8,7 +8,7 @@ import secrets
 import threading
 from dataclasses import asdict, dataclass, is_dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
 from urllib.parse import urlparse
 
 from .store import CaptureStore
@@ -55,6 +55,38 @@ class IngestServerHandle:
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# High-level Burp bridge lifecycle types.
+#
+# These describe the *result* of a start/stop/status operation on the bridge,
+# as used by the CLI wiring layer (start_burp_bridge / close_burp_bridge /
+# burp_bridge_status) and the /burp slash command. They live here so both the
+# wiring layer and the UI layer share one definition instead of ad-hoc dicts.
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class BurpBridgeState:
+    """Snapshot of whether the bridge is running and, if so, how to reach it."""
+    running: bool
+    port: Optional[int] = None
+    url: Optional[str] = None
+    token: Optional[str] = None
+
+
+@dataclass(slots=True)
+class BurpBridgeResult:
+    """Outcome of a start/stop/status call against the bridge."""
+    status: Literal[
+        "started",
+        "already_running",
+        "restarted",
+        "stopped",
+        "not_running",
+    ]
+    state: BurpBridgeState
+    old_port: Optional[int] = None
 
 
 class IngestHTTPServer(ThreadingHTTPServer):

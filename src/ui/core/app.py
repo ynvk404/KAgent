@@ -41,6 +41,7 @@ from src.llm.providers import (
     OPENROUTER_DEFAULT_BASE_URL,
     OPENROUTER_RECOMMENDED_MODELS,
 )
+from src.browser.server import BurpBridgeResult, BurpBridgeState
 from src.logger.session_debug import SessionDebugLog
 from src.skills.template import render_skill_template
 from src.ui.bridges.ask_bridge import AskRequest
@@ -146,13 +147,6 @@ class ConfigSnapshot(TypedDict):
     api_keys: dict[str, str]
     model: str
 
-
-class BurpBridgeInfo(TypedDict):
-    url: str
-    token: str
-    already_running: bool
-
-
 @dataclass(slots=True)
 class AppProps:
     agent: Agent
@@ -179,10 +173,15 @@ class AppProps:
     on_skill_created: Callable[[str], None] | None = None
     bind_notice_publisher: Callable[[Callable[[str], None]], None] | None = None
     start_burp_bridge: (
-        Callable[[int | None], Awaitable[BurpBridgeInfo]] | None
+        Callable[[int | None], Awaitable[BurpBridgeResult]] | None
     ) = None
-    resume_summary: str | None = None
-
+    close_burp_bridge: (
+        Callable[[], Awaitable[BurpBridgeResult]] | None
+    ) = None
+    burp_bridge_status: (
+        Callable[[], Awaitable[BurpBridgeResult]] | None
+    ) = None
+    resume_summary: str | None = None    # ← đảm bảo dòng này còn tồn tại
 
 @dataclass(slots=True)
 class RunAgentOptions:
@@ -311,6 +310,8 @@ class Pentestagent(App):
         self.bind_notice_publisher = props.bind_notice_publisher
 
         self.start_burp_bridge = props.start_burp_bridge
+        self.close_burp_bridge = props.close_burp_bridge
+        self.burp_bridge_status = props.burp_bridge_status
         self.resume_summary = props.resume_summary
 
         # useReducer
