@@ -150,6 +150,9 @@ from src.tools.browser_capture import (
 from src.browser.server import (
     start_ingest_server,
     IngestServerOptions,
+    BurpBridgeResult,
+    BurpBridgeState,
+    IngestServerHandle,
 )
 
 
@@ -162,7 +165,6 @@ from src.ui.core.app import (
     AppProps,
     ConfigSnapshot,
     ProviderChange,
-    BurpBridgeInfo,
 )
 
 from src.ui.widgets.banner import BannerData, ToolSupportPill
@@ -573,66 +575,127 @@ async def main() -> int:
     ingest_handle = None
     ingest_token = secrets.token_hex(16)
 
-    async def start_burp_bridge(
-        port: int | None,
-    ) -> BurpBridgeInfo:
-        global ingest_handle
-
-        # Nếu không truyền port thì dùng mặc định
-        actual_port = port or 9999
-
-        # Đã chạy sẵn
-        if ingest_handle is not None:
-            return {
-                "url": ingest_handle.url,
-                "token": ingest_handle.token,
-                "already_running": True,
-            }
-
-        ingest_handle = start_ingest_server(
-            IngestServerOptions(
-                store=capture_store,
-                port=actual_port,
-                token=ingest_token,
-                on_event=lambda text: (
-                    notice_holder.publish(text)
-                    if getattr(notice_holder, "publish", None)
-                    else None
-                ),
+    def create_bridge(port: int) -> "IngestServerHandle":
+        """Helper duy nhất tạo ingest server — dùng chung cho cả start và restart,
+        tránh lặp code khi thêm option mới cho IngestServerOptions."""
+        try:
+            return start_ingest_server(
+                IngestServerOptions(
+                    store=capture_store,
+                    port=port,
+                    token=ingest_token,
+                    on_event=lambda text: (
+                        notice_holder.publish(text)
+                        if getattr(notice_holder, "publish", None)
+                        else None
+                    ),
+                )
             )
+        except OSError as err:
+            raise RuntimeError(
+                f"Failed to bind port {port}: {err}\n"
+                f"The port may already be in use (for example by another browser bridge).\n"
+                f"Try `/burp <another-port>`."
+            ) from err
+
+
+    async def start_burp_bridge(port: int | None) -> BurpBridgeResult:
+        """Khởi động bridge nếu chưa chạy.
+        - Không truyền port (hoặc port trùng port hiện tại) khi đang chạy -> trả trạng thái hiện tại.
+        - Truyền port khác khi đang chạy -> dừng bridge cũ, khởi động lại ở port mới.
+        """
+        nonlocal ingest_handle
+
+        if ingest_handle is not None:
+            if port is None or port == ingest_handle.port:
+                return BurpBridgeResult(
+                    status="already_running",
+                    state=BurpBridgeState(
+                        running=True,
+                        port=ingest_handle.port,
+                        url=ingest_handle.url,
+                        token=ingest_handle.token,
+                    ),
+                )
+
+            old_port = ingest_handle.port
+            ingest_handle.close()
+            ingest_handle = create_bridge(port)
+            return BurpBridgeResult(
+                status="restarted",
+                state=BurpBridgeState(
+                    running=True,
+                    port=ingest_handle.port,
+                    url=ingest_handle.url,
+                    token=ingest_handle.token,
+                ),
+                old_port=old_port,
+            )
+
+        ingest_handle = create_bridge(port or 9999)
+        return BurpBridgeResult(
+            status="started",
+            state=BurpBridgeState(
+                running=True,
+                port=ingest_handle.port,
+                url=ingest_handle.url,
+                token=ingest_handle.token,
+            ),
         )
 
-        return {
-            "url": ingest_handle.url,
-            "token": ingest_handle.token,
-            "already_running": False,
-        }
-    
-    async def close_burp_bridge() -> None:
-        global ingest_handle
 
+    async def close_burp_bridge() -> BurpBridgeResult:
+        """Dừng bridge nếu đang chạy. Không coi 'chưa chạy' là lỗi."""
+        nonlocal ingest_handle
         handle = ingest_handle
 
-        if handle is not None:
-            handle.close()
-            ingest_handle = None
+        if handle is None:
+            return BurpBridgeResult(
+                status="not_running",
+                state=BurpBridgeState(running=False),
+            )
+
+        handle.close()
+        old_port = handle.port
+        ingest_handle = None
+        return BurpBridgeResult(
+            status="stopped",
+            state=BurpBridgeState(running=False),
+            old_port=old_port,
+        )
+
+
+    async def burp_bridge_status() -> BurpBridgeResult:
+        """Chỉ đọc trạng thái, không thay đổi gì."""
+        handle = ingest_handle
+        if handle is None:
+            return BurpBridgeResult(
+                status="not_running",
+                state=BurpBridgeState(running=False),
+            )
+        return BurpBridgeResult(
+            status="already_running",
+            state=BurpBridgeState(
+                running=True,
+                port=handle.port,
+                url=handle.url,
+                token=handle.token,
+            ),
+        )
+
     if flags.burp:
         try:
-            result = await start_burp_bridge(flags.burp_port)
-
-            sys.stderr.write(
-                f"pentestagent Burp bridge listening at "
-                f"{result['url']}\n"
-                f"pentestagent Burp bridge token: "
-                f"{result['token']}\n"
-                "Set both values in the Burp plugin.\n"
+            burp_start_result = await start_burp_bridge(flags.burp_port)
+            logger.info(
+                "burp bridge auto-started",
+                {
+                    "port": burp_start_result.state.port,
+                    "status": burp_start_result.status,
+                },
             )
-
         except Exception as err:
-            sys.stderr.write(
-                f"warning: --burp failed to start on "
-                f":{flags.burp_port}: {err}\n"
-            )
+            sys.stderr.write(f"warning: failed to start burp bridge: {err}\n")
+
     mcp_results = await asyncio.gather(
         *(discover_mcp_tools(server) for server in session_servers),
         return_exceptions=True,
@@ -958,6 +1021,8 @@ async def main() -> int:
             test_connection=test_connection,
 
             start_burp_bridge=start_burp_bridge,
+            close_burp_bridge=close_burp_bridge,
+            burp_bridge_status=burp_bridge_status,
         )
     )
     await app.run_async()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
@@ -162,6 +163,11 @@ def cap_string(value: str) -> str:
 
 class CaptureStore:
     def __init__(self, max_entries: Optional[int] = None) -> None:
+        # ThreadingHTTPServer dispatches each request on its own thread, so
+        # every method that reads or mutates shared state below takes this
+        # lock. It's re-entrant because some public methods call other
+        # locking methods internally (e.g. ingest_burp_issue -> _upsert_burp_issue).
+        self._lock = threading.RLock()
         self.requests: dict[str, CapturedRequest] = {}
         self.endpoints: dict[str, _EndpointRecord] = {}
         self.snapshots: list[SessionSnapshot] = []
@@ -183,64 +189,65 @@ class CaptureStore:
 
         kind = _str_or_none(obj.get("kind"))
 
-        if kind in ("ws-open", "ws-send", "ws-recv"):
-            ws_url = _str_or_none(obj.get("url"))
-            self._record_endpoint("WS", ws_url if ws_url is not None else "", None, None)
+        with self._lock:
+            if kind in ("ws-open", "ws-send", "ws-recv"):
+                ws_url = _str_or_none(obj.get("url"))
+                self._record_endpoint("WS", ws_url if ws_url is not None else "", None, None)
+                self.last_activity_at = _now_ms()
+                return {"ok": True}
+
+            url = _str_or_none(obj.get("url"))
+            if not url:
+                return {"ok": False, "reason": "missing url"}
+
+            method_raw = _str_or_none(obj.get("method"))
+            method = (method_raw if method_raw is not None else "GET").upper()
+
+            raw_id = obj.get("id")
+            id_seed = raw_id if raw_id is not None else f"{kind or 'wr'}-{self._next_id()}"
+            id_ = f"{kind or 'wr'}:{id_seed}"
+
+            source: RequestSource
+            if kind in ("fetch", "xhr", "ws"):
+                source = kind
+            elif kind:
+                source = "unknown"
+            else:
+                source = "webRequest"
+
+            request_body = cap_body(_coalesce(obj.get("requestBody"), obj.get("reqBody")))
+            response_body_str = _str_or_none(obj.get("respBody"))
+
+            entry = CapturedRequest(
+                id=id_,
+                source=source,
+                tab_id=_int_or_none(obj.get("tabId")),
+                method=method,
+                url=url,
+                type=_str_or_none(obj.get("type")),
+                initiator=_str_or_none(obj.get("initiator")),
+                status=_int_or_none(obj.get("status")),
+                from_cache=_bool_or_none(obj.get("fromCache")),
+                request_headers=self._coerce_headers(
+                    _coalesce(obj.get("requestHeaders"), obj.get("reqHeaders"))
+                ),
+                response_headers=self._coerce_headers(
+                    _coalesce(obj.get("responseHeaders"), obj.get("respHeaders"))
+                ),
+                request_body=request_body,
+                response_body=cap_string(response_body_str) if response_body_str is not None else None,
+                time_start=_float_or_none(obj.get("timeStart")),
+                time_end=_float_or_none(obj.get("timeEnd")),
+                elapsed_ms=_float_or_none(obj.get("elapsedMs")),
+                received_at=_now_ms(),
+            )
+
+            self.requests.pop(id_, None)
+            self.requests[id_] = entry
+            self._record_endpoint(method, url, entry.request_body, self._query_params(url))
+            self._prune_if_needed()
             self.last_activity_at = _now_ms()
             return {"ok": True}
-
-        url = _str_or_none(obj.get("url"))
-        if not url:
-            return {"ok": False, "reason": "missing url"}
-
-        method_raw = _str_or_none(obj.get("method"))
-        method = (method_raw if method_raw is not None else "GET").upper()
-
-        raw_id = obj.get("id")
-        id_seed = raw_id if raw_id is not None else f"{kind or 'wr'}-{self._next_id()}"
-        id_ = f"{kind or 'wr'}:{id_seed}"
-
-        source: RequestSource
-        if kind in ("fetch", "xhr", "ws"):
-            source = kind
-        elif kind:
-            source = "unknown"
-        else:
-            source = "webRequest"
-
-        request_body = cap_body(_coalesce(obj.get("requestBody"), obj.get("reqBody")))
-        response_body_str = _str_or_none(obj.get("respBody"))
-
-        entry = CapturedRequest(
-            id=id_,
-            source=source,
-            tab_id=_int_or_none(obj.get("tabId")),
-            method=method,
-            url=url,
-            type=_str_or_none(obj.get("type")),
-            initiator=_str_or_none(obj.get("initiator")),
-            status=_int_or_none(obj.get("status")),
-            from_cache=_bool_or_none(obj.get("fromCache")),
-            request_headers=self._coerce_headers(
-                _coalesce(obj.get("requestHeaders"), obj.get("reqHeaders"))
-            ),
-            response_headers=self._coerce_headers(
-                _coalesce(obj.get("responseHeaders"), obj.get("respHeaders"))
-            ),
-            request_body=request_body,
-            response_body=cap_string(response_body_str) if response_body_str is not None else None,
-            time_start=_float_or_none(obj.get("timeStart")),
-            time_end=_float_or_none(obj.get("timeEnd")),
-            elapsed_ms=_float_or_none(obj.get("elapsedMs")),
-            received_at=_now_ms(),
-        )
-
-        self.requests.pop(id_, None)
-        self.requests[id_] = entry
-        self._record_endpoint(method, url, entry.request_body, self._query_params(url))
-        self._prune_if_needed()
-        self.last_activity_at = _now_ms()
-        return {"ok": True}
 
     def ingest_snapshot(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
@@ -261,19 +268,21 @@ class CaptureStore:
             local_storage=self._coerce_string_map(obj.get("localStorage")),
             session_storage=self._coerce_string_map(obj.get("sessionStorage")),
         )
-        self.snapshots.append(snap)
-        if len(self.snapshots) > 100:
-            del self.snapshots[: len(self.snapshots) - 100]
-        self.last_activity_at = _now_ms()
+        with self._lock:
+            self.snapshots.append(snap)
+            if len(self.snapshots) > 100:
+                del self.snapshots[: len(self.snapshots) - 100]
+            self.last_activity_at = _now_ms()
         return {"ok": True}
 
     def status(self) -> dict[str, int]:
-        return {
-            "request_count": len(self.requests),
-            "endpoint_count": len(self.endpoints),
-            "snapshot_count": len(self.snapshots),
-            "last_activity_at": self.last_activity_at,
-        }
+        with self._lock:
+            return {
+                "request_count": len(self.requests),
+                "endpoint_count": len(self.endpoints),
+                "snapshot_count": len(self.snapshots),
+                "last_activity_at": self.last_activity_at,
+            }
 
     def list_requests(
         self,
@@ -284,58 +293,64 @@ class CaptureStore:
         substr = url_substr.lower() if url_substr else None
         meth = method.upper() if method else None
         out: list[CapturedRequest] = []
-        for r in reversed(self.requests.values()):
-            if substr and substr not in r.url.lower():
-                continue
-            if meth and r.method != meth:
-                continue
-            out.append(r)
-            if len(out) >= limit:
-                break
+        with self._lock:
+            for r in reversed(self.requests.values()):
+                if substr and substr not in r.url.lower():
+                    continue
+                if meth and r.method != meth:
+                    continue
+                out.append(r)
+                if len(out) >= limit:
+                    break
         return out
 
     def get_request(self, id_: str) -> Optional[CapturedRequest]:
-        return self.requests.get(id_)
+        with self._lock:
+            return self.requests.get(id_)
 
     def list_endpoints(
         self, url_substr: Optional[str] = None, method: Optional[str] = None
     ) -> list[EndpointSummary]:
         substr = url_substr.lower() if url_substr else None
         meth = method.upper() if method else None
-        result = [
-            EndpointSummary(
-                method=e.method,
-                url=e.url,
-                query_params=list(e.query_params),
-                body_params=list(e.body_params),
-                hit_count=e.hit_count,
-                first_seen=e.first_seen,
-                last_seen=e.last_seen,
-            )
-            for e in self.endpoints.values()
-            if (not substr or substr in e.url.lower()) and (not meth or e.method == meth)
-        ]
+        with self._lock:
+            result = [
+                EndpointSummary(
+                    method=e.method,
+                    url=e.url,
+                    query_params=list(e.query_params),
+                    body_params=list(e.body_params),
+                    hit_count=e.hit_count,
+                    first_seen=e.first_seen,
+                    last_seen=e.last_seen,
+                )
+                for e in self.endpoints.values()
+                if (not substr or substr in e.url.lower()) and (not meth or e.method == meth)
+            ]
         result.sort(key=lambda s: s.hit_count, reverse=True)
         return result
 
     def latest_snapshot(self, url_substr: Optional[str] = None) -> Optional[SessionSnapshot]:
-        if not url_substr:
-            return self.snapshots[-1] if self.snapshots else None
-        needle = url_substr.lower()
-        for snap in reversed(self.snapshots):
-            if needle in snap.url.lower():
-                return snap
-        return None
+        with self._lock:
+            if not url_substr:
+                return self.snapshots[-1] if self.snapshots else None
+            needle = url_substr.lower()
+            for snap in reversed(self.snapshots):
+                if needle in snap.url.lower():
+                    return snap
+            return None
 
     def list_snapshots(self) -> list[SessionSnapshot]:
-        return list(self.snapshots)
+        with self._lock:
+            return list(self.snapshots)
 
     def clear(self) -> None:
-        self.requests.clear()
-        self.endpoints.clear()
-        self.snapshots.clear()
-        self.burp_tasks.clear()
-        self.burp_issues.clear()
+        with self._lock:
+            self.requests.clear()
+            self.endpoints.clear()
+            self.snapshots.clear()
+            self.burp_tasks.clear()
+            self.burp_issues.clear()
 
     def ingest_burp_task(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
@@ -344,26 +359,28 @@ class CaptureStore:
         action = obj.get("action")
         if action not in ("scan", "plan", "scope"):
             return {"ok": False, "reason": "action must be scan, plan, or scope"}
-        task = BurpTask(
-            id=f"burp-task-{self._next_id()}",
-            action=action,
-            target=_str_or_none(obj.get("target")),
-            method=_str_or_none(obj.get("method")),
-            url=_str_or_none(obj.get("url")),
-            host=_str_or_none(obj.get("host")),
-            raw_request_b64=_str_or_none(obj.get("rawRequestB64")),
-            notes=_str_or_none(obj.get("notes")),
-            source="burp",
-            created_at=_now_ms(),
-        )
-        self.burp_tasks.append(task)
-        if len(self.burp_tasks) > 1000:
-            del self.burp_tasks[: len(self.burp_tasks) - 1000]
-        self.last_activity_at = _now_ms()
+        with self._lock:
+            task = BurpTask(
+                id=f"burp-task-{self._next_id()}",
+                action=action,
+                target=_str_or_none(obj.get("target")),
+                method=_str_or_none(obj.get("method")),
+                url=_str_or_none(obj.get("url")),
+                host=_str_or_none(obj.get("host")),
+                raw_request_b64=_str_or_none(obj.get("rawRequestB64")),
+                notes=_str_or_none(obj.get("notes")),
+                source="burp",
+                created_at=_now_ms(),
+            )
+            self.burp_tasks.append(task)
+            if len(self.burp_tasks) > 1000:
+                del self.burp_tasks[: len(self.burp_tasks) - 1000]
+            self.last_activity_at = _now_ms()
         return {"ok": True, "task": task}
 
     def list_burp_tasks(self) -> list[BurpTask]:
-        return list(reversed(self.burp_tasks))
+        with self._lock:
+            return list(reversed(self.burp_tasks))
 
     def ingest_burp_issue(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
@@ -377,29 +394,29 @@ class CaptureStore:
             return {"ok": False, "reason": "title, url, and detail required"}
 
         existing_id = _str_or_none(obj.get("id"))
-        issue_id = existing_id if existing_id is not None else f"burp-issue-{self._next_id()}"
-
         severity = _str_or_none(obj.get("severity"))
         confidence = _str_or_none(obj.get("confidence"))
         created_at = _int_or_none(obj.get("createdAt"))
 
-        issue = BurpIssue(
-            id=issue_id,
-            title=title,
-            severity=severity if severity is not None else "Information",
-            confidence=confidence if confidence is not None else "Tentative",
-            url=url,
-            method=_str_or_none(obj.get("method")),
-            parameter=_str_or_none(obj.get("parameter")),
-            detail=detail,
-            remediation=_str_or_none(obj.get("remediation")),
-            path=_str_or_none(obj.get("path")),
-            raw_request_b64=_str_or_none(obj.get("rawRequestB64")),
-            raw_response_b64=_str_or_none(obj.get("rawResponseB64")),
-            created_at=created_at if created_at is not None else _now_ms(),
-        )
-        self._upsert_burp_issue(issue)
-        self.last_activity_at = _now_ms()
+        with self._lock:
+            issue_id = existing_id if existing_id is not None else f"burp-issue-{self._next_id()}"
+            issue = BurpIssue(
+                id=issue_id,
+                title=title,
+                severity=severity if severity is not None else "Information",
+                confidence=confidence if confidence is not None else "Tentative",
+                url=url,
+                method=_str_or_none(obj.get("method")),
+                parameter=_str_or_none(obj.get("parameter")),
+                detail=detail,
+                remediation=_str_or_none(obj.get("remediation")),
+                path=_str_or_none(obj.get("path")),
+                raw_request_b64=_str_or_none(obj.get("rawRequestB64")),
+                raw_response_b64=_str_or_none(obj.get("rawResponseB64")),
+                created_at=created_at if created_at is not None else _now_ms(),
+            )
+            self._upsert_burp_issue(issue)
+            self.last_activity_at = _now_ms()
         return {"ok": True, "issue": issue}
 
     def add_burp_issue(
@@ -419,26 +436,28 @@ class CaptureStore:
         id: Optional[str] = None,
         created_at: Optional[int] = None,
     ) -> None:
-        issue = BurpIssue(
-            id=id if id is not None else f"pf-finding-{self._next_id()}",
-            title=title,
-            severity=severity,
-            confidence=confidence,
-            url=url,
-            method=method,
-            parameter=parameter,
-            detail=detail,
-            remediation=remediation,
-            path=path,
-            raw_request_b64=raw_request_b64,
-            raw_response_b64=raw_response_b64,
-            created_at=created_at if created_at is not None else _now_ms(),
-        )
-        self._upsert_burp_issue(issue)
-        self.last_activity_at = _now_ms()
+        with self._lock:
+            issue = BurpIssue(
+                id=id if id is not None else f"pf-finding-{self._next_id()}",
+                title=title,
+                severity=severity,
+                confidence=confidence,
+                url=url,
+                method=method,
+                parameter=parameter,
+                detail=detail,
+                remediation=remediation,
+                path=path,
+                raw_request_b64=raw_request_b64,
+                raw_response_b64=raw_response_b64,
+                created_at=created_at if created_at is not None else _now_ms(),
+            )
+            self._upsert_burp_issue(issue)
+            self.last_activity_at = _now_ms()
 
     def list_burp_issues(self) -> list[BurpIssue]:
-        return list(reversed(list(self.burp_issues.values())))
+        with self._lock:
+            return list(reversed(list(self.burp_issues.values())))
 
     def _upsert_burp_issue(self, issue: BurpIssue) -> None:
         self.burp_issues[issue.id] = issue

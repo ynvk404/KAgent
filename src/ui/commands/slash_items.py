@@ -63,8 +63,8 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
         name="/burp",
-        args="[port]",
-        description="start the local Burp/pentestagent listener",
+        args="[port|stop]",
+        description="manage the local Burp/PentestAgent bridge listener",
     ),
 
     SlashItem(
