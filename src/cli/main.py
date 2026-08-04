@@ -576,7 +576,7 @@ async def main() -> int:
     async def start_burp_bridge(
         port: int | None,
     ) -> BurpBridgeInfo:
-        global ingest_handle
+        nonlocal ingest_handle
 
         # Nếu không truyền port thì dùng mặc định
         actual_port = port or 9999
@@ -609,7 +609,7 @@ async def main() -> int:
         }
     
     async def close_burp_bridge() -> None:
-        global ingest_handle
+        nonlocal ingest_handle
 
         handle = ingest_handle
 
