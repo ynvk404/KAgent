@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import re
+import shlex
 import urllib.parse
 from typing import Optional
 
@@ -28,6 +30,8 @@ CURL_SKIP_VALUE_FLAGS = {
     "--write-out",
 }
 
+_LINE_CONTINUATION_RE = re.compile(r"\\\r?\n")
+
 
 def finding_request_for_burp(finding) -> str:
     if getattr(finding, "curl", None):
@@ -50,7 +54,7 @@ def http_request_from_curl(
 ) -> Optional[str]:
 
     tokens = shell_words(
-        command.replace("\\\n", " ")
+        _LINE_CONTINUATION_RE.sub(" ", command)
     )
 
     if not tokens:
@@ -183,7 +187,7 @@ def http_request_from_curl(
             i += 1
             if i < len(args):
                 cookie = args[i]
-                if not has_header(headers, "cookie"):
+                if cookie and not has_header(headers, "cookie"):
                     headers.append(
                         f"Cookie: {cookie}"
                     )
@@ -209,7 +213,7 @@ def http_request_from_curl(
             if i < len(args):
                 user = args[i]
 
-                if not has_header(headers, "authorization"):
+                if user and not has_header(headers, "authorization"):
                     encoded = base64.b64encode(
                         user.encode()
                     ).decode()
@@ -222,13 +226,29 @@ def http_request_from_curl(
             continue
 
 
+        if arg.startswith("--user="):
+            user = arg[len("--user="):]
+
+            if user and not has_header(headers, "authorization"):
+                encoded = base64.b64encode(
+                    user.encode()
+                ).decode()
+
+                headers.append(
+                    f"Authorization: Basic {encoded}"
+                )
+
+            i += 1
+            continue
+
+
         if arg in ("-A", "--user-agent"):
             i += 1
 
             if i < len(args):
                 ua = args[i]
 
-                if not has_header(headers, "user-agent"):
+                if ua and not has_header(headers, "user-agent"):
                     headers.append(
                         f"User-Agent: {ua}"
                     )
@@ -240,7 +260,7 @@ def http_request_from_curl(
         if arg.startswith("-A") and len(arg) > 2:
             ua = arg[2:]
 
-            if not has_header(headers, "user-agent"):
+            if ua and not has_header(headers, "user-agent"):
                 headers.append(
                     f"User-Agent: {ua}"
                 )
@@ -252,7 +272,7 @@ def http_request_from_curl(
         if arg.startswith("--user-agent="):
             ua = arg[len("--user-agent="):]
 
-            if not has_header(headers, "user-agent"):
+            if ua and not has_header(headers, "user-agent"):
                 headers.append(
                     f"User-Agent: {ua}"
                 )
@@ -305,8 +325,7 @@ def http_request_from_curl(
         f"{normalized_method} {path} HTTP/1.1"
     ]
 
-
-    host = parsed.netloc
+    host = request_host(parsed)
 
     if not has_header(headers, "host"):
         out.append(
@@ -362,10 +381,21 @@ def fallback_request(
 
     return (
         f"{method or 'GET'} {path} HTTP/1.1\r\n"
-        f"Host: {parsed.netloc}\r\n"
+        f"Host: {request_host(parsed)}\r\n"
         "User-Agent: kagent\r\n"
         "\r\n"
     )
+
+
+
+def request_host(parsed: urllib.parse.ParseResult) -> str:
+
+    host = parsed.hostname or ""
+
+    if parsed.port:
+        host += f":{parsed.port}"
+
+    return host
 
 
 
@@ -418,15 +448,21 @@ def encode_urlencode_arg(
             f"<URL-encoded contents of file {value[1:]}>"
         )
 
-    if "=" in value:
-        name, content = value.split("=", 1)
+    at = value.find("@")
+    eq = value.find("=")
 
+    if eq >= 0 and (at < 0 or eq < at):
+        name, content = value.split("=", 1)
+        encoded = urllib.parse.quote(content, safe="")
+        return f"{name}={encoded}" if name else encoded
+
+    if at > 0:
+        name, filename = value.split("@", 1)
         return (
-            f"{name}="
-            f"{urllib.parse.quote(content)}"
+            f"{name}=<URL-encoded contents of file {filename}>"
         )
 
-    return urllib.parse.quote(value)
+    return urllib.parse.quote(value, safe="")
 
 
 
@@ -454,6 +490,7 @@ def shell_words(
     text: str,
 ) -> list[str]:
 
-    import shlex
-
-    return shlex.split(text)
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return []

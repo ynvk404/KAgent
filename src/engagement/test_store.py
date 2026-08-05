@@ -11,10 +11,6 @@ from src.engagement.store import (
 )
 
 
-# ==========================================================
-# Fixtures
-# ==========================================================
-
 @pytest.fixture
 def temp_dirs():
     with tempfile.TemporaryDirectory(prefix="pf-engage-cwd-") as cwd, \
@@ -22,19 +18,11 @@ def temp_dirs():
         yield Path(cwd), Path(home)
 
 
-# ==========================================================
-# Helpers
-# ==========================================================
-
 def write_engagement(root: Path, body: str) -> None:
     directory = root / ".kagent"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "engagement.md").write_text(body, encoding="utf-8")
 
-
-# ==========================================================
-# Tests
-# ==========================================================
 
 def test_returns_empty_string_when_no_files_exist(temp_dirs):
     cwd, home = temp_dirs

@@ -1,13 +1,6 @@
-"""
-"""
-
 import re
 from typing import List, Tuple
 
-
-# ==========================================================
-# Regex
-# ==========================================================
 
 THINK_PAIR_RE = re.compile(
     r"(?:<(?:think|thinking|reasoning)>|◁think▷)"
@@ -27,16 +20,7 @@ ANY_THINK_TAG_RE = re.compile(
 )
 
 
-# ==========================================================
-# stripThinkingTags
-# ==========================================================
-
 def strip_thinking_tags(text: str) -> str:
-    """
-    Xóa toàn bộ block <think>...</think>
-    và các tag lẻ còn sót.
-    """
-
     if not ANY_THINK_TAG_RE.search(text):
         return text
 
@@ -53,10 +37,6 @@ def strip_thinking_tags(text: str) -> str:
 
     return out.lstrip()
 
-
-# ==========================================================
-# Tags
-# ==========================================================
 
 THINK_OPEN_TAGS = [
     "<think>",
@@ -75,18 +55,10 @@ THINK_CLOSE_TAGS = [
 ALL_THINK_TAGS = THINK_OPEN_TAGS + THINK_CLOSE_TAGS
 
 
-# ==========================================================
-# Helpers
-# ==========================================================
-
 def find_first_tag(
     text: str,
     tags: List[str],
 ) -> Tuple[int, int]:
-    """
-    Trả về (index, length)
-    """
-
     lower = text.lower()
 
     index = -1
@@ -107,10 +79,6 @@ def safe_prefix_length(
     text: str,
     tags: List[str],
 ) -> int:
-    """
-    Tính số ký tự an toàn có thể xử lý.
-    """
-
     lower = text.lower()
 
     hold = 0
@@ -128,17 +96,9 @@ def safe_prefix_length(
     return len(text) - hold
 
 
-# ==========================================================
-# Streaming Filter
-# ==========================================================
-
 class ThinkingStreamFilter:
-    """
-    Lọc reasoning khi model stream.
-    """
 
     def __init__(self):
-
         self.in_thinking = False
         self.pending = ""
 
@@ -230,10 +190,6 @@ class ThinkingStreamFilter:
         return out
 
     def flush(self) -> str:
-        """
-        Gọi khi stream kết thúc.
-        """
-
         if self.in_thinking:
             out = ""
         else:

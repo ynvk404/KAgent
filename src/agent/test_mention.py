@@ -9,11 +9,6 @@ from .mentions import (
     mention_candidates,
 )
 
-
-# =====================================================
-# find_active_mention
-# =====================================================
-
 def test_find_active_mention_start():
     assert find_active_mention("@READ") == {
         "at": 0,
@@ -60,11 +55,6 @@ def test_find_active_mention_empty():
         "at": 8,
         "partial": "",
     }
-
-
-# =====================================================
-# parse_mention_path
-# =====================================================
 
 def test_parse_path():
 
@@ -120,11 +110,6 @@ def test_parse_absolute():
         "host",
     )
 
-
-# =====================================================
-# list_mention_dir
-# =====================================================
-
 def test_list_dir():
 
     with tempfile.TemporaryDirectory() as root:
@@ -177,11 +162,6 @@ def test_hidden():
 
         finally:
             os.chdir(old)
-
-
-# =====================================================
-# mention_candidates
-# =====================================================
 
 def test_candidates():
 

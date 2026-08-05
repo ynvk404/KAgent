@@ -1,35 +1,17 @@
-"""
-Định nghĩa các sự kiện (Event) mà Agent phát ra trong quá trình
-thực thi run() hoặc compact().
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
 
-# =============================================================================
-# Base Event
-# =============================================================================
-
-
 @dataclass(slots=True)
 class BaseEvent:
-    """
-    Base class cho tất cả AgentEvent.
-    Hỗ trợ cả event.type và event["type"] giống object bên TypeScript.
-    """
 
     def __getitem__(self, key: str):
         return getattr(self, key)
 
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self, key, default)
-
-# =============================================================================
-# Event Types
-# =============================================================================
 
 
 @dataclass(slots=True)
@@ -52,11 +34,8 @@ class ToolCallEvent(BaseEvent):
     name: str = ""
 
     args: dict[str, Any] = field(default_factory=dict)
-
-    # Python naming
     args_json: str = ""
 
-    # TypeScript compatibility
     @property
     def argsJSON(self) -> str:
         return self.args_json
@@ -131,11 +110,6 @@ class DoneEvent(BaseEvent):
     type: Literal["done"] = "done"
 
 
-# =============================================================================
-# Agent Event Union
-# =============================================================================
-
-
 AgentEvent: TypeAlias = (
     AssistantTextEvent
     | AssistantDeltaEvent
@@ -150,16 +124,7 @@ AgentEvent: TypeAlias = (
 )
 
 
-# =============================================================================
-# Exceptions
-# =============================================================================
-
-
 class MaxStepsError(RuntimeError):
-    """
-    Raised when the agent exceeds the maximum reasoning/tool-call steps
-    within a single turn.
-    """
 
     def __init__(self, steps: int):
         super().__init__(
@@ -167,13 +132,6 @@ class MaxStepsError(RuntimeError):
         )
         self.steps = steps
 
-# =============================================================================
-# TypeScript compatibility aliases
-# =============================================================================
-
-# =============================================================================
-# TypeScript compatibility aliases
-# =============================================================================
 
 AssistantText = AssistantTextEvent
 AssistantDelta = AssistantDeltaEvent
@@ -185,10 +143,6 @@ SkillActive = SkillActiveEvent
 MemoryRecall = MemoryRecallEvent
 Done = DoneEvent
 
-
-# =============================================================================
-# Public exports
-# =============================================================================
 
 __all__ = [
     "AgentEvent",

@@ -1,14 +1,8 @@
-"""
-Findings Store
-
-Port từ:
-kagent/src/findings/store.ts
-"""
-
 from __future__ import annotations
 
+import asyncio
+import os
 import re
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -20,6 +14,8 @@ Severity = Literal[
     "low",
     "info",
 ]
+
+_SAFE_SLUG_RE = re.compile(r"^[a-z0-9-]+$")
 
 
 @dataclass(slots=True)
@@ -55,41 +51,52 @@ class Store:
         self,
         finding: Finding,
     ) -> str:
-        """
-        Render markdown và lưu xuống file.
+        
+        if not _SAFE_SLUG_RE.match(finding.slug):
+            raise ValueError(
+                f"unsafe finding slug: {finding.slug!r}"
+            )
 
-        Nếu slug đã tồn tại thì tạo:
-            slug.md
-            slug-2.md
-            slug-3.md
-            ...
-        """
+        content = render(finding)
+
+        return await asyncio.to_thread(
+            self._write,
+            finding.slug,
+            content,
+        )
+
+
+    def _write(
+        self,
+        slug: str,
+        content: str,
+    ) -> str:
 
         self.dir.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        content = render(finding)
-
         i = 1
 
         while True:
 
             filename = (
-                f"{finding.slug}.md"
+                f"{slug}.md"
                 if i == 1
-                else f"{finding.slug}-{i}.md"
+                else f"{slug}-{i}.md"
             )
 
             path = self.dir / filename
 
             try:
-                with open(
+                fd = os.open(
                     path,
-                    "x",
-                    encoding="utf-8",
-                ) as f:
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o600,
+                )
+
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(content)
 
                 return str(path)
@@ -101,16 +108,12 @@ class Store:
 def slugify(
     title: str,
 ) -> str:
+    import unicodedata
 
     text = unicodedata.normalize(
         "NFKD",
         title.lower(),
     )
-
-    text = text.encode(
-        "ascii",
-        "ignore",
-    ).decode()
 
     text = re.sub(
         r"[^a-z0-9]+",

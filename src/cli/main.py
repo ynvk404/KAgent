@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-# ==========================================================
-# Thư viện chuẩn
-# ==========================================================
 import json
 import shutil
 import asyncio
@@ -21,9 +18,7 @@ from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
 from watchdog.events import FileSystemEventHandler
 GROQ_AUTO_COMPACT_THRESHOLD = 5500
-# ==========================================================
-# Phiên bản / Cấu hình / Ghi log
-# ==========================================================
+
 from src.version.version import VERSION, describe
 
 from src.config import config
@@ -35,35 +30,17 @@ from src.logger.session_debug import (
     SessionDebugOptions,
 )
 
-# ==========================================================
-# Mục tiêu (Target)
-# ==========================================================
-
 from src.target.target import new_target
-
-# ==========================================================
-# Agent Core
-# ==========================================================
 
 from src.agent.agent import Agent, AgentOptions
 from src.agent.system_prompt import PromptToolingProfile, PromptProfile
 from src.permission.permission import AlwaysAllow
 from src.permission.permission import YoloPrompter
 
-
-# ==========================================================
-# Mô hình ngôn ngữ (LLM)
-# ==========================================================
-
 from src.llm import factory as llm_factory
 from src.llm.model_warnings import model_reliability_warning
 from src.llm.probe import probe_tool_support
 from src.llm.providers import *
-
-
-# ==========================================================
-# Bộ nhớ / Lưu trữ
-# ==========================================================
 
 from src.memory.store import MemoryStore
 from src.coverage.store import CoverageStore
@@ -75,19 +52,9 @@ from src.findings.http_request import finding_request_for_burp
 
 from src.session import store as session_store
 
-
-# ==========================================================
-# Kỹ năng (Skills)
-# ==========================================================
-
 from src.skills.discovery import skill_search_dirs
 from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry as SkillRegistry
-
-
-# ==========================================================
-# Công cụ (Tools)
-# ==========================================================
 
 from src.tools.plugin import CommandPluginTool
 from src.tools.finding import ConfirmFindingTool
@@ -120,11 +87,6 @@ from src.tools.coverage import CoverageTool
 from src.tools.payloads import ReadPayloadsTool
 from src.tools.skill_file import ReadSkillFileTool
 
-
-# ==========================================================
-# Giao thức MCP
-# ==========================================================
-
 from src.tools.mcp_server import (
     BROWSER_MCP_NAMES,
     session_mcp_servers,
@@ -135,11 +97,6 @@ from src.tools.mcp_integration import (
     MCPSession,
     discover_mcp_tools,
 )
-
-
-# ==========================================================
-# Bắt dữ liệu Trình duyệt
-# ==========================================================
 
 from src.browser.store import CaptureStore
 
@@ -154,11 +111,6 @@ from src.browser.server import (
     BurpBridgeState,
     IngestServerHandle,
 )
-
-
-# ==========================================================
-# Giao diện người dùng (UI)
-# ==========================================================
 
 from src.ui.core.app import (
     KAgent,
@@ -208,11 +160,6 @@ RED = lambda t: _c("31", t)
 MAGENTA = lambda t: _c("35", t)
 BLUE = lambda t: _c("34", t)
  
- 
-# ==========================================================
-# Môi trường thực thi (Runtime)
-# ==========================================================
-
 class BannerDataPatch(TypedDict, total=False):
     provider: str
     model: str
@@ -310,7 +257,6 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
         elif a == "--resume":
             out.resume_id = next_arg()
         elif a in ("--yolo", "--dangerously-skip-permissions"):
-            # Tên cũ là --dangerously-skip-permissions, giữ làm alias hỗ trợ script cũ. Đều là chế độ YOLO.
             out.yolo = True
         elif a == "--browser":
             out.browser = True
@@ -318,7 +264,6 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
             out.no_stream = True
         elif a in ("--burp", "--browser-ingest"):
             out.burp = True
-            # Nhận cổng tuỳ chọn: --burp 9999. Nếu tham số tiếp theo bắt đầu bằng '--' hoặc thiếu thì dùng mặc định.
             peek = argv[i + 1] if i + 1 < len(argv) else None
             if peek is not None and not peek.startswith("--"):
                 try:
@@ -372,7 +317,6 @@ async def main() -> int:
     for sig, name in ((signal.SIGINT, "SIGINT"), (signal.SIGTERM, "SIGTERM"), (signal.SIGHUP, "SIGHUP")):
         loop.add_signal_handler(sig, lambda n=name: on_sig(n))
 
-    # Đọc cấu hình
     try:
         cfg = config.load()
     except Exception as err:
@@ -416,7 +360,6 @@ async def main() -> int:
     if flags.browser:
         logger.info("browser MCP enabled for this session", {"source": "--browser"})
 
-    # Client LLM
     try:
         print("DEBUG backend:", cfg.backend)
         print("DEBUG model:", cfg.model)
@@ -425,16 +368,13 @@ async def main() -> int:
     except Exception as err:
         sys.stderr.write(f"{err}\n")
         return 1
-    # Tải kỹ năng mặc định, dự án và người dùng
     skills = SkillRegistry()
     all_skill_dirs = skill_search_dirs(cfg.skills_dirs)
     for d in all_skill_dirs:
         skills.load_dir(d)
 
-    # Tắt kỹ năng được thiết lập trong cấu hình
     skills.set_disabled_names(cfg.disabled_skills)
 
-    # Mục tiêu đánh giá — dùng chung cho công cụ HTTP + Prompt hệ thống
     target = new_target()
     perm_holder: dict = {"publish": None}
     ask_holder: dict = {"publish": None}
@@ -446,16 +386,10 @@ async def main() -> int:
     bridged_ask = BridgedAskPrompter(
         lambda req: ask_holder["publish"] and ask_holder["publish"](req)
     )
-    # prompter = YoloPrompter(bridged_perm, flags.yolo)
-    # if flags.yolo:
-    #     sys.stderr.write(
-    #         "⚠  YOLO mode active: every tool call will auto-approve. Authorized engagements / lab targets only.\n"
-    #     )
     prompter = YoloPrompter(
         bridged_perm,
         flags.yolo
     )
-    # Lưu trữ lỗ hổng + thông báo
     findings_store = FindingsStore("findings")
     capture_store = CaptureStore(max_entries=5000)
     session_dir = session_store.dir_from_path("")
@@ -492,40 +426,25 @@ async def main() -> int:
             },
         )
     sys.stderr.write(f"debug session log: {session_debug.path}\n")
-    # Theo dõi các mục tiêu đã kiểm thử để khôi phục phiên
     coverage_store = CoverageStore(f"findings/coverage-{session_id}.json")
-
-    # Lưu thông tin thu thập được khi pentest
     intelligence_store = IntelligenceStore()
-
-    # Lưu bộ nhớ dài hạn của agent
     memory_store = MemoryStore()
-
-    # Tải phạm vi và quy tắc đánh giá
     engagement = EngagementStore().load()
-    # Các công cụ
-    tools = ToolRegistry()
 
+    tools = ToolRegistry()
     tools.register(ShellTool())
     tools.register(BashTool())
-
     tools.register(FileReadTool())
     tools.register(FileReadToolAlias())
-
     tools.register(FileWriteTool())
     tools.register(FileWriteToolAlias())
-
     tools.register(FileEditTool())
     tools.register(FileEditToolAlias())
-
     tools.register(GlobTool())
     tools.register(GrepTool())
-
     tools.register(HTTPTool(target))
-
     tools.register(WebFetchTool())
     tools.register(WebSearchTool())
-
     tools.register(AskUserTool(bridged_ask))
     tools.register(
         ConfirmFindingTool(
@@ -576,8 +495,6 @@ async def main() -> int:
     ingest_token = secrets.token_hex(16)
 
     def create_bridge(port: int) -> "IngestServerHandle":
-        """Helper duy nhất tạo ingest server — dùng chung cho cả start và restart,
-        tránh lặp code khi thêm option mới cho IngestServerOptions."""
         try:
             return start_ingest_server(
                 IngestServerOptions(
@@ -600,10 +517,6 @@ async def main() -> int:
 
 
     async def start_burp_bridge(port: int | None) -> BurpBridgeResult:
-        """Khởi động bridge nếu chưa chạy.
-        - Không truyền port (hoặc port trùng port hiện tại) khi đang chạy -> trả trạng thái hiện tại.
-        - Truyền port khác khi đang chạy -> dừng bridge cũ, khởi động lại ở port mới.
-        """
         nonlocal ingest_handle
 
         if ingest_handle is not None:
@@ -645,7 +558,6 @@ async def main() -> int:
 
 
     async def close_burp_bridge() -> BurpBridgeResult:
-        """Dừng bridge nếu đang chạy. Không coi 'chưa chạy' là lỗi."""
         nonlocal ingest_handle
         handle = ingest_handle
 
@@ -666,7 +578,6 @@ async def main() -> int:
 
 
     async def burp_bridge_status() -> BurpBridgeResult:
-        """Chỉ đọc trạng thái, không thay đổi gì."""
         handle = ingest_handle
         if handle is None:
             return BurpBridgeResult(
@@ -735,20 +646,16 @@ async def main() -> int:
         await asyncio.gather(*(s.close() for s in mcp_sessions))
         await close_burp_bridge()
         return 0
-    # Thiết lập lần đầu.
-    # Hỏi đúng một lần trước khi tạo agent để áp dụng cấu hình công cụ vào prompt hệ thống.
 
     if cfg.tooling_profile is None:
         picked = await run_first_run_picker()
 
         if picked is None:
-            # Đóng các phiên MCP
             await asyncio.gather(
                 *(session.close() for session in mcp_sessions),
                 return_exceptions=True,
             )
 
-            # Đóng cầu nối Burp
             await close_burp_bridge()
 
             print(
@@ -767,7 +674,6 @@ async def main() -> int:
                 file=sys.stderr,
             )
             
-    # Tạo đối tượng cấu hình opts
     opts = AgentOptions(
         client=client,
         tools=tools,
@@ -795,7 +701,6 @@ async def main() -> int:
         streaming_enabled=False if flags.no_stream else cfg.streaming_enabled,
     )
 
-    # Truyền opts vào Agent
     agent = Agent(opts)
     resume_summary = ""
 
@@ -815,7 +720,6 @@ async def main() -> int:
             )
             return 1
 
-    # Live skill reload
     skill_dirs_to_watch = [
         d for d in all_skill_dirs
         if Path(d).exists()
@@ -838,7 +742,6 @@ async def main() -> int:
                 skills.clear()
                 for d in skill_dirs_to_watch:
                     skills.load_dir(d)
-                # Persisted disabled state stays — only what's on disk changes.
                 skills.set_disabled_names(cfg.disabled_skills)
                 agent.rebuild_from_skills()
                 count = len(skills.list_enabled())
@@ -908,7 +811,6 @@ async def main() -> int:
                 file=sys.stderr,
             )
 
-        #ollama context
     async def persist_disabled_skills(names: list[str]) -> None:
         cfg.disabled_skills = sorted(names)
         await config.save(cfg)
@@ -1028,11 +930,6 @@ async def main() -> int:
     await app.run_async()
     return 0
 
-
-# ============================================================
-# Helpers
-# ============================================================
-
 def pretty_cwd() -> str:
     cwd = str(Path.cwd())
     home = str(Path.home())
@@ -1090,33 +987,18 @@ def locality_for(backend: str) -> str:
     return "local"
       
 async def run_first_run_picker() -> ToolingProfile | None:
-    """
-    Chuyển thể từ hàm TS runFirstRunPicker().
-
-    Hiển thị giao diện chọn thiết lập lần đầu,
-    trả về ToolingProfile nếu người dùng chọn,
-    None nếu hủy.
-    """
 
     picked: ToolingProfile | None = None
     finished = asyncio.Event()
 
     def on_pick(profile: ToolingProfile) -> None:
         nonlocal picked
-
         picked = profile
-
-        # Tương đương: inkApp.unmount()
-
         finished.set()
 
     def on_cancel() -> None:
         nonlocal picked
-
         picked = None
-
-        # Tương đương: inkApp.unmount()
-
         finished.set()
 
     def exit_app() -> None:
@@ -1130,13 +1012,9 @@ async def run_first_run_picker() -> ToolingProfile | None:
         )
     )
 
-    # Tương đương:
-    # const inkApp = render(tree)
-    # Python chưa có thư viện Ink nên dùng vòng lặp terminal.
-
     while not finished.is_set():
 
-        print("\033[2J\033[H", end="")  # Xóa màn hình terminal
+        print("\033[2J\033[H", end="") 
 
         print(
             "\n".join(
@@ -1180,11 +1058,6 @@ def build_resume_summary(
     )
 
 def fs_watch(path: str, loop: asyncio.AbstractEventLoop, callback: Callable[[], None]) -> Any | None:
-    """Start a watchdog Observer on `path` that calls `callback()` on the
-    event loop thread whenever anything changes. Tries recursive watching
-    first; falls back to shallow if unsupported. Returns None on failure
-    (best-effort — a watcher failure shouldn't block startup)."""
-
     class _Handler(FileSystemEventHandler):
         def on_any_event(self, event) -> None:
             loop.call_soon_threadsafe(callback)
@@ -1202,13 +1075,6 @@ def fs_watch(path: str, loop: asyncio.AbstractEventLoop, callback: Callable[[], 
 
 
 def effective_auto_compact_threshold(cfg: config.Config) -> int:
-    """
-    Xác định ngưỡng tự động nén ngữ cảnh theo backend/mô hình.
-
-    Tương đương TS: effectiveAutoCompactThreshold()
-    """
-
-    # Groq có ngữ cảnh nhỏ hơn nên giới hạn ngưỡng nén
     if cfg.backend == "groq":
         if cfg.auto_compact_threshold <= 0:
             return GROQ_AUTO_COMPACT_THRESHOLD
@@ -1217,9 +1083,7 @@ def effective_auto_compact_threshold(cfg: config.Config) -> int:
             cfg.auto_compact_threshold,
             GROQ_AUTO_COMPACT_THRESHOLD,
         )
-
-    # Kimi K2.x có ngữ cảnh lớn (256K)
-    # Nếu chưa tùy chỉnh thì dùng ngưỡng mặc định theo mô hình
+    
     if (
         cfg.backend == "kimi"
         and cfg.auto_compact_threshold
@@ -1237,10 +1101,6 @@ def effective_auto_compact_threshold(cfg: config.Config) -> int:
 def effective_prompt_profile(
     cfg: config.Config,
 ) -> PromptProfile:
-    """
-    Groq/Gemini dùng prompt rút gọn (compact).
-    Các backend khác dùng prompt đầy đủ (full).
-    """
 
     if (
         cfg.backend == "groq"
@@ -1285,8 +1145,6 @@ Slash: /help /plan /clear /reset /exit /target /maxsteps /thinking
 def emit(event: dict) -> None:
     event_type = event.get("type")
  
-    # ---------------- assistant text ----------------
- 
     if event_type == "assistant-text":
         text = event.get("text", "")
         if text:
@@ -1294,8 +1152,6 @@ def emit(event: dict) -> None:
  
     elif event_type == "assistant-delta":
         print(event.get("text", ""), end="", flush=True)
- 
-    # ---------------- tool call / result ----------------
  
     elif event_type == "tool-call":
         name = event.get("name", "?")
@@ -1328,30 +1184,20 @@ def emit(event: dict) -> None:
                 print(f"  {line}")
         print(_hr())
  
-    # ---------------- planner decision ----------------
- 
     elif event_type == "decision":
         summary = event.get("summary", "")
         print(f"\n{MAGENTA('◆ DECISION')}  {summary}")
- 
-    # ---------------- skill loaded / active ----------------
  
     elif event_type == "skill-active":
         name = event.get("name", "?")
         print(f"\n{BLUE('◈ SKILL ACTIVE')}  {BOLD(name)}")
  
-    # ---------------- error ----------------
- 
     elif event_type == "error":
         err = event.get("err", "")
         print(f"\n{RED(BOLD('✖ ERROR'))}  {RED(str(err))}")
  
-    # ---------------- turn done ----------------
- 
     elif event_type == "done":
         print()
- 
-    # ---------------- fallback: event lạ / chưa xử lý ----------------
  
     else:
         print(f"\n{YELLOW('? UNKNOWN EVENT')}  {DIM(str(event))}")

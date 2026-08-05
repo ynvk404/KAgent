@@ -1,18 +1,8 @@
-"""
-test_sanitizer.py
-
-Port từ sanitize.test.ts
-"""
-
 from src.agent.sanitize import (
     ThinkingStreamFilter,
     strip_thinking_tags,
 )
 
-
-# ==========================================================
-# strip_thinking_tags
-# ==========================================================
 
 def test_removes_complete_think_blocks():
     assert (
@@ -33,8 +23,6 @@ def test_removes_dangling_closing_think_tags():
 
 
 def test_keeps_trailing_text_after_unterminated_think_tag():
-    # H7: an unclosed <think> means we can't tell where reasoning ends,
-    # so strip only the tag and preserve the remaining text.
     assert (
         strip_thinking_tags(
             "<think>reasoning that never closed"
@@ -51,7 +39,6 @@ def test_keeps_trailing_text_after_unterminated_think_tag():
 
 
 def test_balances_nested_think_blocks():
-    # M14: peel nested pairs from inside out.
     assert (
         strip_thinking_tags(
             "<think>a<think>b</think>visible</think>real"
@@ -84,7 +71,6 @@ def test_strips_kimi_unicode_delimiters():
         == "Answer"
     )
 
-    # Lone Kimi close tag (no opener)
     assert (
         strip_thinking_tags(
             "◁/think▷Answer"
@@ -93,15 +79,7 @@ def test_strips_kimi_unicode_delimiters():
     )
 
 
-# ==========================================================
-# ThinkingStreamFilter
-# ==========================================================
-
 def run(chunks):
-    """
-    Feed each chunk and concatenate
-    everything emitted by the filter.
-    """
     f = ThinkingStreamFilter()
 
     out = ""
@@ -127,7 +105,6 @@ def test_suppresses_complete_think_block():
 
 
 def test_suppresses_split_tags():
-    # Open/close tags split across chunks.
     assert run(
         [
             "<thi",
@@ -150,8 +127,6 @@ def test_keeps_text_before_and_after():
 
 
 def test_drops_lone_close_tag():
-    # DeepSeek-R1 style stream:
-    # reasoning -> </think> -> answer
     assert run(
         [
             "reasoning text",
@@ -182,7 +157,6 @@ def test_stream_variants():
 
 
 def test_unterminated_block_at_flush():
-    # An open block never closes.
     assert run(
         [
             "answer ",
@@ -192,7 +166,6 @@ def test_unterminated_block_at_flush():
 
 
 def test_partial_open_tag():
-    # Stream ends in the middle of an opening tag.
     assert run(
         [
             "answer <thi"

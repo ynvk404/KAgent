@@ -1,39 +1,15 @@
 from __future__ import annotations
 
-"""
-Skill Registry
-
-Chức năng:
-- Quản lý danh sách skill
-- Load skill từ thư mục
-- Parse SKILL.md có YAML frontmatter
-- Enable / disable skill
-- Render skill body cho LLM
-"""
-
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-import re
+
 import yaml
 
 
-# ============================================================
-# Model
-# ============================================================
-
-@dataclass
+@dataclass(slots=True)
 class Skill:
-    """
-    Một skill của Agent.
-
-    Mỗi skill:
-    - có tên
-    - mô tả
-    - danh sách tool được phép
-    - đường dẫn file
-    - nội dung markdown
-    """
     name: str
     description: str
     tools: list[str]
@@ -42,66 +18,33 @@ class Skill:
     body: str
 
 
-# ============================================================
-# Registry
-# ============================================================
-
 class Registry:
 
     def __init__(self):
-        # lưu skill
         self.skills: dict[str, Skill] = {}
-        # skill bị disable
         self.disabled: set[str] = set()
 
-    # --------------------------------------------------------
-    # Add
-    # --------------------------------------------------------
-
     def add(self, skill: Skill):
-        """Thêm skill vào registry."""
         self.skills[skill.name] = skill
-
-    # --------------------------------------------------------
-    # Get
-    # --------------------------------------------------------
 
     def get(self, name: str) -> Skill | None:
         return self.skills.get(name)
 
-    # --------------------------------------------------------
-    # Has
-    # --------------------------------------------------------
-
     def has(self, name: str) -> bool:
         return name in self.skills
 
-    # --------------------------------------------------------
-    # List
-    # --------------------------------------------------------
-
     def list(self) -> list[Skill]:
-        """Trả về toàn bộ skill."""
         return sorted(
             self.skills.values(),
             key=lambda x: x.name
         )
 
-    # --------------------------------------------------------
-    # Enabled skills
-    # --------------------------------------------------------
-
     def list_enabled(self) -> list[Skill]:
-        """Skill model được phép nhìn thấy."""
         return [
             skill
             for skill in self.list()
             if skill.name not in self.disabled
         ]
-
-    # --------------------------------------------------------
-    # Disabled persistence
-    # --------------------------------------------------------
 
     def set_disabled_names(self, names: Iterable[str]):
         self.disabled = set(names)
@@ -112,20 +55,8 @@ class Registry:
     def is_disabled(self, name: str) -> bool:
         return name in self.disabled
 
-    # --------------------------------------------------------
-    # Clear
-    # --------------------------------------------------------
-
     def clear(self):
-        """
-        Xóa toàn bộ skill.
-        Không xóa disabled.
-        """
         self.skills.clear()
-
-    # --------------------------------------------------------
-    # Enable / Disable
-    # --------------------------------------------------------
 
     def set_disabled(self, name: str, on: bool) -> bool:
         old = name in self.disabled
@@ -140,20 +71,7 @@ class Registry:
 
         return False
 
-    # --------------------------------------------------------
-    # Load directory
-    # --------------------------------------------------------
-
     def load_dir(self, directory: str | Path):
-        """
-        Load:
-
-        skills/
-          sqlmap/
-             SKILL.md
-          nmap/
-             SKILL.md
-        """
         directory = Path(directory)
 
         if not directory.exists():
@@ -165,11 +83,9 @@ class Registry:
             return
 
         for item in entries:
-            # bỏ file ẩn
             if item.name.startswith("."):
                 continue
 
-            # bỏ template
             if item.name.startswith("_"):
                 continue
 
@@ -188,41 +104,46 @@ class Registry:
                 print(f"[skills] skip {skill_file}: {e}")
 
 
-# ============================================================
-# Parse SKILL.md
-# ============================================================
+_FRONTMATTER_RE = re.compile(
+    r"\A---[ \t]*\r?\n(?P<yaml>.*?)\r?\n---[ \t]*\r?\n?",
+    re.DOTALL,
+)
+
+_LEADING_BLANK_LINES_RE = re.compile(r"\A(?:\r?\n)+")
+
+MAX_DESCRIPTION = 1024
+NAME_RE = re.compile(r"^[a-z0-9-]+$")
+
 
 def parse_skill(path: str | Path) -> Skill:
     path = Path(path)
     raw = path.read_text(encoding="utf-8")
 
-    # tách YAML frontmatter
-    metadata = {}
+    metadata: dict = {}
     body = raw
 
-    if raw.startswith("---"):
-        parts = raw.split("---", 2)
-        if len(parts) >= 3:
-            metadata = yaml.safe_load(parts[1]) or {}
-            body = parts[2]
+    match = _FRONTMATTER_RE.match(raw)
+
+    if match:
+        parsed = yaml.safe_load(match.group("yaml"))
+        metadata = parsed if isinstance(parsed, dict) else {}
+        body = raw[match.end():]
 
     name = metadata.get("name")
-    if not name:
+    if not isinstance(name, str) or not name:
         name = path.parent.name
 
-    description = metadata.get("description", "")
+    description = metadata.get("description")
+    if not isinstance(description, str):
+        description = ""
 
-    # allowed-tools
-    # hỗ trợ:
-    # allowed-tools
-    # allowedTools
-    # tools
-    tools = (
-        metadata.get("allowed-tools")
-        or metadata.get("allowedTools")
-        or metadata.get("tools")
-        or []
-    )
+    tools = metadata.get("allowed-tools")
+    if tools is None:
+        tools = metadata.get("allowedTools")
+    if tools is None:
+        tools = metadata.get("tools")
+    if tools is None:
+        tools = []
 
     if not isinstance(tools, list):
         tools = []
@@ -238,31 +159,50 @@ def parse_skill(path: str | Path) -> Skill:
         name=name,
         description=description,
         tools=tools,
-        disable_model_invocation =disable,
+        disable_model_invocation=disable,
         path=str(path),
-        body=body.lstrip("\n")
+        body=_LEADING_BLANK_LINES_RE.sub("", body),
     )
 
 
-# ============================================================
-# Materialize body
-# ============================================================
+def validate_skill(skill: Skill, known_tools: set[str]) -> list[str]:
+    errors: list[str] = []
+    directory = Path(skill.path).parent.name
+
+    if not skill.name:
+        errors.append("missing `name`")
+    elif not NAME_RE.match(skill.name):
+        errors.append(
+            f'name "{skill.name}" must be lowercase-kebab ([a-z0-9-])'
+        )
+    elif skill.name != directory:
+        errors.append(
+            f'name "{skill.name}" does not match its directory "{directory}"'
+        )
+
+    if not skill.description:
+        errors.append("missing `description`")
+    elif len(skill.description) > MAX_DESCRIPTION:
+        errors.append(
+            f"description is {len(skill.description)} chars "
+            f"(max {MAX_DESCRIPTION})"
+        )
+
+    for tool in skill.tools:
+        if tool not in known_tools:
+            errors.append(
+                f'allowed-tools entry "{tool}" is not a known tool'
+            )
+
+    return errors
+
 
 def materialize_skill_body(skill: Skill) -> str:
-    """
-    Thay:
-    ${SKILL_DIR}
-    bằng path thật.
-    """
     directory = str(Path(skill.path).parent)
     body = skill.body.replace("${SKILL_DIR}", directory)
 
     return f"# Skill: {skill.name}\n\n" + body
 
-
-# ============================================================
-# Factory
-# ============================================================
 
 def new_registry():
     return Registry()

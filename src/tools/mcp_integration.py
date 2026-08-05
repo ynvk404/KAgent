@@ -7,7 +7,7 @@ import re
 import io
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol, runtime_checkable, cast, TextIO
+from typing import Any, Optional, Protocol, runtime_checkable, cast, TextIO, AsyncContextManager
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from src.config.config import MCPServerConfig

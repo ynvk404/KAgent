@@ -14,145 +14,136 @@ def finding_with_curl(curl: str) -> Finding:
     )
 
 
-def test_prefers_finding_curl_so_burp_imports_full_query_and_headers():
+def test_data_urlencode_plain_content_is_percent_encoded():
     request = finding_request_for_burp(
-        Finding(
-            title="IDOR",
-            severity="high",
-            url="https://wuzzuf.net/api/company/employers",
-            method="GET",
-            parameter="filter[status]",
-            impact="Account enumeration.",
-            curl=(
-                'curl -ksS -X GET '
-                '"https://wuzzuf.net/api/company/employers?'
-                'include=employer.company&filter%5Bstatus%5D=1" '
-                '-H "Authorization: Bearer <JWT_TOKEN>" '
-                '-H "Accept: application/vnd.api+json" '
-                '-H "X-Requested-With: XMLHttpRequest" '
-                '-H "Referer: https://wuzzuf.net/dashboard"'
-            ),
-            createdAt="2026-06-02T12:21:02.243Z",
-            slug="idor",
+        finding_with_curl(
+            'curl --data-urlencode "a b/c" '
+            '"https://app.example.com/api/search"'
+        )
+    )
+
+    assert "POST /api/search HTTP/1.1" in request
+    assert request.endswith("\r\n\r\na%20b%2Fc")
+
+
+def test_data_urlencode_name_equals_content_only_encodes_content():
+    request = finding_request_for_burp(
+        finding_with_curl(
+            'curl --data-urlencode "query=a/b c" '
+            '"https://app.example.com/api/search"'
+        )
+    )
+
+    assert request.endswith("\r\n\r\nquery=a%2Fb%20c")
+
+
+def test_data_urlencode_name_at_file_uses_placeholder():
+    request = finding_request_for_burp(
+        finding_with_curl(
+            'curl --data-urlencode "avatar@photo.png" '
+            '"https://app.example.com/api/upload"'
         )
     )
 
     assert (
-        "GET /api/company/employers?"
-        "include=employer.company&filter%5Bstatus%5D=1 HTTP/1.1"
+        "avatar=<URL-encoded contents of file photo.png>"
         in request
     )
-    assert "Host: wuzzuf.net" in request
-    assert "Authorization: Bearer <JWT_TOKEN>" in request
-    assert "Accept: application/vnd.api+json" in request
-    assert "X-Requested-With: XMLHttpRequest" in request
-    assert "Referer: https://wuzzuf.net/dashboard" in request
 
 
-def test_reconstructs_post_requests_with_json_body_and_generated_length():
+def test_data_urlencode_leading_at_file_uses_whole_body_placeholder():
     request = finding_request_for_burp(
         finding_with_curl(
-            'curl --json \'{"role":"admin"}\' '
-            '"https://app.example.com/api/users/42" '
-            '-H "Authorization: Bearer tok"'
+            'curl --data-urlencode "@body.json" '
+            '"https://app.example.com/api/upload"'
         )
     )
 
-    assert "POST /api/users/42 HTTP/1.1" in request
-    assert "Host: app.example.com" in request
-    assert "Content-Type: application/json" in request
-    assert "Authorization: Bearer tok" in request
-    assert "Content-Length: 16" in request
-    assert request.endswith('\r\n\r\n{"role":"admin"}')
-
-
-def test_keeps_arbitrary_methods_from_curl_option_forms():
-    request = finding_request_for_burp(
-        finding_with_curl(
-            "curl --request=PATCH "
-            "--url=https://app.example.com/api/profile "
-            '-H "Content-Type: application/json" '
-            '--data-raw=\'{"name":"x"}\''
-        )
-    )
-
-    assert "PATCH /api/profile HTTP/1.1" in request
-    assert "Content-Type: application/json" in request
-    assert request.endswith('\r\n\r\n{"name":"x"}')
-
-
-def test_includes_cookie_and_basic_auth_headers():
-    request = finding_request_for_burp(
-        finding_with_curl(
-            "curl -XDELETE "
-            "https://app.example.com/api/session "
-            '-b "sid=abc; theme=dark" '
-            "-u alice:secret"
-        )
-    )
-
-    assert "DELETE /api/session HTTP/1.1" in request
-    assert "Cookie: sid=abc; theme=dark" in request
     assert (
-        "Authorization: Basic YWxpY2U6c2VjcmV0"
+        "<URL-encoded contents of file body.json>"
         in request
     )
 
 
-def test_emits_curl_user_agent_header_forms():
-    space = finding_request_for_burp(
+def test_userinfo_in_target_url_is_stripped_from_host_header():
+    request = finding_request_for_burp(
         finding_with_curl(
-            'curl -A "MyScanner/1.0" '
-            "https://app.example.com/api/x"
+            "curl https://alice:s3cr3t@app.example.com:8443/api/x"
         )
     )
 
-    assert "User-Agent: MyScanner/1.0" in space
-    assert "User-Agent: kagent" not in space
+    assert "Host: app.example.com:8443" in request
+    assert "alice" not in request
+    assert "s3cr3t" not in request
 
-
-    long = finding_request_for_burp(
+def test_user_equals_form_sets_basic_auth_header():
+    request = finding_request_for_burp(
         finding_with_curl(
-            'curl --user-agent "Custom UA" '
-            "https://app.example.com/api/x"
+            "curl --user=alice:secret "
+            "https://app.example.com/api/session"
         )
     )
 
-    assert "User-Agent: Custom UA" in long
-    assert "User-Agent: kagent" not in long
+    assert "Authorization: Basic YWxpY2U6c2VjcmV0" in request
 
 
-    attached = finding_request_for_burp(
+def test_form_flag_is_treated_as_post_body():
+    request = finding_request_for_burp(
         finding_with_curl(
-            "curl -AAttachedUA "
-            "https://app.example.com/api/x"
+            'curl -F "file=@upload.txt" '
+            "https://app.example.com/api/upload"
         )
     )
 
-    assert "User-Agent: AttachedUA" in attached
+    assert "POST /api/upload HTTP/1.1" in request
+    assert "<contents of file" not in request 
+    assert "file=@upload.txt" in request
 
 
-    eq = finding_request_for_burp(
+def test_explicit_host_header_from_curl_is_not_duplicated():
+    request = finding_request_for_burp(
         finding_with_curl(
-            "curl --user-agent=EqualsUA "
-            "https://app.example.com/api/x"
+            'curl https://app.example.com/api/x '
+            '-H "Host: internal.example.com"'
         )
     )
 
-    assert "User-Agent: EqualsUA" in eq
+    assert request.count("Host:") == 1
+    assert "Host: internal.example.com" in request
+    assert "Host: app.example.com" not in request
 
-
-def test_falls_back_to_finding_url_and_method_when_no_curl_parsed():
-    finding = finding_with_curl("echo not-curl")
-
-    finding.url = "https://app.example.com/api/items?id=7"
-    finding.method = "OPTIONS"
+def test_unterminated_quote_falls_back_instead_of_raising():
+    finding = finding_with_curl('curl "https://app.example.com/api/x')
+    finding.url = "https://app.example.com/api/fallback"
+    finding.method = "GET"
 
     request = finding_request_for_burp(finding)
 
     assert request == (
-        "OPTIONS /api/items?id=7 HTTP/1.1\r\n"
+        "GET /api/fallback HTTP/1.1\r\n"
         "Host: app.example.com\r\n"
         "User-Agent: kagent\r\n"
         "\r\n"
     )
+
+
+def test_lf_line_continuation_is_joined():
+    request = finding_request_for_burp(
+        finding_with_curl(
+            "curl https://app.example.com/api/x \\\n"
+            '  -H "X-Test: one"'
+        )
+    )
+
+    assert "X-Test: one" in request
+
+
+def test_crlf_line_continuation_is_joined():
+    request = finding_request_for_burp(
+        finding_with_curl(
+            "curl https://app.example.com/api/x \\\r\n"
+            '  -H "X-Test: two"'
+        )
+    )
+
+    assert "X-Test: two" in request

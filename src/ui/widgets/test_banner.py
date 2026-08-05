@@ -84,7 +84,7 @@ def test_banner_basic():
     )
 
 
-    assert "Welcome to kagent" in text
+    assert "Welcome to KAgent" in text
     assert "Provider: ollama" in text
     assert "Model: qwen3.5" in text
     assert "Path: /workspace" in text

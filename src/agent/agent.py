@@ -1,6 +1,3 @@
-# ==========================================================
-# Imports
-# ==========================================================
 import traceback
 import asyncio
 import json
@@ -20,7 +17,6 @@ from typing import (
     TypeVar,
     cast,
 )
-#from src.config.config import ToolingProfile
 
 from .mentions import expand_file_mentions
 
@@ -100,24 +96,13 @@ from .system_prompt import (
     build_system_prompt,
 )
 
-# ==========================================================
-# Type Aliases
-# ==========================================================
-
 T = TypeVar("T")
 R = TypeVar("R")
 
 EventSink = Callable[[AgentEvent], None]
 
-
-# ==========================================================
-# Constants
-# ==========================================================
-
 DEFAULT_MAX_STEPS = 20
 
-
-# Map "type" -> event dataclass tương ứng.
 _EVENT_FACTORIES = {
     "assistant-text": AssistantTextEvent,
     "assistant-delta": AssistantDeltaEvent,
@@ -131,8 +116,6 @@ _EVENT_FACTORIES = {
     "done": DoneEvent,
 }
 
-# Một số emit() dùng key kiểu TypeScript (camelCase) cho các field
-# chỉ có @property read-only trên dataclass -> cần đổi tên khi khởi tạo.
 _KEY_ALIASES = {
     "argsJSON": "args_json",
     "tokensBefore": "tokens_before",
@@ -141,32 +124,21 @@ _KEY_ALIASES = {
     "durationMs": "duration_ms",
 }
 
-# Số lần auto-compaction lỗi liên tiếp tối đa.
 MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3
-
-# Số ký tự tối đa đưa vào compact context.
 COMPACTION_INPUT_CHAR_LIMIT = 22_000
-
-# Số tool tối đa chạy song song trong một bước.
 MAX_PARALLEL_TOOL_CALLS = 4
 
-# Tool làm thay đổi trạng thái agent.
 STATEFUL_TOOLS = {
     "load_skill",
 }
 
-# Marker đánh dấu tool output đã bị cắt.
 MIDTURN_ELISION_PREFIX = (
     "[tool output elided mid-turn to fit context"
 )
 
-# Số tool result mới nhất được giữ lại.
 MIDTURN_ELISION_KEEP_RECENT = 4
-
-# Giới hạn số item trong memory list
 MAX_MEMORY_LIST = 200
 
-# Prompt dùng khi compact context
 COMPACTION_SYSTEM_PROMPT = (
     "Create a compact continuation memory for the same "
     "pentesting/coding session. Use concise Markdown with "
@@ -182,16 +154,6 @@ COMPACTION_SYSTEM_PROMPT = (
 )
 
 
-# ==========================================================
-# Data Models
-# ==========================================================
-
-
-# ==========================================================
-# Data Models
-# ==========================================================
-
-# Lưu thông tin memory đã được parse của một session.
 @dataclass
 class SessionMemoryParsed:
     objectives: list[str] = field(default_factory=list)
@@ -205,7 +167,6 @@ class SessionMemoryParsed:
     todos: list[str] = field(default_factory=list)
 
 
-# Lưu thông tin một tool call được sinh ra từ LLM.
 class ParsedToolCall:
     def __init__(
         self,
@@ -218,7 +179,6 @@ class ParsedToolCall:
         self.parse_err = parse_err
 
 
-# Lưu kết quả sau khi Agent thực thi một tool.
 class ToolCallResult:
     def __init__(
         self,
@@ -230,11 +190,12 @@ class ToolCallResult:
         self.err_str = err_str
         self.duration_ms = duration_ms
 
-# Lưu kết quả kiểm tra quyền sử dụng tool.
+
 @dataclass(slots=True)
 class ToolAllowedResult:
     ok: bool
     reason: str | None = None
+
 
 @dataclass(slots=True)
 class MemoryStats:
@@ -248,15 +209,8 @@ class MemoryStats:
     def get(self, key: str, default=None):
         return getattr(self, key, default)
 
-# ==========================================================
-# Agent Options
-# ==========================================================
 
 class AgentRunOptions:
-    """
-    Option khi chạy một lượt Agent.
-    """
-
     def __init__(
         self,
         tools: bool = True,
@@ -265,10 +219,6 @@ class AgentRunOptions:
 
 
 class AgentOptions:
-    """
-    Cấu hình khởi tạo Agent.
-    """
-
     def __init__(
         self,
         client: Client,
@@ -314,17 +264,12 @@ class AgentOptions:
         self.engagement = engagement
 
 
-# ==========================================================
-# Agent
-# ==========================================================
-
 class Agent:
 
     def __init__(
         self,
         opts: AgentOptions,
     ):
-
         self.client = opts.client
 
         self.tools = opts.tools
@@ -349,7 +294,6 @@ class Agent:
             else DEFAULT_MAX_STEPS
         )
 
-        # Session memory
         self.memory: Optional[SessionMemory] = None
 
         self.auto_compact_threshold = (
@@ -383,21 +327,16 @@ class Agent:
             else ""
         )
 
-        # Runtime state
         self.running = False
 
-        # Skill state
         self.active_skills: set[str] = set()
         self.pending_skills: set[str] = set()
 
-        # Tool token cache
         self.tools_tokens_cache: int = 0
         self.tools_tokens_key: tuple[str, ...] | None = None
 
-        # Đánh dấu turn hiện tại có chạy tool hay chưa
         self.turn_executed_tool = False
 
-        # Build system prompt
         self.sys_prompt = build_system_prompt(
             BuildOptions(
                 skills=self.skills,
@@ -422,48 +361,21 @@ class Agent:
             )
         ]
 
-    # ==========================================================
-    # Accessors & Configuration
-    # ==========================================================
-
     def get_history(self) -> list[Message]:
-            """
-            Lấy lịch sử hội thoại.
-            Trả về bản copy để tránh sửa trực tiếp history gốc.
-            """
-            return [replace(m) for m in self.history]
-
+        return [replace(m) for m in self.history]
 
     def get_max_steps(self) -> int:
-        """
-        Lấy số bước tối đa Agent được chạy.
-        """
         return self.max_steps
 
-
     def set_max_steps(self, n: int) -> None:
-        """
-        Cập nhật số bước tối đa.
-        Chỉ nhận giá trị >= 1.
-        """
         if n >= 1:
             self.max_steps = n
 
-
     def get_auto_compact_threshold(self) -> int:
-        """
-        Lấy ngưỡng tự động compact memory.
-        """
         return self.auto_compact_threshold
 
-
     def set_auto_compact_threshold(self, n: int) -> None:
-        """
-        Thiết lập ngưỡng tự động compact (đơn vị: approx tokens).
-        Giá trị 0 sẽ tắt tính năng auto-compact.
-        """
         self.auto_compact_threshold = max(0, int(n))
-
 
     def get_memory_stats(self) -> MemoryStats:
         return MemoryStats(
@@ -484,43 +396,18 @@ class Agent:
             ),
         )
 
-
     def is_running(self) -> bool:
-        """
-        Trả về True nếu Agent đang thực thi run() hoặc compact().
-        """
         return self.running
 
-
     def thinking_is_enabled(self) -> bool:
-        """
-        Kiểm tra chế độ Thinking có đang được bật hay không.
-        """
         return self.thinking
 
-
     async def set_thinking_enabled(self, enabled: bool) -> None:
-        """
-        Bật/Tắt chế độ Thinking của Agent.
-        """
-
-        # Cập nhật trạng thái Thinking
         self.thinking = enabled
-
-        # Tạo lại System Prompt để phản ánh cấu hình mới
         self.rebuild_system_prompt()
-
-        # Lưu session
         await self.save()
 
-
     def set_client(self, client: Client) -> None:
-        """
-        Thay đổi LLM Client (provider/model) đang sử dụng.
-
-        Không cho phép đổi khi Agent đang thực thi một lượt (turn),
-        tránh việc cùng một phiên làm việc sử dụng hai client khác nhau.
-        """
         if self.running:
             raise RuntimeError(
                 "cannot switch model/provider while a turn is in flight "
@@ -529,38 +416,20 @@ class Agent:
 
         self.client = client
 
-
     def set_prompt_profile(self, profile: PromptProfile) -> None:
-        """
-        Thiết lập Prompt Profile mới.
-        Nếu profile không thay đổi thì bỏ qua.
-        """
-
         if self.prompt_profile == profile:
             return
 
         self.prompt_profile = profile
-
-        # Xây dựng lại System Prompt
         self.rebuild_system_prompt()
-
-        # Đảm bảo history luôn chứa System Prompt mới
         self.history = ensure_system_prompt(
             self.history,
             self.sys_prompt,
         )
 
-
-    # ==========================================================
-    # Session Memory Management
-    # ==========================================================
-
-    # Format session memory thành text hiển thị
     def format_memory(
         self,
     ) -> str:
-
-        # Memory rỗng
         if (
             self.memory is None
             or count_memory_items(self.memory) == 0
@@ -573,7 +442,6 @@ class Agent:
         m = self.memory
         out = []
 
-        # Thông tin compact
         out.append(
             f"Session memory · "
             f"{m.compactions} compaction"
@@ -585,7 +453,6 @@ class Agent:
                 f"Last compacted: {m.last_compacted_at}"
             )
 
-        # Các nhóm dữ liệu memory
         for title, items in [
             ("Objectives", m.objectives),
             ("Plan", m.plan),
@@ -605,45 +472,25 @@ class Agent:
 
         return "\n".join(out)
 
-
     async def clear_memory(self) -> None:
-        """
-        Xóa session memory do Agent tạo.
-        Không ảnh hưởng engagement memory.
-        """
-
-        # Không có memory thì bỏ qua
         if (
             self.memory is None
             or count_memory_items(self.memory) == 0
         ):
             return
 
-        # Xóa session memory
         self.memory = None
-
-        # Tạo lại system prompt sau khi mất memory
         self.rebuild_system_prompt()
-
-        # Đảm bảo system prompt mới được cập nhật vào history
         self.history = ensure_system_prompt(
             self.history,
             self.sys_prompt,
         )
-
-        # Lưu session
         await self.save()
-
 
     async def forget_memory(
         self,
         query: str,
     ) -> list[str]:
-        """
-        Xóa memory chứa từ khóa.
-        Bao gồm long memory và session memory.
-        """
-
         needle = query.strip().lower()
 
         if not needle:
@@ -651,13 +498,11 @@ class Agent:
 
         removed: list[str] = []
 
-        # Xóa long-term memory
         if self.memory_store:
             removed.extend(
                 self.memory_store.forget(query)
             )
 
-        # Xóa session memory
         if self.memory:
 
             def prune(items: list[str]) -> list[str]:
@@ -684,34 +529,22 @@ class Agent:
                 todos=prune(self.memory.todos),
             )
 
-        # Không có memory bị xóa
         if not removed:
             return []
 
-        # Cập nhật lại prompt
         self.rebuild_system_prompt()
-
         self.history = ensure_system_prompt(
             self.history,
             self.sys_prompt,
         )
-
-        # Lưu session
         await self.save()
 
         return removed
-
 
     async def add_memory(
         self,
         input: AddMemoryInput,
     ) -> MemoryFact | None:
-        """
-        Thêm một Memory Fact vào Curated Memory.
-        Sau khi thêm sẽ rebuild System Prompt,
-        cập nhật history rồi lưu session.
-        """
-
         if self.memory_store is None:
             return None
 
@@ -723,24 +556,16 @@ class Agent:
         if fact is None:
             return None
 
-        # Rebuild System Prompt
         self.rebuild_system_prompt()
-
-        # Cập nhật message system đầu tiên trong history
         self.history = ensure_system_prompt(
             self.history,
             self.sys_prompt,
         )
-
-        # Lưu session
         await self.save()
 
         return fact
 
     def list_curated_memory(self) -> list[MemoryFact]:
-        """
-        Liệt kê toàn bộ Curated Memory.
-        """
         if self.memory_store is None:
             return []
 
@@ -751,10 +576,6 @@ class Agent:
         user_msg: str,
         emit,
     ) -> str:
-        """
-        Truy xuất các Curated Memory liên quan đến yêu cầu hiện tại.
-        """
-
         if self.memory_store is None:
             return ""
 
@@ -783,20 +604,13 @@ class Agent:
 
         return format_memory_recall(facts)
 
-
-    # ==========================================================
-    # Intelligence Management
-    # ==========================================================
-
     async def clear_intelligence(
         self,
-       scope: Literal["project", "personal", "all"] = "all",
+        scope: Literal["project", "personal", "all"] = "all",
     ) -> None:
         if self.intelligence:
             await self.intelligence.clear(scope)
 
-
-    # Lấy thống kê intelligence
     def get_intelligence_stats(
         self,
     ) -> dict:
@@ -808,15 +622,10 @@ class Agent:
             "personal": 0,
         }
 
-
     def build_intelligence_context(
         self,
         user_msg: str,
     ) -> str:
-        """
-        Truy xuất tri thức (Intelligence) liên quan đến yêu cầu hiện tại.
-        """
-
         if self.intelligence is None:
             return ""
 
@@ -842,15 +651,10 @@ class Agent:
 
         return format_intelligence_context(results)
 
-
     async def learn_intelligence(
         self,
         summary: str,
     ) -> None:
-        """
-        Học tri thức mới từ kết quả của phiên pentest hiện tại.
-        """
-
         if self.intelligence is None:
             return
 
@@ -874,22 +678,10 @@ class Agent:
                 },
             )
 
-
-    # ==========================================================
-    # Skill Management
-    # ==========================================================
-
     async def set_skill_enabled(self, name: str, enabled: bool) -> bool:
-        """
-        Bật/Tắt một skill trong Skill Registry.
-        Trả về True nếu trạng thái thay đổi.
-        """
-
-        # Skill không tồn tại
         if not self.skills.has(name):
             return False
 
-        # set_disabled(disabled=True/False)
         changed = self.skills.set_disabled(name, not enabled)
 
         if not changed:
@@ -899,64 +691,42 @@ class Agent:
             self.active_skills.discard(name)
             self.pending_skills.discard(name)
 
-        # Cập nhật System Prompt
         self.rebuild_system_prompt()
-
         self.history = ensure_system_prompt(
             self.history,
             self.sys_prompt,
         )
-
-        # Lưu session
         await self.save()
 
         return True
 
-
     def rebuild_from_skills(self) -> None:
-        """
-        Xây dựng lại System Prompt từ Skill Registry hiện tại.
-        Được gọi khi skill được reload hoặc thay đổi.
-        """
-
         self.rebuild_system_prompt()
-
         self.history = ensure_system_prompt(
             self.history,
             self.sys_prompt,
         )
 
-
     async def inject_skill(self, name: str) -> str:
-        """
-        Nạp trực tiếp một skill vào history dưới dạng System Message.
-        Skill sẽ được áp dụng cho yêu cầu kế tiếp.
-        """
-
-        # Không cho phép nạp skill khi agent đang chạy
         if self.running:
             raise RuntimeError(
                 "cannot load a skill while a turn is in flight "
                 "- cancel first with Esc"
             )
 
-        # Lấy skill
         skill = self.skills.get(name)
 
         if skill is None:
             raise RuntimeError(f'unknown skill "{name}"')
 
-        # Skill bị disable
         if self.skills.is_disabled(name):
             raise RuntimeError(
                 f'skill "{name}" is disabled '
                 "- enable it from /skills first"
             )
 
-        # Sinh nội dung skill
         body = materialize_skill_body(skill)
 
-        # Chèn vào history như một System Message
         self.history.append(
             Message(
                 role="system",
@@ -967,10 +737,7 @@ class Agent:
             )
         )
 
-        # Đánh dấu skill đang được kích hoạt
         self.pending_skills.add(name)
-
-        # Lưu session
         await self.save()
 
         return name
@@ -979,40 +746,23 @@ class Agent:
         self,
         tool_name: str,
     ) -> ToolAllowedResult:
-        """
-        Kiểm tra tool có được phép sử dụng dựa trên skill đang active.
-
-        Rule:
-        1. Không có active skill -> không giới hạn.
-        2. Tool không yêu cầu permission -> luôn cho phép.
-        3. Skill không khai báo allowed-tools -> cho phép tất cả.
-        4. Tool nằm trong allowed-tools của skill -> cho phép.
-        5. Ngược lại -> block.
-        """
-
-        # Không có skill đang active
         if len(self.active_skills) == 0:
             return ToolAllowedResult(
                 ok=True,
             )
 
-        # Lấy tool
         tool = self.tools.get(tool_name)
 
-        # Tool không tồn tại
-        # để tầng execute xử lý lỗi rõ hơn
         if tool is None:
             return ToolAllowedResult(
                 ok=True,
             )
 
-        # Tool dạng workflow primitive
         if not tool.requires_permission():
             return ToolAllowedResult(
                 ok=True,
             )
 
-        # Lấy danh sách skill đang active
         active_skills = []
 
         for name in self.active_skills:
@@ -1021,24 +771,19 @@ class Agent:
             if skill is not None:
                 active_skills.append(skill)
 
-        # Không có skill hợp lệ
         if len(active_skills) == 0:
             return ToolAllowedResult(
                 ok=True,
             )
 
-        # Skill không khai báo allowed-tools
-        # nghĩa là inherit tất cả tool
         for skill in active_skills:
             if len(skill.tools) == 0:
                 return ToolAllowedResult(
                     ok=True,
                 )
 
-        # Chuẩn hóa tên tool
         wanted = canonical_tool_name(tool_name)
 
-        # Kiểm tra tool có nằm trong allowed-tools không
         allowed_by = []
 
         for skill in active_skills:
@@ -1056,7 +801,6 @@ class Agent:
                 ok=True,
             )
 
-        # Tạo message lỗi
         summary = []
 
         for name in self.active_skills:
@@ -1081,28 +825,14 @@ class Agent:
             ),
         )
 
-    # ==========================================================
-    # Token & Context Estimation
-    # ==========================================================
-
     def approx_tokens(self) -> int:
-        """
-        Ước lượng số token trong history.
-
-        Quy ước:
-        ~4 ký tự = 1 token
-        """
-
         total = 0
 
         for message in self.history:
 
-            # Nội dung message
             if message.content:
                 total += len(message.content) // 4
 
-
-            # Tool calls
             for tc in (getattr(message, "tool_calls", None) or []):
 
                 function = tc.function
@@ -1113,51 +843,24 @@ class Agent:
                     len(function.arguments)
                 ) // 4
 
-
         return total
 
-
     def tools_token_estimate(self) -> int:
-        """
-        Ước lượng số token của JSON Schema các tool được gửi kèm
-        trong mỗi request tới LLM.
-
-        Kết quả được cache và chỉ tính lại khi số lượng tool thay đổi.
-        """
-
-        # names() đã sort sẵn, dùng tuple làm key để phát hiện
-        # đúng khi tool set thay đổi (không chỉ số lượng).
         tools_key = tuple(self.tools.names())
 
-        # Nếu tool set thay đổi thì tính lại
         if tools_key != self.tools_tokens_key:
 
-            # Chuyển toàn bộ Tool Schema thành JSON
             tools_json = json.dumps(
                 self.tools.as_llm_tools(),
                 ensure_ascii=False,
             )
 
-            # Ước lượng token (~4 ký tự ≈ 1 token)
             self.tools_tokens_cache = len(tools_json) // 4
-
-            # Cập nhật cache key
             self.tools_tokens_key = tools_key
 
         return self.tools_tokens_cache
 
-
-    # ==========================================================
-    # Session Lifecycle
-    # ==========================================================
-
     async def reset(self) -> None:
-        """
-        Khởi tạo lại session về trạng thái ban đầu.
-        Xóa history, memory, skill đang active và dữ liệu session.
-        """
-
-        # Chỉ giữ lại System Prompt
         self.history = [
             Message(
                 role="system",
@@ -1165,20 +868,15 @@ class Agent:
             )
         ]
 
-        # Xóa bộ nhớ dài hạn
         self.memory = None
 
-        # Xóa các skill đang active
         self.active_skills.clear()
         self.pending_skills.clear()
 
-        # Reset bộ đếm lỗi auto compact
         self.consecutive_compact_failures = 0
 
-        # Xóa session trong Store
         if self.store is not None:
             await self.store.clear()
-
 
     def has_saved_session(self) -> bool:
 
@@ -1194,26 +892,18 @@ class Agent:
             return False
 
     def resume_saved(self) -> None:
-        """
-        Khôi phục session đã lưu.
-        """
-
         if self.store is None:
             return
 
         loaded = self.store.load()
 
-        # Khôi phục target
         if loaded.target is not None:
             self.target.copy_from(loaded.target)
 
-        # Khôi phục memory
         self.memory = loaded.memory
 
-        # Xây dựng lại System Prompt
         self.rebuild_system_prompt()
 
-        # Không có history
         if len(loaded.messages) == 0:
 
             self.history = [
@@ -1224,7 +914,6 @@ class Agent:
             ]
             return
 
-        # Sửa các Tool Call còn dang dở
         self.history = reconcile_tool_calls(
             ensure_system_prompt(
                 loaded.messages,
@@ -1232,14 +921,9 @@ class Agent:
             )
         )
 
-
     async def save(
         self,
     ) -> None:
-        """
-        Lưu session hiện tại xuống Session Store.
-        """
-
         if self.store is None:
             return
 
@@ -1249,24 +933,15 @@ class Agent:
             self.memory,
         )
 
-
     async def save_context_snapshot(self, reason: str = "periodic") -> str:
-        """
-        Lưu snapshot của toàn bộ session vào Store.
-        Trả về đường dẫn hoặc ID của file snapshot.
-        """
-
-        # Nếu chưa cấu hình Store thì không làm gì
         if self.store is None:
             return ""
 
         out = []
 
-        # Tiêu đề
         out.append("# KAgent Session Context")
         out.append("")
 
-        # Thông tin phiên làm việc
         out.append(f"Updated: {datetime.now(timezone.utc).isoformat()}")
         out.append(f"Reason: {reason}")
         out.append(f"Provider: {self.client.name()}")
@@ -1278,34 +953,25 @@ class Agent:
 
         out.append("")
 
-        # Bộ nhớ dài hạn
         out.append("## Persistent Memory")
         out.append("")
         out.append(self.format_memory())
 
         out.append("")
 
-        # Lịch sử hội thoại (đã rút gọn)
         out.append("## Redacted Conversation Context")
         out.append("")
         out.append(
             format_history_for_compaction(self.history[1:])
         )
 
-        # Ghép thành chuỗi Markdown
         content = "\n".join(out)
 
-        # Lưu xuống Store
         return await self.store.save_context_snapshot(content)
-
 
     def rebuild_system_prompt(
         self,
     ) -> None:
-        """
-        Xây dựng lại System Prompt dựa trên trạng thái hiện tại của Agent.
-        """
-
         self.sys_prompt = build_system_prompt(
             BuildOptions(
                 skills=self.skills,
@@ -1323,59 +989,28 @@ class Agent:
             )
         )
 
-
-    # ==========================================================
-    # Target Management
-    # ==========================================================
-
     async def set_target_base_url(self, url: str) -> None:
-        """
-        Thiết lập URL mục tiêu.
-        """
-
         self.target.set_base_url(url)
-
         self.rebuild_system_prompt()
-
         self.history = ensure_system_prompt(
             self.history,
             self.sys_prompt,
         )
-
         await self.save()
-
 
     async def clear_target(self) -> None:
-        """
-        Xóa Target hiện tại.
-        """
-
         self.target.clear()
-
         self.rebuild_system_prompt()
-
         self.history = ensure_system_prompt(
             self.history,
             self.sys_prompt,
         )
-
         await self.save()
 
-
-    # ==========================================================
-    # Context Builders
-    # ==========================================================
-
     async def coverage_context(self, signal) -> str:
-        """
-        Tạo context về trạng thái coverage hiện tại để cung cấp cho LLM.
-        """
-
-        # Kiểm tra Coverage Tool có tồn tại không
         if self.tools.get("coverage") is None:
             return "Coverage tool is not available in this session."
 
-        # Lấy thông tin tổng quan (summary)
         try:
             summary = await self.tools.execute(
                 "coverage",
@@ -1386,7 +1021,6 @@ class Agent:
         except Exception as err:
             summary = f"error: {err_message(err)}"
 
-        # Lấy danh sách coverage
         try:
             entries = await self.tools.execute(
                 "coverage",
@@ -1397,7 +1031,6 @@ class Agent:
         except Exception as err:
             entries = f"error: {err_message(err)}"
 
-        # Ghép thành chuỗi context gửi cho LLM
         return "\n".join(
             [
                 "Coverage summary:",
@@ -1416,12 +1049,6 @@ class Agent:
             ]
         )
 
-
-    # ==========================================================
-    # Agent Execution (Run Loop)
-    # ==========================================================
-
-    # Run Loop
     async def run(
         self,
         user_msg: str,
@@ -1429,18 +1056,11 @@ class Agent:
         emit,
         opts: AgentRunOptions | None = None,
     ) -> None:
-        """
-        Hàm bao ngoài điều khiển toàn bộ một lượt chạy (turn) của Agent.
-        """
-
-        # Tạo hàm emit an toàn (không phát event nếu đã bị hủy)
         safe_emit = make_safe_emit(signal, emit)
 
-        # Đánh dấu agent đang chạy
         self.running = True
 
         try:
-            # Thực thi vòng lặp chính của Agent
             await self.run_inner(
                 user_msg,
                 signal,
@@ -1449,7 +1069,6 @@ class Agent:
             )
 
         except Exception as err:
-            # Người dùng hủy (Ctrl+C / Esc)
             if signal.aborted or is_abort_like_error(err):
 
                 safe_emit(
@@ -1461,7 +1080,6 @@ class Agent:
                 return
             traceback.print_exc()
 
-            # Các lỗi khác
             log_error(
                 "agent: panic in Run",
                 {
@@ -1478,18 +1096,14 @@ class Agent:
 
         finally:
 
-            # Đánh dấu đã kết thúc
             self.running = False
 
-            # Thông báo hoàn thành
             safe_emit(
                 {
                     "type": "done",
                 }
             )
 
-
-    # Main Agent Loop
     async def run_inner(
         self,
         user_msg: str,
@@ -1497,34 +1111,24 @@ class Agent:
         emit,
         opts=None,
     ) -> None:
-        """
-        Vòng xử lý chính của Agent cho một lượt tương tác.
-        """
-        # Hỗ trợ caller truyền dict thay vì AgentRunOptions
         if isinstance(opts, dict):
             opts = AgentRunOptions(**opts)
 
-        # Kích hoạt các skill đang chờ
         self.active_skills = set(self.pending_skills)
         self.pending_skills.clear()
 
-        # Đánh dấu chưa thực thi tool trong turn này
         self.turn_executed_tool = False
 
-        # Sửa các tool call còn dang dở từ turn trước
         self.history = reconcile_tool_calls(
             self.history
         )
 
-        # Mở rộng các @file thành nội dung thực tế
         expanded_user_msg = expand_file_mentions(
             user_msg
         )
 
-        # Ước lượng số token của input mới
         incoming_tokens = len(expanded_user_msg) // 4
 
-        # Token của Tool Schema
         if opts is not None and getattr(opts, "tools", True) is False:
             tools_tokens = 0
         else:
@@ -1533,7 +1137,6 @@ class Agent:
         history_tokens = self.approx_tokens()
         trigger_tokens = history_tokens + incoming_tokens + tools_tokens
 
-        # Kiểm tra có cần Auto Compact không
         if (
             self.auto_compact_threshold > 0
             and self.consecutive_compact_failures
@@ -1549,8 +1152,6 @@ class Agent:
                 tools_tokens=tools_tokens,
             )
 
-
-       # Decision Planning
         if opts is not None and getattr(opts, "tools", True) is False:
             decision = None
         else:
@@ -1573,7 +1174,6 @@ class Agent:
                 }
             )
 
-        # Conversation History
         self.history.append(
             Message(
                 role="user",
@@ -1596,8 +1196,6 @@ class Agent:
             )
 
         last = working[-1] if working else None
-
-        # Context Injection
 
         if decision and last:
             working.insert(
@@ -1638,8 +1236,6 @@ class Agent:
         if last:
             last.content = expanded_user_msg
 
-        # Agent Reasoning Loop
-
         max_steps = self.max_steps
 
         for step in range(max_steps):
@@ -1654,7 +1250,6 @@ class Agent:
                     opts,
                 )
 
-            # Build Chat Request
             req = ChatRequest(
                 model=self.client.model(),
                 messages=working,
@@ -1663,7 +1258,6 @@ class Agent:
             if opts is None or getattr(opts, "tools", True):
                 req.tools = self.tools.as_llm_tools()
 
-            # LLM Response
             print("RUN_INNER BEFORE CHAT")
             resp, streamed = await self.chat(
                 req,
@@ -1679,7 +1273,6 @@ class Agent:
 
             has_tool_calls = len(tool_calls) > 0
 
-            # Plan-only Mode
             if (
                 opts is not None
                 and getattr(opts, "tools", True) is False
@@ -1705,8 +1298,6 @@ class Agent:
 
                 return
 
-            # Store Assistant Message
-
             self.history.append(resp.message)
 
             working.append(resp.message)
@@ -1723,8 +1314,6 @@ class Agent:
                     }
                 )
 
-            # Assistant Output
-
             if resp.message.content and not streamed:
                 emit(
                     {
@@ -1732,8 +1321,6 @@ class Agent:
                         "text": resp.message.content,
                     }
                 )
-
-            # Finish Turn
 
             if not has_tool_calls:
 
@@ -1749,16 +1336,12 @@ class Agent:
 
                 return
 
-            # Tool Execution
-
             await self.execute_tool_calls(
                 tool_calls,
                 signal,
                 emit,
                 working,
             )
-
-        # Max Steps Error
 
         emit(
             {
@@ -1767,31 +1350,16 @@ class Agent:
             }
         )
 
-
-    # Context Guard
     def guard_working_context(
         self,
         working: list[Message],
         emit,
         opts=None,
     ) -> None:
-        """
-        Mid-turn context guard.
-
-        Nếu working context quá lớn thì chỉ lược bỏ (elide)
-        các Tool Output cũ trong working copy để tránh vượt
-        context window.
-
-        Không làm thay đổi self.history.
-        """
-
-        # Tool Schema Tokens
         if opts is not None and getattr(opts, "tools", True) is False:
             tools_tokens = 0
         else:
             tools_tokens = self.tools_token_estimate()
-
-        # Context Size Estimation
 
         def size() -> int:
 
@@ -1814,8 +1382,6 @@ class Agent:
 
         if size() < self.auto_compact_threshold:
             return
-
-        # Tool Output Elision
 
         tool_indexes: list[int] = []
 
@@ -1848,7 +1414,6 @@ class Agent:
 
             bytes_dropped = len(msg.content)
 
-            # Replace Tool Output
             working[i] = Message(
                 role=msg.role,
                 content=(
@@ -1861,8 +1426,6 @@ class Agent:
             )
 
             dropped += bytes_dropped
-
-        # Emit Context Event
 
         if dropped > 0:
 
@@ -1878,8 +1441,6 @@ class Agent:
                 }
             )
 
-
-    # Tool Execution
     async def execute_tool_calls(
         self,
         tool_calls: list[ToolCall],
@@ -1887,16 +1448,6 @@ class Agent:
         emit,
         working: list[Message],
     ) -> None:
-        """
-        Thực thi các Tool Call của một bước.
-
-        - Nếu chỉ có một tool hoặc có tool thay đổi trạng thái
-          (ví dụ load_skill) thì chạy tuần tự.
-
-        - Nếu các tool độc lập thì chạy song song với số lượng
-          giới hạn để tăng tốc.
-        """
-
         sequential = (
             len(tool_calls) <= 1
             or any(
@@ -1904,8 +1455,6 @@ class Agent:
                 for tc in tool_calls
             )
         )
-
-        # Sequential Execution
 
         if sequential:
 
@@ -1954,14 +1503,10 @@ class Agent:
 
             return
 
-        # Parallel Execution
-
         parsed_all = [
             self.parse_tool_call(tc)
             for tc in tool_calls
         ]
-
-        # Emit Tool Calls
 
         for tc, parsed in zip(tool_calls, parsed_all):
 
@@ -2014,19 +1559,10 @@ class Agent:
         if signal.aborted:
             raise Exception("aborted")
 
-
-    # Tool Running
     def parse_tool_call(
         self,
         tc: ToolCall,
     ) -> ParsedToolCall:
-        """
-        Parse JSON arguments của Tool Call.
-
-        Nếu parse lỗi thì không raise exception ngay,
-        mà lưu lỗi lại để Agent trả về cho LLM tự sửa.
-        """
-
         args: dict[str, Any] = {}
         parse_err: Exception | None = None
 
@@ -2041,19 +1577,12 @@ class Agent:
             parse_err=parse_err,
         )
 
-
     async def run_parsed_tool_call(
         self,
         tc: ToolCall,
         parsed: ParsedToolCall,
         signal,
     ) -> ToolCallResult:
-        """
-        Thực thi một tool call đã được parse.
-        Không raise exception, mọi lỗi sẽ được trả về dưới dạng ToolCallResult
-        để Agent tiếp tục xử lý các tool khác.
-        """
-
         if signal.aborted:
             return ToolCallResult(
                 result="ERROR: aborted",
@@ -2066,7 +1595,6 @@ class Agent:
         result = ""
         run_err: Exception | None = None
 
-        # JSON arguments parse lỗi
         if parsed.parse_err is not None:
             run_err = Exception(
                 f"could not parse arguments: "
@@ -2076,7 +1604,6 @@ class Agent:
 
         else:
 
-            # Kiểm tra tool có được phép chạy không
             allowed = self.is_tool_allowed(
                 tc.function.name
             )
@@ -2127,8 +1654,6 @@ class Agent:
             duration_ms=duration_ms,
         )
 
-
-    # Tool Result Handling
     def record_tool_result(
         self,
         tc: ToolCall,
@@ -2137,11 +1662,6 @@ class Agent:
         emit,
         working: list[Message],
     ) -> None:
-        """
-        Gửi kết quả tool, kích hoạt skill nếu cần,
-        và thêm tool message vào history + working.
-        """
-
         emit(
             {
                 "type": "tool-result",
@@ -2153,11 +1673,9 @@ class Agent:
             }
         )
 
-        # Đánh dấu turn này đã thực thi tool thành công
         if not res.err_str:
             self.turn_executed_tool = True
 
-        # Nếu load_skill thành công thì kích hoạt skill
         if (
             tc.function.name == "load_skill"
             and not res.err_str
@@ -2188,21 +1706,12 @@ class Agent:
         self.history.append(tool_msg)
         working.append(tool_msg)
 
-
     async def chat(
         self,
         req: ChatRequest,
         signal,
         emit,
     ) -> tuple[ChatResponse, bool]:
-        """
-        Gửi request tới LLM.
-
-        Returns:
-            (response, streamed)
-        """
-
-        # Streaming
         if (
             self.streaming_enabled
             and is_streaming(self.client)
@@ -2245,7 +1754,6 @@ class Agent:
 
             return resp, True
 
-        # Non-streaming
         resp = await self.client.chat(
             req,
             signal,
@@ -2253,28 +1761,16 @@ class Agent:
 
         return resp, False
 
-
-    # ==========================================================
-    # Context Compaction
-    # ==========================================================
-
-    # Compact Context
     async def compact(
         self,
         signal,
         emit,
     ) -> None:
-        """
-        Nén (compact) lịch sử hội thoại thành một bản tóm tắt
-        để giảm số token sử dụng.
-        """
-
         safe_emit = make_safe_emit(signal, emit)
 
         self.running = True
 
         try:
-            # Snapshot history
             history_snap = self.history.copy()
 
             if len(history_snap) <= 1:
@@ -2286,7 +1782,6 @@ class Agent:
                 )
                 return
 
-            # Tạo ChatRequest
             req = ChatRequest(
                 model=self.client.model(),
                 messages=[
@@ -2303,10 +1798,8 @@ class Agent:
                 ],
             )
 
-            # Gọi LLM
             resp = await self.client.chat(req, signal)
             print("CHAT RETURNED")
-            # Lấy summary
             summary = strip_thinking_tags(
                 resp.message.content
             )
@@ -2322,22 +1815,17 @@ class Agent:
                 )
                 return
 
-            # Merge Memory
             self.memory = merge_memory(
                 self.memory,
                 summary,
             )
 
-            # Rebuild System Prompt
             self.rebuild_system_prompt()
 
-            # Reset bộ đếm compact lỗi
             self.consecutive_compact_failures = 0
 
-            # Học từ summary
             await self.learn_intelligence(summary)
 
-            # Reset History
             self.history = [
                 Message(
                     role="system",
@@ -2353,7 +1841,6 @@ class Agent:
                 ),
             ]
 
-            # Lưu Session
             try:
                 await self.save()
 
@@ -2368,7 +1855,6 @@ class Agent:
                     }
                 )
 
-            # Lưu Snapshot
             try:
                 await self.save_context_snapshot(
                     "manual compact"
@@ -2385,7 +1871,6 @@ class Agent:
                     }
                 )
 
-            # Thông báo compact thành công
             safe_emit(
                 {
                     "type": "compact",
@@ -2422,7 +1907,6 @@ class Agent:
                 }
             )
 
-
     async def auto_compact(
         self,
         signal,
@@ -2432,10 +1916,6 @@ class Agent:
         incoming_tokens: int = 0,
         tools_tokens: int = 0,
     ) -> None:
-        """
-        Tự động compact lịch sử hội thoại khi vượt ngưỡng token.
-        """
-
         tokens_before = self.approx_tokens()
         displayed_tokens = trigger_tokens if trigger_tokens is not None else tokens_before
         displayed_history_tokens = (
@@ -2520,22 +2000,10 @@ class Agent:
                 }
             )
 
-
     async def compact_in_place(
         self,
         signal,
     ) -> bool:
-        """
-        Thực hiện compact history tại chỗ.
-
-        Trả về False nếu không có gì để compact (skip, không
-        phải lỗi). Trả về True nếu compact thành công.
-
-        Không emit event.
-        Mọi lỗi thật sự sẽ throw ra ngoài để auto_compact()
-        hoặc caller xử lý.
-        """
-
         history_snap = self.history.copy()
 
         if len(history_snap) <= 1:
@@ -2557,7 +2025,6 @@ class Agent:
             ],
         )
 
-        # Gọi LLM
         resp = await self.client.chat(
             req,
             signal,
@@ -2572,21 +2039,17 @@ class Agent:
                 "compact returned empty summary"
             )
 
-        # Merge memory
         self.memory = merge_memory(
             self.memory,
             summary,
         )
 
-        # Cập nhật lại System Prompt
         self.rebuild_system_prompt()
 
-        # Học thêm từ summary
         await self.learn_intelligence(
             summary
         )
 
-        # Reset history
         self.history = [
             Message(
                 role="system",
@@ -2602,28 +2065,18 @@ class Agent:
             ),
         ]
 
-        # Lưu session
         await self.save()
 
-        # Lưu snapshot
         await self.save_context_snapshot(
             "auto compact"
         )
 
         return True
 
-# ==========================================================
-# Module-level Helper Functions
-# ==========================================================
 
 def count_memory_items(
     memory: Optional[SessionMemory]
 ) -> int:
-    """
-    Đếm tổng số item trong SessionMemory.
-    Port 1:1 từ TypeScript.
-    """
-
     if memory is None:
         return 0
 
@@ -2645,14 +2098,12 @@ def append_memory_section(
     title: str,
     items: list[str]
 ) -> None:
-    # Thêm một nhóm memory vào output
     if not items:
         return
 
     out.append("")
     out.append(title)
 
-    # Chỉ hiển thị 8 memory mới nhất
     for item in items[-8:]:
         out.append(f"- {item}")
 
@@ -2661,22 +2112,15 @@ def ensure_system_prompt(
     messages: list[Message],
     prompt: str
 ) -> list[Message]:
-    """
-    Đảm bảo system prompt luôn ở đầu history.
-    """
-
-    # Chưa có system message -> thêm mới
     if not messages or messages[0].role != "system":
         return [
             Message(role="system", content=prompt),
             *messages
         ]
 
-    # Prompt không đổi -> giữ nguyên
     if messages[0].content == prompt:
         return messages
 
-    # Prompt thay đổi -> cập nhật system message
     return [
         Message(role="system", content=prompt),
         *messages[1:]
@@ -2684,35 +2128,20 @@ def ensure_system_prompt(
 
 
 def format_history_for_compaction(messages: list[Message]) -> str:
-    """
-    Chuyển lịch sử hội thoại thành chuỗi văn bản để phục vụ
-    context compaction hoặc lưu snapshot.
-
-    Đồng thời che (redact) các thông tin nhạy cảm như:
-    - Bearer Token
-    - API Key
-    - Password
-    - JWT
-    """
-
     lines: list[str] = []
 
     for m in messages:
-        # Bỏ qua message không có nội dung và cũng không có tool call
         if not m.content and (not m.tool_calls or len(m.tool_calls) == 0):
             continue
 
-        # Hiển thị role và tên (nếu có)
         if m.name:
             lines.append(f"\n[{m.role}:{m.name}]")
         else:
             lines.append(f"\n[{m.role}]")
 
-        # Nội dung hội thoại
         if m.content:
             lines.append(redact(m.content))
 
-        # Thông tin tool call
         if m.tool_calls:
             for tc in m.tool_calls:
                 lines.append(
@@ -2725,23 +2154,12 @@ def format_history_for_compaction(messages: list[Message]) -> str:
 
 
 def err_message(err) -> str:
-    """
-    Chuyển Exception hoặc đối tượng bất kỳ thành chuỗi lỗi.
-    """
     if isinstance(err, Exception):
         return str(err)
     return str(err)
 
 
 def reconcile_tool_calls(messages: list[Message]) -> list[Message]:
-    """
-    Sửa các Tool Call còn dang dở trong history.
-
-    Mỗi Assistant Tool Call phải có một Tool Message tương ứng.
-    Nếu session bị dừng giữa chừng khiến Tool Result chưa được ghi,
-    hàm sẽ tự sinh một Tool Message báo lỗi để history hợp lệ.
-    """
-
     out: list[Message] = []
 
     i = 0
@@ -2754,13 +2172,10 @@ def reconcile_tool_calls(messages: list[Message]) -> list[Message]:
             i += 1
             continue
 
-        # Giữ nguyên message hiện tại
         out.append(message)
 
-        # Lấy danh sách tool call
         tool_calls = message.tool_calls
 
-        # Không phải Assistant hoặc không có Tool Call
         if (
             message.role != "assistant"
             or not tool_calls
@@ -2768,12 +2183,10 @@ def reconcile_tool_calls(messages: list[Message]) -> list[Message]:
             i += 1
             continue
 
-        # Các Tool Call đã có Tool Result
         answered: set[str] = set()
 
         j = i + 1
 
-        # Thu thập các Tool Message ngay sau Assistant
         while j < len(messages):
 
             next_message = messages[j]
@@ -2791,7 +2204,6 @@ def reconcile_tool_calls(messages: list[Message]) -> list[Message]:
 
             j += 1
 
-        # Sinh Tool Message cho các Tool Call chưa có kết quả
         for tool_call in tool_calls:
 
             if (
@@ -2820,8 +2232,8 @@ def reconcile_tool_calls(messages: list[Message]) -> list[Message]:
 
     return out
 
-def _to_agent_event(event: Any):
 
+def _to_agent_event(event: Any):
     if not isinstance(event, dict):
         return event
 
@@ -2843,19 +2255,12 @@ def _to_agent_event(event: Any):
 
     return cls(**kwargs)
 
+
 def make_safe_emit(signal, emit):
-    """
-    Tạo một Event Emitter an toàn.
-
-    Nếu Agent đã bị hủy (Abort), chỉ cho phép gửi
-    event "done" và "error".
-    """
-
     def safe_emit(event):
 
         event = _to_agent_event(event)
 
-        # Đã hủy thì chỉ cho phép done và error
         if (
             signal.aborted
             and event["type"] not in ("done", "error")
@@ -2866,16 +2271,12 @@ def make_safe_emit(signal, emit):
             emit(event)
 
         except Exception:
-            # UI lỗi không được làm Agent dừng
             pass
 
     return safe_emit
 
-def is_abort_like_error(err: object) -> bool:
-    """
-    Kiểm tra xem exception có phải lỗi do hủy (Abort) hay không.
-    """
 
+def is_abort_like_error(err: object) -> bool:
     if not isinstance(err, Exception):
         return False
 
@@ -2887,44 +2288,30 @@ def is_abort_like_error(err: object) -> bool:
         or "operation was aborted" in msg
     )
 
-class AgentRuntimeError(RuntimeError):
-    """
-    RuntimeError tương thích với TypeScript Error.message.
-    """
 
+class AgentRuntimeError(RuntimeError):
     @property
     def message(self) -> str:
         return str(self)
 
+
 def bounded_history_for_compaction(
     messages: list[Message],
 ) -> str:
-    """
-    Giới hạn kích thước history khi gửi cho LLM để compact.
-    Nếu history vượt quá COMPACTION_INPUT_CHAR_LIMIT ký tự,
-    chỉ giữ phần cuối và thêm một system note.
-    """
-
-    # Chuyển history thành chuỗi
     full = format_history_for_compaction(messages)
 
-    # Nếu chưa vượt giới hạn thì trả về luôn
     if len(full) <= COMPACTION_INPUT_CHAR_LIMIT:
         return full
 
-    # Lấy COMPACTION_INPUT_CHAR_LIMIT ký tự cuối
     tail = full[-COMPACTION_INPUT_CHAR_LIMIT:]
 
-    # Tìm vị trí bắt đầu của một message mới
     boundary = tail.find("\n[")
 
-    # Nếu tìm thấy thì cắt từ đầu message
     if boundary > 0:
         trimmed = tail[boundary:]
     else:
         trimmed = tail
 
-    # Ghép thêm system note
     return "\n".join(
         [
             (
@@ -2944,17 +2331,10 @@ def merge_memory(
     prev: SessionMemory | None,
     summary: str,
 ) -> SessionMemory:
-    """
-    Gộp Memory hiện tại với Summary vừa sinh ra sau khi compact.
-    """
-
-    # Thời gian hiện tại (ISO 8601 UTC)
     now = datetime.now(timezone.utc).isoformat()
 
-    # Phân tích summary thành các trường có cấu trúc
     parsed = parse_compaction_summary(summary)
 
-    # Nếu chưa có memory thì tạo memory rỗng
     base = prev if prev is not None else empty_memory()
 
     return SessionMemory(
@@ -3017,40 +2397,28 @@ def merge_list(
     next_items: list[str],
     cap: int = 24,
 ) -> list[str]:
-    """
-    Gộp hai danh sách, loại bỏ phần tử trùng lặp (không phân biệt hoa/thường),
-    chuẩn hóa khoảng trắng, giới hạn độ dài mỗi phần tử và số lượng phần tử.
-    """
-
     seen: set[str] = set()
     out: list[str] = []
 
-    # Ghép danh sách cũ và mới
     for item in (prev or []) + next_items:
 
-        # Chuẩn hóa khoảng trắng
         clean = " ".join(item.split()).strip()
 
-        # Bỏ chuỗi rỗng
         if not clean:
             continue
 
-        # So sánh không phân biệt hoa/thường
         key = clean.lower()
 
-        # Đã tồn tại thì bỏ qua
         if key in seen:
             continue
 
         seen.add(key)
 
-        # Giới hạn chiều dài mỗi mục (240 ký tự)
         if len(clean) > 240:
             clean = clean[:239] + "…"
 
         out.append(clean)
 
-    # Giới hạn số lượng phần tử (giữ các phần tử mới nhất)
     if cap is not None:
         return out[-cap:]
 
@@ -3058,10 +2426,6 @@ def merge_list(
 
 
 def empty_memory() -> SessionMemory:
-    """
-    Khởi tạo một SessionMemory rỗng.
-    """
-
     now = datetime.now(timezone.utc).isoformat()
 
     return SessionMemory(
@@ -3084,20 +2448,6 @@ def empty_memory() -> SessionMemory:
 def parse_compaction_summary(
     summary: str,
 ) -> SessionMemoryParsed:
-    """
-    Parse summary sau compact thành dữ liệu SessionMemory.
-
-    Tương đương:
-    Omit<
-        SessionMemory,
-        'version',
-        'updatedAt',
-        'compactions',
-        'lastCompactedAt',
-        'lastSummary'
-    >
-    """
-
     sections = split_markdown_sections(summary)
 
     files_and_commands = section_items(
@@ -3184,38 +2534,21 @@ def section_items(
     sections: dict[str, list[str]],
     names: list[str],
 ) -> list[str]:
-    """
-    Lấy các item trong các section Markdown cụ thể.
-
-    - Chuẩn hóa tên heading.
-    - Loại bỏ ký tự bullet (-, *, 1., 2)).
-    - Bỏ dòng rỗng.
-    - Bỏ các giá trị như "none", "n/a".
-    """
-
     out: list[str] = []
 
-    # normalize heading trước khi tìm section
     for name in map(normalize_heading, names):
 
-        # Lấy các dòng trong section
         for line in sections.get(name, []):
 
-            # Xóa bullet markdown:
-            # "- item"
-            # "* item"
-            # "1. item"
             item = re.sub(
                 r"^\s*(?:[-*]|\d+[.)])\s+",
                 "",
                 line,
             ).strip()
 
-            # Bỏ dòng rỗng
             if not item:
                 continue
 
-            # Bỏ "none" hoặc "n/a"
             if re.match(
                 r"^none\b|^n/a$",
                 item,
@@ -3229,13 +2562,6 @@ def section_items(
 
 
 def normalize_heading(s: str) -> str:
-    """
-    Chuẩn hóa heading:
-    - Chuyển thành chữ thường
-    - Xóa ký tự ':' và '#'
-    - Xóa khoảng trắng thừa đầu cuối
-    """
-
     return re.sub(
         r"[:#]",
         "",
@@ -3244,10 +2570,6 @@ def normalize_heading(s: str) -> str:
 
 
 def split_markdown_sections(text: str) -> dict[str, list[str]]:
-    """
-    Tách nội dung Markdown thành các section.
-    """
-
     sections = {}
     current = "summary"
 
@@ -3280,10 +2602,6 @@ def build_turn_learning_text(
     user_msg: str,
     assistant_msg: str,
 ) -> str:
-    """
-    Tạo văn bản đầu vào cho learn_intelligence().
-    """
-
     return "\n".join(
         [
             "## User preferences and working style",
@@ -3300,11 +2618,6 @@ async def map_with_concurrency(
     limit: int,
     fn: Callable[[T, int], Awaitable[R]],
 ) -> list[R]:
-    """
-    Chạy tối đa limit task cùng lúc.
-    Kết quả giữ nguyên thứ tự input.
-    """
-
     results = cast(
         list[R],
         [None] * len(items)
@@ -3339,6 +2652,7 @@ async def map_with_concurrency(
     await asyncio.gather(*workers)
 
     return results
+
 
 def tools_enabled(opts) -> bool:
     if opts is None:

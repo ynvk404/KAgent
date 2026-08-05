@@ -50,9 +50,6 @@ class CoverageStore:
         self.dirty = False
         self.saving: asyncio.Task | None = None
 
-    # ---------------------------------------------------------
-    # Load
-    # ---------------------------------------------------------
 
     async def load(self) -> None:
         if self.loaded:
@@ -96,10 +93,6 @@ class CoverageStore:
                 pass
 
         self.loaded = True
-
-    # ---------------------------------------------------------
-    # Mark
-    # ---------------------------------------------------------
 
     async def mark(
         self,
@@ -151,10 +144,6 @@ class CoverageStore:
 
         return merged
 
-    # ---------------------------------------------------------
-    # List
-    # ---------------------------------------------------------
-
     async def list(
         self,
         *,
@@ -191,9 +180,6 @@ class CoverageStore:
 
         return result
 
-    # ---------------------------------------------------------
-    # Untested
-    # ---------------------------------------------------------
 
     async def untested(
         self,
@@ -234,9 +220,6 @@ class CoverageStore:
 
         return out
 
-    # ---------------------------------------------------------
-    # Summary
-    # ---------------------------------------------------------
 
     async def summary(self) -> CoverageSummary:
 
@@ -270,9 +253,6 @@ class CoverageStore:
             byVulnClass=by_vuln,
         )
 
-    # ---------------------------------------------------------
-    # Clear
-    # ---------------------------------------------------------
 
     async def clear(self):
 
@@ -282,18 +262,12 @@ class CoverageStore:
 
         self._queue_save()
 
-    # ---------------------------------------------------------
-    # Flush
-    # ---------------------------------------------------------
 
     async def flush(self):
 
         while self.saving:
             await self.saving
 
-    # ---------------------------------------------------------
-    # Private
-    # ---------------------------------------------------------
 
     def _evict_if_needed(self):
 
@@ -368,11 +342,6 @@ class CoverageStore:
         )
 
         tmp.replace(self.path)
-
-
-# ==========================================================
-# Helpers
-# ==========================================================
 
 def _key_of(
     endpoint: str,

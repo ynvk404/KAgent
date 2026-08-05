@@ -1,6 +1,3 @@
-# kagent-browser-mcp — standalone MCP stdio server that pairs with
-# the kagent Chrome extension companion.
-
 import sys
 import json
 import asyncio
@@ -17,7 +14,6 @@ from src.logger import logger
 from .server import start_ingest_server, IngestServerOptions
 from .store import CaptureStore
 
-# Ép kiểu Any cho module logger để tránh Pylance báo lỗi attr access khi gọi init/info
 log: Any = logger
 
 SERVER_NAME = 'kagent-browser'
@@ -79,8 +75,6 @@ Flags:
   -h, --help          this help
 """)
 
-# ---- Helper utilities ----
-
 def text_result(text: str, is_error: bool = False) -> types.CallToolResult:
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
@@ -88,7 +82,6 @@ def text_result(text: str, is_error: bool = False) -> types.CallToolResult:
     )
 
 def get_val(obj: Any, *keys: str, default: Any = None) -> Any:
-    """Truy cập an toàn cho cả Dict lẫn Object (hỗ trợ camelCase/snake_case)."""
     if isinstance(obj, dict):
         for k in keys:
             if k in obj: return obj[k]
@@ -98,7 +91,6 @@ def get_val(obj: Any, *keys: str, default: Any = None) -> Any:
     return default
 
 def to_dict(obj: Any) -> dict:
-    """Chuyển đổi Object (Dataclass, Class thường hoặc Dict) sang Dictionary an toàn."""
     if isinstance(obj, dict):
         return obj.copy()
     if is_dataclass(obj) and not isinstance(obj, type):
@@ -108,7 +100,6 @@ def to_dict(obj: Any) -> dict:
     return {}
 
 def format_iso(val: Any) -> Optional[str]:
-    """Format thời gian sang chuẩn ISO8601 (Python 3.12+ safe)."""
     if not val:
         return None
     if isinstance(val, datetime):
@@ -116,8 +107,6 @@ def format_iso(val: Any) -> Optional[str]:
     if isinstance(val, (int, float)): 
         return datetime.fromtimestamp(val, timezone.utc).isoformat().replace("+00:00", "Z")
     return str(val)
-
-# ---- Main Application ----
 
 async def main() -> int:
     args = parse_args(sys.argv[1:])
@@ -133,7 +122,6 @@ async def main() -> int:
     handle = None
 
     try:
-        # Gọi đồng bộ với IngestServerOptions đúng như server.py yêu cầu
         handle = start_ingest_server(
             IngestServerOptions(
                 store=store,
@@ -151,8 +139,6 @@ async def main() -> int:
         return 1
 
     mcp = Server(SERVER_NAME)
-
-    # ---- Tools Registration ----
 
     @mcp.list_tools()
     async def handle_list_tools() -> list[types.Tool]:
@@ -308,7 +294,6 @@ async def main() -> int:
         else:
             raise ValueError(f"Unknown tool: {name}")
 
-    # ---- Transport ----
     try:
         async with stdio_server() as (read_stream, write_stream):
             await mcp.run(
@@ -324,7 +309,6 @@ async def main() -> int:
                 ),
             )
     finally:
-        # Gọi close() đồng bộ khi stdio kết thúc
         log.info('browser-mcp shutdown')
         if handle:
             handle.close()

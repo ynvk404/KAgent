@@ -1,8 +1,3 @@
-"""
-decision.py
-Port từ decision.ts sang Python
-"""
-
 from dataclasses import dataclass
 import re
 from typing import List, Optional, TypedDict
@@ -10,15 +5,12 @@ from typing import List, Optional, TypedDict
 from src.skills.registry import Skill
 from src.target.target import Target
 
-# ==========================
-# Decision Plan
-# ==========================
 
 @dataclass
 class DecisionPlan:
     recommended_skill: Optional[str]
     reason: str
-    risk: str               # "normal" | "high"
+    risk: str
     checklist: List[str]
     guidance: str
 
@@ -34,10 +26,6 @@ class IntentScore(TypedDict):
     strong_count: int
     hits: List[str]
 
-
-# ==========================
-# Intent mapping
-# ==========================
 
 STRONG_KEYWORD_WEIGHT = 5
 WEAK_KEYWORD_WEIGHT = 1
@@ -239,19 +227,11 @@ WORKFLOW_TERMS = [
 ]
 
 
-# ==========================================================
-# Hàm chính
-# ==========================================================
-
 def build_decision_plan(
     user_msg: str,
     skills: List[Skill],
     target: Target,
 ) -> Optional[DecisionPlan]:
-    """
-    Sinh DecisionPlan từ câu hỏi người dùng.
-    """
-
     text = user_msg.strip()
 
     if not text:
@@ -302,18 +282,10 @@ def build_decision_plan(
     )
 
 
-# ==========================================================
-# Skill recommendation
-# ==========================================================
-
 def recommend_skill(
     normalized: str,
     skills: List[Skill],
 ) -> Optional[SkillRecommendation]:
-    """
-    Recommend an available skill from curated intent keywords only.
-    """
-
     available_skill_names = {
         skill.name
         for skill in skills
@@ -336,10 +308,6 @@ def detect_intent(
     normalized: str,
     available_skill_names: set[str],
 ) -> List[IntentScore]:
-    """
-    Score curated intent keywords and aggregate by routable skill.
-    """
-
     by_skill: dict[str, IntentScore] = {}
 
     for intent_name, keyword_groups in INTENT_KEYWORDS.items():
@@ -428,16 +396,11 @@ def contains_keyword(normalized: str, keyword: str) -> bool:
     return re.search(pattern, normalized) is not None
 
 
-# ==========================================================
-# Checklist
-# ==========================================================
-
 def build_checklist(
     skill_name: Optional[str],
     target_known: bool,
     risk: str,
 ) -> List[str]:
-
     out = []
 
     if not target_known:
@@ -470,17 +433,12 @@ def build_checklist(
     return out
 
 
-# ==========================================================
-# Guidance
-# ==========================================================
-
 def render_guidance(
     skill_name: Optional[str],
     reason: str,
     risk: str,
     checklist: List[str],
 ) -> str:
-
     if skill_name:
         skill_line = (
             f"Recommended skill: {skill_name} ({reason})."
@@ -509,15 +467,7 @@ def render_guidance(
     return "\n".join(lines)
 
 
-# ==========================================================
-# Helpers
-# ==========================================================
-
 def normalize(s: str) -> str:
-    """
-    Chuẩn hóa chuỗi.
-    """
-
     return (
         s.lower()
         .replace("_", " ")
@@ -526,10 +476,6 @@ def normalize(s: str) -> str:
 
 
 def includes_any(s: str, needles: List[str]) -> bool:
-    """
-    Kiểm tra chuỗi có chứa bất kỳ keyword nào.
-    """
-
     return any(
         needle in s
         for needle in needles
@@ -537,10 +483,6 @@ def includes_any(s: str, needles: List[str]) -> bool:
 
 
 def has_host_like_text(s: str) -> bool:
-    """
-    Kiểm tra chuỗi có chứa URL hoặc domain.
-    """
-
     if re.search(r"https?://[^\s]+", s, re.I):
         return True
 

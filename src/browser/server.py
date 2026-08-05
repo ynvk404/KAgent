@@ -15,16 +15,10 @@ from .store import CaptureStore
 
 logger = logging.getLogger(__name__)
 
-# 4 MiB — bigger than any reasonable single response body slice
 MAX_BODY_BYTES = 4 * 1024 * 1024
 
 
 class DataclassJSONEncoder(json.JSONEncoder):
-    """CaptureStore returns dataclass instances (CapturedRequest, EndpointSummary,
-    BurpTask, BurpIssue, ...) from its list_*/status methods. json.dumps() doesn't
-    know how to serialize those out of the box, so every GET endpoint that returns
-    them would raise TypeError without this encoder."""
-
     def default(self, o: Any) -> Any:
         if is_dataclass(o) and not isinstance(o, type):
             return asdict(o)
@@ -51,24 +45,13 @@ class IngestServerHandle:
     thread: threading.Thread
 
     def close(self) -> None:
-        """Shuts down the server and waits for the thread to exit."""
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
 
 
-# ---------------------------------------------------------------------------
-# High-level Burp bridge lifecycle types.
-#
-# These describe the *result* of a start/stop/status operation on the bridge,
-# as used by the CLI wiring layer (start_burp_bridge / close_burp_bridge /
-# burp_bridge_status) and the /burp slash command. They live here so both the
-# wiring layer and the UI layer share one definition instead of ad-hoc dicts.
-# ---------------------------------------------------------------------------
-
 @dataclass(slots=True)
 class BurpBridgeState:
-    """Snapshot of whether the bridge is running and, if so, how to reach it."""
     running: bool
     port: Optional[int] = None
     url: Optional[str] = None
@@ -77,7 +60,6 @@ class BurpBridgeState:
 
 @dataclass(slots=True)
 class BurpBridgeResult:
-    """Outcome of a start/stop/status call against the bridge."""
     status: Literal[
         "started",
         "already_running",
@@ -90,7 +72,6 @@ class BurpBridgeResult:
 
 
 class IngestHTTPServer(ThreadingHTTPServer):
-    """Custom server class to hold shared application state."""
     def __init__(self, server_address: tuple[str, int], RequestHandlerClass: type[BaseHTTPRequestHandler], opts: IngestServerOptions, token: str):
         self.store = opts.store
         self.token = token
@@ -99,11 +80,9 @@ class IngestHTTPServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    # Helps IDE type checking
     server: IngestHTTPServer 
 
     def log_message(self, format: str, *args: Any) -> None:
-        # Suppress default HTTP logging to stdout to match previous aiohttp behavior
         pass
 
     def send_json(self, payload: Any, status: int = 200, extra_headers: dict[str, str] | None = None) -> None:
@@ -142,7 +121,6 @@ class Handler(BaseHTTPRequestHandler):
         return cors_headers
 
     def _check_security(self) -> bool:
-        """Validates loopback host and authorization token."""
         if not valid_loopback_host(self.headers.get("Host")):
             self.send_json({"ok": False, "error": "invalid host"}, status=403)
             return False
@@ -261,7 +239,6 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
-        # Dispatch
         if path == "/snapshot":
             result = store.ingest_snapshot(parsed)
         elif path == "/burp/task":
@@ -289,17 +266,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def start_ingest_server(opts: IngestServerOptions) -> IngestServerHandle:
-    """HTTP ingest server for the KAgent Chrome extension companion.
-
-    Binds to 127.0.0.1 only — never exposed off-host — and accepts JSON
-    payloads from the extension's forwardUrl.
-    """
     token = opts.token or secrets.token_hex(16)
 
-    # Initialize ThreadingHTTPServer with custom subclass to pass state
     server = IngestHTTPServer((opts.host, opts.port), Handler, opts, token)
 
-    # Get actual bound port in case opts.port was 0
     bound_port = server.server_port
     url = f"http://{opts.host}:{bound_port}"
 
@@ -321,9 +291,6 @@ def start_ingest_server(opts: IngestServerOptions) -> IngestServerHandle:
     )
 
 
-#
-# Strip ANSI/control characters.
-#
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
@@ -388,14 +355,11 @@ def constant_time_equal(a: str, b: str) -> bool:
 
 
 def valid_loopback_host(raw: str | None) -> bool:
-    # HTTP/1.1 clients are required to send Host. Treat a missing header as
-    # untrusted rather than allowing it through — fail closed, not open.
     if not raw:
         return False
 
     host = raw
 
-    # Remove ":port"
     if host.startswith("["):
         host = host.strip("[]")
         if "]:" in raw:

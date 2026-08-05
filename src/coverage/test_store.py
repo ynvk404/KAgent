@@ -1,6 +1,3 @@
-# Coverage store tests: mark / list / untested / summary, plus persistence
-# round-trip and the path-normalization that strips query strings.
-
 from __future__ import annotations
 
 import asyncio
@@ -12,22 +9,10 @@ import pytest
 
 from src.coverage.store import CoverageStore
 
-
-# ==========================================================
-# Helpers
-# ==========================================================
-
-
 def make_store() -> tuple[CoverageStore, Path]:
     tmp_dir = Path(tempfile.mkdtemp(prefix="pf-coverage-"))
     path = tmp_dir / "coverage.json"
     return CoverageStore(str(path)), path
-
-
-# ==========================================================
-# CoverageStore.mark
-# ==========================================================
-
 
 @pytest.mark.asyncio
 async def test_mark_records_new_entry_then_increments_on_remark():
@@ -51,8 +36,7 @@ async def test_mark_records_new_entry_then_increments_on_remark():
     )
 
     assert b.count == 2
-    assert b.status == "failed"  # status updates in place
-
+    assert b.status == "failed" 
 
 @pytest.mark.asyncio
 async def test_mark_strips_query_strings_so_shared_entry():
@@ -92,12 +76,6 @@ async def test_mark_rejects_empty_endpoint_param_vulnclass():
             status="tried",
         )
 
-
-# ==========================================================
-# CoverageStore.untested
-# ==========================================================
-
-
 @pytest.mark.asyncio
 async def test_untested_returns_only_untested_pairs():
     store, _ = make_store()
@@ -117,7 +95,6 @@ async def test_untested_returns_only_untested_pairs():
         ["sqli", "xss"],
     )
 
-    # 4 combinations total; one is already marked -> 3 untested.
     assert len(out) == 3
 
     assert not any(
@@ -126,11 +103,6 @@ async def test_untested_returns_only_untested_pairs():
         and t["vulnClass"] == "sqli"
         for t in out
     )
-
-
-# ==========================================================
-# CoverageStore.summary
-# ==========================================================
 
 
 @pytest.mark.asyncio
@@ -150,12 +122,6 @@ async def test_summary_aggregates_by_status_and_vuln_class():
     assert s.byVulnClass["xss"] == 2
     assert s.byVulnClass["sqli"] == 1
 
-
-# ==========================================================
-# CoverageStore persistence
-# ==========================================================
-
-
 @pytest.mark.asyncio
 async def test_persistence_round_trips_entries_through_json_file():
     store, path = make_store()
@@ -168,7 +134,6 @@ async def test_persistence_round_trips_entries_through_json_file():
         notes="jinja2 sandbox escape via lipsum",
     )
 
-    # Allow the queued save to settle.
     await store.flush()
 
     raw = path.read_text(encoding="utf8")
@@ -188,7 +153,6 @@ async def test_persistence_round_trips_entries_through_json_file():
 async def test_persistence_survives_corrupted_file_gracefully():
     _, path = make_store()
 
-    # Write garbage to the persistence path.
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{{ not json", encoding="utf8")
 
@@ -196,12 +160,11 @@ async def test_persistence_survives_corrupted_file_gracefully():
     entries = await fresh.list()
 
     assert len(entries) == 0
-    assert str(path.parent)  # sanity that we wrote into a tmpdir
+    assert str(path.parent) 
 
 
 @pytest.mark.asyncio
 async def test_persistence_does_not_lose_entries_under_concurrent_first_marks():
-    # Pre-populate the file with one entry via a first store.
     seed, path = make_store()
 
     await seed.mark(
@@ -212,8 +175,6 @@ async def test_persistence_does_not_lose_entries_under_concurrent_first_marks():
     )
     await seed.flush()
 
-    # A fresh store: fire two mark() calls before load() has resolved. The
-    # race fix must let the on-disk seed survive alongside both new marks.
     fresh = CoverageStore(str(path))
 
     await asyncio.gather(

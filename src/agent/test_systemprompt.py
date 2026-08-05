@@ -1,13 +1,7 @@
-# Pins the scope guard,
-# the OWASP / VRT / PortSwigger playbook markers, the thinking toggle,
-# the active-engagement injection, and now the tooling-profile stanza
-# so future trims of the prompt can't silently widen the assistant's
-# behavior or invert the curl-first default.
 
 from src.skills.registry import Registry
 from src.target.target import Target
 from .system_prompt import BuildOptions, build_system_prompt
-
 
 class Testbuild_system_prompt:
     def test_thinking_toggle_injects_the_right_directive(self):
@@ -104,10 +98,9 @@ class Testbuild_system_prompt:
         p = build_system_prompt(
             BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
         )
-        # The base curl-first ban must always be present.
+
         assert "Tool selection: curl-first" in p
         assert "Do NOT reach for ffuf" in p
-        # No 'full' override stanza when profile is missing.
         assert "Tooling profile: scanners enabled" not in p
 
     def test_warns_against_gnu_only_grep_p_in_shell_commands(self):
@@ -127,9 +120,8 @@ class Testbuild_system_prompt:
                 tooling_profile="full",
             )
         )
-        # Base curl-first stays — it's the dominant guidance.
+
         assert "Tool selection: curl-first" in p
-        # Override stanza lifts the ban with explicit guardrails.
         assert "Tooling profile: scanners enabled" in p
         assert "ffuf, nuclei, sqlmap" in p
 
@@ -167,10 +159,6 @@ class Testbuild_system_prompt:
         assert len(compact) < len(full) / 3
 
     def test_carries_the_creative_hunter_mindset_section_with_all_subheadings(self):
-        # These markers are load-bearing for the model's behavior on
-        # engagements — chain thinking, quiet wins, tech-stack hot spots,
-        # adversarial inversion. Future trims must keep them intact or the
-        # model loses its creative-hunter scaffolding.
         p = build_system_prompt(
             BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
         )

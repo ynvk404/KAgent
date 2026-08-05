@@ -163,10 +163,6 @@ def cap_string(value: str) -> str:
 
 class CaptureStore:
     def __init__(self, max_entries: Optional[int] = None) -> None:
-        # ThreadingHTTPServer dispatches each request on its own thread, so
-        # every method that reads or mutates shared state below takes this
-        # lock. It's re-entrant because some public methods call other
-        # locking methods internally (e.g. ingest_burp_issue -> _upsert_burp_issue).
         self._lock = threading.RLock()
         self.requests: dict[str, CapturedRequest] = {}
         self.endpoints: dict[str, _EndpointRecord] = {}

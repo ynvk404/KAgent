@@ -9,9 +9,7 @@ Che các thông tin nhạy cảm trước khi:
 import re
 
 
-# ==========================
 # Regex patterns
-# ==========================
 
 PATTERNS = [
     # Bearer token
@@ -107,9 +105,7 @@ PRIVATE_KEY_BLOCK = re.compile(
 )
 
 
-# ==========================
 # Mask secret
-# ==========================
 
 def mask(secret: str) -> str:
     """
@@ -128,9 +124,7 @@ def mask(secret: str) -> str:
     return f"{head}…[REDACTED:{dots}]…{tail}"
 
 
-# ==========================
 # Redactor
-# ==========================
 
 class Redactor:
     """

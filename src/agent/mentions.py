@@ -7,7 +7,6 @@ from dataclasses import dataclass
 INLINE_BYTE_CAP = 64 * 1024
 MENTION_RE = re.compile(r'(^|[\s("\'`])@(\S+)')
 
-# Cache index
 index_cwd: str = ""
 index_built_at: float = 0
 mention_index: dict[str, list[str]] | None = None
@@ -25,17 +24,12 @@ SKIP_DIRS = {
     ".cache",
 }
 
+
 def is_sensitive_path(path: str) -> bool:
-    """
-    Kiểm tra path có phải là file nhạy cảm hay không.
-    (Bạn có thể tùy chỉnh danh sách hoặc logic tùy mục đích)
-    """
     return False
 
+
 def extract_mentions(input_text: str) -> list[str]:
-    """
-    Trích xuất các @file trong prompt.
-    """
     out: list[str] = []
     for match in MENTION_RE.finditer(input_text):
         raw = clean_mention_path(match.group(2) or "")
@@ -43,24 +37,17 @@ def extract_mentions(input_text: str) -> list[str]:
             out.append(raw)
     return out
 
+
 def clean_mention_path(raw: str) -> str:
-    """
-    Chuẩn hóa đường dẫn.
-    """
     p = raw.strip()
-    # bỏ "..."
     p = re.sub(r'^["\']|["\']$', "", p)
-    # bỏ dấu câu cuối
     p = re.sub(r'["\'.,;:)\]]+$', "", p)
-    # ~/...
     if p.startswith("~/"):
         p = str(Path.home() / p[2:])
     return p
 
+
 def real_resolve_sync(path: str) -> str:
-    """
-    Resolve symlink.
-    """
     try:
         return str(Path(path).resolve(strict=True))
     except Exception:
@@ -70,15 +57,13 @@ def real_resolve_sync(path: str) -> str:
         except Exception:
             return path
 
+
 def walk(
     directory: str,
     idx: dict[str, list[str]],
     state: dict,
     depth: int,
 ) -> None:
-    """
-    Duyệt toàn bộ thư mục.
-    """
     if (
         state["files"] >= INDEX_FILE_CAP
         or state["dirs"] >= INDEX_DIR_CAP
@@ -116,10 +101,8 @@ def walk(
         idx.setdefault(entry.name, []).append(entry.path)
         state["files"] += 1
 
+
 def build_index(cwd: str) -> dict[str, list[str]]:
-    """
-    Build index toàn bộ project.
-    """
     idx: dict[str, list[str]] = {}
     state = {
         "files": 0,
@@ -128,10 +111,8 @@ def build_index(cwd: str) -> dict[str, list[str]]:
     walk(cwd, idx, state, depth=0)
     return idx
 
+
 def find_by_basename(name: str, limit: int = 6) -> list[str]:
-    """
-    Tìm file theo basename.
-    """
     global mention_index
     global index_cwd
     global index_built_at
@@ -155,11 +136,8 @@ def find_by_basename(name: str, limit: int = 6) -> list[str]:
 
     return sorted(matches)[:limit]
 
+
 def resolve_mention(raw: str) -> tuple[str, str]:
-    """
-    Resolve @file thành đường dẫn thật.
-    Trả về (resolved_path, note)
-    """
     if os.path.isabs(raw):
         candidate = raw
     else:
@@ -168,7 +146,6 @@ def resolve_mention(raw: str) -> tuple[str, str]:
     if os.path.isfile(candidate):
         return candidate, ""
 
-    # User nhập path nhưng không tồn tại
     if "/" in raw or "\\" in raw:
         return "", f"File not found: {raw}"
 
@@ -185,10 +162,8 @@ def resolve_mention(raw: str) -> tuple[str, str]:
         "Ambiguous file mention. Matches:\n" + "\n".join(matches),
     )
 
+
 def expand_file_mentions(input_text: str) -> str:
-    """
-    Mở rộng các @file thành nội dung file.
-    """
     mentions = extract_mentions(input_text)
 
     if not mentions:
@@ -248,6 +223,7 @@ def expand_file_mentions(input_text: str) -> str:
 
     return input_text + "\n\n# Referenced files\n\n" + "\n\n".join(blocks)
 
+
 @dataclass
 class MentionCandidate:
     display: str
@@ -266,9 +242,6 @@ PICKER_SKIP_DIRS = {
 
 
 def ensure_index() -> None:
-    """
-    Đảm bảo index đã được tạo.
-    """
     global mention_index
     global index_cwd
     global index_built_at
@@ -282,9 +255,6 @@ def ensure_index() -> None:
 
 
 def relativize(path: str, cwd: str) -> str:
-    """
-    Chuyển path tuyệt đối thành path tương đối nếu có thể.
-    """
     try:
         return os.path.relpath(path, cwd)
     except Exception:
@@ -295,9 +265,6 @@ def mention_candidates(
     partial: str,
     limit: int = 8,
 ) -> list[str]:
-    """
-    Gợi ý file theo basename.
-    """
     if not partial:
         return []
 
@@ -337,9 +304,6 @@ def mention_candidates(
 def parse_mention_path(
     partial: str,
 ) -> tuple[str, str]:
-    """
-    Tách dir và basename.
-    """
     last = partial.rfind("/")
 
     if last < 0:
@@ -354,9 +318,6 @@ def parse_mention_path(
 def has_parent(
     abs_dir: str,
 ) -> bool:
-    """
-    Kiểm tra thư mục còn cha hay không.
-    """
     parent = str(Path(abs_dir).resolve().parent)
     return parent != str(Path(abs_dir).resolve())
 
@@ -366,10 +327,6 @@ def list_mention_dir(
     base: str,
     limit: int = 12,
 ) -> list[MentionCandidate]:
-    """
-    Liệt kê file/thư mục phục vụ @picker.
-    """
-
     if not dir:
         abs_dir = os.getcwd()
 
@@ -441,7 +398,6 @@ def list_mention_dir(
             contains.append(cand)
 
     def sort_key(c: MentionCandidate):
-
         if c.display == "../":
             return (0, "", "")
 
@@ -460,25 +416,18 @@ def list_mention_dir(
 def find_active_mention(
     text: str,
 ):
-    """
-    Tìm @ đang được nhập.
-    """
-
     i = len(text) - 1
 
     while i >= 0:
-
         ch = text[i]
 
         if ch in (" ", "\t", "\n"):
             return None
 
         if ch == "@":
-
             prev = text[i - 1] if i > 0 else ""
 
             if i == 0 or re.match(r'[\s("\'`]', prev):
-
                 partial = text[i + 1 :]
 
                 if partial.lower().startswith(
