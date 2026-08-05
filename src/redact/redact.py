@@ -141,7 +141,6 @@ class Redactor:
         if not text:
             return text
 
-        # Thay toàn bộ private key
         out = PRIVATE_KEY_BLOCK.sub(
             "-----BEGIN PRIVATE KEY-----\n"
             "[REDACTED]\n"
@@ -149,16 +148,19 @@ class Redactor:
             text,
         )
 
-        # Thay từng pattern
         for pattern in PATTERNS:
-
             def repl(match):
                 prefix = match.group(1)
                 secret = match.group(2)
                 return prefix + mask(secret)
-
             out = pattern.sub(repl, out)
 
         return out
 
-redact = Redactor()
+
+_redactor = Redactor()
+
+
+def apply(text: str) -> str:
+    """Module-level entry point — mirrors TS `export function apply(...)`."""
+    return _redactor.apply(text)

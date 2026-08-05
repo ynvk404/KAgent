@@ -451,7 +451,7 @@ async def test_injects_local_intelligence_guidance_for_sqli_context():
         messages = client.requests[0].messages
 
         assert any(
-            "Local Pentestagent Intelligence"
+            "Local PentestAgent Intelligence"
             in msg.content
             for msg in messages
         )

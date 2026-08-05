@@ -21,12 +21,7 @@ from pathlib import Path
 from typing import Final, Literal, Optional
 
 # TODO: thay bằng import module redact thật của dự án, ví dụ:
-# from ..redact import redact
-def redact(text: str) -> str:
-    """Placeholder — cần nối vào redact thật trước khi dùng ở production."""
-    return text
-
-
+from redact.redact import apply as redact
 # =========================
 # Cấu hình giới hạn
 # =========================
@@ -74,7 +69,7 @@ class MemoryFact:
 class AddMemoryInput:
     text: str
     description: str = ""
-    type: MemoryType = "note"
+    type: Optional[MemoryType] = None
     scope: MemoryScope = "project"
     created_at: Optional[str] = None
 

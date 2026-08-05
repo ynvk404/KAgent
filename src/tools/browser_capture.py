@@ -77,7 +77,7 @@ class BrowserCaptureStatusTool(BaseCaptureTool):
     def description(self) -> str:
         return (
             "Show counts and last-activity time for traffic captured by the "
-            "PentesterFlow Chrome extension. Call this first to confirm the "
+            "PentestAgent Chrome extension. Call this first to confirm the "
             "extension is connected and forwarding before relying on the other "
             "browser_capture_* tools."
         )
@@ -318,7 +318,7 @@ class BrowserCaptureBurpTasksTool(BaseCaptureTool):
 
     def description(self) -> str:
         return (
-            "List scan / plan / scope tasks queued from the PentesterFlow "
+            "List scan / plan / scope tasks queued from the PentestAgent "
             "Burp extension. Use this after the user sends requests from "
             "Burp to decide what to scan or plan next."
         )
@@ -342,7 +342,7 @@ class BrowserCaptureBurpIssuesTool(BaseCaptureTool):
 
     def description(self) -> str:
         return (
-            "List PentesterFlow issues exposed to the Burp extension for "
+            "List PentestAgent issues exposed to the Burp extension for "
             "import into Burp Scanner issues."
         )
 
@@ -352,7 +352,7 @@ class BrowserCaptureBurpIssuesTool(BaseCaptureTool):
     async def run(self, args=None, signal=None, prompter=None) -> str:
         issues = self.store.list_burp_issues()
         if len(issues) == 0:
-            return "No PentesterFlow issues queued for Burp import."
+            return "No PentestAgent issues queued for Burp import."
         return render_list(
             [{**i.__dict__, "createdAt": _iso(i.created_at)} for i in issues],
             DEFAULT_LIST_LIMIT,

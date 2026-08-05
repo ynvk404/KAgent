@@ -24,15 +24,15 @@ from typing import (
 
 from .mentions import expand_file_mentions
 
-from ..redact.redact import redact
+from redact.redact import apply as redact
 
-from ..llm.client import (
+from llm.client import (
     Client,
     StreamingClient,
     is_streaming,
 )
 
-from ..llm.types import (
+from llm.types import (
     ChatRequest,
     ChatResponse,
     Message,
@@ -40,36 +40,36 @@ from ..llm.types import (
     parsed_args,
 )
 
-from ..logger.logger import error as log_error
+from logger.logger import error as log_error
 
-from ..intelligence.store import (
+from intelligence.store import (
     IntelligenceStore,
     format_intelligence_context,
 )
 
-from ..memory.store import (
+from memory.store import (
     AddMemoryInput,
     MemoryFact,
     MemoryStore,
     format_memory_recall,
 )
 
-from ..permission.permission import Prompter
+from permission.permission import Prompter
 
-from ..session.store import (
+from session.store import (
     SessionMemory,
     Store,
 )
 
-from ..skills.registry import (
+from skills.registry import (
     Registry as SkillRegistry,
     materialize_skill_body,
 )
 
-from ..target.target import Target
+from target.target import Target
 
-from ..tools.aliases import canonical_tool_name
-from ..tools.registry import Registry as ToolRegistry
+from tools.aliases import canonical_tool_name
+from tools.registry import Registry as ToolRegistry
 
 from .decision_planner import build_decision_plan
 
@@ -408,12 +408,10 @@ class Agent:
                 memory=self.memory,
                 engagement=self.engagement,
                 curated_memory=(
-                    format_memory_recall(
-                        self.memory_store.list()
-                    )
+                    self.memory_store.index()
                     if self.memory_store
                     else ""
-                ),
+                )
             )
         )
 
@@ -792,7 +790,7 @@ class Agent:
 
     async def clear_intelligence(
         self,
-        scope: str = "all",
+       scope: Literal["project", "personal", "all"] = "all",
     ) -> None:
         if self.intelligence:
             await self.intelligence.clear(scope)
@@ -2712,7 +2710,7 @@ def format_history_for_compaction(messages: list[Message]) -> str:
 
         # Nội dung hội thoại
         if m.content:
-            lines.append(redact.apply(m.content))
+            lines.append(redact(m.content))
 
         # Thông tin tool call
         if m.tool_calls:
@@ -2720,7 +2718,7 @@ def format_history_for_compaction(messages: list[Message]) -> str:
                 lines.append(
                     f"tool_call {tc.id} "
                     f"{tc.function.name} "
-                    f"{redact.apply(tc.function.arguments)}"
+                    f"{redact(tc.function.arguments)}"
                 )
 
     return "\n".join(lines)

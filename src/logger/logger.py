@@ -38,6 +38,8 @@ class JsonFormatter(logging.Formatter):
         "threadName",
         "processName",
         "process",
+        "message",
+        "asctime",
     }
 
     def format(self, record: logging.LogRecord) -> str:
@@ -66,6 +68,45 @@ class JsonFormatter(logging.Formatter):
         )
 
 
+# Các tên field chuẩn của logging.LogRecord — nếu `extra` chứa key trùng,
+# stdlib logging sẽ raise KeyError khi tạo LogRecord. Đổi tên (thêm hậu tố
+# "_") thay vì âm thầm bỏ qua, để không mất dữ liệu người gọi truyền vào.
+_RESERVED_EXTRA_KEYS = {
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "message",
+    "asctime",
+}
+
+
+def _safe_extra(args: dict[str, Any] | None) -> dict[str, Any]:
+    if not args:
+        return {}
+
+    return {
+        (f"{key}_" if key in _RESERVED_EXTRA_KEYS else key): value
+        for key, value in args.items()
+    }
+
+
 def default_log_path() -> Path:
     return (
         Path.home()
@@ -92,7 +133,11 @@ def init(path: str | Path | None = None) -> None:
     """
     Initialize logger.
 
-    If initialization fails the logger remains disabled.
+    Phải được caller gọi tường minh (ví dụ ở entrypoint CLI) — module này
+    KHÔNG tự init khi import, để giữ đúng nguyên tắc "no-op mặc định,
+    không side-effect ghi file cho tới khi được yêu cầu rõ ràng".
+
+    Nếu initialization lỗi, logger giữ nguyên trạng thái disabled.
     """
 
     global _current_logger
@@ -141,7 +186,7 @@ def info(
 ) -> None:
     _current_logger.info(
         msg,
-        extra=args or {},
+        extra=_safe_extra(args),
     )
 
 
@@ -151,7 +196,7 @@ def warn(
 ) -> None:
     _current_logger.warning(
         msg,
-        extra=args or {},
+        extra=_safe_extra(args),
     )
 
 
@@ -161,7 +206,7 @@ def error(
 ) -> None:
     _current_logger.error(
         msg,
-        extra=args or {},
+        extra=_safe_extra(args),
     )
 
 
@@ -171,9 +216,5 @@ def debug(
 ) -> None:
     _current_logger.debug(
         msg,
-        extra=args or {},
+        extra=_safe_extra(args),
     )
-
-
-# Initialize once with default path.
-init()

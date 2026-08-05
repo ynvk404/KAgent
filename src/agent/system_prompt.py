@@ -17,9 +17,9 @@ from enum import StrEnum
 #   COMPACT = "compac"
 
 if TYPE_CHECKING:
-    from ..session.store import SessionMemory
-    from ..skills.registry import Registry
-    from ..target.target import Target
+    from session.store import SessionMemory
+    from skills.registry import Registry
+    from target.target import Target
 
 APP_NAME = "pentestagent"
 

@@ -243,17 +243,6 @@ Rules:
 - Keep it concise and actionable."""
 
 
-# ==========================================================
-# suggest_closest — port nguyên thuật toán của suggestClosest() (TS)
-# ==========================================================
-#
-# Chiến lược gốc: ưu tiên longest-common-prefix (bắt lỗi gõ ở cuối chuỗi
-# như "qwen2.5-coder-32b" -> "qwen2.5-coder-32b-instruct"), cộng thêm
-# điểm nếu chuỗi này chứa chuỗi kia (hoặc ngược lại). Cần tối thiểu 4
-# điểm mới coi là gợi ý hợp lệ (tránh đề xuất linh tinh trên input rác).
-# KHÔNG dùng difflib ở đây — difflib.get_close_matches dùng thuật toán
-# khác (SequenceMatcher ratio), cho kết quả khác bản gốc.
-
 def suggest_closest(target: str, known: list[str]) -> str | None:
     needle = target.lower()
     best_name: str | None = None
@@ -278,21 +267,6 @@ def suggest_closest(target: str, known: list[str]) -> str | None:
 
     return best_name if best_name is not None and best_score >= 4 else None
 
-
-# ==========================================================
-# Dispatcher
-# ==========================================================
-#
-# Port của handleSlash() bên TS. Nhận thẳng instance App thay vì danh
-# sách ~15 tham số rời rạc như bản TS — vì trong kiến trúc Textual hiện
-# tại (xem app.py), toàn bộ các "dependency" đó (agent, dispatch,
-# read_config, apply_provider, prompt_text, run_agent_turn,
-# run_agent_compact, start_burp_bridge, persist_disabled_skills,
-# on_skill_created) đã là thuộc tính/method có sẵn trên self (Pentestagent).
-#
-# Trả về True nếu `raw` đã được xử lý như một slash command (kể cả khi
-# xử lý đó là báo lỗi "usage: ..."), False nếu `raw` không khớp lệnh nào
-# (caller nên fallback coi đây là tin nhắn thường).
 
 def handle_slash(app: "Pentestagent", raw: str) -> bool:
     parts = raw.strip().split()
@@ -814,9 +788,22 @@ async def _handle_memory(agent, rest: list[str], dispatch) -> None:
 
     sub = (rest[0] if rest else "").lower()
 
+    # --- validate subcommand: tránh rơi im lặng vào nhánh mặc định khi gõ sai ---
+    KNOWN_SUBS = ("clear", "forget", "add", "list", "intel")
+    if sub and sub not in KNOWN_SUBS:
+        hint = suggest_closest(sub, list(KNOWN_SUBS))
+        text = f'unknown /memory subcommand "{sub}"'
+        text += f'. did you mean "{hint}"?' if hint else ""
+        text += "\nusage: /memory [add <text>|list|forget <text>|clear|intel [stats|clear ...]]"
+        dispatch(Append(entry=TranscriptEntry(kind="error", text=text)))
+        return
+
     if sub == "clear":
-        await agent.clear_memory()
-        dispatch(Append(entry=TranscriptEntry(kind="system", text="session memory cleared")))
+        try:
+            await agent.clear_memory()
+            dispatch(Append(entry=TranscriptEntry(kind="system", text="session memory cleared")))
+        except Exception as err:
+            dispatch(Append(entry=TranscriptEntry(kind="error", text=f"memory clear failed: {err}")))
         return
 
     if sub == "forget":
@@ -824,13 +811,16 @@ async def _handle_memory(agent, rest: list[str], dispatch) -> None:
         if not query:
             dispatch(Append(entry=TranscriptEntry(kind="error", text="usage: /memory forget <text>")))
             return
-        removed = await agent.forget_memory(query)
-        if removed:
-            body = "\n".join(f"- {r}" for r in removed)
-            text = f"forgot {len(removed)} item{'' if len(removed) == 1 else 's'}:\n{body}"
-        else:
-            text = f'no memory items matched "{query}"'
-        dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
+        try:
+            removed = await agent.forget_memory(query)
+            if removed:
+                body = "\n".join(f"- {r}" for r in removed)
+                text = f"forgot {len(removed)} item{'' if len(removed) == 1 else 's'}:\n{body}"
+            else:
+                text = f'no memory items matched "{query}"'
+            dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
+        except Exception as err:
+            dispatch(Append(entry=TranscriptEntry(kind="error", text=f"memory forget failed: {err}")))
         return
 
     if sub == "add":
@@ -861,40 +851,61 @@ async def _handle_memory(agent, rest: list[str], dispatch) -> None:
         return
 
     if sub == "list":
-        facts = agent.list_curated_memory()
-        text = (
-            f"Saved memory ({len(facts)}):\n"
-            + "\n".join(f"- [{f.type}] {f.name} — {f.description}" for f in facts)
-            if facts
-            else "no saved memory yet — add one with #<text> or /memory add <text>"
-        )
-        dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
+        try:
+            facts = agent.list_curated_memory()
+            text = (
+                f"Saved memory ({len(facts)}):\n"
+                + "\n".join(f"- [{f.type}] {f.name} — {f.description}" for f in facts)
+                if facts
+                else "no saved memory yet — add one with #<text> or /memory add <text>"
+            )
+            dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
+        except Exception as err:
+            dispatch(Append(entry=TranscriptEntry(kind="error", text=f"memory list failed: {err}")))
         return
 
     if sub == "intel":
         action = rest[1].lower() if len(rest) > 1 else "stats"
 
         if action == "clear":
-            which = rest[2] if len(rest) > 2 else "all"
-            await agent.clear_intelligence(which)
-            dispatch(Append(entry=TranscriptEntry(kind="system", text=f"intelligence cleared ({which})")))
+            which = rest[2].lower() if len(rest) > 2 else "all"
+            if which not in ("project", "personal", "all"):
+                dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="error",
+                            text=f'usage: /memory intel clear [project|personal|all] (got "{which}")',
+                        )
+                    )
+                )
+                return
+            try:
+                await agent.clear_intelligence(which)
+                dispatch(
+                    Append(entry=TranscriptEntry(kind="system", text=f"intelligence cleared ({which})"))
+                )
+            except Exception as err:
+                dispatch(Append(entry=TranscriptEntry(kind="error", text=f"intel clear failed: {err}")))
             return
 
         if action in ("stats", "list"):
-            stats = agent.get_intelligence_stats()
-            dispatch(
-                Append(
-                    entry=TranscriptEntry(
-                        kind="system",
-                        text=(
-                            f"Intelligence (learned scenarios) — "
-                            f"project: {stats.get('project', 0)} · personal: {stats.get('personal', 0)}\n"
-                            "(auto-capped + pruned to most recent per scope; use "
-                            "/memory intel clear [project|personal|all] to wipe)"
-                        ),
+            try:
+                stats = agent.get_intelligence_stats()
+                dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="system",
+                            text=(
+                                f"Intelligence (learned scenarios) — "
+                                f"project: {stats.get('project', 0)} · personal: {stats.get('personal', 0)}\n"
+                                "(auto-capped + pruned to most recent per scope; use "
+                                "/memory intel clear [project|personal|all] to wipe)"
+                            ),
+                        )
                     )
                 )
-            )
+            except Exception as err:
+                dispatch(Append(entry=TranscriptEntry(kind="error", text=f"intel stats failed: {err}")))
             return
 
         dispatch(
@@ -907,15 +918,17 @@ async def _handle_memory(agent, rest: list[str], dispatch) -> None:
         return
 
     # default view: curated facts + session memory checkpoint
-    facts = agent.list_curated_memory()
-    curated = (
-        f"Saved memory ({len(facts)}):\n"
-        + "\n".join(f"- [{f.type}] {f.name} — {f.description}" for f in facts)
-        if facts
-        else "No saved memory yet. Add one with #<text> or /memory add <text>."
-    )
-    dispatch(Append(entry=TranscriptEntry(kind="system", text=f"{curated}\n\n{agent.format_memory()}")))
-
+    try:
+        facts = agent.list_curated_memory()
+        curated = (
+            f"Saved memory ({len(facts)}):\n"
+            + "\n".join(f"- [{f.type}] {f.name} — {f.description}" for f in facts)
+            if facts
+            else "No saved memory yet. Add one with #<text> or /memory add <text>."
+        )
+        dispatch(Append(entry=TranscriptEntry(kind="system", text=f"{curated}\n\n{agent.format_memory()}")))
+    except Exception as err:
+        dispatch(Append(entry=TranscriptEntry(kind="error", text=f"memory view failed: {err}")))
 
 # ==========================================================
 # /model subcommand
