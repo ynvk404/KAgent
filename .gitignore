@@ -1,8 +1,48 @@
+# Virtual environment
 venv-linux/
-.pytest_cache/
-.vscode/
+venv/
+.env
+.env.*
+
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
 *.log
+logs/
+
+# Runtime data
 .kagent/
+sessions/
+findings/
+captures/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Build/package
+build/
+dist/
+*.egg-info/
+*.whl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config
+config.local.json
