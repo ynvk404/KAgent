@@ -22,8 +22,6 @@ from .types import (
 
 
 def with_retry_after(err: BackendError, resp: httpx.Response) -> BackendError:
-    """Annotate a backend error with the server's Retry-After so with_retry can
-    honor it instead of its computed backoff."""
     retry_after = resp.headers.get('retry-after')
     if retry_after:
         ms = parse_retry_after(retry_after)
@@ -113,16 +111,12 @@ class GeminiClient(StreamingClient, Pinger):
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{self.base_url}/models",
-                # Pass the key as a header, not a query param, so it can't leak into
-                # access/proxy logs or error messages that echo the request URL.
                 headers={"x-goog-api-key": self.api_key}
             )
             if resp.status_code >= 500:
                 raise Exception(f"gemini status {resp.status_code}")
 
     async def chat(self, req: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
-        # Retry rate limits / transient 5xx with backoff (E7). The call has no
-        # observable side effects before it returns, so re-running it is safe.
         return await with_retry(
             lambda: self._chat_once(req, signal),
             RetryOptions(signal=signal),
@@ -158,8 +152,6 @@ class GeminiClient(StreamingClient, Pinger):
                 raise classify_backend('gemini', None, resp.status_code, f"invalid JSON from gemini: {raw}")
 
             if out.get("error", {}).get("message"):
-                # Route through the classifier so rate-limit phrasing in a 200 body
-                # becomes a retryable BackendError rather than a plain Error.
                 raise classify_backend('gemini', None, resp.status_code, out["error"]["message"])
 
             candidates = out.get("candidates", [])
@@ -168,9 +160,6 @@ class GeminiClient(StreamingClient, Pinger):
                 raise Exception("gemini: empty candidates")
 
             parts = choice.get("content", {}).get("parts", [])
-
-            # Skip thought parts: they're reasoning summaries, not the answer, and
-            # must not enter the model's history.
             text_parts = [
                 p.get("text", "")
                 for p in parts
@@ -191,8 +180,6 @@ class GeminiClient(StreamingClient, Pinger):
         on_delta: Callable[[str], None],
         signal: Optional[Any] = None,
     ) -> ChatResponse:
-        # Retry only the connection setup (E7): a transient 429/5xx surfaces before
-        # any delta is emitted, so re-running openStream can't double-emit tokens.
         client, resp = await with_retry(
             lambda: self._open_stream(req, signal),
             RetryOptions(signal=signal),
@@ -233,9 +220,6 @@ class GeminiClient(StreamingClient, Pinger):
                     if not part.get("text"):
                         continue
 
-                    # Stream both thought summaries and answer text as visible progress
-                    # (so the UI shows movement instead of a frozen spinner), but only
-                    # accumulate answer text into the returned message.
                     on_delta(part["text"])
                     if not part.get("thought"):
                         chunks.append(part["text"])
@@ -253,15 +237,12 @@ class GeminiClient(StreamingClient, Pinger):
         return ChatResponse(message=msg, finish_reason=finish)
 
     async def _open_stream(self, req: ChatRequest, signal: Optional[Any] = None):
-        """Open the SSE stream and return the live 200 response paired with a
-        client that is intentionally left open for iter_sse streaming. Extracted
-        so with_retry can re-attempt without re-entering the consume loop."""
+ 
         body = encode_request(req, self._gen_opts())
         client = httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC)
         
         try:
-            # alt=sse switches streamGenerateContent from a JSON array to an SSE
-            # stream of data: events, which iter_sse consumes incrementally.
+
             req_obj = client.build_request(
                 "POST",
                 f"{self.base_url}/{with_models_prefix(req.model or self.model_id)}:streamGenerateContent?alt=sse",
@@ -290,8 +271,7 @@ class GeminiClient(StreamingClient, Pinger):
 
 
 def part_to_tool_call(part: Dict[str, Any]) -> ToolCall:
-    """Convert a Gemini functionCall part into a provider-neutral ToolCall,
-    preserving the thoughtSignature so a follow-up turn can echo it back."""
+
     fc = part.get("functionCall", {})
     thought_sig = part.get("thoughtSignature") or part.get("thought_signature")
 
@@ -309,7 +289,6 @@ def part_to_tool_call(part: Dict[str, Any]) -> ToolCall:
 
 
 async def iter_sse(resp: httpx.Response) -> AsyncIterator[str]:
-    """Decode a byte stream into SSE-style logical lines, splitting on \\n."""
     async for line in resp.aiter_lines():
         if line:
             yield line.rstrip('\r')
@@ -339,7 +318,6 @@ def encode_request(
     if req.tools:
         body["tools"] = [{"functionDeclarations": [encode_tool(t) for t in req.tools]}]
 
-    # Generation knobs
     generation_config: Dict[str, Any] = {}
     if gen_opts.get("temperature") is not None:
         generation_config["temperature"] = gen_opts["temperature"]
@@ -351,8 +329,6 @@ def encode_request(
     if max_tokens is not None and max_tokens > 0:
         generation_config["maxOutputTokens"] = max_tokens
 
-    # Gemini 2.5/3 Flash models run an internal "thinking" pass on every turn.
-    # 0 disables thinking entirely (fastest); a positive budget caps it.
     thinking_budget = gen_opts.get("thinkingBudget")
     if thinking_budget is not None and thinking_budget >= 0:
         if thinking_budget == 0:
@@ -370,7 +346,6 @@ def encode_request(
 
 
 def with_models_prefix(model_id: str) -> str:
-    """Ensure the model id carries the models/ (or tunedModels/) prefix."""
     if model_id.startswith('models/') or model_id.startswith('tunedModels/'):
         return model_id
     return f"models/{model_id}"
@@ -379,7 +354,6 @@ def with_models_prefix(model_id: str) -> str:
 def encode_message(m: Message) -> List[Dict[str, Any]]:
     if m.role == 'tool':
         return [{
-            # v1beta Content.role accepts only 'user' / 'model'.
             "role": "user",
             "parts": [{
                 "functionResponse": {

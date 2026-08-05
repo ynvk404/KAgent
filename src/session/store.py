@@ -1,17 +1,5 @@
 from __future__ import annotations
 
-"""
-Session Store
-
-Chức năng:
-- Lưu session JSON
-- Load session
-- Xóa session
-- Atomic save chống crash
-- fsync đảm bảo ghi xuống disk
-- Context snapshot
-"""
-
 import json
 import os
 import random
@@ -33,35 +21,22 @@ from src.llm.types import (
 from src.target.target import Target
 
 
-# ============================================================
-# Session Memory
-# ============================================================
-
-
 @dataclass
 class SessionMemory:
     version: int = 1
     updated_at: str = ""
-
     compactions: int = 0
     last_compacted_at: str | None = None
     last_summary: str | None = None
-
     objectives: list[str] = field(default_factory=list)
     plan: list[str] = field(default_factory=list)
     completed: list[str] = field(default_factory=list)
-
     findings: list[str] = field(default_factory=list)
     tested: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
     credentials: list[str] = field(default_factory=list)
     todos: list[str] = field(default_factory=list)
-
-
-# ============================================================
-# Session File
-# ============================================================
 
 
 @dataclass
@@ -79,11 +54,6 @@ class Summary:
     path: str
     updated_at: datetime
     preview: str
-
-
-# ============================================================
-# ID helpers
-# ============================================================
 
 
 def new_id() -> str:
@@ -104,17 +74,7 @@ def dir_from_path(path=None):
     return Path(path).parent
 
 
-# ============================================================
-# Config
-# ============================================================
-
-
 FSYNC_EVERY = 5
-
-
-# ============================================================
-# Helpers
-# ============================================================
 
 
 def random_tmp_id():
@@ -139,19 +99,7 @@ def cleanup_stale_temps(directory: Path, max_age_seconds: int = 60):
             pass
 
 
-# ============================================================
-# ToolCall (de)serialization helpers
-# ============================================================
-
-
 def _tool_call_from_dict(d: Any) -> ToolCall | None:
-    """
-    Reconstruct a ToolCall dataclass (with nested FunctionCall /
-    ToolProvider / GeminiProvider) from a plain dict loaded from JSON.
-
-    Returns None if `d` isn't a usable dict, so callers can filter out
-    corrupt entries instead of crashing the whole load().
-    """
     if not isinstance(d, dict):
         return None
 
@@ -192,16 +140,6 @@ def _tool_calls_from_list(raw: Any) -> list[ToolCall] | None:
     return result or None
 
 
-# ============================================================
-# SessionMemory (de)serialization helpers
-# ============================================================
-
-# The TypeScript store writes SessionMemory using camelCase field names
-# (updatedAt, lastCompactedAt, lastSummary), while this dataclass uses
-# snake_case (updated_at, last_compacted_at, last_summary). Both stores
-# read/write the same on-disk session files, so a session saved by the
-# TS CLI must still load cleanly here. We accept either key style rather
-# than silently dropping the whole memory block on a TypeError.
 _MEMORY_KEY_ALIASES = {
     "updatedAt": "updated_at",
     "lastCompactedAt": "last_compacted_at",
@@ -224,11 +162,6 @@ def _memory_from_dict(data: dict) -> SessionMemory | None:
         return None
 
 
-# ============================================================
-# Store
-# ============================================================
-
-
 class Store:
     def __init__(self, path, session_id: str = ""):
         self.path = Path(path)
@@ -242,10 +175,6 @@ class Store:
     def context_snapshot_path(self):
         session_id = self.id or self.path.stem or "session"
         return self.path.parent.parent / "context" / f"{session_id}.md"
-
-    # ============================================================
-    # Load
-    # ============================================================
 
     def load(self) -> SessionFile:
         if not self.path.exists():
@@ -292,10 +221,6 @@ class Store:
             memory=memory,
         )
 
-    # ============================================================
-    # Save
-    # ============================================================
-
     async def save(
         self,
         messages: list[Message],
@@ -341,11 +266,6 @@ class Store:
         tmp = Path(str(self.path) + ".tmp." + random_tmp_id())
 
         try:
-            # Create the tmp file with 0600 permissions from the outset
-            # (via the fd mode, not a later chmod). session files can
-            # contain secrets (SessionMemory.credentials), so there must
-            # be no window where the tmp file is group/world readable
-            # under the process umask before the final chmod runs.
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w", encoding="utf8") as f:
                 f.write(body)
@@ -364,18 +284,10 @@ class Store:
             tmp.unlink(missing_ok=True)
             raise
 
-    # ============================================================
-    # Clear
-    # ============================================================
-
     async def clear(self) -> None:
         if not self.path or str(self.path) in ("", "."):
             return
         self.path.unlink(missing_ok=True)
-
-    # ============================================================
-    # Context snapshot
-    # ============================================================
 
     async def save_context_snapshot(self, markdown: str) -> str:
         if not self.path or str(self.path) in ("", "."):
@@ -390,9 +302,6 @@ class Store:
         tmp = Path(str(out) + ".tmp." + random_tmp_id())
 
         try:
-            # Same 0600-from-creation reasoning as save(): context
-            # snapshots can embed findings/credentials pulled from
-            # SessionMemory, so avoid a world/group-readable window.
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w", encoding="utf8") as f:
                 f.write(markdown)
@@ -413,21 +322,10 @@ class Store:
         return str(out)
 
 
-# ============================================================
-# Listing
-# ============================================================
-
-
 _PREVIEW_MARKER = "\n\n# Referenced files\n\n"
 
 
 def _first_user_preview(messages: list, max_len: int) -> str:
-    """
-    Mirror of the TS firstUserPreview(): find the first user message,
-    strip anything from the "# Referenced files" marker onward, keep
-    only its first line, and truncate to max_len characters (counting
-    by unicode codepoint, matching the TS `[...s]` spread behaviour).
-    """
     for m in messages:
         role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
         if role != "user":
@@ -451,10 +349,6 @@ def _first_user_preview(messages: list, max_len: int) -> str:
 
 
 def list_dir(directory) -> list[Summary]:
-    """
-    List `*.json` sessions in `directory`, newest first. Corrupt files
-    are skipped rather than aborting the whole listing.
-    """
     directory = Path(directory)
     if not directory.exists():
         return []

@@ -15,8 +15,6 @@ _current_logger.disabled = True
 
 
 class JsonFormatter(logging.Formatter):
-    """JSON Lines formatter."""
-
     _STANDARD_FIELDS = {
         "name",
         "msg",
@@ -67,10 +65,6 @@ class JsonFormatter(logging.Formatter):
             ensure_ascii=False,
         )
 
-
-# Các tên field chuẩn của logging.LogRecord — nếu `extra` chứa key trùng,
-# stdlib logging sẽ raise KeyError khi tạo LogRecord. Đổi tên (thêm hậu tố
-# "_") thay vì âm thầm bỏ qua, để không mất dữ liệu người gọi truyền vào.
 _RESERVED_EXTRA_KEYS = {
     "name",
     "msg",
@@ -130,16 +124,6 @@ def _log_level() -> int:
 
 
 def init(path: str | Path | None = None) -> None:
-    """
-    Initialize logger.
-
-    Phải được caller gọi tường minh (ví dụ ở entrypoint CLI) — module này
-    KHÔNG tự init khi import, để giữ đúng nguyên tắc "no-op mặc định,
-    không side-effect ghi file cho tới khi được yêu cầu rõ ràng".
-
-    Nếu initialization lỗi, logger giữ nguyên trạng thái disabled.
-    """
-
     global _current_logger
 
     try:

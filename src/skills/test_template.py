@@ -10,10 +10,6 @@ KNOWN_TOOL_NAMES = {
 }
 
 
-# ==========================================================
-# Template
-# ==========================================================
-
 def test_render_skill_template_frontmatter():
 
     post = frontmatter.loads(
@@ -31,11 +27,6 @@ def test_render_skill_template_frontmatter():
     assert isinstance(description, str)
     assert len(description) <= 1024
     assert post.content.strip()
-
-
-# ==========================================================
-# Allowed Tools
-# ==========================================================
 
 def test_render_skill_template_allowed_tools():
 

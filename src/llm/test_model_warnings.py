@@ -1,4 +1,3 @@
-# tests/llm/test_model_warnings.py
 
 from __future__ import annotations
 

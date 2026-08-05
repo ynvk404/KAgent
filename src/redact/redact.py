@@ -1,13 +1,5 @@
-"""
-
-Che các thông tin nhạy cảm trước khi:
-- gửi cho LLM (compact)
-- export markdown
-- lưu session snapshot
-"""
 
 import re
-
 
 # Regex patterns
 
@@ -105,12 +97,7 @@ PRIVATE_KEY_BLOCK = re.compile(
 )
 
 
-# Mask secret
-
 def mask(secret: str) -> str:
-    """
-    Che secret nhưng vẫn giữ 2 ký tự đầu và 2 ký tự cuối.
-    """
 
     if len(secret) <= 6:
         return "[REDACTED]"
@@ -124,12 +111,7 @@ def mask(secret: str) -> str:
     return f"{head}…[REDACTED:{dots}]…{tail}"
 
 
-# Redactor
-
 class Redactor:
-    """
-    Che các credential phổ biến trước khi gửi cho LLM.
-    """
 
     def apply(self, text: str) -> str:
         if not text:
@@ -156,5 +138,4 @@ _redactor = Redactor()
 
 
 def apply(text: str) -> str:
-    """Module-level entry point — mirrors TS `export function apply(...)`."""
     return _redactor.apply(text)

@@ -30,7 +30,6 @@ from src.llm.providers import (
 def new_from_config(
     cfg: Config,
 ) -> Client:
-    """Build the right Client from the parsed Config."""
 
     backend = (
         cfg.backend.value

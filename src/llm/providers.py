@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Final
 
-
-# ============================================================================
 # Groq
-# ============================================================================
 
 GROQ_DEFAULT_BASE_URL: Final[str] = (
     "https://api.groq.com/openai/v1"
@@ -28,10 +25,7 @@ GROQ_MODELS: Final[tuple[str, ...]] = (
     "compound-beta-mini",
 )
 
-
-# ============================================================================
 # OpenRouter
-# ============================================================================
 
 OPENROUTER_DEFAULT_BASE_URL: Final[str] = (
     "https://openrouter.ai/api/v1"
@@ -45,10 +39,7 @@ OPENROUTER_RECOMMENDED_MODELS: Final[tuple[str, ...]] = (
     "openrouter/auto",
 )
 
-
-# ============================================================================
 # OpenAI
-# ============================================================================
 
 OPENAI_DEFAULT_BASE_URL: Final[str] = (
     "https://api.openai.com/v1"
@@ -58,10 +49,7 @@ OPENAI_DEFAULT_MODEL: Final[str] = (
     "gpt-4o-mini"
 )
 
-
-# ============================================================================
 # Kimi / Moonshot
-# ============================================================================
 
 KIMI_DEFAULT_BASE_URL: Final[str] = (
     "https://api.moonshot.ai/v1"
@@ -83,7 +71,6 @@ KIMI_MODELS: Final[tuple[str, ...]] = (
     "moonshot-v1-32k-vision-preview",
     "moonshot-v1-128k-vision-preview",
 )
-
 
 KIMI_CONTEXT_WINDOWS: Final[dict[str, int]] = {
     "kimi-k2.7-code": 262_144,
@@ -107,22 +94,16 @@ KIMI_TEMPERATURE_LOCKED_MODELS: Final[frozenset[str]] = frozenset(
     }
 )
 
-
 KIMI_DEFAULT_MAX_TOKENS: Final[int] = 2048
-
 
 def kimi_locks_temperature(model: str) -> bool:
     return model in KIMI_TEMPERATURE_LOCKED_MODELS
-
-
 
 def kimi_supports_thinking_toggle(model: str) -> bool:
     return model in {
         "kimi-k2.6",
         "kimi-k2.5",
     }
-
-
 
 def kimi_auto_compact_threshold(
     model: str,
@@ -135,11 +116,7 @@ def kimi_auto_compact_threshold(
 
     return window * 3 // 4
 
-
-
-# ============================================================================
 # DeepSeek
-# ============================================================================
 
 DEEPSEEK_DEFAULT_BASE_URL: Final[str] = (
     "https://api.deepseek.com"
@@ -156,11 +133,7 @@ DEEPSEEK_MODELS: Final[tuple[str, ...]] = (
     "deepseek-reasoner",
 )
 
-
-
-# ============================================================================
 # Anthropic Claude
-# ============================================================================
 
 ANTHROPIC_DEFAULT_BASE_URL: Final[str] = (
     "https://api.anthropic.com/v1"
@@ -176,7 +149,6 @@ ANTHROPIC_DEFAULT_MODEL: Final[str] = (
 
 ANTHROPIC_DEFAULT_MAX_TOKENS: Final[int] = 16000
 
-
 ANTHROPIC_MODELS: Final[tuple[str, ...]] = (
     "claude-opus-4-8",
     "claude-opus-4-7",
@@ -187,12 +159,9 @@ ANTHROPIC_MODELS: Final[tuple[str, ...]] = (
     "claude-sonnet-4-5",
 )
 
-
 ANTHROPIC_RECOMMENDED_MODELS: Final[tuple[str, ...]] = (
     *ANTHROPIC_MODELS,
 )
-
-
 
 def anthropic_accepts_temperature(
     model: str,
@@ -207,11 +176,7 @@ def anthropic_accepts_temperature(
         or "mythos-5" in model
     )
 
-
-
-# ============================================================================
 # Gemini
-# ============================================================================
 
 GEMINI_DEFAULT_BASE_URL: Final[str] = (
     "https://generativelanguage.googleapis.com/v1beta"
@@ -220,7 +185,6 @@ GEMINI_DEFAULT_BASE_URL: Final[str] = (
 GEMINI_DEFAULT_MODEL: Final[str] = (
     "models/gemini-3.5-flash"
 )
-
 
 GEMINI_BEST_FIT_MODELS: Final[tuple[str, ...]] = (
     "models/gemini-3.5-flash",
@@ -231,13 +195,11 @@ GEMINI_BEST_FIT_MODELS: Final[tuple[str, ...]] = (
     "models/gemini-2.5-flash-lite",
 )
 
-
 GEMINI_CHEAP_MODELS: Final[tuple[str, ...]] = (
     "models/gemini-flash-lite-latest",
     "models/gemini-3.1-flash-lite-preview",
     "models/gemma-4-26b-a4b-it",
 )
-
 
 GEMINI_RECOMMENDED_MODELS: Final[tuple[str, ...]] = (
     *GEMINI_BEST_FIT_MODELS,

@@ -1,26 +1,3 @@
-"""
-Test Skill Registry — Extra / Edge Cases
-
-Bổ sung cho test_registry.py, tập trung vào các nhánh logic
-CHƯA được cover trong bộ test gốc:
-
-- parse_skill: frontmatter regex (dấu "---" trong value, CRLF, no
-  frontmatter, frontmatter không phải dict), các biến thể tools
-  (allowed-tools / allowedTools / tools), "allowed-tools: []" tường
-  minh, tools không phải list / chứa phần tử không phải string,
-  disable-model-invocation.
-- load_dir: bỏ qua thư mục ẩn (.), thư mục template (_), item không
-  phải thư mục, thư mục thiếu SKILL.md, và skip skill lỗi mà vẫn
-  load được các skill khác.
-- Registry: get() / has() / clear().
-- validate_skill: toàn bộ các nhánh lỗi + case hợp lệ.
-- materialize_skill_body: thay ${SKILL_DIR} + header.
-
-Các test này tự tạo file trong tmp_path thay vì phụ thuộc vào
-skills_dir thật của project, để không phụ thuộc nội dung SKILL.md
-có sẵn (không rõ chúng có cover các case dưới đây hay không).
-"""
-
 from pathlib import Path
 
 import pytest
@@ -33,26 +10,14 @@ from src.skills.registry import (
     materialize_skill_body,
 )
 
-
 def write_skill(tmp_path: Path, dirname: str, content: str) -> Path:
-    """Helper: tạo <tmp_path>/<dirname>/SKILL.md với nội dung cho trước."""
     d = tmp_path / dirname
     d.mkdir(parents=True, exist_ok=True)
     f = d / "SKILL.md"
     f.write_text(content, encoding="utf-8", newline="")
     return f
 
-
-# ============================================================
-# parse_skill — frontmatter edge cases
-# ============================================================
-
-
 def test_frontmatter_with_triple_dash_in_value(tmp_path):
-    """
-    "description" chứa chuỗi "---" không được làm hỏng việc tách
-    metadata / body (lý do dùng regex thay vì str.split("---", 2)).
-    """
     content = (
         "---\n"
         'name: mytool\n'
@@ -71,9 +36,7 @@ def test_frontmatter_with_triple_dash_in_value(tmp_path):
     assert "name: mytool" not in skill.body
     assert skill.body.startswith("# Body")
 
-
 def test_frontmatter_crlf_line_endings(tmp_path):
-    """Frontmatter với CRLF vẫn phải parse đúng."""
     content = (
         "---\r\n"
         "name: crlf-tool\r\n"
@@ -91,9 +54,7 @@ def test_frontmatter_crlf_line_endings(tmp_path):
     assert skill.description == "uses CRLF"
     assert skill.body.startswith("# Body")
 
-
 def test_no_frontmatter_falls_back_to_directory_name(tmp_path):
-    """Không có frontmatter -> name = tên thư mục, description = ""."""
     content = "# Just a body\nNo frontmatter at all.\n"
     f = write_skill(tmp_path, "plain-dir", content)
 
@@ -104,12 +65,7 @@ def test_no_frontmatter_falls_back_to_directory_name(tmp_path):
     assert skill.tools == []
     assert skill.body == content
 
-
 def test_frontmatter_non_dict_falls_back_to_empty_metadata(tmp_path):
-    """
-    YAML frontmatter hợp lệ nhưng parse ra không phải dict (VD: một
-    list) -> metadata phải fallback thành {} thay vì raise.
-    """
     content = (
         "---\n"
         "- item1\n"
@@ -122,17 +78,10 @@ def test_frontmatter_non_dict_falls_back_to_empty_metadata(tmp_path):
 
     skill = parse_skill(f)
 
-    # fallback: name lấy từ thư mục, description rỗng, tools rỗng
     assert skill.name == "non-dict-fm"
     assert skill.description == ""
     assert skill.tools == []
     assert skill.body.startswith("# Body")
-
-
-# ============================================================
-# parse_skill — allowed-tools variants
-# ============================================================
-
 
 @pytest.mark.parametrize(
     "key",
@@ -156,12 +105,7 @@ def test_tools_key_variants(tmp_path, key):
 
     assert skill.tools == ["bash", "web_search"]
 
-
 def test_tools_key_priority_order(tmp_path):
-    """
-    Khi nhiều key cùng tồn tại, "allowed-tools" phải được ưu tiên hơn
-    "allowedTools", và "allowedTools" ưu tiên hơn "tools".
-    """
     content = (
         "---\n"
         "name: priority-tool\n"
@@ -182,12 +126,7 @@ def test_tools_key_priority_order(tmp_path):
 
     assert skill.tools == ["preferred"]
 
-
 def test_explicit_empty_tools_list_is_respected(tmp_path):
-    """
-    "allowed-tools: []" tường minh nghĩa là KHÔNG tool nào cả — không
-    được fallback sang key khác (bug đã fix: "or" coi [] là falsy).
-    """
     content = (
         "---\n"
         "name: empty-tools\n"
@@ -205,7 +144,6 @@ def test_explicit_empty_tools_list_is_respected(tmp_path):
 
     assert skill.tools == []
 
-
 def test_tools_not_a_list_falls_back_to_empty(tmp_path):
     content = (
         "---\n"
@@ -221,7 +159,6 @@ def test_tools_not_a_list_falls_back_to_empty(tmp_path):
     skill = parse_skill(f)
 
     assert skill.tools == []
-
 
 def test_tools_filters_non_string_entries(tmp_path):
     content = (
@@ -243,12 +180,6 @@ def test_tools_filters_non_string_entries(tmp_path):
 
     assert skill.tools == ["bash", "web_search"]
 
-
-# ============================================================
-# parse_skill — disable-model-invocation
-# ============================================================
-
-
 @pytest.mark.parametrize("key", ["disable-model-invocation", "disableModelInvocation"])
 def test_disable_model_invocation_true(tmp_path, key):
     content = (
@@ -266,7 +197,6 @@ def test_disable_model_invocation_true(tmp_path, key):
 
     assert skill.disable_model_invocation is True
 
-
 def test_disable_model_invocation_default_false(tmp_path):
     content = (
         "---\n"
@@ -282,9 +212,7 @@ def test_disable_model_invocation_default_false(tmp_path):
 
     assert skill.disable_model_invocation is False
 
-
 def test_disable_model_invocation_non_bool_is_falsy(tmp_path):
-    """Chỉ literal True mới bật; "true" (string) không được tính."""
     content = (
         "---\n"
         "name: stringy-flag\n"
@@ -300,12 +228,6 @@ def test_disable_model_invocation_non_bool_is_falsy(tmp_path):
 
     assert skill.disable_model_invocation is False
 
-
-# ============================================================
-# load_dir — filtering behavior
-# ============================================================
-
-
 def test_load_dir_skips_hidden_and_template_dirs(tmp_path):
     write_skill(tmp_path, "visible", "---\nname: visible\ndescription: d\n---\nBody\n")
     write_skill(tmp_path, ".hidden", "---\nname: hidden\ndescription: d\n---\nBody\n")
@@ -320,7 +242,6 @@ def test_load_dir_skips_hidden_and_template_dirs(tmp_path):
     assert "hidden" not in names
     assert "template" not in names
 
-
 def test_load_dir_skips_non_directory_items(tmp_path):
     (tmp_path / "stray.txt").write_text("not a skill dir", encoding="utf-8")
     write_skill(tmp_path, "real-skill", "---\nname: real-skill\ndescription: d\n---\nBody\n")
@@ -331,7 +252,6 @@ def test_load_dir_skips_non_directory_items(tmp_path):
     names = [x.name for x in r.list()]
 
     assert names == ["real-skill"]
-
 
 def test_load_dir_skips_dir_without_skill_md(tmp_path):
     empty_dir = tmp_path / "no-skill-here"
@@ -345,13 +265,7 @@ def test_load_dir_skips_dir_without_skill_md(tmp_path):
 
     assert names == ["has-skill"]
 
-
 def test_load_dir_skips_broken_skill_but_loads_rest(tmp_path, monkeypatch):
-    """
-    Nếu 1 skill lỗi khi parse, load_dir phải skip nó (catch exception,
-    print cảnh báo) chứ không được raise, và các skill khác vẫn load
-    bình thường.
-    """
     write_skill(tmp_path, "good-skill", "---\nname: good-skill\ndescription: d\n---\nBody\n")
     write_skill(tmp_path, "broken-skill", "---\nname: broken-skill\ndescription: d\n---\nBody\n")
 
@@ -374,12 +288,6 @@ def test_load_dir_skips_broken_skill_but_loads_rest(tmp_path, monkeypatch):
     assert "good-skill" in names
     assert "broken-skill" not in names
 
-
-# ============================================================
-# Registry — get / has / clear
-# ============================================================
-
-
 def test_get_has_clear(tmp_path):
     write_skill(tmp_path, "alpha", "---\nname: alpha\ndescription: d\n---\nBody\n")
 
@@ -400,9 +308,7 @@ def test_get_has_clear(tmp_path):
     assert r.list() == []
     assert r.has("alpha") is False
 
-
 def test_clear_does_not_touch_disabled_set(tmp_path):
-    """Theo docstring: clear() xóa skill nhưng không xóa disabled."""
     write_skill(tmp_path, "alpha", "---\nname: alpha\ndescription: d\n---\nBody\n")
 
     r = Registry()
@@ -414,12 +320,6 @@ def test_clear_does_not_touch_disabled_set(tmp_path):
     assert r.list() == []
     assert r.is_disabled("alpha") is True
 
-
-# ============================================================
-# validate_skill
-# ============================================================
-
-
 def make_skill(
     name: str = "valid-skill",
     description: str = "A valid description",
@@ -428,11 +328,6 @@ def make_skill(
     path: str = "/skills/valid-skill/SKILL.md",
     body: str = "body",
 ) -> Skill:
-    """
-    Helper tạo Skill với giá trị mặc định hợp lệ, override từng field
-    qua tham số tường minh (thay vì **kwargs) để type-checker suy ra
-    đúng kiểu cho mỗi field thay vì hợp nhất thành str | list[str] | bool.
-    """
     return Skill(
         name=name,
         description=description,
@@ -442,59 +337,45 @@ def make_skill(
         body=body,
     )
 
-
 def test_validate_skill_valid_case():
     skill = make_skill()
     errors = validate_skill(skill, known_tools={"bash", "web_search"})
     assert errors == []
-
 
 def test_validate_skill_missing_name():
     skill = make_skill(name="")
     errors = validate_skill(skill, known_tools=set())
     assert any("missing `name`" in e for e in errors)
 
-
 def test_validate_skill_name_not_kebab_case():
     skill = make_skill(name="Invalid_Name", path="/skills/Invalid_Name/SKILL.md")
     errors = validate_skill(skill, known_tools=set())
     assert any("lowercase-kebab" in e for e in errors)
-
 
 def test_validate_skill_name_does_not_match_directory():
     skill = make_skill(name="foo", path="/skills/bar/SKILL.md")
     errors = validate_skill(skill, known_tools=set())
     assert any("does not match its directory" in e for e in errors)
 
-
 def test_validate_skill_missing_description():
     skill = make_skill(description="")
     errors = validate_skill(skill, known_tools=set())
     assert any("missing `description`" in e for e in errors)
-
 
 def test_validate_skill_description_too_long():
     skill = make_skill(description="x" * 1025)
     errors = validate_skill(skill, known_tools=set())
     assert any("max 1024" in e for e in errors)
 
-
 def test_validate_skill_unknown_tool():
     skill = make_skill(tools=["bash", "made-up-tool"])
     errors = validate_skill(skill, known_tools={"bash"})
     assert any('"made-up-tool" is not a known tool' in e for e in errors)
 
-
 def test_validate_skill_multiple_errors_accumulate():
     skill = make_skill(name="", description="", tools=["ghost"])
     errors = validate_skill(skill, known_tools=set())
     assert len(errors) >= 3
-
-
-# ============================================================
-# materialize_skill_body
-# ============================================================
-
 
 def test_materialize_skill_body_replaces_skill_dir():
     skill = make_skill(
@@ -508,7 +389,6 @@ def test_materialize_skill_body_replaces_skill_dir():
     assert materialized.startswith("# Skill: tool-x\n\n")
     assert "/opt/skills/tool-x/scripts/run.sh" in materialized
     assert "${SKILL_DIR}" not in materialized
-
 
 def test_materialize_skill_body_no_placeholder_still_adds_header():
     skill = make_skill(name="tool-y", body="No placeholder here.")

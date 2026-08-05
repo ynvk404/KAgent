@@ -21,8 +21,8 @@ def new_call_id() -> str:
     return f"call_{uuid.uuid4().hex}"
 
 
-CHAT_TIMEOUT = 600.0  # seconds
-_ABORT_POLL_INTERVAL = 0.1  # seconds
+CHAT_TIMEOUT = 600.0  #s
+_ABORT_POLL_INTERVAL = 0.1  #s
 
 
 class OpenAIClient(Client):
@@ -64,7 +64,6 @@ class OpenAIClient(Client):
         return headers
 
     async def ping(self) -> None:
-        # Health check đồng bộ chạy trong thread pool để không block event loop
         import requests
 
         loop = asyncio.get_running_loop()
@@ -80,8 +79,6 @@ class OpenAIClient(Client):
 
         if resp.status_code >= 500:
             raise RuntimeError(f"{self.label} status {resp.status_code}")
-
-    # --- Retry Utilities ---
 
     def _on_retry(self, info: RetryInfo) -> None:
         if not self.log_error:
@@ -120,8 +117,6 @@ class OpenAIClient(Client):
             await asyncio.wait({task}, timeout=_ABORT_POLL_INTERVAL)
         return task.result()
 
-    # --- Non-streaming ---
-
     async def chat(
         self,
         req: ChatRequest,
@@ -154,7 +149,6 @@ class OpenAIClient(Client):
                         self.label, None, resp.status_code, f"invalid JSON: {resp.text}"
                     ) from err
 
-                # Lỗi API trả về status 200 sẽ không tự động retry tại đây mà được check sau with_retry
                 return data
 
         async def attempt() -> dict[str, Any]:
@@ -175,7 +169,6 @@ class OpenAIClient(Client):
         choice = choices[0]
         message = choice.get("message", {})
 
-        # Ưu tiên lấy content; fallback sang reasoning_content để tránh message trống
         raw_content = message.get("content") or message.get("reasoning_content") or ""
 
         msg = Message(role="assistant", content=raw_content)
@@ -194,8 +187,6 @@ class OpenAIClient(Client):
 
         return ChatResponse(message=msg, finish_reason=choice.get("finish_reason", ""))
 
-    # --- Streaming ---
-
     async def chat_stream(
         self,
         req: ChatRequest,
@@ -204,7 +195,6 @@ class OpenAIClient(Client):
     ) -> ChatResponse:
         body = self.encode_request(req, True)
 
-        # Phase 1: Mở kết nối stream (chỉ retry các lỗi tạm thời)
         async def open_stream() -> tuple[httpx.AsyncClient, httpx.Response]:
             client = httpx.AsyncClient(timeout=CHAT_TIMEOUT)
             try:
@@ -244,7 +234,6 @@ class OpenAIClient(Client):
         tool_parts: dict[int, dict[str, str]] = {}
         fallback_index = -1
 
-        # Phase 2: Đọc dữ liệu stream (có thể huỷ ngang, không tự động retry để tránh lặp/mất data)
         async def consume() -> None:
             nonlocal finish, fallback_index
 
@@ -272,7 +261,6 @@ class OpenAIClient(Client):
 
                 delta = choice.get("delta", {})
 
-                # Phát luồng reasoning content ra UI nhưng không lưu vào chuỗi message cuối cùng
                 if delta.get("reasoning_content"):
                     on_delta(delta["reasoning_content"])
 
@@ -328,8 +316,6 @@ class OpenAIClient(Client):
 
         return ChatResponse(message=msg, finish_reason=finish)
 
-    # --- Request Encoding ---
-
     def encode_request(self, req: ChatRequest, stream: bool) -> dict[str, Any]:
         messages: list[dict[str, Any]] = []
 
@@ -382,7 +368,6 @@ class OpenAIClient(Client):
 
             body["tools"] = encoded_tools
 
-        # Tắt reasoning trace đối với các model hỗ trợ để nhận trực tiếp câu trả lời
         if self.label == "kimi" and kimi_supports_thinking_toggle(self.model_id):
             body["thinking"] = {"type": "disabled"}
         elif self.label == "deepseek":

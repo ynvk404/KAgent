@@ -1,14 +1,3 @@
-"""
-Memory Store
-
-Bộ nhớ lâu dài của Pentest Agent — port từ TypeScript sang Python,
-chuẩn PEP 8 / type hint đầy đủ / production-ready.
-
-Hai scope (giống EngagementStore / IntelligenceStore):
-  - project:  ./.kagent/memory/   (theo từng engagement)
-  - personal: ~/.kagent/memory/   (thói quen/preference dùng chung)
-"""
-
 from __future__ import annotations
 
 import os
@@ -20,11 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final, Literal, Optional
 
-# TODO: thay bằng import module redact thật của dự án, ví dụ:
 from src.redact.redact import apply as redact
-# =========================
-# Cấu hình giới hạn
-# =========================
 
 MAX_FACTS_PER_SCOPE = 500
 MAX_FACT_CHARS = 4000
@@ -50,10 +35,6 @@ SCOPES: Final[tuple[MemoryScope, ...]] = (
 )
 
 
-# =========================
-# Data Model
-# =========================
-
 @dataclass
 class MemoryFact:
     name: str
@@ -74,12 +55,7 @@ class AddMemoryInput:
     created_at: Optional[str] = None
 
 
-# =========================
-# Memory Store
-# =========================
-
 class MemoryStore:
-
     def __init__(
         self,
         cwd: Optional[str] = None,
@@ -91,15 +67,10 @@ class MemoryStore:
         self.project_dir: Path = Path(cwd) / ".kagent" / "memory"
         self.personal_dir: Path = Path(home) / ".kagent" / "memory"
 
-        # cache: scope -> (mtime, list[MemoryFact])
         self.scope_cache: dict[MemoryScope, tuple[float, list[MemoryFact]]] = {}
 
     def _dir(self, scope: MemoryScope) -> Path:
         return self.personal_dir if scope == "personal" else self.project_dir
-
-    # =========================
-    # Thêm memory mới
-    # =========================
 
     def add(self, memory: AddMemoryInput) -> Optional[MemoryFact]:
         text = redact(memory.text.strip())
@@ -132,7 +103,6 @@ class MemoryStore:
 
         self._atomic_write(file, content)
 
-        # đọc lại 1 lần, dùng chung cho prune + index
         self.scope_cache.pop(scope, None)
         self._prune_scope(scope)
         self.scope_cache.pop(scope, None)
@@ -147,10 +117,6 @@ class MemoryStore:
             created_at=created,
             file=str(file),
         )
-
-    # =========================
-    # Load toàn bộ memory (có cache)
-    # =========================
 
     def list(self) -> list[MemoryFact]:
         result: list[MemoryFact] = []
@@ -178,10 +144,6 @@ class MemoryStore:
 
         self.scope_cache[scope] = (mtime, facts)
         return facts
-
-    # =========================
-    # Đọc 1 file memory
-    # =========================
 
     def load_file(self, file: Path, scope: MemoryScope) -> Optional[MemoryFact]:
         try:
@@ -217,10 +179,6 @@ class MemoryStore:
             file=str(file),
         )
 
-    # =========================
-    # Tìm memory liên quan (có recency boost)
-    # =========================
-
     def search(
         self,
         query: str,
@@ -246,10 +204,6 @@ class MemoryStore:
 
         scored.sort(key=lambda x: (x[0], x[1].created_at), reverse=True)
         return [f for _, f in scored[: max(1, int(limit))]]
-
-    # =========================
-    # Xóa memory
-    # =========================
 
     def forget(self, query: str) -> list[str]:
         needle = query.strip().lower()
@@ -285,10 +239,6 @@ class MemoryStore:
 
         return removed
 
-    # =========================
-    # Tạo MEMORY.md (chỉ theo đúng scope, ghi atomic)
-    # =========================
-
     def write_index(self, scope: MemoryScope) -> None:
         folder = self._dir(scope)
         facts = sorted(
@@ -308,12 +258,7 @@ class MemoryStore:
         if len(facts) > MAX_INDEX_LINES:
             lines.append(f"- ...và {len(facts) - MAX_INDEX_LINES} mục khác")
 
-        # _atomic_write() đã tự chmod 0o600 cho file đích, không cần lặp lại.
         self._atomic_write(path, "\n".join(lines) + "\n")
-
-    # =========================
-    # Lấy memory index cho LLM
-    # =========================
 
     def index(self) -> str:
         facts = self.list()
@@ -326,10 +271,6 @@ class MemoryStore:
         if len(facts) > MAX_INDEX_LINES:
             lines.append(f"- ...và {len(facts) - MAX_INDEX_LINES} mục khác")
         return "\n".join(lines)
-
-    # =========================
-    # Hàm phụ (utility — không dùng state của instance)
-    # =========================
 
     @staticmethod
     def tokenize(text: str) -> list[str]:
@@ -450,10 +391,6 @@ class MemoryStore:
         except OSError:
             pass
 
-
-# =========================
-# Format memory cho LLM
-# =========================
 
 def format_memory_recall(facts: list[MemoryFact]) -> str:
     if not facts:

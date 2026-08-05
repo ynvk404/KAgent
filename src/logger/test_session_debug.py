@@ -85,6 +85,4 @@ def test_is_noop_when_disabled():
     )
 
     assert log.enabled is False
-
-    # Không được phát sinh exception
     log.write("ignored")

@@ -37,11 +37,6 @@ def down() -> BackendError:
     )
 
 
-# ============================================================================
-# is_transient
-# ============================================================================
-
-
 class TestIsTransient:
 
     def test_flags_transient_errors(self) -> None:
@@ -54,11 +49,6 @@ class TestIsTransient:
         assert not is_transient(transient(401))
         assert not is_transient(transient(500))
         assert not is_transient(Exception("boom"))
-
-
-# ============================================================================
-# parse_retry_after
-# ============================================================================
 
 
 class TestParseRetryAfter:
@@ -80,12 +70,6 @@ class TestParseRetryAfter:
     def test_returns_none(self) -> None:
         assert parse_retry_after(None) is None
         assert parse_retry_after("soon") is None
-
-
-# ============================================================================
-# with_retry
-# ============================================================================
-
 
 class TestWithRetry:
 

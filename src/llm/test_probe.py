@@ -1,15 +1,3 @@
-"""
-tests/llm/test_probe.py
-
-Port of probe.test.ts (Vitest) to Python (pytest + pytest-asyncio).
-
-Only `probe_tool_support` is covered here. The original TS suite also
-covered `parseOllamaContextInfo`, but the Ollama context-window probe
-(`detect_ollama_context_window` / `parse_ollama_context_info`) was removed
-from `llm/probe.py` along with Ollama/LM Studio backend support, so there is
-nothing left to port for that half of the suite.
-"""
-
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -20,10 +8,7 @@ from src.llm.client import Client
 from src.llm.probe import PING_TOOL_NAME, probe_tool_support
 from src.llm.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 
-
 class _StubClient:
-    """Client stub that always returns a fixed ChatResponse."""
-
     def __init__(self, reply: ChatResponse) -> None:
         self._reply = reply
 
@@ -40,10 +25,7 @@ class _StubClient:
     ) -> ChatResponse:
         return self._reply
 
-
 class _RejectingClient:
-    """Client stub whose chat() always raises."""
-
     def __init__(self, err: Exception) -> None:
         self._err = err
 
@@ -60,14 +42,11 @@ class _RejectingClient:
     ) -> ChatResponse:
         raise self._err
 
-
 def _stub_client(reply: ChatResponse) -> Client:
     return _StubClient(reply)  # type: ignore[return-value]
 
-
 def _rejecting_client(err: Exception) -> Client:
     return _RejectingClient(err)  # type: ignore[return-value]
-
 
 class TestProbeToolSupport:
     @pytest.mark.asyncio
@@ -92,7 +71,6 @@ class TestProbeToolSupport:
         )
 
         r = await probe_tool_support(c)
-
         assert r.tool_support == "yes"
 
     @pytest.mark.asyncio
@@ -133,7 +111,6 @@ class TestProbeToolSupport:
         )
 
         r = await probe_tool_support(c)
-
         assert r.tool_support == "no"
 
     @pytest.mark.asyncio
@@ -141,5 +118,4 @@ class TestProbeToolSupport:
         c = _rejecting_client(Exception("connection refused"))
 
         r = await probe_tool_support(c)
-
         assert r.tool_support == "unknown"

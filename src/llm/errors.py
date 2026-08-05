@@ -14,16 +14,8 @@ ErrorCategory = Literal[
 ]
 
 
-# ============================================================================
-# Backend Error
-# ============================================================================
-
-
 @dataclass(slots=True)
 class BackendError(Exception):
-    """
-    Backend-specific error classification.
-    """
 
     backend: str
     category: ErrorCategory
@@ -40,23 +32,7 @@ class BackendError(Exception):
         super().__init__(msg)
 
 
-# ============================================================================
-# Retry
-# ============================================================================
-
-
 def is_transient(err: object) -> bool:
-    """
-    Returns True if the error is worth retrying.
-
-    Retry:
-        - backend-down
-        - 408
-        - 429
-        - 502
-        - 503
-        - 504
-    """
 
     if not isinstance(err, BackendError):
         return False
@@ -67,26 +43,10 @@ def is_transient(err: object) -> bool:
     return err.status_code in (408, 429, 502, 503, 504)
 
 
-# ============================================================================
-# Retry-After
-# ============================================================================
-
-
 def parse_retry_after(
     header: str | None,
     now: float | None = None,
 ) -> int | None:
-    """
-    Parse Retry-After into milliseconds.
-
-    Supports either:
-
-        Retry-After: 30
-
-    or
-
-        Retry-After: Wed, 21 Oct 2015 07:28:00 GMT
-    """
 
     if not header:
         return None
@@ -108,25 +68,12 @@ def parse_retry_after(
 
     return max(0, delta_ms)
 
-
-# ============================================================================
-# Classification
-# ============================================================================
-
-
 def classify_backend(
     backend: str,
     transport_error: Exception | str | None,
     status_code: int,
     body: str | None,
 ) -> BackendError:
-    """
-    Convert transport or HTTP errors into BackendError.
-    """
-
-    # ------------------------------------------------------------------
-    # Transport failure
-    # ------------------------------------------------------------------
 
     if transport_error is not None:
 
@@ -166,10 +113,6 @@ def classify_backend(
             msg,
         )
 
-    # ------------------------------------------------------------------
-    # HTTP error body
-    # ------------------------------------------------------------------
-
     msg = (body or "").strip()
 
     if body:
@@ -191,10 +134,6 @@ def classify_backend(
 
     lower = msg.lower()
 
-    # ------------------------------------------------------------------
-    # Rate limit
-    # ------------------------------------------------------------------
-
     if (
         "rate limit" in lower
         or "rate_limit" in lower
@@ -208,10 +147,6 @@ def classify_backend(
             msg,
         )
 
-    # ------------------------------------------------------------------
-    # No model loaded
-    # ------------------------------------------------------------------
-
     if (
         "no models loaded" in lower
         or "no model loaded" in lower
@@ -224,10 +159,6 @@ def classify_backend(
             status_code,
             msg,
         )
-
-    # ------------------------------------------------------------------
-    # Model missing
-    # ------------------------------------------------------------------
 
     if (
         "try pulling it first" in lower

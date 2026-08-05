@@ -10,10 +10,6 @@ from . import anthropic as anthropic_module
 from .anthropic import AnthropicClient, map_finish_reason
 from .types import ChatRequest, FunctionCall, Message, ToolCall, ToolFunction, ToolSpec
 
-
-# ---------------------------------------------------------------------------
-# Mock server
-# ---------------------------------------------------------------------------
 @dataclass
 class _Captured:
     last_body: dict[str, Any] | None = None
@@ -23,8 +19,6 @@ class _Captured:
 
 captured = _Captured()
 
-# The mock server's canned /v1/messages response: one text block plus one
-# tool_use block, matching what a real Claude response looks like.
 _MOCK_RESPONSE = {
     "content": [
         {"type": "text", "text": "working"},
@@ -40,10 +34,10 @@ _MOCK_RESPONSE = {
 
 
 class _MockHandler(BaseHTTPRequestHandler):
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: Any) -> None: 
         pass
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None: 
         captured.last_api_key_header = self.headers.get("x-api-key")
         captured.last_version_header = self.headers.get("anthropic-version")
         if self.path == "/v1/models":
@@ -52,7 +46,7 @@ class _MockHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:  
         captured.last_api_key_header = self.headers.get("x-api-key")
         captured.last_version_header = self.headers.get("anthropic-version")
 
@@ -81,8 +75,6 @@ def base_url():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    # anthropic.py builds paths as f"{base_url}/messages" / f"{base_url}/models",
-    # so base_url must already carry the /v1 prefix.
     yield f"http://127.0.0.1:{port}/v1"
     server.shutdown()
     server.server_close()
@@ -97,13 +89,8 @@ def _reset_captured():
     yield
 
 
-# ---------------------------------------------------------------------------
-# chat(): request encoding + response parsing
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_encodes_system_prompt_tool_turns_and_parses_tool_use(base_url, monkeypatch):
-    # Keep this test deterministic regardless of which real models
-    # anthropic_accepts_temperature() allows sampling params for.
     monkeypatch.setattr(anthropic_module, "anthropic_accepts_temperature", lambda model: True)
 
     c = AnthropicClient(base_url, "test-key", "claude-test", {"temperature": 0.5})
@@ -147,7 +134,6 @@ async def test_encodes_system_prompt_tool_turns_and_parses_tool_use(base_url, mo
     assert out.message.content == "working"
     assert out.finish_reason == "tool_calls"
 
-    # Response parsing
     assert out.message.tool_calls is not None
     tool_call = cast(ToolCall, out.message.tool_calls[0])
 
@@ -160,10 +146,8 @@ async def test_encodes_system_prompt_tool_turns_and_parses_tool_use(base_url, mo
     assert captured.last_body is not None
     body = captured.last_body
 
-    # System prompt is a top-level field, not a message.
     assert body["system"] == "system prompt"
 
-    # Only non-system turns appear in messages: user, assistant(tool_use), tool(tool_result).
     messages = body["messages"]
     assert len(messages) == 3
 
@@ -172,7 +156,6 @@ async def test_encodes_system_prompt_tool_turns_and_parses_tool_use(base_url, mo
         "content": [{"type": "text", "text": "test"}],
     }
 
-    # Request encoding
     assert messages[1]["role"] == "assistant"
     assert messages[1]["content"] == [
         {
@@ -194,7 +177,6 @@ async def test_encodes_system_prompt_tool_turns_and_parses_tool_use(base_url, mo
         ],
     }
 
-    # Tools are encoded with input_schema, not "parameters".
     assert body["tools"] == [
         {
             "name": "http",
@@ -218,8 +200,6 @@ async def test_drops_empty_assistant_turns_from_the_request(base_url, monkeypatc
         model="claude-test",
         messages=[
             Message(role="user", content="hi"),
-            # An assistant turn with no text and no tool calls encodes to
-            # nothing and must be dropped, not sent as a content-less block.
             Message(role="assistant", content=""),
         ],
     )
@@ -232,9 +212,6 @@ async def test_drops_empty_assistant_turns_from_the_request(base_url, monkeypatc
     ]
 
 
-# ---------------------------------------------------------------------------
-# max_tokens handling
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_falls_back_to_default_max_tokens_when_not_configured(base_url):
     c = AnthropicClient(base_url, "test-key", "claude-test")
@@ -258,9 +235,6 @@ async def test_uses_configured_max_tokens_when_positive(base_url):
     assert captured.last_body["max_tokens"] == 256
 
 
-# ---------------------------------------------------------------------------
-# temperature gating
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_sends_temperature_when_the_model_accepts_it(base_url, monkeypatch):
     monkeypatch.setattr(anthropic_module, "anthropic_accepts_temperature", lambda model: True)
@@ -275,7 +249,6 @@ async def test_sends_temperature_when_the_model_accepts_it(base_url, monkeypatch
 
 @pytest.mark.asyncio
 async def test_omits_temperature_when_the_model_rejects_sampling_params(base_url, monkeypatch):
-    # e.g. opus-4-7/4-8 and the Fable/Mythos 5 family 400 on any sampling param.
     monkeypatch.setattr(anthropic_module, "anthropic_accepts_temperature", lambda model: False)
 
     c = AnthropicClient(base_url, "test-key", "claude-test", {"temperature": 0.7})
@@ -285,10 +258,6 @@ async def test_omits_temperature_when_the_model_rejects_sampling_params(base_url
     assert captured.last_body is not None
     assert "temperature" not in captured.last_body
 
-
-# ---------------------------------------------------------------------------
-# finish-reason mapping (pure function, no server needed)
-# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "stop_reason,expected",
     [
@@ -296,7 +265,7 @@ async def test_omits_temperature_when_the_model_rejects_sampling_params(base_url
         ("stop_sequence", "stop"),
         ("tool_use", "tool_calls"),
         ("max_tokens", "length"),
-        ("refusal", "refusal"),  # unknown values pass through verbatim
+        ("refusal", "refusal"), 
         (None, ""),
     ],
 )
@@ -304,9 +273,6 @@ def test_maps_stop_reason_to_finish_reason(stop_reason, expected):
     assert map_finish_reason(stop_reason) == expected
 
 
-# ---------------------------------------------------------------------------
-# ping()
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_pings_the_models_endpoint(base_url):
     c = AnthropicClient(base_url, "test-key", "claude-test")

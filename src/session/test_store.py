@@ -1,8 +1,3 @@
-"""
-Test bổ sung cho các fix mới trong store.py — không có trong bản
-test_store.py ported từ TS, vì các hành vi này KHÔNG tồn tại (hoặc
-không đúng) trong bản Python trước khi fix.
-"""
 from __future__ import annotations
 
 import json
@@ -20,15 +15,13 @@ class TestEmptyPathGuards:
     @pytest.mark.asyncio
     async def test_save_is_noop_with_empty_path(self, tmp_path):
         store = Store("", "")
-        # Trước fix: crash hoặc ghi nhầm vào cwd. Sau fix: no-op im lặng.
         await store.save([Message(role="user", content="x")], None)
         assert not any(Path(".").glob("*.tmp.*"))
 
     @pytest.mark.asyncio
     async def test_clear_is_noop_with_empty_path(self):
         store = Store("", "")
-        # Trước fix: Path("") -> Path(".") -> unlink(".") raise IsADirectoryError.
-        await store.clear()  # không được raise
+        await store.clear()
 
     @pytest.mark.asyncio
     async def test_save_context_snapshot_is_noop_with_empty_path(self):
@@ -36,22 +29,11 @@ class TestEmptyPathGuards:
         out = await store.save_context_snapshot("hello")
         assert out == ""
 
-
 class TestTmpFilePermissionRace:
     @pytest.mark.asyncio
     async def test_tmp_file_is_0600_at_creation_not_only_after_rename(
         self, tmp_path, monkeypatch
     ):
-        """
-        Bug bảo mật cũ: `open(tmp, "x")` tạo file theo umask tiến trình
-        (thường 0644), rồi mới os.replace() + chmod(0600) SAU đó. Có
-        một khoảng hở khi file .tmp.* chứa credentials nằm trên đĩa với
-        quyền group/other-readable.
-
-        Test này chặn ngay trước os.replace() để kiểm tra quyền của
-        chính file .tmp lúc đó (không phải quyền của file đích sau khi
-        rename+chmod), để bug cũ chắc chắn bị bắt.
-        """
         store = Store.new_with_id(tmp_path, new_id())
         observed_modes = []
 
@@ -72,17 +54,9 @@ class TestTmpFilePermissionRace:
             "should be 0600 from creation, not only after chmod"
         )
 
-
 class TestCrossFormatMemoryCompat:
     @pytest.mark.asyncio
     async def test_loads_memory_written_by_ts_store_camel_case(self, tmp_path):
-        """
-        Bug cũ: SessionMemory(**memory_data) raise TypeError trên key
-        camelCase (updatedAt/lastCompactedAt/lastSummary) do TS CLI ghi,
-        bị nuốt bởi `except Exception: memory = None` -> toàn bộ memory
-        (kể cả credentials, findings...) biến mất im lặng khi Python
-        load lại session do TS lưu.
-        """
         store = Store.new_with_id(tmp_path, "ts-written")
         ts_style_file = {
             "updated_at": "2026-01-01T00:00:00",
@@ -120,7 +94,6 @@ class TestCrossFormatMemoryCompat:
 
     @pytest.mark.asyncio
     async def test_still_loads_native_python_snake_case_memory(self, tmp_path):
-        # Không được regress đường load bình thường khi tự Python ghi/đọc.
         store = Store.new_with_id(tmp_path, new_id())
         memory = SessionMemory(compactions=9, last_summary="native")
         await store.save([Message(role="user", content="hi")], None, memory)
@@ -128,7 +101,6 @@ class TestCrossFormatMemoryCompat:
         assert loaded.memory is not None
         assert loaded.memory.compactions == 9
         assert loaded.memory.last_summary == "native"
-
 
 class TestListDir:
     def test_returns_empty_list_for_missing_dir(self, tmp_path):
@@ -140,8 +112,6 @@ class TestListDir:
         store_new = Store.new_with_id(tmp_path, "new-session")
 
         await store_old.save([Message(role="user", content="first one")], None)
-        # Ghi đè updated_at thủ công để đảm bảo thứ tự rõ ràng, không phụ
-        # thuộc vào độ phân giải thời gian giữa 2 lần save liên tiếp.
         raw_old = json.loads(store_old.path.read_text())
         raw_old["updated_at"] = "2020-01-01T00:00:00"
         store_old.path.write_text(json.dumps(raw_old))

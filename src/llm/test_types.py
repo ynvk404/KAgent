@@ -18,11 +18,6 @@ from src.llm.types import (
 )
 
 
-# ============================================================================
-# parsed_args
-# ============================================================================
-
-
 class TestParsedArgs:
 
     def test_returns_empty_dict_when_arguments_empty(self) -> None:
@@ -54,11 +49,6 @@ class TestParsedArgs:
             parsed_args(call)
 
 
-# ============================================================================
-# FunctionCall
-# ============================================================================
-
-
 class TestFunctionCall:
 
     def test_construct(self) -> None:
@@ -69,11 +59,6 @@ class TestFunctionCall:
 
         assert call.name == "grep"
         assert call.arguments == '{"pattern":"test"}'
-
-
-# ============================================================================
-# ToolCall
-# ============================================================================
 
 
 class TestToolCall:
@@ -110,11 +95,6 @@ class TestToolCall:
         assert call.provider.gemini.thought_signature == "abc123"
 
 
-# ============================================================================
-# Message
-# ============================================================================
-
-
 class TestMessage:
 
     def test_basic_message(self) -> None:
@@ -148,11 +128,6 @@ class TestMessage:
         assert msg.tool_calls[0].id == "1"
 
 
-# ============================================================================
-# ToolFunction / ToolSpec
-# ============================================================================
-
-
 class TestToolSpec:
 
     def test_construct(self) -> None:
@@ -168,11 +143,6 @@ class TestToolSpec:
 
         assert spec.type == "function"
         assert spec.function.name == "shell"
-
-
-# ============================================================================
-# ChatRequest
-# ============================================================================
 
 
 class TestChatRequest:
@@ -192,11 +162,6 @@ class TestChatRequest:
         assert len(req.messages) == 1
         assert req.tools is None
         assert req.stream is None
-
-
-# ============================================================================
-# ChatResponse
-# ============================================================================
 
 
 class TestChatResponse:

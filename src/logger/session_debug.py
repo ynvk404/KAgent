@@ -10,11 +10,6 @@ from typing import Any
 
 
 def redact(text: str) -> str:
-    """
-    Redact sensitive information before writing.
-
-    Replace this placeholder with your own implementation.
-    """
     return text
 
 
@@ -132,7 +127,6 @@ class FileSessionDebugLog(SessionDebugLog):
                 f.write(safe + "\n")
 
         except Exception:
-            # Debug logging must never break the application.
             pass
 
     def agent_event(

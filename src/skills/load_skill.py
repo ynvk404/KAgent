@@ -1,16 +1,5 @@
 from __future__ import annotations
 
-"""
-Load Skill Tool
-
-Chuc nang:
-- Cung cap tool load_skill cho Agent
-- Lay noi dung day du cua mot skill
-- Kiem tra skill ton tai
-- Kiem tra skill bi disable
-- Tra playbook Markdown cho LLM
-"""
-
 from typing import Any
 
 from .registry import (
@@ -18,23 +7,7 @@ from .registry import (
     materialize_skill_body,
 )
 
-
 class LoadSkillTool:
-    """
-    Tool cho phep Agent load noi dung skill.
-
-    Vi du:
-
-    Agent goi:
-
-    load_skill({
-        "name": "webvuln"
-    })
-
-    Ket qua:
-        tra ve noi dung SKILL.md
-    """
-
     def __init__(
         self,
         registry: Registry
@@ -42,9 +15,6 @@ class LoadSkillTool:
         self.reg = registry
 
     def name(self) -> str:
-        """
-        Ten tool.
-        """
         return "load_skill"
 
     def description(self) -> str:
@@ -60,9 +30,6 @@ class LoadSkillTool:
         )
 
     def schema(self) -> dict[str, Any]:
-        """
-        JSON schema cho LLM function calling.
-        """
         return {
             "type": "object",
             "properties": {
@@ -81,10 +48,6 @@ class LoadSkillTool:
         }
 
     def requires_permission(self) -> bool:
-        """
-        Load skill chi doc file markdown,
-        khong can permission.
-        """
         return False
 
     async def run(
@@ -93,14 +56,6 @@ class LoadSkillTool:
         signal=None,
         prompter=None
     ) -> str:
-        """
-        Load skill body.
-
-        args:
-        {
-            "name": "webvuln"
-        }
-        """
         name = args.get("name", "")
 
         if not isinstance(name, str) or not name:
@@ -108,7 +63,6 @@ class LoadSkillTool:
 
         skill = self.reg.get(name)
 
-        # Khong ton tai
         if skill is None:
             names = ", ".join(
                 s.name
@@ -120,7 +74,6 @@ class LoadSkillTool:
                 f"Available: {names}"
             )
 
-        # Skill bi disable
         if self.reg.is_disabled(name):
             raise ValueError(
                 f'skill "{name}" is disabled. '
@@ -129,7 +82,6 @@ class LoadSkillTool:
                 f"can be loaded."
             )
 
-        # Skill chi user duoc goi
         if skill.disable_model_invocation:
             raise ValueError(
                 f'skill "{name}" is marked '
