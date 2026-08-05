@@ -1,4 +1,3 @@
-# tests/ui/render/test_color_level.py
 
 from __future__ import annotations
 

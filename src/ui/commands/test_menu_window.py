@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 MENU_VISIBLE_CAP = 5
-
 
 @dataclass(frozen=True, slots=True)
 class MenuWindow:

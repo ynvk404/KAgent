@@ -24,7 +24,6 @@ class BridgedPrompter(Prompter):
         self._publish = publish
         self._session_allowed: set[str] = set()
 
-        # Single-modal lock
         self._busy = False
         self._waiters: list[asyncio.Future[None]] = []
 
@@ -40,14 +39,12 @@ class BridgedPrompter(Prompter):
         req: PermissionRequest,
         signal=None,
     ) -> Decision:
-        # Session cache
         if (
             not req.no_session_cache
             and self._key_for(req) in self._session_allowed
         ):
             return Decision.ALLOW_ONCE
 
-        # Acquire single-modal lock
         if self._busy:
             loop = asyncio.get_running_loop()
             waiter: asyncio.Future[None] = loop.create_future()
@@ -57,7 +54,6 @@ class BridgedPrompter(Prompter):
             self._busy = True
 
         try:
-            # Re-check cache after acquiring the lock
             if (
                 not req.no_session_cache
                 and self._key_for(req) in self._session_allowed

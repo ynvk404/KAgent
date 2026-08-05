@@ -15,15 +15,6 @@ class TextInputRequest:
 
 
 class TextInputModal:
-    """
-    Plain text input modal.
-
-    Keys:
-        normal key -> append character
-        backspace/delete -> remove last char
-        Enter -> submit
-        Esc -> cancel
-    """
 
     def __init__(
         self,

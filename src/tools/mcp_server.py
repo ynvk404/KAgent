@@ -1,10 +1,3 @@
-"""
-Session MCP server helpers.
-
-Port từ:
-agent/src/mcp/session_mcp.py
-"""
-
 from __future__ import annotations
 
 from typing import Final
@@ -43,14 +36,6 @@ def session_mcp_servers(
     configured: list[MCPServerConfig],
     browser_enabled: bool,
 ) -> list[MCPServerConfig]:
-    """
-    Build danh sách MCP server cho session hiện tại.
-
-    Browser MCP không bao giờ lấy trực tiếp từ config.
-    Nếu browser_enabled=False thì loại bỏ mọi Browser MCP.
-
-    Nếu browser_enabled=True thì append Browser MCP mặc định.
-    """
 
     base = [
         server

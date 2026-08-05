@@ -8,20 +8,10 @@ from src.permission.permission import (
     Prompter,
     YoloPrompter,
 )
-
 from src.tools.registry import Registry
 from src.tools.types import Tool
 
-
-# ============================================================
-# Fake permission-required tool
-# ============================================================
-
 class GatedTool:
-    """
-    Tool yêu cầu permission, giả lập http/shell.
-    """
-
     def __init__(self):
         self.ran = False
 
@@ -48,23 +38,13 @@ class GatedTool:
         self.ran = True
         return "ok"
 
-
-# ============================================================
-# Spy Prompter
-# ============================================================
-
 class SpyPrompter:
-    """
-    Ghi nhận xem có bị gọi ask() hay không.
-    """
-
     def __init__(
         self,
         decision: Decision = Decision.DENY,
     ):
         self.calls: list[PermissionRequest] = []
         self.decision = decision
-
 
     async def ask(
         self,
@@ -74,14 +54,8 @@ class SpyPrompter:
         self.calls.append(request)
         return self.decision
 
-
-# ============================================================
-# Tests
-# ============================================================
-
 @pytest.mark.asyncio
 async def test_yolo_auto_approves_permission_tool_without_calling_prompter():
-
     reg = Registry()
 
     tool = GatedTool()
@@ -96,7 +70,6 @@ async def test_yolo_auto_approves_permission_tool_without_calling_prompter():
         True,
     )
 
-
     out = await reg.execute(
         "http",
         {
@@ -106,18 +79,12 @@ async def test_yolo_auto_approves_permission_tool_without_calling_prompter():
         yolo,
     )
 
-
     assert out == "ok"
     assert tool.ran is True
-
-    # Inner prompter không được gọi
     assert len(inner.calls) == 0
-
-
 
 @pytest.mark.asyncio
 async def test_prompts_and_denies_when_yolo_disabled():
-
     reg = Registry()
 
     reg.register(
@@ -128,12 +95,10 @@ async def test_prompts_and_denies_when_yolo_disabled():
         Decision.DENY
     )
 
-
     yolo = YoloPrompter(
         inner,
         False,
     )
-
 
     with pytest.raises(
         PermissionError,
@@ -147,6 +112,5 @@ async def test_prompts_and_denies_when_yolo_disabled():
             None,
             yolo,
         )
-
 
     assert len(inner.calls) == 1

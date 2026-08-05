@@ -5,7 +5,7 @@ import pytest
 
 from src.ui.commands.skills_handler import handle_skills_command
 from src.ui.core.state import Append, SetActiveSkill
-from src.agent.agent import Agent   # sửa path này nếu Agent nằm chỗ khác
+from src.agent.agent import Agent  
 
 
 class StubSkills:

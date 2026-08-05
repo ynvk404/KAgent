@@ -1,4 +1,3 @@
-# ui/widgets/test_banner.py
 
 from src.ui.widgets.banner import (
     Banner,
@@ -6,11 +5,6 @@ from src.ui.widgets.banner import (
     LOGO,
     model_pill,
 )
-
-
-# ==========================================================
-# model_pill
-# ==========================================================
 
 
 def test_model_pill_yes():
@@ -49,13 +43,6 @@ def test_model_pill_probing():
 
 def test_model_pill_none():
     assert model_pill(None) is None
-
-
-
-# ==========================================================
-# Banner render
-# ==========================================================
-
 
 def get_text(lines):
     """

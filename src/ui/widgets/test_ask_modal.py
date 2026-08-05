@@ -35,10 +35,6 @@ def make_req(**overrides) -> AskRequest:
     return AskRequest(**data)
 
 
-# ==========================================================
-# Render
-# ==========================================================
-
 def test_render_shows_question_and_options():
 
     modal = AskModal(
@@ -55,10 +51,6 @@ def test_render_shows_question_and_options():
     assert "Remote" in frame
     assert "Cloud" in frame
 
-
-# ==========================================================
-# Navigation
-# ==========================================================
 
 def test_down_arrow_changes_selection():
 
@@ -92,11 +84,6 @@ def test_up_arrow_wraps():
     assert "› Cloud" in frame
 
 
-
-# ==========================================================
-# Selection
-# ==========================================================
-
 def test_enter_resolves_selected_option():
 
     resolve = Mock()
@@ -112,7 +99,6 @@ def test_enter_resolves_selected_option():
     resolve.assert_called_once_with(
         "Local"
     )
-
 
 
 def test_number_shortcut_selects_option():
@@ -133,11 +119,6 @@ def test_number_shortcut_selects_option():
         "Remote"
     )
 
-
-
-# ==========================================================
-# Cancel
-# ==========================================================
 
 def test_escape_rejects():
 

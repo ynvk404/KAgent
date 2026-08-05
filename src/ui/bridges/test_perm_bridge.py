@@ -41,12 +41,6 @@ def make_bridge(decision: Decision):
 
     return ask, lambda: shown
 
-
-# ==========================================================
-# Cache behavior
-# ==========================================================
-
-
 @pytest.mark.asyncio
 async def test_cache_allow_session_per_tool():
 
@@ -177,11 +171,6 @@ async def test_cache_key_does_not_whitelist_other_command():
 
 
     assert denials == 1
-
-
-# ==========================================================
-# Concurrency
-# ==========================================================
 
 
 @pytest.mark.asyncio

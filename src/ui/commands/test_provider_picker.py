@@ -50,7 +50,6 @@ def test_open_provider_picker_dispatches_state_actions():
     assert req.question.header == "provider"
     assert req.question.question == "Select LLM provider or manage provider settings"
 
-    # 3 advanced actions + 7 provider choices.
     assert len(req.question.options) == 10
 
     labels = [

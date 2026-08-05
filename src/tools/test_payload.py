@@ -278,5 +278,4 @@ async def test_handles_missing_payload_directory(
         noop_prompter,
     )
 
-
     assert "no payloads" in out

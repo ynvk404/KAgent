@@ -1,5 +1,3 @@
-# Glob + grep behavior tests.
-
 from __future__ import annotations
 
 import shutil
@@ -10,12 +8,6 @@ import pytest
 
 from src.tools.search import GlobTool, GrepTool
 from src.permission.permission import AlwaysAllow, AlwaysDeny
-
-
-# ==========================================================
-# Fixtures
-# ==========================================================
-
 
 @pytest.fixture
 def search_tmp():
@@ -49,17 +41,9 @@ def search_tmp():
         ignore_errors=True,
     )
 
-
 @pytest.fixture
 def signal():
-    # Python equivalent of AbortController.signal
     return None
-
-
-# ==========================================================
-# GlobTool
-# ==========================================================
-
 
 @pytest.mark.asyncio
 async def test_glob_returns_matching_files(search_tmp, signal):
@@ -75,7 +59,6 @@ async def test_glob_returns_matching_files(search_tmp, signal):
     assert "main.go" in out
     assert str(Path("internal") / "tools" / "shell.go") in out
 
-
 @pytest.mark.asyncio
 async def test_glob_returns_no_matches(search_tmp, signal):
     out = await GlobTool().run(
@@ -89,7 +72,6 @@ async def test_glob_returns_no_matches(search_tmp, signal):
 
     assert out == "no matches"
 
-
 @pytest.mark.asyncio
 async def test_glob_errors_when_pattern_missing(search_tmp, signal):
     with pytest.raises(Exception, match="required"):
@@ -100,7 +82,6 @@ async def test_glob_errors_when_pattern_missing(search_tmp, signal):
             signal,
             AlwaysAllow(),
         )
-
 
 @pytest.mark.asyncio
 async def test_glob_prompts_sensitive_path(signal):
@@ -119,12 +100,6 @@ async def test_glob_prompts_sensitive_path(signal):
             AlwaysDeny(),
         )
 
-
-# ==========================================================
-# GrepTool
-# ==========================================================
-
-
 @pytest.mark.asyncio
 async def test_grep_finds_regex_match_line(search_tmp, signal):
     out = await GrepTool().run(
@@ -140,7 +115,6 @@ async def test_grep_finds_regex_match_line(search_tmp, signal):
     assert "shell.go" in out
     assert "rm -rf" in out
 
-
 @pytest.mark.asyncio
 async def test_grep_returns_no_matches(search_tmp, signal):
     out = await GrepTool().run(
@@ -153,7 +127,6 @@ async def test_grep_returns_no_matches(search_tmp, signal):
     )
 
     assert out == "no matches"
-
 
 @pytest.mark.asyncio
 async def test_grep_supports_ignore_case(search_tmp, signal):
@@ -170,7 +143,6 @@ async def test_grep_supports_ignore_case(search_tmp, signal):
 
     assert "main.go" in out
 
-
 @pytest.mark.asyncio
 async def test_grep_invalid_regex(search_tmp, signal):
     with pytest.raises(Exception, match="invalid regex"):
@@ -182,7 +154,6 @@ async def test_grep_invalid_regex(search_tmp, signal):
             signal,
             AlwaysAllow(),
         )
-
 
 @pytest.mark.asyncio
 async def test_grep_prompts_sensitive_path(signal):
@@ -201,7 +172,6 @@ async def test_grep_prompts_sensitive_path(signal):
             AlwaysDeny(),
         )
 
-
 @pytest.mark.asyncio
 async def test_grep_single_file(search_tmp, signal):
     out = await GrepTool().run(
@@ -215,7 +185,6 @@ async def test_grep_single_file(search_tmp, signal):
 
     assert "main.go" in out
     assert "package main" in out
-
 
 @pytest.mark.asyncio
 async def test_grep_limit_matches(search_tmp, signal):
@@ -254,7 +223,6 @@ async def test_grep_limit_matches(search_tmp, signal):
         )
         == 10
     )
-
 
 @pytest.mark.asyncio
 async def test_grep_finds_matches_across_many_files(search_tmp, signal):

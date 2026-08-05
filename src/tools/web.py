@@ -15,33 +15,23 @@ from src.permission.permission import Prompter
 from .private_host import gate_private_request, parse_http_url
 from .types import Tool, arg_string
 
-# Cấu hình giới hạn bộ nhớ & thời gian chờ
 FETCH_TIMEOUT_SECONDS = 30.0
 FETCH_BODY_CAP = 512 * 1024
 SEARCH_BODY_CAP = 1024 * 1024
 FETCH_TEXT_CAP = 40 * 1024
-STRIP_INPUT_CAP = 256 * 1024  # Giới hạn HTML đầu vào để tránh Regex ReDoS
+STRIP_INPUT_CAP = 256 * 1024
 
-# Cache TTL & LRU
 CACHE_TTL_SECONDS = 10 * 60
 CACHE_MAX_ENTRIES = 50
 
-ABORT_POLL_SECONDS = 0.05  # Chu kỳ kiểm tra tín hiệu hủy task
-
-
-# ==========================================================
-# Cache System
-# ==========================================================
-
+ABORT_POLL_SECONDS = 0.05
 
 @dataclass
 class _CacheEntry:
     value: str
     expires: float
 
-
 _result_cache: "OrderedDict[str, _CacheEntry]" = OrderedDict()
-
 
 def _cache_get(key: str) -> str | None:
     entry = _result_cache.get(key)
@@ -53,22 +43,14 @@ def _cache_get(key: str) -> str | None:
     _result_cache.move_to_end(key)
     return entry.value
 
-
 def _cache_set(key: str, value: str) -> None:
     _result_cache.pop(key, None)
     _result_cache[key] = _CacheEntry(value=value, expires=time.monotonic() + CACHE_TTL_SECONDS)
     while len(_result_cache) > CACHE_MAX_ENTRIES:
         _result_cache.popitem(last=False)
 
-
 def clear_web_cache() -> None:
-    """Xóa toàn bộ bộ nhớ cache."""
     _result_cache.clear()
-
-
-# ==========================================================
-# HTML Stripping
-# ==========================================================
 
 TAG_RE = re.compile(r"<[^>]+>")
 SCRIPT_RE = re.compile(r"<script[^>]*>[\s\S]*?</script>", re.IGNORECASE)
@@ -76,9 +58,7 @@ STYLE_RE = re.compile(r"<style[^>]*>[\s\S]*?</style>", re.IGNORECASE)
 WS_RE = re.compile(r"[ \t]+")
 NL_RE = re.compile(r"\n{3,}")
 
-
 def strip_html(s: str) -> str:
-    """Loại bỏ script, style, tag HTML và chuẩn hóa khoảng trắng."""
     input_ = s[:STRIP_INPUT_CAP] if len(s) > STRIP_INPUT_CAP else s
     out = SCRIPT_RE.sub("", input_)
     out = STYLE_RE.sub("", out)
@@ -87,32 +67,20 @@ def strip_html(s: str) -> str:
     out = NL_RE.sub("\n\n", out)
     return out.strip()
 
-
-# ==========================================================
-# Request Cancellation & Error Handling
-# ==========================================================
-
-
 class _FetchAborted(Exception):
-    """Lỗi khi request bị hủy bởi tín hiệu bên ngoài."""
-
+    pass
 
 class _FetchFailed(Exception):
-    """Lỗi kết nối mạng hoặc timeout."""
-
     def __init__(self, message: str, *, timed_out: bool, code: str | None = None):
         super().__init__(message)
         self.message = message
         self.timed_out = timed_out
         self.code = code
 
-
 def _is_aborted(signal: Any) -> bool:
     return signal is not None and getattr(signal, "aborted", False)
 
-
 async def _run_cancelable(coro, timeout_seconds: float, signal: Any):
-    """Chạy coroutine kèm theo timeout và hỗ trợ hủy công việc qua signal."""
     if _is_aborted(signal):
         coro.close()
         raise _FetchAborted()
@@ -135,23 +103,19 @@ async def _run_cancelable(coro, timeout_seconds: float, signal: Any):
 
     try:
         return await asyncio.wait_for(task, timeout=timeout_seconds)
-
     except asyncio.TimeoutError as exc:
         task.cancel()
         raise _FetchFailed("request timed out", timed_out=True) from exc
-
     except asyncio.CancelledError as exc:
         if aborted:
             raise _FetchAborted() from exc
         raise
-
     finally:
         watch_task.cancel()
         try:
             await watch_task
         except asyncio.CancelledError:
             pass
-
 
 def _map_httpx_error(err: Exception) -> tuple[str, str | None]:
     message = str(err)
@@ -180,7 +144,6 @@ def _map_httpx_error(err: Exception) -> tuple[str, str | None]:
     return message, None
 
 async def _decode_capped(response: httpx.Response, cap: int) -> str:
-    """Đọc và giải mã UTF-8 từ stream response, tối đa `cap` bytes."""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     parts: list[str] = []
     total = 0
@@ -204,12 +167,6 @@ async def _decode_capped(response: httpx.Response, cap: int) -> str:
         parts.append(decoder.decode(b"", True))
 
     return "".join(parts)
-
-
-# ==========================================================
-# Tool: web_fetch
-# ==========================================================
-
 
 class WebFetchTool(Tool):
     def name(self) -> str:
@@ -275,7 +232,6 @@ class WebFetchTool(Tool):
         _cache_set(cache_key, result)
         return result
 
-
 async def _do_fetch(url: str) -> httpx.Response:
     client = httpx.AsyncClient(follow_redirects=False)
     request = client.build_request(
@@ -292,7 +248,6 @@ async def _do_fetch(url: str) -> httpx.Response:
         await client.aclose()
         raise
 
-    # Giữ client sống cho đến khi response đóng hoàn toàn
     resp._pf_client = client  # type: ignore[attr-defined]
     original_aclose = resp.aclose
 
@@ -302,7 +257,6 @@ async def _do_fetch(url: str) -> httpx.Response:
 
     resp.aclose = _aclose  # type: ignore[method-assign]
     return resp
-
 
 def format_fetch_failure(url: str, message: str, timed_out: bool, code: str | None) -> str:
     lines = [
@@ -320,7 +274,6 @@ def format_fetch_failure(url: str, message: str, timed_out: bool, code: str | No
         lines.append("")
         lines.append(hint)
     return "\n".join(lines)
-
 
 def _fetch_failure_hint(url: str, code: str | None) -> str:
     host = _hostname_of(url)
@@ -342,13 +295,11 @@ def _fetch_failure_hint(url: str, code: str | None) -> str:
         return "Hint: TLS certificate validation failed. Use the http tool or curl when you need TLS-disabled probing."
     return ""
 
-
 def _hostname_of(raw: str) -> str:
     try:
         return (urlparse(raw).hostname or "").lower()
     except Exception:
         return ""
-
 
 def _hackerone_handle_from_platform_path(raw: str) -> str:
     try:
@@ -357,24 +308,15 @@ def _hackerone_handle_from_platform_path(raw: str) -> str:
     except Exception:
         return ""
 
-
-# ==========================================================
-# Tool: web_search
-# ==========================================================
-
-# Regex bóc tách thẻ kết quả tìm kiếm từ DuckDuckGo HTML
 DDG_RESULT_RE = re.compile(
     r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)</a>[\s\S]*?'
     r'<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)</a>',
     re.IGNORECASE,
 )
 
-# Regex dự phòng lấy thẻ <a> bất kỳ nếu giao diện DDG thay đổi
 ANCHOR_RE = re.compile(r'<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)</a>', re.IGNORECASE)
 
-
 def normalize_ddg_url(raw_url: str) -> str:
-    """Chuẩn hóa URL từ DuckDuckGo: bỏ redirect /l/?uddg= và thêm https."""
     url = raw_url
     if url.startswith("//"):
         url = f"https:{url}"
@@ -389,9 +331,7 @@ def normalize_ddg_url(raw_url: str) -> str:
         pass
     return url
 
-
 def extract_anchor_results(body: str) -> list[tuple[str, str]]:
-    """Phương án dự phòng: Lấy tối đa 10 link từ các thẻ <a> bất kỳ."""
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -410,7 +350,6 @@ def extract_anchor_results(body: str) -> list[tuple[str, str]]:
         out.append((url, title))
 
     return out
-
 
 class WebSearchTool(Tool):
     def name(self) -> str:
@@ -496,7 +435,6 @@ class WebSearchTool(Tool):
         _cache_set(cache_key, result)
         return result
 
-
 async def _do_search(endpoint: str) -> httpx.Response:
     client = httpx.AsyncClient(follow_redirects=True)
     request = client.build_request(
@@ -517,7 +455,6 @@ async def _do_search(endpoint: str) -> httpx.Response:
 
     resp.aclose = _aclose  # type: ignore[method-assign]
     return resp
-
 
 def _url_encode(s: str) -> str:
     from urllib.parse import quote

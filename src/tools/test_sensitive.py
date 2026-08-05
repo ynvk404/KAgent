@@ -1,4 +1,3 @@
-# Sensitive-path classification test cases.
 
 from pathlib import Path
 from os.path import expanduser

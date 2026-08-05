@@ -1,8 +1,3 @@
-# src/tools/shell.py
-# Shell/Bash tool used by the agent.
-# - Executes local commands after permission approval.
-# - Blocks obviously destructive commands.
-# - Truncates large outputs to bound memory usage.
 from __future__ import annotations
 import signal
 import asyncio
@@ -22,10 +17,8 @@ MAX_TIMEOUT_SECONDS = 30 * 60
 MAX_OUTPUT_BYTES = 64 * 1024
 ABORT_POLL_SECONDS = 0.05
 
-
 def is_windows() -> bool:
     return sys.platform == "win32"
-
 
 def shell_invocation(unix_shell: str, command: str) -> tuple[str, list[str]]:
     if is_windows():
@@ -33,8 +26,6 @@ def shell_invocation(unix_shell: str, command: str) -> tuple[str, list[str]]:
         return shell, ["-NoProfile", "-NonInteractive", "-Command", command]
     return unix_shell, ["-c", command]
 
-
-# Chống thực thi các lệnh phá hoại hệ thống (Defense-in-depth)
 DENY_PATTERNS: list[re.Pattern[str]] = [
     re.compile(p, re.IGNORECASE)
     for p in (
@@ -42,7 +33,7 @@ DENY_PATTERNS: list[re.Pattern[str]] = [
         r"[^|;&\n]*\s/[^/\s]*/?(?:\s|$)",
         r"\brm\b(?=[^|;&\n]*\s-{1,2}[a-z-]*r)(?=[^|;&\n]*\s-{1,2}[a-z-]*f)"
         r"""[^|;&\n]*\s["']/[^/"'\s]*/?["'](?:\s|$)""",
-        r":\(\)\s*\{\s*:\|:&\s*\}",  # Fork bomb
+        r":\(\)\s*\{\s*:\|:&\s*\}",
         r"\bmkfs\b",
         r"\bdd\b[^|;&\n]*\bof=/dev/",
         r">\s*/dev/sd[a-z]",
@@ -52,14 +43,11 @@ DENY_PATTERNS: list[re.Pattern[str]] = [
     )
 ]
 
-
 @dataclass
 class PortabilityPattern:
     re: re.Pattern[str]
     message: str
 
-
-# Cảnh báo/chặn các cờ chỉ có trên GNU, không tương thích với macOS/BSD
 PORTABILITY_PATTERNS: list[PortabilityPattern] = [
     PortabilityPattern(
         re.compile(r"\bgrep\s+(?:-[A-Za-z]*P[A-Za-z]*|--perl-regexp)\b"),
@@ -105,7 +93,6 @@ GREP_P_RE = re.compile(
     r"""((?:'[^']*')|(?:"[^"]*")|(?:\\.|[^\s|;&])+)"""
     r"([^|;&\n]*)"
 )
-
 
 class ShellTool(Tool):
     def __init__(self, shell: str = "/bin/sh", tool_name: str = "shell"):
@@ -216,7 +203,6 @@ class ShellTool(Tool):
         cmd, argv = shell_invocation(self.shell_path, cmd_str)
         return await run_with_capture(cmd, argv, timeout_seconds, signal)
 
-
 class BashTool(ShellTool):
     def __init__(self) -> None:
         super().__init__("/bin/bash", "BashTool")
@@ -237,8 +223,6 @@ class BashTool(ShellTool):
             "or $'...' quoting."
         )
 
-
-# Chuyển đổi lệnh `grep -P` không tương thích sang `perl -ne` tương thích cross-platform
 def rewrite_portable_command(command: str) -> str:
     if is_windows():
         return command
@@ -286,7 +270,6 @@ def rewrite_portable_command(command: str) -> str:
 
     return GREP_P_RE.sub(replace, command)
 
-
 def unquote_shell_token(token: str) -> str | None:
     if not token:
         return None
@@ -296,10 +279,8 @@ def unquote_shell_token(token: str) -> str | None:
         return re.sub(r'\\(["\\$`])', r"\1", token[1:-1])
     return re.sub(r"\\(.)", r"\1", token)
 
-
 def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
-
 
 async def run_with_capture(
     cmd: str,
@@ -385,10 +366,8 @@ async def run_with_capture(
         result += f"\nstderr:\n{stderr}"
     return result
 
-
 def _is_aborted(signal: Any) -> bool:
     return signal is not None and getattr(signal, "aborted", False)
-
 
 def kill_process_group(pid: int | None) -> None:
     if not pid:
@@ -419,10 +398,7 @@ def kill_process_group(pid: int | None) -> None:
     except Exception:
         pass
 
-
 class HeadTailBuffer:
-    """Bộ đệm giữ nửa đầu và nửa cuối dữ liệu (giới hạn MAX_OUTPUT_BYTES)."""
-
     def __init__(self, cap: int):
         self.cap = cap
         self.half = cap // 2
@@ -466,9 +442,7 @@ class HeadTailBuffer:
         tail_str = _decode_utf8_tail(tail_buf)
         return f"{head_str}\n[... truncated {self.total - retained} bytes ...]\n{tail_str}"
 
-
 def _decode_utf8_tail(buf: bytes) -> str:
-    """Giải mã phần cuối buffer, bỏ qua tối đa 3 byte UTF-8 dở dang ở đầu."""
     start = 0
     while start < len(buf) and start < 3 and 0x80 <= buf[start] < 0xC0:
         start += 1

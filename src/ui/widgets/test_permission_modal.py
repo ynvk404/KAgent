@@ -23,12 +23,6 @@ def make_req(**overrides) -> BridgedPermissionRequest:
 
     return BridgedPermissionRequest(**data)
 
-
-# ==========================================================
-# is_command_tool
-# ==========================================================
-
-
 def test_is_command_tool():
 
     for tool in [
@@ -49,12 +43,6 @@ def test_is_command_tool():
         "confirm_finding",
     ]:
         assert is_command_tool(tool) is False
-
-
-
-# ==========================================================
-# Render
-# ==========================================================
 
 
 def test_shows_long_command_without_prose_cap():
@@ -111,12 +99,6 @@ def test_caps_huge_command():
 
     assert "echo AAAA" in frame
     assert "truncated" in frame
-
-
-
-# ==========================================================
-# Keyboard handling
-# ==========================================================
 
 
 def test_allow_once_key():

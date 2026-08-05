@@ -5,7 +5,6 @@ from src.ui.core.first_run_picker import (
     OPTIONS,
 )
 
-
 def make_picker():
     picked = []
     cancelled = []
@@ -21,11 +20,6 @@ def make_picker():
 
     return picker, picked, cancelled, exited
 
-
-# ==========================================================
-# Render
-# ==========================================================
-
 def test_render_shows_options():
 
     picker, _, _, _ = make_picker()
@@ -37,10 +31,6 @@ def test_render_shows_options():
     assert OPTIONS[1].label in text
     assert "Enter pick" in text
 
-
-# ==========================================================
-# Navigation
-# ==========================================================
 
 def test_down_changes_selection():
 
@@ -60,10 +50,6 @@ def test_up_wraps():
     assert picker.idx == len(OPTIONS) - 1
 
 
-# ==========================================================
-# Selection
-# ==========================================================
-
 def test_enter_picks_minimal():
 
     picker, picked, _, _ = make_picker()
@@ -81,11 +67,6 @@ def test_enter_after_down_picks_full():
     picker.handle_key("enter")
 
     assert picked == [ToolingProfile.FULL]
-
-
-# ==========================================================
-# Cancel
-# ==========================================================
 
 def test_escape_calls_cancel_and_exit():
 

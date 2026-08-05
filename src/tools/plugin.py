@@ -1,10 +1,3 @@
-"""
-Command plugin tool.
-
-Port từ:
-agent/src/tools/plugin.ts
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +11,6 @@ from src.tools.types import Tool
 
 PLUGIN_TIMEOUT_SECONDS = 5 * 60
 MAX_OUTPUT_BYTES = 128 * 1024
-
 
 class CommandPluginTool:
     def __init__(self, cfg: PluginConfig):
@@ -61,7 +53,6 @@ class CommandPluginTool:
         signal: Any,
         prompter: Prompter,
     ) -> str:
-
         if not self.cfg.command:
             raise RuntimeError(
                 f"plugin {self.cfg.name} has no command"
@@ -74,14 +65,12 @@ class CommandPluginTool:
             signal,
         )
 
-
 async def run_plugin(
     command: str,
     argv: list[str],
     args: dict[str, Any],
     signal: Any,
 ) -> str:
-
     proc = await asyncio.create_subprocess_exec(
         command,
         *argv,
@@ -97,10 +86,6 @@ async def run_plugin(
     )
 
     async def _watch_abort() -> None:
-        # Poll the abort signal instead of assuming it exposes an
-        # awaitable/event API. Cheap enough at 50ms resolution and works
-        # with any object that just has an `.aborted` bool, mirroring how
-        # loosely `AbortSignal` is used on the TS side.
         while not communicate_task.done():
             if getattr(signal, "aborted", False):
                 return
@@ -118,7 +103,6 @@ async def run_plugin(
     aborted = (not timed_out) and communicate_task not in done
 
     if timed_out or aborted:
-
         communicate_task.cancel()
         abort_task.cancel()
 
@@ -140,7 +124,6 @@ async def run_plugin(
     stderr = truncate(stderr, len(stderr))
 
     if proc.returncode == 0:
-
         if stderr:
             return f"{stdout}\nstderr:\n{stderr}"
 
@@ -149,8 +132,6 @@ async def run_plugin(
     sig_suffix = ""
 
     if proc.returncode is not None and proc.returncode < 0:
-        # On POSIX, a negative returncode means the child was killed by
-        # a signal; mirror TS's `sigSuffix` (e.g. "(signal: SIGKILL)").
         try:
             sig_name = signal_module.Signals(-proc.returncode).name
         except ValueError:
@@ -162,12 +143,10 @@ async def run_plugin(
         + (f": {stderr.strip()}" if stderr else "")
     )
 
-
 def truncate(
     data: bytes,
     total: int,
 ) -> str:
-
     text = data.decode(
         "utf-8",
         errors="replace",
@@ -180,7 +159,6 @@ def truncate(
         text[:MAX_OUTPUT_BYTES]
         + f"\n[... truncated {total - MAX_OUTPUT_BYTES} bytes ...]"
     )
-
 
 __all__ = [
     "CommandPluginTool",

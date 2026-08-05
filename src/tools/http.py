@@ -1,16 +1,3 @@
-"""
-HTTP Tool
-
-Port từ:
-Chức năng:
-- Gửi HTTP/HTTPS request
-- Hỗ trợ GET, POST, PUT, DELETE...
-- Không follow redirect
-- Disable TLS verify (pentest convention)
-- Kiểm tra SSRF qua privateHost
-- Trả HTTP response về cho LLM
-"""
-
 from __future__ import annotations
 
 from urllib.parse import urlparse
@@ -29,28 +16,17 @@ from .types import (
 )
 
 RESPONSE_BYTE_CAP = 64 * 1024 
-#64 x 128 x 256
 REQUEST_TIMEOUT = 60
 
-
 class HTTPTool(Tool):
-
     def __init__(
         self,
         target: Target,
     ):
         self.target = target
 
-    # --------------------------------------------------
-    # Tool name
-    # --------------------------------------------------
-
     def name(self) -> str:
         return "http"
-
-    # --------------------------------------------------
-    # Description
-    # --------------------------------------------------
 
     def description(self) -> str:
         return (
@@ -63,10 +39,6 @@ class HTTPTool(Tool):
             "Does not follow redirects (you'll see 30x responses). "
             "Authorized targets only."
         )
-
-    # --------------------------------------------------
-    # JSON Schema
-    # --------------------------------------------------
 
     def schema(self) -> dict:
         return {
@@ -103,22 +75,13 @@ class HTTPTool(Tool):
             ],
         }
 
-    # --------------------------------------------------
-    # Permission
-    # --------------------------------------------------
-
     def requires_permission(self) -> bool:
         return True
-
-    # --------------------------------------------------
-    # Permission cache key
-    # --------------------------------------------------
 
     def permission_hints(
         self,
         args: dict,
     ) -> dict:
-
         try:
             parsed = urlparse(
                 self.resolve_url(
@@ -141,15 +104,10 @@ class HTTPTool(Tool):
                 )
             }
 
-    # --------------------------------------------------
-    # Permission summary
-    # --------------------------------------------------
-
     def summarize(
         self,
         args: dict,
     ) -> dict:
-
         method = (
             arg_string(args, "method")
             or "GET"
@@ -194,10 +152,6 @@ class HTTPTool(Tool):
             "summary": f"http: {method} {url}",
             "detail": detail,
         }
-
-    # --------------------------------------------------
-    # Execute
-    # --------------------------------------------------
 
     async def run(
         self,
@@ -312,10 +266,6 @@ class HTTPTool(Tool):
             )
 
         return output
-
-    # --------------------------------------------------
-    # Resolve URL
-    # --------------------------------------------------
 
     def resolve_url(
         self,

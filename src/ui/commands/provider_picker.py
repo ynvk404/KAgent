@@ -25,19 +25,6 @@ REMOTE_PROVIDERS: tuple[tuple[str, str, str], ...] = (
     ("deepseek", "DeepSeek", "sk-..."),
     ("openai-compat", "OpenAI-compatible", "sk-..."),
 )
-# ============================================================
-# Constants
-# ============================================================
-# Base URLs are imported from src.llm.providers (single source of truth),
-# shared with src/llm/factory.py and src/llm/models.py.
-
-# ============================================================
-# Types
-# ============================================================
-
-# ============================================================
-# Provider picker
-# ============================================================
 
 def mask_api_key(value: str) -> str:
     if not value:

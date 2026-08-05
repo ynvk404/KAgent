@@ -1,34 +1,9 @@
-"""
-Shared private/internal-host detection and SSRF gate.
-
-Port từ:
-kagent/src/tools/privateHost.ts
-
-Chức năng:
-- Parse HTTP URL
-- Detect localhost/private/internal str(addr)ess
-- DNS resolve để phát hiện domain trỏ vào IP nội bộ
-- SSRF permission gate
-- Hỗ trợ IPv4 / IPv6 / NAT64 / 6to4
-"""
-
 import ipaddress
 import socket
 from urllib.parse import urlparse
 from src.permission.permission import PermissionRequest, Decision
 
-# ============================================================
-# Parse HTTP URL
-# ============================================================
-
 def parse_http_url(raw: str):
-    """
-    Parse và validate HTTP(S) URL.
-
-    Chỉ cho phép:
-    - http
-    - https
-    """
     try:
         parsed = urlparse(raw)
     except Exception:
@@ -46,21 +21,12 @@ def parse_http_url(raw: str):
 
     return parsed
 
-
-# ============================================================
-# SSRF Gate
-# ============================================================
-
 async def gate_private_request(
     prompter,
     parsed,
     signal,
     tool_name: str,
 ) -> str:
-    """
-    Nếu request tới private/internal host
-    thì yêu cầu permission.
-    """
     reason = await private_host_reason(
         parsed.hostname
     )
@@ -92,11 +58,6 @@ async def gate_private_request(
 
     return reason
 
-
-# ============================================================
-# Detect private host
-# ============================================================
-
 async def private_host_reason(
     hostname: str | None,
 ) -> str:
@@ -111,14 +72,12 @@ async def private_host_reason(
         .lower()
     )
 
-    # localhost
     if (
         host == "localhost"
         or host.endswith(".localhost")
     ):
         return "localhost name"
 
-    # IP trực tiếp
     try:
         ip = ipaddress.ip_address(host)
 
@@ -133,7 +92,6 @@ async def private_host_reason(
     except ValueError:
         pass
 
-    # DNS resolve
     try:
         resolved = socket.getaddrinfo(
             host,
@@ -168,15 +126,9 @@ async def private_host_reason(
                 continue
 
     except Exception:
-        # để fetch xử lý DNS error
         pass
 
     return ""
-
-
-# ============================================================
-# IPv4
-# ============================================================
 
 def private_ipv4_reason(
     host: str,
@@ -217,15 +169,9 @@ def private_ipv4_reason(
 
     return ""
 
-
-# ============================================================
-# IPv6
-# ============================================================
-
 def private_ipv6_reason(
     host: str,
 ) -> str:
-    # IPv4 mapped IPv6
     mapped = host.lower()
 
     if mapped.startswith(
@@ -241,7 +187,6 @@ def private_ipv6_reason(
         if reason:
             return reason
 
-    # NAT64
     if mapped.startswith(
         "64:ff9b::"
     ):
@@ -262,7 +207,6 @@ def private_ipv6_reason(
                     f"{reason} ({v4})"
                 )
 
-    # 6to4
     if mapped.startswith(
         "2002:"
     ):
@@ -306,15 +250,9 @@ def private_ipv6_reason(
 
     return ""
 
-
-# ============================================================
-# IPv6 helpers
-# ============================================================
-
 def embedded_ipv4(
     tail: str,
 ):
-    # dạng 169.254.169.254
     if "." in tail:
         return tail
 
@@ -327,7 +265,6 @@ def embedded_ipv4(
         )
 
     return None
-
 
 def hextets_to_ipv4(
     hi_hex: str,

@@ -1,5 +1,3 @@
-"""Tests for status_bar.py.
-"""
 
 from __future__ import annotations
 
@@ -27,10 +25,6 @@ def props(**overrides) -> StatusProps:
 
 
 class _HarnessApp(App):
-    """Minimal host app so StatusBar can be mounted and measured, the way
-    ink-testing-library's `render()` mounts a component into a virtual
-    terminal."""
-
     def __init__(self, status_props: StatusProps) -> None:
         super().__init__()
         self._status_props = status_props
@@ -43,7 +37,6 @@ class _HarnessApp(App):
 
 
 async def render_frame(status_props: StatusProps, size: tuple[int, int] = (100, 3)) -> str:
-    """Equivalent of `render(<StatusBar {...props} />).lastFrame()`."""
     app = _HarnessApp(status_props)
     async with app.run_test(size=size):
         return app.query_one(StatusBar).render().plain
@@ -84,10 +77,8 @@ class TestStatusBarAutoApproveBadge:
     async def test_shows_supermode_on_the_same_line_as_status_pinned_right(self) -> None:
         frame = await render_frame(props(yolo=True, api_ready=True))
         assert "AutoApprove" in frame
-        # It shares the status row - the line with "ready" also carries it.
         ready_line = next((line for line in frame.split("\n") if "ready" in line), "")
         assert "AutoApprove" in ready_line
-        # ...and it's pushed to the right of the status text (space-between).
         assert ready_line.index("AutoApprove") > ready_line.index("ready")
 
     async def test_shows_supermode_while_busy_too(self) -> None:

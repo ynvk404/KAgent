@@ -1,4 +1,3 @@
-# widgets/slash_menu.py
 
 from __future__ import annotations
 
@@ -17,14 +16,6 @@ class SlashMenuLine:
 
 
 class SlashMenu:
-    """
-    Slash-command suggestion menu.
-
-    Equivalent to Ink SlashMenu:
-    - selected -> magenta + bold
-    - unselected -> dim
-    - windowed list
-    """
 
     def __init__(
         self,

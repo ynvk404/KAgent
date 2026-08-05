@@ -21,11 +21,9 @@ def warn(message: str, **fields: Any) -> None:
     else:
         _log.warning(message)
 
-
 @runtime_checkable
 class Prompter(Protocol):
     ...
-
 
 @runtime_checkable
 class Tool(Protocol):
@@ -63,14 +61,12 @@ def primary_tool_arg(tool_name: str, args: dict[str, Any]) -> Optional[str]:
             return only_val
     return None
 
-
 HANDSHAKE_TIMEOUT_S = 15.0
 CLOSE_DEADLINE_S = 3.0
 MCP_RESULT_CHAR_CAP = 128 * 1024
 MCP_CALL_TIMEOUT_S = 120.0
 MCP_MAX_CONTENT_BLOCKS = 200
 MCP_MAX_DEPTH = 32
-
 
 class MCPSession:
 
@@ -189,7 +185,6 @@ class MCPSession:
         except asyncio.TimeoutError:
             warn("mcp: close deadline exceeded; abandoning child", server=self.server_name)
 
-
 class MCPTool:
 
     def __init__(
@@ -243,7 +238,6 @@ class MCPTool:
         bounded = bound_content(result["content"], MCP_RESULT_CHAR_CAP)
         return truncate_string(json.dumps(bounded, default=str), MCP_RESULT_CHAR_CAP)
 
-
 def bound_content(content: Any, cap: int, depth: int = 0) -> Any:
     if depth >= MCP_MAX_DEPTH:
         if isinstance(content, str):
@@ -274,7 +268,6 @@ def bound_content(content: Any, cap: int, depth: int = 0) -> Any:
 
     return content
 
-
 def truncate_string(s: str, cap: int) -> str:
     if len(s) <= cap:
         return s
@@ -291,7 +284,6 @@ def format_mcp_error(tool_name: str, remote_name: str, content: Any) -> str:
 
     return f"{label} failed: {remote_name} returned an MCP error"
 
-
 def extract_mcp_text(content: Any) -> str:
     blocks = content if isinstance(content, list) else [content]
     parts: list[str] = []
@@ -301,7 +293,6 @@ def extract_mcp_text(content: Any) -> str:
         if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
             parts.append(block["text"])
     return "\n".join(parts)
-
 
 async def discover_mcp_tools(server: MCPServerConfig) -> dict[str, Any]:
     session = await MCPSession.open(server)
@@ -324,7 +315,6 @@ async def discover_mcp_tools(server: MCPServerConfig) -> dict[str, Any]:
     except Exception:
         await session.close()
         raise
-
 
 class _StderrLogWriter(io.TextIOBase):
 
@@ -353,7 +343,6 @@ class _StderrLogWriter(io.TextIOBase):
         if self._buffer.strip():
             warn("mcp child stderr", server=self._server_name, line=self._buffer.rstrip())
             self._buffer = ""
-
 
 def sanitize(s: str) -> str:
     out = "".join(ch if re.match(r"[A-Za-z0-9_]", ch) else "_" for ch in s)

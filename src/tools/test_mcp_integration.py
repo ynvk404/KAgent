@@ -6,11 +6,6 @@ from src.tools.mcp_integration import (
     MCPSession,
 )
 
-
-# ============================================================
-# Fake session giống TS mock
-# ============================================================
-
 class FakeSession:
     def __init__(self, result):
         self.server_name = "browser"
@@ -22,12 +17,6 @@ class FakeSession:
 
 class DummyPrompter:
     pass
-
-
-# ============================================================
-# Test 1
-# formats text MCP errors without raw content JSON
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_formats_text_mcp_errors_without_raw_content_json():
@@ -69,12 +58,6 @@ async def test_formats_text_mcp_errors_without_raw_content_json():
         assert "isError" not in str(e)
 
 
-
-# ============================================================
-# Test 2
-# truncates large successful MCP results
-# ============================================================
-
 @pytest.mark.asyncio
 async def test_truncates_large_successful_mcp_results():
 
@@ -106,13 +89,6 @@ async def test_truncates_large_successful_mcp_results():
 
     assert "truncated" in out
     assert len(out) < 140_000
-
-
-
-# ============================================================
-# Test 3
-# bounds deeply nested content
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_bounds_deeply_nested_content():

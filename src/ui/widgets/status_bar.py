@@ -7,7 +7,7 @@ from rich.text import Text
 from textual.reactive import reactive
 from textual.widget import Widget
 from src.ui.widgets.banner import ToolSupportPill
-# --- Types -------------------------------------------------------------
+from src.ui.core.state import TranscriptFilter
 
 UiPhase = Literal[
     "planning",
@@ -18,13 +18,8 @@ UiPhase = Literal[
     "skills",
     "idle",
 ]
-TranscriptFilter = Literal["all", "tools", "errors"]
 
 SUPERMODE_COLOR = "#ff8700"
-
-
-# --- Pure helpers -------------------------------------------------------
-
 
 def format_elapsed(total_seconds: float) -> str:
     """mm:ss elapsed clock. 42 -> "0:42", 125 -> "2:05", 3700 -> "61:40"."""
@@ -58,10 +53,6 @@ def compact_target(target: str) -> str:
     target = target.removeprefix("https://").removeprefix("http://")
     return target.removesuffix("/")
 
-
-# --- Props bag -----------------------------------------------------------
-
-
 @dataclass(slots=True)
 class StatusProps:
     busy: bool
@@ -81,9 +72,6 @@ class StatusProps:
     elapsed_seconds: float | None = None
 
 
-# --- Line builders -------------------------------------------------------
-
-
 def busy_line(p: StatusProps) -> Text:
     phase_text = phase_label(p.phase)
     label = (
@@ -98,7 +86,7 @@ def busy_line(p: StatusProps) -> Text:
     )
 
     line = Text()
-    line.append("⠋ ", style="yellow")  # static glyph stand-in for ink-spinner
+    line.append("⠋ ", style="yellow")  
     line.append(f" {label}{clock} · Esc to cancel", style="grey62")
     if p.active_skill:
         line.append(f" · skill: {p.active_skill}", style="grey62")
@@ -155,10 +143,6 @@ def idle_line(p: StatusProps) -> Text:
         line.append(f" · mem: {p.memory_items}", style="grey62")
 
     return line
-
-
-# --- Widget --------------------------------------------------------------
-
 
 class StatusBar(Widget):
     """Right-aligned AutoApprove badge + left-aligned status content."""

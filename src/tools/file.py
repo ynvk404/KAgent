@@ -1,5 +1,3 @@
-# tools/file.py
-
 from __future__ import annotations
 
 import codecs
@@ -12,50 +10,24 @@ from .types import (
     arg_bool,
     arg_string,
 )
-
 from .sensitive import is_sensitive_path
-
 
 READ_BYTE_CAP = 200 * 1024
 
 WRITE_FILE_MODE = 0o644
 WRITE_DIR_MODE = 0o755
 
-
-# ==========================================================
-# Helpers
-# ==========================================================
-
-
 def decode_utf8_capped(
     data: bytes,
     cap: int,
 ) -> str:
-    """
-    Decode up to `cap` bytes of UTF-8 without emitting a trailing
-    replacement character when the cap falls mid-codepoint.
-
-    Mirrors the TS implementation (Node's StringDecoder.write): an
-    incremental decoder buffers an incomplete trailing multi-byte
-    sequence instead of emitting a replacement char for it, while
-    invalid bytes *inside* the decoded range are still replaced with
-    U+FFFD rather than silently dropped (unlike errors="ignore", which
-    would delete them with no trace).
-    """
-
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-
-    # final=False: do not flush/replace a dangling incomplete sequence
-    # at the very end of the capped slice.
     return decoder.decode(data[:cap], False)
-
 
 def real_resolve(
     abs_path: str,
 ) -> str:
-
     path = Path(abs_path)
-
     try:
         return str(
             path.resolve(
@@ -71,18 +43,15 @@ def real_resolve(
         except Exception:
             return abs_path
 
-
 async def gate_sensitive_path(
     p,
     abs_path: str,
     verb: str,
     signal,
 ):
-
     real = real_resolve(
         abs_path
     )
-
     if (
         not is_sensitive_path(abs_path)
         and not is_sensitive_path(real)
@@ -120,12 +89,10 @@ async def gate_sensitive_path(
 
     return real
 
-
 def count_occurrences(
     text: str,
     needle: str,
 ) -> int:
-
     if not needle:
         return 0
 
@@ -144,18 +111,10 @@ def count_occurrences(
         count += 1
         pos = idx + len(needle)
 
-
 def _preview(content: str, limit: int = 400) -> str:
     return content if len(content) <= limit else f"{content[:limit]}..."
 
-
-# ==========================================================
-# File Read
-# ==========================================================
-
-
 class FileReadTool(Tool):
-
     def __init__(
         self,
         tool_name="file_read"
@@ -194,7 +153,6 @@ class FileReadTool(Tool):
         signal,
         p,
     ):
-
         path = arg_string(
             args,
             "path"
@@ -216,9 +174,6 @@ class FileReadTool(Tool):
             signal
         )
 
-        # Read from the gate-resolved real path, not the lexical one,
-        # so a symlink swapped in between the gate check and the I/O
-        # can't smuggle a sensitive file past the prompt (TOCTOU).
         size = os.path.getsize(
             real
         )
@@ -244,14 +199,7 @@ class FileReadTool(Tool):
 
         return content
 
-
-# ==========================================================
-# File Write
-# ==========================================================
-
-
 class FileWriteTool(Tool):
-
     def __init__(
         self,
         tool_name="file_write"
@@ -291,8 +239,6 @@ class FileWriteTool(Tool):
         self,
         args
     ):
-        # Scope an "allow session" approval to the destination path so
-        # it can't silently authorize writes to other files later on.
         return {
             "cacheKey":
                 str(
@@ -325,7 +271,6 @@ class FileWriteTool(Tool):
         signal,
         p,
     ):
-
         path = arg_string(
             args,
             "path"
@@ -359,11 +304,6 @@ class FileWriteTool(Tool):
             exist_ok=True
         )
 
-        # mkdir(exist_ok=True) leaves the mode of an already-existing
-        # dir untouched, which matches Node's mkdir({recursive:true});
-        # only chmod the leaf dir when we're the ones creating it fresh
-        # is unnecessary here since Python's mkdir already applies mode
-        # to newly-created components. Set explicitly for parity.
         try:
             os.chmod(parent, WRITE_DIR_MODE)
         except OSError:
@@ -385,14 +325,7 @@ class FileWriteTool(Tool):
             f"to {real}"
         )
 
-
-# ==========================================================
-# File Edit
-# ==========================================================
-
-
 class FileEditTool(Tool):
-
     def __init__(
         self,
         tool_name="file_edit"
@@ -440,7 +373,6 @@ class FileEditTool(Tool):
         self,
         args
     ):
-        # Scope an "allow session" approval to the edited path.
         return {
             "cacheKey":
                 str(
@@ -474,7 +406,6 @@ class FileEditTool(Tool):
         signal,
         p,
     ):
-
         path = arg_string(
             args,
             "path"
@@ -531,9 +462,6 @@ class FileEditTool(Tool):
                 "replace_all=true or use a longer unique snippet"
             )
 
-        # Literal split/join replacement (not re.sub / str.format), so
-        # nothing in new_string is ever interpreted as a backreference
-        # or template token.
         updated = content.replace(
             old,
             new
@@ -554,30 +482,19 @@ class FileEditTool(Tool):
             f"({count} replacement(s))"
         )
 
-
-# ==========================================================
-# Aliases
-# ==========================================================
-
-
 class FileReadToolAlias(FileReadTool):
-
     def __init__(self):
         super().__init__(
             "FileReadTool"
         )
 
-
 class FileWriteToolAlias(FileWriteTool):
-
     def __init__(self):
         super().__init__(
             "FileWriteTool"
         )
 
-
 class FileEditToolAlias(FileEditTool):
-
     def __init__(self):
         super().__init__(
             "FileEditTool"

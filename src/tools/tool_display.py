@@ -1,16 +1,8 @@
-"""
-Tool display helpers.
-
-Port từ:
-kagent/src/tools/toolDisplay.ts
-"""
-
 from __future__ import annotations
 
 import json
 import re
 from typing import Any
-
 
 TOOL_DISPLAY_NAMES: dict[str, str] = {
     "ask_user": "Ask User",
@@ -22,17 +14,11 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "web_search": "Web Search",
 }
 
-
-# ==========================================================
-# Display name
-# ==========================================================
-
 def display_tool_name(name: str) -> str:
     if name.startswith("mcp_browser_browser_"):
         return browser_tool_name(name)
 
     return TOOL_DISPLAY_NAMES.get(name, name)
-
 
 def browser_tool_name(name: str) -> str:
     if name in TOOL_DISPLAY_NAMES:
@@ -45,7 +31,6 @@ def browser_tool_name(name: str) -> str:
 
     return f"Browser {title_case(action)}"
 
-
 def title_case(text: str) -> str:
     return re.sub(
         r"\b[a-z]",
@@ -53,16 +38,10 @@ def title_case(text: str) -> str:
         text,
     )
 
-
-# ==========================================================
-# Primary tool arg
-# ==========================================================
-
 def primary_tool_arg(
     name: str,
     args: dict[str, Any],
 ) -> str | None:
-
     if name == "mcp_browser_browser_navigate":
         url = args.get("url")
         if isinstance(url, str) and url:
@@ -130,16 +109,10 @@ def primary_tool_arg(
 
     return None
 
-
-# ==========================================================
-# Tool result formatter
-# ==========================================================
-
 def format_tool_result(
     name: str,
     result: str,
 ) -> str | None:
-
     if name == "load_skill":
         return format_load_skill_result(result)
 
@@ -186,15 +159,9 @@ def format_tool_result(
 
     return None
 
-
-# ==========================================================
-# load_skill formatter
-# ==========================================================
-
 def format_load_skill_result(
     result: str,
 ) -> str | None:
-
     match = re.search(
         r"^# Skill:\s*(.+)$",
         result,
@@ -209,7 +176,6 @@ def format_load_skill_result(
     title = None
 
     for line in result.splitlines():
-
         line = line.strip()
 
         if (
@@ -231,15 +197,9 @@ def format_load_skill_result(
 
     return "\n".join(lines)
 
-
-# ==========================================================
-# ask_user formatter
-# ==========================================================
-
 def format_ask_user_call(
     args: dict[str, Any],
 ) -> str | None:
-
     questions = args.get("questions")
 
     if not isinstance(
@@ -284,11 +244,9 @@ def format_ask_user_call(
 
     return count_text
 
-
 def format_ask_user_result(
     result: str,
 ) -> str | None:
-
     try:
         parsed = json.loads(result)
     except Exception:
@@ -307,7 +265,6 @@ def format_ask_user_result(
     lines = ["answers:"]
 
     for item in parsed["answers"]:
-
         if not isinstance(item, dict):
             continue
 

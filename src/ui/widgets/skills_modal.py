@@ -7,18 +7,6 @@ PersistDisabledSkills = Callable[[list[str]], Awaitable[None]]
 
 
 class SkillsModal:
-    """
-    Interactive skills picker.
-
-    Keys:
-        ↑/↓       navigate
-        Space     toggle skill
-        Enter     toggle skill
-        a         enable all
-        d         disable all
-        1-9       jump
-        Esc/q     close
-    """
 
     def __init__(
         self,
@@ -33,11 +21,6 @@ class SkillsModal:
         self.idx = 0
         self.busy_name: str | None = None
         self.error: str | None = None
-
-
-    # ======================================================
-    # Helpers
-    # ======================================================
 
     def skills(self):
         return self.agent.skills.list()
@@ -55,11 +38,6 @@ class SkillsModal:
         )
 
         return skills[safe_idx]
-
-
-    # ======================================================
-    # Toggle
-    # ======================================================
 
     async def toggle(self):
 
@@ -133,7 +111,6 @@ class SkillsModal:
                 )
 
 
-                # already correct state
                 if disabled == (not enabled):
                     continue
 
@@ -160,11 +137,6 @@ class SkillsModal:
 
             self.busy_name = None
 
-
-
-    # ======================================================
-    # Input
-    # ======================================================
 
     def handle_key(
         self,
@@ -227,12 +199,6 @@ class SkillsModal:
 
             if n < total:
                 self.idx = n
-
-
-
-    # ======================================================
-    # Render
-    # ======================================================
 
     def render(self) -> list[str]:
 
@@ -332,8 +298,6 @@ class SkillsModal:
 
 
         return lines
-
-
 
 def truncate(
     text: str,

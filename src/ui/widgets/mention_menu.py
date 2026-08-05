@@ -1,4 +1,3 @@
-# widgets/mention_menu.py
 
 from __future__ import annotations
 
@@ -51,7 +50,6 @@ class MentionMenu:
         lines: list[MentionMenuLine] = []
 
 
-        # cwd header (dimColor trong TS)
         lines.append(
             MentionMenuLine(
                 text=f"  @{self.cwd or ''}",
@@ -95,7 +93,6 @@ class MentionMenu:
                     text=f"  {icon} {candidate.display}",
                     selected=is_selected,
                     dim=not is_selected,
-                    # TS: icon dir luôn cyan kể cả không selected
                     icon_color="cyan" if candidate.is_dir else None,
                 )
             )

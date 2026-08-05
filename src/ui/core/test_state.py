@@ -30,11 +30,6 @@ def seed():
         ),
     )
 
-# ============================================================
-# tool-call preview
-# ============================================================
-
-
 def test_collapses_escaped_newline_in_args_preview():
 
     out = reducer(
@@ -164,12 +159,6 @@ def test_comment_shell_command():
     assert last.prefix == "⏺ "
 
 
-
-# ============================================================
-# Streaming
-# ============================================================
-
-
 def test_delta_changes_planning_to_answering():
 
     s = reducer(
@@ -221,12 +210,6 @@ def test_streaming_finalized_by_done():
     assert s.busy is False
 
 
-
-# ============================================================
-# Filter / Clear
-# ============================================================
-
-
 def test_cycle_filters():
 
     s = seed()
@@ -260,10 +243,6 @@ def test_clear():
 
     assert len(s.transcript) == 0
     assert s.clear_gen == 1
-
-# ============================================================
-# Finding
-# ============================================================
 
 
 def test_confirm_finding_card():

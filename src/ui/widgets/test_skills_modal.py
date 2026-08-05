@@ -7,10 +7,6 @@ import pytest
 from src.ui.widgets.skills_modal import SkillsModal
 
 
-# ==========================================================
-# Fake skill registry
-# ==========================================================
-
 class FakeSkill:
     def __init__(self, name: str, description: str):
         self.name = name
@@ -64,12 +60,6 @@ class FakeAgent:
 
         return True
 
-
-
-# ==========================================================
-# Render
-# ==========================================================
-
 def test_render_skills():
 
     agent = FakeAgent()
@@ -89,12 +79,6 @@ def test_render_skills():
     assert "3/3 enabled" in frame
     assert "web_scan" in frame
     assert "nmap" in frame
-
-
-
-# ==========================================================
-# Navigation
-# ==========================================================
 
 def test_down_changes_selection():
 
@@ -129,11 +113,6 @@ def test_up_wraps():
     assert modal.idx == 2
 
 
-
-# ==========================================================
-# Number shortcut
-# ==========================================================
-
 def test_number_select():
 
     agent = FakeAgent()
@@ -148,11 +127,6 @@ def test_number_select():
 
     assert modal.idx == 2
 
-
-
-# ==========================================================
-# Toggle
-# ==========================================================
 
 @pytest.mark.asyncio
 async def test_toggle_skill():
@@ -215,11 +189,6 @@ async def test_toggle_all_enable():
 
     assert len(agent.skills.disabled) == 0
 
-
-
-# ==========================================================
-# Close
-# ==========================================================
 
 def test_escape_close():
 

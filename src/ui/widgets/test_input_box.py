@@ -23,11 +23,6 @@ def fixed_columns(monkeypatch):
     )
 
 
-# ==========================================================
-# Rule frame (top/bottom border)
-# ==========================================================
-
-
 def test_every_branch_is_wrapped_by_rule_top_and_bottom():
     disabled_empty = InputBox(value="", cursor=0, disabled=True).render()
     placeholder = InputBox(value="", cursor=0, placeholder="hi").render()
@@ -62,11 +57,6 @@ def test_rule_has_minimum_width_of_one(monkeypatch):
     assert texts(lines[0]) == ["─"]
 
 
-# ==========================================================
-# Disabled + empty -> "agent running…"
-# ==========================================================
-
-
 def test_disabled_and_empty_shows_agent_running():
     lines = InputBox(value="", cursor=0, disabled=True).render()
 
@@ -86,11 +76,6 @@ def test_disabled_and_empty_ignores_placeholder():
 
     content = lines[1]
     assert texts(content) == ["❯ ", "agent running…"]
-
-
-# ==========================================================
-# Placeholder (empty value, not disabled)
-# ==========================================================
 
 
 def test_placeholder_shown_with_cursor_block():
@@ -115,8 +100,6 @@ def test_placeholder_omits_cursor_block_when_disabled():
     ).render()
 
     content = lines[1]
-    # disabled+empty branch wins over placeholder, so this is actually
-    # the "agent running…" case, not the placeholder case.
     assert texts(content) == ["❯ ", "agent running…"]
 
 
@@ -125,16 +108,8 @@ def test_no_placeholder_falls_through_to_normal_empty_input():
 
     assert len(lines) == 3
     content = lines[1]
-    # empty value, no placeholder -> single empty line with just a
-    # cursor block (cursor_col == 0 == len(""), so nothing is "under"
-    # the cursor).
     assert texts(content) == ["❯ ", "", "▌", ""]
     assert styles(content) == ["prompt", "text", "cursor", "text"]
-
-
-# ==========================================================
-# Normal input: cursor rendering
-# ==========================================================
 
 
 def test_cursor_mid_line_highlights_char_under_cursor():
@@ -176,15 +151,9 @@ def test_custom_prompt_is_used_as_prefix():
     assert texts(content)[0] == ">>> "
 
 
-# ==========================================================
-# Multi-line input
-# ==========================================================
-
-
 def test_multiline_uses_continuation_indent_on_later_lines():
     lines = InputBox(value="foo\nbar", cursor=0).render()
 
-    # rule, "foo" line, "bar" line, rule
     assert len(lines) == 4
     first, second = lines[1], lines[2]
     assert texts(first)[0] == "❯ "
@@ -192,15 +161,11 @@ def test_multiline_uses_continuation_indent_on_later_lines():
 
 
 def test_multiline_cursor_lands_on_correct_line():
-    # "foo\nb|ar" -> cursor sits between 'b' and 'a' on the second line
     lines = InputBox(value="foo\nbar", cursor=5).render()
 
     first, second = lines[1], lines[2]
-    # first line is inactive -> plain text, no cursor segments
     assert texts(first) == ["❯ ", "foo"]
     assert styles(first) == ["prompt", "text"]
-
-    # second line is active -> cursor split
     assert texts(second) == ["  ", "b", "a", "r"]
     assert styles(second) == ["prompt", "text", "cursor_char", "text"]
 

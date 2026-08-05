@@ -10,7 +10,6 @@ from src.findings.store import (
     Severity,
     slugify,
 )
-
 from src.permission.permission import Prompter
 from .types import Tool, arg_string
 
@@ -24,9 +23,7 @@ SEVERITIES: tuple[Severity, ...] = (
 
 FindingNotifier = Callable[[Finding, str], None]
 
-
 class ConfirmFindingTool:
-
     def __init__(
         self,
         store: Store,
@@ -126,7 +123,6 @@ class ConfirmFindingTool:
         signal: Any,
         prompter: Prompter,
     ) -> str:
-
         title = arg_string(args, "title")
         severity = arg_string(args, "severity").lower()
         url = arg_string(args, "url")
@@ -166,7 +162,6 @@ class ConfirmFindingTool:
         self.notifier(finding, path)
 
         return f'Finding "{finding.title}" written to {path}'
-
 
 def is_severity(value: str) -> TypeGuard[Severity]:
     return value in SEVERITIES

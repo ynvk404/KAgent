@@ -4,10 +4,6 @@ from src.tools.tool_display import display_tool_name
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest
 from src.permission.permission import Decision
 
-# ==========================================================
-# Constants
-# ==========================================================
-
 COMMAND_TOOLS = {
     "shell",
     "bash",
@@ -22,10 +18,6 @@ COMMAND_TOOLS = {
 COMMAND_DETAIL_CAP = 8000
 PROSE_DETAIL_CAP = 1200
 
-
-# ==========================================================
-# Helpers
-# ==========================================================
 
 def is_command_tool(tool: str) -> bool:
     """
@@ -49,31 +41,14 @@ def truncate(
     )
 
 
-# ==========================================================
-# Permission Modal
-# ==========================================================
 
 class PermissionModal:
-    """
-    Permission confirmation widget.
-
-    Keys:
-        y       -> allow once
-        a       -> allow session
-        n       -> deny
-        esc     -> deny
-    """
 
     def __init__(
         self,
         req: BridgedPermissionRequest,
     ):
         self.req = req
-
-
-    # ------------------------------------------------------
-    # Input handling
-    # ------------------------------------------------------
 
     def handle_key(
         self,
@@ -94,19 +69,11 @@ class PermissionModal:
         elif key == "n":
             self.req.resolve(Decision.DENY)
 
-
-    # ------------------------------------------------------
-    # Rendering
-    # ------------------------------------------------------
-
     def render(self) -> list[str]:
 
         req = self.req
 
         lines: list[str] = []
-
-
-        # Title
         lines.append(
             f"Permission requested: "
             f"{display_tool_name(req.tool)}"
@@ -115,8 +82,6 @@ class PermissionModal:
 
         lines.append("")
 
-
-        # Summary
         lines.append(req.summary)
 
 
@@ -130,10 +95,8 @@ class PermissionModal:
 
             lines.append("")
 
-
             if is_command_tool(req.tool):
 
-                # Exact command/payload
                 lines.append(
                     "╭─ command ─────────"
                 )
@@ -153,8 +116,6 @@ class PermissionModal:
 
 
             else:
-
-                # Normal description
                 lines.append(
                     truncate(
                         req.detail,
@@ -165,8 +126,6 @@ class PermissionModal:
 
         lines.append("")
 
-
-        # Footer
         lines.append(
             "y allow once · "
             "a allow session · "

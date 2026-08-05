@@ -16,7 +16,6 @@ def clamp(n: int, lo: int, hi: int) -> int:
 
 
 def position_of(value: str, offset: int) -> tuple[int, int]:
-    """Chuyển đổi vị trí offset phẳng thành cặp (line, col) trong chuỗi."""
     line = 0
     col = 0
     cap = clamp(offset, 0, len(value))
@@ -30,7 +29,6 @@ def position_of(value: str, offset: int) -> tuple[int, int]:
 
 
 def offset_at(value: str, line: int, col: int) -> int:
-    """Tính toán vị trí offset phẳng từ (line, col), giới hạn độ dài cột theo dòng."""
     lines = value.split("\n")
     target_line = clamp(line, 0, len(lines) - 1)
     off = 0
@@ -41,9 +39,6 @@ def offset_at(value: str, line: int, col: int) -> int:
 
 
 class TextField:
-    """Quản lý trạng thái con trỏ và giá trị mutable cùng các thao tác chỉnh sửa.
-    Gọi các phương thức xử lý (action), sau đó re-render từ `.value` / `.cursor`.
-    """
 
     def __init__(self, initial: str = "") -> None:
         self._state = TextFieldState(value=initial, cursor=len(initial))
@@ -132,17 +127,7 @@ class TextField:
         self._state = TextFieldState(value="", cursor=0)
 
 
-# ---------------------------------------------------------------------------
-# Xử lý Bracketed-paste & các hàm trợ giúp
-# ---------------------------------------------------------------------------
-
-
 def looks_like_paste(input_text: str, key_return: bool = False) -> bool:
-    """Kiểm tra xem dữ liệu đầu vào từ sự kiện phím có phải là thao tác paste không.
-    
-    Nếu `input_text` chứa nhiều ký tự hoặc có ký tự xuống dòng (mà không phải nhấn Enter),
-    terminal vừa thực hiện dán văn bản -> thêm cả khối thay vì xử lý \\n như lệnh submit.
-    """
     if not input_text:
         return False
     if len(input_text) > 1:
@@ -162,17 +147,14 @@ def strip_paste_markers(s: str) -> str:
 
 
 def normalize_pasted_text(s: str) -> str:
-    """Chuẩn hóa ký tự xuống dòng từ văn bản dán vào thành \\n."""
     return s.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def should_collapse_paste(s: str) -> bool:
-    """Kiểm tra xem văn bản dán vào có chứa nhiều dòng hay không."""
     return "\n" in normalize_pasted_text(s)
 
 
 def pasted_text_marker(id_: int, text: str) -> str:
-    """Tạo nhãn hiển thị thu gọn cho đoạn văn bản dán vào."""
     normalized = normalize_pasted_text(text)
     line_count = len(normalized.split("\n"))
     return f"[Pasted text #{id_} +{line_count} lines, {len(normalized)} chars]"
@@ -186,7 +168,6 @@ PASTED_TEXT_MARKER_RE = re.compile(
 def expand_pasted_text_markers(
     value: str, pasted_text_by_id: Mapping[int, str]
 ) -> str:
-    """Khôi phục các nhãn paste thu gọn thành nội dung văn bản gốc."""
     def _replace(m: re.Match[str]) -> str:
         pasted = pasted_text_by_id.get(int(m.group(1)))
         return pasted if pasted is not None else m.group(0)
@@ -194,15 +175,8 @@ def expand_pasted_text_markers(
     return PASTED_TEXT_MARKER_RE.sub(_replace, value)
 
 def cursor_is_on_first_line(value: str, cursor: int) -> bool:
-    """
-    True when the cursor sits on the first line of the input. We use it to
-    gate prompt-history nav: ↑ should walk history only when the user
-    isn't trying to move the cursor up within multi-line text. Single-line
-    inputs (no `\n` anywhere) trivially satisfy this.
-    """
     return value.rfind("\n", 0, cursor) == -1
 
 
 def cursor_is_on_last_line(value: str, cursor: int) -> bool:
-    """Symmetric helper for ↓: cursor is on the input's last line."""
     return value.find("\n", cursor) == -1

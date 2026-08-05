@@ -6,10 +6,6 @@ from typing import Callable
 from src.config.config import ToolingProfile
 
 
-# ==========================================================
-# Profile Option
-# ==========================================================
-
 @dataclass(slots=True)
 class ProfileOption:
     value: ToolingProfile
@@ -17,10 +13,6 @@ class ProfileOption:
     description: str
     helper: str
 
-
-# ==========================================================
-# Options
-# ==========================================================
 OPTIONS: list[ProfileOption] = [
     ProfileOption(
         value=ToolingProfile.MINIMAL,
@@ -52,34 +44,13 @@ OPTIONS: list[ProfileOption] = [
 ]
 
 
-# ==========================================================
-# Request
-# ==========================================================
-
 @dataclass(slots=True)
 class FirstRunPickerRequest:
     on_pick: Callable[[ToolingProfile], None]
     on_cancel: Callable[[], None]
     exit_app: Callable[[], None]
 
-
-# ==========================================================
-# First Run Picker
-# ==========================================================
-
 class FirstRunPicker:
-    """
-    One-time first-launch picker.
-
-    Select tooling profile for agent.
-
-    Keys:
-        ↑ / up       previous option
-        ↓ / down     next option
-        Enter        choose
-        Esc          cancel
-        Ctrl+C       cancel
-    """
 
     def __init__(
         self,
@@ -87,11 +58,6 @@ class FirstRunPicker:
     ):
         self.req = req
         self.idx = 0
-
-
-    # ======================================================
-    # Input
-    # ======================================================
 
     def handle_key(
         self,
@@ -145,11 +111,6 @@ class FirstRunPicker:
             )
 
             return
-
-
-    # ======================================================
-    # Render
-    # ======================================================
 
     def render(self) -> list[str]:
 

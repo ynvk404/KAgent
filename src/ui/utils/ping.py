@@ -9,18 +9,10 @@ PING_TIMEOUT = 5
 
 
 def is_pinger(client: object) -> bool:
-    """
-    Return True if the client supports health probing.
-    """
     return callable(getattr(client, "ping", None))
 
 
 class PingTask:
-    """
-    Periodically probe the active LLM client.
-
-    Clients without a ping() method are treated as always ready.
-    """
 
     def __init__(
         self,

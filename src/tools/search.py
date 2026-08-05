@@ -12,9 +12,6 @@ from .types import (
 )
 from .file import gate_sensitive_path
 
-# ==========================================================
-# Constants
-# ==========================================================
 GREP_FILE_BYTE_CAP = 5 * 1024 * 1024
 GREP_CONCURRENCY = 8
 SKIP_DIR_NAMES = {
@@ -31,9 +28,6 @@ SKIP_DIR_NAMES = {
     "__pycache__",
 }
 
-# ==========================================================
-# GlobTool
-# ==========================================================
 class GlobTool(Tool):
     def name(self) -> str:
         return "GlobTool"
@@ -121,9 +115,6 @@ class GlobTool(Tool):
             return "no matches"
         return "\n".join(matches)
 
-# ==========================================================
-# GrepTool
-# ==========================================================
 class GrepTool(Tool):
     def name(self) -> str:
         return "GrepTool"
@@ -239,9 +230,6 @@ class GrepTool(Tool):
             )
         return "\n".join(output)
 
-# ==========================================================
-# Glob implementation
-# ==========================================================
 async def glob_files(
     base: str,
     pattern: str,
@@ -308,9 +296,6 @@ async def glob_entries(
         key=lambda x: x["path"]
     )
 
-# ==========================================================
-# Grep implementation
-# ==========================================================
 async def grep_entries(
     entries,
     regex,
@@ -402,9 +387,6 @@ async def grep_file(
         pass
     return output
 
-# ==========================================================
-# Security helpers
-# ==========================================================
 async def gate_search_inputs(
     p,
     base,
@@ -448,9 +430,6 @@ def absolute_literal_prefix(
         else ""
     )
 
-# ==========================================================
-# Filesystem helpers
-# ==========================================================
 def walk_files(root: Path):
     for entry in root.iterdir():
         if entry.is_symlink():
@@ -485,13 +464,11 @@ def _translate_glob(
     while i < n:
         c = pattern[i]
         if c == "*":
-            # **
             if (
                 i + 1 < n
                 and pattern[i + 1] == "*"
             ):
                 i += 2
-                # **/ => zero or more directories
                 if (
                     i < n
                     and pattern[i] == "/"
@@ -500,7 +477,6 @@ def _translate_glob(
                 result.append(
                     "(?:.*/)?"
                 )
-            # *
             else:
                 result.append(
                     "[^/]*"

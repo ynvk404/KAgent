@@ -1,10 +1,3 @@
-"""
-Test AskUserTool
-
-Port từ:
-kagent/src/tools/ask.test.ts
-"""
-
 from __future__ import annotations
 
 import json
@@ -15,29 +8,18 @@ from src.ask.ask import (
     AskPrompter,
     Question,
 )
-
 from src.permission.permission import AlwaysAllow
-
 from src.tools.ask import AskUserTool
 
-
-
-# ==========================================================
-# Fake AskPrompter
-# ==========================================================
-
 class CaptureAskPrompter(AskPrompter):
-
     def __init__(self):
         self.questions: list[Question] = []
-
 
     async def ask(
         self,
         q: Question,
         signal=None,
     ) -> str:
-
         self.questions.append(q)
 
         return (
@@ -46,30 +28,18 @@ class CaptureAskPrompter(AskPrompter):
             else ""
         )
 
-
-
-# ==========================================================
-# Tests
-# ==========================================================
-
-
 @pytest.mark.asyncio
 async def test_adds_authorized_testing_to_authorization_scope_questions():
-
     prompter = CaptureAskPrompter()
-
     tool = AskUserTool(prompter)
-
 
     out = await tool.run(
         {
             "questions": [
                 {
                     "header": "Scope",
-
                     "question":
                         "Which target are you authorized to test?",
-
                     "options": [
                         {
                             "label":
@@ -83,12 +53,9 @@ async def test_adds_authorized_testing_to_authorization_scope_questions():
                 }
             ]
         },
-
         None,
-
         AlwaysAllow(),
     )
-
 
     assert [
         o.label
@@ -99,28 +66,21 @@ async def test_adds_authorized_testing_to_authorization_scope_questions():
         "Web vuln hunt",
     ]
 
-
     assert json.loads(out) == {
         "answers": [
             {
                 "question":
                     "Which target are you authorized to test?",
-
                 "answer":
                     "Authorized testing",
             }
         ]
     }
 
-
-
 @pytest.mark.asyncio
 async def test_does_not_duplicate_authorized_testing_when_already_present():
-
     prompter = CaptureAskPrompter()
-
     tool = AskUserTool(prompter)
-
 
     await tool.run(
         {
@@ -128,7 +88,6 @@ async def test_does_not_duplicate_authorized_testing_when_already_present():
                 {
                     "question":
                         "Which target are you authorized to test?",
-
                     "options": [
                         {
                             "label":
@@ -142,12 +101,9 @@ async def test_does_not_duplicate_authorized_testing_when_already_present():
                 }
             ]
         },
-
         None,
-
         AlwaysAllow(),
     )
-
 
     assert [
         o.label
@@ -157,15 +113,10 @@ async def test_does_not_duplicate_authorized_testing_when_already_present():
         "Just curious / explore",
     ]
 
-
-
 @pytest.mark.asyncio
 async def test_does_not_add_authorized_testing_to_unrelated_questions():
-
     prompter = CaptureAskPrompter()
-
     tool = AskUserTool(prompter)
-
 
     await tool.run(
         {
@@ -173,7 +124,6 @@ async def test_does_not_add_authorized_testing_to_unrelated_questions():
                 {
                     "question":
                         "Do you have authenticated credentials to use?",
-
                     "options": [
                         {
                             "label":
@@ -187,12 +137,9 @@ async def test_does_not_add_authorized_testing_to_unrelated_questions():
                 }
             ]
         },
-
         None,
-
         AlwaysAllow(),
     )
-
 
     assert [
         o.label

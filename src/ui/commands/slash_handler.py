@@ -22,15 +22,6 @@ _DOMAIN_LABEL_RE = re.compile(
 )
 
 
-# ==========================================================
-# Keybindings / Tips — hiển thị trong /help
-# ==========================================================
-#
-# TODO: chưa có nguồn KEYBINDINGS / TIPS gốc (buildHelpText.ts tham
-# chiếu 2 hằng số này nhưng không nằm trong đoạn code được gửi). Đang
-# dùng danh sách tạm/hợp lý — THAY BẰNG DANH SÁCH GỐC khi bạn gửi file
-# chứa KEYBINDINGS / TIPS thật.
-
 _KEYBINDINGS: list[tuple[str, str]] = [
     ("@<file>", "inline a file into the next turn (Tab opens a picker)"),
     (
@@ -68,15 +59,6 @@ _TIPS: list[str] = [
 ]
 
 
-# ==========================================================
-# build_help_text — port của buildHelpText() (TS)
-# ==========================================================
-#
-# LƯU Ý: bản TS dùng `chalk` để tô màu từng phần trong một dòng
-# (c.bold.cyan(...), c.gray(...), ...). TranscriptEntry ở Python chỉ có
-# MỘT field `color` áp cho toàn bộ entry (xem state.py), không hỗ trợ tô
-# màu từng đoạn trong một chuỗi text như chalk. Bản port này giữ đúng
-# NỘI DUNG + BỐ CỤC nhưng bỏ style per-span.
 
 def build_help_text(agent: "Agent", read_config) -> str:
     cfg = read_config()
@@ -94,7 +76,6 @@ def build_help_text(agent: "Agent", read_config) -> str:
     out.append("─" * 60)
     out.append("")
 
-    # --- Session ---
     out.append("Session")
     out.append(f"  provider   {provider}")
     out.append(f"  model      {model}")
@@ -111,7 +92,6 @@ def build_help_text(agent: "Agent", read_config) -> str:
     )
     out.append("")
 
-    # --- Slash commands ---
     out.append("Slash commands")
     namelines = [f"{s.name} {s.args}" if s.args else s.name for s in SLASH_ITEMS]
     w = min(36, (max((len(n) for n in namelines), default=0)) + 2)
@@ -119,14 +99,12 @@ def build_help_text(agent: "Agent", read_config) -> str:
         out.append(f"  {name_line.ljust(w)}{item.description}")
     out.append("")
 
-    # --- Keybindings ---
     out.append("Input & navigation")
     kw = max((len(k) for k, _ in _KEYBINDINGS), default=0) + 2
     for keys, desc in _KEYBINDINGS:
         out.append(f"  {keys.ljust(kw)}{desc}")
     out.append("")
 
-    # --- Tips (word-wrapped to ~88 cols, same as TS) ---
     out.append("Tips")
     for tip in _TIPS:
         words = tip.split(" ")
@@ -184,10 +162,6 @@ def normalize_target_url(raw: str) -> str | None:
     return None
 
 
-# ==========================================================
-# build_plan_prompt — port nguyên văn của buildPlanPrompt() (TS)
-# ==========================================================
-
 def build_plan_prompt(objective: str) -> str:
     subject = (
         f"Plan this objective:\n\n{objective}"
@@ -213,11 +187,6 @@ When you are ready to finalize, return the plan wrapped exactly in:
 
 Use Markdown inside the block. Prefer these sections: Summary, Key Changes, Test Plan, Assumptions."""
 
-
-# ==========================================================
-# build_coverage_next_prompt — port nguyên văn của
-# buildCoverageNextPrompt() (TS)
-# ==========================================================
 
 def build_coverage_next_prompt(objective: str, coverage_context: str) -> str:
     subject = (
@@ -278,16 +247,10 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
     agent = app.agent
     dispatch = app.dispatch
 
-    # ---------------------------------------------------
-    # /exit, /quit
-    # ---------------------------------------------------
     if cmd in ("/exit", "/quit"):
         app.exit()
         return True
 
-    # ---------------------------------------------------
-    # /yolo [on|off|default]
-    # ---------------------------------------------------
     if cmd == "/yolo":
         if not rest:
             current = "on" if app.state.yolo else "off"
@@ -336,18 +299,10 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         )
         return True
 
-    # ---------------------------------------------------
-    # /clear — chỉ xoá transcript trên màn hình
-    # ---------------------------------------------------
     if cmd == "/clear":
-        # Textual không cần bước ANSI clear như Ink — reducer's Clear()
-        # đã tự tăng clear_gen để trigger vẽ lại (xem state.py).
         dispatch(Clear())
         return True
 
-    # ---------------------------------------------------
-    # /reset — xoá conversation + session đã lưu
-    # ---------------------------------------------------
     if cmd == "/reset":
         async def _reset():
             await agent.reset()
@@ -357,9 +312,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         dispatch(Append(entry=TranscriptEntry(kind="system", text="conversation reset")))
         return True
 
-    # ---------------------------------------------------
-    # /help
-    # ---------------------------------------------------
     if cmd == "/help":
         dispatch(
             Append(
@@ -368,16 +320,11 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         )
         return True
 
-    # ---------------------------------------------------
-    # /memory [add <text>|list|forget <text>|clear|intel ...]
-    # ---------------------------------------------------
     if cmd == "/memory":
         asyncio.create_task(_handle_memory(agent, rest, dispatch))
         return True
 
-    # ---------------------------------------------------
-    # /snapshot
-    # ---------------------------------------------------
+
     if cmd == "/snapshot":
         async def _snapshot():
             try:
@@ -396,9 +343,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         asyncio.create_task(_snapshot())
         return True
 
-    # ---------------------------------------------------
-    # /burp [port]
-    # ---------------------------------------------------
     if cmd == "/burp":
         bridge = app.start_burp_bridge
         stop_bridge = app.close_burp_bridge
@@ -479,7 +423,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                             f"Burp bridge already running at {r.state.url}\n"
                             f"Token: {r.state.token}"
                         )
-                    case _:  # "started"
+                    case _:  
                         text = (
                             f"Burp bridge listening at {r.state.url}\n"
                             f"Token: {r.state.token}"
@@ -498,9 +442,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         asyncio.create_task(_burp())
         return True
 
-    # ---------------------------------------------------
-    # /compact
-    # ---------------------------------------------------
     if cmd == "/compact":
         if agent.is_running():
             dispatch(
@@ -510,9 +451,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         app.run_agent_compact()
         return True
 
-    # ---------------------------------------------------
-    # /next [objective]
-    # ---------------------------------------------------
+
     if cmd == "/next":
         if agent.is_running():
             dispatch(Append(entry=TranscriptEntry(kind="error", text="next: a turn is already running")))
@@ -522,7 +461,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
         async def _next():
             try:
-                signal = asyncio.Event()  # fresh, never-set — mirrors `new AbortController().signal`
+                signal = asyncio.Event() 
                 coverage_context = await agent.coverage_context(signal)
 
                 await app.run_agent_turn(
@@ -538,10 +477,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
         asyncio.create_task(_next())
         return True
-
-    # ---------------------------------------------------
-    # /plan [objective]
-    # ---------------------------------------------------
+    
     if cmd == "/plan":
         objective = " ".join(rest).strip()
         prompt = build_plan_prompt(objective)
@@ -559,9 +495,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         asyncio.create_task(_plan())
         return True
 
-    # ---------------------------------------------------
-    # /provider
-    # ---------------------------------------------------
     if cmd == "/provider":
         from src.ui.commands.provider_picker import open_provider_picker
         open_provider_picker(
@@ -574,16 +507,10 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         )
         return True
 
-    # ---------------------------------------------------
-    # /model [<id>|list]
-    # ---------------------------------------------------
     if cmd == "/model":
         asyncio.create_task(_handle_model(app, rest, dispatch))
         return True
 
-    # ---------------------------------------------------
-    # /target [<url>|clear]
-    # ---------------------------------------------------
     if cmd == "/target":
         u = " ".join(rest).strip()
         if not u:
@@ -656,9 +583,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         )
         return True
 
-    # ---------------------------------------------------
-    # /maxsteps [<n>|default]
-    # ---------------------------------------------------
     if cmd == "/maxsteps":
         if not rest:
             dispatch(
@@ -704,9 +628,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         dispatch(Append(entry=TranscriptEntry(kind="system", text=f"max steps set to {n}")))
         return True
 
-    # ---------------------------------------------------
-    # /thinking [on|off|default]
-    # ---------------------------------------------------
     if cmd == "/thinking":
         if not rest:
             current = "on" if agent.thinking_is_enabled() else "off"
@@ -747,17 +668,11 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
         return True
 
-    # ---------------------------------------------------
-    # /skills [enable|disable|new <name>]
-    # ---------------------------------------------------
     if cmd == "/skills":
         from src.ui.commands.skills_handler import handle_skills_command
         handle_skills_command(agent, rest, dispatch, app.persist_disabled_skills, app.on_skill_created)
         return True
 
-    # ---------------------------------------------------
-    # fallback: /<skill-name> — nạp skill trực tiếp, áp dụng ở prompt kế
-    # ---------------------------------------------------
     skill_name = cmd[1:] if cmd.startswith("/") else ""
     if skill_name and agent.skills.has(skill_name):
         async def _inject():
@@ -779,16 +694,11 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
     return False
 
 
-# ==========================================================
-# /memory subcommands
-# ==========================================================
-
 async def _handle_memory(agent, rest: list[str], dispatch) -> None:
-    from src.agent.agent import AddMemoryInput  # lazy import: tránh vòng lặp import với app.py
+    from src.agent.agent import AddMemoryInput  
 
     sub = (rest[0] if rest else "").lower()
 
-    # --- validate subcommand: tránh rơi im lặng vào nhánh mặc định khi gõ sai ---
     KNOWN_SUBS = ("clear", "forget", "add", "list", "intel")
     if sub and sub not in KNOWN_SUBS:
         hint = suggest_closest(sub, list(KNOWN_SUBS))
@@ -833,8 +743,6 @@ async def _handle_memory(agent, rest: list[str], dispatch) -> None:
             )
             return
         try:
-            # NOTE: giả định scope="project" cho /memory add (giống nhánh
-            # mặc định không có "#!" trong submit()'s memory shortcut).
             fact = await agent.add_memory(AddMemoryInput(text=text, scope="project"))
             if fact:
                 dispatch(
@@ -917,7 +825,6 @@ async def _handle_memory(agent, rest: list[str], dispatch) -> None:
         )
         return
 
-    # default view: curated facts + session memory checkpoint
     try:
         facts = agent.list_curated_memory()
         curated = (
@@ -930,12 +837,9 @@ async def _handle_memory(agent, rest: list[str], dispatch) -> None:
     except Exception as err:
         dispatch(Append(entry=TranscriptEntry(kind="error", text=f"memory view failed: {err}")))
 
-# ==========================================================
-# /model subcommand
-# ==========================================================
 
 async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
-    from src.ui.core.app import ProviderChange  # lazy import: tránh vòng lặp import với app.py
+    from src.ui.core.app import ProviderChange  
 
     agent = app.agent
     m = " ".join(rest).strip()
@@ -971,9 +875,6 @@ async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
         )
         return
 
-    # Validate against the live backend catalog before swapping the
-    # client, same reasoning as the TS version: catch typos here instead
-    # of a confusing 404 on the next chat turn.
     known: list[str] = []
     try:
         known = await asyncio.to_thread(
@@ -1012,11 +913,6 @@ async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
     except Exception as err:
         dispatch(Append(entry=TranscriptEntry(kind="error", text=f"model: {err}")))
 
-
-# ==========================================================
-# small helper: build RunAgentOptions without importing app.py at
-# module load time (avoids the circular import)
-# ==========================================================
 
 def _run_opts(**kwargs) -> "RunAgentOptions":
     from src.ui.core.app import RunAgentOptions as _RunAgentOptions

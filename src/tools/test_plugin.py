@@ -1,9 +1,4 @@
-"""
-Test truncate cho CommandPluginTool.
 
-Port từ:
-agent/src/tools/plugin.test.ts
-"""
 
 from __future__ import annotations
 
@@ -15,7 +10,6 @@ from src.tools.plugin import CommandPluginTool
 
 
 class _NeverAborted:
-    """Đóng vai trò AbortController().signal — không bao giờ abort."""
 
     aborted = False
 

@@ -47,11 +47,6 @@ class FakePrompter:
             return_value=result
         )
 
-
-# ======================================================
-# schema
-# ======================================================
-
 def test_schema_not_require_method():
 
     tool = HTTPTool(Target())
@@ -59,11 +54,6 @@ def test_schema_not_require_method():
     assert tool.schema()["required"] == [
         "url"
     ]
-
-
-# ======================================================
-# summarize
-# ======================================================
 
 def test_summarize_default_get():
 
@@ -82,11 +72,6 @@ def test_summarize_default_get():
     assert result["detail"] == (
         "GET http://example.test"
     )
-
-
-# ======================================================
-# runtime default GET
-# ======================================================
 
 @pytest.mark.asyncio
 async def test_default_get_runtime():
@@ -121,10 +106,6 @@ async def test_default_get_runtime():
         assert "HTTP/1.1 200 OK" in out
         assert "ok" in out
 
-# ======================================================
-# require url
-# ======================================================
-
 @pytest.mark.asyncio
 async def test_require_url():
 
@@ -140,11 +121,6 @@ async def test_require_url():
             None,
             FakePrompter(),
         )
-
-
-# ======================================================
-# SSRF deny
-# ======================================================
 
 @pytest.mark.asyncio
 async def test_block_private_url():
@@ -170,11 +146,6 @@ async def test_block_private_url():
         )
 
     prompter.ask.assert_called_once()
-
-
-# ======================================================
-# SSRF allow
-# ======================================================
 
 @pytest.mark.asyncio
 async def test_allow_private_url():
@@ -208,10 +179,6 @@ async def test_allow_private_url():
         mock_stream.assert_called_once()
 
         assert "HTTP/1.1 200 OK" in out
-
-# ======================================================
-# permission cache key
-# ======================================================
 
 def test_permission_scope():
 

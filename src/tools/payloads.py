@@ -9,10 +9,8 @@ from src.skills.registry import Registry as SkillRegistry
 
 from .types import Tool, arg_number, arg_string
 
-
 MAX_BYTES = 256 * 1024
 MAX_PREVIEW_BYTES = 16 * 1024
-
 
 class ReadPayloadsTool(Tool):
 
@@ -22,10 +20,8 @@ class ReadPayloadsTool(Tool):
     ):
         self.skills = skills
 
-
     def name(self) -> str:
         return "read_payloads"
-
 
     def description(self) -> str:
         return "\n".join(
@@ -48,19 +44,16 @@ class ReadPayloadsTool(Tool):
             ]
         )
 
-
     def schema(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-
                 "skill": {
                     "type": "string",
                     "description": (
                         "Skill name whose payloads directory to read."
                     ),
                 },
-
                 "action": {
                     "type": "string",
                     "enum": [
@@ -72,14 +65,12 @@ class ReadPayloadsTool(Tool):
                         "'read' returns file content."
                     ),
                 },
-
                 "file": {
                     "type": "string",
                     "description": (
                         "Relative path inside skill/payloads."
                     ),
                 },
-
                 "limit": {
                     "type": "number",
                     "description": (
@@ -88,17 +79,13 @@ class ReadPayloadsTool(Tool):
                     ),
                 },
             },
-
             "required": [
                 "skill",
             ],
         }
 
-
     def requires_permission(self) -> bool:
-        # Read-only access inside skill repository
         return False
-
 
     async def run(
         self,
@@ -106,7 +93,6 @@ class ReadPayloadsTool(Tool):
         _signal,
         _prompter: Prompter,
     ) -> str:
-
         skill_name = arg_string(
             args,
             "skill",
@@ -114,7 +100,6 @@ class ReadPayloadsTool(Tool):
 
         if not skill_name:
             return "error: skill is required"
-
 
         skill = self.skills.get(
             skill_name
@@ -125,17 +110,14 @@ class ReadPayloadsTool(Tool):
                 f'error: skill "{skill_name}" not loaded'
             )
 
-
         skill_dir = Path(
             skill.path
         ).parent
-
 
         payloads_dir = (
             skill_dir /
             "payloads"
         )
-
 
         if not payloads_dir.exists():
             return (
@@ -143,12 +125,10 @@ class ReadPayloadsTool(Tool):
                 f"at {payloads_dir}"
             )
 
-
         file = arg_string(
             args,
             "file",
         )
-
 
         action = (
             arg_string(
@@ -158,9 +138,7 @@ class ReadPayloadsTool(Tool):
             or ("read" if file else "list")
         )
 
-
         if action == "list":
-
             return json.dumps(
                 list_files(
                     payloads_dir
@@ -168,26 +146,16 @@ class ReadPayloadsTool(Tool):
                 indent=2,
             )
 
-
         if action != "read":
-
             return (
                 f'error: unknown action "{action}"'
             )
 
-
         if not file:
-
             return (
                 "error: file is required for action=read"
             )
 
-
-        #
-        # Path.resolve():
-        # - normalize ../ traversal
-        # - resolve symlinks
-        #
         resolved = (
             payloads_dir /
             file
@@ -195,9 +163,6 @@ class ReadPayloadsTool(Tool):
             strict=False
         )
 
-
-        # Prevent escaping skill/payloads/
-        # after resolve()
         if not contained_in(
             payloads_dir,
             resolved,
@@ -207,7 +172,6 @@ class ReadPayloadsTool(Tool):
                 "<skill>/payloads/"
             )
 
-
         if (
             not resolved.exists()
             or not resolved.is_file()
@@ -216,22 +180,18 @@ class ReadPayloadsTool(Tool):
                 f"error: not a file: {file}"
             )
 
-
         size = (
             resolved.stat()
             .st_size
         )
-
 
         limit = arg_number(
             args,
             "limit",
         )
 
-
         if limit is None:
             limit = 200
-
 
         limit = max(
             1,
@@ -241,11 +201,9 @@ class ReadPayloadsTool(Tool):
             ),
         )
 
-
         raw = resolved.read_text(
             encoding="utf-8"
         )
-
 
         lines = raw.split("\n")
 
@@ -255,30 +213,24 @@ class ReadPayloadsTool(Tool):
             lines[:limit]
         )
 
-
         if len(body) > MAX_PREVIEW_BYTES:
-
             body = (
                 body[:MAX_PREVIEW_BYTES]
                 +
                 f"\n...<truncated; {size} bytes on disk>"
             )
 
-
         truncated = ""
 
         if total > limit:
-
             truncated = (
                 f"\n...<truncated at {limit} "
                 f"of {total} lines>"
             )
 
-
         relative_path = resolved.relative_to(
             payloads_dir.resolve()
         )
-
 
         return (
             f"# {skill_name}/{relative_path} "
@@ -287,47 +239,28 @@ class ReadPayloadsTool(Tool):
             f"{truncated}"
         )
 
-
-
 def contained_in(
     base: Path,
     target: Path,
 ) -> bool:
-    """
-    Return True if target is inside base.
-
-    Both paths should already be resolved.
-    """
-
     try:
-
         target.relative_to(
             base.resolve()
         )
-
         return True
-
     except ValueError:
-
         return False
-
-
 
 def list_files(
     directory: Path,
     prefix: str = "",
 ) -> list[str]:
-
     result: list[str] = []
 
-
     for entry in directory.iterdir():
-
         path = directory / entry.name
 
-
         if path.is_dir():
-
             result.extend(
                 list_files(
                     path,
@@ -338,18 +271,13 @@ def list_files(
                     ),
                 )
             )
-
             continue
-
 
         if not path.is_file():
             continue
 
-
-        # Skip huge files
         if path.stat().st_size > MAX_BYTES:
             continue
-
 
         result.append(
             (
@@ -358,6 +286,5 @@ def list_files(
                 else entry.name
             )
         )
-
 
     return sorted(result)

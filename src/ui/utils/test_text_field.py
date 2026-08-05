@@ -1,7 +1,3 @@
-# Pure-function tests for the text-field helpers. The stateful TextField
-# class itself would be exercised end-to-end through the app; here we cover
-# the arithmetic that's hardest to get right: line/column math and the
-# paste-detection predicate.
 
 from __future__ import annotations
 
@@ -45,11 +41,9 @@ class TestOffsetAt:
         assert offset_at("ab\ncd\nef", 2, 1) == 7
 
     def test_clamps_column_to_target_line_length(self):
-        # line 1 ("cd") is only 2 chars — column 99 should clamp.
         assert offset_at("ab\ncd\nef", 1, 99) == 5
 
     def test_clamps_line_to_last_line_index(self):
-        # 3 lines total (indices 0-2); line 99 should clamp to line 2.
         assert offset_at("ab\ncd\nef", 99, 1) == 7
 
 
@@ -61,7 +55,6 @@ class TestLooksLikePaste:
         assert looks_like_paste("a\nb", key_return=False) is True
 
     def test_treats_true_enter_keypress_as_not_paste(self):
-        # The terminal may report empty input + a return keypress for Enter.
         assert looks_like_paste("", key_return=True) is False
         assert looks_like_paste("\n", key_return=True) is False
 

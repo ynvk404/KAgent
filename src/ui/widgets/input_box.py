@@ -5,12 +5,6 @@ from dataclasses import dataclass
 from src.ui.core.terminal_size import get_terminal_size
 from src.ui.utils.text_field import position_of
 
-
-# ==========================================================
-# Render Models
-# ==========================================================
-
-
 @dataclass(frozen=True, slots=True)
 class InputSegment:
     text: str
@@ -22,22 +16,10 @@ class InputLine:
     segments: list[InputSegment]
 
 
-# ==========================================================
-# Input Widget
-# ==========================================================
-
-
 CONTINUATION_INDENT = "  "
 
 
 class InputBox:
-    """
-    Pure input renderer.
-
-    - State(value/cursor) nằm ở App
-    - Widget chỉ render
-    - Không tự xử lý key
-    """
 
     def __init__(
         self,
@@ -53,10 +35,6 @@ class InputBox:
         self.placeholder = placeholder
         self.disabled = disabled
 
-    # ------------------------------------------------------
-    # Render
-    # ------------------------------------------------------
-
     def _rule(self) -> InputLine:
         columns, _rows = get_terminal_size()
         return InputLine(
@@ -70,7 +48,6 @@ class InputBox:
 
         is_empty = len(self.value) == 0
 
-        # agent running...
         if self.disabled and is_empty:
             lines.append(
                 InputLine(
@@ -83,7 +60,6 @@ class InputBox:
             lines.append(rule)
             return lines
 
-        # placeholder
         if is_empty and self.placeholder:
             segments = [
                 InputSegment(self.prompt, "prompt"),
@@ -97,7 +73,6 @@ class InputBox:
             lines.append(rule)
             return lines
 
-        # normal input
         text_lines = self.value.split("\n")
 
         cursor_line, cursor_col = position_of(self.value, self.cursor)

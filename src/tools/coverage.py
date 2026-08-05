@@ -24,9 +24,7 @@ STATUSES: tuple[CoverageStatus, ...] = (
     "skipped",
 )
 
-
 class CoverageTool(Tool):
-
     def __init__(
         self,
         store: CoverageStore,
@@ -145,7 +143,6 @@ class CoverageTool(Tool):
         _signal,
         _prompter: Prompter,
     ) -> str:
-
         action = arg_string(args, "action") or ""
 
         if action not in ACTIONS:
@@ -173,7 +170,6 @@ class CoverageTool(Tool):
         self,
         args: dict[str, Any],
     ) -> str:
-
         endpoint = arg_string(args, "endpoint")
         param = arg_string(args, "param")
         vuln_class = arg_string(args, "vuln_class")
@@ -227,7 +223,6 @@ class CoverageTool(Tool):
         self,
         args: dict[str, Any],
     ) -> str:
-
         endpoint = arg_string(args, "endpoint") or None
         param = arg_string(args, "param") or None
         vuln_class = arg_string(args, "vuln_class") or None
@@ -272,7 +267,6 @@ class CoverageTool(Tool):
         self,
         args: dict[str, Any],
     ) -> str:
-
         raw_candidates = args.get("candidates", [])
         raw_vuln_classes = args.get("vuln_classes", [])
 
@@ -339,7 +333,6 @@ class CoverageTool(Tool):
         )
 
     async def run_summary(self) -> str:
-
         summary = await self.store.summary()
 
         return json.dumps(

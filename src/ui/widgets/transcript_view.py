@@ -8,19 +8,6 @@ from src.ui.widgets.transcript import entry_view
 
 
 class TranscriptView(RichLog):
-    """
-    Widget Textual thật cho phần "committed log" — tương đương JSX:
-
-        <Transcript committed={filteredCommitted} bannerData={...}
-                    generation={`${state.clearGen}:${state.transcriptFilter}`} />
-
-    LƯU Ý: đây là lớp MỚI, không phải port 1:1 từ TS (JSX component
-    không map thẳng sang 1 class Python cụ thể) — viết theo Hướng B
-    (widget-tree thật của Textual) đã thống nhất. Logic "chỉ in các
-    entry mới kể từ lần trước" giữ đúng ý tưởng từ src/ui/widgets/
-    transcript.py (Transcript.flush) nhưng đích ghi là RichLog thay vì
-    sys.stdout.
-    """
 
     DEFAULT_CSS = """
     TranscriptView {

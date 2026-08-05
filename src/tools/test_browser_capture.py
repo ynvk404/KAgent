@@ -1,4 +1,4 @@
-"""Output-cap tests for the browser_capture_* tools."""
+
 
 from typing import cast
 

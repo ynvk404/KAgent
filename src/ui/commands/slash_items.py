@@ -10,11 +10,6 @@ class SlashItem:
     description: str
     args: str | None = None
 
-
-# ==========================================================
-# Slash command catalog
-# ==========================================================
-
 SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
@@ -113,11 +108,6 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     ),
 )
 
-
-# ==========================================================
-# Filter
-# ==========================================================
-
 def filter_slash(
     input_text: str,
     extras: Sequence[SlashItem] = (),
@@ -128,12 +118,6 @@ def filter_slash(
     if not trimmed.startswith("/"):
         return []
 
-
-    # user bắt đầu nhập argument:
-    #
-    # /model qwen
-    #
-    # không hiện menu nữa
 
     if " " in trimmed[1:]:
         return []

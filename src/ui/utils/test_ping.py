@@ -6,7 +6,6 @@ import pytest
 
 from src.ui.utils.ping import PING_TIMEOUT, PingTask
 
-
 class DummyClient:
     async def ping(self) -> None:
         return None
@@ -20,7 +19,6 @@ class FailingClient:
 class SlowClient:
     async def ping(self) -> None:
         await asyncio.sleep(3600)
-
 
 @pytest.mark.asyncio
 async def test_client_without_ping_is_ready(monkeypatch):

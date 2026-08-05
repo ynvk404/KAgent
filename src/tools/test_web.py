@@ -1,5 +1,3 @@
-# web_fetch + web_search tool tests.
-
 from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
@@ -10,10 +8,7 @@ import pytest
 from src.permission.permission import Decision, PermissionRequest, AlwaysAllow, AlwaysDeny
 from src.tools.web import WebFetchTool, WebSearchTool, clear_web_cache
 
-
 class _Prompter:
-    """Stand-in for `{} as Prompter` in the JS suite."""
-
     async def ask(
         self,
         request: PermissionRequest,
@@ -21,23 +16,11 @@ class _Prompter:
     ) -> Decision:
         return Decision.ALLOW_ONCE
 
-
 prompter = _Prompter()
 
-
 class FakeSignal:
-    """Duck-typed abort signal (see tools/shell.py's `_is_aborted` pattern)."""
-
     def __init__(self, aborted: bool = False):
         self.aborted = aborted
-
-
-# ==========================================================
-# Fake httpx.AsyncClient — mocks at the same boundary the JS suite mocks
-# `fetch`, since Python's client is a stateful object rather than a bare
-# function.
-# ==========================================================
-
 
 class FakeResponse:
     def __init__(
@@ -62,18 +45,9 @@ class FakeResponse:
     async def __aexit__(self, exc_type, exc, tb):
         await self.aclose()
 
-
 Handler = Callable[[httpx.Request], Awaitable[FakeResponse]]
 
-
 class FakeAsyncClient:
-    """
-    Stand-in for httpx.AsyncClient. Records constructor kwargs (so tests can
-    assert e.g. follow_redirects=False — the Python equivalent of the JS
-    assertion on `redirect: 'manual'`) and delegates .send() to a per-test
-    handler.
-    """
-
     handler: Handler | None = None
     last_init_kwargs: dict[str, Any] | None = None
     call_count = 0
@@ -94,7 +68,6 @@ class FakeAsyncClient:
     async def aclose(self) -> None:
         pass
 
-
 @pytest.fixture(autouse=True)
 def fake_httpx_client(monkeypatch: pytest.MonkeyPatch):
     FakeAsyncClient.handler = None
@@ -102,13 +75,10 @@ def fake_httpx_client(monkeypatch: pytest.MonkeyPatch):
     FakeAsyncClient.call_count = 0
     monkeypatch.setattr("src.tools.web.httpx.AsyncClient", FakeAsyncClient)
     yield
-    # Clear cross-test cache state so each case exercises the cold network path.
     clear_web_cache()
-
 
 def set_handler(handler: Handler) -> None:
     FakeAsyncClient.handler = handler
-
 
 def ok_handler(body: str, status: int = 200, reason: str = "OK") -> Handler:
     async def handler(_request: httpx.Request) -> FakeResponse:
@@ -116,18 +86,11 @@ def ok_handler(body: str, status: int = 200, reason: str = "OK") -> Handler:
 
     return handler
 
-
 def failing_handler(exc: Exception) -> Handler:
     async def handler(_request: httpx.Request) -> FakeResponse:
         raise exc
 
     return handler
-
-
-# ==========================================================
-# WebFetchTool
-# ==========================================================
-
 
 @pytest.mark.asyncio
 async def test_returns_readable_text_for_successful_fetches():
@@ -142,7 +105,6 @@ async def test_returns_readable_text_for_successful_fetches():
     assert "Hello" in out
     assert "<h1>" not in out
     assert "x()" not in out
-
 
 @pytest.mark.asyncio
 async def test_explains_hackerone_platform_dns_failures_with_program_url_hint():
@@ -161,18 +123,8 @@ async def test_explains_hackerone_platform_dns_failures_with_program_url_hint():
     assert "platform.hackerone.com is not a public HackerOne program host" in out
     assert "https://hackerone.com/hackerone" in out
 
-
 @pytest.mark.asyncio
 async def test_rethrows_when_caller_aborts_the_request():
-    # NOTE on divergence from the JS suite: the JS version calls fetch()
-    # regardless of prior abort state, and only checks `signal.aborted` in the
-    # catch block to decide whether to rethrow the *original* error verbatim.
-    # The Python port's _run_cancelable checks `signal.aborted` *before*
-    # invoking the request at all (matching the same short-circuit pattern
-    # used in tools/shell.py's abort handling), so it never reaches the fake
-    # handler and raises _FetchAborted instead of the original exception.
-    # Net effect is the same (the abort is not silently swallowed into a
-    # formatted failure string); the exact exception type/message differs.
     signal = FakeSignal(aborted=True)
     set_handler(failing_handler(Exception("aborted")))
 
@@ -181,10 +133,9 @@ async def test_rethrows_when_caller_aborts_the_request():
 
     assert FakeAsyncClient.call_count == 0
 
-
 @pytest.mark.asyncio
 async def test_prompts_before_fetching_private_or_local_urls():
-    set_handler(ok_handler(""))  # should never be reached
+    set_handler(ok_handler(""))
 
     with pytest.raises(Exception, match=r"private/internal URL denied"):
         await WebFetchTool().run(
@@ -194,7 +145,6 @@ async def test_prompts_before_fetching_private_or_local_urls():
         )
 
     assert FakeAsyncClient.call_count == 0
-
 
 @pytest.mark.asyncio
 async def test_does_not_automatically_follow_redirects():
@@ -207,7 +157,6 @@ async def test_does_not_automatically_follow_redirects():
     )
 
     assert FakeAsyncClient.last_init_kwargs == {"follow_redirects": False}
-
 
 @pytest.mark.asyncio
 async def test_prompts_before_fetching_ipv4_mapped_ipv6_private_urls():
@@ -222,7 +171,6 @@ async def test_prompts_before_fetching_ipv4_mapped_ipv6_private_urls():
 
     assert FakeAsyncClient.call_count == 0
 
-
 @pytest.mark.asyncio
 async def test_rejects_non_http_url_schemes():
     with pytest.raises(Exception, match="unsupported URL scheme"):
@@ -231,7 +179,6 @@ async def test_rejects_non_http_url_schemes():
             None,
             prompter,
         )
-
 
 @pytest.mark.asyncio
 async def test_serves_second_fetch_of_same_url_from_cache():
@@ -247,7 +194,6 @@ async def test_serves_second_fetch_of_same_url_from_cache():
     assert second == first
     assert FakeAsyncClient.call_count == 1
 
-
 @pytest.mark.asyncio
 async def test_does_not_cache_failed_fetches():
     set_handler(failing_handler(httpx.ConnectError("fetch failed")))
@@ -256,12 +202,6 @@ async def test_does_not_cache_failed_fetches():
     await WebFetchTool().run({"url": "https://example.com/down"}, None, prompter)
 
     assert FakeAsyncClient.call_count == 2
-
-
-# ==========================================================
-# WebSearchTool
-# ==========================================================
-
 
 @pytest.mark.asyncio
 async def test_parses_structured_duckduckgo_results():
@@ -276,10 +216,8 @@ async def test_parses_structured_duckduckgo_results():
     assert "https://cve.example/CVE-1" in out
     assert "Snippet one" in out
 
-
 @pytest.mark.asyncio
 async def test_falls_back_to_raw_anchor_extraction_when_markup_changes():
-    # No result__a / result__snippet classes, but real links are present.
     html = """
       <div><a href="/internal">nav</a></div>
       <a href="https://example.org/post">Interesting Post</a>
@@ -291,9 +229,7 @@ async def test_falls_back_to_raw_anchor_extraction_when_markup_changes():
     assert "degraded results" in out
     assert "https://example.org/post" in out
     assert "Interesting Post" in out
-    # Relative nav anchors are dropped.
     assert "/internal" not in out
-
 
 @pytest.mark.asyncio
 async def test_returns_structured_failure_instead_of_throwing_when_search_fetch_fails():

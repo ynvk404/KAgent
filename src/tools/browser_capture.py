@@ -1,5 +1,3 @@
-"""Công cụ browser_capture (read-only) truy xuất dữ liệu từ store cục bộ."""
-
 from __future__ import annotations
 
 import json
@@ -13,29 +11,22 @@ from .types import Tool, arg_number, arg_string
 
 TOOL_PREFIX = "browser_capture_"
 
-# Giới hạn kích thước đầu ra và số lượng bản ghi
 OUTPUT_CHAR_CAP = 64 * 1024
 DEFAULT_LIST_LIMIT = 200
 MAX_REQUESTS_LIMIT = 500
 
-
 def _iso(ms: float | None) -> str:
-    """Chuyển đổi mili giây epoch sang chuỗi ISO 8601."""
     if ms is None:
         return "never"
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
 
-
 def cap_json(value: Any) -> str:
-    """Chuyển thành chuỗi JSON nén và cắt ngắn nếu vượt giới hạn."""
     s = json.dumps(value, separators=(",", ":"))
     if len(s) <= OUTPUT_CHAR_CAP:
         return s
     return f"{s[:OUTPUT_CHAR_CAP]}\n[... truncated {len(s) - OUTPUT_CHAR_CAP} chars ...]"
 
-
 def render_list(items: list[Any], limit: int) -> str:
-    """Giới hạn số lượng bản ghi và chuyển thành chuỗi JSON nén."""
     shown = items[:limit]
     out = json.dumps(shown, separators=(",", ":"))
     if len(items) > limit:
@@ -43,7 +34,6 @@ def render_list(items: list[Any], limit: int) -> str:
     if len(out) <= OUTPUT_CHAR_CAP:
         return out
     return f"{out[:OUTPUT_CHAR_CAP]}\n[... truncated {len(out) - OUTPUT_CHAR_CAP} chars ...]"
-
 
 class BaseCaptureTool(Tool, ABC):
     def __init__(self, store: CaptureStore):
@@ -68,7 +58,6 @@ class BaseCaptureTool(Tool, ABC):
 
     def requires_permission(self) -> bool:
         return False
-
 
 class BrowserCaptureStatusTool(BaseCaptureTool):
     def name(self) -> str:
@@ -98,7 +87,6 @@ class BrowserCaptureStatusTool(BaseCaptureTool):
             },
             indent=2,
         )
-
 
 class BrowserCaptureEndpointsTool(BaseCaptureTool):
     def name(self) -> str:
@@ -138,7 +126,6 @@ class BrowserCaptureEndpointsTool(BaseCaptureTool):
                 "with capture enabled and the scope regex matches the target."
             )
         return render_list(eps, DEFAULT_LIST_LIMIT)
-
 
 class BrowserCaptureRequestsTool(BaseCaptureTool):
     def name(self) -> str:
@@ -197,7 +184,6 @@ class BrowserCaptureRequestsTool(BaseCaptureTool):
         ]
         return cap_json(slim)
 
-
 class BrowserCaptureGetTool(BaseCaptureTool):
     def name(self) -> str:
         return f"{TOOL_PREFIX}get"
@@ -243,7 +229,6 @@ class BrowserCaptureGetTool(BaseCaptureTool):
         }
         return json.dumps(trimmed, indent=2)
 
-
 class BrowserCaptureSnapshotTool(BaseCaptureTool):
     def name(self) -> str:
         return f"{TOOL_PREFIX}snapshot"
@@ -277,7 +262,6 @@ class BrowserCaptureSnapshotTool(BaseCaptureTool):
             indent=2,
         )
 
-
 class BrowserCaptureClearTool(BaseCaptureTool):
     def name(self) -> str:
         return f"{TOOL_PREFIX}clear"
@@ -292,7 +276,7 @@ class BrowserCaptureClearTool(BaseCaptureTool):
         return {"type": "object", "properties": {}}
 
     def requires_permission(self) -> bool:
-        return True  # Thao tác xóa dữ liệu cần xác nhận quyền
+        return True
 
     def summarize(self, args: dict[str, Any]) -> dict[str, str]:
         return {
@@ -310,7 +294,6 @@ class BrowserCaptureClearTool(BaseCaptureTool):
     async def run(self, args=None, signal=None, prompter=None) -> str:
         self.store.clear()
         return "cleared."
-
 
 class BrowserCaptureBurpTasksTool(BaseCaptureTool):
     def name(self) -> str:
@@ -335,7 +318,6 @@ class BrowserCaptureBurpTasksTool(BaseCaptureTool):
             DEFAULT_LIST_LIMIT,
         )
 
-
 class BrowserCaptureBurpIssuesTool(BaseCaptureTool):
     def name(self) -> str:
         return f"{TOOL_PREFIX}burp_issues"
@@ -357,7 +339,6 @@ class BrowserCaptureBurpIssuesTool(BaseCaptureTool):
             [{**i.__dict__, "createdAt": _iso(i.created_at)} for i in issues],
             DEFAULT_LIST_LIMIT,
         )
-
 
 def register_browser_capture_tools(
     register: Callable[[Tool], None],

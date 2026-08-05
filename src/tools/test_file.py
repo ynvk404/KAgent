@@ -13,12 +13,6 @@ from src.tools.file import (
     FileEditTool,
 )
 
-
-# ==========================================================
-# Fixtures
-# ==========================================================
-
-
 @pytest.fixture
 def file_tmp():
     tmp = Path(
@@ -34,16 +28,9 @@ def file_tmp():
         ignore_errors=True,
     )
 
-
 @pytest.fixture
 def signal():
     return None
-
-
-# ==========================================================
-# FileReadTool
-# ==========================================================
-
 
 @pytest.mark.asyncio
 async def test_file_read_regular_file(file_tmp, signal):
@@ -63,7 +50,6 @@ async def test_file_read_regular_file(file_tmp, signal):
 
     assert out == "hello world"
 
-
 @pytest.mark.asyncio
 async def test_file_read_missing_path(signal):
     with pytest.raises(
@@ -75,7 +61,6 @@ async def test_file_read_missing_path(signal):
             signal,
             AlwaysAllow(),
         )
-
 
 @pytest.mark.asyncio
 async def test_file_read_large_file_truncated(
@@ -110,12 +95,6 @@ async def test_file_read_large_file_truncated(
         < 210 * 1024
     )
 
-
-# ==========================================================
-# FileWriteTool
-# ==========================================================
-
-
 @pytest.mark.asyncio
 async def test_file_write_creates_parent_dirs(
     file_tmp,
@@ -148,12 +127,6 @@ async def test_file_write_creates_parent_dirs(
 
     assert back == "abc"
 
-
-# ==========================================================
-# FileEditTool
-# ==========================================================
-
-
 @pytest.mark.asyncio
 async def test_file_edit_replace_unique(
     file_tmp,
@@ -185,7 +158,6 @@ async def test_file_edit_replace_unique(
 
     assert after == "foo qux baz"
 
-
 @pytest.mark.asyncio
 async def test_file_edit_non_unique_without_replace_all(
     file_tmp,
@@ -210,7 +182,6 @@ async def test_file_edit_non_unique_without_replace_all(
             signal,
             AlwaysAllow(),
         )
-
 
 @pytest.mark.asyncio
 async def test_file_edit_replace_all(
@@ -243,7 +214,6 @@ async def test_file_edit_replace_all(
     )
 
     assert after == "y y y"
-
 
 @pytest.mark.asyncio
 async def test_file_edit_old_string_not_found(

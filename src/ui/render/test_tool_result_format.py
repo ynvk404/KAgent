@@ -23,9 +23,6 @@ YELLOW = f"{ESC}[33m"
 
 @pytest.fixture(scope="module", autouse=True)
 def t(request):
-    """Force color on (mirrors `vi.stubEnv('NO_COLOR', '')`) and import the
-    module fresh so the module-level color level picks up the env change.
-    """
     os.environ.pop("NO_COLOR", None)
     os.environ["FORCE_COLOR"] = "1"
     module = importlib.import_module("src.ui.render.tool_result_format")
@@ -65,9 +62,7 @@ class TestColorizeShellResult:
 
     def test_tints_stderr_section_red_but_leaves_stdout_alone(self, t):
         out = t.colorize_shell_result("exit: 1\nstdout:\nfine line\nstderr:\nbad line")
-        # The stdout content "fine line" should NOT carry red ANSI.
-        # The stderr content "bad line" SHOULD.
-        assert "fine line" in out  # verbatim, no color wrap
+        assert "fine line" in out  
         idx = out.index("bad line")
         assert idx > 0
         assert RED in out[:idx]
@@ -159,11 +154,9 @@ class TestBuildToolResultView:
         v = t.build_tool_result_view(body)
         assert v.collapsible is True
         preview_lines = strip_ansi(v.preview).split("\n")
-        # 12 head lines + 1 notice line.
         assert len(preview_lines) <= 13
         assert "more lines" in strip_ansi(v.preview)
         assert "Ctrl-O to expand" in strip_ansi(v.preview)
-        # Full view keeps everything.
         assert "line 199" in strip_ansi(v.full)
 
     def test_collapses_giant_single_line_by_char_cap(self, t):
@@ -177,7 +170,6 @@ class TestBuildToolResultView:
         raw = json.dumps([{"type": "text", "text": snapshot}])
         v = t.build_tool_result_view(raw)
         assert v.collapsible is True
-        # No JSON envelope leaks into the rendered preview.
         assert '"type"' not in strip_ansi(v.preview)
         assert 'link "item 0"' in strip_ansi(v.preview)
 
@@ -218,5 +210,5 @@ class TestBuildToolResultViewRoutesHTTP:
     def test_colorizes_an_http_tool_result(self, t):
         raw = http_resp("301 Moved Permanently")
         view = t.build_tool_result_view(raw)
-        assert view.full != raw  # gained ANSI
+        assert view.full != raw  
         assert "301 Moved Permanently" in strip_ansi(view.full)

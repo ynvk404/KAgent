@@ -1,14 +1,9 @@
-# ui/widgets/banner.py
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
 
-
-# ==========================================================
-# Logo
-# ==========================================================
 
 LOGO = [
     "██╗  ██╗ █████╗",
@@ -27,10 +22,6 @@ ToolSupportPill = Literal[
     "probing",
 ]
 
-
-# ==========================================================
-# Data
-# ==========================================================
 
 @dataclass(frozen=True, slots=True)
 class BannerData:
@@ -51,12 +42,6 @@ class BannerData:
 class Pill:
     text: str
     color: str
-
-
-
-# ==========================================================
-# Pill
-# ==========================================================
 
 def model_pill(
     tool_support: ToolSupportPill | None,
@@ -92,21 +77,10 @@ def model_pill(
             return None
 
 
-
-# ==========================================================
-# Render line
-# ==========================================================
-
 @dataclass(frozen=True, slots=True)
 class BannerLine:
     text: str
     color: str = "white"
-
-
-
-# ==========================================================
-# Banner
-# ==========================================================
 
 class Banner:
 

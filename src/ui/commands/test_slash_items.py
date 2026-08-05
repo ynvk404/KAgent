@@ -3,19 +3,16 @@ from src.ui.commands.slash_items import (
     filter_slash,
 )
 
-
 def test_returns_all_items_when_input_is_just_slash():
     result = filter_slash("/")
 
     assert len(result) == len(SLASH_ITEMS)
 
 
-
 def test_returns_no_items_when_input_does_not_start_with_slash():
 
     assert filter_slash("hello") == []
     assert filter_slash("") == []
-
 
 
 def test_prefix_matches_command_names():

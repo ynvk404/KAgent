@@ -1,10 +1,3 @@
-"""
-Test toolDisplay
-
-Port từ:
-kagent/src/tools/toolDisplay.test.ts
-"""
-
 from __future__ import annotations
 
 from src.tools.tool_display import (
@@ -12,11 +5,6 @@ from src.tools.tool_display import (
     primary_tool_arg,
     format_tool_result,
 )
-
-
-# ==========================================================
-# display_tool_name
-# ==========================================================
 
 def test_display_browser_navigate():
     assert (
@@ -26,7 +14,6 @@ def test_display_browser_navigate():
         == "Browser"
     )
 
-
 def test_display_browser_actions():
     assert (
         display_tool_name(
@@ -34,14 +21,12 @@ def test_display_browser_actions():
         )
         == "Browser Click"
     )
-
     assert (
         display_tool_name(
             "mcp_browser_browser_type_text"
         )
         == "Browser Type Text"
     )
-
 
 def test_display_load_skill():
     assert (
@@ -51,7 +36,6 @@ def test_display_load_skill():
         == "Skill"
     )
 
-
 def test_display_confirm_finding():
     assert (
         display_tool_name(
@@ -59,7 +43,6 @@ def test_display_confirm_finding():
         )
         == "Confirmed Finding"
     )
-
 
 def test_display_ask_user():
     assert (
@@ -69,7 +52,6 @@ def test_display_ask_user():
         == "Ask User"
     )
 
-
 def test_display_web_tools():
     assert (
         display_tool_name(
@@ -77,7 +59,6 @@ def test_display_web_tools():
         )
         == "Web Fetch"
     )
-
     assert (
         display_tool_name(
             "web_search"
@@ -85,15 +66,9 @@ def test_display_web_tools():
         == "Web Search"
     )
 
-
 def test_display_unknown():
     assert display_tool_name("shell") == "shell"
     assert display_tool_name("not_real") == "not_real"
-
-
-# ==========================================================
-# primary_tool_arg
-# ==========================================================
 
 def test_primary_browser():
     assert (
@@ -106,7 +81,6 @@ def test_primary_browser():
         == "https://x.test"
     )
 
-
 def test_primary_shell():
     assert (
         primary_tool_arg(
@@ -117,7 +91,6 @@ def test_primary_shell():
         )
         == "id"
     )
-
     assert (
         primary_tool_arg(
             "bash",
@@ -127,7 +100,6 @@ def test_primary_shell():
         )
         == "ls -la"
     )
-
     assert (
         primary_tool_arg(
             "BashTool",
@@ -137,7 +109,6 @@ def test_primary_shell():
         )
         == "whoami"
     )
-
 
 def test_primary_http():
     assert (
@@ -150,7 +121,6 @@ def test_primary_http():
         )
         == "GET https://gobus.net"
     )
-
     assert (
         primary_tool_arg(
             "http",
@@ -161,7 +131,6 @@ def test_primary_http():
         )
         == "POST /api/login"
     )
-
     assert (
         primary_tool_arg(
             "http",
@@ -171,7 +140,6 @@ def test_primary_http():
         )
         == "https://gobus.net"
     )
-
 
 def test_primary_confirm_finding():
     assert (
@@ -184,7 +152,6 @@ def test_primary_confirm_finding():
         )
         == "(high) XSS"
     )
-
     assert (
         primary_tool_arg(
             "confirm_finding",
@@ -194,7 +161,6 @@ def test_primary_confirm_finding():
         )
         == "XSS"
     )
-
 
 def test_primary_load_skill():
     assert (
@@ -206,7 +172,6 @@ def test_primary_load_skill():
         )
         == "webvuln"
     )
-
 
 def test_primary_ask_user():
     assert (
@@ -254,7 +219,6 @@ def test_primary_ask_user():
         )
     )
 
-
 def test_primary_unknown():
     assert (
         primary_tool_arg(
@@ -263,7 +227,6 @@ def test_primary_unknown():
         )
         is None
     )
-
     assert (
         primary_tool_arg(
             "shell",
@@ -271,7 +234,6 @@ def test_primary_unknown():
         )
         is None
     )
-
     assert (
         primary_tool_arg(
             "mcp_browser_browser_navigate",
@@ -281,7 +243,6 @@ def test_primary_unknown():
         )
         is None
     )
-
     assert (
         primary_tool_arg(
             "confirm_finding",
@@ -290,13 +251,7 @@ def test_primary_unknown():
         is None
     )
 
-
-# ==========================================================
-# format_tool_result
-# ==========================================================
-
 def test_browser_capture_status():
-
     result = format_tool_result(
         "browser_capture_status",
         """
@@ -308,16 +263,13 @@ def test_browser_capture_status():
 }
 """,
     )
-
     assert (
         result
         ==
         "requests: 0 · endpoints: 0 · snapshots: 0 · last activity: never"
     )
 
-
 def test_load_skill():
-
     body = "\n".join(
         [
             "# Skill: webvuln",
@@ -330,7 +282,6 @@ def test_load_skill():
             "## 2. Known-CVE pass",
         ]
     )
-
     assert (
         format_tool_result(
             "load_skill",
@@ -345,9 +296,7 @@ def test_load_skill():
         )
     )
 
-
 def test_ask_user_result():
-
     result = """
 {
     "answers":[
@@ -362,7 +311,6 @@ def test_ask_user_result():
     ]
 }
 """
-
     assert (
         format_tool_result(
             "ask_user",
@@ -380,9 +328,7 @@ def test_ask_user_result():
         )
     )
 
-
 def test_format_result_fallback():
-
     assert (
         format_tool_result(
             "shell",
@@ -390,7 +336,6 @@ def test_format_result_fallback():
         )
         is None
     )
-
     assert (
         format_tool_result(
             "browser_capture_status",
@@ -398,7 +343,6 @@ def test_format_result_fallback():
         )
         is None
     )
-
     assert (
         format_tool_result(
             "load_skill",
@@ -406,7 +350,6 @@ def test_format_result_fallback():
         )
         is None
     )
-
     assert (
         format_tool_result(
             "ask_user",
