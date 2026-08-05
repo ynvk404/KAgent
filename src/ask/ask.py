@@ -2,7 +2,7 @@
 AskPrompter
 
 Port từ:
-pentestagent/src/ask/ask.ts
+kagent/src/ask/ask.ts
 """
 
 from __future__ import annotations

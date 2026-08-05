@@ -2,7 +2,7 @@
 Findings Store
 
 Port từ:
-pentestagent/src/findings/store.ts
+kagent/src/findings/store.ts
 """
 
 from __future__ import annotations

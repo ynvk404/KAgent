@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from engagement.store import (
+from src.engagement.store import (
     ENGAGEMENT_CHAR_LIMIT,
     EngagementStore,
 )
@@ -27,7 +27,7 @@ def temp_dirs():
 # ==========================================================
 
 def write_engagement(root: Path, body: str) -> None:
-    directory = root / ".pentestagent"
+    directory = root / ".kagent"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "engagement.md").write_text(body, encoding="utf-8")
 

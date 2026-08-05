@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from permission.permission import Decision, YoloPrompter
-from skills.registry import Registry
-from tools.payloads import ReadPayloadsTool
+from src.permission.permission import Decision, YoloPrompter
+from src.skills.registry import Registry
+from src.tools.payloads import ReadPayloadsTool
 
 
 class DummyInnerPrompter:

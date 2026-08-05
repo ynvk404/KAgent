@@ -567,7 +567,7 @@ def format_intelligence_context(results: list[dict[str, Any]]) -> str:
         return ""
  
     out = [
-        "# Local PentestAgent Intelligence",
+        "# Local KAgent Intelligence",
         "",
         "The following local intelligence scenarios matched this turn. "
         "Use them as scan-coverage guidance only; verify all claims with "

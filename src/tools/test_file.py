@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from permission.permission import AlwaysAllow, AlwaysDeny
-from tools.file import (
+from src.permission.permission import AlwaysAllow, AlwaysDeny
+from src.tools.file import (
     FileReadTool,
     FileWriteTool,
     FileEditTool,

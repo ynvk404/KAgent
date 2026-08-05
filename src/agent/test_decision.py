@@ -1,8 +1,8 @@
 import pytest
 
 from src.agent.decision_planner import build_decision_plan
-from target.target import Target
-from skills.registry import Skill
+from src.target.target import Target
+from src.skills.registry import Skill
 
 
 def skill(name: str, description: str) -> Skill:

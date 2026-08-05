@@ -35,7 +35,7 @@ from .types import (
 PROBE_TIMEOUT = 8
 
 # Tên tool giả dùng để kiểm tra Tool Calling.
-PING_TOOL_NAME = "__pentestagent_probe_ping"
+PING_TOOL_NAME = "__kagent_probe_ping"
 
 
 # ============================================================================

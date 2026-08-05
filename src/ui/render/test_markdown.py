@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from ui.render.markdown import render_markdown
+from src.ui.render.markdown import render_markdown
 
 ESC = "\x1b"
 _ANSI_RE = re.compile(rf"{ESC}\[[0-9;]*m")

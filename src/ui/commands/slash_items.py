@@ -64,7 +64,7 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     SlashItem(
         name="/burp",
         args="[port|stop]",
-        description="manage the local Burp/PentestAgent bridge listener",
+        description="manage the local Burp/KAgent bridge listener",
     ),
 
     SlashItem(
@@ -109,7 +109,7 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
         name="/exit",
-        description="quit pentestagent",
+        description="quit kagent",
     ),
 )
 

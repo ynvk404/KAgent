@@ -2,7 +2,7 @@
 ask_user tool.
 
 Port từ:
-pentestagent/src/tools/ask.ts
+kagent/src/tools/ask.ts
 """
 
 from __future__ import annotations

@@ -9,7 +9,7 @@ import tempfile
 import asyncio
 from pathlib import Path
 from typing import Any
-from tools.types import Tool
+from src.tools.types import Tool
 from src.memory.store import MemoryStore
 from src.agent.agent import Agent, AgentOptions, AgentRunOptions, reconcile_tool_calls
 from src.intelligence.store import IntelligenceStore
@@ -451,7 +451,7 @@ async def test_injects_local_intelligence_guidance_for_sqli_context():
         messages = client.requests[0].messages
 
         assert any(
-            "Local PentestAgent Intelligence"
+            "Local KAgent Intelligence"
             in msg.content
             for msg in messages
         )

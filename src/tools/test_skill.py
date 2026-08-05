@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from permission.permission import (
+from src.permission.permission import (
     Decision,
     PermissionRequest,
 )
 
-from skills.registry import Registry
-from tools.skill_file import ReadSkillFileTool
+from src.skills.registry import Registry
+from src.tools.skill_file import ReadSkillFileTool
 
 
 # ============================================================

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from config.config import PluginConfig
-from permission.permission import AlwaysAllow
-from tools.plugin import CommandPluginTool
+from src.config.config import PluginConfig
+from src.permission.permission import AlwaysAllow
+from src.tools.plugin import CommandPluginTool
 
 
 class _NeverAborted:

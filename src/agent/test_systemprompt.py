@@ -4,8 +4,8 @@
 # so future trims of the prompt can't silently widen the assistant's
 # behavior or invert the curl-first default.
 
-from skills.registry import Registry
-from target.target import Target
+from src.skills.registry import Registry
+from src.target.target import Target
 from .system_prompt import BuildOptions, build_system_prompt
 
 

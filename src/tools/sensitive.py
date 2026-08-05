@@ -35,7 +35,7 @@ HOME_RELATIVE = [
     ".docker",
     ".config/gcloud",
     ".config/op",
-    ".pentestagent",
+    ".kagent",
     ".netrc",
     ".pgpass",
     ".npmrc",

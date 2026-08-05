@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 
-from permission.permission import (
+from src.permission.permission import (
     Decision,
     PermissionRequest,
     Prompter,
@@ -24,7 +24,7 @@ from .types import (
     PermissionHintTool,
 )
 
-from llm.types import ToolSpec
+from src.llm.types import ToolSpec
 
 
 class Registry:

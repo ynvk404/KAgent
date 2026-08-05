@@ -92,7 +92,7 @@ from src.skills.registry import Registry as SkillRegistry
 from src.tools.plugin import CommandPluginTool
 from src.tools.finding import ConfirmFindingTool
 from src.tools.registry import Registry as ToolRegistry
-
+from src.redact.redact import apply as redact
 from src.tools.shell import BashTool, ShellTool
 from src.tools.http import HTTPTool
 
@@ -161,7 +161,7 @@ from src.browser.server import (
 # ==========================================================
 
 from src.ui.core.app import (
-    Pentestagent,
+    KAgent,
     AppProps,
     ConfigSnapshot,
     ProviderChange,
@@ -277,8 +277,8 @@ notice_holder = NoticeHolder()
 def parse_flags(argv: list[str]) -> ParsedFlags:
     out = ParsedFlags(
         burp_port=8888,
-        debug_session=os.getenv("PENTESTAGENT_DEBUG_SESSION") == "1",
-        debug_session_path=os.getenv("PENTESTAGENT_DEBUG_SESSION_PATH", ""),
+        debug_session=os.getenv("KAgent_DEBUG_SESSION") == "1",
+        debug_session_path=os.getenv("KAgent_DEBUG_SESSION_PATH", ""),
     )
 
     i = 0
@@ -975,7 +975,7 @@ async def main() -> int:
         run_probes(root_ctl)
     )
 
-    app = Pentestagent(
+    app = KAgent(
         AppProps(
             agent=agent,
             banner_data=banner_data,
@@ -1252,10 +1252,10 @@ def effective_prompt_profile(
 
 def print_help() -> None:
     sys.stdout.write(
-        f"""pentestagent {VERSION}
+        f"""kagent {VERSION}
 
 Usage:
-  pentestagent [flags]
+  kagent [flags]
 
 Flags:
   --backend |openai-compat|kimi|groq|openrouter|deepseek|gemini
@@ -1265,7 +1265,7 @@ Flags:
   --skills <dirs>            comma-separated extra skill directories
   --resume <session-id>
   --browser                  enable Browser MCP for this session only (not persisted)
-  --burp [port]              start local Burp/Pentestagent bridge (default :9999)
+  --burp [port]              start local Burp/KAgent bridge (default :9999)
   --browser-ingest [port]    deprecated alias for --burp
   --no-stream                disable streaming chat (fallback for backends
                              whose SSE/ND-JSON path drops tool_calls)
@@ -1381,6 +1381,9 @@ def _hr(char: str = "─") -> str:
     return GRAY(char * min(_term_width(), 80))
 
 
+def cli_main() -> int:
+    return asyncio.run(main())
+
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    import sys
+    sys.exit(cli_main())

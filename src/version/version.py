@@ -4,4 +4,4 @@ VERSION = "1.0.0"
 
 
 def describe() -> str:
-    return f"pentestagent {VERSION}"
+    return f"kagent {VERSION}"

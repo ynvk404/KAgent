@@ -1,7 +1,7 @@
 """
 Test cho skill discovery
 
-Port từ discovery.test.ts của PentestAgent
+Port từ discovery.test.ts của KAgent
 
 Kiểm tra:
 - thứ tự ưu tiên thư mục skill
@@ -15,7 +15,7 @@ Dùng Path.resolve() để tương thích Windows/Linux
 
 from pathlib import Path
 
-from skills.discovery import skill_search_dirs
+from src.skills.discovery import skill_search_dirs
 
 
 # ============================================================
@@ -40,11 +40,11 @@ def test_skill_search_dirs_order():
 
         str(Path("/proj/skills").resolve()),
 
-        str(Path("/proj/.pentestagent/skills").resolve()),
+        str(Path("/proj/.kagent/skills").resolve()),
 
-        str(Path("/home/.pentestagent/builtin-skills").resolve()),
+        str(Path("/home/.kagent/builtin-skills").resolve()),
 
-        str(Path("/home/.pentestagent/skills").resolve()),
+        str(Path("/home/.kagent/skills").resolve()),
 
         str(Path("/cfg/skills").resolve())
 
@@ -66,17 +66,17 @@ def test_contains_default_skill_dirs():
 
 
     assert str(
-        Path("/proj/.pentestagent/skills").resolve()
+        Path("/proj/.kagent/skills").resolve()
     ) in dirs
 
 
     assert str(
-        Path("/home/.pentestagent/builtin-skills").resolve()
+        Path("/home/.kagent/builtin-skills").resolve()
     ) in dirs
 
 
     assert str(
-        Path("/home/.pentestagent/skills").resolve()
+        Path("/home/.kagent/skills").resolve()
     ) in dirs
 
 

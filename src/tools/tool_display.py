@@ -2,7 +2,7 @@
 Tool display helpers.
 
 Port từ:
-pentestagent/src/tools/toolDisplay.ts
+kagent/src/tools/toolDisplay.ts
 """
 
 from __future__ import annotations

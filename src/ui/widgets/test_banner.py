@@ -1,6 +1,6 @@
 # ui/widgets/test_banner.py
 
-from ui.widgets.banner import (
+from src.ui.widgets.banner import (
     Banner,
     BannerData,
     LOGO,
@@ -84,7 +84,7 @@ def test_banner_basic():
     )
 
 
-    assert "Welcome to pentestagent" in text
+    assert "Welcome to kagent" in text
     assert "Provider: ollama" in text
     assert "Model: qwen3.5" in text
     assert "Path: /workspace" in text
@@ -203,7 +203,7 @@ def test_banner_keeps_logo_and_text_on_same_rows():
             provider="Groq",
             model="openai/gpt-oss-120b",
             endpoint="https://api.groq.com/openai/v1",
-            cwd="/mnt/d/DOANTOTNGHIEP/pentestagent",
+            cwd="/mnt/d/DOANTOTNGHIEP/kagent",
             status="Session e77ed62c - type /help to begin",
             tool_support="yes",
         )

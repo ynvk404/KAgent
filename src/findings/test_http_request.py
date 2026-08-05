@@ -1,5 +1,5 @@
-from findings.store import Finding
-from findings.http_request import finding_request_for_burp
+from src.findings.store import Finding
+from src.findings.http_request import finding_request_for_burp
 
 
 def finding_with_curl(curl: str) -> Finding:
@@ -108,7 +108,7 @@ def test_emits_curl_user_agent_header_forms():
     )
 
     assert "User-Agent: MyScanner/1.0" in space
-    assert "User-Agent: pentestagent" not in space
+    assert "User-Agent: kagent" not in space
 
 
     long = finding_request_for_burp(
@@ -119,7 +119,7 @@ def test_emits_curl_user_agent_header_forms():
     )
 
     assert "User-Agent: Custom UA" in long
-    assert "User-Agent: pentestagent" not in long
+    assert "User-Agent: kagent" not in long
 
 
     attached = finding_request_for_burp(
@@ -153,6 +153,6 @@ def test_falls_back_to_finding_url_and_method_when_no_curl_parsed():
     assert request == (
         "OPTIONS /api/items?id=7 HTTP/1.1\r\n"
         "Host: app.example.com\r\n"
-        "User-Agent: pentestagent\r\n"
+        "User-Agent: kagent\r\n"
         "\r\n"
     )

@@ -247,7 +247,7 @@ class HTTPTool(Tool):
             for k in headers
         ):
             headers["user-agent"] = (
-                "pentestagent/0.1"
+                "kagent/0.1"
             )
 
         async with httpx.AsyncClient(

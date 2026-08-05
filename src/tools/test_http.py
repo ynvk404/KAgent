@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from permission.permission import Decision
-from target.target import Target
-from tools.http import HTTPTool
+from src.permission.permission import Decision
+from src.target.target import Target
+from src.tools.http import HTTPTool
 
 
 class FakeResponse:
@@ -100,7 +100,7 @@ async def test_default_get_runtime():
     stream_cm.__aexit__.return_value = None
 
     with patch(
-        "tools.http.httpx.AsyncClient.stream",
+        "src.tools.http.httpx.AsyncClient.stream",
         return_value=stream_cm,
     ) as mock_stream:
 
@@ -192,7 +192,7 @@ async def test_allow_private_url():
     stream_cm.__aexit__.return_value = None
 
     with patch(
-        "tools.http.httpx.AsyncClient.stream",
+        "src.tools.http.httpx.AsyncClient.stream",
         return_value=stream_cm,
     ) as mock_stream:
 

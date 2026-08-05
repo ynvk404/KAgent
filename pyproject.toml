@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kagent"
+version = "0.1.0"
+description = "AI-powered penetration testing agent"
+readme = "README.md"
+requires-python = ">=3.11"
+
+# Điền dependency thật của project khi hoàn thiện
+dependencies = []
+
+[project.scripts]
+kagent = "src.cli.main:cli_main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

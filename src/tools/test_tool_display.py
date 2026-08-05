@@ -2,12 +2,12 @@
 Test toolDisplay
 
 Port từ:
-pentestagent/src/tools/toolDisplay.test.ts
+kagent/src/tools/toolDisplay.test.ts
 """
 
 from __future__ import annotations
 
-from tools.tool_display import (
+from src.tools.tool_display import (
     display_tool_name,
     primary_tool_arg,
     format_tool_result,

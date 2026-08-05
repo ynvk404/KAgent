@@ -12,7 +12,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from src.config.config import MCPServerConfig
 from contextlib import asynccontextmanager
-_log = logging.getLogger("pentestagent.mcp")
+_log = logging.getLogger("kagent.mcp")
 
 
 def warn(message: str, **fields: Any) -> None:

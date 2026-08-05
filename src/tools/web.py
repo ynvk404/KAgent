@@ -283,7 +283,7 @@ async def _do_fetch(url: str) -> httpx.Response:
         url,
         headers={
             "Accept": "text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.8",
-            "User-Agent": "Mozilla/5.0 pentestagent/0.1 (+research)",
+            "User-Agent": "Mozilla/5.0 kagent/0.1 (+research)",
         },
     )
     try:
@@ -502,7 +502,7 @@ async def _do_search(endpoint: str) -> httpx.Response:
     request = client.build_request(
         "GET",
         endpoint,
-        headers={"User-Agent": "Mozilla/5.0 pentestagent/0.1"},
+        headers={"User-Agent": "Mozilla/5.0 kagent/0.1"},
     )
     try:
         resp = await client.send(request, stream=True)

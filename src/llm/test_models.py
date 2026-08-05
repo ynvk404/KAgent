@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 import requests
 
-from llm.models import list_models
+from src.llm.models import list_models
 
 
 class _Handler(BaseHTTPRequestHandler):

@@ -1,8 +1,8 @@
 import pytest
 import requests
 
-from browser.server import IngestServerOptions, start_ingest_server
-from browser.store import CaptureStore
+from src.browser.server import IngestServerOptions, start_ingest_server
+from src.browser.store import CaptureStore
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def test_requires_bridge_token_for_reads_and_writes(store):
         # Authenticated GET -> 200
         authed_status = requests.get(
             f"{base}/status",
-            headers={"X-Pentestagent-Token": "secret-token"},
+            headers={"X-KAgent-Token": "secret-token"},
         )
         assert authed_status.status_code == 200
 
@@ -37,7 +37,7 @@ def test_requires_bridge_token_for_reads_and_writes(store):
             f"{base}/ingest",
             headers={
                 "Content-Type": "application/json",
-                "X-Pentestagent-Token": "secret-token",
+                "X-KAgent-Token": "secret-token",
             },
             json={"url": "https://app.example.com/api", "method": "GET"},
         )
@@ -66,7 +66,7 @@ def test_rejects_non_loopback_host_headers(store):
             f"{handle.url}/status",
             headers={
                 "Host": "evil.example",
-                "X-Pentestagent-Token": "secret-token",
+                "X-KAgent-Token": "secret-token",
             },
         )
         assert res.status_code == 403

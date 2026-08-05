@@ -6,8 +6,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from llm.openai import OpenAIClient
-from llm.types import ChatRequest, Message
+from src.llm.openai import OpenAIClient
+from src.llm.types import ChatRequest, Message
 
 
 # =====================================================
@@ -541,7 +541,7 @@ async def test_extra_headers():
         "openrouter",
         {
             "HTTP-Referer":
-                "https://github.com/pentestagent/agent"
+                "https://github.com/kagent/agent"
         },
     )
 
@@ -554,5 +554,5 @@ async def test_extra_headers():
     assert (
         last_headers["HTTP-Referer"]
         ==
-        "https://github.com/pentestagent/agent"
+        "https://github.com/kagent/agent"
     )

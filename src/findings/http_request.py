@@ -321,7 +321,7 @@ def http_request_from_curl(
 
     if not has_header(headers, "user-agent"):
         out.append(
-            "User-Agent: pentestagent"
+            "User-Agent: kagent"
         )
 
 
@@ -363,7 +363,7 @@ def fallback_request(
     return (
         f"{method or 'GET'} {path} HTTP/1.1\r\n"
         f"Host: {parsed.netloc}\r\n"
-        "User-Agent: pentestagent\r\n"
+        "User-Agent: kagent\r\n"
         "\r\n"
     )
 

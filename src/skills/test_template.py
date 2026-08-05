@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import frontmatter
 from typing import cast
-from skills.template import render_skill_template
+from src.skills.template import render_skill_template
 KNOWN_TOOL_NAMES = {
     "http",
     "shell",

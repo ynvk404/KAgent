@@ -137,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
 
         cors_headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, DELETE"
         cors_headers["Access-Control-Allow-Headers"] = (
-            "Content-Type, X-Pentestagent-Source, X-Pentestagent-Token"
+            "Content-Type, X-KAgent-Source, X-KAgent-Token"
         )
         return cors_headers
 
@@ -147,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": False, "error": "invalid host"}, status=403)
             return False
 
-        if not authorized(self.headers.get("X-Pentestagent-Token"), self.server.token):
+        if not authorized(self.headers.get("X-KAgent-Token"), self.server.token):
             self.send_json(
                 {"ok": False, "error": "unauthorized"},
                 status=401,
@@ -289,7 +289,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def start_ingest_server(opts: IngestServerOptions) -> IngestServerHandle:
-    """HTTP ingest server for the Pentestagent Chrome extension companion.
+    """HTTP ingest server for the KAgent Chrome extension companion.
 
     Binds to 127.0.0.1 only — never exposed off-host — and accepts JSON
     payloads from the extension's forwardUrl.

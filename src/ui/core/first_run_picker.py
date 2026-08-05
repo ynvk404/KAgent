@@ -157,7 +157,7 @@ class FirstRunPicker:
 
 
         lines.append(
-            "pentestagent first-run setup"
+            "kagent first-run setup"
         )
 
         lines.append("")

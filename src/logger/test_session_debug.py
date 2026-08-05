@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from logger.session_debug import (
+from src.logger.session_debug import (
     create_session_debug_log,
     SessionDebugOptions,
 )

@@ -1,5 +1,5 @@
-# pentestagent-browser-mcp — standalone MCP stdio server that pairs with
-# the pentestagent Chrome extension companion.
+# kagent-browser-mcp — standalone MCP stdio server that pairs with
+# the kagent Chrome extension companion.
 
 import sys
 import json
@@ -13,14 +13,14 @@ from mcp.server import Server, NotificationOptions
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 
-import logger
+from src.logger import logger
 from .server import start_ingest_server, IngestServerOptions
 from .store import CaptureStore
 
 # Ép kiểu Any cho module logger để tránh Pylance báo lỗi attr access khi gọi init/info
 log: Any = logger
 
-SERVER_NAME = 'pentestagent-browser'
+SERVER_NAME = 'kagent-browser'
 SERVER_VERSION = '0.1.0'
 DEFAULT_PORT = 9999
 
@@ -64,13 +64,13 @@ def parse_args(argv: List[str]) -> ParsedArgs:
     return out
 
 def print_help() -> None:
-    sys.stderr.write(f"""pentestagent-browser-mcp {SERVER_VERSION}
+    sys.stderr.write(f"""kagent-browser-mcp {SERVER_VERSION}
 
-Standalone MCP stdio server that bridges the pentestagent Chrome extension
-to any MCP-aware client (Cursor, pentestagent, ...).
+Standalone MCP stdio server that bridges the kagent Chrome extension
+to any MCP-aware client (Cursor, kagent, ...).
 
 Usage:
-  python -m pentestagent_browser_mcp [flags]
+  python -m kagent_browser_mcp [flags]
 
 Flags:
   --port <n>          ingest HTTP port (default {DEFAULT_PORT}, 127.0.0.1 only)
@@ -142,12 +142,12 @@ async def main() -> int:
         )
         ingest_url = handle.url
         sys.stderr.write(
-            f"[pentestagent-browser-mcp] ingest listening at {handle.url}/ingest\n"
-            f"[pentestagent-browser-mcp] token: {handle.token}\n"
-            f"[pentestagent-browser-mcp] configure the Chrome extension with this base URL and token.\n"
+            f"[kagent-browser-mcp] ingest listening at {handle.url}/ingest\n"
+            f"[kagent-browser-mcp] token: {handle.token}\n"
+            f"[kagent-browser-mcp] configure the Chrome extension with this base URL and token.\n"
         )
     except Exception as err:
-        sys.stderr.write(f"[pentestagent-browser-mcp] failed to start ingest server on :{args.port}: {err}\n")
+        sys.stderr.write(f"[kagent-browser-mcp] failed to start ingest server on :{args.port}: {err}\n")
         return 1
 
     mcp = Server(SERVER_NAME)
@@ -159,7 +159,7 @@ async def main() -> int:
         return [
             types.Tool(
                 name="browser_capture_status",
-                description="Show counts (requests / endpoints / snapshots) and last-activity time for traffic captured by the pentestagent Chrome extension. Call this first to confirm the extension is connected and forwarding.",
+                description="Show counts (requests / endpoints / snapshots) and last-activity time for traffic captured by the kagent Chrome extension. Call this first to confirm the extension is connected and forwarding.",
                 inputSchema={"type": "object", "properties": {}}
             ),
             types.Tool(
@@ -337,5 +337,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as e:
-        sys.stderr.write(f"[pentestagent-browser-mcp] fatal: {e}\n")
+        sys.stderr.write(f"[kagent-browser-mcp] fatal: {e}\n")
         sys.exit(1)

@@ -32,7 +32,7 @@ def test_render_shows_options():
 
     text = "\n".join(picker.render())
 
-    assert "pentestagent first-run setup" in text
+    assert "kagent first-run setup" in text
     assert OPTIONS[0].label in text
     assert OPTIONS[1].label in text
     assert "Enter pick" in text

@@ -1,7 +1,7 @@
 """
 Skill discovery
 
-Port từ Pentestagent discovery.ts
+Port từ KAgent discovery.ts
 
 Chức năng:
 - Xác định các thư mục chứa skill
@@ -9,9 +9,9 @@ Chức năng:
 
 Thứ tự:
 1. ./skills                (built-in)
-2. ./.pentestagent/skills (project local)
-3. ~/.pentestagent/builtin-skills
-4. ~/.pentestagent/skills
+2. ./.kagent/skills (project local)
+3. ~/.kagent/builtin-skills
+4. ~/.kagent/skills
 5. thư mục cấu hình thêm
 
 Skill load sau sẽ ghi đè skill trước
@@ -74,19 +74,19 @@ def skill_search_dirs(
 
         # skill riêng của project
         Path(cwd)
-        / ".pentestagent"
+        / ".kagent"
         / "skills",
 
 
         # skill cài bởi installer
         Path(home)
-        / ".pentestagent"
+        / ".kagent"
         / "builtin-skills",
 
 
         # skill cá nhân
         Path(home)
-        / ".pentestagent"
+        / ".kagent"
         / "skills",
     ]
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ui.render.color_level import color_level, no_color_requested
+from src.ui.render.color_level import color_level, no_color_requested
 
 
 def test_forces_truecolor_by_default(monkeypatch):

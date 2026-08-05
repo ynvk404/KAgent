@@ -17,8 +17,8 @@ class EngagementStore:
         cwd = Path(self.cwd).resolve() if self.cwd else Path.cwd().resolve()
         home = Path(self.home).expanduser() if self.home else Path.home()
 
-        self.project_path = cwd / ".pentestagent" / "engagement.md"
-        self.personal_path = home / ".pentestagent" / "engagement.md"
+        self.project_path = cwd / ".kagent" / "engagement.md"
+        self.personal_path = home / ".kagent" / "engagement.md"
 
     def load(self) -> str:
         parts: list[str] = []

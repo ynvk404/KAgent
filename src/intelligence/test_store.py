@@ -285,7 +285,7 @@ class TestContextFormatter:
         ]
 
         formatted = format_intelligence_context(search_results)
-        assert "# Local PentestAgent Intelligence" in formatted
+        assert "# Local KAgent Intelligence" in formatted
         assert f"## {sample_scenario.title}" in formatted
         assert "Category: vulnerability" in formatted
         assert "sqlmap -u" in formatted

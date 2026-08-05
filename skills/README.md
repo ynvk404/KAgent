@@ -31,13 +31,13 @@ Discovered automatically, in increasing precedence (later overrides earlier
 on a name collision):
 
 1. this built-in `skills/` directory
-2. `./.pentestagent/skills/` (project-local — scoped to the repo)
-3. `~/.pentestagent/builtin-skills/` (installer-managed shipped skills)
-4. `~/.pentestagent/skills/` (personal)
+2. `./.kagent/skills/` (project-local — scoped to the repo)
+3. `~/.kagent/builtin-skills/` (installer-managed shipped skills)
+4. `~/.kagent/skills/` (personal)
 5. any dirs passed via `--skills <dir>` or the `skills_dirs` config
 
-Use `~/.pentestagent/skills/` for personal skills you want available
-everywhere, or the project-local `./.pentestagent/skills/` for skills
+Use `~/.kagent/skills/` for personal skills you want available
+everywhere, or the project-local `./.kagent/skills/` for skills
 scoped to a single repo.
 
 Just drop a `<name>/SKILL.md` into one of these — no config needed. Skills
@@ -47,7 +47,7 @@ Just drop a `<name>/SKILL.md` into one of these — no config needed. Skills
 ## Creating a skill
 
 - **Scaffold:** run `/skills new <name>` in the TUI — it writes a templated
-  `./.pentestagent/skills/<name>/SKILL.md` and loads it immediately.
+  `./.kagent/skills/<name>/SKILL.md` and loads it immediately.
 - **By hand:** copy [`_template/SKILL.md`](_template/SKILL.md) into
   `<name>/SKILL.md` and edit.
 

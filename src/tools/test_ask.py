@@ -2,7 +2,7 @@
 Test AskUserTool
 
 Port từ:
-pentestagent/src/tools/ask.test.ts
+kagent/src/tools/ask.test.ts
 """
 
 from __future__ import annotations
@@ -11,14 +11,14 @@ import json
 
 import pytest
 
-from ask.ask import (
+from src.ask.ask import (
     AskPrompter,
     Question,
 )
 
-from permission.permission import AlwaysAllow
+from src.permission.permission import AlwaysAllow
 
-from tools.ask import AskUserTool
+from src.tools.ask import AskUserTool
 
 
 

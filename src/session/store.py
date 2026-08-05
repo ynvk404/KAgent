@@ -100,7 +100,7 @@ def validate_id(session_id: str) -> None:
 
 def dir_from_path(path=None):
     if not path:
-        return Path.home() / ".pentestagent" / "sessions"
+        return Path.home() / ".kagent" / "sessions"
     return Path(path).parent
 
 
@@ -193,6 +193,38 @@ def _tool_calls_from_list(raw: Any) -> list[ToolCall] | None:
 
 
 # ============================================================
+# SessionMemory (de)serialization helpers
+# ============================================================
+
+# The TypeScript store writes SessionMemory using camelCase field names
+# (updatedAt, lastCompactedAt, lastSummary), while this dataclass uses
+# snake_case (updated_at, last_compacted_at, last_summary). Both stores
+# read/write the same on-disk session files, so a session saved by the
+# TS CLI must still load cleanly here. We accept either key style rather
+# than silently dropping the whole memory block on a TypeError.
+_MEMORY_KEY_ALIASES = {
+    "updatedAt": "updated_at",
+    "lastCompactedAt": "last_compacted_at",
+    "lastSummary": "last_summary",
+}
+
+_MEMORY_FIELDS = {f.name for f in dataclasses.fields(SessionMemory)}
+
+
+def _memory_from_dict(data: dict) -> SessionMemory | None:
+    normalized: dict[str, Any] = {}
+    for key, value in data.items():
+        canonical = _MEMORY_KEY_ALIASES.get(key, key)
+        if canonical in _MEMORY_FIELDS:
+            normalized[canonical] = value
+
+    try:
+        return SessionMemory(**normalized)
+    except Exception:
+        return None
+
+
+# ============================================================
 # Store
 # ============================================================
 
@@ -245,10 +277,7 @@ class Store:
         memory = None
         memory_data = raw.get("memory")
         if isinstance(memory_data, dict):
-            try:
-                memory = SessionMemory(**memory_data)
-            except Exception:
-                memory = None
+            memory = _memory_from_dict(memory_data)
 
         target = None
         target_data = raw.get("target")
@@ -273,6 +302,9 @@ class Store:
         target: Target | None = None,
         memory: SessionMemory | None = None,
     ) -> None:
+        if not self.path or str(self.path) in ("", "."):
+            return
+
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
         serialized_messages = []
@@ -295,7 +327,7 @@ class Store:
             "updated_at": datetime.now().isoformat(),
             "id": self.id if self.id else None,
             "target": target.to_dict() if target and not target.is_empty() else None,
-            "memory": memory.__dict__ if memory else None,
+            "memory": dataclasses.asdict(memory) if memory else None,
             "messages": serialized_messages,
         }
 
@@ -309,7 +341,13 @@ class Store:
         tmp = Path(str(self.path) + ".tmp." + random_tmp_id())
 
         try:
-            with open(tmp, "x", encoding="utf8") as f:
+            # Create the tmp file with 0600 permissions from the outset
+            # (via the fd mode, not a later chmod). session files can
+            # contain secrets (SessionMemory.credentials), so there must
+            # be no window where the tmp file is group/world readable
+            # under the process umask before the final chmod runs.
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf8") as f:
                 f.write(body)
                 f.flush()
                 if need_fsync:
@@ -331,6 +369,8 @@ class Store:
     # ============================================================
 
     async def clear(self) -> None:
+        if not self.path or str(self.path) in ("", "."):
+            return
         self.path.unlink(missing_ok=True)
 
     # ============================================================
@@ -338,6 +378,9 @@ class Store:
     # ============================================================
 
     async def save_context_snapshot(self, markdown: str) -> str:
+        if not self.path or str(self.path) in ("", "."):
+            return ""
+
         out = self.context_snapshot_path()
         out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
@@ -347,16 +390,113 @@ class Store:
         tmp = Path(str(out) + ".tmp." + random_tmp_id())
 
         try:
-            with open(tmp, "x", encoding="utf8") as f:
+            # Same 0600-from-creation reasoning as save(): context
+            # snapshots can embed findings/credentials pulled from
+            # SessionMemory, so avoid a world/group-readable window.
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf8") as f:
                 f.write(markdown)
                 f.flush()
                 os.fsync(f.fileno())
 
             os.replace(tmp, out)
-            os.chmod(out, 0o600)
+
+            try:
+                os.chmod(out, 0o600)
+            except Exception:
+                pass
 
         except Exception:
             tmp.unlink(missing_ok=True)
             raise
 
         return str(out)
+
+
+# ============================================================
+# Listing
+# ============================================================
+
+
+_PREVIEW_MARKER = "\n\n# Referenced files\n\n"
+
+
+def _first_user_preview(messages: list, max_len: int) -> str:
+    """
+    Mirror of the TS firstUserPreview(): find the first user message,
+    strip anything from the "# Referenced files" marker onward, keep
+    only its first line, and truncate to max_len characters (counting
+    by unicode codepoint, matching the TS `[...s]` spread behaviour).
+    """
+    for m in messages:
+        role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+        if role != "user":
+            continue
+
+        content = m.get("content") if isinstance(m, dict) else getattr(m, "content", "")
+        content = content or ""
+
+        idx = content.find(_PREVIEW_MARKER)
+        if idx >= 0:
+            content = content[:idx]
+
+        first_line = content.split("\n", 1)[0].strip()
+
+        chars = list(first_line)
+        if len(chars) > max_len:
+            return "".join(chars[: max_len - 1]) + "…"
+        return first_line
+
+    return "(no user messages)"
+
+
+def list_dir(directory) -> list[Summary]:
+    """
+    List `*.json` sessions in `directory`, newest first. Corrupt files
+    are skipped rather than aborting the whole listing.
+    """
+    directory = Path(directory)
+    if not directory.exists():
+        return []
+
+    try:
+        entries = list(directory.iterdir())
+    except Exception:
+        return []
+
+    out: list[Summary] = []
+    for entry in entries:
+        if not entry.name.endswith(".json"):
+            continue
+
+        try:
+            raw = json.loads(entry.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        if not isinstance(raw, dict):
+            continue
+
+        session_id = raw.get("id") or entry.stem
+
+        updated_at_raw = raw.get("updated_at")
+        try:
+            updated_at = (
+                datetime.fromisoformat(updated_at_raw)
+                if updated_at_raw
+                else datetime.fromtimestamp(0)
+            )
+        except ValueError:
+            updated_at = datetime.fromtimestamp(0)
+
+        out.append(
+            Summary(
+                id=session_id,
+                path=str(entry),
+                updated_at=updated_at,
+                preview=_first_user_preview(raw.get("messages") or [], 80),
+            )
+        )
+
+    out.sort(key=lambda s: s.updated_at, reverse=True)
+    return out

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from ui.widgets.skills_modal import SkillsModal
+from src.ui.widgets.skills_modal import SkillsModal
 
 
 # ==========================================================

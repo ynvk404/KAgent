@@ -3,13 +3,13 @@ import tempfile
 
 import pytest
 
-from skills.registry import (
+from src.skills.registry import (
     Registry,
     parse_skill,
     materialize_skill_body,
 )
 
-from skills.load_skill import LoadSkillTool
+from src.skills.load_skill import LoadSkillTool
 
 # ============================================================
 # Helpers

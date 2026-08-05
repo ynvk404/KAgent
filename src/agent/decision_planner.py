@@ -7,8 +7,8 @@ from dataclasses import dataclass
 import re
 from typing import List, Optional, TypedDict
 
-from skills.registry import Skill
-from target.target import Target
+from src.skills.registry import Skill
+from src.target.target import Target
 
 # ==========================
 # Decision Plan

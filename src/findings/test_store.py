@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from findings.store import Finding, Store
+from src.findings.store import Finding, Store
 
 
 @pytest.fixture

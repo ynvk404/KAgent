@@ -7,8 +7,8 @@ from typing import Any, Awaitable, Callable
 import httpx
 import pytest
 
-from permission.permission import Decision, PermissionRequest, AlwaysAllow, AlwaysDeny
-from tools.web import WebFetchTool, WebSearchTool, clear_web_cache
+from src.permission.permission import Decision, PermissionRequest, AlwaysAllow, AlwaysDeny
+from src.tools.web import WebFetchTool, WebSearchTool, clear_web_cache
 
 
 class _Prompter:
@@ -100,7 +100,7 @@ def fake_httpx_client(monkeypatch: pytest.MonkeyPatch):
     FakeAsyncClient.handler = None
     FakeAsyncClient.last_init_kwargs = None
     FakeAsyncClient.call_count = 0
-    monkeypatch.setattr("tools.web.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("src.tools.web.httpx.AsyncClient", FakeAsyncClient)
     yield
     # Clear cross-test cache state so each case exercises the cold network path.
     clear_web_cache()

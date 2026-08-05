@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from ui.utils.ping import PING_TIMEOUT, PingTask
+from src.ui.utils.ping import PING_TIMEOUT, PingTask
 
 
 class DummyClient:
@@ -84,7 +84,7 @@ async def test_ping_timeout_sets_not_ready(monkeypatch):
     ready: list[bool] = []
 
     monkeypatch.setattr(
-        "ui.utils.ping.PING_TIMEOUT",
+        "src.ui.utils.ping.PING_TIMEOUT",
         0.01,
     )
     task = PingTask(lambda: SlowClient(), ready.append)

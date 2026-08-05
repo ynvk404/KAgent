@@ -124,10 +124,10 @@ def new_from_config(
                 "openrouter",
                 {
                     "HTTP-Referer": (
-                        "https://github.com/pentestagent/agent"
+                        "https://github.com/kagent/agent"
                     ),
                     "X-OpenRouter-Title": (
-                        "pentestagent"
+                        "kagent"
                     ),
                 },
                 gen,

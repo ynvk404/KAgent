@@ -46,7 +46,7 @@ def handle_skills_command(
             )
             return
 
-        skills_root = Path.cwd() / ".pentestagent" / "skills"
+        skills_root = Path.cwd() / ".kagent" / "skills"
         skill_dir = skills_root / name
         skill_file = skill_dir / "SKILL.md"
         if skill_file.exists():

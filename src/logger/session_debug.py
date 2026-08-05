@@ -183,7 +183,7 @@ def default_debug_path(
 
     return (
         Path.home()
-        / ".pentestagent"
+        / ".kagent"
         / "debug"
         / f"session-{session_id}-{stamp}.jsonl"
     )

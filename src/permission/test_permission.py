@@ -1,6 +1,6 @@
 import pytest
 
-from permission.permission import (
+from src.permission.permission import (
     Decision,
     PermissionRequest,
     Prompter,

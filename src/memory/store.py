@@ -5,8 +5,8 @@ Bộ nhớ lâu dài của Pentest Agent — port từ TypeScript sang Python,
 chuẩn PEP 8 / type hint đầy đủ / production-ready.
 
 Hai scope (giống EngagementStore / IntelligenceStore):
-  - project:  ./.pentestagent/memory/   (theo từng engagement)
-  - personal: ~/.pentestagent/memory/   (thói quen/preference dùng chung)
+  - project:  ./.kagent/memory/   (theo từng engagement)
+  - personal: ~/.kagent/memory/   (thói quen/preference dùng chung)
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Final, Literal, Optional
 
 # TODO: thay bằng import module redact thật của dự án, ví dụ:
-from redact.redact import apply as redact
+from src.redact.redact import apply as redact
 # =========================
 # Cấu hình giới hạn
 # =========================
@@ -88,8 +88,8 @@ class MemoryStore:
         cwd = cwd or os.getcwd()
         home = home or str(Path.home())
 
-        self.project_dir: Path = Path(cwd) / ".pentestagent" / "memory"
-        self.personal_dir: Path = Path(home) / ".pentestagent" / "memory"
+        self.project_dir: Path = Path(cwd) / ".kagent" / "memory"
+        self.personal_dir: Path = Path(home) / ".kagent" / "memory"
 
         # cache: scope -> (mtime, list[MemoryFact])
         self.scope_cache: dict[MemoryScope, tuple[float, list[MemoryFact]]] = {}
@@ -302,7 +302,7 @@ class MemoryStore:
             path.unlink(missing_ok=True)
             return
 
-        lines = [f"# Pentestagent memory ({scope})", ""]
+        lines = [f"# KAgent memory ({scope})", ""]
         for fact in facts[:MAX_INDEX_LINES]:
             lines.append(f"- [{fact.type}] {fact.name} - {fact.description}")
         if len(facts) > MAX_INDEX_LINES:

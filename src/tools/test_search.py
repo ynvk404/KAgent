@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from tools.search import GlobTool, GrepTool
-from permission.permission import AlwaysAllow, AlwaysDeny
+from src.tools.search import GlobTool, GrepTool
+from src.permission.permission import AlwaysAllow, AlwaysDeny
 
 
 # ==========================================================

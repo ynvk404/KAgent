@@ -2,7 +2,7 @@
 Shared private/internal-host detection and SSRF gate.
 
 Port từ:
-pentestagent/src/tools/privateHost.ts
+kagent/src/tools/privateHost.ts
 
 Chức năng:
 - Parse HTTP URL

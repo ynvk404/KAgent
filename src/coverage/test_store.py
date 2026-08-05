@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from coverage.store import CoverageStore
+from src.coverage.store import CoverageStore
 
 
 # ==========================================================

@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 from typing import cast
-from tools.mcp_integration import (
+from src.tools.mcp_integration import (
     MCPTool,
     MCPSession,
 )

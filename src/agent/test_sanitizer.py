@@ -4,7 +4,7 @@ test_sanitizer.py
 Port từ sanitize.test.ts
 """
 
-from agent.sanitize import (
+from src.agent.sanitize import (
     ThinkingStreamFilter,
     strip_thinking_tags,
 )

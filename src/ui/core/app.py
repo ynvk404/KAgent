@@ -197,7 +197,7 @@ class RunAgentOptions:
 # PermissionModal, SkillsModal, TextInputModal, MentionMenu, SlashMenu)
 # đều là PURE RENDERER — không phải Textual Widget, chỉ tính ra
 # text/dataclass thuần. Phần adapter này chịu trách nhiệm nối chúng vào
-# cây widget Textual thật (RichLog/Static) trong class Pentestagent.
+# cây widget Textual thật (RichLog/Static) trong class KAgent.
 # ==========================================================
 
 
@@ -278,7 +278,7 @@ def transcript_entry_matches_filter(
 # ==========================================================
 
 
-class Pentestagent(App):
+class KAgent(App):
 
     # ==========================================================
     # Init
@@ -1503,7 +1503,7 @@ class Pentestagent(App):
     # Submit
     # ==========================================================
     # LƯU Ý: method này bị lồng sai bên trong _on_parent_abort() ở bản
-    # trước — đã đưa ra thành method ngang cấp của class Pentestagent,
+    # trước — đã đưa ra thành method ngang cấp của class KAgent,
     # không đổi logic bên trong.
 
     def submit(self, value: str) -> None:

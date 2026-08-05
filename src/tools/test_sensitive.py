@@ -5,7 +5,7 @@ from os.path import expanduser
 
 import pytest
 
-from tools.sensitive import is_sensitive_path
+from src.tools.sensitive import is_sensitive_path
 
 
 home = Path(expanduser("~"))

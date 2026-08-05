@@ -1,5 +1,5 @@
 from __future__ import annotations
-from ui.widgets.banner import BannerData
+from src.ui.widgets.banner import BannerData
 import json
 
 import pytest

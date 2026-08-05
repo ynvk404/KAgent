@@ -24,15 +24,15 @@ from typing import (
 
 from .mentions import expand_file_mentions
 
-from redact.redact import apply as redact
+from src.redact.redact import apply as redact
 
-from llm.client import (
+from src.llm.client import (
     Client,
     StreamingClient,
     is_streaming,
 )
 
-from llm.types import (
+from src.llm.types import (
     ChatRequest,
     ChatResponse,
     Message,
@@ -40,36 +40,36 @@ from llm.types import (
     parsed_args,
 )
 
-from logger.logger import error as log_error
+from src.logger.logger import error as log_error
 
-from intelligence.store import (
+from src.intelligence.store import (
     IntelligenceStore,
     format_intelligence_context,
 )
 
-from memory.store import (
+from src.memory.store import (
     AddMemoryInput,
     MemoryFact,
     MemoryStore,
     format_memory_recall,
 )
 
-from permission.permission import Prompter
+from src.permission.permission import Prompter
 
-from session.store import (
+from src.session.store import (
     SessionMemory,
     Store,
 )
 
-from skills.registry import (
+from src.skills.registry import (
     Registry as SkillRegistry,
     materialize_skill_body,
 )
 
-from target.target import Target
+from src.target.target import Target
 
-from tools.aliases import canonical_tool_name
-from tools.registry import Registry as ToolRegistry
+from src.tools.aliases import canonical_tool_name
+from src.tools.registry import Registry as ToolRegistry
 
 from .decision_planner import build_decision_plan
 
@@ -1263,7 +1263,7 @@ class Agent:
         out = []
 
         # Tiêu đề
-        out.append("# Pentestagent Session Context")
+        out.append("# KAgent Session Context")
         out.append("")
 
         # Thông tin phiên làm việc

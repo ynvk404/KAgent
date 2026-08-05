@@ -13,7 +13,7 @@ from src.ui.core.state import Append, Clear, TranscriptEntry
 
 if TYPE_CHECKING:
     from src.agent.agent import Agent
-    from src.ui.core.app import Pentestagent, RunAgentOptions
+    from src.ui.core.app import KAgent, RunAgentOptions
 
 DEFAULT_THINKING_ENABLED = False
 DEFAULT_YOLO_ENABLED = False
@@ -54,7 +54,7 @@ _KEYBINDINGS: list[tuple[str, str]] = [
         "Esc",
         "cancel an in-flight turn / clear the input draft",
     ),
-    ("Ctrl-C", "quit pentestagent"),
+    ("Ctrl-C", "quit kagent"),
 ]
 
 
@@ -90,7 +90,7 @@ def build_help_text(agent: "Agent", read_config) -> str:
 
     out: list[str] = []
 
-    out.append("pentestagent — quick reference")
+    out.append("kagent — quick reference")
     out.append("─" * 60)
     out.append("")
 
@@ -268,7 +268,7 @@ def suggest_closest(target: str, known: list[str]) -> str | None:
     return best_name if best_name is not None and best_score >= 4 else None
 
 
-def handle_slash(app: "Pentestagent", raw: str) -> bool:
+def handle_slash(app: "KAgent", raw: str) -> bool:
     parts = raw.strip().split()
     if not parts:
         return False
@@ -934,7 +934,7 @@ async def _handle_memory(agent, rest: list[str], dispatch) -> None:
 # /model subcommand
 # ==========================================================
 
-async def _handle_model(app: "Pentestagent", rest: list[str], dispatch) -> None:
+async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
     from src.ui.core.app import ProviderChange  # lazy import: tránh vòng lặp import với app.py
 
     agent = app.agent

@@ -10,7 +10,7 @@ from typing import Any
 MAX_LOG_BYTES = 4 * 1024 * 1024
 MAX_LOG_GENERATIONS = 3
 
-_current_logger: logging.Logger = logging.getLogger("pentestagent-disabled")
+_current_logger: logging.Logger = logging.getLogger("kagent-disabled")
 _current_logger.disabled = True
 
 
@@ -110,15 +110,15 @@ def _safe_extra(args: dict[str, Any] | None) -> dict[str, Any]:
 def default_log_path() -> Path:
     return (
         Path.home()
-        / ".pentestagent"
+        / ".kagent"
         / "logs"
-        / "pentestagent.log"
+        / "kagent.log"
     )
 
 
 def _log_level() -> int:
     level = os.getenv(
-        "PENTESTAGENT_LOG_LEVEL",
+        "KAgent_LOG_LEVEL",
         "INFO",
     ).upper()
 
@@ -150,7 +150,7 @@ def init(path: str | Path | None = None) -> None:
             exist_ok=True,
         )
 
-        logger = logging.getLogger("pentestagent")
+        logger = logging.getLogger("kagent")
         logger.handlers.clear()
 
         handler = RotatingFileHandler(
@@ -170,7 +170,7 @@ def init(path: str | Path | None = None) -> None:
         _current_logger = logger
 
     except Exception:
-        disabled = logging.getLogger("pentestagent-disabled")
+        disabled = logging.getLogger("kagent-disabled")
         disabled.handlers.clear()
         disabled.disabled = True
         _current_logger = disabled

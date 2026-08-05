@@ -1,4 +1,4 @@
-from ui.commands.slash_items import (
+from src.ui.commands.slash_items import (
     SLASH_ITEMS,
     filter_slash,
 )

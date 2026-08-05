@@ -134,13 +134,13 @@ def no_shell_meta(value: str) -> bool:
 
 def config_path() -> Path:
     override = os.getenv(
-        "pentestagent_CONFIG"
+        "kagent_CONFIG"
     )
     if override:
         return Path(override)
     return (
         Path.home()
-        / ".pentestagent"
+        / ".kagent"
         / "config.json"
     )
 
@@ -312,7 +312,7 @@ async def save(
         path.parent
         /
         (
-            ".pentestagent.cfg.tmp."
+            ".kagent.cfg.tmp."
             +
             "".join(
                 random.choices(

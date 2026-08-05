@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import pytest
 
-from permission.permission import PermissionRequest, Decision
-from ui.bridges.perm_bridge import (
+from src.permission.permission import PermissionRequest, Decision
+from src.ui.bridges.perm_bridge import (
     BridgedPrompter,
     BridgedPermissionRequest as BridgePermissionRequest,
 )

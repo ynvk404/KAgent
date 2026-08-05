@@ -2,7 +2,7 @@
 Tool interface.
 
 Port từ:
-pentestagent/src/tools/types.ts
+kagent/src/tools/types.ts
 """
 
 from __future__ import annotations

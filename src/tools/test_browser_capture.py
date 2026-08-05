@@ -4,13 +4,13 @@ from typing import cast
 
 import pytest
 
-from browser.store import (
+from src.browser.store import (
     BurpTask,
     CaptureStore,
     CapturedRequest,
 )
-from permission.permission import Prompter
-from tools.browser_capture import (
+from src.permission.permission import Prompter
+from src.tools.browser_capture import (
     BrowserCaptureBurpTasksTool,
     BrowserCaptureEndpointsTool,
     BrowserCaptureRequestsTool,

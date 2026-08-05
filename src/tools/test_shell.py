@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from permission.permission import AlwaysAllow
+from src.permission.permission import AlwaysAllow
 from src.tools.shell import (
     BashTool,
     DENY_PATTERNS,

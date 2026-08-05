@@ -25,7 +25,7 @@ def temp_config(monkeypatch):
         path = Path(tmp) / "config.json"
 
         monkeypatch.setenv(
-            "pentestagent_CONFIG",
+            "kagent_CONFIG",
             str(path),
         )
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
-from ui.widgets.ask_modal import AskModal
-from ui.bridges.ask_bridge import AskRequest
+from src.ui.widgets.ask_modal import AskModal
+from src.ui.bridges.ask_bridge import AskRequest
 from src.ask.ask import Option, Question
 
 

@@ -1,6 +1,6 @@
 from unittest.mock import Mock
 
-from ui.widgets.text_input_modal import (
+from src.ui.widgets.text_input_modal import (
     TextInputModal,
     TextInputRequest,
 )

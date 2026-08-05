@@ -16,9 +16,9 @@ from typing import Any, Optional
 
 import pytest
 
-from llm.client import Client
-from llm.probe import PING_TOOL_NAME, probe_tool_support
-from llm.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
+from src.llm.client import Client
+from src.llm.probe import PING_TOOL_NAME, probe_tool_support
+from src.llm.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 
 
 class _StubClient:

@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from typing import cast
-from src.ui.core.app import Pentestagent, RunAgentOptions
+from src.ui.core.app import KAgent, RunAgentOptions
 from src.ui.commands.slash_handler import handle_slash
-from src.ui.core.app import Pentestagent
+from src.ui.core.app import KAgent
 from src.ui.core.state import Append
 
 
@@ -85,7 +85,7 @@ def test_maxsteps_without_argument_shows_current_value():
     app = DummyApp()
     app.agent.set_max_steps(10)
 
-    assert handle_slash(cast(Pentestagent, app), "/maxsteps")
+    assert handle_slash(cast(KAgent, app), "/maxsteps")
 
     assert last_text(app) == "max steps currently 10"
     assert app.agent.get_max_steps() == 10
@@ -94,7 +94,7 @@ def test_maxsteps_without_argument_shows_current_value():
 def test_maxsteps_sets_value():
     app = DummyApp()
 
-    assert handle_slash(cast(Pentestagent, app), "/maxsteps 10")
+    assert handle_slash(cast(KAgent, app), "/maxsteps 10")
 
     assert app.agent.get_max_steps() == 10
     assert last_text(app) == "max steps set to 10"
@@ -104,7 +104,7 @@ def test_maxsteps_default_resets_to_agent_default():
     app = DummyApp()
     app.agent.set_max_steps(10)
 
-    assert handle_slash(cast(Pentestagent, app), "/maxsteps default")
+    assert handle_slash(cast(KAgent, app), "/maxsteps default")
 
     assert app.agent.get_max_steps() == 20
     assert last_text(app) == "max steps reset to default (20)"
@@ -113,7 +113,7 @@ def test_maxsteps_default_resets_to_agent_default():
 def test_maxsteps_invalid_argument_shows_usage():
     app = DummyApp()
 
-    assert handle_slash(cast(Pentestagent, app), "/maxsteps abc")
+    assert handle_slash(cast(KAgent, app), "/maxsteps abc")
 
     assert app.agent.get_max_steps() == 20
     assert last_text(app) == "usage: /maxsteps <n|default>"
@@ -122,7 +122,7 @@ def test_maxsteps_invalid_argument_shows_usage():
 def test_thinking_without_argument_shows_current_state():
     app = DummyApp()
 
-    assert handle_slash(cast(Pentestagent, app), "/thinking")
+    assert handle_slash(cast(KAgent, app), "/thinking")
 
     assert last_text(app) == "thinking currently off"
     assert not app.agent.thinking_is_enabled()
@@ -132,7 +132,7 @@ def test_thinking_on_enables_reasoning_mode():
     async def run() -> None:
         app = DummyApp()
 
-        assert handle_slash(cast(Pentestagent, app), "/thinking on")
+        assert handle_slash(cast(KAgent, app), "/thinking on")
         await asyncio.sleep(0)
 
         assert app.agent.thinking_is_enabled()
@@ -146,7 +146,7 @@ def test_thinking_off_disables_reasoning_mode():
         app = DummyApp()
         app.agent.thinking = True
 
-        assert handle_slash(cast(Pentestagent, app), "/thinking off")
+        assert handle_slash(cast(KAgent, app), "/thinking off")
         await asyncio.sleep(0)
 
         assert not app.agent.thinking_is_enabled()
@@ -160,7 +160,7 @@ def test_thinking_default_resets_to_off():
         app = DummyApp()
         app.agent.thinking = True
 
-        assert handle_slash(cast(Pentestagent, app), "/thinking default")
+        assert handle_slash(cast(KAgent, app), "/thinking default")
         await asyncio.sleep(0)
 
         assert not app.agent.thinking_is_enabled()
@@ -172,7 +172,7 @@ def test_thinking_default_resets_to_off():
 def test_thinking_invalid_argument_shows_usage():
     app = DummyApp()
 
-    assert handle_slash(cast(Pentestagent, app), "/thinking abc")
+    assert handle_slash(cast(KAgent, app), "/thinking abc")
 
     assert not app.agent.thinking_is_enabled()
     assert last_text(app) == "usage: /thinking <on|off|default>"
@@ -181,7 +181,7 @@ def test_thinking_invalid_argument_shows_usage():
 def test_yolo_without_argument_shows_current_state():
     app = DummyApp()
 
-    assert handle_slash(cast(Pentestagent, app), "/yolo")
+    assert handle_slash(cast(KAgent, app), "/yolo")
 
     assert last_text(app) == "yolo currently off"
     assert not app.state.yolo
@@ -191,7 +191,7 @@ def test_yolo_without_argument_shows_current_state():
 def test_yolo_on_enables_auto_approve():
     app = DummyApp()
 
-    assert handle_slash(cast(Pentestagent, app), "/yolo on")
+    assert handle_slash(cast(KAgent, app), "/yolo on")
 
     assert app.state.yolo
     assert (
@@ -205,7 +205,7 @@ def test_yolo_off_disables_auto_approve():
     app = DummyApp()
     app.state.yolo = True
 
-    assert handle_slash(cast(Pentestagent, app), "/yolo off")
+    assert handle_slash(cast(KAgent, app), "/yolo off")
 
     assert not app.state.yolo
     assert last_text(app) == "YOLO disabled. Tool calls will prompt for confirmation."
@@ -216,7 +216,7 @@ def test_yolo_default_resets_to_off():
     app = DummyApp()
     app.state.yolo = True
 
-    assert handle_slash(cast(Pentestagent, app), "/yolo default")
+    assert handle_slash(cast(KAgent, app), "/yolo default")
 
     assert not app.state.yolo
     assert last_text(app) == "YOLO reset to default (off)"
@@ -226,7 +226,7 @@ def test_yolo_default_resets_to_off():
 def test_yolo_invalid_argument_shows_usage():
     app = DummyApp()
 
-    assert handle_slash(cast(Pentestagent, app), "/yolo abc")
+    assert handle_slash(cast(KAgent, app), "/yolo abc")
 
     assert not app.state.yolo
     assert last_text(app) == "usage: /yolo <on|off|default>"
@@ -237,7 +237,7 @@ def test_target_without_argument_shows_current_target():
     app = DummyApp()
     app.agent.target.set_base_url("http://localhost:3000")
 
-    assert handle_slash(cast(Pentestagent, app), "/target")
+    assert handle_slash(cast(KAgent, app), "/target")
 
     assert last_text(app) == "target currently: http://localhost:3000"
 
@@ -245,7 +245,7 @@ def test_target_without_argument_shows_current_target():
 def test_target_without_argument_reports_no_target():
     app = DummyApp()
 
-    assert handle_slash(cast(Pentestagent, app), "/target")
+    assert handle_slash(cast(KAgent, app), "/target")
 
     assert last_text(app) == "no target configured"
 
@@ -254,7 +254,7 @@ def test_target_url_sets_target():
     async def run() -> None:
         app = DummyApp()
 
-        assert handle_slash(cast(Pentestagent, app), "/target http://google.com")
+        assert handle_slash(cast(KAgent, app), "/target http://google.com")
         assert app.agent.target.base_url() == "http://google.com"
         assert last_text(app) == "target set to http://google.com"
         await asyncio.sleep(0)
@@ -269,7 +269,7 @@ def test_target_domain_without_scheme_adds_http():
     async def run() -> None:
         app = DummyApp()
 
-        assert handle_slash(cast(Pentestagent, app), "/target google.com")
+        assert handle_slash(cast(KAgent, app), "/target google.com")
         assert app.agent.target.base_url() == "http://google.com"
         assert last_text(app) == "target set to http://google.com"
         await asyncio.sleep(0)
@@ -284,7 +284,7 @@ def test_target_ip_with_port_without_scheme_adds_http():
     async def run() -> None:
         app = DummyApp()
 
-        assert handle_slash(cast(Pentestagent, app), "/target 192.168.1.10:3000")
+        assert handle_slash(cast(KAgent, app), "/target 192.168.1.10:3000")
         assert app.agent.target.base_url() == "http://192.168.1.10:3000"
         assert last_text(app) == "target set to http://192.168.1.10:3000"
         await asyncio.sleep(0)
@@ -300,7 +300,7 @@ def test_target_clear_removes_target():
         app = DummyApp()
         app.agent.target.set_base_url("http://localhost:3000")
 
-        assert handle_slash(cast(Pentestagent, app), "/target clear")
+        assert handle_slash(cast(KAgent, app), "/target clear")
         assert app.agent.target.base_url() == ""
         assert last_text(app) == "target cleared (no target configured)"
         await asyncio.sleep(0)
@@ -314,7 +314,7 @@ def test_target_clear_removes_target():
 def test_target_invalid_input_shows_usage():
     app = DummyApp()
 
-    assert handle_slash(cast(Pentestagent, app), "/target abc?")
+    assert handle_slash(cast(KAgent, app), "/target abc?")
 
     assert app.agent.target.base_url() == ""
     assert last_text(app) == "usage: /target <url|clear>"
@@ -324,7 +324,7 @@ def test_plan_turn_disables_agent_tools():
     async def run() -> None:
         app = DummyApp()
 
-        assert handle_slash(cast(Pentestagent, app), "/plan fix auth flow")
+        assert handle_slash(cast(KAgent, app), "/plan fix auth flow")
         await asyncio.sleep(0)
 
         assert len(app.turns) == 1
@@ -344,7 +344,7 @@ def test_next_turn_disables_agent_tools():
     async def run() -> None:
         app = DummyApp()
 
-        assert handle_slash(cast(Pentestagent, app), "/next test checkout")
+        assert handle_slash(cast(KAgent, app), "/next test checkout")
         await asyncio.sleep(0)
 
         assert len(app.turns) == 1

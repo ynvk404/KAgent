@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from skills.registry import (
+from src.skills.registry import (
     Registry,
     parse_skill,
 )
