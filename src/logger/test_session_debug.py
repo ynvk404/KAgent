@@ -86,3 +86,48 @@ def test_is_noop_when_disabled():
 
     assert log.enabled is False
     log.write("ignored")
+
+def test_redacts_secrets_before_writing(tmp_path: Path):
+    path = tmp_path / "session.jsonl"
+
+    log = create_session_debug_log(
+        SessionDebugOptions(
+            enabled=True,
+            path=str(path),
+            session_id="abc123",
+        )
+    )
+
+    log.agent_event(
+        {
+            "type": "tool-result",
+            "text": "authorization: Bearer abcdef0123456789abcdef",
+            "nested": {
+                "headers": ["x-api-key: sk-live-0123456789abcdefghij"],
+            },
+        }
+    )
+
+    raw = path.read_text(encoding="utf-8")
+
+    assert "abcdef0123456789abcdef" not in raw
+    assert "sk-live-0123456789abcdefghij" not in raw
+
+    line = json.loads(raw)
+    assert line["type"] == "tool-result"
+
+
+def test_debug_log_is_not_world_readable(tmp_path: Path):
+    path = tmp_path / "nested" / "session.jsonl"
+
+    log = create_session_debug_log(
+        SessionDebugOptions(
+            enabled=True,
+            path=str(path),
+            session_id="abc123",
+        )
+    )
+
+    log.write("session_start")
+
+    assert path.stat().st_mode & 0o077 == 0

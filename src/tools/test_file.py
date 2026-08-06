@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from src.permission.permission import AlwaysAllow, AlwaysDeny
+from src.permission.permission import (
+    AlwaysAllow,
+    AlwaysDeny,
+    Decision,
+    PermissionRequest,
+)
 from src.tools.file import (
     FileReadTool,
     FileWriteTool,
@@ -238,4 +243,51 @@ async def test_file_edit_old_string_not_found(
             },
             signal,
             AlwaysAllow(),
+        )
+@pytest.mark.asyncio
+async def test_sensitive_path_gate_asks_with_permission_request(file_tmp, signal):
+    path = file_tmp / ".env"
+
+    path.write_text(
+        "API_KEY=secret"
+    )
+
+    asked: list[PermissionRequest] = []
+
+    class Recorder:
+        async def ask(self, request, _signal=None):
+            asked.append(request)
+            return Decision.ALLOW_ONCE
+
+    out = await FileReadTool().run(
+        {
+            "path": str(path),
+        },
+        signal,
+        Recorder(),
+    )
+
+    assert out == "API_KEY=secret"
+    assert len(asked) == 1
+    assert isinstance(asked[0], PermissionRequest)
+    assert asked[0].no_session_cache is True
+
+@pytest.mark.asyncio
+async def test_sensitive_path_gate_denies_read(file_tmp, signal):
+    path = file_tmp / ".env"
+
+    path.write_text(
+        "API_KEY=secret"
+    )
+
+    with pytest.raises(
+        PermissionError,
+        match="denied",
+    ):
+        await FileReadTool().run(
+            {
+                "path": str(path),
+            },
+            signal,
+            AlwaysDeny(),
         )

@@ -29,3 +29,22 @@ home = Path(expanduser("~"))
 )
 def test_is_sensitive_path(path: Path, want: bool):
     assert is_sensitive_path(str(path)) is want
+
+@pytest.mark.parametrize(
+    "path, want",
+    [
+        (home / ".git-credentials", True),
+        (home / ".azure" / "accessTokens.json", True),
+        (home / ".config" / "gh" / "hosts.yml", True),
+        (Path("/srv/app/.env"), True),
+        (Path("/srv/app/.env.production"), True),
+        (Path("/srv/app/credentials.json"), True),
+        (Path("/srv/app/deploy/id_ed25519"), True),
+
+        (Path("/srv/app/.environment_notes.md"), False),
+        (Path("/srv/app/env.example"), False),
+        (Path("/srv/app/settings.json"), False),
+    ],
+)
+def test_is_sensitive_path_extra_locations(path: Path, want: bool):
+    assert is_sensitive_path(str(path)) is want

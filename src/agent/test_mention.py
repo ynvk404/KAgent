@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 from .mentions import (
+    expand_file_mentions,
     find_active_mention,
     parse_mention_path,
     list_mention_dir,
@@ -186,3 +187,23 @@ def test_candidates():
 
         finally:
             os.chdir(old)
+
+def test_expand_file_mentions_refuses_sensitive_paths():
+    with tempfile.TemporaryDirectory() as tmp:
+        secret = Path(tmp) / ".env"
+        secret.write_text("OPENAI_API_KEY=sk-live-do-not-leak\n")
+
+        out = expand_file_mentions(f"look at @{secret}")
+
+        assert "sk-live-do-not-leak" not in out
+        assert "Refusing to inline sensitive path" in out
+
+
+def test_expand_file_mentions_still_inlines_regular_files():
+    with tempfile.TemporaryDirectory() as tmp:
+        note = Path(tmp) / "note.txt"
+        note.write_text("plain content\n")
+
+        out = expand_file_mentions(f"look at @{note}")
+
+        assert "plain content" in out

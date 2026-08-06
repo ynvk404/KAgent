@@ -361,9 +361,6 @@ async def main() -> int:
         logger.info("browser MCP enabled for this session", {"source": "--browser"})
 
     try:
-        print("DEBUG backend:", cfg.backend)
-        print("DEBUG model:", cfg.model)
-        print("DEBUG key:", cfg.api_key[:10] if cfg.api_key else "EMPTY")
         client = llm_factory.new_from_config(cfg)
     except Exception as err:
         sys.stderr.write(f"{err}\n")
