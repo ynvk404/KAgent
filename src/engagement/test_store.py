@@ -60,3 +60,21 @@ def test_truncates_combined_notes_past_char_limit_with_marker(temp_dirs):
 
     assert len(out) < ENGAGEMENT_CHAR_LIMIT + 200
     assert "engagement notes truncated" in out
+
+def test_unreadable_notes_are_reported_not_silently_dropped(tmp_path, caplog):
+    import logging
+
+    project = tmp_path / "project"
+    (project / ".kagent").mkdir(parents=True)
+    notes = project / ".kagent" / "engagement.md"
+    notes.write_text("in scope: example.com", encoding="utf-8")
+    notes.chmod(0o000)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="kagent.engagement.store"):
+            loaded = EngagementStore(cwd=project, home=tmp_path / "home").load()
+    finally:
+        notes.chmod(0o600)
+
+    assert loaded == ""
+    assert any("engagement.md" in r.getMessage() for r in caplog.records)

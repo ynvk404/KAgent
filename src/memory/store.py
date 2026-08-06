@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final, Literal, Optional
 
+from src.logger.logger import get_logger
 from src.redact.redact import apply as redact
+
+log = get_logger("memory.store")
 
 MAX_FACTS_PER_SCOPE = 500
 MAX_FACT_CHARS = 4000
@@ -149,6 +152,7 @@ class MemoryStore:
         try:
             raw = file.read_text(encoding="utf-8")
         except OSError:
+            log.warning("memory: skipping unreadable fact %s", file, exc_info=True)
             return None
 
         parts = raw.split("---", 2)
@@ -159,6 +163,9 @@ class MemoryStore:
         try:
             meta: dict = yaml.safe_load(fm) or {}
         except yaml.YAMLError:
+            log.warning(
+                "memory: skipping fact %s with invalid front matter", file, exc_info=True
+            )
             return None
 
         body = body.strip()
@@ -231,7 +238,11 @@ class MemoryStore:
                         removed.append(fact.name)
                         changed = True
                     except OSError:
-                        pass
+                        log.warning(
+                            "memory: could not forget %s; it is still stored",
+                            file,
+                            exc_info=True,
+                        )
 
             if changed:
                 self.scope_cache.pop(scope, None)
@@ -322,7 +333,11 @@ class MemoryStore:
             try:
                 Path(fact.file).unlink()
             except OSError:
-                pass
+                log.warning(
+                    "memory: could not prune %s; the scope stays over its limit",
+                    fact.file,
+                    exc_info=True,
+                )
 
     @staticmethod
     def _infer_type(text: str) -> MemoryType:
@@ -389,7 +404,12 @@ class MemoryStore:
         try:
             os.chmod(path, mode)
         except OSError:
-            pass
+            log.warning(
+                "memory: could not restrict permissions on %s; it may be "
+                "readable by other users",
+                path,
+                exc_info=True,
+            )
 
 
 def format_memory_recall(facts: list[MemoryFact]) -> str:

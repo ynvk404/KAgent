@@ -10,7 +10,11 @@ from .types import (
     arg_number,
     arg_string,
 )
+from src.logger.logger import get_logger
+
 from .file import gate_sensitive_path
+
+log = get_logger("tools.search")
 
 GREP_FILE_BYTE_CAP = 5 * 1024 * 1024
 GREP_CONCURRENCY = 8
@@ -284,6 +288,7 @@ async def glob_entries(
         try:
             size = os.path.getsize(f)
         except OSError:
+            log.debug("search: could not stat %s", f, exc_info=True)
             size = 0
         result.append(
             {
@@ -383,8 +388,8 @@ async def grep_file(
                     )
                     if len(output) >= remaining:
                         break
-    except Exception:
-        pass
+    except OSError:
+        log.debug("search: skipping unreadable file %s", path, exc_info=True)
     return output
 
 async def gate_search_inputs(

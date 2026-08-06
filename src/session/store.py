@@ -18,7 +18,10 @@ from src.llm.types import (
     ToolProvider,
     GeminiProvider,
 )
+from src.logger.logger import get_logger
 from src.target.target import Target
+
+log = get_logger("session.store")
 
 
 @dataclass
@@ -95,8 +98,8 @@ def cleanup_stale_temps(directory: Path, max_age_seconds: int = 60):
             age = now - file.stat().st_mtime
             if age > max_age_seconds:
                 file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except OSError:
+            log.warning("session: could not remove stale temp %s", file, exc_info=True)
 
 
 def _tool_call_from_dict(d: Any) -> ToolCall | None:
@@ -158,8 +161,25 @@ def _memory_from_dict(data: dict) -> SessionMemory | None:
 
     try:
         return SessionMemory(**normalized)
-    except Exception:
+    except TypeError:
+        log.warning("session: dropping unreadable session memory", exc_info=True)
         return None
+
+
+class SessionLoadError(RuntimeError):
+    """A session file exists but could not be read back."""
+
+
+def _restrict_permissions(path: Path) -> None:
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        log.warning(
+            "session: could not restrict permissions on %s; it may be "
+            "readable by other users",
+            path,
+            exc_info=True,
+        )
 
 
 class Store:
@@ -186,7 +206,15 @@ class Store:
                 memory=None,
             )
 
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as err:
+            raise SessionLoadError(
+                f"session: failed to read {self.path}: {err}"
+            ) from err
+
+        if not isinstance(raw, dict):
+            raise SessionLoadError(f"session: {self.path}: not a JSON object")
 
         messages: list[Message] = []
         for item in raw.get("messages", []):
@@ -275,10 +303,7 @@ class Store:
 
             os.replace(tmp, self.path)
 
-            try:
-                os.chmod(self.path, 0o600)
-            except Exception:
-                pass
+            _restrict_permissions(self.path)
 
         except Exception:
             tmp.unlink(missing_ok=True)
@@ -310,10 +335,7 @@ class Store:
 
             os.replace(tmp, out)
 
-            try:
-                os.chmod(out, 0o600)
-            except Exception:
-                pass
+            _restrict_permissions(out)
 
         except Exception:
             tmp.unlink(missing_ok=True)
@@ -355,7 +377,8 @@ def list_dir(directory) -> list[Summary]:
 
     try:
         entries = list(directory.iterdir())
-    except Exception:
+    except OSError:
+        log.warning("session: could not list %s", directory, exc_info=True)
         return []
 
     out: list[Summary] = []
@@ -365,7 +388,8 @@ def list_dir(directory) -> list[Summary]:
 
         try:
             raw = json.loads(entry.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, json.JSONDecodeError):
+            log.warning("session: skipping unreadable session %s", entry, exc_info=True)
             continue
 
         if not isinstance(raw, dict):

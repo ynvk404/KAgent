@@ -289,6 +289,28 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
 
     return out
 
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_reporting(coro, label: str) -> asyncio.Task:
+    """Run a coroutine detached, keeping a reference so it is not garbage
+    collected mid-flight and its failure is logged instead of dropped."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+
+    def done(finished: asyncio.Task) -> None:
+        _background_tasks.discard(finished)
+
+        if finished.cancelled():
+            return
+
+        if (err := finished.exception()) is not None:
+            logger.error(f"{label} task failed", {"err": str(err)})
+
+    task.add_done_callback(done)
+    return task
+
+
 async def main() -> int:
     flags = parse_flags(sys.argv[1:])
     watched_dirs: set[str] = set()
@@ -302,6 +324,8 @@ async def main() -> int:
         print_help()
         return 0
     logger.init(flags.log_path)
+    if (log_err := logger.init_error()) is not None:
+        print(f"⚠ file logging disabled: {log_err}", file=sys.stderr)
     logger.info(
         "startup",
         {
@@ -853,9 +877,7 @@ async def main() -> int:
                 }
             )
 
-        asyncio.create_task(
-            run_probes(root_ctl)
-        )
+        _spawn_reporting(run_probes(root_ctl), "probe")
 
     async def update_provider_api_key(provider: str, api_key: str) -> None:
         cfg.api_keys[provider] = api_key
@@ -870,9 +892,7 @@ async def main() -> int:
         if inspect.isawaitable(result):
             await result
     
-    probe_task = asyncio.create_task(
-        run_probes(root_ctl)
-    )
+    _spawn_reporting(run_probes(root_ctl), "probe")
 
     app = KAgent(
         AppProps(
@@ -1066,8 +1086,16 @@ def fs_watch(path: str, loop: asyncio.AbstractEventLoop, callback: Callable[[], 
             observer.schedule(handler, path, recursive=recursive)
             observer.start()
             return observer
-        except Exception:
-            continue
+        except Exception as err:
+            logger.debug(
+                "skills: watch attempt failed",
+                {"path": path, "recursive": recursive, "err": str(err)},
+            )
+
+    logger.warn(
+        "skills: cannot watch directory; edits there will not hot-reload",
+        {"path": path},
+    )
     return None
 
 

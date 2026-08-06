@@ -8,6 +8,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
+from src.logger.logger import get_logger
+
+log = get_logger("coverage.store")
+
 CoverageStatus = Literal[
     "tried",
     "passed",
@@ -53,6 +57,7 @@ class CoverageStore:
         self.dirty = False
         self.saving: asyncio.Task | None = None
 
+        self.last_save_error: Exception | None = None
 
     async def load(self) -> None:
         if self.loaded:
@@ -68,34 +73,66 @@ class CoverageStore:
     async def _do_load(self) -> None:
         if self.path.exists():
             try:
-                raw = self.path.read_text(
-                    encoding="utf8"
+                self.entries = self._parse(
+                    self.path.read_text(
+                        encoding="utf8"
+                    )
                 )
 
-                parsed = json.loads(raw)
-
-                if (
-                    parsed.get("version") == 1
-                    and isinstance(
-                        parsed.get("entries"),
-                        list,
-                    )
-                ):
-                    for item in parsed["entries"]:
-                        if _is_valid_entry(item):
-                            entry = CoverageEntry(**item)
-                            self.entries[
-                                _key_of(
-                                    entry.endpoint,
-                                    entry.param,
-                                    entry.vulnClass,
-                                )
-                            ] = entry
-
             except Exception:
-                pass
+                log.warning(
+                    "coverage: unreadable store %s; quarantining it and "
+                    "starting from an empty store",
+                    self.path,
+                    exc_info=True,
+                )
+                self._quarantine()
 
         self.loaded = True
+
+    @staticmethod
+    def _parse(raw: str) -> dict[str, CoverageEntry]:
+        parsed = json.loads(raw)
+
+        entries: dict[str, CoverageEntry] = {}
+
+        if (
+            parsed.get("version") == 1
+            and isinstance(
+                parsed.get("entries"),
+                list,
+            )
+        ):
+            for item in parsed["entries"]:
+                if _is_valid_entry(item):
+                    entry = CoverageEntry(**item)
+                    entries[
+                        _key_of(
+                            entry.endpoint,
+                            entry.param,
+                            entry.vulnClass,
+                        )
+                    ] = entry
+
+        return entries
+
+    def _quarantine(self) -> None:
+        """Move an unusable store aside so the next save cannot destroy it."""
+        backup = self.path.with_suffix(
+            self.path.suffix + f".corrupt.{secrets.token_hex(3)}"
+        )
+
+        try:
+            self.path.replace(backup)
+            log.warning("coverage: previous store kept at %s", backup)
+
+        except OSError:
+            log.warning(
+                "coverage: could not quarantine %s; it will be overwritten "
+                "on the next save",
+                self.path,
+                exc_info=True,
+            )
 
     async def mark(
         self,
@@ -306,11 +343,14 @@ class CoverageStore:
 
             try:
                 await self._persist()
+                self.last_save_error = None
 
             except Exception as exc:
-                print(
-                    "coverage: failed to persist store:",
-                    exc,
+                self.last_save_error = exc
+                log.error(
+                    "coverage: failed to persist store to %s",
+                    self.path,
+                    exc_info=True,
                 )
 
         self.saving = None
@@ -336,6 +376,15 @@ class CoverageStore:
             + f".tmp.{secrets.token_hex(3)}"
         )
 
+        try:
+            tmp.write_text(
+                json.dumps(
+                    payload,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf8",
+
         tmp.touch(mode=STORE_FILE_MODE)
 
         tmp.write_text(
@@ -343,11 +392,12 @@ class CoverageStore:
                 payload,
                 indent=2,
             )
-            + "\n",
-            encoding="utf8",
-        )
 
-        tmp.replace(self.path)
+            tmp.replace(self.path)
+
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
 
 def _key_of(
     endpoint: str,

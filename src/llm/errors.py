@@ -29,7 +29,7 @@ class BackendError(Exception):
         else:
             msg = f"{self.backend}: {self.detail}"
 
-        super().__init__(msg)
+        Exception.__init__(self, msg)
 
 
 def is_transient(err: object) -> bool:

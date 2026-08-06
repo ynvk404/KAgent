@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hmac
 import json
-import logging
 import re
 import secrets
 import threading
@@ -11,9 +10,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Literal, Optional
 from urllib.parse import urlparse
 
+from src.logger.logger import get_logger
+
 from .store import CaptureStore
 
-logger = logging.getLogger(__name__)
+logger = get_logger("browser.server")
 
 MAX_BODY_BYTES = 4 * 1024 * 1024
 

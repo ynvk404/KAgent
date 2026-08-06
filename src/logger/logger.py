@@ -10,8 +10,19 @@ from typing import Any
 MAX_LOG_BYTES = 4 * 1024 * 1024
 MAX_LOG_GENERATIONS = 3
 
-_current_logger: logging.Logger = logging.getLogger("kagent-disabled")
-_current_logger.disabled = True
+BASE_LOGGER_NAME = "kagent"
+
+
+def _base_logger() -> logging.Logger:
+    log = logging.getLogger(BASE_LOGGER_NAME)
+    log.propagate = False
+    if not log.handlers:
+        log.addHandler(logging.NullHandler())
+    return log
+
+
+_current_logger: logging.Logger = _base_logger()
+_init_error: Exception | None = None
 
 # Attributes `logging` itself owns on a LogRecord: never emitted as JSON payload
 # fields, and suffixed when a caller passes one as `extra`.
@@ -102,7 +113,9 @@ def _log_level() -> int:
 
 
 def init(path: str | Path | None = None) -> None:
-    global _current_logger
+    global _current_logger, _init_error
+
+    log = _base_logger()
 
     try:
         target = Path(path) if path else default_log_path()
@@ -111,9 +124,6 @@ def init(path: str | Path | None = None) -> None:
             parents=True,
             exist_ok=True,
         )
-
-        logger = logging.getLogger("kagent")
-        logger.handlers.clear()
 
         handler = RotatingFileHandler(
             filename=target,
@@ -124,22 +134,40 @@ def init(path: str | Path | None = None) -> None:
 
         handler.setFormatter(JsonFormatter())
 
-        logger.addHandler(handler)
-        logger.setLevel(_log_level())
-        logger.propagate = False
-        logger.disabled = False
+        log.handlers.clear()
+        log.addHandler(handler)
+        log.setLevel(_log_level())
+        log.disabled = False
 
-        _current_logger = logger
+        _init_error = None
+        _current_logger = log
 
-    except Exception:
-        disabled = logging.getLogger("kagent-disabled")
-        disabled.handlers.clear()
-        disabled.disabled = True
-        _current_logger = disabled
+    except Exception as err:
+        log.handlers.clear()
+        log.addHandler(logging.NullHandler())
+        log.disabled = True
+
+        _init_error = err
+        _current_logger = log
+
+
+def init_error() -> Exception | None:
+    """The failure that disabled file logging during the last init(), if any."""
+    return _init_error
 
 
 def logger() -> logging.Logger:
     return _current_logger
+
+
+def get_logger(name: str) -> logging.Logger:
+    """A namespaced logger routed into the KAgent log file.
+
+    Modules use this instead of logging.getLogger() so their records never
+    escape to stderr and corrupt the TUI when logging has not been set up.
+    """
+    _base_logger()
+    return logging.getLogger(f"{BASE_LOGGER_NAME}.{name}")
 
 
 def info(

@@ -4,8 +4,9 @@ import time
 from pathlib import Path
 from dataclasses import dataclass
 
+from src.logger.logger import get_logger
+log = get_logger("agent.mentions")
 from src.tools.sensitive import is_sensitive_path
-
 INLINE_BYTE_CAP = 64 * 1024
 MENTION_RE = re.compile(r'(^|[\s("\'`])@(\S+)')
 
@@ -71,7 +72,8 @@ def walk(
 
     try:
         entries = os.scandir(directory)
-    except Exception:
+    except OSError:
+        log.debug("mentions: skipping unreadable directory %s", directory, exc_info=True)
         return
 
     for entry in entries:
@@ -336,7 +338,8 @@ def list_mention_dir(
 
     try:
         entries = list(os.scandir(abs_dir))
-    except Exception:
+    except OSError:
+        log.debug("mentions: skipping unreadable directory %s", abs_dir, exc_info=True)
         return []
 
     needle = base.lower()
