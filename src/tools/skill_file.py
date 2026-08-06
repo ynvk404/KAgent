@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 from typing import Any
 
 from src.permission.permission import Prompter
+from .skill_paths import (
+    MAX_BYTES,
+    MAX_PREVIEW_BYTES,
+    clamp_line_limit,
+    contained_in,
+    list_files,
+    render_file_preview,
+    resolve_skill_dir,
+)
 from .types import (
     Tool,
     arg_number,
@@ -13,8 +20,8 @@ from .types import (
 )
 from src.skills.registry import Registry as SkillRegistry
 
-MAX_BYTES = 256 * 1024
-MAX_PREVIEW_BYTES = 16 * 1024
+__all__ = ["MAX_BYTES", "MAX_PREVIEW_BYTES", "ReadSkillFileTool"]
+
 
 class ReadSkillFileTool:
     def __init__(
@@ -95,19 +102,13 @@ class ReadSkillFileTool:
             "skill",
         )
 
-        if not skill_name:
-            return "error: skill is required"
-
-        skill = self.skills.get(
-            skill_name
+        skill_dir, error = resolve_skill_dir(
+            self.skills,
+            skill_name,
         )
 
-        if not skill:
-            return (
-                f'error: skill "{skill_name}" not loaded'
-            )
-
-        skill_dir = Path(skill.path).parent
+        if skill_dir is None:
+            return error or "error: skill is required"
 
         path = arg_string(
             args,
@@ -124,7 +125,7 @@ class ReadSkillFileTool:
 
         if action == "list":
             return json.dumps(
-                list_files(skill_dir),
+                list_files(skill_dir, skip_root_names=("SKILL.md",)),
                 indent=2,
             )
 
@@ -170,106 +171,14 @@ class ReadSkillFileTool:
                 f'error: path "{path}" escapes the skill directory via a symlink'
             )
 
-        size = resolved.stat().st_size
-
-        limit_value = arg_number(
-            args,
-            "limit",
-        )
-
-        limit = int(
-            max(
-                1,
-                min(
-                    5000,
-                    limit_value if limit_value is not None else 200,
-                ),
-            )
-        )
-
-        raw = resolved.read_text(
-            encoding="utf-8"
-        )
-
-        lines = raw.split("\n")
-
-        total = len(lines)
-
-        body = "\n".join(
-            lines[:limit]
-        )
-
-        if len(body.encode("utf-8")) > MAX_PREVIEW_BYTES:
-            body = (
-                body[:MAX_PREVIEW_BYTES]
-                + f"\n...<truncated; {size} bytes on disk>"
-            )
-
-        truncated = ""
-
-        if total > limit:
-            truncated = (
-                f"\n...<truncated at {limit} of {total} lines>"
-            )
-
-        return (
-            f"# {skill_name}/{rel} — "
-            f"{total} line(s), {size} bytes\n"
-            f"{body}"
-            f"{truncated}"
-        )
-
-def contained_in(
-    base: Path,
-    target: Path,
-) -> bool:
-    try:
-        real_base = base.resolve()
-        real_target = target.resolve()
-
-        real_target.relative_to(
-            real_base
-        )
-
-        return True
-
-    except (
-        FileNotFoundError,
-        ValueError,
-    ):
-        return False
-
-def list_files(
-    directory: Path,
-    prefix: str = "",
-) -> list[str]:
-    result: list[str] = []
-
-    for entry in directory.iterdir():
-        if entry.name == "SKILL.md" and not prefix:
-            continue
-
-        if entry.is_dir():
-            result.extend(
-                list_files(
-                    entry,
-                    f"{prefix}/{entry.name}"
-                    if prefix
-                    else entry.name,
+        return render_file_preview(
+            f"{skill_name}/{rel}",
+            resolved.read_text(encoding="utf-8"),
+            resolved.stat().st_size,
+            clamp_line_limit(
+                arg_number(
+                    args,
+                    "limit",
                 )
-            )
-            continue
-
-        if not entry.is_file():
-            continue
-
-        if entry.stat().st_size > MAX_BYTES:
-            continue
-
-        result.append(
-            f"{prefix}/{entry.name}"
-            if prefix
-            else entry.name
+            ),
         )
-
-    return sorted(result)
