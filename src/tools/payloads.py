@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from src.permission.permission import Prompter
 from src.skills.registry import Registry as SkillRegistry
 
+from .skill_paths import (
+    MAX_BYTES,
+    MAX_PREVIEW_BYTES,
+    clamp_line_limit,
+    contained_in,
+    list_files,
+    render_file_preview,
+    resolve_skill_dir,
+)
 from .types import Tool, arg_number, arg_string
 
-MAX_BYTES = 256 * 1024
-MAX_PREVIEW_BYTES = 16 * 1024
+__all__ = ["MAX_BYTES", "MAX_PREVIEW_BYTES", "ReadPayloadsTool"]
+
 
 class ReadPayloadsTool(Tool):
 
@@ -98,26 +106,15 @@ class ReadPayloadsTool(Tool):
             "skill",
         )
 
-        if not skill_name:
-            return "error: skill is required"
-
-        skill = self.skills.get(
-            skill_name
+        skill_dir, error = resolve_skill_dir(
+            self.skills,
+            skill_name,
         )
 
-        if not skill:
-            return (
-                f'error: skill "{skill_name}" not loaded'
-            )
+        if skill_dir is None:
+            return error or "error: skill is required"
 
-        skill_dir = Path(
-            skill.path
-        ).parent
-
-        payloads_dir = (
-            skill_dir /
-            "payloads"
-        )
+        payloads_dir = skill_dir / "payloads"
 
         if not payloads_dir.exists():
             return (
@@ -180,111 +177,18 @@ class ReadPayloadsTool(Tool):
                 f"error: not a file: {file}"
             )
 
-        size = (
-            resolved.stat()
-            .st_size
-        )
-
-        limit = arg_number(
-            args,
-            "limit",
-        )
-
-        if limit is None:
-            limit = 200
-
-        limit = max(
-            1,
-            min(
-                5000,
-                int(limit),
-            ),
-        )
-
-        raw = resolved.read_text(
-            encoding="utf-8"
-        )
-
-        lines = raw.split("\n")
-
-        total = len(lines)
-
-        body = "\n".join(
-            lines[:limit]
-        )
-
-        if len(body) > MAX_PREVIEW_BYTES:
-            body = (
-                body[:MAX_PREVIEW_BYTES]
-                +
-                f"\n...<truncated; {size} bytes on disk>"
-            )
-
-        truncated = ""
-
-        if total > limit:
-            truncated = (
-                f"\n...<truncated at {limit} "
-                f"of {total} lines>"
-            )
-
         relative_path = resolved.relative_to(
             payloads_dir.resolve()
         )
 
-        return (
-            f"# {skill_name}/{relative_path} "
-            f"— {total} line(s), {size} bytes\n"
-            f"{body}"
-            f"{truncated}"
-        )
-
-def contained_in(
-    base: Path,
-    target: Path,
-) -> bool:
-    try:
-        target.relative_to(
-            base.resolve()
-        )
-        return True
-    except ValueError:
-        return False
-
-def list_files(
-    directory: Path,
-    prefix: str = "",
-) -> list[str]:
-    result: list[str] = []
-
-    for entry in directory.iterdir():
-        path = directory / entry.name
-
-        if path.is_dir():
-            result.extend(
-                list_files(
-                    path,
-                    (
-                        f"{prefix}/{entry.name}"
-                        if prefix
-                        else entry.name
-                    ),
+        return render_file_preview(
+            f"{skill_name}/{relative_path}",
+            resolved.read_text(encoding="utf-8"),
+            resolved.stat().st_size,
+            clamp_line_limit(
+                arg_number(
+                    args,
+                    "limit",
                 )
-            )
-            continue
-
-        if not path.is_file():
-            continue
-
-        if path.stat().st_size > MAX_BYTES:
-            continue
-
-        result.append(
-            (
-                f"{prefix}/{entry.name}"
-                if prefix
-                else entry.name
-            )
+            ),
         )
-
-    return sorted(result)
