@@ -378,11 +378,6 @@ class CoverageStore:
 
         tmp.touch(mode=STORE_FILE_MODE)
 
-        tmp.write_text(
-            json.dumps(
-                payload,
-                indent=2,
-
         try:
             tmp.write_text(
                 json.dumps(
@@ -398,6 +393,7 @@ class CoverageStore:
         except Exception:
             tmp.unlink(missing_ok=True)
             raise
+
 
 def _key_of(
     endpoint: str,

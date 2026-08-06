@@ -100,6 +100,7 @@ def test_kimi_respects_explicit_max_tokens():
         _cfg(Backend.KIMI, api_key="key", max_tokens=42)
     )
 
+    assert isinstance(client, OpenAIClient)
     assert client.max_tokens == 42
 
 
@@ -170,5 +171,6 @@ def test_explicit_base_url_and_model_override_defaults():
 
     client = new_from_config(cfg)
 
+    assert isinstance(client, OpenAIClient)
     assert client.base_url == "https://custom.test/v1"
     assert client.model_id == "custom-model"

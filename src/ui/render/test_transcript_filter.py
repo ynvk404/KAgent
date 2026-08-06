@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from src.ui.core.state import TranscriptEntry
 from src.ui.render.transcript_filter import (
+    TranscriptFilter,
     filter_transcript,
     transcript_entry_matches_filter,
 )
@@ -88,5 +91,10 @@ def test_matches_all_and_current_always_true():
 
 
 def test_unhandled_filter_raises():
+    # Intentionally passing a value outside the TranscriptFilter Literal to
+    # exercise the defensive `assert` branch at runtime; cast() tells the
+    # type checker this is deliberate rather than a real type error.
+    bogus_filter = cast(TranscriptFilter, "nonsense")
+
     with pytest.raises(AssertionError, match="Unhandled TranscriptFilter"):
-        transcript_entry_matches_filter(_e("assistant"), "nonsense")
+        transcript_entry_matches_filter(_e("assistant"), bogus_filter)
