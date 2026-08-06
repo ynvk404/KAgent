@@ -376,6 +376,7 @@ class CoverageStore:
             + f".tmp.{secrets.token_hex(3)}"
         )
         try:
+            tmp.touch(mode=STORE_FILE_MODE)
             tmp.write_text(
                 json.dumps(
                     payload,

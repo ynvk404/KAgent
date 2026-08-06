@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Callable, TypeGuard, Any
 
 from src.findings.store import (
@@ -153,8 +153,8 @@ class ConfirmFindingTool:
             responseExcerpt=arg_string(args, "response_excerpt") or None,
             curl=arg_string(args, "curl") or None,
             remediation=arg_string(args, "remediation") or None,
-            createdAt=datetime.utcnow().isoformat(),
-            slug=slugify(title) or f"finding-{int(datetime.utcnow().timestamp())}",
+            createdAt=datetime.now(UTC).isoformat(),
+            slug=slugify(title) or f"finding-{int(datetime.now(UTC).timestamp())}",
         )
 
         path = await self.store.save(finding)

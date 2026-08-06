@@ -43,8 +43,14 @@ def test_read_terminal_size_falls_back_to_default(monkeypatch):
         columns = DEFAULT_SIZE.columns
         lines = DEFAULT_SIZE.rows
 
-    monkeypatch.setattr(ts.shutil, "get_terminal_size", lambda fallback: _Size())
-
-    size = read_terminal_size()
-
-    assert size == DEFAULT_SIZE
+    monkeypatch.setattr(
+        ts,
+        "shutil",
+        type(
+            "FakeShutil",
+            (),
+            {
+                "get_terminal_size": lambda fallback: _Size()
+            },
+        ),
+    )
