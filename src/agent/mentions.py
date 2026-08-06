@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from src.tools.sensitive import is_sensitive_path
 from src.logger.logger import get_logger
 log = get_logger("agent.mentions")
+
 INLINE_BYTE_CAP = 64 * 1024
 MENTION_RE = re.compile(r'(^|[\s("\'`])@(\S+)')
 

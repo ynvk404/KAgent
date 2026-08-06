@@ -375,8 +375,15 @@ class CoverageStore:
             self.path.suffix
             + f".tmp.{secrets.token_hex(3)}"
         )
+
+        tmp.touch(mode=STORE_FILE_MODE)
+
+        tmp.write_text(
+            json.dumps(
+                payload,
+                indent=2,
+
         try:
-            tmp.touch(mode=STORE_FILE_MODE)
             tmp.write_text(
                 json.dumps(
                     payload,

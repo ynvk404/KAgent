@@ -11,7 +11,6 @@ from typing import Any
 
 from src.redact.redact import apply as redact
 from src.logger.logger import get_logger
-
 log = get_logger("session_debug")
 DEBUG_DIR_MODE = 0o700
 DEBUG_FILE_MODE = 0o600
