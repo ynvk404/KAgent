@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 SYSTEM_PATHS = [
@@ -15,23 +16,47 @@ SYSTEM_PATHS = [
 HOME_RELATIVE = [
     ".ssh",
     ".aws",
+    ".azure",
     ".gnupg",
     ".gcloud",
     ".kube",
     ".docker",
     ".config/gcloud",
+    ".config/gh",
     ".config/op",
+    ".config/git/credentials",
     ".kagent",
     ".netrc",
     ".pgpass",
     ".npmrc",
     ".pypirc",
+    ".git-credentials",
+    ".terraform.d",
+    ".terraformrc",
+    ".gem/credentials",
+    ".cargo/credentials",
+    ".cargo/credentials.toml",
+    ".composer/auth.json",
+    ".m2/settings.xml",
     ".bash_history",
     ".zsh_history",
     ".python_history",
     ".mysql_history",
     ".psql_history",
 ]
+
+#: Basenames that hold secrets wherever they appear on disk.
+SENSITIVE_BASENAMES = {
+    "credentials.json",
+    "service-account.json",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+}
+
+#: Dotenv variants: .env, .env.local, .env.production, ...
+DOTENV_RE = re.compile(r"^\.env(\..+)?$")
 
 def is_sensitive_path(
     abs_path: str,
@@ -47,6 +72,16 @@ def is_sensitive_path(
             target,
         ):
             return True
+
+    basename = os.path.basename(
+        os.path.normpath(cleaned)
+    ).lower()
+
+    if basename in SENSITIVE_BASENAMES:
+        return True
+
+    if DOTENV_RE.match(basename):
+        return True
 
     try:
         home = Path.home()

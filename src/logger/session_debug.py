@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -8,9 +9,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from src.redact.redact import apply as redact
 
-def redact(text: str) -> str:
-    return text
+DEBUG_DIR_MODE = 0o700
+DEBUG_FILE_MODE = 0o600
+
+
+def redact_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {k: redact_payload(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_payload(v) for v in value]
+    return value
 
 
 class SessionDebugLog(ABC):
@@ -110,21 +122,22 @@ class FileSessionDebugLog(SessionDebugLog):
             self._path.parent.mkdir(
                 parents=True,
                 exist_ok=True,
+                mode=DEBUG_DIR_MODE,
             )
 
             line = json.dumps(
-                payload,
+                redact_payload(payload),
                 ensure_ascii=False,
             )
 
-            safe = redact(line)
-
-            with open(
+            fd = os.open(
                 self._path,
-                "a",
-                encoding="utf-8",
-            ) as f:
-                f.write(safe + "\n")
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                DEBUG_FILE_MODE,
+            )
+
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
 
         except Exception:
             pass

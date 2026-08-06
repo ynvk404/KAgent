@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from src.permission.permission import Decision, PermissionRequest
+
 from .types import (
     Tool,
     arg_bool,
@@ -65,24 +67,22 @@ async def gate_sensitive_path(
     )
 
     decision = await p.ask(
-        {
-            "tool": "file",
-            "summary":
-                f"{verb} sensitive file: {real}",
-            "detail":
-                (
-                    f"path: {shown}\n\n"
-                    "This path is on the sensitive-path list "
-                    "(private keys, cloud credentials, shell history, "
-                    "config dirs, etc.). Approve only if you intend to "
-                    f"{verb} it."
-                ),
-            "noSessionCache": True,
-        },
+        PermissionRequest(
+            tool="file",
+            summary=f"{verb} sensitive file: {real}",
+            detail=(
+                f"path: {shown}\n\n"
+                "This path is on the sensitive-path list "
+                "(private keys, cloud credentials, shell history, "
+                "config dirs, etc.). Approve only if you intend to "
+                f"{verb} it."
+            ),
+            no_session_cache=True,
+        ),
         signal,
     )
 
-    if decision == "deny":
+    if decision == Decision.DENY:
         raise PermissionError(
             f"{verb} of sensitive path denied: {real}"
         )

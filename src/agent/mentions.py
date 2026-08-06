@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 from dataclasses import dataclass
 
+from src.tools.sensitive import is_sensitive_path
+
 INLINE_BYTE_CAP = 64 * 1024
 MENTION_RE = re.compile(r'(^|[\s("\'`])@(\S+)')
 
@@ -23,10 +25,6 @@ SKIP_DIRS = {
     "build",
     ".cache",
 }
-
-
-def is_sensitive_path(path: str) -> bool:
-    return False
 
 
 def extract_mentions(input_text: str) -> list[str]:
