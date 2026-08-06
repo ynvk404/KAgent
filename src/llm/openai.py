@@ -1,28 +1,23 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
-import uuid
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Any, Callable
 
 import httpx
 
 from .client import Client
-from .errors import BackendError, classify_backend, parse_retry_after
+from .errors import classify_backend
 from .providers import kimi_locks_temperature, kimi_supports_thinking_toggle
 from .retry import RetryInfo, RetryOptions, with_retry
+from .transport import (
+    CHAT_TIMEOUT_SEC,
+    attach_retry_after,
+    new_call_id,
+    resolve_max_tokens,
+    run_cancellable,
+)
 from .types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
-
-T = TypeVar("T")
-
-
-def new_call_id() -> str:
-    return f"call_{uuid.uuid4().hex}"
-
-
-CHAT_TIMEOUT = 600.0  #s
-_ABORT_POLL_INTERVAL = 0.1  #s
 
 
 class OpenAIClient(Client):
@@ -45,11 +40,7 @@ class OpenAIClient(Client):
 
         gen_opts = gen_opts or {}
         self.temperature = gen_opts.get("temperature")
-        self.max_tokens = (
-            gen_opts.get("maxTokens")
-            if gen_opts.get("maxTokens") is not None
-            else gen_opts.get("max_tokens")
-        )
+        self.max_tokens = resolve_max_tokens(gen_opts)
 
     def name(self) -> str:
         return self.label
@@ -96,27 +87,6 @@ class OpenAIClient(Client):
             },
         )
 
-    def _attach_retry_after(self, err: BackendError, resp: httpx.Response) -> None:
-        if err.retry_after_ms is not None:
-            return
-        ms = parse_retry_after(resp.headers.get("retry-after"))
-        if ms is not None:
-            err.retry_after_ms = ms
-
-    async def _run_cancellable(self, coro: Awaitable[T], signal: Any) -> T:
-        """Chạy `coro` dưới dạng task, liên tục poll `signal.aborted` để có thể ngắt request HTTP đang chạy."""
-        task: asyncio.Task[T] = asyncio.ensure_future(coro)
-        if signal is None:
-            return await task
-        while not task.done():
-            if getattr(signal, "aborted", False):
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-                raise RuntimeError("aborted")
-            await asyncio.wait({task}, timeout=_ABORT_POLL_INTERVAL)
-        return task.result()
-
     async def chat(
         self,
         req: ChatRequest,
@@ -125,7 +95,7 @@ class OpenAIClient(Client):
         body = self.encode_request(req, False)
 
         async def do_request() -> dict[str, Any]:
-            async with httpx.AsyncClient(timeout=CHAT_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC) as client:
                 try:
                     resp = await client.post(
                         f"{self.base_url}/chat/completions",
@@ -136,11 +106,12 @@ class OpenAIClient(Client):
                     raise classify_backend(self.label, err, 0, None) from err
 
                 if resp.status_code >= 400:
-                    backend_err = classify_backend(
-                        self.label, None, resp.status_code, resp.text
+                    raise attach_retry_after(
+                        classify_backend(
+                            self.label, None, resp.status_code, resp.text
+                        ),
+                        resp,
                     )
-                    self._attach_retry_after(backend_err, resp)
-                    raise backend_err
 
                 try:
                     data = resp.json()
@@ -152,7 +123,7 @@ class OpenAIClient(Client):
                 return data
 
         async def attempt() -> dict[str, Any]:
-            return await self._run_cancellable(do_request(), signal)
+            return await run_cancellable(do_request(), signal)
 
         data = await with_retry(
             attempt,
@@ -196,7 +167,7 @@ class OpenAIClient(Client):
         body = self.encode_request(req, True)
 
         async def open_stream() -> tuple[httpx.AsyncClient, httpx.Response]:
-            client = httpx.AsyncClient(timeout=CHAT_TIMEOUT)
+            client = httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC)
             try:
                 req_obj = client.build_request(
                     "POST",
@@ -213,16 +184,17 @@ class OpenAIClient(Client):
                 raw = await resp.aread()
                 await resp.aclose()
                 await client.aclose()
-                backend_err = classify_backend(
-                    self.label, None, resp.status_code, raw.decode("utf-8", "replace")
+                raise attach_retry_after(
+                    classify_backend(
+                        self.label, None, resp.status_code, raw.decode("utf-8", "replace")
+                    ),
+                    resp,
                 )
-                self._attach_retry_after(backend_err, resp)
-                raise backend_err
 
             return client, resp
 
         async def attempt() -> tuple[httpx.AsyncClient, httpx.Response]:
-            return await self._run_cancellable(open_stream(), signal)
+            return await run_cancellable(open_stream(), signal)
 
         client, resp = await with_retry(
             attempt,
@@ -295,7 +267,7 @@ class OpenAIClient(Client):
                         current["arguments"] += fn["arguments"]
 
         try:
-            await self._run_cancellable(consume(), signal)
+            await run_cancellable(consume(), signal)
         finally:
             await resp.aclose()
             await client.aclose()

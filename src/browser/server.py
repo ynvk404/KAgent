@@ -110,11 +110,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def get_cors_headers(self) -> dict[str, str]:
         origin = self.headers.get("Origin")
-        cors_headers = {}
 
-        if origin and origin.startswith("chrome-extension://"):
-            cors_headers["Access-Control-Allow-Origin"] = origin
+        cors_headers = {"Vary": "Origin"}
 
+        if not origin or not allowed_origin(origin):
+            return cors_headers
+
+        cors_headers["Access-Control-Allow-Origin"] = origin
         cors_headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, DELETE"
         cors_headers["Access-Control-Allow-Headers"] = (
             "Content-Type, X-KAgent-Source, X-KAgent-Token"
@@ -340,6 +342,15 @@ def event_text(path: str, parsed: Any) -> str:
         return f"Burp bridge: captured request {target}"
 
     return "Burp bridge: captured request"
+
+
+EXTENSION_ORIGIN_RE = re.compile(
+    r"^chrome-extension://[a-p]{32}$"
+)
+
+
+def allowed_origin(origin: str) -> bool:
+    return bool(EXTENSION_ORIGIN_RE.match(origin))
 
 
 def authorized(header_token: str | None, token: str) -> bool:

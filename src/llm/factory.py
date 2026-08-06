@@ -24,6 +24,7 @@ from src.llm.providers import (
     KIMI_DEFAULT_MODEL,
     OPENROUTER_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_MODEL,
+    validate_base_url,
 )
 
 
@@ -41,6 +42,9 @@ def new_from_config(
         "temperature": cfg.temperature,
         "max_tokens": cfg.max_tokens,
     }
+
+    if cfg.base_url:
+        validate_base_url(cfg.base_url)
 
     match backend:
 

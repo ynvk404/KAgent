@@ -22,6 +22,9 @@ CoverageStatus = Literal[
 
 MAX_ENTRIES = 5000
 
+STORE_DIR_MODE = 0o700
+STORE_FILE_MODE = 0o600
+
 
 @dataclass
 class CoverageEntry:
@@ -357,6 +360,7 @@ class CoverageStore:
         self.path.parent.mkdir(
             parents=True,
             exist_ok=True,
+            mode=STORE_DIR_MODE,
         )
 
         payload = {
@@ -380,6 +384,13 @@ class CoverageStore:
                 )
                 + "\n",
                 encoding="utf8",
+
+        tmp.touch(mode=STORE_FILE_MODE)
+
+        tmp.write_text(
+            json.dumps(
+                payload,
+                indent=2,
             )
 
             tmp.replace(self.path)
