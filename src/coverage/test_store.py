@@ -213,3 +213,53 @@ async def test_persistence_coalesces_burst_of_marks_into_single_snapshot():
     entries = await reread.list()
 
     assert len(entries) == 20
+
+@pytest.mark.asyncio
+async def test_corrupt_file_is_quarantined_instead_of_overwritten():
+    _, path = make_store()
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{{ not json", encoding="utf8")
+
+    store = CoverageStore(str(path))
+    await store.mark(
+        endpoint="GET /api/x",
+        param="id",
+        vulnClass="idor",
+        status="tried",
+    )
+    await store.flush()
+
+    backups = list(path.parent.glob("coverage.json.corrupt.*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf8") == "{{ not json"
+
+    assert json.loads(path.read_text(encoding="utf8"))["version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_persist_failure_is_recorded_and_leaves_no_temp_file():
+    store, path = make_store()
+
+    await store.mark(
+        endpoint="GET /api/x",
+        param="id",
+        vulnClass="idor",
+        status="tried",
+    )
+    await store.flush()
+
+    path.parent.chmod(0o500)
+    try:
+        await store.mark(
+            endpoint="GET /api/y",
+            param="id",
+            vulnClass="idor",
+            status="tried",
+        )
+        await store.flush()
+    finally:
+        path.parent.chmod(0o700)
+
+    assert isinstance(store.last_save_error, OSError)
+    assert not list(path.parent.glob("coverage.json.tmp.*"))

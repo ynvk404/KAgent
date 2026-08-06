@@ -282,6 +282,8 @@ class Agent:
         self.intelligence = opts.intelligence
         self.memory_store = opts.memory_store
 
+        self._background_tasks: set[asyncio.Task] = set()
+
         self.thinking = (
             opts.thinking_enabled
             if opts.thinking_enabled is not None
@@ -360,6 +362,28 @@ class Agent:
                 content=self.sys_prompt,
             )
         ]
+
+    def _spawn_background(self, coro, label: str) -> asyncio.Task:
+        """Run a coroutine detached, keeping a reference so it is not garbage
+        collected mid-flight and its failure is reported instead of dropped."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+
+        def done(finished: asyncio.Task) -> None:
+            self._background_tasks.discard(finished)
+
+            if finished.cancelled():
+                return
+
+            err = finished.exception()
+            if err is not None:
+                log_error(
+                    f"agent: background task {label} failed",
+                    {"err": err_message(err)},
+                )
+
+        task.add_done_callback(done)
+        return task
 
     def get_history(self) -> list[Message]:
         return [replace(m) for m in self.history]
@@ -888,7 +912,11 @@ class Agent:
 
             return len(loaded.messages) > 1
 
-        except Exception:
+        except Exception as err:
+            log_error(
+                "agent: saved session is unreadable; starting fresh",
+                {"err": err_message(err)},
+            )
             return False
 
     def resume_saved(self) -> None:
@@ -1258,13 +1286,11 @@ class Agent:
             if opts is None or getattr(opts, "tools", True):
                 req.tools = self.tools.as_llm_tools()
 
-            print("RUN_INNER BEFORE CHAT")
             resp, streamed = await self.chat(
                 req,
                 signal,
                 emit,
             )
-            print("RUN_INNER AFTER CHAT")
             resp.message.content = strip_thinking_tags(
                 resp.message.content
             )
@@ -1325,13 +1351,14 @@ class Agent:
             if not has_tool_calls:
 
                 if self.turn_executed_tool:
-                    asyncio.create_task(
+                    self._spawn_background(
                         self.learn_intelligence(
                             build_turn_learning_text(
                                 user_msg,
                                 resp.message.content,
                             )
-                        )
+                        ),
+                        "learn_intelligence",
                     )
 
                 return
@@ -1474,13 +1501,11 @@ class Agent:
                         "argsJSON": parsed.args_json,
                     }
                 )
-                print(">>> BEFORE run_parsed_tool_call")
                 result = await self.run_parsed_tool_call(
                     tc,
                     parsed,
                     signal,
                 )
-                print(">>> AFTER run_parsed_tool_call")
                 self.record_tool_result(
                     tc,
                     parsed,
@@ -1616,14 +1641,12 @@ class Agent:
 
             else:
                 try:
-                    print(">>> BEFORE execute")
                     result = await self.tools.execute(
                         tc.function.name,
                         parsed.args,
                         signal,
                         self.prompter,
                     )
-                    print(">>> AFTER execute")
                 except Exception as err:
                     run_err = err
 
@@ -1731,7 +1754,6 @@ class Agent:
                             "text": visible,
                         }
                     )
-            print("CHAT_STREAM RETURNED")
             resp = await c.chat_stream(
                 ChatRequest(
                     model=req.model,
@@ -1799,7 +1821,6 @@ class Agent:
             )
 
             resp = await self.client.chat(req, signal)
-            print("CHAT RETURNED")
             summary = strip_thinking_tags(
                 resp.message.content
             )
@@ -2270,8 +2291,14 @@ def make_safe_emit(signal, emit):
         try:
             emit(event)
 
-        except Exception:
-            pass
+        except Exception as err:
+            log_error(
+                "agent: event listener raised; event dropped",
+                {
+                    "event": event["type"],
+                    "err": err_message(err),
+                },
+            )
 
     return safe_emit
 

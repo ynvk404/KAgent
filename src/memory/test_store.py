@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from src.memory.store import (
@@ -115,3 +117,35 @@ def test_empty_text(store):
 def test_format_memory_empty():
     result = format_memory_recall([])
     assert result == ""
+
+def test_unreadable_fact_is_reported_and_skipped(store, caplog):
+    store.add(AddMemoryInput(text="target is example.com", scope="project"))
+
+    fact_file = next(
+        f for f in store.project_dir.glob("*.md") if f.name != "MEMORY.md"
+    )
+    fact_file.chmod(0o000)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="kagent.memory.store"):
+            store.scope_cache.clear()
+            facts = store.list()
+    finally:
+        fact_file.chmod(0o600)
+
+    assert facts == []
+    assert any(fact_file.name in r.getMessage() for r in caplog.records)
+
+
+def test_forget_reports_facts_it_could_not_delete(store, caplog):
+    store.add(AddMemoryInput(text="target is example.com", scope="project"))
+
+    store.project_dir.chmod(0o500)
+    try:
+        with caplog.at_level(logging.WARNING, logger="kagent.memory.store"):
+            removed = store.forget("example.com")
+    finally:
+        store.project_dir.chmod(0o700)
+
+    assert removed == []
+    assert any("could not forget" in r.getMessage() for r in caplog.records)

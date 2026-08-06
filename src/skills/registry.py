@@ -7,6 +7,10 @@ from typing import Iterable
 
 import yaml
 
+from src.logger.logger import get_logger
+
+log = get_logger("skills.registry")
+
 
 @dataclass(slots=True)
 class Skill:
@@ -78,8 +82,13 @@ class Registry:
             return
 
         try:
-            entries = directory.iterdir()
-        except Exception:
+            entries = list(directory.iterdir())
+        except OSError:
+            log.warning(
+                "skills: could not list %s; no skills loaded from it",
+                directory,
+                exc_info=True,
+            )
             return
 
         for item in entries:
@@ -100,8 +109,8 @@ class Registry:
             try:
                 skill = parse_skill(skill_file)
                 self.add(skill)
-            except Exception as e:
-                print(f"[skills] skip {skill_file}: {e}")
+            except Exception:
+                log.warning("skills: skipping %s", skill_file, exc_info=True)
 
 
 _FRONTMATTER_RE = re.compile(

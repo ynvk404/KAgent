@@ -8,9 +8,12 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
+from src.logger.logger import get_logger
 from src.permission.permission import Prompter
 from .file import decode_utf8_capped
 from .types import Tool, arg_string
+
+log = get_logger("tools.shell")
 
 DEFAULT_TIMEOUT_SECONDS = 5 * 60
 MAX_TIMEOUT_SECONDS = 30 * 60
@@ -380,8 +383,8 @@ def kill_process_group(pid: int | None) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-        except Exception:
-            pass
+        except OSError:
+            log.warning("shell: could not kill process tree %s", pid, exc_info=True)
         return
 
     killpg = getattr(os, "killpg", None)
@@ -390,13 +393,22 @@ def kill_process_group(pid: int | None) -> None:
         try:
             killpg(pid, signal.SIGTERM)
             return
-        except Exception:
-            pass
+        except ProcessLookupError:
+            return
+        except OSError:
+            log.debug(
+                "shell: could not signal process group %s; "
+                "falling back to the process itself",
+                pid,
+                exc_info=True,
+            )
 
     try:
         os.kill(pid, signal.SIGTERM)
-    except Exception:
+    except ProcessLookupError:
         pass
+    except OSError:
+        log.warning("shell: could not kill process %s", pid, exc_info=True)
 
 class HeadTailBuffer:
     def __init__(self, cap: int):
