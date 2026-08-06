@@ -9,6 +9,7 @@ import pytest
 import requests
 
 from src.llm.models import list_models
+from src.llm.providers import validate_base_url
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -159,3 +160,29 @@ class TestListModels:
     def test_raises_on_connection_failure(self) -> None:
         with pytest.raises(requests.RequestException):
             list_models("openai-compat", "http://127.0.0.1:1")
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://api.evil.example.com/v1",
+        "http://10.0.0.5:8000/v1",
+        "ftp://api.example.com/v1",
+        "api.example.com/v1",
+    ],
+)
+def test_list_models_rejects_cleartext_and_unknown_schemes(base_url: str) -> None:
+    with pytest.raises(ValueError):
+        list_models("openai-compat", base_url=base_url, api_key="sk-secret")
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://api.example.com/v1",
+        "http://127.0.0.1:1234/v1",
+        "http://localhost:1234/v1",
+        "http://[::1]:1234/v1",
+    ],
+)
+def test_validate_base_url_allows_https_and_loopback(base_url: str) -> None:
+    assert validate_base_url(base_url) == base_url

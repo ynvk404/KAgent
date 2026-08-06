@@ -19,6 +19,7 @@ from .providers import (
     KIMI_MODELS,
     OPENROUTER_DEFAULT_BASE_URL,
     OPENROUTER_RECOMMENDED_MODELS,
+    validate_base_url,
 )
 
 DEFAULT_TIMEOUT_S: float = 5.0
@@ -50,6 +51,8 @@ def list_models(
     if not base:
         raise ValueError(f"{b} backend requires a base URL")
 
+    validate_base_url(base)
+
     headers: dict[str, str] = {}
 
     if api_key and b == "gemini":
@@ -65,6 +68,7 @@ def list_models(
         f"{base}/models",
         headers=headers,
         timeout=timeout,
+        allow_redirects=False,
     )
 
     if response.status_code != 200:

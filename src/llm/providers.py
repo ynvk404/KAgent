@@ -1,6 +1,49 @@
 from __future__ import annotations
 
+import ipaddress
 from typing import Final
+from urllib.parse import urlparse
+
+LOOPBACK_HOSTS: Final[frozenset[str]] = frozenset(
+    {"localhost", "127.0.0.1", "::1"}
+)
+
+
+def validate_base_url(base_url: str) -> str:
+    """Reject provider base URLs that would leak the API key in cleartext."""
+    parsed = urlparse(base_url)
+
+    if parsed.scheme == "https":
+        return base_url
+
+    if parsed.scheme != "http":
+        raise ValueError(
+            f"base_url must use http or https, got {parsed.scheme or base_url!r}"
+        )
+
+    if _is_loopback(parsed.hostname):
+        return base_url
+
+    raise ValueError(
+        "base_url must use https for non-loopback hosts; "
+        f"refusing to send credentials in cleartext to {parsed.hostname}"
+    )
+
+
+def _is_loopback(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+
+    host = hostname.strip("[]").rstrip(".").lower()
+
+    if host in LOOPBACK_HOSTS or host.endswith(".localhost"):
+        return True
+
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
 
 # Groq
 

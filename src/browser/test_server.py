@@ -67,3 +67,37 @@ def test_rejects_non_loopback_host_headers(store):
 
     finally:
         handle.close()
+
+def test_cors_only_reflects_valid_extension_origins(store):
+    handle = start_ingest_server(
+        IngestServerOptions(store=store, port=0, token="secret-token")
+    )
+    try:
+        base = handle.url
+        extension = "chrome-extension://" + ("a" * 32)
+
+        allowed = requests.options(
+            f"{base}/ingest",
+            headers={"Origin": extension},
+        )
+        assert allowed.status_code == 204
+        assert allowed.headers["Access-Control-Allow-Origin"] == extension
+        assert allowed.headers["Vary"] == "Origin"
+
+        for origin in (
+            "https://evil.example.com",
+            "chrome-extension://short",
+            "chrome-extension://../../etc",
+            "null",
+        ):
+            denied = requests.options(
+                f"{base}/ingest",
+                headers={"Origin": origin},
+            )
+            assert "Access-Control-Allow-Origin" not in denied.headers
+            assert "Access-Control-Allow-Methods" not in denied.headers
+
+        for response in (allowed, denied):
+            assert "Access-Control-Allow-Credentials" not in response.headers
+    finally:
+        handle.close()
