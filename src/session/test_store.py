@@ -9,7 +9,14 @@ from pathlib import Path
 import pytest
 
 from src.llm.types import Message
-from src.session.store import Store, SessionMemory, dir_from_path, list_dir, new_id
+from src.session.store import (
+    SessionLoadError,
+    SessionMemory,
+    Store,
+    dir_from_path,
+    list_dir,
+    new_id,
+)
 
 class TestEmptyPathGuards:
     @pytest.mark.asyncio
@@ -157,3 +164,22 @@ class TestListDir:
 
         entries = list_dir(tmp_path)
         assert entries[0].preview == "(no user messages)"
+
+class TestLoadPropagatesCorruption:
+    def test_raises_on_unparsable_session(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "broken")
+        store.path.write_text("{not valid json", encoding="utf-8")
+
+        with pytest.raises(SessionLoadError):
+            store.load()
+
+    def test_raises_when_session_is_not_an_object(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "listy")
+        store.path.write_text("[]", encoding="utf-8")
+
+        with pytest.raises(SessionLoadError):
+            store.load()
+
+    def test_returns_empty_session_when_file_is_absent(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "missing")
+        assert store.load().messages == []

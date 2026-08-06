@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.logger.logger import get_logger
+
+log = get_logger("engagement.store")
+
 ENGAGEMENT_CHAR_LIMIT = 6000
 
 @dataclass(slots=True)
@@ -50,4 +54,9 @@ def _read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8").strip()
     except OSError:
+        log.warning(
+            "engagement: could not read %s; its notes are missing from this session",
+            path,
+            exc_info=True,
+        )
         return ""

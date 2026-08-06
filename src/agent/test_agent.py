@@ -1,3 +1,6 @@
+import logging
+from types import SimpleNamespace
+
 import pytest
 import asyncio
 import json
@@ -11,7 +14,13 @@ from pathlib import Path
 from typing import Any
 from src.tools.types import Tool
 from src.memory.store import MemoryStore
-from src.agent.agent import Agent, AgentOptions, AgentRunOptions, reconcile_tool_calls
+from src.agent.agent import (
+    Agent,
+    AgentOptions,
+    AgentRunOptions,
+    make_safe_emit,
+    reconcile_tool_calls,
+)
 from src.intelligence.store import IntelligenceStore
 from src.llm.client import Client
 from src.llm.types import (
@@ -3125,3 +3134,35 @@ async def test_forget_memory_removes_curated_fact_and_prompt():
 
     finally:
         helper["cleanup"]()
+
+
+class TestErrorReporting:
+    def test_safe_emit_reports_listener_failures_instead_of_dropping_them(
+        self, caplog
+    ):
+        signal = SimpleNamespace(aborted=False)
+
+        def broken_listener(event):
+            raise RuntimeError("listener blew up")
+
+        emit = make_safe_emit(signal, broken_listener)
+
+        with caplog.at_level(logging.ERROR, logger="kagent"):
+            emit({"type": "assistant-text", "text": "hi"})
+
+        assert any("listener blew up" in str(r.err) for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_background_task_failure_is_logged(self, caplog):
+        agent = make_agent([])
+
+        async def boom():
+            raise RuntimeError("background boom")
+
+        with caplog.at_level(logging.ERROR, logger="kagent"):
+            task = agent._spawn_background(boom(), "unit-test")
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+
+        assert agent._background_tasks == set()
+        assert any("background boom" in str(r.err) for r in caplog.records)

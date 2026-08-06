@@ -4,6 +4,10 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
+from src.logger.logger import get_logger
+
+log = get_logger("ui.ping")
+
 PING_INTERVAL = 15
 PING_TIMEOUT = 5
 
@@ -42,7 +46,10 @@ class PingTask:
                         if self._running:
                             self._set_ready(True)
 
-                    except Exception:
+                    except Exception as err:
+                        log.debug(
+                            "ping: backend unreachable: %s", err, exc_info=True
+                        )
                         if self._running:
                             self._set_ready(False)
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 import io
 from contextlib import AsyncExitStack
@@ -12,7 +11,9 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from src.config.config import MCPServerConfig
 from contextlib import asynccontextmanager
-_log = logging.getLogger("kagent.mcp")
+from src.logger.logger import get_logger
+
+_log = get_logger("mcp")
 
 
 def warn(message: str, **fields: Any) -> None:
@@ -175,8 +176,12 @@ class MCPSession:
         async def close_op() -> None:
             try:
                 await self._exit_stack.aclose()
-            except Exception:
-                pass
+            except Exception as err:
+                warn(
+                    "mcp: error while closing session",
+                    server=self.server_name,
+                    err=str(err),
+                )
             if self._stderr_task:
                 self._stderr_task.cancel()
 

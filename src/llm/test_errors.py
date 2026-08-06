@@ -152,3 +152,19 @@ class TestIsTransient:
                 "timeout",
             )
         )
+
+class TestBackendErrorConstruction:
+    def test_is_raisable_and_formats_status_and_detail(self) -> None:
+        err = BackendError("ollama", "backend-down", 503, "unavailable")
+
+        assert str(err) == "ollama error 503: unavailable"
+
+        try:
+            raise err
+        except BackendError as caught:
+            assert caught is err
+
+    def test_omits_status_when_there_is_no_response(self) -> None:
+        err = BackendError("groq", "unknown", 0, "connection refused")
+
+        assert str(err) == "groq: connection refused"

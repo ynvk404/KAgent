@@ -8,6 +8,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from src.logger.logger import get_logger
+
+log = get_logger("session_debug")
+
 
 def redact(text: str) -> str:
     return text
@@ -76,6 +80,7 @@ class FileSessionDebugLog(SessionDebugLog):
         self._path = path
         self._session_id = session_id
         self._seq = 0
+        self._write_failed = False
 
     @property
     def enabled(self) -> bool:
@@ -127,7 +132,14 @@ class FileSessionDebugLog(SessionDebugLog):
                 f.write(safe + "\n")
 
         except Exception:
-            pass
+            if not self._write_failed:
+                self._write_failed = True
+                log.warning(
+                    "session debug: cannot write to %s; further write errors "
+                    "for this session are not reported",
+                    self._path,
+                    exc_info=True,
+                )
 
     def agent_event(
         self,

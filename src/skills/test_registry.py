@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -396,3 +397,18 @@ def test_materialize_skill_body_no_placeholder_still_adds_header():
     materialized = materialize_skill_body(skill)
 
     assert materialized == "# Skill: tool-y\n\nNo placeholder here."
+
+def test_load_dir_reports_bad_skill_instead_of_printing(tmp_path, caplog, capsys):
+    skill_dir = tmp_path / "broken"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: \"unterminated\nfoo: [\n---\n\nbody\n", encoding="utf-8"
+    )
+
+    registry = Registry()
+    with caplog.at_level(logging.WARNING, logger="kagent.skills.registry"):
+        registry.load_dir(tmp_path)
+
+    assert registry.list() == []
+    assert capsys.readouterr().out == ""
+    assert any("broken/SKILL.md" in r.getMessage() for r in caplog.records)

@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
-import logging
 import os
 import re
 import secrets
@@ -14,7 +13,9 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Literal, Optional
 
-logger = logging.getLogger("intelligence_store")
+from src.logger.logger import get_logger
+
+logger = get_logger("intelligence.store")
 
 try:
     import filelock 
