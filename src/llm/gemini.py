@@ -1,14 +1,21 @@
-import asyncio
-import contextlib
 import json
-import uuid
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
 from .client import Client, Pinger, StreamingClient
-from .errors import BackendError, classify_backend, parse_retry_after
+from .errors import classify_backend
 from .retry import RetryOptions, with_retry
+from .transport import (
+    CHAT_TIMEOUT_SEC,
+    aborted,
+    attach_retry_after,
+    iter_sse_lines,
+    new_call_id,
+    ping_models_endpoint,
+    resolve_max_tokens,
+    run_cancellable,
+)
 from .types import (
     ChatRequest,
     ChatResponse,
@@ -19,22 +26,6 @@ from .types import (
     ToolProvider,
     ToolSpec,
 )
-
-
-def with_retry_after(err: BackendError, resp: httpx.Response) -> BackendError:
-    retry_after = resp.headers.get('retry-after')
-    if retry_after:
-        ms = parse_retry_after(retry_after)
-        if ms is not None:
-            err.retry_after_ms = ms
-    return err
-
-
-CHAT_TIMEOUT_MS = 10 * 60 * 1000
-CHAT_TIMEOUT_SEC = CHAT_TIMEOUT_MS / 1000.0
-_ABORT_POLL_INTERVAL_SEC = 0.1
-
-T = TypeVar("T")
 
 
 class _CompatToolCall(ToolCall):
@@ -59,20 +50,6 @@ class _CompatToolCall(ToolCall):
         raise KeyError(key)
 
 
-async def _run_cancellable(coro: Awaitable[T], signal: Optional[Any]) -> T:
-    task: asyncio.Task[T] = asyncio.ensure_future(coro)
-    if signal is None:
-        return await task
-    while not task.done():
-        if getattr(signal, "aborted", False):
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            raise RuntimeError("aborted")
-        await asyncio.wait({task}, timeout=_ABORT_POLL_INTERVAL_SEC)
-    return task.result()
-
-
 class GeminiClient(StreamingClient, Pinger):
     def __init__(
         self,
@@ -87,11 +64,7 @@ class GeminiClient(StreamingClient, Pinger):
         self.api_key = api_key
         self.model_id = model
         self.temperature = gen_opts.get("temperature")
-        self.max_tokens = (
-            gen_opts.get("maxTokens")
-            if gen_opts.get("maxTokens") is not None
-            else gen_opts.get("max_tokens")
-        )
+        self.max_tokens = resolve_max_tokens(gen_opts)
         self.thinking_budget = gen_opts.get("thinkingBudget")
 
     def _gen_opts(self) -> Dict[str, Any]:
@@ -108,13 +81,11 @@ class GeminiClient(StreamingClient, Pinger):
         return self.model_id
 
     async def ping(self, signal: Optional[Any] = None) -> None:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{self.base_url}/models",
-                headers={"x-goog-api-key": self.api_key}
-            )
-            if resp.status_code >= 500:
-                raise Exception(f"gemini status {resp.status_code}")
+        await ping_models_endpoint(
+            self.base_url,
+            {"x-goog-api-key": self.api_key},
+            "gemini",
+        )
 
     async def chat(self, req: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
         return await with_retry(
@@ -126,7 +97,7 @@ class GeminiClient(StreamingClient, Pinger):
         body = encode_request(req, self._gen_opts())
         async with httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC) as client:
             try:
-                resp = await _run_cancellable(
+                resp = await run_cancellable(
                     client.post(
                         f"{self.base_url}/{with_models_prefix(req.model or self.model_id)}:generateContent",
                         headers={
@@ -138,13 +109,13 @@ class GeminiClient(StreamingClient, Pinger):
                     signal,
                 )
             except Exception as err:
-                if getattr(signal, "aborted", False):
+                if aborted(signal):
                     raise
                 raise classify_backend('gemini', err, 0, None)
 
             raw = resp.text
             if resp.status_code != 200:
-                raise with_retry_after(classify_backend('gemini', None, resp.status_code, raw), resp)
+                raise attach_retry_after(classify_backend('gemini', None, resp.status_code, raw), resp)
 
             try:
                 out = resp.json()
@@ -191,7 +162,7 @@ class GeminiClient(StreamingClient, Pinger):
 
         async def consume() -> None:
             nonlocal finish
-            async for line in iter_sse(resp):
+            async for line in iter_sse_lines(resp):
                 if not line.startswith('data:'):
                     continue
                 data = line[5:].strip()
@@ -225,7 +196,7 @@ class GeminiClient(StreamingClient, Pinger):
                         chunks.append(part["text"])
 
         try:
-            await _run_cancellable(consume(), signal)
+            await run_cancellable(consume(), signal)
         finally:
             await resp.aclose()
             await client.aclose()
@@ -253,10 +224,10 @@ class GeminiClient(StreamingClient, Pinger):
                 },
                 json=body
             )
-            resp = await _run_cancellable(client.send(req_obj, stream=True), signal)
+            resp = await run_cancellable(client.send(req_obj, stream=True), signal)
         except Exception as err:
             await client.aclose()
-            if getattr(signal, "aborted", False):
+            if aborted(signal):
                 raise
             raise classify_backend('gemini', err, 0, None)
 
@@ -265,7 +236,7 @@ class GeminiClient(StreamingClient, Pinger):
             raw = resp.text
             await resp.aclose()
             await client.aclose()
-            raise with_retry_after(classify_backend('gemini', None, resp.status_code, raw), resp)
+            raise attach_retry_after(classify_backend('gemini', None, resp.status_code, raw), resp)
 
         return client, resp
 
@@ -276,7 +247,7 @@ def part_to_tool_call(part: Dict[str, Any]) -> ToolCall:
     thought_sig = part.get("thoughtSignature") or part.get("thought_signature")
 
     tc = _CompatToolCall(
-        id=f"call_{uuid.uuid4().hex[:16]}",
+        id=new_call_id(16),
         function=FunctionCall(
             name=fc.get("name", ""),
             arguments=json.dumps(fc.get("args", {})),
@@ -286,12 +257,6 @@ def part_to_tool_call(part: Dict[str, Any]) -> ToolCall:
         tc.provider = ToolProvider(gemini=GeminiProvider(thought_signature=thought_sig))
 
     return tc
-
-
-async def iter_sse(resp: httpx.Response) -> AsyncIterator[str]:
-    async for line in resp.aiter_lines():
-        if line:
-            yield line.rstrip('\r')
 
 
 def encode_request(
@@ -321,11 +286,7 @@ def encode_request(
     generation_config: Dict[str, Any] = {}
     if gen_opts.get("temperature") is not None:
         generation_config["temperature"] = gen_opts["temperature"]
-    max_tokens = (
-        gen_opts.get("maxTokens")
-        if gen_opts.get("maxTokens") is not None
-        else gen_opts.get("max_tokens")
-    )
+    max_tokens = resolve_max_tokens(gen_opts)
     if max_tokens is not None and max_tokens > 0:
         generation_config["maxOutputTokens"] = max_tokens
 

@@ -13,9 +13,10 @@ MAX_LOG_GENERATIONS = 3
 _current_logger: logging.Logger = logging.getLogger("kagent-disabled")
 _current_logger.disabled = True
 
-
-class JsonFormatter(logging.Formatter):
-    _STANDARD_FIELDS = {
+# Attributes `logging` itself owns on a LogRecord: never emitted as JSON payload
+# fields, and suffixed when a caller passes one as `extra`.
+LOG_RECORD_FIELDS = frozenset(
+    {
         "name",
         "msg",
         "args",
@@ -39,7 +40,10 @@ class JsonFormatter(logging.Formatter):
         "message",
         "asctime",
     }
+)
 
+
+class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         data: dict[str, Any] = {
             "timestamp": self.formatTime(
@@ -52,7 +56,7 @@ class JsonFormatter(logging.Formatter):
         }
 
         for key, value in record.__dict__.items():
-            if key not in self._STANDARD_FIELDS:
+            if key not in LOG_RECORD_FIELDS:
                 data[key] = value
 
         if record.exc_info:
@@ -65,38 +69,12 @@ class JsonFormatter(logging.Formatter):
             ensure_ascii=False,
         )
 
-_RESERVED_EXTRA_KEYS = {
-    "name",
-    "msg",
-    "args",
-    "levelname",
-    "levelno",
-    "pathname",
-    "filename",
-    "module",
-    "exc_info",
-    "exc_text",
-    "stack_info",
-    "lineno",
-    "funcName",
-    "created",
-    "msecs",
-    "relativeCreated",
-    "thread",
-    "threadName",
-    "processName",
-    "process",
-    "message",
-    "asctime",
-}
-
-
 def _safe_extra(args: dict[str, Any] | None) -> dict[str, Any]:
     if not args:
         return {}
 
     return {
-        (f"{key}_" if key in _RESERVED_EXTRA_KEYS else key): value
+        (f"{key}_" if key in LOG_RECORD_FIELDS else key): value
         for key, value in args.items()
     }
 

@@ -1,51 +1,27 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import json
-from typing import Any, Awaitable, Dict, List, Optional, TypeVar
+from typing import Any, Dict, List, Optional
 
 import httpx
 
 from .client import Client, Pinger
-from .errors import BackendError, classify_backend, parse_retry_after
+from .errors import classify_backend
 from .providers import (
     ANTHROPIC_DEFAULT_MAX_TOKENS,
     ANTHROPIC_VERSION,
     anthropic_accepts_temperature,
 )
 from .retry import RetryOptions, with_retry
+from .transport import (
+    CHAT_TIMEOUT_SEC,
+    aborted,
+    attach_retry_after,
+    ping_models_endpoint,
+    resolve_max_tokens,
+    run_cancellable,
+)
 from .types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall, ToolSpec
-
-
-def with_retry_after(err: BackendError, resp: httpx.Response) -> BackendError:
-    retry_after = resp.headers.get('retry-after')
-    if retry_after:
-        ms = parse_retry_after(retry_after)
-        if ms is not None:
-            err.retry_after_ms = ms
-    return err
-
-
-CHAT_TIMEOUT_MS = 10 * 60 * 1000
-CHAT_TIMEOUT_SEC = CHAT_TIMEOUT_MS / 1000.0
-_ABORT_POLL_INTERVAL_SEC = 0.1
-
-T = TypeVar("T")
-
-
-async def _run_cancellable(coro: Awaitable[T], signal: Optional[Any]) -> T:
-    task: asyncio.Task[T] = asyncio.ensure_future(coro)
-    if signal is None:
-        return await task
-    while not task.done():
-        if getattr(signal, "aborted", False):
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            raise RuntimeError("aborted")
-        await asyncio.wait({task}, timeout=_ABORT_POLL_INTERVAL_SEC)
-    return task.result()
 
 
 class AnthropicClient(Client, Pinger):
@@ -62,11 +38,7 @@ class AnthropicClient(Client, Pinger):
         self.api_key = api_key
         self.model_id = model
         self.temperature = gen_opts.get("temperature")
-        self.max_tokens = (
-            gen_opts.get("maxTokens")
-            if gen_opts.get("maxTokens") is not None
-            else gen_opts.get("max_tokens")
-        )
+        self.max_tokens = resolve_max_tokens(gen_opts)
 
     def _gen_opts(self) -> Dict[str, Any]:
         return {
@@ -81,16 +53,14 @@ class AnthropicClient(Client, Pinger):
         return self.model_id
 
     async def ping(self, signal: Optional[Any] = None) -> None:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{self.base_url}/models",
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": ANTHROPIC_VERSION,
-                }
-            )
-            if resp.status_code >= 500:
-                raise Exception(f"anthropic status {resp.status_code}")
+        await ping_models_endpoint(
+            self.base_url,
+            {
+                "x-api-key": self.api_key,
+                "anthropic-version": ANTHROPIC_VERSION,
+            },
+            "anthropic",
+        )
 
     async def chat(self, req: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
         return await with_retry(
@@ -104,7 +74,7 @@ class AnthropicClient(Client, Pinger):
 
         async with httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC) as client:
             try:
-                resp = await _run_cancellable(
+                resp = await run_cancellable(
                     client.post(
                         f"{self.base_url}/messages",
                         headers={
@@ -117,13 +87,13 @@ class AnthropicClient(Client, Pinger):
                     signal,
                 )
             except Exception as err:
-                if getattr(signal, "aborted", False):
+                if aborted(signal):
                     raise
                 raise classify_backend('anthropic', err, 0, None)
 
             raw = resp.text
             if resp.status_code != 200:
-                raise with_retry_after(classify_backend('anthropic', None, resp.status_code, raw), resp)
+                raise attach_retry_after(classify_backend('anthropic', None, resp.status_code, raw), resp)
 
             try:
                 out = resp.json()
@@ -190,11 +160,7 @@ def encode_request(
         if encoded is not None:
             messages.append(encoded)
 
-    max_tokens = (
-        gen_opts.get("maxTokens")
-        if gen_opts.get("maxTokens") is not None
-        else gen_opts.get("max_tokens")
-    )
+    max_tokens = resolve_max_tokens(gen_opts)
     body: Dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens if max_tokens and max_tokens > 0 else ANTHROPIC_DEFAULT_MAX_TOKENS,
