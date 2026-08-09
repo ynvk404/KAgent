@@ -1,3 +1,4 @@
+```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ src/cli/main.py — parse flags, load config, wire everything up        │
 └───────┬──────────────────────────────────────────────────────────────┘
@@ -34,3 +35,4 @@
 │ Registry │  │ Store    │  │ Store    │  │ Store        │  │ CaptureStore │
 │ SKILL.md │  │ findings │  │ coverage │  │ local files  │  │ ingest server│
 └──────────┘  └──────────┘  └──────────┘  └──────────────┘  └──────────────┘
+```
