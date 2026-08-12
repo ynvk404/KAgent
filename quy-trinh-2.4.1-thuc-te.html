@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="vi">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KAgent – Quy trình hoạt động của hệ thống</title>
+  <style>
+    :root {
+      --paper: #f5f5f5;
+      --paper2: #ececec;
+      --ink: #2d3142;
+      --muted: #4f5d75;
+      --soft: #7a8399;
+      --rule: rgba(45, 49, 66, .12);
+      --accent: #eb6c36;
+      --accentTint: rgba(235, 108, 54, .08);
+      --link: #2e5aa8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    main {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 48px 32px 40px;
+    }
+
+    .eyebrow,
+    .tag,
+    .meta,
+    th,
+    .foot {
+      color: var(--muted);
+      font-family: "Courier New", monospace;
+      font-size: 11px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 8px 0 10px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 400;
+      font-size: 40px;
+      line-height: 1.08;
+    }
+
+    .lead {
+      max-width: 830px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.55;
+      margin: 0 0 32px;
+    }
+
+    figure {
+      margin: 0;
+      overflow-x: auto;
+    }
+
+    svg {
+      display: block;
+      width: 100%;
+      min-width: 980px;
+      height: auto;
+    }
+
+    figcaption {
+      margin: 12px 0 34px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    h2 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 400;
+      font-size: 28px;
+      margin: 36px 0 12px;
+    }
+
+    .note {
+      border-left: 3px solid var(--accent);
+      padding: 12px 16px;
+      background: rgba(235, 108, 54, .045);
+      line-height: 1.55;
+      margin: 18px 0 24px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    th {
+      text-align: left;
+      font-size: 10px;
+      padding: 12px;
+      border-bottom: 1px solid var(--ink);
+    }
+
+    td {
+      vertical-align: top;
+      padding: 12px;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    td code {
+      color: var(--link);
+      font-family: "Courier New", monospace;
+      font-size: 12px;
+    }
+
+    .foot {
+      border-top: 1px solid var(--rule);
+      margin-top: 32px;
+      padding-top: 16px;
+      line-height: 1.55;
+      letter-spacing: .04em;
+      text-transform: none;
+    }
+
+    @media print {
+      main {
+        max-width: none;
+        padding: 18mm 14mm;
+      }
+
+      h1 {
+        font-size: 32px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <p class="eyebrow">Mục 2.4.1 · Flowchart kiểm chứng từ implementation</p>
+    <h1>KAgent – Quy trình hoạt động của hệ thống</h1>
+    <p class="lead">Luồng của một yêu cầu thông thường trong giao diện terminal. Sơ đồ chỉ thể hiện các bước nằm trên
+      execution path: từ khởi tạo CLI/TUI, tiếp nhận prompt, chuẩn bị context, đến vòng lặp LLM–tool và phản hồi cuối.
+    </p>
+
+    <figure>
+      <svg viewBox="0 0 1200 1392" role="img" aria-labelledby="kagent-flow-title kagent-flow-desc">
+        <title id="kagent-flow-title">KAgent – Quy trình hoạt động của hệ thống</title>
+        <desc id="kagent-flow-desc">Flowchart thể hiện KAgent khởi tạo Agent, nhận prompt trong TUI, chuẩn bị session
+          context, gọi LLM, thực thi tool khi LLM yêu cầu và lặp lại đến khi không còn tool call hoặc đạt giới hạn bước.
+        </desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#4f5d75" />
+          </marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#eb6c36" />
+          </marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#2e5aa8" />
+          </marker>
+        </defs>
+        <rect width="1200" height="1392" fill="#f5f5f5" />
+
+        <!-- connectors are deliberately drawn before nodes -->
+        <path d="M600 128 V176" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)" />
+        <path d="M600 328 V376" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)" />
+        <path d="M600 528 V584" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)" />
+        <path d="M600 696 V744" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)" />
+        <path d="M600 872 V920" fill="none" stroke="#eb6c36" stroke-width="1.4" marker-end="url(#arrow-accent)" />
+        <path d="M600 1068 V1120" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)" />
+        <path d="M600 1224 V1272" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)" />
+        <!-- context threshold: auto compaction is performed in-place before the LLM request -->
+        <path d="M712 808 H920 V896 H632 V920" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5 4"
+          marker-end="url(#arrow)" />
+        <path d="M712 1172 H800" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)" />
+        <!-- tool results form the real agent loop -->
+        <path d="M960 1104 V1088 H1040 V996 H800" fill="none" stroke="#2e5aa8" stroke-width="1.4"
+          marker-end="url(#arrow-link)" />
+        <!-- LLM errors leave the active turn through the common final event path -->
+        <path d="M400 996 H184 V1320 H480" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5 4"
+          marker-end="url(#arrow)" />
+
+        <!-- arrow labels, each offset from its connector -->
+        <rect x="792" y="868" width="88" height="16" rx="2" fill="#f5f5f5" /><text x="836" y="880" text-anchor="middle"
+          font-family="Courier New,monospace" font-size="8" fill="#4f5d75">YES · COMPACT</text>
+        <rect x="620" y="880" width="40" height="16" rx="2" fill="#f5f5f5" /><text x="640" y="892" text-anchor="middle"
+          font-family="Courier New,monospace" font-size="8" fill="#4f5d75">NO</text>
+        <rect x="724" y="1140" width="48" height="16" rx="2" fill="#f5f5f5" /><text x="748" y="1152"
+          text-anchor="middle" font-family="Courier New,monospace" font-size="8" fill="#4f5d75">YES</text>
+        <rect x="620" y="1232" width="40" height="16" rx="2" fill="#f5f5f5" /><text x="640" y="1244"
+          text-anchor="middle" font-family="Courier New,monospace" font-size="8" fill="#4f5d75">NO</text>
+        <rect x="816" y="1064" width="112" height="16" rx="2" fill="#f5f5f5" /><text x="872" y="1076"
+          text-anchor="middle" font-family="Courier New,monospace" font-size="8" fill="#2e5aa8">RESULT → LLM</text>
+        <rect x="208" y="1120" width="112" height="16" rx="2" fill="#f5f5f5" /><text x="264" y="1132"
+          text-anchor="middle" font-family="Courier New,monospace" font-size="8" fill="#4f5d75">FAIL AFTER
+          RETRIES</text>
+
+        <!-- Start -->
+        <rect x="480" y="48" width="240" height="80" rx="40" fill="#fff" stroke="#2d3142" stroke-width="1.2" />
+        <text x="600" y="80" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="16"
+          font-weight="600" fill="#2d3142">Bắt đầu: lệnh kagent</text>
+        <text x="600" y="104" text-anchor="middle" font-family="Courier New,monospace" font-size="8"
+          fill="#4f5d75">src.cli.main:cli_main → main()</text>
+
+        <!-- Bootstrap -->
+        <rect x="400" y="176" width="400" height="152" rx="6" fill="#fff" stroke="#2d3142" stroke-width="1.2" />
+        <rect x="416" y="192" width="56" height="16" rx="2" fill="none" stroke="#4f5d75" /><text x="444" y="204"
+          text-anchor="middle" font-family="Courier New,monospace" font-size="8" fill="#4f5d75">SETUP</text>
+        <text x="600" y="236" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="16"
+          font-weight="600">Khởi tạo phiên và Agent</text>
+        <text x="600" y="264" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="12">Nạp
+          config/LLM/skills; tạo session, target, stores, registry tools</text>
+        <text x="600" y="288" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="12">Khám phá MCP
+          theo cấu hình (nếu có); tạo Agent rồi chạy KAgent TUI</text>
+        <text x="600" y="312" text-anchor="middle" font-family="Courier New,monospace" font-size="8"
+          fill="#4f5d75">main() → Agent(opts) → KAgent(AppProps).run_async()</text>
+
+        <!-- User input -->
+        <rect x="400" y="376" width="400" height="152" rx="6" fill="#fff" stroke="#2d3142" stroke-width="1.2" />
+        <rect x="416" y="392" width="48" height="16" rx="2" fill="none" stroke="#4f5d75" /><text x="440" y="404"
+          text-anchor="middle" font-family="Courier New,monospace" font-size="8" fill="#4f5d75">INPUT</text>
+        <text x="600" y="436" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="16"
+          font-weight="600">Người dùng gửi nội dung trong TUI</text>
+        <text x="600" y="464" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="12"># / #! → lưu
+          curated memory; /... → slash handler; còn lại → agent turn</text>
+        <text x="600" y="488" text-anchor="middle" font-family="Courier New,monospace" font-size="8"
+          fill="#4f5d75">KAgent.submit() → asyncio.create_task(run_agent_turn(...))</text>
+
+        <!-- Prepare context -->
+        <rect x="400" y="584" width="400" height="112" rx="6" fill="#fff" stroke="#2d3142" stroke-width="1.2" />
+        <rect x="416" y="600" width="56" height="16" rx="2" fill="none" stroke="#4f5d75" /><text x="444" y="612"
+          text-anchor="middle" font-family="Courier New,monospace" font-size="8" fill="#4f5d75">CONTEXT</text>
+        <text x="600" y="644" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="16"
+          font-weight="600">Tiền xử lý và ước lượng context</text>
+        <text x="600" y="672" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="12">Reconcile
+          history; expand file mentions; ước lượng history + input + tool schemas</text>
+
+        <!-- Context decision -->
+        <path d="M600 744 L712 808 L600 872 L488 808 Z" fill="#fff" stroke="#2d3142" stroke-width="1.2" />
+        <text x="600" y="800" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="14"
+          font-weight="600">Context đạt ngưỡng</text>
+        <text x="600" y="824" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="14"
+          font-weight="600">auto-compact?</text>
+        <text x="600" y="848" text-anchor="middle" font-family="Courier New,monospace" font-size="8"
+          fill="#4f5d75">history + input + tool schemas</text>
+
+        <!-- LLM -->
+        <rect x="400" y="920" width="400" height="148" rx="6" fill="rgba(235,108,54,.08)" stroke="#eb6c36"
+          stroke-width="1.2" />
+        <rect x="416" y="936" width="40" height="16" rx="2" fill="none" stroke="#eb6c36" /><text x="436" y="948"
+          text-anchor="middle" font-family="Courier New,monospace" font-size="8" fill="#eb6c36">LLM</text>
+        <text x="600" y="980" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="16"
+          font-weight="600">Tạo working context và gọi mô hình</text>
+        <text x="600" y="1008" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="12">Append/save
+          prompt; inject planner, intelligence, memory recall; gửi messages + tool schemas</text>
+        <text x="600" y="1032" text-anchor="middle" font-family="Courier New,monospace" font-size="8"
+          fill="#4f5d75">Agent.chat() → Client.chat[_stream](); transient error retry tối đa 2 lần</text>
+        <text x="600" y="1052" text-anchor="middle" font-family="Courier New,monospace" font-size="8"
+          fill="#4f5d75">Assistant message được append và session được save</text>
+
+        <!-- Tool decision -->
+        <path d="M600 1120 L712 1172 L600 1224 L488 1172 Z" fill="#fff" stroke="#2d3142" stroke-width="1.2" />
+        <text x="600" y="1168" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="14"
+          font-weight="600">LLM trả tool_calls?</text>
+        <text x="600" y="1192" text-anchor="middle" font-family="Courier New,monospace" font-size="8"
+          fill="#4f5d75">resp.message.tool_calls</text>
+
+        <!-- Tool -->
+        <rect x="800" y="1104" width="320" height="136" rx="6" fill="#fff" stroke="#2e5aa8" stroke-width="1.2" />
+        <rect x="816" y="1120" width="48" height="16" rx="2" fill="none" stroke="#2e5aa8" /><text x="840" y="1132"
+          text-anchor="middle" font-family="Courier New,monospace" font-size="8" fill="#2e5aa8">TOOLS</text>
+        <text x="960" y="1164" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="16"
+          font-weight="600">Kiểm tra, cấp quyền và chạy tool</text>
+        <text x="960" y="1192" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="12">Parse args;
+          skill allow-list; registry lookup; permission; tool.run()</text>
+        <text x="960" y="1216" text-anchor="middle" font-family="Courier New,monospace" font-size="8" fill="#4f5d75">Kết
+          quả hoặc ERROR → Message(role=tool) → save session</text>
+
+        <!-- End -->
+        <rect x="480" y="1272" width="240" height="80" rx="40" fill="#fff" stroke="#2d3142" stroke-width="1.2" />
+        <text x="600" y="1304" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="16"
+          font-weight="600">Kết thúc lượt chạy</text>
+        <text x="600" y="1328" text-anchor="middle" font-family="Courier New,monospace" font-size="8"
+          fill="#4f5d75">assistant text / error / done event → transcript UI</text>
+
+        <line x1="40" y1="1372" x2="1160" y2="1372" stroke="rgba(45,49,66,.12)" stroke-width="1" />
+        <text x="40" y="1388" font-family="Courier New,monospace" font-size="8" fill="#4f5d75">KÝ HIỆU</text>
+        <rect x="160" y="1378" width="16" height="8" rx="2" fill="#fff" stroke="#2d3142" /><text x="184" y="1388"
+          font-family="Arial,Helvetica,sans-serif" font-size="8" fill="#4f5d75">Xử lý</text>
+        <path d="M280 1378 L292 1384 L280 1390 L268 1384 Z" fill="#fff" stroke="#2d3142" /><text x="304" y="1388"
+          font-family="Arial,Helvetica,sans-serif" font-size="8" fill="#4f5d75">Điều kiện</text>
+        <line x1="424" y1="1384" x2="460" y2="1384" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)" />
+        <text x="472" y="1388" font-family="Arial,Helvetica,sans-serif" font-size="8" fill="#4f5d75">Vòng lặp tool
+          result</text>
+        <line x1="650" y1="1384" x2="686" y2="1384" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5 4" /><text
+          x="698" y="1388" font-family="Arial,Helvetica,sans-serif" font-size="8" fill="#4f5d75">Nhánh điều
+          kiện/lỗi</text>
+      </svg>
+      <figcaption>Nhánh “YES · COMPACT” là auto-compaction tại đầu lượt chạy; nhánh xanh là vòng lặp thực tế do
+        <code>tool_calls</code> của LLM điều khiển. Tool lỗi, bị từ chối hoặc không tồn tại vẫn được chuẩn hoá thành
+        tool result <code>ERROR: ...</code> và quay lại LLM, thay vì tự kết thúc ngay lượt chạy.
+      </figcaption>
+    </figure>
+
+    <h2>Bảng kiểm chứng với mã nguồn</h2>
+    <div class="note"><strong>Phạm vi sơ đồ:</strong> normal prompt trên terminal UI. Các slash command và cú pháp
+      <code>#</code>/<code>#!</code> được nhận diện trước vòng Agent; chúng là nhánh riêng, không mặc định đi qua LLM.
+      MCP, Burp bridge và các tool/plugin chỉ xuất hiện nếu được cấu hình hoặc bật.
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Flow step</th>
+          <th>Source file</th>
+          <th>Class / Function</th>
+          <th>Vai trò</th>
+          <th>Evidence</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Entry point</td>
+          <td><code>src/cli/main.py</code></td>
+          <td><code>cli_main() → main()</code></td>
+          <td>Điểm vào console script <code>kagent</code>.</td>
+          <td><code>pyproject.toml</code> khai báo <code>kagent = src.cli.main:cli_main</code>; <code>cli_main</code>
+            gọi <code>asyncio.run(main())</code>.</td>
+        </tr>
+        <tr>
+          <td>Bootstrap</td>
+          <td><code>src/cli/main.py</code></td>
+          <td><code>main()</code></td>
+          <td>Nạp config, LLM client, skills, target, stores, tool registry; khởi tạo <code>Agent</code> và TUI.</td>
+          <td><code>Agent(opts)</code> và <code>KAgent(AppProps(...))</code>; MCP tools chỉ register sau
+            <code>discover_mcp_tools()</code>.
+          </td>
+        </tr>
+        <tr>
+          <td>Input routing</td>
+          <td><code>src/ui/core/app.py</code></td>
+          <td><code>KAgent.submit()</code></td>
+          <td>Phân loại text input.</td>
+          <td><code>#</code>/<code>#!</code> gọi <code>agent.add_memory()</code>; <code>/</code> gọi
+            <code>handle_slash()</code>; còn lại tạo task <code>run_agent_turn()</code>.
+          </td>
+        </tr>
+        <tr>
+          <td>Agent run</td>
+          <td><code>src/ui/core/app.py</code>, <code>src/agent/agent.py</code></td>
+          <td><code>run_agent_turn() → Agent.run() → run_inner()</code></td>
+          <td>Thiết lập abort/event handling và chạy một lượt agent.</td>
+          <td><code>Agent.run()</code> luôn phát event <code>done</code> ở <code>finally</code>; UI chuyển event thành
+            transcript state.</td>
+        </tr>
+        <tr>
+          <td>Context preparation</td>
+          <td><code>src/agent/agent.py</code></td>
+          <td><code>run_inner()</code></td>
+          <td>Reconcile history, mở rộng file mention, thêm guidance/planner, intelligence và memory recall vào
+            <code>working</code>.
+          </td>
+          <td><code>build_decision_plan()</code>, <code>build_intelligence_context()</code>,
+            <code>recall_curated_memory()</code> được chèn trước user message trong working context.
+          </td>
+        </tr>
+        <tr>
+          <td>Persistence / compaction</td>
+          <td><code>src/agent/agent.py</code>, <code>src/session/store.py</code></td>
+          <td><code>auto_compact()</code>, <code>compact_in_place()</code>, <code>Store.save()</code></td>
+          <td>Lưu history/target/session memory; nén khi token estimate chạm ngưỡng.</td>
+          <td>Ngưỡng gồm history + incoming input + tool schemas. Nén dùng LLM, merge <code>SessionMemory</code>, save
+            JSON và context snapshot Markdown.</td>
+        </tr>
+        <tr>
+          <td>LLM interaction</td>
+          <td><code>src/agent/agent.py</code>, <code>src/llm/openai.py</code>, <code>src/llm/retry.py</code></td>
+          <td><code>Agent.chat()</code>, <code>Client.chat[_stream]()</code>, <code>with_retry()</code></td>
+          <td>Gửi messages/tool specs đến provider và nhận assistant message/tool calls.</td>
+          <td>OpenAI-compatible client POST tới <code>/chat/completions</code>; lỗi transient được retry tối đa 2 lần
+            theo <code>RetryOptions</code>.</td>
+        </tr>
+        <tr>
+          <td>Decision / termination</td>
+          <td><code>src/agent/agent.py</code></td>
+          <td><code>run_inner()</code></td>
+          <td>Quyết định dựa trên <code>resp.message.tool_calls</code>.</td>
+          <td>Nếu không có tool call: emit text (nếu cần) rồi <code>return</code>. Nếu hết <code>max_steps</code>: emit
+            <code>MaxStepsError</code>; UI hỏi Continue/Stop.
+          </td>
+        </tr>
+        <tr>
+          <td>Tool dispatch</td>
+          <td><code>src/agent/agent.py</code>, <code>src/tools/registry.py</code></td>
+          <td><code>execute_tool_calls()</code>, <code>run_parsed_tool_call()</code>, <code>Registry.execute()</code>
+          </td>
+          <td>Parse/validate call, lookup tool, kiểm tra allow-list skill và permission, sau đó gọi
+            <code>tool.run()</code>.
+          </td>
+          <td>Stateful <code>load_skill</code> chạy tuần tự; call độc lập có thể chạy song song, giới hạn 4.</td>
+        </tr>
+        <tr>
+          <td>Tool result feedback</td>
+          <td><code>src/agent/agent.py</code></td>
+          <td><code>record_tool_result()</code></td>
+          <td>Đưa kết quả về context để LLM quyết định tiếp.</td>
+          <td>Tạo <code>Message(role="tool", content=result, tool_call_id=...)</code>, append vào history/working và
+            save. Exception thành <code>ERROR: ...</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="foot">Nguồn kiểm chứng: mã nguồn trong workspace KAgent, trace theo đường gọi normal prompt. Sơ đồ không
+      giả định database, cache hay HTTP API nội bộ; persistence thực tế trên path này là session JSON/context snapshot
+      và các file store cục bộ khi tính năng tương ứng được dùng.</p>
+  </main>
+</body>
+
+</html>
