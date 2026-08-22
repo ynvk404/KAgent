@@ -1,6 +1,12 @@
 ---
 name: recon
-description: External recon playbook for a web target — subdomain enumeration, live-host probing, tech fingerprinting, and a first pass at content discovery. Use when the user gives you a root domain or apex and wants attack surface mapping.
+description: >
+  Initial reconnaissance of a target: identify the reachable service,
+  fingerprint the technology stack, and collect obvious attack-surface
+  clues. Works for a domain, IP, URL, or localhost target (e.g.
+  http://localhost:3000). Use when the agent has just received a new
+  target and has no prior information about it — before endpoint-level
+  enumeration or vulnerability testing.
 allowed-tools:
   - shell
   - http
@@ -9,86 +15,298 @@ allowed-tools:
 
 # Recon playbook
 
-You have been asked to map the attack surface of a domain the user is authorized to test. Stay surgical — do not scan IP ranges or third-party assets.
+You have been asked to establish an initial picture of a target the user is
+authorized to test. This phase answers "what is this target and what is it
+running?" It does not map endpoints, parameters, or forms. That belongs to
+`web-enumeration`.
 
-Default to curl and the built-in `http` tool. Do not pull in specialized scanners (subfinder, httpx, ffuf, gobuster, etc.) unless the user explicitly asks for them.
+Default to `curl` and the built-in `http` tool. Do not pull in specialized
+scanners such as `nmap`, `subfinder`, `httpx`, `ffuf`, or `gobuster` unless
+the user explicitly asks for them, or the target is a root domain wide enough
+that a single request cannot establish reachability.
 
-Execution rule: substitute the real apex/host into commands before running them. Never write literal placeholders such as `<APEX>`, `<HOST>`, or `<subdomains>` to files. If the apex is unclear, ask once before running commands.
+Execution rule: substitute the real target into commands before running them.
+Never write literal placeholders such as `<TARGET>`, `<HOST>`, or `<APEX>`
+to files. If the target is unclear or its scope was not already stated in
+the conversation, ask once before running commands.
 
-## 1. Confirm scope
-Before running anything, restate the apex domain and ask the user to confirm it is in scope (only ask if scope was not already explicit in the conversation). Note any explicit out-of-scope subdomains or paths.
+## Target identifier convention
 
-## 2. Passive subdomain enumeration with curl
-Pull from public CT logs — no extra tooling required. Note: `crt.sh` is flaky and frequently answers with a `502`/HTML page or an empty body instead of JSON. Piping that straight into `jq` is what throws `jq: parse error: Invalid numeric literal`. Validate the body is JSON before parsing, and retry with backoff:
+Before writing any output path, derive a single, stable identifier from the
+target and reuse it for every file this skill (and downstream skills) write.
+This must be deterministic — the same target must always produce the same
+identifier, so `recon`, `web-enumeration`, and `web-input-analysis` land in
+the same directory.
 
-```
-# Robust crt.sh pull — quiet retries, parse only valid JSON.
-APEX="example.com" # replace with the scoped apex before running
-mkdir -p "recon/$APEX"
+1. Start from `agent.target.base_url()` if set, otherwise
+   `agent.target.name()`.
+2. Strip the scheme (`http://`, `https://`).
+3. Lowercase everything.
+4. Replace any run of characters outside `[a-z0-9]` with a single `-`.
+5. Trim leading/trailing `-`.
+6. Truncate to 64 characters.
+
+This mirrors the charset and normalization already enforced for finding
+slugs in `src/findings/store.py` (`_SAFE_SLUG_RE`, `slugify()`) — lowercase
+alphanumerics and hyphens only, no underscores, no path separators, 64-char
+cap. Do not invent a different charset per skill.
+
+Example: `https://App.Example.com:8443/` → `app-example-com-8443`.
+
+Below, `<target>` always refers to this derived identifier, not the raw
+target string.
+
+## 1. Confirm the target and its shape
+
+Restate the target and confirm that it is in scope, but only ask for
+confirmation when scope has not already been made explicit.
+
+Classify the target because this determines which reconnaissance steps apply:
+
+- **Single URL** such as `http://localhost:3000` or
+  `https://app.example.com`: proceed directly to step 2.
+- **Bare domain/apex** such as `example.com`: this may represent multiple
+  hosts. Consider step 1b when broader surface mapping is explicitly needed.
+- **IP address**: skip subdomain discovery and proceed to step 2.
+
+Do not perform external-domain reconnaissance against a target that is clearly
+a single local URL, localhost service, or standalone IP.
+
+## 1b. Passive subdomain discovery for a root domain
+
+Only perform this step when all of the following are true:
+
+- the target is a bare apex domain;
+- broader attack-surface mapping is intended;
+- the discovered subdomains remain within the authorized scope.
+
+Skip this step entirely for single URLs, localhost targets, and IP addresses.
+
+Use public certificate-transparency data without adding specialized tooling.
+`crt.sh` may return `502`, HTML, or an empty body instead of JSON, so validate
+the response before parsing and retry with backoff:
+
+```sh
+APEX="example.com"  # replace with the real scoped apex
 : > subs.txt
+
 for attempt in 1 2 3; do
-  resp=$(curl -fsS --max-time 30 -H 'Accept: application/json' \
-    "https://crt.sh/?q=%25.$APEX&output=json" 2>/dev/null || true)
-  if printf '%s' "$resp" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  resp=$(curl -fsS --max-time 30 \
+    -H 'Accept: application/json' \
+    "https://crt.sh/?q=%25.$APEX&output=json" \
+    2>/dev/null || true)
+
+  if printf '%s' "$resp" \
+    | jq -e 'type == "array"' >/dev/null 2>&1; then
+
     printf '%s' "$resp" \
       | jq -r '.[].name_value' \
       | sed 's/^\*\.//' \
-      | tr 'A-Z' 'a-z' | tr -d '\r' \
+      | tr 'A-Z' 'a-z' \
+      | tr -d '\r' \
       | sort -u > subs.txt
+
     break
   fi
-  sleep 3   # crt.sh is rate-limited / returns 502 under load
+
+  sleep 3
 done
-[ -s subs.txt ] || printf 'warning: crt.sh unavailable or returned non-JSON; try OTX or another source\n' >&2
+
+[ -s subs.txt ] || \
+  printf 'warning: crt.sh unavailable or returned non-JSON; try another source\n' >&2
 ```
 
-`name_value` is newline-separated and may include wildcard (`*.`) entries; the `sed`/`sort -u` above normalizes and dedupes them. If `/target` is pinned, derive the real apex from that target before running.
+Save the deduplicated list with `file_write` to:
 
-For a second source, layer on AlienVault OTX (also guard the JSON):
+`recon/<target>/subs.txt`
 
+(using the identifier derived above for the apex, not the raw `$APEX` string).
+
+Treat each discovered hostname as a separate target for reachability checks.
+
+Do not automatically escalate to `subfinder`, `amass`, or `assetfinder`.
+Only use them when the user explicitly requests them or the scope and
+testing plan justify broader enumeration.
+
+## 2. Establish reachability
+
+For a single target, one request is normally sufficient.
+
+Capture the HTTP status, final URL, response headers, and basic page metadata:
+
+```sh
+TARGET="http://localhost:3000"  # replace with the real target
+
+curl -ksS \
+  -o /tmp/body \
+  -w '%{http_code}\t%{url_effective}\t%{header_json}\n' \
+  --max-time 8 \
+  "$TARGET/" > /tmp/meta
+
+code=$(cut -f1 /tmp/meta)
+url=$(cut -f2 /tmp/meta)
+headers_json=$(cut -f3 /tmp/meta)
+
+server=$(printf '%s' "$headers_json" \
+  | jq -r '.server[0] // "-"')
+
+powered_by=$(printf '%s' "$headers_json" \
+  | jq -r '.["x-powered-by"][0] // "-"')
+
+title=$(sed -n \
+  's/.*<title>\(.*\)<\/title>.*/\1/p' \
+  /tmp/body \
+  | head -1)
+
+printf '%s\t%s\tserver=%s\tpowered-by=%s\ttitle=%s\n' \
+  "$code" "$url" "$server" "$powered_by" "$title"
 ```
-APEX="example.com" # replace with the scoped apex before running
-otx=$(curl -fsS --max-time 30 "https://otx.alienvault.com/api/v1/indicators/domain/$APEX/passive_dns" 2>/dev/null)
-printf '%s' "$otx" | jq -e . >/dev/null 2>&1 \
-  && printf '%s' "$otx" | jq -r '.passive_dns[].hostname' | sort -u >> subs.txt
-sort -u -o subs.txt subs.txt
+
+Avoid repeated requests when the initial response already provides sufficient
+information.
+
+If the first response is ambiguous, limited follow-up requests may be used,
+for example:
+
+```sh
+curl -ksS -X OPTIONS --max-time 5 "$TARGET/"
+curl -ksS --max-time 5 "$TARGET/api"
+curl -ksS --max-time 5 "$TARGET/api/health"
 ```
 
-Save the deduped list with `file_write` to `recon/$APEX/subs.txt`.
+Do not turn these probes into broad endpoint enumeration.
 
-Only reach for `subfinder` / `amass` / `assetfinder` if the user names them or the apex is large enough that crt.sh paging starts to drop results.
+If the local curl build does not support `%{header_json}`, capture headers
+separately:
 
-## 3. Liveness + tech fingerprinting with curl
-For each candidate, send a single GET and capture status, title, and key headers. Tight bash loop:
+```sh
+curl -ksS \
+  -D /tmp/headers \
+  -o /tmp/body \
+  --max-time 8 \
+  "$TARGET/"
 
-```
-while read h; do
-  curl -ksS -o /tmp/body -w "%{http_code}\t%{url_effective}\t%header{server}\t%header{x-powered-by}\n" \
-    --max-time 8 "https://$h/" 2>/dev/null \
-    | awk -F'\t' -v host="$h" '{title=""; getline title < "/tmp/body"; sub(/.*<title>/,"",title); sub(/<\/title>.*/,"",title); print $0"\t"title}'
-done < subs.txt > httpx.txt
-```
-
-If you need more than that (favicon hashing, full tech fingerprinting on hundreds of hosts), say so and ask the user whether to install/run `httpx`.
-
-## 4. Content discovery with curl + a wordlist
-For 2-3 hosts that look custom (admin panels, staging, dashboards), do a focused wordlist sweep with curl:
-
-```
-HOST="app.example.com" # replace with an interesting live host before running
-WORDLIST=/usr/share/seclists/Discovery/Web-Content/raft-small-words.txt
-while read w; do
-  code=$(curl -ksS -o /dev/null -w "%{http_code}" --max-time 5 "https://$HOST/$w")
-  case "$code" in 200|204|301|302|401|403) echo "$code /$w";; esac
-done < "$WORDLIST" | tee "ffuf-$HOST.txt"
+grep -i '^server:' /tmp/headers
+grep -i '^x-powered-by:' /tmp/headers
 ```
 
-Use `-w "%{http_code} %{size_download}\n"` if you also want to filter by body size. Pick a small wordlist first — escalate to medium only if the small one produces signal.
+## 3. Fingerprint the technology
 
-Only use `ffuf` or `gobuster` if the user explicitly asks for them.
+Use the observations already collected to identify likely technologies.
 
-## 5. Summarize
-Write a `recon/$APEX/summary.md` with:
-- Counts: total subdomains, live hosts, by tech stack
-- Top 10 interesting hosts (with one-line reasons)
-- Candidate next steps (auth flows to inspect, admin endpoints, exposed configs, JS files worth diffing)
+Look for evidence such as:
+
+- Server response headers;
+- `X-Powered-By`;
+- framework-specific cookies such as `JSESSIONID` or `.AspNetCore`;
+- generator metadata;
+- framework-specific static asset paths;
+- recognizable error-page structures;
+- authentication/session indicators;
+- API indicators exposed by the initial response or a small number of
+  low-noise probes.
+
+For limited probing of obvious application indicators:
+
+```sh
+TARGET="http://localhost:3000"
+
+for p in /api /api/health /graphql /swagger.json /robots.txt; do
+  code=$(curl -ksS \
+    -o /dev/null \
+    -w "%{http_code}" \
+    --max-time 5 \
+    "$TARGET$p")
+
+  echo "$code $p"
+done
+```
+
+These probes are for technology and application-shape identification only.
+Detailed API, route, endpoint, and parameter enumeration belongs to
+`web-enumeration`.
+
+Treat fingerprint results as hypotheses until supported by concrete evidence.
+Do not state that a technology is confirmed without an observable indicator.
+
+## 4. Record initial attack-surface clues
+
+Record only the high-value clues already visible from reconnaissance.
+
+Examples include:
+
+- login or authentication pages referenced by the initial application;
+- administrative interfaces visible from existing links or resources;
+- obvious API entry points;
+- exposed API documentation;
+- authentication/session mechanisms;
+- security-relevant response headers;
+- cookie flags such as `Secure` and `HttpOnly`;
+- JavaScript bundle names that reveal application structure.
+
+Do not perform broad content discovery here.
+
+In particular, do not run wordlist-based endpoint discovery, directory
+brute-forcing, or parameter enumeration. Those tasks belong to
+`web-enumeration`.
+
+## 5. Record reconnaissance results
+
+Write a concise summary to:
+
+`recon/<target>/summary.md`
+
+The summary should contain:
+
+- target and target type (URL, apex, or IP);
+- reachable service and observed status;
+- final URL after redirects, when applicable;
+- observed technologies, explicitly marked as confirmed or hypothesis;
+- initial attack-surface clues;
+- relevant uncertainties;
+- recommended next phase.
+
+Do not create a security finding from reconnaissance observations alone unless
+reproducible evidence already demonstrates a vulnerability. (Findings, when
+they eventually exist, follow their own naming convention in
+`finding-validation` — do not reuse the target identifier for a finding
+file name.)
+
+## 6. Transition to the next phase
+
+When the target is a web application:
+
+- transition to `web-enumeration` to identify endpoints, routes, parameters,
+  forms, and API surfaces;
+- use `web-input-analysis` only after enumeration has produced concrete
+  candidate inputs;
+- do not jump directly to a vulnerability-specific skill merely because a
+  technology or framework was fingerprinted.
+
+The normal flow is:
+
+```text
+recon
+  ↓
+web-enumeration
+  ↓
+web-input-analysis
+  ↓
+vulnerability-specific skill
+```
+
+## Stop conditions
+
+Stop reconnaissance when:
+
+- the target has been classified;
+- reachability has been established or the failure is clearly recorded;
+- major technology indicators have been identified or explicitly marked
+  unknown;
+- initial attack-surface clues have been recorded;
+- the next phase can be determined.
+
+Do not escalate reconnaissance into high-volume scanning, full subdomain
+brute-forcing, or deep content discovery. Those activities belong to later
+phases and should only be performed when justified by the testing plan and
+authorized scope.

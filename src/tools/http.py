@@ -185,6 +185,7 @@ class HTTPTool(Tool):
             parse_http_url(resolved),
             signal,
             "http",
+            target=self.target,
         )
 
         headers: dict[str, str] = {}

@@ -1,7 +1,9 @@
 import ipaddress
 import socket
 from urllib.parse import urlparse
+
 from src.permission.permission import PermissionRequest, Decision
+
 
 def parse_http_url(raw: str):
     try:
@@ -21,11 +23,74 @@ def parse_http_url(raw: str):
 
     return parsed
 
+
+def same_authorized_origin(
+    parsed,
+    target,
+) -> bool:
+    """
+    Return True only when the request URL matches the currently
+    configured target by scheme, hostname, and effective port.
+
+    This allows session-caching the private-host permission for the
+    explicitly declared target, while keeping other private hosts
+    subject to a fresh permission check.
+    """
+    if target is None or target.empty():
+        return False
+
+    target_raw = target.base_url()
+    if not target_raw:
+        return False
+
+    try:
+        target_parsed = urlparse(target_raw)
+    except Exception:
+        return False
+
+    request_host = (
+        (parsed.hostname or "")
+        .lower()
+        .rstrip(".")
+    )
+    target_host = (
+        (target_parsed.hostname or "")
+        .lower()
+        .rstrip(".")
+    )
+
+    if not request_host or request_host != target_host:
+        return False
+
+    def effective_port(p):
+        try:
+            port = p.port
+        except ValueError:
+            port = None
+
+        if port is not None:
+            return port
+
+        return (
+            443
+            if p.scheme.lower() == "https"
+            else 80
+        )
+
+    return (
+        parsed.scheme.lower()
+        == target_parsed.scheme.lower()
+        and effective_port(parsed)
+        == effective_port(target_parsed)
+    )
+
+
 async def gate_private_request(
     prompter,
     parsed,
     signal,
     tool_name: str,
+    target=None,
 ) -> str:
     reason = await private_host_reason(
         parsed.hostname
@@ -34,10 +99,18 @@ async def gate_private_request(
     if not reason:
         return ""
 
+    is_declared_target = same_authorized_origin(
+        parsed,
+        target,
+    )
+
     decision = await prompter.ask(
         PermissionRequest(
             tool=tool_name,
-            summary=f"{tool_name}: private/internal URL {parsed.geturl()}",
+            summary=(
+                f"{tool_name}: private/internal URL "
+                f"{parsed.geturl()}"
+            ),
             detail=(
                 f"host: {parsed.hostname}\n"
                 f"reason: {reason}\n\n"
@@ -45,7 +118,16 @@ async def gate_private_request(
                 "a classic SSRF target. Approve only if this host "
                 "is intentionally in scope."
             ),
-            no_session_cache=True,
+            no_session_cache=(
+                not is_declared_target
+            ),
+            cache_key=(
+                f"private-declared://"
+                f"{parsed.scheme}://"
+                f"{parsed.netloc}"
+                if is_declared_target
+                else None
+            ),
         ),
         signal,
     )
@@ -57,6 +139,7 @@ async def gate_private_request(
         )
 
     return reason
+
 
 async def private_host_reason(
     hostname: str | None,
@@ -89,6 +172,7 @@ async def private_host_reason(
             return private_ipv6_reason(
                 host
             )
+
     except ValueError:
         pass
 
@@ -130,6 +214,7 @@ async def private_host_reason(
 
     return ""
 
+
 def private_ipv4_reason(
     host: str,
 ) -> str:
@@ -169,6 +254,7 @@ def private_ipv4_reason(
 
     return ""
 
+
 def private_ipv6_reason(
     host: str,
 ) -> str:
@@ -184,6 +270,7 @@ def private_ipv6_reason(
         reason = private_ipv4_reason(
             v4
         )
+
         if reason:
             return reason
 
@@ -197,10 +284,12 @@ def private_ipv6_reason(
         v4 = embedded_ipv4(
             tail
         )
+
         if v4:
             reason = private_ipv4_reason(
                 v4
             )
+
             if reason:
                 return (
                     f"NAT64-embedded "
@@ -222,6 +311,7 @@ def private_ipv6_reason(
                 reason = private_ipv4_reason(
                     v4
                 )
+
                 if reason:
                     return (
                         f"6to4-embedded "
@@ -250,6 +340,7 @@ def private_ipv6_reason(
 
     return ""
 
+
 def embedded_ipv4(
     tail: str,
 ):
@@ -265,6 +356,7 @@ def embedded_ipv4(
         )
 
     return None
+
 
 def hextets_to_ipv4(
     hi_hex: str,
@@ -286,5 +378,6 @@ def hextets_to_ipv4(
             f"{lo >> 8}."
             f"{lo & 0xff}"
         )
+
     except ValueError:
         return None

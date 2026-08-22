@@ -20,8 +20,8 @@ def test_stays_quiet_for_low_signal_greetings():
     plan = build_decision_plan(
         "hello",
         [
-            skill("recon", "External recon playbook for subdomain enumeration"),
-            skill("webvuln", "Web vulnerability hunting playbook"),
+            skill("recon", "Initial reconnaissance of a target"),
+            skill("web-enumeration", "Enumerate the attack surface of a web application"),
         ],
         Target(),
     )
@@ -33,8 +33,8 @@ def test_recommends_recon():
     plan = build_decision_plan(
         "enumerate subdomains and fingerprint live hosts for example.com",
         [
-            skill("recon", "External recon playbook for subdomain enumeration"),
-            skill("webvuln", "Web vulnerability hunting playbook"),
+            skill("recon", "Initial reconnaissance of a target"),
+            skill("web-enumeration", "Enumerate the attack surface of a web application"),
         ],
         Target(),
     )
@@ -44,25 +44,25 @@ def test_recommends_recon():
     assert "load the recon skill" in plan.guidance
 
 
-def test_recommends_webvuln():
+def test_recommends_web_enumeration():
     plan = build_decision_plan(
-        "hunt IDOR and auth bugs on the orders API",
+        "enumerate the endpoints and routes and api entry points for this app",
         [
-            skill("recon", "External recon playbook for subdomain enumeration"),
-            skill("webvuln", "Web vulnerability hunting playbook for IDOR and auth flaws"),
+            skill("recon", "Initial reconnaissance of a target"),
+            skill("web-enumeration", "Enumerate the attack surface of a web application"),
         ],
         Target(),
     )
 
     assert plan is not None
-    assert plan.recommended_skill == "webvuln"
+    assert plan.recommended_skill == "web-enumeration"
 
 
 def test_marks_high_risk():
     plan = build_decision_plan(
         "run nuclei and ffuf against https://example.com",
         [
-            skill("webvuln", "Web vulnerability hunting playbook"),
+            skill("web-enumeration", "Enumerate the attack surface of a web application"),
         ],
         Target(),
     )
@@ -79,7 +79,7 @@ def test_requires_target():
     plan = build_decision_plan(
         "test the orders API for IDOR",
         [
-            skill("webvuln", "Web vulnerability hunting playbook"),
+            skill("web-enumeration", "Enumerate the attack surface of a web application"),
         ],
         Target(),
     )
@@ -95,7 +95,7 @@ def test_pinned_target():
     plan = build_decision_plan(
         "test the orders API for IDOR",
         [
-            skill("webvuln", "Web vulnerability hunting playbook"),
+            skill("web-enumeration", "Enumerate the attack surface of a web application"),
         ],
         target,
     )
@@ -109,11 +109,9 @@ def test_pinned_target():
 
 def planner_skills() -> list[Skill]:
     return [
-        skill("graphql", "GraphQL testing playbook mentioning target safely"),
-        skill("recon", "External recon playbook for subdomain enumeration"),
-        skill("ssrf", "SSRF testing playbook"),
-        skill("webvuln", "Web vulnerability testing playbook"),
-        skill("jwt", "JWT authentication testing playbook"),
+        skill("recon", "Initial reconnaissance of a target"),
+        skill("web-enumeration", "Enumerate the attack surface of a web application"),
+        skill("web-input-analysis", "Analyze a web-enumeration inventory for testing candidates"),
     ]
 
 
@@ -132,37 +130,37 @@ def test_scan_target_does_not_recommend_specialized_skill():
     )
 
 
-def test_recommends_graphql_for_introspection():
+def test_recommends_web_enumeration_for_endpoints_and_routes():
     plan = build_decision_plan(
-        "test GraphQL introspection endpoint",
+        "map the target's endpoints and routes",
         planner_skills(),
         Target(),
     )
 
     assert plan is not None
-    assert plan.recommended_skill == "graphql"
+    assert plan.recommended_skill == "web-enumeration"
 
 
-def test_recommends_webvuln_for_sql_injection():
+def test_recommends_web_input_analysis_for_candidate_triage():
     plan = build_decision_plan(
-        "test SQL injection login parameter",
+        "triage the input analysis candidates for suspected vulnerability class",
         planner_skills(),
         Target(),
     )
 
     assert plan is not None
-    assert plan.recommended_skill == "webvuln"
+    assert plan.recommended_skill == "web-input-analysis"
 
 
-def test_recommends_ssrf_for_webhook_ssrf():
+def test_recommends_recon_for_subdomain_enumeration():
     plan = build_decision_plan(
-        "test webhook SSRF",
+        "enumerate subdomains and check crt for this apex domain",
         planner_skills(),
         Target(),
     )
 
     assert plan is not None
-    assert plan.recommended_skill == "ssrf"
+    assert plan.recommended_skill == "recon"
 
 
 def test_nuclei_scan_is_high_risk_without_specialized_intent():
@@ -178,7 +176,7 @@ def test_nuclei_scan_is_high_risk_without_specialized_intent():
 
 def test_weak_common_terms_do_not_accumulate_to_skill():
     plan = build_decision_plan(
-        "check the API endpoint query",
+        "check the api parameter and form values",
         planner_skills(),
         Target(),
     )
@@ -187,18 +185,18 @@ def test_weak_common_terms_do_not_accumulate_to_skill():
     assert plan.recommended_skill is None
 
 
-def test_single_strong_keyword_recommends_graphql():
+def test_single_strong_keyword_recommends_web_enumeration():
     plan = build_decision_plan(
-        "graphql",
+        "endpoints",
         planner_skills(),
         Target(),
     )
 
     assert plan is not None
-    assert plan.recommended_skill == "graphql"
+    assert plan.recommended_skill == "web-enumeration"
 
 
-def test_known_target_scan_target_does_not_route_to_graphql():
+def test_known_target_scan_target_does_not_route_to_web_enumeration():
     target = Target()
     target.set_base_url("http://juice.lab:3000")
 
@@ -209,19 +207,19 @@ def test_known_target_scan_target_does_not_route_to_graphql():
     )
 
     assert plan is not None
-    assert plan.recommended_skill != "graphql"
+    assert plan.recommended_skill != "web-enumeration"
     assert plan.recommended_skill is None
 
 
 def test_tie_break_uses_alphabetical_skill_name_not_registry_order():
     plan = build_decision_plan(
-        "ssrf graphql",
+        "recon endpoints",
         [
-            skill("ssrf", "SSRF testing playbook"),
-            skill("graphql", "GraphQL testing playbook"),
+            skill("web-enumeration", "Enumerate the attack surface of a web application"),
+            skill("recon", "Initial reconnaissance of a target"),
         ],
         Target(),
     )
 
     assert plan is not None
-    assert plan.recommended_skill == "graphql"
+    assert plan.recommended_skill == "recon"

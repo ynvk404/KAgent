@@ -47,6 +47,14 @@ class FakePrompter:
             return_value=result
         )
 
+
+def make_stream_cm():
+    stream_cm = AsyncMock()
+    stream_cm.__aenter__.return_value = FakeResponse()
+    stream_cm.__aexit__.return_value = None
+    return stream_cm
+
+
 def test_schema_not_require_method():
 
     tool = HTTPTool(Target())
@@ -203,3 +211,85 @@ def test_permission_scope():
         "cacheKey":
         "http://169.254.169.254"
     }
+
+
+# ---------------------------------------------------------------------------
+# private-host target wiring (session-cache fix)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_http_passes_target_to_private_gate():
+
+    target = Target("http://juice.lab:3000")
+    tool = HTTPTool(target)
+
+    with (
+        patch(
+            "src.tools.http.gate_private_request",
+            new=AsyncMock(return_value="loopback IPv4"),
+        ) as mock_gate,
+        patch(
+            "src.tools.http.httpx.AsyncClient.stream",
+            return_value=make_stream_cm(),
+        ),
+    ):
+        await tool.run(
+            {"url": "http://juice.lab:3000/"},
+            None,
+            FakePrompter(),
+        )
+
+    mock_gate.assert_awaited_once()
+
+    assert mock_gate.await_args is not None
+    kwargs = mock_gate.await_args.kwargs
+
+    assert kwargs.get("target") is target
+
+@pytest.mark.asyncio
+async def test_http_prepends_private_note_when_reason_present():
+
+    target = Target("http://juice.lab:3000")
+    tool = HTTPTool(target)
+
+    with (
+        patch(
+            "src.tools.http.gate_private_request",
+            new=AsyncMock(return_value="loopback IPv4"),
+        ),
+        patch(
+            "src.tools.http.httpx.AsyncClient.stream",
+            return_value=make_stream_cm(),
+        ),
+    ):
+        out = await tool.run(
+            {"url": "http://juice.lab:3000/"},
+            None,
+            FakePrompter(),
+        )
+
+    assert out.startswith("note: private/internal host approved")
+    assert "loopback IPv4" in out
+
+@pytest.mark.asyncio
+async def test_http_no_note_when_host_is_public():
+
+    tool = HTTPTool(Target())
+
+    with (
+        patch(
+            "src.tools.http.gate_private_request",
+            new=AsyncMock(return_value=""),
+        ),
+        patch(
+            "src.tools.http.httpx.AsyncClient.stream",
+            return_value=make_stream_cm(),
+        ),
+    ):
+        out = await tool.run(
+            {"url": "http://example.test/"},
+            None,
+            FakePrompter(),
+        )
+
+    assert not out.startswith("note:")

@@ -31,162 +31,105 @@ STRONG_KEYWORD_WEIGHT = 5
 WEAK_KEYWORD_WEIGHT = 1
 MIN_RECOMMEND_SCORE = 5
 
+# NOTE: only intents for currently-active skills belong here. When a new
+# vulnerability-specific skill (cross-site-scripting, access-control,
+# finding-validation, ...) is added and has completed its full rollout
+# checklist, add its intent + keywords here at that point. Do not
+# pre-register intents for skills that don't exist yet — an unmapped
+# INTENT_TO_SKILL entry is silently dropped by detect_intent() via the
+# available_skill_names check, which would hide the fact that the mapping
+# is stale rather than surfacing it.
+#
+# sql-injection completed its rollout checklist and is registered below.
 INTENT_TO_SKILL: dict[str, str] = {
     "recon": "recon",
-    "graphql": "graphql",
-    "ssrf": "ssrf",
-    "injection": "webvuln",
-    "web_testing": "webvuln",
-    "authentication": "jwt",
-    "ssti": "ssti",
-    "race": "race",
-    "takeover": "takeover",
-    "supabase": "supabase",
-    "deserialize": "deserialize",
+    "web_enumeration": "web-enumeration",
+    "web_input_analysis": "web-input-analysis",
+    "sql_injection": "sql-injection",
 }
 
 INTENT_KEYWORDS: dict[str, dict[str, List[str]]] = {
     "recon": {
         "strong": [
             "recon",
+            "reconnaissance",
             "subdomain",
             "subdomains",
-            "enumerate",
-            "enumeration",
-            "attack surface",
             "crt",
+            "certificate transparency",
             "liveness",
             "fingerprint",
             "fingerprinting",
-            "content discovery",
             "apex",
-        ],
-        "weak": [],
-    },
-    "graphql": {
-        "strong": [
-            "graphql",
-            "gql",
-            "introspection",
-            "mutation",
-            "schema",
+            "new target",
         ],
         "weak": [
-            "resolver",
+            "attack surface",
+            "technology stack",
+            "reachable",
         ],
     },
-    "ssrf": {
+    "web_enumeration": {
         "strong": [
-            "ssrf",
-            "webhook",
-            "callback",
-            "metadata",
-            "169.254.169.254",
-            "imds",
-        ],
-        "weak": [
-            "internal service",
-            "cloud metadata",
-        ],
-    },
-    "injection": {
-        "strong": [
-            "xss",
-            "sqli",
-            "sql injection",
-            "injection",
-            "csrf",
+            "endpoint",
+            "endpoints",
+            "route",
+            "routes",
+            "map attack surface",
+            "enumerate web application",
+            "web enumeration",
+            "content discovery",
+            "directory discovery",
+            "api entry point",
+            "api entry points",
+            "swagger",
+            "openapi",
         ],
         "weak": [
             "parameter",
-            "payload",
+            "parameters",
+            "form",
+            "forms",
+            "graphql endpoint",
+            "inventory",
+            "static resources",
+            "javascript resources",
         ],
     },
-    "web_testing": {
+    "web_input_analysis": {
         "strong": [
-            "idor",
-            "bola",
-            "bac",
-            "cve",
+            "candidate",
+            "candidates",
+            "input analysis",
+            "web input analysis",
+            "triage input",
+            "triage endpoint",
+            "suspected vulnerability class",
+            "prioritize testing",
         ],
         "weak": [
-            "web",
-            "vuln",
-            "vulnerability",
-            "authorization",
+            "context",
+            "signal",
+            "reflected",
+            "object identifier",
+            "which parameter",
+            "which endpoint",
         ],
     },
-    "authentication": {
+    "sql_injection": {
         "strong": [
-            "jwt",
-            "token",
-            "bearer",
-            "jwks",
-            "jku",
-            "hs256",
-            "rs256",
+            "sql injection",
+            "sqli",
+            "union select",
+            "boolean based",
+            "time based",
+            "error based",
+            "database error",
         ],
         "weak": [
-            "alg",
-            "kid",
-        ],
-    },
-    "ssti": {
-        "strong": [
-            "ssti",
-            "jinja",
-            "twig",
-            "freemarker",
-            "velocity",
-            "handlebars",
-        ],
-        "weak": [
-            "template",
-        ],
-    },
-    "race": {
-        "strong": [
-            "race",
-            "concurrent",
-            "parallel",
-            "double spend",
-        ],
-        "weak": [
-            "coupon",
-            "redeem",
-            "balance",
-        ],
-    },
-    "takeover": {
-        "strong": [
-            "takeover",
-            "dangling",
-            "cname",
-            "nxdomain",
-            "subdomain takeover",
-        ],
-        "weak": [],
-    },
-    "supabase": {
-        "strong": [
-            "supabase",
-            "rls",
-            "anon key",
-            "postgrest",
-            "storage bucket",
-        ],
-        "weak": [],
-    },
-    "deserialize": {
-        "strong": [
-            "deserialize",
-            "deserialization",
-            "pickle",
-            "unserialize",
-            "binaryformatter",
-        ],
-        "weak": [
-            "yaml",
+            "database",
+            "injection",
+            "syntax sensitive",
         ],
     },
 }

@@ -6,7 +6,7 @@ import re
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-from src.agent.agent import DEFAULT_MAX_STEPS, AgentRunOptions
+from src.agent.agent import DEFAULT_MAX_STEPS, AgentRunOptions, ensure_system_prompt
 from src.llm.models import list_models
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.state import Append, Clear, TranscriptEntry
@@ -520,22 +520,31 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             return True
 
         if u.lower() == "clear":
+            # State + system prompt rebuild happen synchronously right here
+            # so the very next turn is guaranteed to see the cleared target
+            # in its context — this must not depend on the event loop
+            # scheduling an async task before the user's next message runs.
             agent.target.clear()
+            agent.rebuild_system_prompt()
+            agent.history = ensure_system_prompt(agent.history, agent.sys_prompt)
 
-            async def _target_clear():
+            async def _persist_target_clear():
                 try:
-                    await agent.clear_target()
+                    await agent.save()
                 except Exception as err:
                     dispatch(
                         Append(
                             entry=TranscriptEntry(
                                 kind="error",
-                                text=f"target clear failed: {err}",
+                                text=(
+                                    f"target clear save failed (state is "
+                                    f"still updated in-memory): {err}"
+                                ),
                             )
                         )
                     )
 
-            asyncio.create_task(_target_clear())
+            asyncio.create_task(_persist_target_clear())
             dispatch(
                 Append(
                     entry=TranscriptEntry(
@@ -558,21 +567,32 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             )
             return True
 
-        async def _target_set():
+        # Same fix here: set_base_url + rebuild_system_prompt + history
+        # patch run synchronously, so agent.history[0] already contains
+        # the new target before this function returns. Only the disk
+        # write (agent.save()) is pushed to the background — it doesn't
+        # affect what the next turn sees.
+        agent.target.set_base_url(normalized)
+        agent.rebuild_system_prompt()
+        agent.history = ensure_system_prompt(agent.history, agent.sys_prompt)
+
+        async def _persist_target_set():
             try:
-                await agent.set_target_base_url(normalized)
+                await agent.save()
             except Exception as err:
                 dispatch(
                     Append(
                         entry=TranscriptEntry(
                             kind="error",
-                            text=f"target set failed: {err}",
+                            text=(
+                                f"target save failed (state is still "
+                                f"updated in-memory): {err}"
+                            ),
                         )
                     )
                 )
 
-        agent.target.set_base_url(normalized)
-        asyncio.create_task(_target_set())
+        asyncio.create_task(_persist_target_set())
         dispatch(
             Append(
                 entry=TranscriptEntry(
@@ -582,7 +602,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             )
         )
         return True
-
+    
     if cmd == "/maxsteps":
         if not rest:
             dispatch(
