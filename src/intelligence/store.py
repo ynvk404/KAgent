@@ -259,10 +259,10 @@ class IntelligenceStore:
         home_path = Path(home) if home else Path.home()
 
         self.project_path = (
-            cwd_path / ".pentesterflow" / "intelligence" / "scenarios.jsonl"
+            cwd_path / ".kagent" / "intelligence" / "scenarios.jsonl"
         )
         self.personal_path = (
-            home_path / ".pentesterflow" / "intelligence" / "scenarios.jsonl"
+            home_path / ".kagent" / "intelligence" / "scenarios.jsonl"
         )
 
         self.file_cache: dict[str, dict[str, Any]] = {}

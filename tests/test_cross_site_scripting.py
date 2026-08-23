@@ -79,8 +79,9 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
        `confirmed`, or whether it can only ever support
        `requires-browser-confirmation`.
     """
-    # 3a — blocked takes priority over everything else; the skill is
-    # explicit that an ordinary 401/403 must NOT be treated the same way.
+    # 3a — blocked takes priority over everything else, for every context
+    # including `encoded`; the skill is explicit that an ordinary 401/403
+    # must NOT be treated the same way.
     if probe.upstream_blocked:
         return Outcome.BLOCKED
 
@@ -116,6 +117,10 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
         return Outcome.NOT_CONFIRMED
 
     if probe.context == ReflectionContext.DOM_BASED:
+        # observed execution alone is sufficient — it doesn't need
+        # dom_sink_path_plausible to also be set, since actually observing
+        # execution is strictly stronger evidence than a plausible-but-
+        # unconfirmed source->sink path.
         if probe.dom_execution_observed:
             return Outcome.CONFIRMED
         if probe.dom_sink_path_plausible:
@@ -151,6 +156,16 @@ class TestConfirmedRequiresDeterministicContext:
     def test_html_body_escaped_is_not_confirmed(self):
         probe = Probe(
             context=ReflectionContext.HTML_BODY,
+            payload_reflected_unescaped=False,
+        )
+        assert classify_xss_outcome(probe) == Outcome.NOT_CONFIRMED
+
+    def test_html_attribute_escaped_is_not_confirmed(self):
+        # Symmetric to the html_body case above — both contexts share the
+        # same "deterministic parsing" branch in the classifier, so both
+        # need their own negative case, not just the positive one.
+        probe = Probe(
+            context=ReflectionContext.HTML_ATTRIBUTE,
             payload_reflected_unescaped=False,
         )
         assert classify_xss_outcome(probe) == Outcome.NOT_CONFIRMED
@@ -197,6 +212,16 @@ class TestNonDeterministicContextsNeverConfirmFromHttpAlone:
             == Outcome.REQUIRES_BROWSER_CONFIRMATION
         )
 
+    def test_url_href_not_reflected_is_not_confirmed(self):
+        # Explicit negative counterpart — previously only covered
+        # incidentally by the totality sweep, which checks the result is
+        # *a* valid Outcome but not *which* one.
+        probe = Probe(
+            context=ReflectionContext.URL_HREF,
+            payload_reflected_unescaped=False,
+        )
+        assert classify_xss_outcome(probe) == Outcome.NOT_CONFIRMED
+
     def test_dom_based_plausible_path_without_observed_execution(self):
         probe = Probe(
             context=ReflectionContext.DOM_BASED,
@@ -212,6 +237,18 @@ class TestNonDeterministicContextsNeverConfirmFromHttpAlone:
         probe = Probe(
             context=ReflectionContext.DOM_BASED,
             dom_sink_path_plausible=True,
+            dom_execution_observed=True,
+        )
+        assert classify_xss_outcome(probe) == Outcome.CONFIRMED
+
+    def test_dom_based_observed_execution_alone_is_sufficient(self):
+        # dom_execution_observed=True must be sufficient by itself,
+        # independent of dom_sink_path_plausible — actually observing
+        # execution is strictly stronger evidence than a merely plausible
+        # source->sink path, and the two flags shouldn't need to agree.
+        probe = Probe(
+            context=ReflectionContext.DOM_BASED,
+            dom_sink_path_plausible=False,
             dom_execution_observed=True,
         )
         assert classify_xss_outcome(probe) == Outcome.CONFIRMED
@@ -240,18 +277,11 @@ class TestEncodedContextIsAlwaysNotConfirmed:
 class TestBlockedTakesPriorityOverEverything:
     """Step 3a: an upstream block means the application was never actually
     tested, so it must override any other evidence and must be reachable
-    from every context."""
+    from every context — including `encoded`, since the interception
+    happens before the application (and therefore before its encoding
+    behavior) is ever reached."""
 
-    @pytest.mark.parametrize(
-        "context",
-        [
-            ReflectionContext.HTML_BODY,
-            ReflectionContext.HTML_ATTRIBUTE,
-            ReflectionContext.JS_STRING,
-            ReflectionContext.URL_HREF,
-            ReflectionContext.DOM_BASED,
-        ],
-    )
+    @pytest.mark.parametrize("context", list(ReflectionContext))
     def test_upstream_block_wins_regardless_of_other_evidence(self, context):
         probe = Probe(
             context=context,
@@ -259,6 +289,7 @@ class TestBlockedTakesPriorityOverEverything:
             payload_reflected_unescaped=True,
             js_breakout_deterministic=True,
             dom_execution_observed=True,
+            dom_sink_path_plausible=True,
         )
         assert classify_xss_outcome(probe) == Outcome.BLOCKED
 

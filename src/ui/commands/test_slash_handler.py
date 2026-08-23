@@ -33,6 +33,8 @@ class DummyAgent:
     max_steps: int = 20
     thinking: bool = False
     target: DummyTarget = field(default_factory=DummyTarget)
+    sys_prompt: str = ""
+    history: list = field(default_factory=list)
 
     def get_max_steps(self) -> int:
         return self.max_steps
@@ -57,6 +59,25 @@ class DummyAgent:
 
     async def coverage_context(self, signal) -> str:
         return "coverage fixture"
+
+    def rebuild_system_prompt(self) -> None:
+        # Mirrors the real agent's contract: rebuild_system_prompt() runs
+        # synchronously and refreshes sys_prompt from current target state.
+        # slash_handler.py reads/writes agent.history and agent.sys_prompt
+        # right after calling this (via
+        # ensure_system_prompt(agent.history, agent.sys_prompt)), so both
+        # fields must exist on the dummy, not just this method.
+        self.sys_prompt = f"system prompt (target={self.target.base_url()!r})"
+
+    async def save(self) -> None:
+        # slash_handler.py's /target branch persists to disk via
+        # `await agent.save()` in a background task after
+        # rebuild_system_prompt(), and swallows any exception into a
+        # "target save failed ..." transcript message. Without this method
+        # the dummy raises AttributeError there, which silently overwrites
+        # the "target set to ..." / "target cleared ..." message the tests
+        # assert on. No-op is sufficient — tests don't assert persistence.
+        pass
 
 
 @dataclass(slots=True)

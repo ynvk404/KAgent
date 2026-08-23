@@ -91,8 +91,8 @@ class TestRedactAndUtils:
 class TestIntelligenceStorePersistence:
     def test_init_paths(self, store: IntelligenceStore, temp_store_paths):
         cwd, home = temp_store_paths
-        assert store.project_path == cwd / ".pentesterflow" / "intelligence" / "scenarios.jsonl"
-        assert store.personal_path == home / ".pentesterflow" / "intelligence" / "scenarios.jsonl"
+        assert store.project_path == cwd / ".kagent" / "intelligence" / "scenarios.jsonl"
+        assert store.personal_path == home / ".kagent" / "intelligence" / "scenarios.jsonl"
 
     @pytest.mark.asyncio
     async def test_append_and_list_scenarios(self, store: IntelligenceStore, sample_scenario: IntelligenceScenario):

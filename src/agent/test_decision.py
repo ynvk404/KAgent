@@ -1,6 +1,11 @@
 import pytest
 
-from src.agent.decision_planner import build_decision_plan
+from src.agent.decision_planner import (
+    INTENT_KEYWORDS,
+    build_decision_plan,
+    matching_keywords,
+    normalize,
+)
 from src.target.target import Target
 from src.skills.registry import Skill
 
@@ -107,11 +112,59 @@ def test_pinned_target():
     )
 
 
+def test_requires_target_for_access_control():
+    plan = build_decision_plan(
+        "test the orders API for IDOR",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "access-control"
+    assert "clarify the exact in-scope target" in plan.checklist[0]
+
+
+def test_pinned_target_for_access_control():
+    target = Target()
+    target.set_base_url("https://example.com")
+
+    plan = build_decision_plan(
+        "test the orders API for IDOR",
+        planner_skills(),
+        target,
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "access-control"
+    assert (
+        "clarify the exact in-scope target"
+        not in "\n".join(plan.checklist)
+    )
+
+
 def planner_skills() -> list[Skill]:
     return [
         skill("recon", "Initial reconnaissance of a target"),
-        skill("web-enumeration", "Enumerate the attack surface of a web application"),
-        skill("web-input-analysis", "Analyze a web-enumeration inventory for testing candidates"),
+        skill(
+            "web-enumeration",
+            "Enumerate the attack surface of a web application",
+        ),
+        skill(
+            "web-input-analysis",
+            "Analyze a web-enumeration inventory for testing candidates",
+        ),
+        skill(
+            "access-control",
+            "Validate authorization, IDOR/BOLA, and privilege escalation candidates",
+        ),
+        skill(
+            "authentication",
+            "Validate session, login/logout, MFA, and password-reset flows",
+        ),
+        skill(
+            "ssrf",
+            "Validate suspected server-side URL fetching and characterize impact",
+        ),
     ]
 
 
@@ -150,6 +203,86 @@ def test_recommends_web_input_analysis_for_candidate_triage():
 
     assert plan is not None
     assert plan.recommended_skill == "web-input-analysis"
+
+
+def test_recommends_access_control_for_idor():
+    plan = build_decision_plan(
+        "test the orders API for IDOR",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "access-control"
+
+
+def test_recommends_access_control_for_bola():
+    plan = build_decision_plan(
+        "check the orders API for BOLA",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "access-control"
+
+
+def test_recommends_access_control_for_horizontal_privilege_escalation():
+    # Deliberately avoids the word "endpoint", which is a strong
+    # web-enumeration keyword and would tie 5-5 with access-control's
+    # "horizontal privilege escalation" hit, only resolved by alphabetical
+    # tie-break in confidence_check(). This test should isolate the
+    # access-control signal on its own.
+    plan = build_decision_plan(
+        "test horizontal privilege escalation on the orders resource",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "access-control"
+
+
+def test_horizontal_privilege_escalation_and_endpoint_is_alphabetical_tie_break():
+    # Documents a real tie: "horizontal privilege escalation" (strong,
+    # access-control) and "endpoint" (strong, web-enumeration) both score
+    # 5 with strong_count 1. access-control wins only because
+    # "access-control" < "web-enumeration" alphabetically in
+    # confidence_check()'s tie-break, not because of keyword specificity.
+    plan = build_decision_plan(
+        "test horizontal privilege escalation on the orders endpoint",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "access-control"
+
+
+def test_recommends_access_control_for_vertical_privilege_escalation():
+    plan = build_decision_plan(
+        "verify vertical privilege escalation on the admin endpoint",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "access-control"
+
+
+def test_access_control_keyword_is_not_double_counted():
+    hits = matching_keywords(
+        normalize("test access-control on this endpoint"),
+        INTENT_KEYWORDS["access_control"]["strong"],
+    )
+
+    assert hits == ["access control"]
+
+
+def test_access_control_keyword_normalization_is_consistent():
+    assert normalize("access-control") == "access control"
+    assert normalize("access_control") == "access control"
+    assert normalize("Access   Control") == "access control"
 
 
 def test_recommends_recon_for_subdomain_enumeration():
@@ -223,3 +356,162 @@ def test_tie_break_uses_alphabetical_skill_name_not_registry_order():
 
     assert plan is not None
     assert plan.recommended_skill == "recon"
+
+
+def test_recommends_authentication_for_session_fixation():
+    plan = build_decision_plan(
+        "test for session fixation and session invalidation after login",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "authentication"
+
+
+def test_recommends_authentication_for_mfa_bypass():
+    plan = build_decision_plan(
+        "check for mfa bypass and otp bypass in the login flow",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "authentication"
+
+
+def test_recommends_authentication_for_password_reset():
+    plan = build_decision_plan(
+        "verify the password reset flow for a reset token bypass",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "authentication"
+
+
+def test_recommends_authentication_for_user_enumeration():
+    plan = build_decision_plan(
+        "check for user enumeration and account enumeration on login",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "authentication"
+
+
+def test_credential_stuffing_does_not_recommend_authentication():
+    plan = build_decision_plan(
+        "test credential stuffing against the login form",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill != "authentication"
+
+
+def test_idor_still_recommends_access_control():
+    plan = build_decision_plan(
+        "test IDOR on the orders API",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "access-control"
+
+
+def test_authorization_bypass_still_recommends_access_control():
+    plan = build_decision_plan(
+        "check for authorization bypass on the admin resource",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "access-control"
+
+
+def test_recommends_ssrf_for_ssrf_keyword():
+    plan = build_decision_plan(
+        "test this parameter for ssrf",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "ssrf"
+
+
+def test_recommends_ssrf_for_server_side_request_forgery_spelled_out():
+    plan = build_decision_plan(
+        "check for server-side request forgery on the webhook field",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "ssrf"
+
+
+def test_recommends_ssrf_for_server_side_request_forgery_no_hyphen():
+    # Confirms both the hyphenated and spaced-out strong keyword variants
+    # are registered, not just one spelling.
+    plan = build_decision_plan(
+        "investigate a server side request forgery report",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "ssrf"
+
+
+def test_ssrf_weak_keywords_alone_do_not_route_to_ssrf():
+    # "image url" and "callback url" are weak-only signals. Weak hits
+    # without any strong hit must never clear confidence_check()'s
+    # strong_count > 0 requirement — url-shaped input alone should not
+    # force routing into ssrf ahead of web-input-analysis triage.
+    plan = build_decision_plan(
+        "the image url parameter looks like a callback url candidate",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill != "ssrf"
+
+
+def test_endpoint_with_url_does_not_route_to_ssrf_over_web_enumeration():
+    # A bare "endpoint ... url" mention should still favor
+    # web-enumeration's strong "endpoint" keyword, not get pulled into
+    # ssrf via the weak "url fetch"-adjacent wording.
+    plan = build_decision_plan(
+        "endpoint takes a url",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill == "web-enumeration"
+
+
+def test_ssrf_does_not_bleed_into_webhook_alone():
+    # "webhook" alone is a weak ssrf keyword. Without a strong hit it
+    # must not be enough to recommend ssrf by itself. Note: the original
+    # version of this test used a message with no WORKFLOW_TERMS hit and
+    # no known target, which correctly returns None entirely (same as
+    # test_stays_quiet_for_low_signal_greetings) rather than a plan with
+    # no recommendation — "check" is added here so a plan is actually
+    # produced for the assertion below to be meaningful.
+    plan = build_decision_plan(
+        "check the webhook field on this form",
+        planner_skills(),
+        Target(),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill != "ssrf"

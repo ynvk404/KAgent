@@ -31,21 +31,40 @@ STRONG_KEYWORD_WEIGHT = 5
 WEAK_KEYWORD_WEIGHT = 1
 MIN_RECOMMEND_SCORE = 5
 
-# NOTE: only intents for currently-active skills belong here. When a new
-# vulnerability-specific skill (cross-site-scripting, access-control,
-# finding-validation, ...) is added and has completed its full rollout
-# checklist, add its intent + keywords here at that point. Do not
-# pre-register intents for skills that don't exist yet — an unmapped
-# INTENT_TO_SKILL entry is silently dropped by detect_intent() via the
-# available_skill_names check, which would hide the fact that the mapping
-# is stale rather than surfacing it.
+# NOTE: only intents for currently-active, fully rolled-out skills belong
+# here. When a new vulnerability-specific skill (finding-validation, ...)
+# completes its full rollout checklist, add its intent + keywords here at
+# that point. Do not pre-register intents for skills that haven't finished
+# rollout — an unmapped INTENT_TO_SKILL entry is silently dropped by
+# detect_intent() via the available_skill_names check, which would hide
+# the fact that the mapping is stale rather than surfacing it.
 #
-# sql-injection completed its rollout checklist and is registered below.
+# recon, web-enumeration, web-input-analysis, sql-injection,
+# cross-site-scripting, access-control, authentication, ssrf, and csrf
+# have completed their rollout checklists and are registered below.
+#
+# ssrf is registered as validation-only: its keywords route to the
+# confirm/characterize workflow in skills/ssrf/SKILL.md, which stops at
+# SSRF-1..4 and hands off deeper impact work to a separate, not-yet-
+# registered ssrf-impact skill. Do not broaden these keywords to also
+# imply impact/exploitation intent without registering that skill too.
+#
+# csrf is likewise validation-only: it stops at CSRF-1..3 (candidate ->
+# suspected -> confirmed) and hands off account-takeover/destructive
+# follow-up to a separate, not-yet-registered workflow. Its keywords
+# should stay scoped to CSRF terminology — do not let generic terms like
+# "token" or "session" bleed in, since those already belong to
+# authentication and access_control.
 INTENT_TO_SKILL: dict[str, str] = {
     "recon": "recon",
     "web_enumeration": "web-enumeration",
     "web_input_analysis": "web-input-analysis",
     "sql_injection": "sql-injection",
+    "cross_site_scripting": "cross-site-scripting",
+    "access_control": "access-control",
+    "authentication": "authentication",
+    "ssrf": "ssrf",
+    "csrf": "csrf",
 }
 
 INTENT_KEYWORDS: dict[str, dict[str, List[str]]] = {
@@ -130,6 +149,109 @@ INTENT_KEYWORDS: dict[str, dict[str, List[str]]] = {
             "database",
             "injection",
             "syntax sensitive",
+        ],
+    },
+    "cross_site_scripting": {
+        "strong": [
+            "xss",
+            "cross site scripting",
+            "script injection",
+            "reflected xss",
+            "stored xss",
+            "dom xss",
+            "dom based xss",
+            "html injection",
+        ],
+        "weak": [
+            "script tag",
+            "innerhtml",
+            "document.write",
+            "postmessage",
+            "sanitize input",
+            "escape output",
+            "content security policy",
+        ],
+    },
+    "access_control": {
+        "strong": [
+            "access control",
+            "idor",
+            "bola",
+            "horizontal privilege escalation",
+            "vertical privilege escalation",
+            "missing authorization",
+            "authorization bypass",
+            "function level authorization",
+        ],
+        "weak": [
+            "object identifier",
+            "object ownership",
+            "owner vs non-owner",
+            "admin endpoint",
+            "authorization check",
+            "unauthorized access",
+            "cross-user access",
+        ],
+    },
+    "authentication": {
+        "strong": [
+            "session fixation",
+            "session invalidation",
+            "login bypass",
+            "login flow bypass",
+            "mfa bypass",
+            "2fa bypass",
+            "otp bypass",
+            "password reset flow",
+            "password reset bypass",
+            "reset token",
+            "logout invalidation",
+            "user enumeration",
+            "account enumeration",
+        ],
+        "weak": [
+            "login flow",
+            "logout",
+            "session cookie",
+            "mfa",
+            "2fa",
+            "otp",
+            "password reset",
+            "forgot password",
+            "remember me",
+            "session token",
+            "account lockout",
+            "rate limiting login",
+        ],
+    },
+    "ssrf": {
+        "strong": [
+            "ssrf",
+            "server-side request forgery",
+            "server side request forgery",
+        ],
+        "weak": [
+            "url fetch",
+            "webhook",
+            "callback url",
+            "image url",
+            "remote url",
+            "redirect url",
+        ],
+    },
+    "csrf": {
+        "strong": [
+            "csrf",
+            "cross-site request forgery",
+            "cross site request forgery",
+        ],
+        "weak": [
+            "csrf token",
+            "anti-csrf",
+            "state-changing request",
+            "samesite",
+            "double-submit cookie",
+            "forged request",
         ],
     },
 }
@@ -411,11 +533,11 @@ def render_guidance(
 
 
 def normalize(s: str) -> str:
-    return (
-        s.lower()
-        .replace("_", " ")
-        .replace("-", " ")
-    )
+    return re.sub(
+        r"\s+",
+        " ",
+        s.lower().replace("_", " ").replace("-", " "),
+    ).strip()
 
 
 def includes_any(s: str, needles: List[str]) -> bool:
