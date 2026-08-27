@@ -40,8 +40,8 @@ MIN_RECOMMEND_SCORE = 5
 # the fact that the mapping is stale rather than surfacing it.
 #
 # recon, web-enumeration, web-input-analysis, sql-injection,
-# cross-site-scripting, access-control, authentication, ssrf, and csrf
-# have completed their rollout checklists and are registered below.
+# cross-site-scripting, access-control, authentication, ssrf, csrf, and
+# ssti have completed their rollout checklists and are registered below.
 #
 # ssrf is registered as validation-only: its keywords route to the
 # confirm/characterize workflow in skills/ssrf/SKILL.md, which stops at
@@ -55,6 +55,14 @@ MIN_RECOMMEND_SCORE = 5
 # should stay scoped to CSRF terminology — do not let generic terms like
 # "token" or "session" bleed in, since those already belong to
 # authentication and access_control.
+#
+# ssti is registered as a single, fully self-contained skill (unlike
+# ssrf/csrf): skills/ssti/SKILL.md gates its own impact work internally —
+# Phase 3 (command execution / sensitive-read probes) only runs after
+# SSTI-2 is confirmed AND the user explicitly authorizes via ask_user.
+# There is no separate ssti-impact skill to register later, so these
+# keywords may route straight to detection+validation without needing a
+# parallel "impact-only" split.
 INTENT_TO_SKILL: dict[str, str] = {
     "recon": "recon",
     "web_enumeration": "web-enumeration",
@@ -65,6 +73,7 @@ INTENT_TO_SKILL: dict[str, str] = {
     "authentication": "authentication",
     "ssrf": "ssrf",
     "csrf": "csrf",
+    "ssti": "ssti",
 }
 
 INTENT_KEYWORDS: dict[str, dict[str, List[str]]] = {
@@ -252,6 +261,27 @@ INTENT_KEYWORDS: dict[str, dict[str, List[str]]] = {
             "samesite",
             "double-submit cookie",
             "forged request",
+        ],
+    },
+    "ssti": {
+        "strong": [
+            "ssti",
+            "server-side template injection",
+            "server side template injection",
+            "template injection",
+            "template engine injection",
+        ],
+        "weak": [
+            "jinja2",
+            "twig template",
+            "velocity template",
+            "freemarker",
+            "smarty template",
+            "erb template",
+            "template engine",
+            "template expression",
+            "expression evaluation",
+            "sandbox escape",
         ],
     },
 }

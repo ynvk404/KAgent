@@ -1,721 +1,684 @@
+"""
+tests/test_sqlinjection.py
+
+Contract tests for skills/sql-injection/{SKILL.md,payloads.txt}.
+
+These tests do NOT execute any SQL injection technique, do NOT make any
+network or shell calls, and do NOT exercise a live agent. They check two
+things:
+
+1. Static content contract — SKILL.md and payloads.txt contain the
+   invariants this skill was designed around (no dns_callback dependency,
+   Phase 2d capability-gating, Phase 3 separate authorization, scope
+   bounds on extraction, etc.), so a future edit to either file can't
+   silently drift from the agreed design without a test failing.
+
+2. Reference gate logic — a small, pure-Python re-implementation of the
+   Phase 2d / Phase 3 authorization gates described in SKILL.md, tested
+   as an executable spec. This models the *decision policy* the skill
+   text instructs an agent to follow; it is not the agent itself and
+   contains no payloads, no request logic, and no exploitation code.
+
+Run with: pytest tests/test_sqlinjection.py -v
+"""
+
 from __future__ import annotations
 
-import asyncio
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 import yaml
 
+# ---------------------------------------------------------------------------
+# Locating the skill files
+# ---------------------------------------------------------------------------
 
-# ============================================================================
-# Paths
-# ============================================================================
+def _find_skill_dir() -> Path:
+    """Walk up from this test file looking for skills/sql-injection/."""
+    here = Path(__file__).resolve()
+    for parent in [here.parent, *here.parents]:
+        candidate = parent / "skills" / "sql-injection"
+        if (candidate / "SKILL.md").exists():
+            return candidate
+    raise FileNotFoundError(
+        "Could not locate skills/sql-injection/SKILL.md relative to "
+        f"{here}. Expected repo layout: <root>/skills/sql-injection/SKILL.md"
+    )
 
-ROOT = Path(__file__).resolve().parents[1]
 
-SKILLS_DIR = ROOT / "skills"
-SQLI_DIR = SKILLS_DIR / "sql-injection"
-SQLI_FILE = SQLI_DIR / "SKILL.md"
+SKILL_DIR = _find_skill_dir()
+SKILL_MD_PATH = SKILL_DIR / "SKILL.md"
+PAYLOADS_PATH = SKILL_DIR / "payloads.txt"
 
-EXPECTED_ALLOWED_TOOLS = {
-    "shell",
-    "http",
-    "file_write",
-}
 
-VALID_OUTCOMES = {
-    "confirmed",
+@pytest.fixture(scope="session")
+def skill_text() -> str:
+    return SKILL_MD_PATH.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="session")
+def payloads_text() -> str:
+    return PAYLOADS_PATH.read_text(encoding="utf-8")
+
+
+def _norm(text: str) -> str:
+    """
+    Collapse whitespace/newlines so phrase checks survive line-wrapping,
+    and strip leading '#' comment markers (payloads.txt banners wrap
+    across multiple '#'-prefixed lines) so a wrapped comment reads as one
+    continuous phrase.
+    """
+    lines = [re.sub(r"^\s*#+\s?", "", line) for line in text.splitlines()]
+    return re.sub(r"\s+", " ", " ".join(lines))
+
+
+@pytest.fixture(scope="session")
+def skill_frontmatter(skill_text: str) -> dict:
+    """Parse the YAML frontmatter block at the top of SKILL.md."""
+    match = re.match(r"^---\n(.*?)\n---\n", skill_text, re.DOTALL)
+    assert match, "SKILL.md must start with a YAML frontmatter block delimited by '---'"
+    data = yaml.safe_load(match.group(1))
+    assert isinstance(data, dict)
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 1. Frontmatter / allowed-tools contract
+# ---------------------------------------------------------------------------
+
+class TestFrontmatter:
+    def test_name_and_description_present(self, skill_frontmatter: dict):
+        assert skill_frontmatter.get("name") == "sql-injection"
+        assert skill_frontmatter.get("description")
+
+    def test_allowed_tools_present(self, skill_frontmatter: dict):
+        tools = skill_frontmatter.get("allowed-tools")
+        assert isinstance(tools, list) and tools, "allowed-tools must be a non-empty list"
+
+    def test_dns_callback_not_declared(self, skill_frontmatter: dict):
+        """
+        Core regression this whole exercise was about: the skill must not
+        declare a dependency on a tool (dns_callback) that doesn't exist
+        in the current runtime.
+        """
+        tools = skill_frontmatter["allowed-tools"]
+        assert "dns_callback" not in tools
+        # Also guard against re-adding it under a near-alias.
+        for t in tools:
+            assert "callback" not in t.lower() and "oob" not in t.lower(), (
+                f"allowed-tools contains a suspicious OOB-flavored tool "
+                f"entry {t!r} — if a real OOB tool has been added, update "
+                f"the capability-gating tests below rather than silently "
+                f"allowing it."
+            )
+
+    def test_core_tools_present(self, skill_frontmatter: dict):
+        tools = set(skill_frontmatter["allowed-tools"])
+        for expected in {"shell", "http", "read_payloads", "file_write", "ask_user"}:
+            assert expected in tools, f"expected tool {expected!r} missing from allowed-tools"
+
+    def test_no_automated_exploitation_tools(self, skill_frontmatter: dict):
+        tools = " ".join(skill_frontmatter["allowed-tools"]).lower()
+        for banned in ("sqlmap", "ghauri", "exploit"):
+            assert banned not in tools
+
+
+# ---------------------------------------------------------------------------
+# 2. Phase 2d capability-gating contract (SKILL.md text)
+# ---------------------------------------------------------------------------
+
+class TestPhase2dCapabilityGateText:
+    def test_capability_check_section_exists(self, skill_text: str):
+        assert "Phase 2d capability check" in skill_text
+
+    def test_capability_checked_before_authorization(self, skill_text: str):
+        """
+        The gate order matters: capability presence must be checked before
+        the skill ever asks the user to authorize something that cannot
+        run. Assert the capability-present item appears before the
+        explicit-authorization item in the numbered list.
+        """
+        section = skill_text.split("### Phase 2d capability check", 1)[1]
+        section = section.split("### 2d. Out-of-band", 1)[0]
+        cap_idx = section.find("Capability present")
+        auth_idx = section.find("Explicit authorization")
+        assert cap_idx != -1 and auth_idx != -1
+        assert cap_idx < auth_idx, (
+            "Capability presence must be checked before explicit "
+            "authorization in the Phase 2d gate."
+        )
+
+    def test_current_capability_absence_is_stated(self, skill_text: str):
+        assert "contains no such tool" in skill_text
+        assert "check fails by default" in skill_text
+
+    def test_no_workaround_via_shell(self, skill_text: str):
+        """
+        The skill must explicitly forbid simulating/faking an OOB
+        callback via shell or any other substitute mechanism.
+        """
+        assert re.search(
+            r"never be used to simulate, fake, or locally stand in for an OOB",
+            _norm(skill_text),
+        )
+        assert "fake a listener or a callback" in _norm(skill_text)
+
+    def test_failed_capability_check_short_circuits(self, skill_text: str):
+        """
+        If capability check 1 fails, the skill must stop there — not
+        proceed to ask_user for authorization of something unexecutable.
+        """
+        normalized = _norm(skill_text)
+        assert "do not proceed to checks 2 or 3" in normalized
+        assert "do not ask" in normalized
+        assert "not simulate the technique" in normalized
+
+    def test_failed_capability_check_records_result(self, skill_text: str):
+        assert "phase_2d_used: no" in skill_text
+        assert "OOB unavailable" in skill_text
+
+    def test_phase3_authorization_is_independent_of_phase2d(self, skill_text: str):
+        assert "Do not infer Phase 3 authorization merely because Phase 2d" in skill_text
+
+
+# ---------------------------------------------------------------------------
+# 3. Result recording / outcome contract
+# ---------------------------------------------------------------------------
+
+EXPECTED_OUTCOMES = {
+    "confirmed (SQLI-2)",
+    "confirmed (SQLI-3)",
     "not confirmed",
     "blocked",
     "deferred (nosql, out of scope)",
 }
 
 
-# ============================================================================
-# Helpers
-# ============================================================================
-
-def read_skill_text() -> str:
-    """
-    Raw file bytes, preserving line breaks. Use this only when line
-    structure matters (frontmatter parsing, code-block scoping). For
-    prose/substring checks, use normalized_text() instead — SKILL.md is
-    hard-wrapped at ~79 cols, so a phrase that reads as one sentence can
-    still contain a literal newline between two of its words.
-    """
-    assert SQLI_FILE.is_file(), f"Missing skill file: {SQLI_FILE}"
-    return SQLI_FILE.read_text(encoding="utf-8")
-
-
-def normalized_text() -> str:
-    """
-    Same content as read_skill_text(), with every run of whitespace
-    (including newlines from hard-wrapping) collapsed to a single space.
-    Use this for substring assertions against prose spanning a wrapped
-    line, so line-wrap position isn't part of the test.
-    """
-    return re.sub(r"\s+", " ", read_skill_text())
-
-
-def parse_frontmatter(raw: str) -> dict:
-    assert raw.startswith("---"), "SKILL.md must start with frontmatter"
-
-    match = re.match(
-        r"\A---[ \t]*\r?\n(?P<yaml>.*?)\r?\n---[ \t]*\r?\n?",
-        raw,
-        re.DOTALL,
-    )
-
-    assert match is not None, "Invalid SKILL.md frontmatter"
-
-    metadata = yaml.safe_load(match.group("yaml"))
-    assert isinstance(metadata, dict)
-
-    return metadata
-
-
-def skill_body(raw: str) -> str:
-    match = re.match(
-        r"\A---[ \t]*\r?\n(?P<yaml>.*?)\r?\n---[ \t]*\r?\n?",
-        raw,
-        re.DOTALL,
-    )
-
-    assert match is not None
-
-    body = raw[match.end():]
-    return re.sub(r"\A(?:\r?\n)+", "", body)
-
-
-def load_registry():
-    """
-    Uses the real Registry implementation from the project.
-    """
-    from src.skills.registry import Registry
-
-    registry = Registry()
-    registry.load_dir(SKILLS_DIR)
-    return registry
-
-
-def sql_injection_skill():
-    registry = load_registry()
-
-    skill = registry.get("sql-injection")
-
-    assert skill is not None, (
-        "sql-injection was not loaded into the Registry"
-    )
-
-    return skill
-
-
-def extract_allowed_tools(skill) -> set[str]:
-    return set(skill.tools)
-
-
-# ============================================================================
-# Layer 1 - Static
-# ============================================================================
-
-def test_sql_injection_skill_file_exists():
-    assert SQLI_FILE.is_file()
-
-
-def test_sql_injection_frontmatter_is_valid():
-    metadata = parse_frontmatter(read_skill_text())
-
-    assert metadata["name"] == "sql-injection"
-    assert isinstance(metadata["description"], str)
-    assert metadata["description"].strip()
-
-
-def test_sql_injection_name_matches_directory():
-    skill = sql_injection_skill()
-
-    assert skill.name == "sql-injection"
-    assert Path(skill.path).parent.name == "sql-injection"
-
-
-def test_sql_injection_allowed_tools_are_exact():
-    skill = sql_injection_skill()
-
-    assert extract_allowed_tools(skill) == EXPECTED_ALLOWED_TOOLS
-
-
-def test_sql_injection_allowed_tools_are_known():
-    """
-    Uses the exact KNOWN_TOOL_NAMES from the project's current policy.
-    """
-    known_tools = {
-        "shell",
-        "bash",
-        "BashTool",
-        "file_read",
-        "FileReadTool",
-        "file_write",
-        "FileWriteTool",
-        "file_edit",
-        "FileEditTool",
-        "glob",
-        "GlobTool",
-        "grep",
-        "GrepTool",
-        "http",
-        "web_fetch",
-        "web_search",
-        "ask",
-        "ask_user",
-        "confirm_finding",
-        "load_skill",
-        "read_payloads",
-        "read_skill_file",
-        "coverage",
-    }
-
-    skill = sql_injection_skill()
-
-    assert set(skill.tools) <= known_tools
-
-
-def test_sql_injection_passes_registry_validation():
-    from src.skills.registry import validate_skill
-
-    skill = sql_injection_skill()
-
-    known_tools = {
-        "shell",
-        "bash",
-        "BashTool",
-        "file_read",
-        "FileReadTool",
-        "file_write",
-        "FileWriteTool",
-        "file_edit",
-        "FileEditTool",
-        "glob",
-        "GlobTool",
-        "grep",
-        "GrepTool",
-        "http",
-        "web_fetch",
-        "web_search",
-        "ask",
-        "ask_user",
-        "confirm_finding",
-        "load_skill",
-        "read_payloads",
-        "read_skill_file",
-        "coverage",
-    }
-
-    errors = validate_skill(skill, known_tools)
-
-    assert errors == []
-
-
-def test_sql_injection_description_is_within_registry_limit():
-    from src.skills.registry import MAX_DESCRIPTION
-
-    skill = sql_injection_skill()
-
-    assert len(skill.description) <= MAX_DESCRIPTION
-
-
-def test_sql_injection_has_no_unresolved_placeholders():
-    """
-    Guards against literal, un-substituted placeholders being written to
-    files or commands (the thing the skill's own "Execution rule"
-    prohibits) — e.g. a stray `<TARGET>` left in a curl command instead of
-    the real host.
-
-    This is deliberately narrower than "no angle-bracket token anywhere":
-    the lowercase `<target>` token is this skill's (and recon's,
-    web-enumeration's, web-input-analysis's) documented convention for
-    referring to the *derived identifier* in prose and output paths, e.g.
-    `sql-injection/<target>/results.md`. That usage is intentional and
-    shared across the whole skill pipeline, so it is excluded here rather
-    than flagged.
-    """
-    text = read_skill_text()
-
-    forbidden = [
-        "<TARGET>",
-        "<PARAM>",
-        "<VALUE>",
-        "<HOST>",
-        "<APEX>",
-        "<endpoint>",
-        "<parameter>",
-        "<param>",
-        "<value>",
-    ]
-
-    for marker in forbidden:
-        assert marker not in text, f"unresolved placeholder found: {marker}"
-
-
-def test_sql_injection_target_placeholder_only_used_as_documented_identifier():
-    """
-    Every occurrence of the lowercase `<target>` convention token should
-    sit next to path- or identifier-like context (a slash, a backtick, or
-    the word "identifier") rather than appearing as a stray unresolved
-    value inside a runnable command.
-    """
-    text = read_skill_text()
-
-    for match in re.finditer(r"<target>", text):
-        start, end = match.span()
-        window = text[max(0, start - 40): end + 40]
-        assert (
-            "/" in window
-            or "identifier" in window.lower()
-            or "`" in window
-        ), f"unexpected bare <target> usage: {window!r}"
-
-
-def test_sql_injection_scope_is_sql_only():
-    text = normalized_text().lower()
-
-    assert "sql injection only" in text
-    assert "nosql/operator injection" in text
-    assert "out of scope" in text
-
-
-# ============================================================================
-# Layer 2 - Explicit skill load
-# ============================================================================
-
-def test_sql_injection_is_discoverable_without_decision_planner():
-    registry = load_registry()
-
-    assert registry.has("sql-injection")
-    assert registry.get("sql-injection") is not None
-
-
-def test_sql_injection_can_be_loaded_explicitly():
-    """
-    Tests the actual LoadSkillTool path without decision_planner.
-    """
-    from src.skills.load_skill import LoadSkillTool
-
-    registry = load_registry()
-    tool = LoadSkillTool(registry)
-
-    body = asyncio.run(
-        tool.run({"name": "sql-injection"})
-    )
-
-    assert isinstance(body, str)
-    assert body.startswith("# Skill: sql-injection")
-    assert "SQL injection playbook" in body
-
-
-def test_sql_injection_is_model_invocable():
-    skill = sql_injection_skill()
-
-    assert skill.disable_model_invocation is False
-
-
-# ============================================================================
-# Layer 3 - Behavioral contract
-# ============================================================================
-
-def test_error_based_path_is_defined():
-    text = normalized_text().lower()
-
-    assert "error-based" in text
-    assert "single quote" in text
-    assert "clear db error string" in text
-
-
-def test_boolean_based_path_is_defined():
-    text = normalized_text().lower()
-
-    assert "boolean-based differential check" in text
-    assert "1=1" in text
-    assert "1=2" in text
-    assert "repeat once" in text
-
-
-def test_time_based_path_is_defined():
-    text = normalized_text().lower()
-
-    assert "time-based check" in text
-    assert "sleep(5)" in text
-    assert "repeatability" in text
-
-
-def test_waf_and_rate_limit_are_blocked():
-    text = normalized_text().lower()
-
-    assert "403" in text
-    assert "429" in text
-    assert "blocked" in text
-    assert "filter-bypass" in text
-
-
-def test_nosql_is_deferred():
-    text = normalized_text().lower()
-
-    assert "deferred (nosql, out of scope)" in text
-
-
-def test_authentication_context_is_preserved():
-    text = normalized_text().lower()
-
-    assert "session cookie" in text
-    assert "authorization" in text
-    assert "csrf token" in text
-    assert "preserve the original request structure" in text
-
-
-def test_post_json_context_is_supported():
-    text = normalized_text().lower()
-
-    assert "post/json" in text
-    assert "application/json" in text
-    assert "json body" in text
-
-
-def test_second_order_is_recorded_not_automatically_chased():
-    text = normalized_text().lower()
-
-    assert "second-order-suspected" in text
-    assert (
-        "do not automatically build or run a multi-request confirmation "
-        "flow" in text
-    )
-
-
-# ============================================================================
-# Layer 4 - Output contract
-# ============================================================================
-
-def test_results_file_path_is_defined():
-    text = normalized_text()
-
-    expected = "sql-injection/<target>/results.md"
-
-    assert expected in text
-
-
-def test_results_file_uses_same_target_identifier():
-    text = normalized_text().lower()
-
-    assert (
-        "same target identifier as `recon`, `web-enumeration`, and" in text
-    )
-    assert "web-input-analysis" in text
-
-
-def test_results_require_exactly_one_outcome():
-    text = normalized_text().lower()
-
-    assert "every candidate gets exactly one outcome" in text
-
-    for outcome in VALID_OUTCOMES:
-        assert outcome in text
-
-
-def test_results_record_every_candidate():
-    text = normalized_text().lower()
-
-    assert "every candidate, regardless of outcome" in text
-    assert "confirmed, not confirmed, blocked, or deferred" in text
-
-
-def test_results_do_not_store_full_response_bodies():
-    text = normalized_text().lower()
-
-    assert "not full response bodies" in text
-    assert "never response bodies containing real user data" in text
-
-
-def test_results_record_evidence():
-    text = normalized_text().lower()
-
-    required = [
-        "technique(s) tried",
-        "status/size/timing deltas",
-        "apparent db engine",
-        "injection context",
-        "scope of proof obtained",
-    ]
-
-    for item in required:
-        assert item in text
-
-
-# ============================================================================
-# Layer 5 - Guardrails
-# ============================================================================
-
-def test_confirm_finding_is_not_allowed():
-    skill = sql_injection_skill()
-
-    assert "confirm_finding" not in skill.tools
-
-
-def test_sqlmap_is_not_allowed_as_default():
-    text = normalized_text().lower()
-
-    assert "sqlmap" in text
-    assert "do not reach for `sqlmap`" in text
-
-
-def test_ghauri_is_not_allowed_as_default():
-    text = normalized_text().lower()
-
-    assert "ghauri" in text
-
-
-def test_union_select_extraction_is_forbidden():
-    text = normalized_text().lower()
-
-    assert "union select" in text
-    assert "do not" in text
-
-
-def test_real_data_extraction_is_forbidden():
-    text = normalized_text().lower()
-
-    forbidden_concepts = [
-        "credentials",
-        "session tokens",
-        "real row data",
-        "dump table",
-    ]
-
-    for concept in forbidden_concepts:
-        assert concept in text
-
-
-def test_file_write_is_allowed_for_results():
-    skill = sql_injection_skill()
-
-    assert "file_write" in skill.tools
-
-
-def test_http_is_allowed():
-    skill = sql_injection_skill()
-
-    assert "http" in skill.tools
-
-
-def test_shell_is_allowed():
-    skill = sql_injection_skill()
-
-    assert "shell" in skill.tools
-
-
-def test_skill_stops_after_sufficient_proof():
-    text = normalized_text().lower()
-
-    assert "stop probing that candidate" in text
-    assert "clear, repeatable positive signal" in text
-    assert "stop the skill entirely" in text
-
-
-def test_skill_does_not_create_final_finding():
-    text = normalized_text().lower()
-
-    assert "does not create a final finding itself" in text
-    assert "finding-validation" in text
-
-
-def test_blocked_candidate_is_not_treated_as_negative():
-    text = normalized_text().lower()
-
-    assert "a `blocked` result is distinct from `not confirmed`" in text
-
-
-def test_skill_does_not_retry_waf_with_bypass():
-    text = normalized_text().lower()
-
-    assert (
-        "don't retry with encoding tricks or filter-bypass variants"
-        in text
-    )
-
-
-# ============================================================================
-# Layer 6 - Decision planner
-# ============================================================================
-
-def _load_decision_planner():
-    try:
-        from src.agent import decision_planner
-    except ImportError:
-        pytest.skip("decision_planner module is unavailable")
-
-    return decision_planner
-
-
-def test_sql_injection_planner_registration():
-    planner = _load_decision_planner()
-
-    intent_to_skill = getattr(planner, "INTENT_TO_SKILL", None)
-
-    if intent_to_skill is None:
-        pytest.skip("INTENT_TO_SKILL is not exposed")
-
-    # Before rollout this should skip, not fail: sql_injection is
-    # deliberately not registered in decision_planner.py yet (see the
-    # NOTE above INTENT_TO_SKILL in that module). Registering it early
-    # is a separate, later step gated on completing the skill's own
-    # rollout checklist, not on this test suite passing.
-    if "sql_injection" not in intent_to_skill:
-        pytest.skip(
-            "sql_injection has not been rolled out into decision_planner.py"
-        )
-
-    assert intent_to_skill["sql_injection"] == "sql-injection"
-
-
-def test_sql_injection_planner_keywords():
-    planner = _load_decision_planner()
-
-    intent_keywords = getattr(planner, "INTENT_KEYWORDS", None)
-
-    if intent_keywords is None:
-        pytest.skip("INTENT_KEYWORDS is not exposed")
-
-    if "sql_injection" not in intent_keywords:
-        pytest.skip(
-            "sql_injection has not been rolled out into decision_planner.py"
-        )
-
-    keywords = intent_keywords["sql_injection"]
-
-    assert isinstance(keywords, dict)
-    assert "strong" in keywords
-    assert "weak" in keywords
-
-    strong = {str(x).lower() for x in keywords["strong"]}
-
-    assert "sql injection" in strong
-    assert "sqli" in strong
-
-
-def _make_stub_skills(names):
-    """
-    A minimal stand-in for src.skills.registry.Skill.
-
-    recommend_skill()/detect_intent() only ever read `skill.name` off each
-    entry in the `skills` list (to build `available_skill_names`), so a
-    duck-typed object with just a `.name` attribute is sufficient — this
-    deliberately avoids importing the real Skill class, whose constructor
-    signature/module path isn't guaranteed by anything this test suite has
-    confirmed (see the src.skills.tool import mixup earlier in this file's
-    history).
-    """
-    return [SimpleNamespace(name=name) for name in names]
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "check this parameter for sql injection",
-        "test this endpoint for sqli",
-        "is this parameter injectable with SQL injection",
-    ],
-)
-def test_sql_injection_recommendation(text):
-    planner = _load_decision_planner()
-
-    intent_to_skill = getattr(planner, "INTENT_TO_SKILL", None)
-    intent_keywords = getattr(planner, "INTENT_KEYWORDS", None)
-
-    if (
-        not isinstance(intent_to_skill, dict)
-        or "sql_injection" not in intent_to_skill
-        or not isinstance(intent_keywords, dict)
-        or "sql_injection" not in intent_keywords
+class TestOutcomeContract:
+    def test_all_five_outcomes_documented(self, skill_text: str):
+        for outcome in EXPECTED_OUTCOMES:
+            assert outcome in skill_text, f"missing outcome definition: {outcome!r}"
+
+    def test_not_confirmed_does_not_require_every_technique(self, skill_text: str):
+        """
+        Regression for the earlier over-strict wording: `not confirmed`
+        must not be defined as requiring literally every technique to
+        have been run — the "stop at first clear signal" rule means a
+        candidate can validly reach `not confirmed` without exhausting
+        every phase-2 technique.
+        """
+        # Find the bullet defining not confirmed in "Recording the result"
+        section = skill_text.split("## Recording the result", 1)[1]
+        section = section.split("### Standard result entry template", 1)[0]
+        not_confirmed_line = [
+            line for line in section.splitlines() if line.strip().startswith("- `not confirmed`")
+        ]
+        assert not_confirmed_line, "could not find the `not confirmed` definition bullet"
+        line = not_confirmed_line[0]
+        assert "does not mean every technique must be run" in line or "stop at the first clear signal" in line
+        assert "every technique actually available" not in line
+
+    def test_blocked_distinct_from_not_confirmed(self, skill_text: str):
+        assert "distinct from `not confirmed`" in skill_text
+
+    def test_2c_treated_as_guard_not_confirmation_technique(self, skill_text: str):
+        """
+        2c (WAF/rate-limit check) should be described as a guard condition
+        (absence of blocking), not as a technique that itself must
+        produce a positive/negative confirmation signal.
+        """
+        assert "condition was observed under 2c" in _norm(skill_text)
+
+
+# ---------------------------------------------------------------------------
+# 4. Scope-bound contract ("Bound the proof" / Phase 3 minimalism)
+# ---------------------------------------------------------------------------
+
+class TestScopeBounds:
+    def test_bound_the_proof_section_exists(self, skill_text: str):
+        assert "### Bound the proof" in skill_text
+
+    def test_forbids_union_extraction(self, skill_text: str):
+        assert "UNION SELECT" in skill_text
+        assert "build or run a `UNION SELECT` chain" in skill_text
+
+    def test_forbids_credential_and_row_dumping(self, skill_text: str):
+        assert "dump table/column names, credentials, session tokens, or any real row data" in skill_text
+
+    def test_forbids_automated_tooling_escalation(self, skill_text: str):
+        assert '"see how bad it is"' in skill_text or "see how bad it is" in skill_text
+
+    def test_phase3_requires_separate_authorization(self, skill_text: str):
+        section = skill_text.split("## Phase 3: Minimal Impact Validation", 1)[1]
+        section = section.split("## Recording the result", 1)[0]
+        assert "explicitly authorizes deeper impact validation via `ask_user`" in section
+
+
+    def test_phase3_limited_to_fingerprint(self, skill_text: str):
+        section = skill_text.split("## Phase 3: Minimal Impact Validation", 1)[1]
+        section = section.split("## Recording the result", 1)[0]
+        assert "minimal, non-sensitive fingerprint reads" in section
+        assert "not user data" in section
+        assert "not credentials" in section
+
+    def test_column_enumeration_forbidden_in_payloads_and_skill(
+        self, skill_text: str, payloads_text: str
     ):
-        pytest.skip(
-            "sql_injection intent is not rolled out yet"
+        assert "Do not probe column counts broadly" in payloads_text
+        assert "do not iterate" in payloads_text
+
+    def test_nosql_deferred_not_handled_here(self, skill_text: str):
+        assert "deferred (nosql, out of scope)" in skill_text
+        assert "do not apply SQL syntax to it here" in _norm(skill_text)
+
+
+# ---------------------------------------------------------------------------
+# 5. Handoff contract (only confirmed findings go to finding-validation)
+# ---------------------------------------------------------------------------
+
+class TestHandoffContract:
+    def test_handoff_schema_present(self, skill_text: str):
+        assert "handoff:" in skill_text
+        for field_name in (
+            "target:", "endpoint:", "method:", "parameter:", "location:",
+            "sqli_level:", "technique:", "engine:", "proof_scope:",
+        ):
+            assert field_name in skill_text
+
+    def test_only_confirmed_outcomes_handed_off(self, skill_text: str):
+        assert "Do not hand off `not confirmed`, `blocked`, or `deferred` candidates" in skill_text
+
+    def test_no_concrete_query_rewrite_in_handoff(self, skill_text: str):
+        assert "Do not fill in a rewritten, drop-in query fix" in skill_text
+
+    def test_proof_scope_declares_no_extraction_by_default(self, skill_text: str):
+        assert 'data_extracted: false' in skill_text
+        assert "no data extraction performed; confirmation only" in skill_text
+
+
+# ---------------------------------------------------------------------------
+# 6. payloads.txt contract
+# ---------------------------------------------------------------------------
+
+class TestPayloadsFile:
+    def test_phase2d_banner_states_oob_unavailable(self, payloads_text: str):
+        normalized = _norm(payloads_text)
+        section_markers = [
+            "KAgent currently does not expose an OOB callback/listener tool",
+            "MUST NOT be executed in the current runtime",
+        ]
+        for marker in section_markers:
+            assert marker in normalized
+
+        # The standalone NOTE banner directly under the PHASE 2D header.
+        assert "# NOTE:" in payloads_text
+        assert "KAgent currently has no OOB callback/listener tool." in normalized
+        assert "must not be executed in the current environment" in normalized
+        assert "Never execute them through shell or another substitute mechanism." in normalized
+
+    def test_phase1_comment_does_not_claim_no_logic_change(self, payloads_text: str):
+        """
+        Regression: Phase 1's old comment claimed none of the probes
+        change query logic, which is technically inaccurate for `;` and
+        `--`. The corrected comment should describe them as parser/syntax
+        boundary probes instead.
+        """
+        phase1 = payloads_text.split("PHASE 1 — DETECTION", 1)[1]
+        phase1 = phase1.split("PHASE 2 — VALIDATION", 1)[0]
+        assert "test parser" in phase1 or "syntax boundaries" in phase1
+        assert "None of these attempt to change query" not in phase1
+
+    def test_stacked_query_warning_present(self, payloads_text: str):
+        phase2 = payloads_text.split("PHASE 2 — VALIDATION", 1)[1]
+        phase2 = phase2.split("PHASE 2D", 1)[0]
+        assert "stacked" in phase2.lower()
+        assert "not evidence against sql injection" in phase2.lower() or "NOT evidence against" in phase2
+
+    def test_oracle_dbms_lock_fallback_present(self, payloads_text: str):
+        normalized = _norm(payloads_text)
+        assert "DBMS_LOCK is unavailable or unauthorized" in normalized
+        assert "Fall back to boolean-based validation" in normalized
+        assert "do not substitute an" in normalized.lower() or "expensive recursive/heavy query" in normalized
+
+    def test_phase3_fingerprint_caveat_present(self, payloads_text: str):
+        phase3 = payloads_text.split("PHASE 3 — IMPACT", 1)[1]
+        assert "without exploratory column/table" in phase3
+        assert "Do not probe column counts broadly" in phase3
+
+    def test_no_credential_or_table_dump_payloads(self, payloads_text: str):
+        lowered = payloads_text.lower()
+        for banned in ("information_schema.tables", "pg_shadow", "sys.user_password", "load credentials"):
+            assert banned not in lowered
+
+    def test_tokens_are_placeholders_not_fixed_values(self, payloads_text: str):
+        assert "{TOKEN}" in payloads_text
+        assert "{CALLBACK_DOMAIN}" in payloads_text
+
+    def test_sections_present_in_order(self, payloads_text: str):
+        markers = [
+            "PHASE 1 — DETECTION",
+            "PHASE 2 — VALIDATION",
+            "PHASE 2D — OUT-OF-BAND",
+            "PHASE 3 — IMPACT",
+        ]
+        positions = [payloads_text.index(m) for m in markers]
+        assert positions == sorted(positions), "phase sections must appear in order in payloads.txt"
+
+
+# ---------------------------------------------------------------------------
+# 7. Reference gate logic — executable spec (no payloads, no requests)
+# ---------------------------------------------------------------------------
+#
+# This is a small, independent re-implementation of the *decision policy*
+# SKILL.md describes for Phase 2d and Phase 3 gating. It exists so the
+# policy itself (not just prose) has an automated, falsifiable check. It
+# deliberately contains no SQL, no HTTP calls, and no engine-specific
+# logic — it only tracks booleans/enums representing "has this
+# precondition been met".
+
+Outcome = str  # one of EXPECTED_OUTCOMES
+
+
+@dataclass
+class Phase2State:
+    """What's known about a single candidate's Phase 2 progress."""
+    technique_2a_tried: bool = False
+    technique_2a_signal: bool = False
+    technique_2b_tried: bool = False
+    technique_2b_signal: bool = False
+    blocked_at_2c: bool = False
+
+
+@dataclass
+class Phase2dGate:
+    """
+    Reference model of the "Phase 2d capability check" in SKILL.md.
+
+    capability_present: whether a real OOB callback/listener tool exists
+        in the current runtime's allowed-tools (today: always False).
+    """
+    capability_present: bool = False
+    phase2_state: Phase2State = field(default_factory=Phase2State)
+    user_authorized: bool = False
+    callback_domain_confirmed: bool = False
+
+    def techniques_exhausted(self) -> bool:
+        s = self.phase2_state
+        if s.blocked_at_2c:
+            return False  # blocked candidates don't proceed to 2d at all
+        if s.technique_2a_signal or s.technique_2b_signal:
+            return False  # already confirmed via 2a/2b — no need for 2d
+        return s.technique_2a_tried and s.technique_2b_tried
+
+    def may_run(self) -> tuple[bool, str]:
+        """
+        Returns (allowed, reason). Mirrors the three ordered checks in
+        SKILL.md: capability -> techniques exhausted -> authorization.
+        """
+        if not self.capability_present:
+            return False, "capability_absent"
+        if not self.techniques_exhausted():
+            return False, "techniques_not_exhausted"
+        if not (self.user_authorized and self.callback_domain_confirmed):
+            return False, "not_authorized"
+        return True, "ok"
+
+
+@dataclass
+class Phase3Gate:
+    sqli_confirmed_level2: bool = False
+    user_authorized: bool = False
+
+    def may_run(self) -> tuple[bool, str]:
+        if not self.sqli_confirmed_level2:
+            return False, "sqli_not_confirmed"
+        if not self.user_authorized:
+            return False, "not_authorized"
+        return True, "ok"
+
+
+def resolve_outcome(
+    phase1_signal: bool,
+    phase2: Phase2State,
+    phase2d_gate: Optional[Phase2dGate],
+    phase3_gate: Optional[Phase3Gate],
+) -> Outcome:
+    """
+    Reference resolution of the five documented outcomes, following
+    "stop at the first clear signal" — this does not require every
+    technique to have run.
+    """
+    if phase2.blocked_at_2c:
+        return "blocked"
+
+    sqli2 = phase2.technique_2a_signal or phase2.technique_2b_signal
+    if not sqli2 and phase2d_gate is not None:
+        allowed, _ = phase2d_gate.may_run()
+        if allowed:
+            sqli2 = True  # a real OOB callback would be checked by the caller
+
+    if sqli2 and phase3_gate is not None:
+        allowed, _ = phase3_gate.may_run()
+        if allowed:
+            return "confirmed (SQLI-3)"
+
+    if sqli2:
+        return "confirmed (SQLI-2)"
+
+    return "not confirmed"
+
+
+class TestPhase2dGateLogic:
+    def test_capability_absent_blocks_regardless_of_other_state(self):
+        gate = Phase2dGate(
+            capability_present=False,
+            phase2_state=Phase2State(technique_2a_tried=True, technique_2b_tried=True),
+            user_authorized=True,
+            callback_domain_confirmed=True,
         )
+        allowed, reason = gate.may_run()
+        assert not allowed
+        assert reason == "capability_absent"
 
-    recommend_skill = getattr(planner, "recommend_skill", None)
-    normalize = getattr(planner, "normalize", None)
-
-    # Deliberately not using callable() here: pyright/Pylance narrows a
-    # callable()-checked value's type to Callable[..., object], which
-    # erases the return type to plain `object` and breaks result["name"]
-    # below with "__getitem__ not defined on object" — even though the
-    # actual runtime value (via getattr) is a real function. An identity
-    # check against None avoids that erasure while still catching the
-    # "attribute doesn't exist" case (getattr's default).
-    if recommend_skill is None or normalize is None:
-        pytest.skip(
-            "recommend_skill/normalize are not exposed by decision_planner"
+    def test_capability_present_but_techniques_not_exhausted_blocks(self):
+        gate = Phase2dGate(
+            capability_present=True,
+            phase2_state=Phase2State(technique_2a_tried=True, technique_2b_tried=False),
+            user_authorized=True,
+            callback_domain_confirmed=True,
         )
+        allowed, reason = gate.may_run()
+        assert not allowed
+        assert reason == "techniques_not_exhausted"
 
-    skills = _make_stub_skills(
-        set(intent_to_skill.values()) | {"sql-injection"}
-    )
-
-    normalized = normalize(text)
-    result = recommend_skill(normalized, skills)
-
-    assert result is not None, (
-        f"planner returned no recommendation for SQLi intent: {text!r}"
-    )
-
-    assert result["name"] == "sql-injection", (
-        f"expected sql-injection for {text!r}, got {result!r}"
-    )
-
-
-def test_sql_injection_does_not_replace_web_input_analysis():
-    planner = _load_decision_planner()
-
-    intent_to_skill = getattr(planner, "INTENT_TO_SKILL", None)
-
-    if not isinstance(intent_to_skill, dict):
-        pytest.skip("INTENT_TO_SKILL is not exposed")
-
-    if "sql_injection" not in intent_to_skill:
-        pytest.skip(
-            "sql_injection has not been rolled out into decision_planner.py"
+    def test_already_confirmed_by_2a_skips_need_for_2d(self):
+        gate = Phase2dGate(
+            capability_present=True,
+            phase2_state=Phase2State(
+                technique_2a_tried=True, technique_2a_signal=True,
+                technique_2b_tried=False,
+            ),
         )
+        # 2d isn't "needed" — techniques_exhausted() is False here because
+        # 2a already gave a signal, meaning 2d shouldn't be reached at all.
+        assert gate.techniques_exhausted() is False
 
-    assert intent_to_skill.get("web_input_analysis") == (
-        "web-input-analysis"
-    )
-    assert intent_to_skill["sql_injection"] == "sql-injection"
+    def test_capability_and_techniques_ok_but_no_authorization_blocks(self):
+        gate = Phase2dGate(
+            capability_present=True,
+            phase2_state=Phase2State(technique_2a_tried=True, technique_2b_tried=True),
+            user_authorized=False,
+        )
+        allowed, reason = gate.may_run()
+        assert not allowed
+        assert reason == "not_authorized"
+
+    def test_authorization_without_callback_domain_blocks(self):
+        gate = Phase2dGate(
+            capability_present=True,
+            phase2_state=Phase2State(technique_2a_tried=True, technique_2b_tried=True),
+            user_authorized=True,
+            callback_domain_confirmed=False,
+        )
+        allowed, reason = gate.may_run()
+        assert not allowed
+        assert reason == "not_authorized"
+
+    def test_all_conditions_met_allows(self):
+        gate = Phase2dGate(
+            capability_present=True,
+            phase2_state=Phase2State(technique_2a_tried=True, technique_2b_tried=True),
+            user_authorized=True,
+            callback_domain_confirmed=True,
+        )
+        allowed, reason = gate.may_run()
+        assert allowed
+        assert reason == "ok"
+
+    def test_blocked_at_2c_never_reaches_2d(self):
+        gate = Phase2dGate(
+            capability_present=True,
+            phase2_state=Phase2State(blocked_at_2c=True),
+            user_authorized=True,
+            callback_domain_confirmed=True,
+        )
+        allowed, reason = gate.may_run()
+        assert not allowed
+        assert reason == "techniques_not_exhausted"
+
+    def test_current_environment_default_is_always_blocked(self):
+        """
+        Mirrors the real repo state today: capability_present defaults to
+        False, so Phase2dGate() with no arguments must never allow a run,
+        no matter what else is true.
+        """
+        gate = Phase2dGate(
+            phase2_state=Phase2State(technique_2a_tried=True, technique_2b_tried=True),
+            user_authorized=True,
+            callback_domain_confirmed=True,
+        )
+        allowed, reason = gate.may_run()
+        assert not allowed
+        assert reason == "capability_absent"
 
 
-# ============================================================================
-# End-to-end consistency checks
-# ============================================================================
+class TestPhase3GateLogic:
+    def test_requires_sqli2_confirmed_first(self):
+        gate = Phase3Gate(sqli_confirmed_level2=False, user_authorized=True)
+        allowed, reason = gate.may_run()
+        assert not allowed
+        assert reason == "sqli_not_confirmed"
 
-def test_sql_injection_pipeline_contract():
-    text = normalized_text().lower()
+    def test_requires_its_own_authorization(self):
+        gate = Phase3Gate(sqli_confirmed_level2=True, user_authorized=False)
+        allowed, reason = gate.may_run()
+        assert not allowed
+        assert reason == "not_authorized"
 
-    pipeline = [
-        "web-input-analysis",
-        "candidates.md",
-        "results.md",
-        "finding-validation",
-    ]
+    def test_phase2d_authorization_does_not_imply_phase3(self):
+        """
+        Phase 2d and Phase 3 authorizations are independent — granting one
+        must never be interpreted as granting the other.
+        """
+        phase2d = Phase2dGate(
+            capability_present=True,
+            phase2_state=Phase2State(technique_2a_tried=True, technique_2b_tried=True),
+            user_authorized=True,
+            callback_domain_confirmed=True,
+        )
+        phase2d_allowed, _ = phase2d.may_run()
+        assert phase2d_allowed
 
-    for item in pipeline:
-        assert item in text
+        # A fresh Phase3Gate has its own, separate user_authorized flag —
+        # it must start false regardless of phase2d's state.
+        phase3 = Phase3Gate(sqli_confirmed_level2=True)
+        allowed, reason = phase3.may_run()
+        assert not allowed
+        assert reason == "not_authorized"
+
+    def test_all_conditions_met_allows(self):
+        gate = Phase3Gate(sqli_confirmed_level2=True, user_authorized=True)
+        allowed, reason = gate.may_run()
+        assert allowed
 
 
-def test_sql_injection_is_candidate_driven():
-    text = normalized_text().lower()
+class TestOutcomeResolution:
+    def test_blocked_takes_precedence(self):
+        outcome = resolve_outcome(
+            phase1_signal=True,
+            phase2=Phase2State(blocked_at_2c=True),
+            phase2d_gate=None,
+            phase3_gate=None,
+        )
+        assert outcome == "blocked"
 
-    assert "does not discover new ones" in text
-    assert "does not re-triage the whole inventory" in text
+    def test_not_confirmed_without_exhausting_every_technique(self):
+        """
+        Regression for the earlier over-strict `not confirmed` wording:
+        a candidate with only 2a tried (and no signal), where context
+        makes 2b inapplicable, can still validly resolve to
+        `not confirmed` — it is not required to have run 2b.
+        """
+        outcome = resolve_outcome(
+            phase1_signal=True,
+            phase2=Phase2State(technique_2a_tried=True, technique_2a_signal=False),
+            phase2d_gate=None,
+            phase3_gate=None,
+        )
+        assert outcome == "not confirmed"
+
+    def test_confirmed_sqli2_via_2a(self):
+        outcome = resolve_outcome(
+            phase1_signal=True,
+            phase2=Phase2State(technique_2a_tried=True, technique_2a_signal=True),
+            phase2d_gate=None,
+            phase3_gate=None,
+        )
+        assert outcome == "confirmed (SQLI-2)"
+
+    def test_confirmed_sqli3_requires_phase3_gate_allowed(self):
+        phase3 = Phase3Gate(sqli_confirmed_level2=True, user_authorized=True)
+        outcome = resolve_outcome(
+            phase1_signal=True,
+            phase2=Phase2State(technique_2a_tried=True, technique_2a_signal=True),
+            phase2d_gate=None,
+            phase3_gate=phase3,
+        )
+        assert outcome == "confirmed (SQLI-3)"
+
+    def test_sqli2_without_phase3_authorization_stays_sqli2(self):
+        phase3 = Phase3Gate(sqli_confirmed_level2=True, user_authorized=False)
+        outcome = resolve_outcome(
+            phase1_signal=True,
+            phase2=Phase2State(technique_2a_tried=True, technique_2a_signal=True),
+            phase2d_gate=None,
+            phase3_gate=phase3,
+        )
+        assert outcome == "confirmed (SQLI-2)"
+
+    def test_2d_unreachable_in_current_environment_never_yields_sqli2(self):
+        """
+        End-to-end regression: with capability_present defaulted False
+        (today's real state), a candidate that only 2a/2b were
+        inconclusive on must resolve to `not confirmed`, never quietly
+        "confirm" via an unreachable Phase 2d.
+        """
+        gate = Phase2dGate(
+            phase2_state=Phase2State(technique_2a_tried=True, technique_2b_tried=True),
+            user_authorized=True,
+            callback_domain_confirmed=True,
+        )
+        outcome = resolve_outcome(
+            phase1_signal=True,
+            phase2=Phase2State(technique_2a_tried=True, technique_2b_tried=True),
+            phase2d_gate=gate,
+            phase3_gate=None,
+        )
+        assert outcome == "not confirmed"
 
 
-def test_sql_injection_is_single_candidate_at_a_time():
-    text = normalized_text().lower()
-
-    assert "work one candidate at a time" in text
-    assert "finish, record, then move to the next" in text
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))

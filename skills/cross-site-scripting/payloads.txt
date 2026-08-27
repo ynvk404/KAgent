@@ -1,0 +1,158 @@
+# XSS payload corpus for skills/cross-site-scripting/SKILL.md — two
+# sections, matching the two payload-bearing stages of the actual
+# workflow. This deliberately does NOT mirror sql-injection/payloads.txt's
+# phase count: the two vulnerability classes have different workflows, and
+# forcing XSS into the same number of phases would create sections with no
+# real gate behind them. See SKILL.md "Workflow at a glance" and
+# "Relationship to payloads.txt".
+#
+#   - Phase 1 (below): a plain-text DETECTION MARKER. Not executable. Used
+#     only to observe where and how the input lands in the response
+#     (encoded, inside a tag, inside an attribute, inside a script, etc.)
+#     before any execution is attempted.
+#
+#   - Phase 2 (below): CONTEXT-SPECIFIC EXECUTION MARKERS. These do execute
+#     JavaScript — call them what they are. The safety property they carry
+#     is that the *action* performed is harmless and self-contained
+#     (setting document.title to a known value), not that they avoid
+#     running code. Use only the entry matching the context you actually
+#     observed in Phase 1 — do not try every context's entry against one
+#     candidate.
+#
+# There is no Phase 3 or Phase 4 in this file. Stored XSS and DOM-based
+# XSS are not separate payload categories — they reuse whichever Phase 2
+# entry matches the observed context; what differs is workflow (where the
+# payload is submitted, when/to whom it renders back), which SKILL.md
+# handles, not this corpus. Do not add a new phase section here without a
+# corresponding ask_user-gated phase being defined in SKILL.md first.
+#
+# No browser-execution capability is available in the current runtime.
+# Phase 2 markers establish an execution *hypothesis* from HTTP-level or
+# source/sink evidence. When that evidence is not deterministic (e.g. a
+# JS-string break-out, or a DOM sink whose actual execution can't be
+# observed), SKILL.md requires recording `requires-browser-confirmation`
+# and stopping — do not attempt to simulate or infer browser execution
+# using shell, http, or any other substitute for an actual browser.
+#
+# None of these payloads exfiltrate cookies, tokens, or page content, and
+# none chain into session hijacking, credential capture, keylogging, or
+# redirection to an external site. That is out of scope for this skill
+# entirely (see SKILL.md "Bound the proof") and is not something that
+# becomes available under any future phase either.
+
+# ============================================================================
+# ===================== PHASE 1 — CONTEXT DETECTION ==========================
+# ============================================================================
+# Plain text only. No HTML/JS metacharacters that would themselves prove
+# anything — the point is to see how the *marker itself* is transformed
+# (encoded, stripped, passed through) before deciding whether the
+# candidate is even worth an execution attempt, and if so, which context's
+# Phase 2 entry to use.
+
+xsspoc{TIMESTAMP}                     # purpose: baseline marker with no special characters | applies: every candidate, always run first | limit: establishes presence/absence of encoding only, proves nothing about execution
+xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four characters most output-encoding schemes transform (", ', <, >) | applies: every candidate, second detection request | limit: observe which characters survive unescaped; still not an execution attempt
+
+# Replace {TIMESTAMP} with a fresh value per candidate (e.g. unix epoch
+# seconds) so repeated runs against the same parameter don't collide with
+# stale reflected/stored values from a previous test.
+#
+# Read the response around the marker and classify the context per
+# SKILL.md step 2 (html-body | html-attribute | js-string | url |
+# html-comment | fully-encoded) before moving to Phase 2. For URL/href/src
+# contexts specifically, do not proceed straight to a javascript:-scheme
+# probe — first observe whether the value is HTML-encoded, whether the
+# scheme is validated/allow-listed, and whether the URL is canonicalized;
+# see SKILL.md step 2 for what each observation implies about which Phase
+# 2 URL entry (if any) is even applicable.
+
+# ============================================================================
+# ============== PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION =====================
+# ============================================================================
+# One execution marker per observed context. Use only the entry matching
+# what Phase 1 showed. Each sets document.title to a value containing the
+# candidate's marker — visible proof of execution that reads nothing
+# sensitive and sends nothing off-session. Replace {MARKER} with the same
+# value used in Phase 1 for that candidate so the result is traceable.
+
+# --- HTML body context --------------------------------------------------
+<script>document.title='xsspoc-{MARKER}'</script>
+    # purpose: direct script execution in an unescaped HTML body position
+    # applies: marker in Phase 1 rendered between tags, unescaped
+    # limit: execution marker only — do not substitute a payload that reads document.cookie or similar
+
+<img src=x onerror="document.title='xsspoc-{MARKER}'">
+    # purpose: event-handler-based close variant for HTML body context
+    # applies: ONLY if the <script> entry above specifically failed to execute while Phase 1 showed the marker otherwise landing unescaped — i.e. testing whether the app's sanitizer covers event-handler attributes as well as <script> tags, not evading a WAF or security control
+    # limit: this is the one close variant allowed by SKILL.md step 3 for this context — if this also fails, record not confirmed rather than trying further tag/attribute combinations
+
+# --- HTML attribute context ---------------------------------------------
+"><script>document.title='xsspoc-{MARKER}'</script>
+    # purpose: break out of a quoted attribute value, then execute
+    # applies: marker in Phase 1 rendered inside a quoted attribute, unescaped
+    # limit: try this closing-quote form first; if inconclusive, try at most one close variant (e.g. a single-quote breakout below) before recording not confirmed
+
+'><script>document.title='xsspoc-{MARKER}'</script>
+    # purpose: single-quote variant of the attribute breakout above
+    # applies: same as above, for single-quoted attribute values
+    # limit: this is the "one close variant" allowed by SKILL.md step 3 — do not chain further bypass attempts beyond this
+
+# --- JavaScript string context -------------------------------------------
+';document.title='xsspoc-{MARKER}';//
+    # purpose: break out of a single-quoted JS string literal, then execute
+    # applies: marker in Phase 1 rendered inside a JS string (e.g. var x = 'MARKER';)
+    # limit: HTTP-level evidence of this succeeding is usually not deterministic — per SKILL.md step 3, record requires-browser-confirmation unless the response makes the break-out and execution position unambiguous
+
+";document.title='xsspoc-{MARKER}';//
+    # purpose: double-quote variant of the above
+    # applies: same as above, for double-quoted JS string literals
+    # limit: same requires-browser-confirmation caveat as above
+
+# --- URL / href / src context ---------------------------------------------
+# Do not use a javascript:-scheme payload here by default. Per SKILL.md
+# step 2, first confirm from Phase 1 evidence that the value is (a) not
+# HTML-encoded, (b) not scheme-validated/allow-listed by the app, and (c)
+# not canonicalized in a way that would strip or neutralize the scheme.
+# Only if all three hold does the entry below apply; otherwise record
+# fully-encoded/neutralized or not confirmed rather than forcing this
+# payload in to "see if it works."
+javascript:document.title='xsspoc-{MARKER}'
+    # purpose: scheme-based execution when the value is placed directly into an href/src with no scheme validation
+    # applies: only after confirming (a)-(c) above from Phase 1 evidence
+    # limit: execution here typically requires a user action (click/navigation) to trigger — note this in evidence/notes; do not simulate a click via automation this skill doesn't have
+
+# --- HTML comment context ---------------------------------------------------
+--><script>document.title='xsspoc-{MARKER}'</script><!--
+    # purpose: close the surrounding HTML comment, execute, then reopen a comment to keep the rest of the page well-formed
+    # applies: marker in Phase 1 rendered inside an HTML comment, unescaped
+    # limit: execution marker only, same as the HTML body entry
+
+# --- CSS context: style attribute (e.g. <div style="color: MARKER">) -------
+red;"><script>document.title='xsspoc-{MARKER}'</script><div style="
+    # purpose: close the style attribute's quote and the tag itself, then execute, then reopen a dummy attribute so the rest of the page stays well-formed
+    # applies: marker in Phase 1 rendered inside a style="..." attribute value, unescaped
+    # limit: mechanically the same breakout as HTML attribute context, not the <style>-block entry below — do not use this against a marker that landed inside a <style> block instead
+    # note: modern browsers do not support CSS expression()-style execution, so even a successful attribute breakout here is really just landing in HTML-body-equivalent execution, not "CSS execution" per se — spend at most this one probe, then record not confirmed rather than searching for a legacy-browser-specific technique
+
+# --- CSS context: <style> block (e.g. <style>body{color:MARKER}</style>) ---
+color:red;}</style><script>document.title='xsspoc-{MARKER}'</script><style>{
+    # purpose: close the surrounding <style> block and execute, then reopen a dummy style block so the rest of the page stays well-formed
+    # applies: marker in Phase 1 rendered inside a <style>...</style> block, unescaped
+    # limit: mechanically the same breakout as HTML comment context (close/reopen the enclosing construct), not the style-attribute entry above — do not use this against a marker that landed inside a style="..." attribute instead
+    # note: same legacy-browser caveat as above — spend at most this one probe, then record not confirmed
+
+# Note on DOM-based candidates: if the sink is client-side (innerHTML,
+# document.write, eval, a postMessage handler, etc.) and you can already
+# cite the exact sink and taint path from source per SKILL.md step 3, a
+# live payload from this file is often unnecessary — source/sink analysis
+# alone can support requires-browser-confirmation (or, if the flow is
+# unambiguous enough, confirmed). If a live probe is still useful, use
+# whichever entry above matches where the tainted value is written into
+# the DOM (e.g. the HTML body entry for an innerHTML sink rendering raw
+# HTML) — there is no separate DOM-specific payload set.
+#
+# Note on stored candidates: use the same context-matched entry above,
+# submitted to a resource you own or a designated test account. Record the
+# trigger path (storing endpoint -> rendering endpoint/audience) in
+# results.md's `order` field, and clean up the stored payload afterward
+# when the application supports deletion — record whether cleanup was
+# performed in results.md's `cleanup_performed` field.

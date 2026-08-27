@@ -13,6 +13,7 @@ allowed-tools:
   - shell
   - http
   - file_write
+  - ask_user
 ---
 
 # Cross-site scripting playbook
@@ -33,15 +34,79 @@ persistent exploit chain — or record a clear negative, blocked, or
 unconfirmable result. Then record the result and stop. This skill produces
 evidence, not a final finding.
 
+## Workflow at a glance
+
+This skill has exactly two payload-bearing stages, matching the two
+sections in `payloads.txt` — it deliberately does not mirror
+`sql-injection`'s phase count, because the two vulnerability classes have
+different workflows. What's shared between the two skills is the design
+*contract* (candidate in → scope check → minimum evidence → stop → record),
+not the number of phases:
+
+```
+Context detection    — inert text marker, establishes where/how input lands
+        ↓
+Context-specific
+confirmation          — one execution marker matched to the observed context
+        ↓
+(if HTTP/source evidence is not deterministic)
+requires-browser-confirmation — recorded and stopped, not escalated
+```
+
+**There is no optional "impact" phase analogous to `sql-injection`'s Phase
+3, and this is a deliberate design choice, not an omission.** For XSS, the
+minimum proof of exploitability (a harmless execution marker landing in an
+executable position) *is* the impact ceiling — there is no smaller,
+separately-authorized "confirm impact" step below it the way there is for
+SQL injection (where confirming the vulnerability and reading a fingerprint
+value are two meaningfully different levels of access). If a future version
+of this skill ever needs a deeper, separately-gated impact phase, it should
+get its own `ask_user` checkpoint here first — `payloads.txt` should never
+grow a new phase section before `SKILL.md` defines the gate for it.
+
 Default to `curl` and the built-in `http` tool. Do not pull in browser
 automation frameworks, XSS scanners (XSStrike, dalfox), or payload
 generators — this skill works from one candidate at a time with a small,
 targeted payload set, not brute-force fuzzing.
 
+**No browser-execution capability is available in the current runtime.**
+When a candidate's evidence depends on actual browser execution (see
+`requires-browser-confirmation` below), record that outcome and stop — do
+not attempt to simulate or infer browser execution using `shell`, `http`,
+or any other substitute. This mirrors how `sql-injection` treats its
+OOB-confirmation capability gate: an unavailable capability is a reason to
+record the honest limits of what was tested, not a reason to improvise a
+workaround.
+
 Execution rule: substitute the real target and real parameter values before
 running commands. Never write literal placeholder payloads such as
 `<PAYLOAD>` to files — write the exact payload used. If the candidate or its
-context is unclear, ask once before proceeding.
+context is unclear, use `ask_user` once before proceeding.
+
+## Relationship to `payloads.txt`
+
+`SKILL.md` and `payloads.txt` have different jobs, same as in
+`sql-injection`:
+
+- **`SKILL.md` decides what you're allowed to do** — which section of
+  `payloads.txt` applies to the candidate's context, what evidence bar a
+  result needs to meet, and when to stop.
+- **`payloads.txt` provides the technical how** — the actual marker and
+  execution-probe strings, once `SKILL.md` says a given section applies.
+
+Reading a section of `payloads.txt` is not by itself authorization to use
+it against a context it doesn't match. In particular:
+
+- Use `read_payloads(skill="cross-site-scripting", file="payloads.txt")`
+  and select only the `PHASE 1 — CONTEXT DETECTION` block for step 2
+  below, and only the `PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION` entry that
+  matches the context you actually observed for step 3.
+- Do not read the whole file and try every context's payload against a
+  candidate "to see what sticks" — that is the fuzzing behavior this skill
+  explicitly avoids.
+- `payloads.txt` has no impact/exploitation section, by design (see
+  "Workflow at a glance" above) — there is nothing further to read once
+  Phase 2 gives you a result.
 
 ## Target identifier
 
@@ -73,6 +138,18 @@ Before starting, you should have:
 If no such candidate exists, or the candidate file is missing or stale, go
 back to `web-input-analysis` rather than guessing at a parameter here.
 
+## Session / authentication consistency
+
+If the candidate's endpoint requires authentication or a session (check
+`auth:` on the candidate entry), use one fixed, valid session/credential
+for the entire candidate's test run — the context-detection request in
+step 2 and the confirmation request(s) in step 3 must carry the same
+session cookie, `Authorization` header, and CSRF token. If the session
+expires mid-sequence, refresh it and re-run context detection before
+continuing — don't compare a step-3 probe made with a stale session
+against a step-2 observation made with a fresh one; that difference is
+session state, not a change in how the input is handled.
+
 ## 1. Load the candidate and its context
 
 For each XSS candidate handed off, note:
@@ -92,12 +169,14 @@ for the first — finish, record, then move to the next.
 ## 2. Determine the reflection context precisely
 
 The correct proof payload depends entirely on where the value lands. Send
-one request with a distinctive, non-executing marker and inspect exactly
-how it is embedded in the response before choosing a payload:
+one request with the **detection marker** from `payloads.txt`'s
+`PHASE 1 — CONTEXT DETECTION` section — a plain, non-executing text string
+— and inspect exactly how it is embedded in the response before choosing a
+confirmation payload:
 
 ```sh
 TARGET="http://localhost:3000"  # replace with the real target
-MARKER="xsspoc$(date +%s)"
+MARKER="xsspoc$(date +%s)"      # from payloads.txt Phase 1
 
 curl -ksS "$TARGET/search?q=${MARKER}\"'<>" \
   | grep -o ".\{20\}${MARKER}.\{20\}"
@@ -112,7 +191,32 @@ Classify what you see around the marker:
 - **JS string context** — the marker sits inside a JavaScript string
   literal.
 - **URL/href context** — the marker lands in an `href`, `src`, or similar
-  URL-bearing attribute.
+  URL-bearing attribute. Before selecting a Phase 2 payload for this
+  context, observe — don't assume — three things: whether the value is
+  HTML-encoded, whether the scheme is validated or allow-listed (e.g. the
+  app only accepts `http(s)://`), and whether the URL is canonicalized
+  before being written into the attribute. Only pick a probe from
+  `payloads.txt`'s URL-context entry once you know which of these apply;
+  do not default to a `javascript:`-scheme payload without that
+  observation, since many apps validate or strip the scheme before an
+  executable URL payload would ever matter.
+- **HTML comment context** — the marker lands inside an HTML comment
+  (`<!-- ... -->`).
+- **CSS context** — the marker lands inside CSS. This has two mechanically
+  different sub-cases, and `payloads.txt` has a separate entry for each —
+  identify which one you're looking at before picking a Phase 2 payload:
+  - *style attribute*, e.g. `<div style="color: MARKER">` — breakout
+    mechanics are the same as HTML attribute context (close the quote and
+    the tag).
+  - *`<style>` block*, e.g. `<style>body{color:MARKER}</style>` — breakout
+    mechanics are the same as HTML comment context (close and reopen the
+    enclosing construct).
+  Modern browsers no longer support `expression()`-style CSS execution, so
+  this context rarely yields a working execution marker either way —
+  classify it accurately when observed, but expect the Phase 2 entry for
+  it to often end in `not confirmed` rather than force a result. Do not
+  spend more than one probe per sub-case confirming this context is
+  genuinely inert before moving on.
 - **Fully encoded/neutralized** — special characters are encoded or
   otherwise neutralized. This candidate is very likely not exploitable as
   reflected XSS; note this and mark it `not confirmed` rather than forcing
@@ -128,20 +232,14 @@ guidance and the outcome definitions in step 5.
 
 ## 3. Confirm with the minimum payload for that context
 
-Use the smallest payload needed to establish exploitability in the observed
-context. Do not use a maximal bypass chain — one clear result per candidate
-is enough.
-
-```sh
-# HTML body context
-curl -ksS "$TARGET/search?q=<script>document.title='xsspoc-${MARKER}'</script>"
-
-# HTML attribute context — break out of the attribute first
-curl -ksS "$TARGET/search?q=\"><script>document.title='xsspoc-${MARKER}'</script>"
-
-# JS string context — break out of the string literal
-curl -ksS "$TARGET/search?q='-document.title='xsspoc-${MARKER}'-'"
-```
+Use the **execution marker** from `payloads.txt`'s
+`PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION` section that matches the context
+observed in step 2 — and only that section's entry for that context. Do
+not use a maximal bypass chain — one clear result per candidate is enough.
+Call it what it is: this payload does execute JavaScript (unlike the
+step-2 detection marker, which is inert text); the safety property it has
+is that the *action* it performs is harmless and self-contained
+(`document.title`), not that it avoids executing code.
 
 Interpret the result according to the observed context:
 
@@ -171,12 +269,20 @@ Keep the proof non-destructive and scoped to your own session:
   persisted and rendered back on a later request, e.g. a comment or profile
   field), only submit the payload to a resource you own or a designated
   test account, and remove or clean up the stored payload afterward when
-  the application supports it.
+  the application supports it. Stored XSS reuses the same Phase 2 payload
+  matched to the observed context — it is a difference in *where and when*
+  the payload executes (store now, render later, possibly to a different
+  user), not a different payload corpus. Record the trigger path — which
+  endpoint stores the value and which endpoint/action renders it back —
+  in the result's `order` field (see step 5).
 - For a candidate that appears to be DOM-based (the sink is client-side,
   e.g. `innerHTML`, `document.write`, `eval` on a URL fragment or a
   `postMessage` handler observed in JS during `web-enumeration`), confirm
   from the JS source itself where possible rather than guessing a payload —
-  cite the exact sink and how tainted input reaches it.
+  cite the exact sink and how tainted input reaches it. This is
+  source/sink analysis, not a separate payload category: if a live probe
+  is still needed to confirm, it uses the same context-matched Phase 2
+  entry as any other candidate.
 
 **3a. WAF / rate-limiting check.** If a probe is clearly intercepted by an
 upstream WAF, rate limiter, CAPTCHA, or equivalent challenge before reaching
@@ -194,9 +300,16 @@ filter-bypass techniques. That is outside this skill's scope.
 
 If the first payload for the observed context doesn't execute, try at most
 one or two close variants for that same context (e.g. a different quote
-style). If none work, mark the candidate as `not confirmed` rather than
-escalating into a broader payload sweep or filter-bypass exploration — that
-shift is out of scope for this skill.
+style, or — for HTML body/attribute contexts specifically — an
+event-handler-based marker if the `<script>` variant specifically appears
+stripped while other tags/attributes pass through unescaped). Both are
+listed under that context's entry in `payloads.txt`. This is different
+from filter-bypass: a close variant tests whether the *same context* is
+exploitable through an equivalent vector, which is squarely part of
+assessing sanitization coverage; it does not use encoding tricks, case
+obfuscation, or payload fragmentation aimed at evading a filter or WAF —
+those remain out of scope per step 3a. If no close variant works, mark the
+candidate as `not confirmed` rather than escalating further.
 
 ## 4. Bound the proof — do not escalate into impact demonstration
 
@@ -235,27 +348,10 @@ Every candidate gets exactly one outcome:
 - `requires-browser-confirmation` — the response or source/sink analysis is
   consistent with XSS, but actual execution depends on browser behavior
   that cannot be established reliably with the available HTTP-level
-  evidence.
+  evidence, and no browser-execution capability is available in this
+  runtime to close that gap (see "Workflow at a glance").
 
-For every candidate, regardless of outcome, capture:
-
-- endpoint, method, parameter, location;
-- outcome (one of the four above);
-- reflection type: reflected, stored, or DOM-based;
-- exact payload(s) used;
-- the exact request(s) and response evidence showing the outcome (the
-  relevant excerpt around the marker/payload — not full response bodies,
-  and never response bodies containing real user data);
-- authentication context: does triggering it require the victim to be
-  logged in, and does the payload execute in their authenticated session;
-- realistic impact when there's enough evidence to describe it (e.g.
-  session-adjacent action, content spoofing, credential-phishing surface)
-  — describe plausible impact without actually performing session hijacking
-  or credential theft;
-- any mitigating factors observed (e.g. CSP headers, HttpOnly cookies) even
-  if they don't fully block this specific payload;
-- for DOM-based candidates: the sink and the taint path observed in source,
-  if apparent.
+### Standard result entry template
 
 Write every candidate's result — confirmed, not confirmed, blocked, or
 requires-browser-confirmation — to:
@@ -263,10 +359,34 @@ requires-browser-confirmation — to:
 `cross-site-scripting/<target>/results.md`
 
 using the same target identifier as `recon`, `web-enumeration`, and
-`web-input-analysis`. This is the durable record of what was actually
-tested and what was found, independent of whether anything gets turned into
-a finding. One entry per candidate, in the same style as
-`web-input-analysis/candidates.md`.
+`web-input-analysis`, and this exact template, one entry per candidate,
+appended in the order tested:
+
+```markdown
+## Candidate: <endpoint> [<method>] — param: <parameter> (<location>)
+
+- **timestamp:** <ISO 8601 UTC timestamp when this entry was recorded, e.g. 2026-08-27T09:14:32Z>
+- **agent_session_id:** <identifier for the current agent run/session, for audit-trail correlation with logs elsewhere>
+- **outcome:** <confirmed | not confirmed | blocked | requires-browser-confirmation>
+- **reflection_type:** <reflected | stored | dom-based>
+- **context:** <html-body | html-attribute | js-string | url | html-comment | css-style-attribute | css-style-block | fully-encoded | unknown>
+- **payload(s) used:** <exact detection marker and/or execution marker used, verbatim>
+- **evidence:** <the exact request(s) and response excerpt around the marker/payload — not full response bodies, and never response bodies containing real user data>
+- **auth_context:** <does triggering it require the victim to be logged in, and does the payload execute in their authenticated session>
+- **order:** <first-order (reflected same request) | second-order-suspected (stored) — if stored/second-order, describe the trigger path: which endpoint stores the value, which endpoint/action renders it back, and to whom (e.g. "stored via POST /api/tickets, rendered to support agents at GET /admin/tickets/{id}")>
+- **cleanup_performed:** <yes | no — not applicable (reflected, nothing stored) | app does not support deletion — required whenever a payload was stored per step 3>
+- **mitigating_factors:** <e.g. CSP headers, HttpOnly cookies observed, even if they didn't fully block this payload>
+- **dom_sink_evidence:** <for dom-based candidates: the exact sink and the taint path observed in source; n/a otherwise>
+- **realistic_impact:** <plausible impact described in one or two sentences, without having actually performed session hijacking or credential theft>
+- **notes:** <anything else relevant — WAF behavior, session issues, ambiguous signals>
+```
+
+This is the durable record of what was actually tested and what was found,
+independent of whether anything gets turned into a finding. The
+`timestamp` and `agent_session_id` fields exist purely for audit
+traceability — they don't affect gating or outcome logic. `cleanup_performed`
+exists so the stored-payload cleanup requirement in step 3 is independently
+auditable rather than trusted to have happened silently.
 
 A `confirmed` result here is evidence ready for `finding-validation`; it is
 not yet a tracked finding until that phase accepts it.
@@ -331,6 +451,9 @@ Do not: test candidates this skill was not explicitly handed, run automated
 payload fuzzing or XSS scanners by default, exfiltrate cookies/tokens/
 credentials, chain into session hijacking or other vulnerability classes,
 retry blocked probes with filter-bypass or encoding tricks, leave stored-
-XSS payloads on shared application state without cleanup, or keep
+XSS payloads on shared application state without cleanup, simulate browser
+execution with `shell` or any other workaround when
+`requires-browser-confirmation` applies, add a new payload phase to
+`payloads.txt` without a corresponding gate defined here first, or keep
 escalating payload complexity on a candidate that already gave a clear
 negative result.

