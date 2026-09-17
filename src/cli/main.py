@@ -18,6 +18,7 @@ from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
 from watchdog.events import FileSystemEventHandler
 GROQ_AUTO_COMPACT_THRESHOLD = 5500
+BURP_DEFAULT_PORT = 8888
 
 from src.version.version import VERSION, describe
 
@@ -208,6 +209,10 @@ class ParsedFlags:
     list_skills: bool = False
     list_tools: bool = False
 
+
+class FlagParseError(ValueError):
+    pass
+
 class NoticeHolder:
     def __init__(self):
         self._publisher: Callable[[str], None] | None = None
@@ -223,17 +228,19 @@ notice_holder = NoticeHolder()
 
 def parse_flags(argv: list[str]) -> ParsedFlags:
     out = ParsedFlags(
-        burp_port=8888,
+        burp_port=BURP_DEFAULT_PORT,
         debug_session=os.getenv("KAgent_DEBUG_SESSION") == "1",
         debug_session_path=os.getenv("KAgent_DEBUG_SESSION_PATH", ""),
     )
 
     i = 0
 
-    def next_arg() -> str:
+    def next_arg(flag: str) -> str:
         nonlocal i
         i += 1
-        return argv[i] if i < len(argv) else ""
+        if i >= len(argv) or argv[i].startswith("--"):
+            raise FlagParseError(f"{flag} requires a value")
+        return argv[i]
 
     while i < len(argv):
         a = argv[i]
@@ -243,19 +250,23 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
         elif a in ("--help", "-h"):
             out.show_help = True
         elif a == "--backend":
-            out.backend = next_arg()
+            out.backend = next_arg(a)
         elif a == "--model":
-            out.model = next_arg()
+            out.model = next_arg(a)
         elif a == "--base-url":
-            out.base_url = next_arg()
+            out.base_url = next_arg(a)
         elif a == "--api-key":
-            out.api_key = next_arg()
+            out.api_key = next_arg(a)
         elif a == "--skills":
             out.skills_dirs = [
-                s.strip() for s in next_arg().split(",") if s.strip()
+                s.strip() for s in next_arg(a).split(",") if s.strip()
             ]
         elif a == "--resume":
-            out.resume_id = next_arg()
+            out.resume_id = next_arg(a)
+            try:
+                session_store.validate_id(out.resume_id)
+            except ValueError as err:
+                raise FlagParseError(f"--resume: {err}") from err
         elif a in ("--yolo", "--dangerously-skip-permissions"):
             out.yolo = True
         elif a == "--browser":
@@ -269,23 +280,47 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
                 try:
                     n = int(peek, 10)
                 except ValueError:
-                    n = None
-                if n is not None and 0 < n < 65536:
-                    out.burp_port = n
-                    i += 1
+                    raise FlagParseError("--burp port must be an integer")
+                if not 0 < n < 65536:
+                    raise FlagParseError("--burp port must be between 1 and 65535")
+                out.burp_port = n
+                i += 1
         elif a == "--log":
-            out.log_path = next_arg()
+            out.log_path = next_arg(a)
         elif a == "--debug-session":
             out.debug_session = True
         elif a == "--debug-session-path":
             out.debug_session = True
-            out.debug_session_path = next_arg()
+            out.debug_session_path = next_arg(a)
         elif a == "--list-skills":
             out.list_skills = True
         elif a == "--list-tools":
             out.list_tools = True
+        elif a.startswith("-"):
+            raise FlagParseError(
+                f"unknown option: {redacted_argv([a])[0]}"
+            )
 
         i += 1
+
+    return out
+
+
+def redacted_argv(argv: list[str]) -> list[str]:
+    out: list[str] = []
+    redact_next = False
+
+    for arg in argv:
+        if redact_next:
+            out.append("<redacted>")
+            redact_next = False
+        elif arg == "--api-key":
+            out.append(arg)
+            redact_next = True
+        elif arg.startswith("--api-key="):
+            out.append("--api-key=<redacted>")
+        else:
+            out.append(arg)
 
     return out
 
@@ -311,8 +346,36 @@ def _spawn_reporting(coro, label: str) -> asyncio.Task:
     return task
 
 
+async def close_runtime_resources(
+    root_ctl: asyncio.Event,
+    reload_timer: asyncio.TimerHandle | None,
+    watchers: list[Any],
+    mcp_sessions: list[MCPSession],
+    close_burp_bridge: Callable[[], Any],
+) -> None:
+    root_ctl.set()
+
+    if reload_timer is not None:
+        reload_timer.cancel()
+
+    for observer in watchers:
+        observer.stop()
+    for observer in watchers:
+        observer.join(timeout=1)
+
+    await asyncio.gather(
+        *(session.close() for session in mcp_sessions),
+        return_exceptions=True,
+    )
+    await close_burp_bridge()
+
+
 async def main() -> int:
-    flags = parse_flags(sys.argv[1:])
+    try:
+        flags = parse_flags(sys.argv[1:])
+    except FlagParseError as err:
+        sys.stderr.write(f"kagent: {err}\n")
+        return 2
     watched_dirs: set[str] = set()
     loop = asyncio.get_running_loop()
     root_ctl = asyncio.Event()
@@ -337,7 +400,6 @@ async def main() -> int:
         logger.warn("signal received, shutting down", {"signal": sig_name})
         root_ctl.set()
 
-    loop = asyncio.get_running_loop()
     for sig, name in ((signal.SIGINT, "SIGINT"), (signal.SIGTERM, "SIGTERM"), (signal.SIGHUP, "SIGHUP")):
         loop.add_signal_handler(sig, lambda n=name: on_sig(n))
 
@@ -438,7 +500,7 @@ async def main() -> int:
             "session_start",
             {
                 "version": VERSION,
-                "argv": sys.argv[1:],
+                "argv": redacted_argv(sys.argv[1:]),
                 "cwd": os.getcwd(),
                 "resume": resuming,
                 "backend": cfg.backend,
@@ -566,7 +628,7 @@ async def main() -> int:
                 old_port=old_port,
             )
 
-        ingest_handle = create_bridge(port or 8888)
+        ingest_handle = create_bridge(port or BURP_DEFAULT_PORT)
         return BurpBridgeResult(
             status="started",
             state=BurpBridgeState(
@@ -741,10 +803,6 @@ async def main() -> int:
             )
             return 1
 
-    skill_dirs_to_watch = [
-        d for d in all_skill_dirs
-        if Path(d).exists()
-    ]
     skill_dirs_to_watch = [d for d in all_skill_dirs if os.path.exists(d)]
     watchers: list[Any] = []
     reload_timer: asyncio.TimerHandle | None = None
@@ -944,7 +1002,17 @@ async def main() -> int:
             burp_bridge_status=burp_bridge_status,
         )
     )
-    await app.run_async()
+    try:
+        await app.run_async()
+    finally:
+        await close_runtime_resources(
+            root_ctl,
+            reload_timer,
+            watchers,
+            mcp_sessions,
+            close_burp_bridge,
+        )
+
     return 0
 
 def pretty_cwd() -> str:
@@ -1150,7 +1218,7 @@ Flags:
   --skills <dirs>            comma-separated extra skill directories
   --resume <session-id>
   --browser                  enable Browser MCP for this session only (not persisted)
-  --burp [port]              start local Burp/KAgent bridge (default :9999)
+  --burp [port]              start local Burp/KAgent bridge (default :8888)
   --browser-ingest [port]    deprecated alias for --burp
   --no-stream                disable streaming chat (fallback for backends
                              whose SSE/ND-JSON path drops tool_calls)
