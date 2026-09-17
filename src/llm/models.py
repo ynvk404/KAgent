@@ -103,7 +103,9 @@ def _parse_models(backend: str, body: Any) -> list[str]:
     if backend == "openrouter":
         return _prefer_openrouter_models(ids)
     if backend == "deepseek":
-        return _prefer_known_models(ids, DEEPSEEK_MODELS)
+        # New DeepSeek models can appear before KAgent has a release.  Keep
+        # documented/recommended IDs first without hiding provider discoveries.
+        return _prefer_known_models(ids, DEEPSEEK_MODELS, append_unknown=True)
     if backend == "anthropic":
         return _prefer_known_models(ids, ANTHROPIC_RECOMMENDED_MODELS, append_unknown=True)
 

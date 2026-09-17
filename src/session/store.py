@@ -225,6 +225,7 @@ class Store:
                 Message(
                     role=item.get("role", "user"),
                     content=item.get("content", ""),
+                    reasoning_content=item.get("reasoning_content"),
                     tool_calls=_tool_calls_from_list(item.get("tool_calls")),
                     tool_call_id=item.get("tool_call_id"),
                     name=item.get("name"),
@@ -266,6 +267,7 @@ class Store:
                 {
                     "role": msg.role,
                     "content": msg.content,
+                    "reasoning_content": msg.reasoning_content,
                     "tool_calls": (
                         [dataclasses.asdict(tc) for tc in msg.tool_calls]
                         if msg.tool_calls

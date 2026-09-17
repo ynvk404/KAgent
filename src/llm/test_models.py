@@ -36,6 +36,7 @@ class _Handler(BaseHTTPRequestHandler):
                         {"id": "anthropic/claude-sonnet-4.5"},
                         {"id": "deepseek-v4-pro"},
                         {"id": "deepseek-v4-flash"},
+                        {"id": "deepseek-flash"},
                         {"id": "deepseek-chat"},
                     ]
                 },
@@ -108,13 +109,14 @@ class TestListModels:
             "anthropic/claude-sonnet-4.5",
             "deepseek-v4-pro",
             "deepseek-v4-flash",
+            "deepseek-flash",
             "deepseek-chat",
         ]
 
     def test_parses_openai_compat_v1_models_with_bearer_auth(self, base_url: str) -> None:
         models = list_models("openai-compat", f"{base_url}/v1", "sk-fake")
 
-        assert len(models) == 10
+        assert len(models) == 11
 
     def test_parses_kimi_v1_models_with_bearer_auth(self, base_url: str) -> None:
         models = list_models("kimi", f"{base_url}/v1", "sk-kimi")
@@ -142,7 +144,19 @@ class TestListModels:
     def test_parses_deepseek_models_and_prefers_current_model_names(self, base_url: str) -> None:
         models = list_models("deepseek", f"{base_url}/v1", "sk-deepseek")
 
-        assert models == ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat"]
+        assert models == [
+            "deepseek-flash",
+            "deepseek-v4-pro",
+            "deepseek-chat",
+            "qwen-coder-32b-instruct",
+            "gpt-4o-mini",
+            "kimi-k2.6",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "llama-3.3-70b-versatile",
+            "anthropic/claude-sonnet-4.5",
+            "deepseek-v4-flash",
+        ]
 
     def test_parses_gemini_models_and_sorts_recommendations_first(self, base_url: str) -> None:
         models = list_models("gemini", f"{base_url}/gemini", "gemini-key")

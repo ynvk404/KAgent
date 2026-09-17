@@ -47,6 +47,9 @@ class ToolCall:
 class Message:
     role: Role
     content: str
+    # Provider state which must stay distinct from the user-visible answer.
+    # DeepSeek requires this to be replayed on tool-enabled follow-up calls.
+    reasoning_content: str | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
@@ -76,6 +79,9 @@ class ChatRequest:
     messages: list[Message]
     tools: list[ToolSpec] | None = None
     stream: bool | None = None
+    # None leaves provider defaults intact; otherwise this is the user's
+    # explicit thinking-mode preference for providers that support it.
+    thinking_enabled: bool | None = None
 
 FinishReason = Literal[
     "stop",

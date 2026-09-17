@@ -166,11 +166,11 @@ DEEPSEEK_DEFAULT_BASE_URL: Final[str] = (
 )
 
 DEEPSEEK_DEFAULT_MODEL: Final[str] = (
-    "deepseek-v4-flash"
+    "deepseek-flash"
 )
 
 DEEPSEEK_MODELS: Final[tuple[str, ...]] = (
-    "deepseek-v4-flash",
+    "deepseek-flash",
     "deepseek-v4-pro",
     "deepseek-chat",
     "deepseek-reasoner",

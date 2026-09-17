@@ -54,7 +54,7 @@ class Handler(BaseHTTPRequestHandler):
             def send(obj):
                 self.wfile.write(("data: " + json.dumps(obj) + "\n\n").encode())
 
-            if model == "reasoning-stream":
+            if model in {"reasoning-stream", "deepseek-reasoning-stream"}:
                 send({
                     "choices": [{
                         "delta": {"reasoning_content": "Let me think..."}
@@ -135,6 +135,17 @@ class Handler(BaseHTTPRequestHandler):
                         "finish_reason": "stop",
                     }]
                 }
+        elif model == "deepseek-reasoning":
+            response = {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "final answer",
+                        "reasoning_content": "private reasoning",
+                    },
+                    "finish_reason": "tool_calls",
+                }]
+            }
         elif model == "glm-leak":
             response = {
                 "choices": [{
@@ -196,6 +207,68 @@ async def test_stream_reasoning_content():
 
     assert "Let me think..." in "".join(deltas)
     assert out.message.content == "The answer is 42."
+
+async def test_deepseek_keeps_reasoning_separate_and_does_not_stream_it():
+    c = OpenAIClient(base_url, "", "deepseek-reasoning-stream", "deepseek")
+    deltas = []
+    out = await c.chat_stream(
+        _req("deepseek-reasoning-stream", "go"), lambda x: deltas.append(x)
+    )
+
+    assert "Let me think..." not in "".join(deltas)
+    assert out.message.content == "The answer is 42."
+    assert out.message.reasoning_content == "Let me think..."
+
+async def test_deepseek_non_stream_keeps_reasoning_separate():
+    c = OpenAIClient(base_url, "", "deepseek-reasoning", "deepseek")
+    out = await c.chat(_req("deepseek-reasoning"))
+
+    assert out.message.content == "final answer"
+    assert out.message.reasoning_content == "private reasoning"
+
+async def test_deepseek_replays_reasoning_and_honors_thinking_toggle():
+    c = OpenAIClient(base_url, "", "deepseek-flash", "deepseek", gen_opts={"temperature": 0.3})
+    req = ChatRequest(
+        model="ignored-by-configured-client",
+        messages=[
+            Message(role="user", content="Find this"),
+            Message(
+                role="assistant",
+                content="I'll look it up.",
+                reasoning_content="Need to call search.",
+            ),
+            Message(role="tool", content="result", tool_call_id="call_1"),
+        ],
+        tools=[],
+        thinking_enabled=True,
+    )
+
+    body = c.encode_request(req, stream=False)
+
+    assert body["model"] == "deepseek-flash"
+    assert body["thinking"] == {"type": "enabled"}
+    assert "temperature" not in body
+    assert body["messages"][1]["reasoning_content"] == "Need to call search."
+
+    disabled = c.encode_request(
+        ChatRequest(model="x", messages=[], thinking_enabled=False), stream=False
+    )
+    assert disabled["thinking"] == {"type": "disabled"}
+    assert disabled["temperature"] == 0.3
+
+async def test_non_deepseek_does_not_send_reasoning_content():
+    c = OpenAIClient(base_url, "", "qwen")
+    body = c.encode_request(
+        ChatRequest(
+            model="qwen",
+            messages=[
+                Message(role="assistant", content="answer", reasoning_content="state")
+            ],
+        ),
+        stream=False,
+    )
+
+    assert "reasoning_content" not in body["messages"][0]
 
 async def test_stream_tool_call_fragment():
     c = OpenAIClient(base_url, "", "qwen")

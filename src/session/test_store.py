@@ -61,6 +61,26 @@ class TestTmpFilePermissionRace:
             "should be 0600 from creation, not only after chmod"
         )
 
+
+class TestMessageProviderState:
+    @pytest.mark.asyncio
+    async def test_preserves_reasoning_content_across_session_round_trip(self, tmp_path):
+        store = Store.new_with_id(tmp_path, new_id())
+        await store.save(
+            [
+                Message(
+                    role="assistant",
+                    content="answer",
+                    reasoning_content="provider state",
+                )
+            ]
+        )
+
+        loaded = store.load()
+
+        assert loaded.messages[0].content == "answer"
+        assert loaded.messages[0].reasoning_content == "provider state"
+
 class TestCrossFormatMemoryCompat:
     @pytest.mark.asyncio
     async def test_loads_memory_written_by_ts_store_camel_case(self, tmp_path):

@@ -107,6 +107,7 @@ class TestMessage:
         assert msg.content == "hello"
         assert msg.tool_calls is None
         assert msg.tool_call_id is None
+        assert msg.reasoning_content is None
 
     def test_message_with_tool_call(self) -> None:
         tool = ToolCall(

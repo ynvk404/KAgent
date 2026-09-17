@@ -140,9 +140,14 @@ class OpenAIClient(Client):
         choice = choices[0]
         message = choice.get("message", {})
 
-        raw_content = message.get("content") or message.get("reasoning_content") or ""
-
-        msg = Message(role="assistant", content=raw_content)
+        # reasoning_content is provider state, not a fallback answer.  DeepSeek
+        # requires it to be included again when tools are present in a later
+        # request, so retain it separately from the visible final content.
+        msg = Message(
+            role="assistant",
+            content=message.get("content") or "",
+            reasoning_content=message.get("reasoning_content"),
+        )
 
         if message.get("tool_calls"):
             msg.tool_calls = [
@@ -202,6 +207,7 @@ class OpenAIClient(Client):
         )
 
         chunks: list[str] = []
+        reasoning_chunks: list[str] = []
         finish = ""
         tool_parts: dict[int, dict[str, str]] = {}
         fallback_index = -1
@@ -234,7 +240,12 @@ class OpenAIClient(Client):
                 delta = choice.get("delta", {})
 
                 if delta.get("reasoning_content"):
-                    on_delta(delta["reasoning_content"])
+                    reasoning = delta["reasoning_content"]
+                    reasoning_chunks.append(reasoning)
+                    # DeepSeek's structured CoT is not transcript text.  Do
+                    # not leak it to the UI, while preserving it for replay.
+                    if self.label != "deepseek":
+                        on_delta(reasoning)
 
                 if delta.get("content"):
                     text = delta["content"]
@@ -272,7 +283,11 @@ class OpenAIClient(Client):
             await resp.aclose()
             await client.aclose()
 
-        msg = Message(role="assistant", content="".join(chunks))
+        msg = Message(
+            role="assistant",
+            content="".join(chunks),
+            reasoning_content="".join(reasoning_chunks) or None,
+        )
 
         if tool_parts:
             msg.tool_calls = [
@@ -299,6 +314,16 @@ class OpenAIClient(Client):
 
             if m.name:
                 msg["name"] = m.name
+
+            # DeepSeek requires the CoT of every prior assistant turn in a
+            # tool-enabled request.  Other OpenAI-compatible endpoints often
+            # reject unknown fields, so serialize it only for DeepSeek.
+            if (
+                self.label == "deepseek"
+                and m.role == "assistant"
+                and m.reasoning_content is not None
+            ):
+                msg["reasoning_content"] = m.reasoning_content
 
             if m.tool_calls:
                 msg["tool_calls"] = [
@@ -343,11 +368,18 @@ class OpenAIClient(Client):
         if self.label == "kimi" and kimi_supports_thinking_toggle(self.model_id):
             body["thinking"] = {"type": "disabled"}
         elif self.label == "deepseek":
-            body["thinking"] = {"type": "disabled"}
-            
+            # The API defaults to enabled.  Always send KAgent's explicit
+            # setting so /thinking controls provider behavior as well as the
+            # prompt.  Requests constructed outside the agent retain the API
+            # default when no preference is supplied.
+            if req.thinking_enabled is not None:
+                body["thinking"] = {
+                    "type": "enabled" if req.thinking_enabled else "disabled"
+                }
+
         if self.temperature is not None and not (
             self.label == "kimi" and kimi_locks_temperature(self.model_id)
-        ):
+        ) and not (self.label == "deepseek" and req.thinking_enabled):
             body["temperature"] = self.temperature
 
         if self.max_tokens is not None and self.max_tokens > 0:

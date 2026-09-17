@@ -1281,6 +1281,7 @@ class Agent:
             req = ChatRequest(
                 model=self.client.model(),
                 messages=working,
+                thinking_enabled=self.thinking,
             )
 
             if opts is None or getattr(opts, "tools", True):
@@ -1760,6 +1761,7 @@ class Agent:
                     messages=req.messages,
                     tools=req.tools,
                     stream=True,
+                    thinking_enabled=req.thinking_enabled,
                 ),
                 on_delta,
                 signal,
