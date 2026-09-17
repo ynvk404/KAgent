@@ -10,6 +10,7 @@ from src.findings.store import (
     Severity,
     slugify,
 )
+from src.findings.classification import classify
 from src.permission.permission import Prompter
 from .types import Tool, arg_string
 
@@ -96,6 +97,18 @@ class ConfirmFindingTool:
                     "type": "string",
                     "description": "Optional remediation.",
                 },
+                "vuln_class": {
+                    "type": "string",
+                    "description": (
+                        "Canonical vuln class. Use the SAME canonical class "
+                        "identifier that was used in the corresponding "
+                        "coverage.mark() call for this test (e.g. sqli, "
+                        "xss, idor, ssrf). This is a class key, NOT a "
+                        "display name like 'SQL Injection'. Do NOT invent "
+                        "a CWE or OWASP code yourself — the system looks "
+                        "it up from this key."
+                    ),
+                },
             },
             "required": [
                 "title",
@@ -142,6 +155,9 @@ class ConfirmFindingTool:
                 "severity must be one of: "
                 + ", ".join(SEVERITIES)
             )
+
+        classification = classify(arg_string(args, "vuln_class"))
+
         finding = Finding(
             title=title,
             severity=severity,
@@ -153,6 +169,9 @@ class ConfirmFindingTool:
             responseExcerpt=arg_string(args, "response_excerpt") or None,
             curl=arg_string(args, "curl") or None,
             remediation=arg_string(args, "remediation") or None,
+            vulnerabilityType=(classification.type if classification else None),
+            cwe=(classification.cwe if classification else None),
+            owasp=(classification.owasp if classification else None),
             createdAt=datetime.now(UTC).isoformat(),
             slug=slugify(title) or f"finding-{int(datetime.now(UTC).timestamp())}",
         )

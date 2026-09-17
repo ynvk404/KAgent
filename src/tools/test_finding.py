@@ -5,6 +5,7 @@ import json
 import pytest
 
 from src.findings.store import Finding, Store
+from src.findings.classification import classify
 from src.permission.permission import AlwaysAllow
 from src.tools.finding import (
     SEVERITIES,
@@ -29,6 +30,22 @@ def test_metadata(tmp_path):
     assert schema["type"] == "object"
     assert schema["required"] == ["title", "severity", "url", "impact"]
     assert schema["properties"]["severity"]["enum"] == list(SEVERITIES)
+    assert schema["properties"]["vuln_class"]["type"] == "string"
+    assert "vuln_class" not in schema["required"]
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("  SQLI  ", "SQL Injection"),
+        (" xSs ", "Cross-Site Scripting (XSS)"),
+        ("unknown", None),
+        ("", None),
+    ],
+)
+def test_classify_normalizes_and_returns_none_for_unknown(value, expected):
+    classification = classify(value)
+    assert classification is None or classification.type == expected
 
 
 def test_is_severity():
@@ -80,6 +97,81 @@ async def test_run_persists_finding_and_notifies(tmp_path):
     assert finding.severity == "high"
     assert finding.slug == "reflected-xss-in-search"
     assert path.endswith(".md")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "vuln_class",
+    ["sqli", " SQLI "],
+)
+async def test_run_enriches_finding_from_vuln_class(tmp_path, vuln_class):
+    seen: list[Finding] = []
+    tool, _ = _tool(tmp_path, notifier=lambda finding, _: seen.append(finding))
+
+    await tool.run(
+        {
+            "title": "SQL injection",
+            "severity": "high",
+            "url": "https://target.test/login",
+            "impact": "Database access",
+            "vuln_class": vuln_class,
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    assert len(seen) == 1
+    assert seen[0].vulnerabilityType == "SQL Injection"
+    assert seen[0].cwe == ["CWE-89"]
+    assert seen[0].owasp == ["A03:2021 Injection"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vuln_class", ["unknown", ""])
+async def test_run_persists_without_classification_for_unknown_class(
+    tmp_path,
+    vuln_class,
+):
+    seen: list[Finding] = []
+    tool, _ = _tool(tmp_path, notifier=lambda finding, _: seen.append(finding))
+
+    await tool.run(
+        {
+            "title": "Unclassified finding",
+            "severity": "low",
+            "url": "https://target.test",
+            "impact": "Impact",
+            "vuln_class": vuln_class,
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    assert len(seen) == 1
+    assert seen[0].vulnerabilityType is None
+    assert seen[0].cwe is None
+    assert seen[0].owasp is None
+
+
+@pytest.mark.asyncio
+async def test_run_persists_without_classification_when_class_is_omitted(tmp_path):
+    seen: list[Finding] = []
+    tool, _ = _tool(tmp_path, notifier=lambda finding, _: seen.append(finding))
+
+    await tool.run(
+        {
+            "title": "Legacy finding",
+            "severity": "info",
+            "url": "https://target.test",
+            "impact": "Impact",
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    assert seen[0].vulnerabilityType is None
+    assert seen[0].cwe is None
+    assert seen[0].owasp is None
 
 
 @pytest.mark.asyncio

@@ -32,6 +32,9 @@ class Finding:
     responseExcerpt: str | None = None
     curl: str | None = None
     remediation: str | None = None
+    vulnerabilityType: str | None = None
+    cwe: list[str] | None = None
+    owasp: list[str] | None = None
 
     createdAt: str = ""
     slug: str = ""
@@ -140,6 +143,16 @@ def render(
     lines.append("")
 
     lines.append(f"- **Severity:** {f.severity}")
+
+    if f.vulnerabilityType:
+        lines.append(f"- **Vulnerability Type:** {f.vulnerabilityType}")
+
+    if f.cwe:
+        lines.append(f"- **CWE:** {', '.join(f.cwe)}")
+
+    if f.owasp:
+        lines.append(f"- **OWASP:** {', '.join(f.owasp)}")
+
     lines.append(f"- **URL:** {f.url}")
 
     if f.method:

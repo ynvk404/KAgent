@@ -32,6 +32,9 @@ def make_finding(
     responseExcerpt: str | None = None,
     curl: str | None = None,
     remediation: str | None = None,
+    vulnerabilityType: str | None = None,
+    cwe: list[str] | None = None,
+    owasp: list[str] | None = None,
 ) -> Finding:
     return Finding(
         title=title,
@@ -46,6 +49,9 @@ def make_finding(
         responseExcerpt=responseExcerpt,
         curl=curl,
         remediation=remediation,
+        vulnerabilityType=vulnerabilityType,
+        cwe=cwe,
+        owasp=owasp,
     )
 
 @pytest.mark.asyncio
@@ -155,3 +161,29 @@ def test_render_omits_optional_sections_when_absent():
     assert "## Remediation" not in content
     assert "- **Method:**" not in content
     assert "- **Parameter:**" not in content
+
+
+def test_render_includes_classification_after_severity():
+    content = render(
+        make_finding(
+            vulnerabilityType="SQL Injection",
+            cwe=["CWE-89"],
+            owasp=["A03:2021 Injection"],
+        )
+    )
+
+    severity = content.index("- **Severity:**")
+    vulnerability_type = content.index("- **Vulnerability Type:**")
+    cwe = content.index("- **CWE:**")
+    owasp = content.index("- **OWASP:**")
+    assert severity < vulnerability_type < cwe < owasp
+    assert "- **CWE:** CWE-89" in content
+    assert "- **OWASP:** A03:2021 Injection" in content
+
+
+def test_render_omits_classification_when_absent():
+    content = render(make_finding())
+
+    assert "Vulnerability Type" not in content
+    assert "- **CWE:**" not in content
+    assert "- **OWASP:**" not in content

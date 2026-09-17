@@ -26,6 +26,9 @@ logs/
 .kagent/
 sessions/
 findings/
+!src/findings/
+src/findings/*
+!src/findings/classification.py
 captures/
 
 # Temporary files
