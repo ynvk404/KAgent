@@ -99,7 +99,7 @@ def safe_prefix_length(
 class ThinkingStreamFilter:
 
     def __init__(self):
-        self.in_thinking = False
+        self.thinking_depth = 0
         self.pending = ""
 
     def push(self, chunk: str) -> str:
@@ -113,30 +113,47 @@ class ThinkingStreamFilter:
 
         while self.pending:
 
-            if self.in_thinking:
+            if self.thinking_depth > 0:
+
+                open_index, open_len = find_first_tag(
+                    self.pending,
+                    THINK_OPEN_TAGS,
+                )
 
                 close_index, close_len = find_first_tag(
                     self.pending,
                     THINK_CLOSE_TAGS,
                 )
 
-                if close_index < 0:
+                if open_index < 0 and close_index < 0:
 
                     safe = safe_prefix_length(
                         self.pending,
-                        THINK_CLOSE_TAGS,
+                        ALL_THINK_TAGS,
                     )
 
                     self.pending = self.pending[safe:]
 
                     break
 
-                self.pending = (
-                    self.pending[close_index + close_len :]
-                    .lstrip()
+                open_first = (
+                    open_index >= 0
+                    and (
+                        close_index < 0
+                        or open_index <= close_index
+                    )
                 )
 
-                self.in_thinking = False
+                if open_first:
+                    self.pending = self.pending[open_index + open_len :]
+                    self.thinking_depth += 1
+                    continue
+
+                self.pending = self.pending[close_index + close_len :]
+                self.thinking_depth -= 1
+
+                if self.thinking_depth == 0:
+                    self.pending = self.pending.lstrip()
 
                 continue
 
@@ -183,19 +200,19 @@ class ThinkingStreamFilter:
             self.pending = self.pending[next_index + next_len :]
 
             if open_first:
-                self.in_thinking = True
+                self.thinking_depth = 1
             else:
                 self.pending = self.pending.lstrip()
 
         return out
 
     def flush(self) -> str:
-        if self.in_thinking:
+        if self.thinking_depth > 0:
             out = ""
         else:
             out = self.pending
 
         self.pending = ""
-        self.in_thinking = False
+        self.thinking_depth = 0
 
         return out

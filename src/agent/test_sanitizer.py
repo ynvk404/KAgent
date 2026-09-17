@@ -1,3 +1,5 @@
+import pytest
+
 from src.agent.sanitize import (
     ThinkingStreamFilter,
     strip_thinking_tags,
@@ -104,6 +106,34 @@ def test_suppresses_complete_think_block():
     ) == "answer"
 
 
+def test_stream_balances_nested_thinking_blocks():
+    text = (
+        "<think>outer<think>inner</think>"
+        "SHOULD_STILL_BE_HIDDEN</think>final"
+    )
+
+    assert run(
+        [
+            "<think>outer<think>inner</think>",
+            "SHOULD_STILL_BE_HIDDEN</think>final",
+        ]
+    ) == strip_thinking_tags(text) == "final"
+
+
+def test_stream_balances_nested_mixed_thinking_blocks():
+    text = (
+        "<think>outer<reasoning>inner</reasoning>"
+        "SHOULD_STILL_BE_HIDDEN</think>final"
+    )
+
+    assert run(
+        [
+            "<think>outer<reasoning>inner</reasoning>",
+            "SHOULD_STILL_BE_HIDDEN</think>final",
+        ]
+    ) == strip_thinking_tags(text) == "final"
+
+
 def test_suppresses_split_tags():
     assert run(
         [
@@ -114,6 +144,28 @@ def test_suppresses_split_tags():
             "wer",
         ]
     ) == "answer"
+
+
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    [
+        ("<think>", "</think>"),
+        ("<thinking>", "</thinking>"),
+        ("<reasoning>", "</reasoning>"),
+        ("◁think▷", "◁/think▷"),
+    ],
+)
+def test_suppresses_all_tag_variants_split_across_chunks(opening, closing):
+    open_split = len(opening) // 2
+    close_split = len(closing) // 2
+
+    assert run(
+        [
+            opening[:open_split],
+            opening[open_split:] + "secret" + closing[:close_split],
+            closing[close_split:] + "visible",
+        ]
+    ) == "visible"
 
 
 def test_keeps_text_before_and_after():
