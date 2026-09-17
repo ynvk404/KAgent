@@ -81,6 +81,14 @@ def test_summarize_default_get():
         "GET http://example.test"
     )
 
+
+def test_summarize_ignores_malformed_headers():
+    result = HTTPTool(Target()).summarize(
+        {"url": "http://example.test", "headers": "not-an-object"}
+    )
+
+    assert result["detail"] == "GET http://example.test"
+
 @pytest.mark.asyncio
 async def test_default_get_runtime():
 

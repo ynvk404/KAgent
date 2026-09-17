@@ -71,7 +71,7 @@ def arg_number(
     key: str,
 ) -> Optional[float]:
     value = args.get(key)
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         if value != float("inf") and value != float("-inf"):
             return float(value)
     return None

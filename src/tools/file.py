@@ -298,26 +298,24 @@ class FileWriteTool(Tool):
         )
 
         parent = Path(real).parent
+        file_existed = Path(real).exists()
 
         parent.mkdir(
             parents=True,
-            exist_ok=True
+            exist_ok=True,
+            mode=WRITE_DIR_MODE,
         )
-
-        try:
-            os.chmod(parent, WRITE_DIR_MODE)
-        except OSError:
-            pass
 
         Path(real).write_text(
             content,
             encoding="utf-8"
         )
 
-        try:
-            os.chmod(real, WRITE_FILE_MODE)
-        except OSError:
-            pass
+        if not file_existed:
+            try:
+                os.chmod(real, WRITE_FILE_MODE)
+            except OSError:
+                pass
 
         return (
             f"wrote "
@@ -471,11 +469,6 @@ class FileEditTool(Tool):
             updated,
             encoding="utf-8"
         )
-
-        try:
-            os.chmod(real, WRITE_FILE_MODE)
-        except OSError:
-            pass
 
         return (
             f"edited {real} "

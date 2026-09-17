@@ -130,7 +130,7 @@ class HTTPTool(Tool):
 
         detail = f"{method} {url}"
 
-        if headers:
+        if isinstance(headers, dict) and headers:
             detail += "\nheaders:"
             for k, v in headers.items():
                 detail += f"\n  {k}: {v}"

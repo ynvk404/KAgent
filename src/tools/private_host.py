@@ -1,3 +1,4 @@
+import asyncio
 import ipaddress
 import socket
 from urllib.parse import urlparse
@@ -177,7 +178,8 @@ async def private_host_reason(
         pass
 
     try:
-        resolved = socket.getaddrinfo(
+        resolved = await asyncio.to_thread(
+            socket.getaddrinfo,
             host,
             None,
             proto=socket.IPPROTO_TCP,

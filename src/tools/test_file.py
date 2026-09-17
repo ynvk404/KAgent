@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 
@@ -131,6 +132,27 @@ async def test_file_write_creates_parent_dirs(
     )
 
     assert back == "abc"
+
+
+@pytest.mark.asyncio
+async def test_file_write_and_edit_preserve_existing_modes(file_tmp, signal):
+    parent = file_tmp / "private"
+    parent.mkdir(mode=0o700)
+    path = parent / "secret.txt"
+    path.write_text("before")
+    path.chmod(0o600)
+
+    await FileWriteTool().run(
+        {"path": str(path), "content": "after"}, signal, AlwaysAllow()
+    )
+    await FileEditTool().run(
+        {"path": str(path), "old_string": "after", "new_string": "edited"},
+        signal,
+        AlwaysAllow(),
+    )
+
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 @pytest.mark.asyncio
 async def test_file_edit_replace_unique(

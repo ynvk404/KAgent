@@ -19,6 +19,7 @@ DEFAULT_TIMEOUT_SECONDS = 5 * 60
 MAX_TIMEOUT_SECONDS = 30 * 60
 MAX_OUTPUT_BYTES = 64 * 1024
 ABORT_POLL_SECONDS = 0.05
+TERMINATE_GRACE_SECONDS = 1
 
 def is_windows() -> bool:
     return sys.platform == "win32"
@@ -200,7 +201,11 @@ class ShellTool(Tool):
 
         timeout_arg = args.get("timeout_seconds")
         timeout_seconds = DEFAULT_TIMEOUT_SECONDS
-        if isinstance(timeout_arg, (int, float)) and timeout_arg > 0:
+        if (
+            isinstance(timeout_arg, (int, float))
+            and not isinstance(timeout_arg, bool)
+            and timeout_arg > 0
+        ):
             timeout_seconds = min(timeout_arg, MAX_TIMEOUT_SECONDS)
 
         cmd, argv = shell_invocation(self.shell_path, cmd_str)
@@ -345,7 +350,11 @@ async def run_with_capture(
     except asyncio.TimeoutError:
         timed_out = True
         kill_process_group(proc.pid)
-        await proc.wait()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=TERMINATE_GRACE_SECONDS)
+        except asyncio.TimeoutError:
+            kill_process_group(proc.pid, signal.SIGKILL)
+            await proc.wait()
     finally:
         watch_task.cancel()
         try:
@@ -372,7 +381,7 @@ async def run_with_capture(
 def _is_aborted(signal: Any) -> bool:
     return signal is not None and getattr(signal, "aborted", False)
 
-def kill_process_group(pid: int | None) -> None:
+def kill_process_group(pid: int | None, sig=signal.SIGTERM) -> None:
     if not pid:
         return
 
@@ -391,7 +400,7 @@ def kill_process_group(pid: int | None) -> None:
 
     if killpg is not None:
         try:
-            killpg(pid, signal.SIGTERM)
+            killpg(pid, sig)
             return
         except ProcessLookupError:
             return
@@ -404,7 +413,7 @@ def kill_process_group(pid: int | None) -> None:
             )
 
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, sig)
     except ProcessLookupError:
         pass
     except OSError:
