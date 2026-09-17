@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from src.ui.widgets.banner import BannerData
 else:
     AskRequest = Any
-    PermissionRequest = Any
+    BridgedPermissionRequest = Any
     BannerData = Any
 
 try:

@@ -256,6 +256,56 @@ async def test_concurrent_asks_only_one_modal():
     assert max_open == 1
 
 
+@pytest.mark.asyncio
+async def test_cancelled_queued_ask_does_not_block_later_permission_request():
+    pending: BridgePermissionRequest | None = None
+
+    def publish(req: BridgePermissionRequest | None):
+        nonlocal pending
+        if req is not None:
+            pending = req
+
+    bridge = BridgedPrompter(publish)
+    req = PermissionRequest(tool="http", summary="s", detail="d")
+    first = asyncio.create_task(bridge.ask(req))
+    second = asyncio.create_task(bridge.ask(req))
+    third = asyncio.create_task(bridge.ask(req))
+
+    await asyncio.sleep(0)
+    second.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await second
+
+    assert pending is not None
+    pending.resolve(Decision.ALLOW_ONCE)
+    await first
+    await asyncio.sleep(0)
+
+    assert pending is not None
+    pending.resolve(Decision.ALLOW_ONCE)
+    assert await third == Decision.ALLOW_ONCE
+
+
+@pytest.mark.asyncio
+async def test_abort_signal_rejects_open_permission_prompt():
+    shown = []
+    bridge = BridgedPrompter(shown.append)
+    signal = asyncio.Event()
+    task = asyncio.create_task(
+        bridge.ask(
+            PermissionRequest(tool="http", summary="s", detail="d"),
+            signal,
+        )
+    )
+
+    await asyncio.sleep(0)
+    signal.set()
+
+    with pytest.raises(Exception, match="aborted"):
+        await task
+    assert shown[-1] is None
+
+
 
 @pytest.mark.asyncio
 async def test_same_origin_fanout_uses_session_cache():
