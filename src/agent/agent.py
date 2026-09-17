@@ -66,6 +66,7 @@ from src.target.target import Target
 
 from src.tools.aliases import canonical_tool_name
 from src.tools.registry import Registry as ToolRegistry
+from src.tools.types import ActionPermissionTool
 
 from .decision_planner import build_decision_plan
 
@@ -769,6 +770,7 @@ class Agent:
     def is_tool_allowed(
         self,
         tool_name: str,
+        args: dict[str, Any] | None = None,
     ) -> ToolAllowedResult:
         if len(self.active_skills) == 0:
             return ToolAllowedResult(
@@ -782,7 +784,13 @@ class Agent:
                 ok=True,
             )
 
-        if not tool.requires_permission():
+        requires_permission = (
+            tool.requires_permission_for(args or {})
+            if isinstance(tool, ActionPermissionTool)
+            else tool.requires_permission()
+        )
+
+        if not requires_permission:
             return ToolAllowedResult(
                 ok=True,
             )
@@ -888,14 +896,15 @@ class Agent:
         return self.tools_tokens_cache
 
     async def reset(self) -> None:
+        self.memory = None
+        self.rebuild_system_prompt()
+
         self.history = [
             Message(
                 role="system",
                 content=self.sys_prompt,
             )
         ]
-
-        self.memory = None
 
         self.active_skills.clear()
         self.pending_skills.clear()
@@ -1637,7 +1646,8 @@ class Agent:
         else:
 
             allowed = self.is_tool_allowed(
-                tc.function.name
+                tc.function.name,
+                parsed.args,
             )
 
             if not allowed.ok:

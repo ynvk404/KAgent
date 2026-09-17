@@ -18,9 +18,11 @@ from src.agent.agent import (
     Agent,
     AgentOptions,
     AgentRunOptions,
+    ParsedToolCall,
     make_safe_emit,
     reconcile_tool_calls,
 )
+from src.coverage.store import CoverageStore
 from src.intelligence.store import IntelligenceStore
 from src.llm.client import Client
 from src.llm.types import (
@@ -34,6 +36,7 @@ from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry, Skill
 from src.target.target import Target
 from src.tools.registry import Registry as ToolRegistry
+from src.tools.coverage import CoverageTool
 
 from src.session.store import Store, new_id
 class FakeSignal:
@@ -1415,6 +1418,49 @@ async def test_clear_memory_wipes_carried_state_from_system_prompt():
 
     assert stats.items == 0
 
+
+@pytest.mark.asyncio
+async def test_reset_rebuilds_system_prompt_without_carried_memory():
+
+    summary = (
+        "## Findings and evidence\n"
+        "- Confirmed IDOR on /api/invoices/200"
+    )
+
+    result = make_agent_with_client(
+        [
+            ChatResponse(
+                message=Message(
+                    role="assistant",
+                    content="turn",
+                ),
+                finish_reason="stop",
+            ),
+            ChatResponse(
+                message=Message(
+                    role="assistant",
+                    content=summary,
+                ),
+                finish_reason="stop",
+            ),
+        ]
+    )
+
+    agent = result["agent"]
+    collector = collect()
+
+    await agent.run("start", FakeSignal(), collector["sink"])
+    await agent.compact(FakeSignal(), collector["sink"])
+
+    assert "Confirmed IDOR" in agent.get_history()[0].content
+
+    await agent.reset()
+
+    assert len(agent.get_history()) == 1
+    assert "Carried session state" not in agent.get_history()[0].content
+    assert "Confirmed IDOR" not in agent.get_history()[0].content
+    assert agent.memory is None
+
 @pytest.mark.asyncio
 async def test_forget_memory_drops_only_matching_items():
 
@@ -1860,6 +1906,79 @@ def make_agent_with_skill(
         "events": collector["events"],
         "sink": collector["sink"],
     }
+
+
+@pytest.mark.asyncio
+async def test_blocks_action_aware_coverage_clear_not_listed_in_active_skill(
+    tmp_path,
+):
+    coverage_store = CoverageStore(str(tmp_path / "coverage.json"))
+    await coverage_store.mark(
+        endpoint="GET /orders/1",
+        param="id",
+        vulnClass="idor",
+        status="tried",
+    )
+
+    tools = ToolRegistry()
+    tools.register(CoverageTool(coverage_store))
+
+    skills = SkillRegistry()
+    skills.add(
+        Skill(
+            name="narrow",
+            description="narrow skill",
+            tools=["echo"],
+            disable_model_invocation=False,
+            path="/virtual/narrow/SKILL.md",
+            body="# narrow body",
+        )
+    )
+
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=tools,
+            skills=skills,
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+        )
+    )
+    agent.active_skills.add("narrow")
+
+    clear_result = await agent.run_parsed_tool_call(
+        ToolCall(
+            id="clear",
+            type="function",
+            function=FunctionCall(
+                name="coverage",
+                arguments='{"action":"clear"}',
+            ),
+        ),
+        ParsedToolCall({"action": "clear"}, '{"action":"clear"}'),
+        FakeSignal(),
+    )
+
+    assert "not in any active skill" in clear_result.err_str
+    assert coverage_store.entries
+
+    summary_result = await agent.run_parsed_tool_call(
+        ToolCall(
+            id="summary",
+            type="function",
+            function=FunctionCall(
+                name="coverage",
+                arguments='{"action":"summary"}',
+            ),
+        ),
+        ParsedToolCall({"action": "summary"}, '{"action":"summary"}'),
+        FakeSignal(),
+    )
+
+    assert summary_result.err_str == ""
+    assert json.loads(summary_result.result)["total"] == 1
+
 
 @pytest.mark.asyncio
 async def test_blocks_capability_tool_not_listed_in_active_skill():
