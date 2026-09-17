@@ -3,6 +3,7 @@ from src.ui.widgets.banner import BannerData
 import json
 
 import pytest
+from src.ui.theme import ACCENT, DANGER, ERROR, MUTED, WARNING
 
 from src.ui.core.state import (
     initial_state,
@@ -272,7 +273,7 @@ def test_confirm_finding_card():
 
     assert last.kind == "finding"
     assert last.prefix == "★ "
-    assert last.color == "cyan"
+    assert last.color == ACCENT
 
     assert (
         "LOW · Information Disclosure - PHP Version in Response Headers"
@@ -287,11 +288,11 @@ def test_confirm_finding_card():
 @pytest.mark.parametrize(
     "severity,color",
     [
-        ("critical", "magenta"),
-        ("high", "red"),
-        ("medium", "yellow"),
-        ("low", "cyan"),
-        ("info", "gray"),
+        ("critical", DANGER),
+        ("high", ERROR),
+        ("medium", WARNING),
+        ("low", ACCENT),
+        ("info", MUTED),
     ]
 )
 def test_finding_colors(severity, color):

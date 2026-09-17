@@ -9,6 +9,7 @@ from src.ui.core.state import TranscriptEntry
 from src.ui.core.terminal_size import get_terminal_size
 from src.ui.render.markdown import render_markdown
 from src.ui.widgets.banner import Banner, BannerData
+from src.ui.theme import ACCENT, ERROR, MUTED, PRIMARY, WARNING
 
 EntryKind = Literal[
     "user",
@@ -29,14 +30,14 @@ class RoleStyle:
 
 
 ROLE_STYLES: dict[EntryKind, RoleStyle] = {
-    "user": RoleStyle(color="cyan", prefix="› "),
-    "assistant": RoleStyle(color="white", prefix="  "),
-    "tool-call": RoleStyle(color="magenta", prefix="⚙ "),
-    "tool-result": RoleStyle(color="gray", prefix="↳ "),
-    "system": RoleStyle(color="gray", prefix="· "),
-    "error": RoleStyle(color="red", prefix="! "),
-    "finding": RoleStyle(color="yellow", prefix="★ "),
-    "decision": RoleStyle(color="cyan", prefix="· "),
+    "user": RoleStyle(color=ACCENT, prefix="› "),
+    "assistant": RoleStyle(color=PRIMARY, prefix="  "),
+    "tool-call": RoleStyle(color=ACCENT, prefix="⚙ "),
+    "tool-result": RoleStyle(color=MUTED, prefix="↳ "),
+    "system": RoleStyle(color=MUTED, prefix="· "),
+    "error": RoleStyle(color=ERROR, prefix="! "),
+    "finding": RoleStyle(color=WARNING, prefix="★ "),
+    "decision": RoleStyle(color=ACCENT, prefix="· "),
 }
 
 CONTINUATION_INDENT = "  "

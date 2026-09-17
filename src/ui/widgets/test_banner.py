@@ -5,6 +5,7 @@ from src.ui.widgets.banner import (
     LOGO,
     model_pill,
 )
+from src.ui.theme import ACCENT, ERROR, SUCCESS
 
 
 def test_model_pill_yes():
@@ -12,7 +13,7 @@ def test_model_pill_yes():
 
     assert pill is not None
     assert pill.text == "tools ✓"
-    assert pill.color == "green"
+    assert pill.color == SUCCESS
 
 
 
@@ -21,7 +22,7 @@ def test_model_pill_no():
 
     assert pill is not None
     assert pill.text == "NO TOOLS"
-    assert pill.color == "red"
+    assert pill.color == ERROR
 
 
 
@@ -231,3 +232,5 @@ def test_banner_line_has_color():
         lines[0],
         "color"
     )
+
+    assert lines[0].color == ACCENT

@@ -5,6 +5,7 @@ import pytest
 from textual.app import App, ComposeResult
 
 from .status_bar import StatusBar, StatusProps, busy_line, format_elapsed
+from src.ui.theme import ACCENT, BOLD_SUCCESS, WARNING
 
 
 def props(**overrides) -> StatusProps:
@@ -70,6 +71,19 @@ class TestStatusBarBusyLine:
         ).plain
         assert "planning" in frame
         assert "0:03" in frame
+
+    def test_uses_accent_for_running_state(self) -> None:
+        line = busy_line(props(busy=True, phase="planning"))
+        assert line.spans[0].style == ACCENT
+
+    def test_keeps_success_and_warning_semantics_distinct(self) -> None:
+        from .status_bar import idle_line
+
+        ready = idle_line(props(api_ready=True))
+        pressure = idle_line(props(ctx_tokens=90, compact_threshold=100))
+
+        assert ready.spans[0].style == BOLD_SUCCESS
+        assert pressure.spans[-1].style == WARNING
 
 
 @pytest.mark.asyncio

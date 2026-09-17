@@ -8,6 +8,7 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from src.ui.widgets.banner import ToolSupportPill
 from src.ui.core.state import TranscriptFilter
+from src.ui.theme import ACCENT, BOLD_DANGER, BOLD_ERROR, BOLD_SUCCESS, MUTED, SUCCESS, WARNING
 
 UiPhase = Literal[
     "planning",
@@ -19,7 +20,7 @@ UiPhase = Literal[
     "idle",
 ]
 
-SUPERMODE_COLOR = "#ff8700"
+SUPERMODE_COLOR = BOLD_DANGER
 
 def format_elapsed(total_seconds: float) -> str:
     """mm:ss elapsed clock. 42 -> "0:42", 125 -> "2:05", 3700 -> "61:40"."""
@@ -31,9 +32,9 @@ def format_elapsed(total_seconds: float) -> str:
 def tool_pill(t: ToolSupportPill | None) -> tuple[str, str] | None:
     """Returns (text, color) for the tool-support pill, or None."""
     return {
-        "yes": ("tools ✓", "green"),
-        "no": ("NO TOOLS", "red"),
-        "probing": ("probing…", "yellow"),
+        "yes": ("tools ✓", SUCCESS),
+        "no": ("NO TOOLS", BOLD_ERROR),
+        "probing": ("probing…", WARNING),
     }.get(t) if t else None
 
 
@@ -86,10 +87,10 @@ def busy_line(p: StatusProps) -> Text:
     )
 
     line = Text()
-    line.append("⠋ ", style="yellow")  
-    line.append(f" {label}{clock} · Esc to cancel", style="grey62")
+    line.append("⠋ ", style=ACCENT)
+    line.append(f" {label}{clock} · Esc to cancel", style=MUTED)
     if p.active_skill:
-        line.append(f" · skill: {p.active_skill}", style="grey62")
+        line.append(f" · skill: {p.active_skill}", style=MUTED)
     return line
 
 
@@ -112,27 +113,27 @@ def idle_line(p: StatusProps) -> Text:
 
     line = Text()
     if p.api_ready:
-        line.append("ready", style="bold green")
+        line.append("ready", style=BOLD_SUCCESS)
     else:
-        line.append("disconnected", style="bold red")
+        line.append("disconnected", style=BOLD_ERROR)
 
-    line.append(f" · {phase_text} · Enter send · / commands", style="grey62")
+    line.append(f" · {phase_text} · Enter send · / commands", style=MUTED)
 
     if p.model:
-        line.append(f" · {p.model}", style="grey62")
+        line.append(f" · {p.model}", style=MUTED)
     if p.target:
-        line.append(f" · target: {compact_target(p.target)}", style="grey62")
+        line.append(f" · target: {compact_target(p.target)}", style=MUTED)
     if pill:
         text, color = pill
         line.append(f" [{text}]", style=color)
     if p.expand_hint:
-        line.append(" · Ctrl-O expand output", style="cyan")
+        line.append(" · Ctrl-O expand output", style=ACCENT)
     if p.transcript_filter != "all":
-        line.append(f" · filter: {p.transcript_filter}", style="cyan")
+        line.append(f" · filter: {p.transcript_filter}", style=ACCENT)
     if p.active_skill:
-        line.append(f" · skill: {p.active_skill}", style="grey62")
+        line.append(f" · skill: {p.active_skill}", style=MUTED)
     if ctx_hint:
-        style = "yellow" if ctx_percent >= 90 else "grey62"
+        style = WARNING if ctx_percent >= 90 else MUTED
         suffix = (
             f"/{round(p.compact_threshold / 1000)}k {ctx_percent}%"
             if ctx_percent
@@ -140,7 +141,7 @@ def idle_line(p: StatusProps) -> Text:
         )
         line.append(f"{ctx_hint}{suffix}", style=style)
     if p.memory_items > 0:
-        line.append(f" · mem: {p.memory_items}", style="grey62")
+        line.append(f" · mem: {p.memory_items}", style=MUTED)
 
     return line
 
@@ -201,7 +202,7 @@ class StatusBar(Widget):
         if not props.yolo:
             return content
 
-        badge = Text("AutoApprove", style=f"bold {SUPERMODE_COLOR}")
+        badge = Text("AutoApprove", style=SUPERMODE_COLOR)
         width = self.size.width or 80
         pad = max(1, width - content.cell_len - badge.cell_len)
         line = content.copy()

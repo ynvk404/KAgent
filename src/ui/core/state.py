@@ -42,6 +42,7 @@ except ImportError:
 
 
 from src.ui.render.tool_result_format import build_tool_result_view, shell_result_exit_status
+from src.ui.theme import ACCENT, DANGER, ERROR, MUTED, WARNING
 
 
 TranscriptKind = Literal[
@@ -330,17 +331,17 @@ def _is_shell_tool(name: str) -> bool:
 
 
 def _tool_call_color(name: str) -> str | None:
-    return "red" if name == "confirm_finding" else None
+    return DANGER if name == "confirm_finding" else None
 
 
 def _severity_color(severity: str) -> str:
     return {
-        "critical": "magenta",
-        "high": "red",
-        "medium": "yellow",
-        "low": "cyan",
-        "info": "gray",
-    }.get(severity, "yellow")
+        "critical": DANGER,
+        "high": ERROR,
+        "medium": WARNING,
+        "low": ACCENT,
+        "info": MUTED,
+    }.get(severity, WARNING)
 
 
 def _format_finding_card(args_json: str) -> dict[str, str] | None:

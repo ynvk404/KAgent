@@ -13,6 +13,7 @@ from typing import Any, TypedDict, cast, IO
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual import events
+from textual.selection import Selection
 from textual.widgets import RichLog, Static
 
 from src.agent.agent import Agent, AgentRunOptions
@@ -96,6 +97,8 @@ from src.ui.widgets.text_input_modal import TextInputModal, TextInputRequest
 from src.ui.widgets.slash_menu import SlashMenu
 from src.ui.widgets.status_bar import StatusBar, StatusProps
 from src.ui.widgets.transcript import Transcript, entry_view
+from src.ui.widgets.transcript_view import TranscriptView
+from src.ui.theme import ACCENT, MUTED, PRIMARY
 
 
 MENTION_LIMIT = 12
@@ -190,16 +193,48 @@ class _RichLogWriter:
         return len(s)
 
 _INPUT_STYLE_MAP: dict[str, str] = {
-    "gray": "grey62",
-    "prompt": "bold cyan",
-    "text": "white",
-    "cursor": "bold white",
+    "gray": MUTED,
+    "prompt": f"bold {ACCENT}",
+    "text": PRIMARY,
+    "cursor": f"bold {PRIMARY}",
     "cursor_char": "reverse",
 }
 
 
 def _input_style(name: str | None) -> str:
     return _INPUT_STYLE_MAP.get(name or "text", name or "")
+
+
+def _input_selection_text(value: str, selection: Selection) -> str:
+    lines = value.split("\n")
+
+    def offset(position, *, end: bool) -> int:
+        if position is None:
+            return len(value) if end else 0
+        if position.y <= 1:
+            return 0
+        if position.y >= len(lines) + 1:
+            return len(value)
+        line_index = position.y - 1
+        line_start = sum(len(line) + 1 for line in lines[:line_index])
+        prefix_len = 2
+        return line_start + min(
+            len(lines[line_index]),
+            max(0, position.x - prefix_len),
+        )
+
+    start = offset(selection.start, end=False)
+    end = offset(selection.end, end=True)
+    return value[min(start, end) : max(start, end)]
+
+
+class _InputStatic(Static):
+    def __init__(self) -> None:
+        super().__init__(id="input-box")
+        self.value = ""
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        return _input_selection_text(self.value, selection), "\n"
 
 
 def filter_transcript(
@@ -238,6 +273,13 @@ def transcript_entry_matches_filter(
 
 
 class KAgent(App):
+
+    CSS = """
+    Screen > .screen--selection {
+        background: #38BDF8 30%;
+        color: transparent;
+    }
+    """
 
     def __init__(self, props: AppProps):
         super().__init__()
@@ -309,6 +351,7 @@ class KAgent(App):
 
         self.pasted_text: dict[int, str] = {}
         self.pasted_text_seq = 0
+        self._last_selected_text = ""
 
         self.text_input_future: asyncio.Future[str] | None = None
 
@@ -327,7 +370,7 @@ class KAgent(App):
 
     def compose(self) -> ComposeResult:
 
-        self.transcript_log = RichLog(wrap=True, markup=False, auto_scroll=True)
+        self.transcript_log = TranscriptView(auto_scroll=True)
         yield self.transcript_log
         self.transcript_writer = Transcript(
             out=cast(IO[str], _RichLogWriter(self.transcript_log))
@@ -339,7 +382,7 @@ class KAgent(App):
         self.overlay_static = Static(id="overlay")
         yield self.overlay_static
 
-        self.input_static = Static(id="input-box")
+        self.input_static = _InputStatic()
         yield self.input_static
 
         self.status_bar = StatusBar()
@@ -491,6 +534,42 @@ class KAgent(App):
         self._sync_overlay()
         self._render_input()
 
+    def _insert_pasted_text(self, raw_input: str) -> None:
+        pasted = normalize_pasted_text(strip_paste_markers(raw_input))
+        if should_collapse_paste(pasted):
+            self.pasted_text_seq += 1
+            id = self.pasted_text_seq
+            self.pasted_text[id] = pasted
+            self.input.insert_text(pasted_text_marker(id, pasted))
+            return
+        self.input.insert_text(pasted)
+
+    async def on_paste(self, event: events.Paste) -> None:
+        modal = self._get_active_modal()
+        if isinstance(modal, TextInputModal):
+            modal.handle_key("", event.text)
+        elif modal is None and not self.state.busy:
+            previous_value = self.input.value
+            self._insert_pasted_text(event.text)
+            if self.input.value != previous_value:
+                self._recompute_menus()
+        else:
+            return
+
+        event.stop()
+        self._sync_overlay()
+        self._render_input()
+
+    def on_text_selected(self, event: events.TextSelected) -> None:
+        selected = self.screen.get_selected_text()
+        if selected:
+            self._last_selected_text = selected
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        if event.button == 3 and self._last_selected_text:
+            self.copy_to_clipboard(self._last_selected_text)
+            event.stop()
+
     async def _process_key(self, event: events.Key) -> None:
         raw_input = event.character or ""
         key = event.key  
@@ -571,14 +650,7 @@ class KAgent(App):
             return
 
         if looks_like_paste(raw_input, key == "enter"):
-            pasted = normalize_pasted_text(strip_paste_markers(raw_input))
-            if should_collapse_paste(pasted):
-                self.pasted_text_seq += 1
-                id = self.pasted_text_seq
-                self.pasted_text[id] = pasted
-                self.input.insert_text(pasted_text_marker(id, pasted))
-                return
-            self.input.insert_text(pasted)
+            self._insert_pasted_text(raw_input)
             return
 
         if key in ("ctrl+n", "ctrl+j"):  
@@ -745,6 +817,7 @@ class KAgent(App):
                 text.append("\n")
             for seg in line.segments:
                 text.append(seg.text, style=_input_style(seg.style))
+        self.input_static.value = self.input.value
         self.input_static.update(text)
 
     def _sync_overlay(self) -> None:
@@ -778,7 +851,7 @@ class KAgent(App):
             if i > 0:
                 text.append("\n")
             style = (
-                "bold magenta"
+                f"bold {ACCENT}"
                 if getattr(ln, "selected", False)
                 else ("dim" if getattr(ln, "dim", False) else "")
             )

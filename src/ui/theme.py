@@ -1,0 +1,15 @@
+"""Small semantic palette for KAgent's live Textual UI."""
+
+PRIMARY = "#D6DEE8"
+MUTED = "#7E8A9A"
+ACCENT = "#38BDF8"
+SUCCESS = "#34D399"
+WARNING = "#FBBF24"
+ERROR = "#F87171"
+DANGER = "#FB7185"
+LINK = "#60A5FA"
+
+BOLD_ACCENT = f"bold {ACCENT}"
+BOLD_SUCCESS = f"bold {SUCCESS}"
+BOLD_ERROR = f"bold {ERROR}"
+BOLD_DANGER = f"bold {DANGER}"

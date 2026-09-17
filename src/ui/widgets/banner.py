@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from src.ui.theme import ACCENT, ERROR, MUTED, SUCCESS, WARNING, PRIMARY
 
 
 LOGO = [
@@ -52,25 +53,25 @@ def model_pill(
         case "yes":
             return Pill(
                 text="tools ✓",
-                color="green",
+                color=SUCCESS,
             )
 
         case "no":
             return Pill(
                 text="NO TOOLS",
-                color="red",
+                color=ERROR,
             )
 
         case "probing":
             return Pill(
                 text="probing…",
-                color="yellow",
+                color=WARNING,
             )
 
         case "unknown":
             return Pill(
                 text="tools ?",
-                color="gray",
+                color=MUTED,
             )
 
         case _:
@@ -80,7 +81,7 @@ def model_pill(
 @dataclass(frozen=True, slots=True)
 class BannerLine:
     text: str
-    color: str = "white"
+    color: str = PRIMARY
 
 class Banner:
 
@@ -227,7 +228,7 @@ class Banner:
 
             if accent:
                 text = label
-                color = "magenta"
+                color = ACCENT
 
             else:
 
@@ -241,7 +242,7 @@ class Banner:
                         f" [{pill.text}]"
                     )
 
-                color = "white"
+                color = PRIMARY
 
 
             prefix = (
