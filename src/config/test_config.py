@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from . import config
 from .config import (
     Backend,
     ToolingProfile,
@@ -366,3 +367,114 @@ async def test_saved_file_permissions(
     )
 
     assert mode == 0o600
+
+
+@pytest.mark.asyncio
+async def test_temp_config_file_is_private_before_replace(
+    temp_config,
+    monkeypatch,
+):
+    cfg = default_config()
+    cfg.backend = Backend.GROQ
+    cfg.api_key = "secret"
+
+    real_replace = config.os.replace
+    temporary_modes: list[int] = []
+
+    def capture_replace(source, destination):
+        temporary_modes.append(
+            Path(source).stat().st_mode & 0o777
+        )
+        real_replace(source, destination)
+
+    monkeypatch.setattr(
+        config.os,
+        "replace",
+        capture_replace,
+    )
+
+    await save(cfg)
+
+    assert temporary_modes == [0o600]
+
+
+@pytest.mark.asyncio
+async def test_save_does_not_remove_colliding_temp_file(
+    temp_config,
+    monkeypatch,
+):
+    colliding = temp_config.parent / ".kagent.cfg.tmp.abcdef"
+    colliding.write_text("keep", encoding="utf-8")
+
+    monkeypatch.setattr(
+        config.random,
+        "choices",
+        lambda *_args, **_kwargs: list("abcdef"),
+    )
+
+    with pytest.raises(RuntimeError, match="save failed"):
+        await save(default_config())
+
+    assert colliding.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("mcp_servers", ["bad"]),
+        ("plugins", [123]),
+        ("skills_dirs", "skills"),
+        ("disabled_skills", "recon"),
+        ("thinking_enabled", "false"),
+        ("streaming_enabled", 1),
+        ("max_steps", "20"),
+        ("auto_compact_threshold", "16000"),
+        ("temperature", "0.5"),
+        ("max_tokens", "100"),
+        ("gemini_thinking_budget", "512"),
+        ("tooling_profile", 123),
+        ("base_url", 123),
+        ("model", 123),
+    ],
+)
+def test_rejects_invalid_runtime_config_field_types(
+    key,
+    value,
+):
+    with pytest.raises(ValueError, match=key):
+        config.config_from_dict({key: value})
+
+
+@pytest.mark.parametrize(
+    ("section", "entry"),
+    [
+        ("mcp_servers", {"name": "server"}),
+        ("plugins", {"command": "program"}),
+        (
+            "mcp_servers",
+            {"name": "server", "command": "program", "args": "--bad"},
+        ),
+        (
+            "mcp_servers",
+            {"name": "server", "command": "program", "env": []},
+        ),
+        (
+            "plugins",
+            {"name": "plugin", "command": "program", "schema": []},
+        ),
+        (
+            "plugins",
+            {
+                "name": "plugin",
+                "command": "program",
+                "requires_permission": "yes",
+            },
+        ),
+    ],
+)
+def test_rejects_malformed_mcp_and_plugin_entries(
+    section,
+    entry,
+):
+    with pytest.raises(ValueError, match=section):
+        config.config_from_dict({section: [entry]})

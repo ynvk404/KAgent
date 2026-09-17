@@ -140,10 +140,10 @@ def config_to_dict(
 def config_from_dict(
     data: dict[str, Any],
 ) -> Config:
-    backend = data.get(
-        "backend",
-        "",
-    )
+    if not isinstance(data, dict):
+        raise ValueError("config must be an object")
+
+    backend = data.get("backend", "")
     api_keys = data.get(
         "api_keys",
     )
@@ -167,71 +167,35 @@ def config_from_dict(
 
     return Config(
         backend=backend,
-        model=data.get(
-            "model",
-            "",
-        ),
-        base_url=data.get(
-            "base_url",
-            "",
-        ),
+        model=_string_field(data, "model", ""),
+        base_url=_string_field(data, "base_url", ""),
         api_keys=normalized_api_keys,
-        skills_dirs=data.get(
-            "skills_dirs",
-            [],
-        ),
-        disabled_skills=data.get(
-            "disabled_skills",
-            [],
-        ),
+        skills_dirs=_string_list_field(data, "skills_dirs"),
+        disabled_skills=_string_list_field(data, "disabled_skills"),
         mcp_servers=[
             _validate_mcp_server(x)
-            for x in data.get(
-                "mcp_servers",
-                []
-            )
+            for x in _list_field(data, "mcp_servers")
         ],
         plugins=[
             _validate_plugin(x)
-            for x in data.get(
-                "plugins",
-                []
-            )
+            for x in _list_field(data, "plugins")
         ],
-        session_path=data.get(
-            "session_path",
-            "",
-        ),
-        thinking_enabled=data.get(
-            "thinking_enabled",
-            False,
-        ),
-        streaming_enabled=data.get(
-            "streaming_enabled",
-            True,
-        ),
-        max_steps=data.get(
-            "max_steps",
-            0,
-        ),
-        auto_compact_threshold=data.get(
+        session_path=data.get("session_path", ""),
+        thinking_enabled=_bool_field(data, "thinking_enabled", False),
+        streaming_enabled=_bool_field(data, "streaming_enabled", True),
+        max_steps=_int_field(data, "max_steps", 0),
+        auto_compact_threshold=_int_field(
+            data,
             "auto_compact_threshold",
             DEFAULT_AUTO_COMPACT_THRESHOLD,
         ),
-        temperature=data.get(
-            "temperature",
-        ),
-        max_tokens=data.get(
-            "max_tokens",
-        ),
-        gemini_thinking_budget=data.get(
+        temperature=_number_or_none_field(data, "temperature"),
+        max_tokens=_int_or_none_field(data, "max_tokens"),
+        gemini_thinking_budget=_int_or_none_field(
+            data,
             "gemini_thinking_budget",
         ),
-        tooling_profile=(
-            ToolingProfile(data["tooling_profile"])
-            if data.get("tooling_profile") is not None
-            else None
-        ),
+        tooling_profile=_tooling_profile_field(data),
     )
 
 
@@ -290,12 +254,15 @@ async def save(
         )
     )
 
+    created_tmp = False
     try:
-        with open(
+        fd = os.open(
             tmp,
-            "x",
-            encoding="utf-8",
-        ) as f:
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        created_tmp = True
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(body)
             f.flush()
             os.fsync(
@@ -313,7 +280,7 @@ async def save(
         )
 
     except Exception as e:
-        if tmp.exists():
+        if created_tmp and tmp.exists():
             tmp.unlink(
                 missing_ok=True
             )
@@ -324,32 +291,215 @@ async def save(
 def default_config() -> Config:
     return Config()
 
+
+def _list_field(
+    data: dict[str, Any],
+    name: str,
+) -> list[Any]:
+    value = data.get(name, [])
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a list")
+    return value
+
+
+def _string_list_field(
+    data: dict[str, Any],
+    name: str,
+) -> list[str]:
+    value = _list_field(data, name)
+    if not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{name} must contain only strings")
+    return value
+
+
+def _string_field(
+    data: dict[str, Any],
+    name: str,
+    default: str,
+) -> str:
+    value = data.get(name, default)
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string")
+    return value
+
+
+def _bool_field(
+    data: dict[str, Any],
+    name: str,
+    default: bool,
+) -> bool:
+    value = data.get(name, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean")
+    return value
+
+
+def _int_field(
+    data: dict[str, Any],
+    name: str,
+    default: int,
+) -> int:
+    value = data.get(name, default)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer")
+    return value
+
+
+def _int_or_none_field(
+    data: dict[str, Any],
+    name: str,
+) -> int | None:
+    value = data.get(name)
+    if value is not None and (
+        not isinstance(value, int) or isinstance(value, bool)
+    ):
+        raise ValueError(f"{name} must be an integer or null")
+    return value
+
+
+def _number_or_none_field(
+    data: dict[str, Any],
+    name: str,
+) -> float | int | None:
+    value = data.get(name)
+    if value is not None and (
+        not isinstance(value, (int, float)) or isinstance(value, bool)
+    ):
+        raise ValueError(f"{name} must be a number or null")
+    return value
+
+
+def _tooling_profile_field(
+    data: dict[str, Any],
+) -> ToolingProfile | None:
+    value = data.get("tooling_profile")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("tooling_profile must be a string or null")
+    try:
+        return ToolingProfile(value)
+    except ValueError as e:
+        raise ValueError(
+            f"tooling_profile is invalid: {value!r}"
+        ) from e
+
+
 def _validate_mcp_server(
-    data: dict,
+    data: Any,
 ) -> MCPServerConfig:
-    command = data.get(
-        "command",
-        ""
-    )
+    section = "mcp_servers[]"
+    if not isinstance(data, dict):
+        raise ValueError(f"{section} must be an object")
+    name = _required_string(data, section, "name")
+    command = _required_string(data, section, "command")
     if not no_shell_meta(command):
         raise ValueError(
-            "mcp_servers[].command must not contain shell metacharacters"
+            f"{section}.command must not contain shell metacharacters"
         )
     return MCPServerConfig(
-        **data
+        name=name,
+        command=command,
+        args=_entry_string_list(data, section, "args"),
+        env=_entry_string_dict(data, section, "env"),
     )
 
 def _validate_plugin(
-    data: dict,
+    data: Any,
 ) -> PluginConfig:
-    command = data.get(
-        "command",
-        ""
-    )
+    section = "plugins[]"
+    if not isinstance(data, dict):
+        raise ValueError(f"{section} must be an object")
+    name = _required_string(data, section, "name")
+    command = _required_string(data, section, "command")
     if not no_shell_meta(command):
         raise ValueError(
-            "plugins[].command must not contain shell metacharacters"
+            f"{section}.command must not contain shell metacharacters"
         )
     return PluginConfig(
-        **data
+        name=name,
+        command=command,
+        args=_entry_string_list(data, section, "args"),
+        description=_entry_string(data, section, "description", ""),
+        schema=_entry_dict_or_none(data, section, "schema"),
+        requires_permission=_entry_bool(
+            data,
+            section,
+            "requires_permission",
+            False,
+        ),
     )
+
+
+def _required_string(
+    data: dict[str, Any],
+    section: str,
+    name: str,
+) -> str:
+    if name not in data:
+        raise ValueError(f"{section}.{name} is required")
+    return _entry_string(data, section, name, "")
+
+
+def _entry_string(
+    data: dict[str, Any],
+    section: str,
+    name: str,
+    default: str,
+) -> str:
+    value = data.get(name, default)
+    if not isinstance(value, str):
+        raise ValueError(f"{section}.{name} must be a string")
+    return value
+
+
+def _entry_string_list(
+    data: dict[str, Any],
+    section: str,
+    name: str,
+) -> list[str]:
+    value = data.get(name, [])
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) for item in value
+    ):
+        raise ValueError(f"{section}.{name} must be a list of strings")
+    return value
+
+
+def _entry_string_dict(
+    data: dict[str, Any],
+    section: str,
+    name: str,
+) -> dict[str, str] | None:
+    value = data.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not all(
+        isinstance(key, str) and isinstance(item, str)
+        for key, item in value.items()
+    ):
+        raise ValueError(f"{section}.{name} must be a string map or null")
+    return value
+
+
+def _entry_dict_or_none(
+    data: dict[str, Any],
+    section: str,
+    name: str,
+) -> dict[str, Any] | None:
+    value = data.get(name)
+    if value is not None and not isinstance(value, dict):
+        raise ValueError(f"{section}.{name} must be an object or null")
+    return value
+
+
+def _entry_bool(
+    data: dict[str, Any],
+    section: str,
+    name: str,
+    default: bool,
+) -> bool:
+    value = data.get(name, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{section}.{name} must be a boolean")
+    return value
