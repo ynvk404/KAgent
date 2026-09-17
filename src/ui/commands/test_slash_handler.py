@@ -102,6 +102,13 @@ def last_text(app: DummyApp) -> str:
     return action.entry.text
 
 
+def test_normal_clear_is_not_a_slash_command():
+    app = DummyApp()
+
+    assert handle_slash(cast(KAgent, app), "clear") is False
+    assert app.actions == []
+
+
 def test_maxsteps_without_argument_shows_current_value():
     app = DummyApp()
     app.agent.set_max_steps(10)

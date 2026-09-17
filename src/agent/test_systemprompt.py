@@ -55,6 +55,20 @@ class Testbuild_system_prompt:
         assert "Authorized testing" in p
         assert "proceed within that scope" in p
 
+    def test_requires_explicit_scope_for_destructive_or_state_mutating_tools(self):
+        for profile in ("full", "compact"):
+            prompt = build_system_prompt(
+                BuildOptions(
+                    skills=Registry(),
+                    thinking_enabled=False,
+                    target=None,
+                    prompt_profile=profile,
+                )
+            )
+            assert "Do not infer a destructive or state-mutating tool action" in prompt
+            assert "explicitly identify both the action and its object or scope" in prompt
+            assert "not evidence that the proposal matches the user's intent" in prompt
+
     def test_carries_the_bug_bounty_owasp_vrt_portswigger_playbook(self):
         p = build_system_prompt(
             BuildOptions(skills=Registry(), thinking_enabled=False, target=None)

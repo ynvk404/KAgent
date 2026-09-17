@@ -8,6 +8,10 @@ import pytest
 
 from src.llm.openai import OpenAIClient
 from src.llm.types import ChatRequest, Message
+from src.tools.browser_capture import BrowserCaptureClearTool
+from src.tools.ask import AskUserTool
+from src.ask.ask import FirstOptionPrompter
+from src.tools.registry import Registry as ToolRegistry
 
 server: HTTPServer | None = None
 base_url = ""
@@ -199,6 +203,44 @@ async def test_non_stream_chat():
     c = OpenAIClient(base_url, "", "qwen")
     out = await c.chat(_req("qwen"))
     assert out.message.content == "hi"
+
+
+async def test_serializes_browser_capture_clear_schema_without_action_argument():
+    tools = ToolRegistry()
+    tools.register(BrowserCaptureClearTool(object()))
+    request = ChatRequest(
+        model="qwen",
+        messages=[Message(role="user", content="clear")],
+        tools=tools.as_llm_tools(),
+    )
+
+    body = OpenAIClient(base_url, "", "qwen").encode_request(request, False)
+    function = body["tools"][0]["function"]
+
+    assert function["name"] == "browser_capture_clear"
+    assert function["parameters"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    assert "action" not in function["parameters"]["properties"]
+
+
+async def test_serializes_ask_user_with_optional_options():
+    tools = ToolRegistry()
+    tools.register(AskUserTool(FirstOptionPrompter()))
+    body = OpenAIClient(base_url, "", "qwen").encode_request(
+        ChatRequest(
+            model="qwen",
+            messages=[Message(role="user", content="reset")],
+            tools=tools.as_llm_tools(),
+        ),
+        False,
+    )
+    question = body["tools"][0]["function"]["parameters"]["properties"]["questions"]["items"]
+
+    assert question["required"] == ["question"]
+    assert question["properties"]["options"]["minItems"] == 2
 
 async def test_stream_reasoning_content():
     c = OpenAIClient(base_url, "", "reasoning-stream")

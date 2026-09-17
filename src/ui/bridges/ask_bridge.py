@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from src.ask.ask import AskPrompter, Question
 
@@ -21,9 +21,42 @@ class BridgedAskPrompter(AskPrompter):
     def __init__(self, publish: AskPublisher):
         self._publish = publish
 
-    async def ask(self, question: Question) -> str:
+    async def _await_with_signal(self, future, signal) -> str:
+        if signal is None:
+            return await future
+
+        if getattr(signal, "aborted", False) or getattr(
+            signal, "is_set", lambda: False
+        )():
+            future.cancel()
+            raise Exception("aborted")
+
+        wait = getattr(signal, "wait", None)
+        if not callable(wait):
+            return await future
+
+        abort_waiter = asyncio.create_task(wait())
+        try:
+            done, _ = await asyncio.wait(
+                {future, abort_waiter},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if abort_waiter in done:
+                future.cancel()
+                raise Exception("aborted")
+            return future.result()
+        finally:
+            abort_waiter.cancel()
+
+    async def ask(self, question: Question, signal: Any = None) -> str:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
+
+        if getattr(signal, "aborted", False) or getattr(
+            signal, "is_set", lambda: False
+        )():
+            future.cancel()
+            raise Exception("aborted")
 
         def resolve(label: str) -> None:
             self._publish(None)
@@ -43,4 +76,10 @@ class BridgedAskPrompter(AskPrompter):
             )
         )
 
-        return await future
+        try:
+            return await self._await_with_signal(future, signal)
+        finally:
+            if not future.done():
+                future.cancel()
+            if future.cancelled():
+                self._publish(None)

@@ -137,6 +137,9 @@ class CoverageTool(Tool):
     def requires_permission(self) -> bool:
         return False
 
+    def requires_permission_for(self, args: dict[str, Any]) -> bool:
+        return arg_string(args, "action") == "clear"
+
     async def run(
         self,
         args: dict[str, Any],

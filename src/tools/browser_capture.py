@@ -268,12 +268,26 @@ class BrowserCaptureClearTool(BaseCaptureTool):
 
     def description(self) -> str:
         return (
-            "Clear all captured requests, endpoints, and snapshots from the "
-            "local store. Use this between phases or when scope changes."
+            "Irreversibly clear the browser capture store: all captured "
+            "requests, endpoints, and snapshots. Call only when the user "
+            "explicitly asks to clear or reset browser capture data (for "
+            "example, between named testing phases or after a scope change); "
+            "do not infer this action from an ambiguous request. This tool "
+            "takes no arguments."
         )
 
     def schema(self) -> dict[str, Any]:
-        return {"type": "object", "properties": {}}
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+
+    def validate_args(self, args: dict[str, Any]) -> None:
+        if args:
+            raise ValueError(
+                "browser_capture_clear does not accept arguments"
+            )
 
     def requires_permission(self) -> bool:
         return True

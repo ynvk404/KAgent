@@ -38,6 +38,20 @@ class GatedTool:
         self.ran = True
         return "ok"
 
+
+class ActionAwareTool(GatedTool):
+    def __init__(self, requires: bool):
+        super().__init__()
+        self.requires = requires
+        self.legacy_checked = False
+
+    def requires_permission(self) -> bool:
+        self.legacy_checked = True
+        return not self.requires
+
+    def requires_permission_for(self, args) -> bool:
+        return self.requires
+
 class SpyPrompter:
     def __init__(
         self,
@@ -114,3 +128,31 @@ async def test_prompts_and_denies_when_yolo_disabled():
         )
 
     assert len(inner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_action_aware_permission_hook_requires_permission_when_true():
+    reg = Registry()
+    tool = ActionAwareTool(requires=True)
+    reg.register(tool)
+    prompter = SpyPrompter(Decision.DENY)
+
+    with pytest.raises(PermissionError):
+        await reg.execute("http", {"action": "clear"}, None, prompter)
+
+    assert tool.ran is False
+    assert tool.legacy_checked is False
+    assert len(prompter.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_action_aware_permission_hook_executes_without_permission_when_false():
+    reg = Registry()
+    tool = ActionAwareTool(requires=False)
+    reg.register(tool)
+    prompter = SpyPrompter(Decision.DENY)
+
+    assert await reg.execute("http", {"action": "summary"}, None, prompter) == "ok"
+    assert tool.ran is True
+    assert tool.legacy_checked is False
+    assert prompter.calls == []

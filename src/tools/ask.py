@@ -27,8 +27,10 @@ class AskUserTool(Tool):
 
     def description(self) -> str:
         return (
-            "Ask the user a multiple-choice question "
-            "to disambiguate or get a decision."
+            "Ask the user a question, optionally with multiple-choice options, "
+            "to disambiguate or get a decision. When the requested action "
+            "or object is ambiguous, ask neutrally about the missing object "
+            "or scope; do not invent one."
         )
 
     def schema(self) -> dict:
@@ -39,6 +41,40 @@ class AskUserTool(Tool):
                     "type": "array",
                     "minItems": 1,
                     "maxItems": 4,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "header": {
+                                "type": "string",
+                                "description": "Optional short label for the question.",
+                            },
+                            "question": {
+                                "type": "string",
+                                "description": "The question to show the user.",
+                            },
+                            "options": {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 4,
+                                "description": "Two to four choices for the user. Use this field, not choices.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {
+                                            "type": "string",
+                                            "description": "Short text shown for this choice.",
+                                        },
+                                        "description": {
+                                            "type": "string",
+                                            "description": "Optional explanation of this choice.",
+                                        },
+                                    },
+                                    "required": ["label"],
+                                },
+                            },
+                        },
+                        "required": ["question"],
+                    },
                 }
             },
             "required": [
@@ -89,7 +125,7 @@ class AskUserTool(Tool):
                 ""
             )
 
-            if not qtext:
+            if not isinstance(qtext, str) or not qtext:
                 raise Exception(
                     f"questions[{i}] question required"
                 )
@@ -100,41 +136,70 @@ class AskUserTool(Tool):
 
             options = []
 
-            for opt in item.get(
-                "options",
-                []
-            ):
-                label = opt.get(
-                    "label",
-                    ""
-                )
+            raw_options = item.get("options")
+            legacy_choices = raw_options is None and "choices" in item
 
-                if label:
+            # Earlier providers saw an underspecified schema and sometimes
+            # emitted `choices: ["Yes", "No"]`.  Keep that wire shape
+            # compatible while advertising and internally using `options`.
+            if legacy_choices:
+                raw_options = item.get("choices", [])
+
+            if raw_options is None:
+                question = Question(
+                    question=qtext,
+                    options=[],
+                    header=header,
+                )
+            else:
+                if not isinstance(raw_options, list):
+                    raise Exception(f"questions[{i}] options must be an array")
+
+                for option_index, opt in enumerate(raw_options):
+                    if legacy_choices and isinstance(opt, str):
+                        label = opt
+                        description = None
+                    elif isinstance(opt, dict):
+                        label = opt.get("label", "")
+                        description = opt.get("description")
+                    else:
+                        raise Exception(
+                            f"questions[{i}] options[{option_index}] invalid"
+                        )
+
+                    if not isinstance(label, str) or not label:
+                        raise Exception(
+                            f"questions[{i}] options[{option_index}] label required"
+                        )
+
+                    if description is not None and not isinstance(description, str):
+                        raise Exception(
+                            f"questions[{i}] options[{option_index}] description invalid"
+                        )
+
                     options.append(
                         Option(
                             label=label,
-                            description=opt.get(
-                                "description"
-                            )
+                            description=description,
                         )
                     )
 
-            add_authorized_testing_option(
-                qtext,
-                header,
-                options
-            )
-
-            if len(options) < 2:
-                raise Exception(
-                    f"questions[{i}] at least 2 options required"
+                add_authorized_testing_option(
+                    qtext,
+                    header,
+                    options,
                 )
 
-            question = Question(
-                question=qtext,
-                options=options,
-                header=header
-            )
+                if len(options) < 2:
+                    raise Exception(
+                        f"questions[{i}] at least 2 options required"
+                    )
+
+                question = Question(
+                    question=qtext,
+                    options=options,
+                    header=header,
+                )
 
             choice = await self.prompter.ask(
                 question,

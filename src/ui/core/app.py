@@ -356,6 +356,8 @@ class KAgent(App):
         self.text_input_future: asyncio.Future[str] | None = None
 
         self._text_input_modal: TextInputModal | None = None
+        self._ask_text_input_for: AskRequest | None = None
+        self._ask_text_input_modal: TextInputModal | None = None
         self._ask_modal: AskModal | None = None
         self._perm_modal: PermissionModal | None = None
         self._skills_modal: SkillsModal | None = None
@@ -730,9 +732,27 @@ class KAgent(App):
         self._text_input_modal = None
 
         if self.state.pending_ask:
+            if not self.state.pending_ask.question.options:
+                if self._ask_text_input_for is not self.state.pending_ask:
+                    question = self.state.pending_ask.question
+                    self._ask_text_input_for = self.state.pending_ask
+                    self._ask_text_input_modal = TextInputModal(
+                        TextInputRequest(
+                            header=question.header or "Question",
+                            question=question.question,
+                            placeholder=None,
+                            resolve=self.state.pending_ask.resolve,
+                            reject=self.state.pending_ask.reject,
+                        )
+                    )
+                return self._ask_text_input_modal
+            self._ask_text_input_for = None
+            self._ask_text_input_modal = None
             if self._ask_modal is None or self._ask_modal.req is not self.state.pending_ask:
                 self._ask_modal = AskModal(self.state.pending_ask)
             return self._ask_modal
+        self._ask_text_input_for = None
+        self._ask_text_input_modal = None
         self._ask_modal = None
 
         if self.state.pending_perm:

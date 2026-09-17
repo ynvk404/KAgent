@@ -195,8 +195,8 @@ async def main() -> int:
             ),
             types.Tool(
                 name="browser_capture_clear",
-                description="Wipe all captured requests, endpoints, and snapshots from the in-memory store. Forwarding continues — new captures will repopulate it.",
-                inputSchema={"type": "object", "properties": {}}
+                description="Irreversibly clear the browser capture store: all captured requests, endpoints, and snapshots. Call only when the user explicitly asks to clear or reset browser capture data (for example, between named testing phases or after a scope change); do not infer this action from an ambiguous request. This tool takes no arguments. Forwarding continues — new captures will repopulate it.",
+                inputSchema={"type": "object", "properties": {}, "additionalProperties": False}
             )
         ]
 
@@ -288,6 +288,11 @@ async def main() -> int:
             return text_result(json.dumps(snap_dict, indent=2))
 
         elif name == "browser_capture_clear":
+            if args_dict:
+                return text_result(
+                    "error: browser_capture_clear does not accept arguments",
+                    is_error=True,
+                )
             store.clear()
             return text_result("cleared.")
 

@@ -14,6 +14,8 @@ from .types import (
     PermissionHints,
     SummarizableTool,
     PermissionHintTool,
+    ActionPermissionTool,
+    ArgumentValidatingTool,
 )
 from src.llm.types import ToolSpec
 
@@ -70,7 +72,16 @@ class Registry:
                 f"unknown tool: {name}"
             )
 
-        if tool.requires_permission():
+        if isinstance(tool, ArgumentValidatingTool):
+            tool.validate_args(args)
+
+        requires_permission = (
+            tool.requires_permission_for(args)
+            if isinstance(tool, ActionPermissionTool)
+            else tool.requires_permission()
+        )
+
+        if requires_permission:
             summary = summarize(
                 tool,
                 args,

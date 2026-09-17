@@ -48,6 +48,22 @@ class PermissionHintTool(Protocol):
     ) -> PermissionHints:
         ...
 
+
+@runtime_checkable
+class ActionPermissionTool(Protocol):
+    """Optional argument-aware override for a tool's permission requirement."""
+
+    def requires_permission_for(self, args: dict[str, Any]) -> bool:
+        ...
+
+
+@runtime_checkable
+class ArgumentValidatingTool(Protocol):
+    """Optional tool-side validation that runs before permission is requested."""
+
+    def validate_args(self, args: dict[str, Any]) -> None:
+        ...
+
 def arg_string(
     args: dict[str, Any],
     key: str,
