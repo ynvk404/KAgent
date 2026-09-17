@@ -210,6 +210,52 @@ def make_agent(
     )["agent"]
 
 
+def test_approx_tokens_counts_reasoning_content_without_changing_other_accounting():
+    agent = make_agent([])
+    agent.history = [
+        Message(role="system", content="abcd"),
+        Message(
+            role="assistant",
+            content="",
+            reasoning_content="abcdefgh",
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    function=FunctionCall(name="abcd", arguments="efgh"),
+                )
+            ],
+        ),
+    ]
+
+    # System content (1), private provider state (2), and tool metadata (2).
+    assert agent.approx_tokens() == 5
+
+    agent.history[1].reasoning_content = None
+
+    # Content and tool-call accounting retain their previous behavior.
+    assert agent.approx_tokens() == 3
+
+
+def test_context_guard_accounts_for_reasoning_without_eliding_assistant_state():
+    agent = make_agent([])
+    agent.set_auto_compact_threshold(300)
+    reasoning = "r" * 1000
+    working = [
+        Message(role="assistant", content="", reasoning_content=reasoning),
+        *[
+            Message(role="tool", content="x" * 100, tool_call_id=f"call_{i}")
+            for i in range(5)
+        ],
+    ]
+    events = []
+
+    agent.guard_working_context(working, events.append, AgentRunOptions(tools=False))
+
+    assert working[0].reasoning_content == reasoning
+    assert working[1].content.startswith("[tool output elided mid-turn to fit context")
+    assert any("context guard" in event["summary"] for event in events)
+
+
 def collect():
 
     events = []

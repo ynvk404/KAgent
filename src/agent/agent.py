@@ -857,6 +857,9 @@ class Agent:
             if message.content:
                 total += len(message.content) // 4
 
+            if message.reasoning_content:
+                total += len(message.reasoning_content) // 4
+
             for tc in (getattr(message, "tool_calls", None) or []):
 
                 function = tc.function
@@ -1396,6 +1399,9 @@ class Agent:
             for msg in working:
 
                 total += len(msg.content) // 4
+
+                if msg.reasoning_content:
+                    total += len(msg.reasoning_content) // 4
 
                 if msg.tool_calls:
 
