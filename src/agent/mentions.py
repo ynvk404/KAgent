@@ -77,30 +77,31 @@ def walk(
         log.debug("mentions: skipping unreadable directory %s", directory, exc_info=True)
         return
 
-    for entry in entries:
-        if (
-            state["files"] >= INDEX_FILE_CAP
-            or state["dirs"] >= INDEX_DIR_CAP
-        ):
-            return
+    with entries:
+        for entry in entries:
+            if (
+                state["files"] >= INDEX_FILE_CAP
+                or state["dirs"] >= INDEX_DIR_CAP
+            ):
+                return
 
-        if entry.is_dir(follow_symlinks=False):
-            if entry.name in SKIP_DIRS:
+            if entry.is_dir(follow_symlinks=False):
+                if entry.name in SKIP_DIRS:
+                    continue
+                state["dirs"] += 1
+                walk(
+                    entry.path,
+                    idx,
+                    state,
+                    depth + 1,
+                )
                 continue
-            state["dirs"] += 1
-            walk(
-                entry.path,
-                idx,
-                state,
-                depth + 1,
-            )
-            continue
 
-        if not entry.is_file(follow_symlinks=False):
-            continue
+            if not entry.is_file(follow_symlinks=False):
+                continue
 
-        idx.setdefault(entry.name, []).append(entry.path)
-        state["files"] += 1
+            idx.setdefault(entry.name, []).append(entry.path)
+            state["files"] += 1
 
 
 def build_index(cwd: str) -> dict[str, list[str]]:
@@ -127,10 +128,7 @@ def find_by_basename(name: str, limit: int = 6) -> list[str]:
 
     matches = mention_index.get(name, [])
 
-    if (
-        not matches
-        and (time.time() - index_built_at) * 1000 > REBUILD_COOLDOWN_MS
-    ):
+    if (time.time() - index_built_at) * 1000 > REBUILD_COOLDOWN_MS:
         mention_index = build_index(cwd)
         index_built_at = time.time()
         matches = mention_index.get(name, [])
@@ -200,8 +198,9 @@ def expand_file_mentions(input_text: str) -> str:
             continue
 
         try:
+            size = os.path.getsize(real)
             with open(real, "rb") as f:
-                buf = f.read()
+                buf = f.read(min(size, INLINE_BYTE_CAP))
         except Exception as err:
             blocks.append(f"### @{raw}\n[Could not read file: {err}]")
             continue
@@ -209,11 +208,11 @@ def expand_file_mentions(input_text: str) -> str:
         body = buf.decode("utf-8", errors="replace")
         truncated = ""
 
-        if len(buf) > INLINE_BYTE_CAP:
+        if size > INLINE_BYTE_CAP:
             body = body.encode("utf-8")[:INLINE_BYTE_CAP].decode(
                 "utf-8", errors="ignore"
             )
-            truncated = f"\n[... truncated {len(buf)-INLINE_BYTE_CAP} bytes ...]"
+            truncated = f"\n[... truncated {size-INLINE_BYTE_CAP} bytes ...]"
 
         blocks.append(
             f"### @{raw}\nPath: {real}\n\n```text\n{body}\n```\n{truncated}"
