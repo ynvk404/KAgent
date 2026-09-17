@@ -3,6 +3,7 @@ import pytest
 from src.agent.decision_planner import (
     INTENT_KEYWORDS,
     build_decision_plan,
+    has_host_like_text,
     matching_keywords,
     normalize,
 )
@@ -91,6 +92,46 @@ def test_requires_target():
 
     assert plan is not None
     assert "clarify the exact in-scope target" in plan.checklist[0]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "test SQL injection in server.js",
+        "test SQL injection in config.json",
+        "test SQL injection with Python 3.12.6",
+    ],
+)
+def test_file_names_and_version_numbers_do_not_count_as_targets(text):
+    plan = build_decision_plan(
+        text,
+        [skill("sql-injection", "Validate SQL injection")],
+        Target(),
+    )
+
+    assert plan is not None
+    assert has_host_like_text(text) is False
+    assert "clarify the exact in-scope target" in plan.checklist[0]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "test SQL injection on api.example.com",
+        "test SQL injection on 127.0.0.1",
+        "test SQL injection on https://api.example.com/orders",
+    ],
+)
+def test_hostname_ipv4_and_url_text_count_as_targets(text):
+    plan = build_decision_plan(
+        text,
+        [skill("sql-injection", "Validate SQL injection")],
+        Target(),
+    )
+
+    assert plan is not None
+    assert has_host_like_text(text) is True
+    assert "clarify the exact in-scope target" not in "\n".join(plan.checklist)
 
 
 def test_pinned_target():

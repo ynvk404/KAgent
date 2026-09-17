@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import ipaddress
 import re
 from typing import List, Optional, TypedDict
 
@@ -30,6 +31,40 @@ class IntentScore(TypedDict):
 STRONG_KEYWORD_WEIGHT = 5
 WEAK_KEYWORD_WEIGHT = 1
 MIN_RECOMMEND_SCORE = 5
+
+_HOST_TOKEN_RE = re.compile(
+    r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b",
+    re.IGNORECASE,
+)
+_HOST_LABEL_RE = re.compile(
+    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+    re.IGNORECASE,
+)
+_FILE_SUFFIXES = {
+    "cjs",
+    "conf",
+    "config",
+    "css",
+    "go",
+    "html",
+    "ini",
+    "java",
+    "js",
+    "json",
+    "jsx",
+    "md",
+    "mjs",
+    "php",
+    "rb",
+    "sql",
+    "toml",
+    "ts",
+    "tsx",
+    "txt",
+    "xml",
+    "yaml",
+    "yml",
+}
 
 # NOTE: only intents for currently-active, fully rolled-out skills belong
 # here. When a new vulnerability-specific skill (finding-validation, ...)
@@ -581,7 +616,23 @@ def has_host_like_text(s: str) -> bool:
     if re.search(r"https?://[^\s]+", s, re.I):
         return True
 
-    if re.search(r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b", s, re.I):
-        return True
+    for match in _HOST_TOKEN_RE.finditer(s):
+        candidate = match.group(0)
+
+        try:
+            return ipaddress.ip_address(candidate).version == 4
+        except ValueError:
+            pass
+
+        labels = candidate.split(".")
+
+        if (
+            labels[-1].lower() in _FILE_SUFFIXES
+            or all(label.isdecimal() for label in labels)
+        ):
+            continue
+
+        if all(_HOST_LABEL_RE.fullmatch(label) for label in labels):
+            return True
 
     return False
