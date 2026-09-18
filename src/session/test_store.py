@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from src.llm.types import Message
+import src.session.store as session_store
+from src.llm.types import FunctionCall, GeminiProvider, Message, ToolCall, ToolProvider
 from src.session.store import (
     SessionLoadError,
     SessionMemory,
@@ -62,6 +63,37 @@ class TestTmpFilePermissionRace:
         )
 
 
+class TestTempCollisionOwnership:
+    @pytest.mark.asyncio
+    async def test_save_preserves_temp_file_it_did_not_create(
+        self, tmp_path, monkeypatch
+    ):
+        store = Store.new_with_id(tmp_path, "session")
+        monkeypatch.setattr(session_store, "random_tmp_id", lambda: "fixed")
+        temp = Path(f"{store.path}.tmp.fixed")
+        temp.write_text("another writer's temp", encoding="utf-8")
+
+        with pytest.raises(FileExistsError):
+            await store.save([Message(role="user", content="x")])
+
+        assert temp.read_text(encoding="utf-8") == "another writer's temp"
+
+    @pytest.mark.asyncio
+    async def test_snapshot_preserves_temp_file_it_did_not_create(
+        self, tmp_path, monkeypatch
+    ):
+        store = Store.new_with_id(tmp_path / "sessions", "session")
+        monkeypatch.setattr(session_store, "random_tmp_id", lambda: "fixed")
+        temp = Path(f"{store.context_snapshot_path()}.tmp.fixed")
+        temp.parent.mkdir(parents=True)
+        temp.write_text("another writer's temp", encoding="utf-8")
+
+        with pytest.raises(FileExistsError):
+            await store.save_context_snapshot("snapshot")
+
+        assert temp.read_text(encoding="utf-8") == "another writer's temp"
+
+
 class TestMessageProviderState:
     @pytest.mark.asyncio
     async def test_preserves_reasoning_content_across_session_round_trip(self, tmp_path):
@@ -80,6 +112,78 @@ class TestMessageProviderState:
 
         assert loaded.messages[0].content == "answer"
         assert loaded.messages[0].reasoning_content == "provider state"
+
+    @pytest.mark.asyncio
+    async def test_preserves_tool_calls_and_provider_metadata(self, tmp_path):
+        store = Store.new_with_id(tmp_path, new_id())
+        await store.save(
+            [
+                Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            function=FunctionCall("lookup", '{"q":"x"}'),
+                            provider=ToolProvider(
+                                gemini=GeminiProvider("signature")
+                            ),
+                        )
+                    ],
+                )
+            ]
+        )
+
+        tool_call = store.load().messages[0].tool_calls[0]
+
+        assert tool_call.id == "call_1"
+        assert tool_call.function.name == "lookup"
+        assert tool_call.function.arguments == '{"q":"x"}'
+        assert tool_call.provider.gemini.thought_signature == "signature"
+
+
+class TestMalformedPersistence:
+    def test_drops_invalid_memory_before_compaction_can_use_it(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "bad-memory")
+        store.path.write_text(
+            json.dumps(
+                {
+                    "memory": {
+                        "compactions": "many",
+                        "objectives": "not a list",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert store.load().memory is None
+
+    def test_skips_invalid_message_and_tool_call_values(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "bad-message")
+        store.path.write_text(
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "user", "content": ["not text"]},
+                        {
+                            "role": "assistant",
+                            "content": "ok",
+                            "tool_calls": [
+                                {"id": "call", "function": "not an object"}
+                            ],
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        messages = store.load().messages
+
+        assert len(messages) == 1
+        assert messages[0].content == "ok"
+        assert messages[0].tool_calls is None
 
 class TestCrossFormatMemoryCompat:
     @pytest.mark.asyncio
@@ -184,6 +288,17 @@ class TestListDir:
 
         entries = list_dir(tmp_path)
         assert entries[0].preview == "(no user messages)"
+
+    def test_handles_invalid_updated_at_type(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "bad-timestamp")
+        store.path.write_text(
+            json.dumps({"updated_at": ["not a timestamp"], "messages": []}),
+            encoding="utf-8",
+        )
+
+        entries = list_dir(tmp_path)
+
+        assert entries[0].id == "bad-timestamp"
 
 class TestLoadPropagatesCorruption:
     def test_raises_on_unparsable_session(self, tmp_path):

@@ -106,35 +106,46 @@ def _tool_call_from_dict(d: Any) -> ToolCall | None:
     if not isinstance(d, dict):
         return None
 
-    fn_data = d.get("function") or {}
+    fn_data = d.get("function")
+    if not isinstance(fn_data, dict):
+        return None
+
+    name = fn_data.get("name", "")
+    arguments = fn_data.get("arguments", "")
+    call_id = d.get("id", "")
+    call_type = d.get("type", "function")
+    if not all(
+        isinstance(value, str)
+        for value in (name, arguments, call_id, call_type)
+    ) or call_type != "function":
+        return None
+
     function = FunctionCall(
-        name=fn_data.get("name", ""),
-        arguments=fn_data.get("arguments", ""),
+        name=name,
+        arguments=arguments,
     )
 
     provider = None
     provider_data = d.get("provider")
     if isinstance(provider_data, dict):
         gemini_data = provider_data.get("gemini")
-        gemini = (
-            GeminiProvider(
-                thought_signature=gemini_data.get("thought_signature")
-            )
-            if isinstance(gemini_data, dict)
-            else None
-        )
+        gemini = None
+        if isinstance(gemini_data, dict):
+            thought_signature = gemini_data.get("thought_signature")
+            if thought_signature is None or isinstance(thought_signature, str):
+                gemini = GeminiProvider(thought_signature=thought_signature)
         provider = ToolProvider(gemini=gemini)
 
     return ToolCall(
-        id=d.get("id", ""),
+        id=call_id,
         function=function,
-        type=d.get("type", "function"),
+        type=call_type,
         provider=provider,
     )
 
 
 def _tool_calls_from_list(raw: Any) -> list[ToolCall] | None:
-    if not raw:
+    if not isinstance(raw, list) or not raw:
         return None
 
     result = [
@@ -159,11 +170,79 @@ def _memory_from_dict(data: dict) -> SessionMemory | None:
         if canonical in _MEMORY_FIELDS:
             normalized[canonical] = value
 
-    try:
-        return SessionMemory(**normalized)
-    except TypeError:
-        log.warning("session: dropping unreadable session memory", exc_info=True)
+    list_fields = {
+        "objectives",
+        "plan",
+        "completed",
+        "findings",
+        "tested",
+        "files",
+        "commands",
+        "credentials",
+        "todos",
+    }
+    optional_string_fields = {"last_compacted_at", "last_summary"}
+
+    if (
+        not isinstance(normalized.get("version", 1), int)
+        or isinstance(normalized.get("version", 1), bool)
+        or not isinstance(normalized.get("updated_at", ""), str)
+        or not isinstance(normalized.get("compactions", 0), int)
+        or isinstance(normalized.get("compactions", 0), bool)
+        or any(
+            value is not None and not isinstance(value, str)
+            for key, value in normalized.items()
+            if key in optional_string_fields
+        )
+        or any(
+            not isinstance(value, list)
+            or not all(isinstance(item, str) for item in value)
+            for key, value in normalized.items()
+            if key in list_fields
+        )
+    ):
+        log.warning("session: dropping malformed session memory")
         return None
+
+    return SessionMemory(**normalized)
+
+
+_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
+
+
+def _message_from_dict(data: Any) -> Message | None:
+    if not isinstance(data, dict):
+        return None
+
+    role = data.get("role", "user")
+    content = data.get("content", "")
+    if (
+        not isinstance(role, str)
+        or role not in _MESSAGE_ROLES
+        or not isinstance(content, str)
+    ):
+        return None
+
+    reasoning_content = data.get("reasoning_content")
+    if reasoning_content is not None and not isinstance(reasoning_content, str):
+        reasoning_content = None
+
+    tool_call_id = data.get("tool_call_id")
+    if tool_call_id is not None and not isinstance(tool_call_id, str):
+        tool_call_id = None
+
+    name = data.get("name")
+    if name is not None and not isinstance(name, str):
+        name = None
+
+    return Message(
+        role=role,
+        content=content,
+        reasoning_content=reasoning_content,
+        tool_calls=_tool_calls_from_list(data.get("tool_calls")),
+        tool_call_id=tool_call_id,
+        name=name,
+    )
 
 
 class SessionLoadError(RuntimeError):
@@ -216,21 +295,12 @@ class Store:
         if not isinstance(raw, dict):
             raise SessionLoadError(f"session: {self.path}: not a JSON object")
 
+        raw_messages = raw.get("messages", [])
         messages: list[Message] = []
-        for item in raw.get("messages", []):
-            if not isinstance(item, dict):
-                continue
-
-            messages.append(
-                Message(
-                    role=item.get("role", "user"),
-                    content=item.get("content", ""),
-                    reasoning_content=item.get("reasoning_content"),
-                    tool_calls=_tool_calls_from_list(item.get("tool_calls")),
-                    tool_call_id=item.get("tool_call_id"),
-                    name=item.get("name"),
-                )
-            )
+        for item in raw_messages if isinstance(raw_messages, list) else []:
+            message = _message_from_dict(item)
+            if message is not None:
+                messages.append(message)
 
         memory = None
         memory_data = raw.get("memory")
@@ -294,9 +364,11 @@ class Store:
         )
 
         tmp = Path(str(self.path) + ".tmp." + random_tmp_id())
+        created_tmp = False
 
         try:
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            created_tmp = True
             with os.fdopen(fd, "w", encoding="utf8") as f:
                 f.write(body)
                 f.flush()
@@ -308,7 +380,8 @@ class Store:
             _restrict_permissions(self.path)
 
         except Exception:
-            tmp.unlink(missing_ok=True)
+            if created_tmp:
+                tmp.unlink(missing_ok=True)
             raise
 
     async def clear(self) -> None:
@@ -327,9 +400,11 @@ class Store:
             markdown += "\n"
 
         tmp = Path(str(out) + ".tmp." + random_tmp_id())
+        created_tmp = False
 
         try:
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            created_tmp = True
             with os.fdopen(fd, "w", encoding="utf8") as f:
                 f.write(markdown)
                 f.flush()
@@ -340,7 +415,8 @@ class Store:
             _restrict_permissions(out)
 
         except Exception:
-            tmp.unlink(missing_ok=True)
+            if created_tmp:
+                tmp.unlink(missing_ok=True)
             raise
 
         return str(out)
@@ -406,7 +482,7 @@ def list_dir(directory) -> list[Summary]:
                 if updated_at_raw
                 else datetime.fromtimestamp(0)
             )
-        except ValueError:
+        except (TypeError, ValueError):
             updated_at = datetime.fromtimestamp(0)
 
         out.append(
