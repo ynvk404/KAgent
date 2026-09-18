@@ -1,0 +1,728 @@
+# -*- coding: utf-8 -*-
+# KAgent Burp Suite integration.
+#
+# Load in Burp: Extender -> Extensions -> Add -> Extension type: Python.
+# Requires Jython 2.7.x configured in Burp.
+
+from burp import (
+    IBurpExtender,
+    IContextMenuFactory,
+    IHttpListener,
+    IHttpRequestResponse,
+    IScanIssue,
+    IScannerListener,
+    ITab,
+)
+from java.awt import BorderLayout
+from java.net import URL
+from javax.swing import JPanel, JLabel, JTextField, JButton, JCheckBox, JTextArea, JScrollPane, JMenuItem, BoxLayout
+from java.util import ArrayList
+import base64
+import hashlib
+import json
+import traceback
+
+try:
+    import urllib2
+except ImportError:
+    urllib2 = None
+
+
+DEFAULT_BASE_URL = "http://127.0.0.1:8888"
+
+
+class BurpExtender(IBurpExtender, IContextMenuFactory, IHttpListener, IScannerListener, ITab):
+    def registerExtenderCallbacks(self, callbacks):
+        self.callbacks = callbacks
+        self.helpers = callbacks.getHelpers()
+        self.base_url = DEFAULT_BASE_URL
+        self.token = ""
+        self.auto_import_issues = False
+        self.auto_send_proxy = False
+        self.auto_send_repeater = False
+        self.forward_scanner_issues = False
+        self.imported_issue_keys = set()
+        self.auto_sent_keys = set()
+        self.auto_sent_order = []
+
+        callbacks.setExtensionName("KAgent")
+        callbacks.registerContextMenuFactory(self)
+        callbacks.registerHttpListener(self)
+        callbacks.registerScannerListener(self)
+        callbacks.addSuiteTab(self)
+        self.stdout = callbacks.getStdout()
+        self.stderr = callbacks.getStderr()
+        self._println("KAgent Burp extension loaded. Start KAgent with --burp.")
+
+    def getTabCaption(self):
+        return "KAgent"
+
+    def getUiComponent(self):
+        panel = JPanel(BorderLayout())
+        
+        # Tạo một container chính cho phần top, xếp các hàng theo chiều dọc
+        top_container = JPanel()
+        top_container.setLayout(BoxLayout(top_container, BoxLayout.Y_AXIS))
+
+        # Hàng 1: URL và Token
+        row1 = JPanel()
+        row1.add(JLabel("KAgent URL:"))
+        self.url_field = JTextField(self.base_url, 32)
+        row1.add(self.url_field)
+        row1.add(JLabel("Token:"))
+        self.token_field = JTextField(self.token, 24)
+        row1.add(self.token_field)
+
+        # Hàng 2: Các nút bấm (Bao gồm cả Clear)
+        row2 = JPanel()
+        save = JButton("Save", actionPerformed=self._save_settings)
+        status = JButton("Check Status", actionPerformed=self._check_status)
+        pull = JButton("Import Issues", actionPerformed=self._import_issues)
+        requests = JButton("Show requests", actionPerformed=self._show_requests)
+        tasks = JButton("Show tasks", actionPerformed=self._show_tasks)
+        clear = JButton("Clear Bridge", actionPerformed=self._clear_bridge)
+        clear_console = JButton("Clear Console", actionPerformed=self._clear_console)
+        
+        row2.add(save)
+        row2.add(status)
+        row2.add(pull)
+        row2.add(requests)
+        row2.add(tasks)
+        row2.add(clear)
+        row2.add(clear_console)
+
+        # Hàng 3: Các ô Checkbox
+        row3 = JPanel()
+        self.auto_box = JCheckBox("Auto import issues on click actions")
+        self.auto_proxy_box = JCheckBox("Auto-send Proxy responses")
+        self.auto_repeater_box = JCheckBox("Auto-send Repeater responses")
+        self.forward_scanner_box = JCheckBox("Forward Burp Scanner issues")
+        
+        row3.add(self.auto_box)
+        row3.add(self.auto_proxy_box)
+        row3.add(self.auto_repeater_box)
+        row3.add(self.forward_scanner_box)
+
+        # Thêm các hàng vào container chính
+        top_container.add(row1)
+        top_container.add(row2)
+        top_container.add(row3)
+
+        self.log_area = JTextArea(12, 80)
+        self.log_area.setEditable(False)
+        
+        # Đưa container chính lên vị trí NORTH
+        panel.add(top_container, BorderLayout.NORTH)
+        panel.add(JScrollPane(self.log_area), BorderLayout.CENTER)
+        return panel
+
+    def createMenuItems(self, invocation):
+        items = ArrayList()
+        selected = invocation.getSelectedMessages()
+        if not selected:
+            return items
+
+        items.add(JMenuItem("KAgent: send request(s)", actionPerformed=lambda e: self._send_requests(selected)))
+        items.add(JMenuItem("KAgent: send + queue scan", actionPerformed=lambda e: self._send_and_queue(selected, "scan")))
+        items.add(JMenuItem("KAgent: send + queue /plan", actionPerformed=lambda e: self._send_and_queue(selected, "plan")))
+        items.add(JMenuItem("KAgent: queue scan for request(s)", actionPerformed=lambda e: self._queue_task(selected, "scan")))
+        items.add(JMenuItem("KAgent: queue /plan for request(s)", actionPerformed=lambda e: self._queue_task(selected, "plan")))
+        items.add(JMenuItem("KAgent: add host/domain to scope", actionPerformed=lambda e: self._queue_task(selected, "scope")))
+        items.add(JMenuItem("KAgent: import issues into Burp", actionPerformed=self._import_issues))
+        items.add(JMenuItem("Burp: active scan selected request(s)", actionPerformed=lambda e: self._burp_active_scan(selected)))
+        return items
+
+    def _save_settings(self, _event):
+        self.base_url = self.url_field.getText().strip().rstrip("/") or DEFAULT_BASE_URL
+        self.token = self.token_field.getText().strip()
+        self.auto_import_issues = self.auto_box.isSelected()
+        self.auto_send_proxy = self.auto_proxy_box.isSelected()
+        self.auto_send_repeater = self.auto_repeater_box.isSelected()
+        self.forward_scanner_issues = self.forward_scanner_box.isSelected()
+        self._log("settings saved: %s" % self.base_url)
+
+    def _check_status(self, _event):
+        try:
+            data = self._get_json("/status")
+            self._log("status: %s" % json.dumps(data))
+        except Exception as exc:
+            self._log_error("status failed", exc)
+
+    def _send_requests(self, messages):
+        count = 0
+        for msg in messages:
+            try:
+                payload = self._message_to_ingest_payload(msg)
+                self._post_json("/ingest", payload)
+                count += 1
+            except Exception as exc:
+                self._log_error("send request failed", exc)
+        self._log("sent %d request(s) to KAgent capture" % count)
+        self._maybe_import_issues()
+
+    def _send_and_queue(self, messages, action):
+        self._send_requests(messages)
+        self._queue_task(messages, action)
+
+    def _queue_task(self, messages, action):
+        count = 0
+        for msg in messages:
+            try:
+                payload = self._message_to_task_payload(msg, action)
+                self._post_json("/burp/task", payload)
+                count += 1
+            except Exception as exc:
+                self._log_error("queue %s failed" % action, exc)
+        self._log("queued %d %s task(s) for KAgent" % (count, action))
+        self._maybe_import_issues()
+
+    def _burp_active_scan(self, messages):
+        count = 0
+        for msg in messages:
+            try:
+                service = msg.getHttpService()
+                req_info = self.helpers.analyzeRequest(service, msg.getRequest())
+                url = req_info.getUrl()
+                self.callbacks.doActiveScan(
+                    service.getHost(),
+                    service.getPort(),
+                    service.getProtocol() == "https",
+                    msg.getRequest(),
+                )
+                count += 1
+                self._log("sent to Burp active scanner: %s" % url.toString())
+            except Exception as exc:
+                self._log_error("Burp active scan failed", exc)
+        self._log("sent %d request(s) to Burp active scanner" % count)
+
+    def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
+        if messageIsRequest:
+            return
+        if not self._should_auto_forward(toolFlag):
+            return
+        if self._is_bridge_message(messageInfo):
+            return
+        key = self._message_key(messageInfo)
+        if key in self.auto_sent_keys:
+            return
+        try:
+            payload = self._message_to_ingest_payload(messageInfo)
+            payload["notes"] = "Auto-forwarded from Burp listener"
+            self._post_json("/ingest", payload)
+            self._remember_auto_key(key)
+            self._log("auto-sent %s %s" % (payload.get("method", ""), payload.get("url", "")))
+        except Exception as exc:
+            self._log_error("auto-send failed", exc)
+
+    def newScanIssue(self, issue):
+        if not self.forward_scanner_issues:
+            return
+        try:
+            self._post_json("/burp/issues", self._scanner_issue_to_payload(issue))
+            self._log("forwarded Burp Scanner issue: %s" % issue.getIssueName())
+        except Exception as exc:
+            self._log_error("forward scanner issue failed", exc)
+
+    def _import_issues(self, _event=None):
+        try:
+            issues = self._get_json("/burp/issues")
+            if not isinstance(issues, list):
+                self._log("unexpected issue response: %s" % json.dumps(issues))
+                return
+            imported = 0
+            for item in issues:
+                key = self._issue_import_key(item)
+                if key in self.imported_issue_keys:
+                    continue
+                self.callbacks.addScanIssue(KAgentIssue(item, self.helpers))
+                self.imported_issue_keys.add(key)
+                imported += 1
+            self._log("imported %d KAgent issue(s) into Burp" % imported)
+        except Exception as exc:
+            self._log_error("Import issues failed", exc)
+
+    def _maybe_import_issues(self):
+        if self.auto_import_issues:
+            self._import_issues()
+
+    def _issue_import_key(self, item):
+        evidence = item.get("rawRequestB64", "") or item.get("detail", "")
+        return "%s|%s|%s" % (item.get("id", ""), item.get("url", ""), evidence[:64])
+
+    def _show_requests(self, _event=None):
+        try:
+            data = self._get_json("/requests")
+            self._log("recent KAgent requests: %s" % json.dumps(data[:10]))
+        except Exception as exc:
+            self._log_error("Show requests failed", exc)
+
+    def _show_tasks(self, _event=None):
+        try:
+            data = self._get_json("/burp/tasks")
+            self._log("queued KAgent tasks: %s" % json.dumps(data[:10]))
+        except Exception as exc:
+            self._log_error("Show tasks failed", exc)
+
+    def _clear_bridge(self, _event=None):
+        try:
+            self._delete("/clear")
+            self.imported_issue_keys.clear()
+            self.auto_sent_keys.clear()
+            self.auto_sent_order = []
+            self._log("cleared KAgent bridge state")
+        except Exception as exc:
+            self._log_error("clear bridge failed", exc)
+
+    def _clear_console(self, _event=None):
+        try:
+            self.log_area.setText("")
+            self._println("console cleared")
+        except Exception as exc:
+            self._log_error("clear console failed", exc)
+
+    def _message_to_ingest_payload(self, msg):
+        service = msg.getHttpService()
+        request = msg.getRequest()
+        response = msg.getResponse()
+        req_info = self.helpers.analyzeRequest(service, request)
+        url = req_info.getUrl().toString()
+        method = req_info.getMethod()
+
+        payload = {
+            "kind": "burp",
+            "id": "burp-%s" % self._stable_id(url, method, request),
+            "method": method,
+            "url": url,
+            "requestHeaders": self._headers(req_info.getHeaders()),
+            "requestBody": self._body_to_text(request, req_info.getBodyOffset()),
+            "rawRequestB64": self._b64encode(self._raw_bytes(request)),
+            "source": "burp",
+        }
+        if response:
+            resp_info = self.helpers.analyzeResponse(response)
+            payload["status"] = resp_info.getStatusCode()
+            payload["responseHeaders"] = self._headers(resp_info.getHeaders())
+            payload["respBody"] = self._body_to_text(response, resp_info.getBodyOffset())
+            payload["rawResponseB64"] = self._b64encode(self._raw_bytes(response))
+        return payload
+
+    def _message_to_task_payload(self, msg, action):
+        service = msg.getHttpService()
+        req_info = self.helpers.analyzeRequest(service, msg.getRequest())
+        url = req_info.getUrl()
+        host = service.getHost()
+        payload = {
+            "action": action,
+            "target": url.toString() if action != "scope" else host,
+            "host": host,
+            "method": req_info.getMethod(),
+            "url": url.toString(),
+            "rawRequestB64": self._b64encode(self._raw_bytes(msg.getRequest())),
+            "notes": "Queued from Burp context menu",
+        }
+        return payload
+
+    def _headers(self, headers):
+        out = []
+        for header in headers:
+            text = str(header)
+            idx = text.find(":")
+            if idx > 0:
+                out.append({"name": text[:idx].strip(), "value": text[idx + 1:].strip()})
+        return out
+
+    def _body_to_text(self, data, offset):
+        try:
+            if data is None:
+                return ""
+            raw = self._raw_bytes(data[offset:])
+            try:
+                return raw.decode("utf-8", "replace")
+            except AttributeError:
+                return raw.encode("latin-1", "replace").decode("utf-8", "replace")
+        except Exception:
+            return ""
+
+    def _raw_bytes(self, data):
+        return "".join(chr((int(b) + 256) % 256) for b in data)
+
+    def _b64encode(self, raw):
+        encoded = base64.b64encode(raw)
+        return encoded.decode("ascii") if hasattr(encoded, "decode") else encoded
+
+    def _stable_id(self, url, method, request):
+        digest = hashlib.sha1()
+        digest.update(method.encode("utf-8") if hasattr(method, "encode") else str(method))
+        digest.update(b"|" if hasattr(b"|", "decode") else "|")
+        digest.update(url.encode("utf-8") if hasattr(url, "encode") else str(url))
+        digest.update(b"|" if hasattr(b"|", "decode") else "|")
+        digest.update(self._raw_bytes(request).encode("latin-1", "replace") if hasattr(self._raw_bytes(request), "encode") else self._raw_bytes(request))
+        return digest.hexdigest()[:16]
+
+    def _scanner_issue_to_payload(self, issue):
+        url = issue.getUrl().toString()
+        messages = issue.getHttpMessages()
+        raw_req = None
+        raw_resp = None
+        method = None
+        if messages and len(messages) > 0:
+            first = messages[0]
+            if first.getRequest():
+                raw_req = self._b64encode(self._raw_bytes(first.getRequest()))
+                try:
+                    method = self.helpers.analyzeRequest(first.getHttpService(), first.getRequest()).getMethod()
+                except Exception:
+                    method = None
+            if first.getResponse():
+                raw_resp = self._b64encode(self._raw_bytes(first.getResponse()))
+        payload = {
+            "id": "burp-scanner-%s" % self._stable_id(url, issue.getIssueName(), issue.getIssueName()),
+            "title": issue.getIssueName(),
+            "severity": issue.getSeverity(),
+            "confidence": issue.getConfidence(),
+            "url": url,
+            "method": method,
+            "detail": issue.getIssueDetail() or issue.getIssueBackground() or "",
+            "remediation": issue.getRemediationDetail() or issue.getRemediationBackground(),
+        }
+        if raw_req:
+            payload["rawRequestB64"] = raw_req
+        if raw_resp:
+            payload["rawResponseB64"] = raw_resp
+        return payload
+
+    def _should_auto_forward(self, toolFlag):
+        try:
+            if toolFlag == self.callbacks.TOOL_PROXY:
+                return self.auto_send_proxy
+            if toolFlag == self.callbacks.TOOL_REPEATER:
+                return self.auto_send_repeater
+        except Exception:
+            return False
+        return False
+
+    def _is_bridge_message(self, msg):
+        try:
+            service = msg.getHttpService()
+            if service.getHost() not in ["127.0.0.1", "localhost", "::1", "[::1]"]:
+                return False
+            bridge_port = self._bridge_port()
+            return bridge_port is not None and service.getPort() == bridge_port
+        except Exception:
+            return False
+
+    def _bridge_port(self):
+        try:
+            url = URL(self.base_url)
+            port = url.getPort()
+            if port == -1:
+                port = 443 if url.getProtocol() == "https" else 80
+            return port
+        except Exception:
+            return None
+
+    def _message_key(self, msg):
+        service = msg.getHttpService()
+        req = msg.getRequest()
+        info = self.helpers.analyzeRequest(service, req)
+        resp = msg.getResponse()
+        status = ""
+        if resp:
+            try:
+                status = str(self.helpers.analyzeResponse(resp).getStatusCode())
+            except Exception:
+                status = ""
+        digest = hashlib.sha1()
+        digest.update(self._raw_bytes(req))
+        return "%s|%s|%s|%s" % (
+            info.getMethod(),
+            info.getUrl().toString(),
+            digest.hexdigest(),
+            status,
+        )
+
+    def _remember_auto_key(self, key):
+        self.auto_sent_keys.add(key)
+        self.auto_sent_order.append(key)
+        if len(self.auto_sent_order) > 1000:
+            old = self.auto_sent_order.pop(0)
+            self.auto_sent_keys.discard(old)
+
+    def _auth_headers(self, extra=None):
+        headers = {}
+        if extra:
+            headers.update(extra)
+        if self.token:
+            headers["X-KAgent-Token"] = self.token
+        return headers
+
+    def _post_json(self, path, payload):
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib2.Request(
+            self.base_url + path,
+            body,
+            self._auth_headers({
+                "Accept": "application/json; charset=utf-8",
+                "Content-Type": "application/json; charset=utf-8",
+            }),
+        )
+        res = urllib2.urlopen(req, timeout=10)
+        status = res.getcode()
+        text = res.read()
+        if status < 200 or status >= 300:
+            raise Exception(u"HTTP %s: %s" % (status, self._response_text(text)))
+        return text
+
+    def _get_json(self, path):
+        req = urllib2.Request(self.base_url + path, None, self._auth_headers())
+        res = urllib2.urlopen(req, timeout=10)
+        text = res.read()
+        return self._decode_json_response(path, text)
+
+    def _decode_json_response(self, path, raw):
+        text = self._strip_bom(self._response_text(raw)).strip()
+        try:
+            return json.loads(text)
+        except ValueError as exc:
+            decoder = json.JSONDecoder()
+            try:
+                data, end = decoder.raw_decode(text)
+                trailing = text[end:].strip()
+                if trailing:
+                    self._log(
+                        "warning: ignored %d trailing byte(s) after JSON from %s"
+                        % (len(trailing), path)
+                    )
+                return data
+            except Exception:
+                preview = text[:500].replace("\n", "\\n")
+                raise Exception(
+                    u"invalid JSON from %s: %s; preview=%s"
+                    % (path, self._safe_unicode(exc), preview)
+                )
+
+    def _response_text(self, raw):
+        if raw is None:
+            return u""
+        if hasattr(raw, "decode"):
+            try:
+                return raw.decode("utf-8-sig", "replace")
+            except TypeError:
+                try:
+                    return raw.decode("utf-8-sig")
+                except Exception:
+                    return self._safe_unicode(raw)
+            except Exception:
+                return self._safe_unicode(raw)
+        return self._safe_unicode(raw)
+
+    def _strip_bom(self, text):
+        text = self._safe_unicode(text)
+        if text.startswith(u"\ufeff"):
+            return text[1:]
+        if text.startswith(u"\xef\xbb\xbf"):
+            return text[3:]
+        return text
+
+    def _safe_unicode(self, value):
+        if value is None:
+            return u""
+        try:
+            unicode_type = unicode
+        except NameError:
+            unicode_type = str
+        try:
+            if isinstance(value, unicode_type):
+                return value
+        except Exception:
+            pass
+        if hasattr(value, "decode"):
+            try:
+                return value.decode("utf-8-sig", "replace")
+            except TypeError:
+                try:
+                    return value.decode("utf-8-sig")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        try:
+            return unicode_type(value)
+        except Exception:
+            try:
+                return str(value).decode("utf-8", "replace")
+            except Exception:
+                return u"<unprintable>"
+
+    def _delete(self, path):
+        req = urllib2.Request(self.base_url + path, None, self._auth_headers())
+        req.get_method = lambda: "DELETE"
+        res = urllib2.urlopen(req, timeout=10)
+        return res.read()
+
+    def _log(self, message):
+        message = self._safe_unicode(message)
+        try:
+            self.log_area.append(message + u"\n")
+        except Exception:
+            pass
+        self._println(message)
+
+    def _log_error(self, prefix, exc):
+        self._log(u"%s: %s" % (self._safe_unicode(prefix), self._safe_unicode(exc)))
+        try:
+            traceback.print_exc(file=self.stderr)
+        except Exception:
+            pass
+
+    def _println(self, message):
+        message = self._safe_unicode(message)
+        try:
+            self.stdout.println(u"[KAgent] " + message)
+        except Exception:
+            try:
+                self.stdout.println(("[KAgent] " + message).encode("utf-8", "replace"))
+            except Exception:
+                pass
+
+
+class KAgentIssue(IScanIssue):
+    def __init__(self, data, helpers):
+        self.data = data
+        self.helpers = helpers
+        self._issue_url = URL(self.data.get("url", "http://localhost/"))
+        port = self._issue_url.getPort()
+        if port == -1:
+            port = 443 if self._issue_url.getProtocol() == "https" else 80
+        self._http_service = self.helpers.buildHttpService(
+            self._issue_url.getHost(),
+            port,
+            self._issue_url.getProtocol() == "https",
+        )
+        self._http_message = self._build_http_message()
+
+    def getUrl(self):
+        return self._issue_url
+
+    def getIssueName(self):
+        return self.data.get("title", "KAgent Issue")
+
+    def getIssueType(self):
+        return 0x08000000
+
+    def getSeverity(self):
+        sev = str(self.data.get("severity", "Information")).lower()
+        mapping = {
+            "critical": "High",
+            "high": "High",
+            "medium": "Medium",
+            "low": "Low",
+            "info": "Information",
+            "information": "Information",
+        }
+        return mapping.get(sev, "Information")
+
+    def getConfidence(self):
+        conf = str(self.data.get("confidence", "Tentative")).lower()
+        if conf in ["certain", "firm", "tentative"]:
+            return conf.title()
+        return "Tentative"
+
+    def getIssueBackground(self):
+        return "Imported from KAgent confirmed findings or bridge issue queue."
+
+    def getRemediationBackground(self):
+        return None
+
+    def getIssueDetail(self):
+        parts = [self.data.get("detail", "")]
+        if self.data.get("method"):
+            parts.append("<p><b>Method:</b> %s</p>" % self.data.get("method"))
+        if self.data.get("parameter"):
+            parts.append("<p><b>Parameter:</b> %s</p>" % self.data.get("parameter"))
+        if self.data.get("path"):
+            parts.append("<p><b>KAgent report:</b> %s</p>" % self.data.get("path"))
+        return "\n".join(parts)
+
+    def getRemediationDetail(self):
+        return self.data.get("remediation", None)
+
+    def getHttpMessages(self):
+        return [self._http_message] if self._http_message else None
+
+    def getHttpService(self):
+        return self._http_service
+
+    def _build_http_message(self):
+        raw_req = self._b64_to_bytes(self.data.get("rawRequestB64"))
+        if not raw_req:
+            raw_req = self._fallback_request()
+        raw_resp = self._b64_to_bytes(self.data.get("rawResponseB64"))
+        return self.callbacks_make_http_message(raw_req, raw_resp)
+
+    def callbacks_make_http_message(self, request, response):
+        return HttpRequestResponse(self._http_service, request, response)
+
+    def _fallback_request(self):
+        path = self._issue_url.getPath() or "/"
+        if self._issue_url.getQuery():
+            path += "?" + self._issue_url.getQuery()
+        method = self.data.get("method", "GET")
+        host = self._issue_url.getHost()
+        port = self._issue_url.getPort()
+        default_port = 443 if self._issue_url.getProtocol() == "https" else 80
+        if ":" in host and not host.startswith("["):
+            host = "[%s]" % host
+        if port != -1 and port != default_port:
+            host = "%s:%s" % (host, port)
+        req = "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: KAgent\r\n\r\n" % (
+            method,
+            path,
+            host,
+        )
+        return self.helpers.stringToBytes(req)
+
+    def _b64_to_bytes(self, value):
+        if not value:
+            return None
+        try:
+            return base64.b64decode(value)
+        except Exception:
+            return None
+
+
+class HttpRequestResponse(IHttpRequestResponse):
+    def __init__(self, service, request, response):
+        self._service = service
+        self._request = request
+        self._response = response
+
+    def getRequest(self):
+        return self._request
+
+    def setRequest(self, request):
+        self._request = request
+
+    def getResponse(self):
+        return self._response
+
+    def setResponse(self, response):
+        self._response = response
+
+    def getHttpService(self):
+        return self._service
+
+    def setHttpService(self, service):
+        self._service = service
+
+    def getComment(self):
+        return "Imported from KAgent"
+
+    def setComment(self, _comment):
+        pass
+
+    def getHighlight(self):
+        return None
+
+    def setHighlight(self, _color):
+        pass
