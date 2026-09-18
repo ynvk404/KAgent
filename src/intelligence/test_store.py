@@ -1,8 +1,13 @@
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import os
 import pytest
+import stat
+from threading import Event, Thread
 
+from . import store as intelligence_store
 from .store import (
     IntelligenceScenario,
     IntelligenceStore,
@@ -111,6 +116,23 @@ class TestIntelligenceStorePersistence:
         mode = store.project_path.stat().st_mode & 0o777
         assert mode == 0o600
 
+    def test_append_creates_file_private_before_chmod(
+        self, store: IntelligenceStore, sample_scenario: IntelligenceScenario, monkeypatch
+    ):
+        observed_modes = []
+        real_chmod = os.chmod
+
+        def spy_chmod(path, mode):
+            if Path(path) == store.project_path:
+                observed_modes.append(stat.S_IMODE(os.stat(path).st_mode))
+            real_chmod(path, mode)
+
+        monkeypatch.setattr(os, "chmod", spy_chmod)
+
+        store.append_batch([sample_scenario], scope="project")
+
+        assert observed_modes == [0o600]
+
     @pytest.mark.asyncio
     async def test_append_deduplication(self, store: IntelligenceStore, sample_scenario: IntelligenceScenario):
         await store.append(sample_scenario)
@@ -143,6 +165,123 @@ class TestIntelligenceStorePersistence:
         assert scenarios[0].id == "valid-1"
         assert scenarios[1].id == "valid-2"
 
+    def test_prune_temp_is_private_before_chmod(self, store: IntelligenceStore, monkeypatch):
+        store.project_path.parent.mkdir(parents=True)
+        scenarios = [
+            IntelligenceScenario(id=f"scenario-{i}", title=f"Scenario {i}")
+            for i in range(2)
+        ]
+        store.project_path.write_text(
+            "".join(json.dumps(s.to_wire()) + "\n" for s in scenarios),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(intelligence_store, "MAX_SCENARIOS_PER_FILE", 1)
+        monkeypatch.setattr(intelligence_store.secrets, "token_hex", lambda _: "fixed")
+        observed_modes = []
+        real_chmod = os.chmod
+
+        def spy_chmod(path, mode):
+            if str(path).endswith(".tmp.fixed"):
+                observed_modes.append(stat.S_IMODE(os.stat(path).st_mode))
+            real_chmod(path, mode)
+
+        monkeypatch.setattr(os, "chmod", spy_chmod)
+
+        store.prune_if_too_long(store.project_path, "project")
+
+        assert observed_modes == [0o600]
+
+    def test_prune_preserves_colliding_temp_file(self, store: IntelligenceStore, monkeypatch):
+        store.project_path.parent.mkdir(parents=True)
+        scenarios = [
+            IntelligenceScenario(id=f"scenario-{i}", title=f"Scenario {i}")
+            for i in range(2)
+        ]
+        original = "".join(json.dumps(s.to_wire()) + "\n" for s in scenarios)
+        store.project_path.write_text(original, encoding="utf-8")
+        monkeypatch.setattr(intelligence_store, "MAX_SCENARIOS_PER_FILE", 1)
+        monkeypatch.setattr(intelligence_store.secrets, "token_hex", lambda _: "fixed")
+        temp = Path(f"{store.project_path}.tmp.fixed")
+        temp.write_text("another writer's data", encoding="utf-8")
+
+        store.prune_if_too_long(store.project_path, "project")
+
+        assert temp.read_text(encoding="utf-8") == "another writer's data"
+        assert store.project_path.read_text(encoding="utf-8") == original
+
+    def test_lock_timeout_does_not_append_without_cross_process_lock(
+        self, store: IntelligenceStore, sample_scenario: IntelligenceScenario, monkeypatch
+    ):
+        class TimedOutLock:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                raise intelligence_store.filelock.Timeout("timed out")
+
+            def __exit__(self, *_args):
+                return False
+
+        monkeypatch.setattr(intelligence_store.filelock, "FileLock", TimedOutLock)
+
+        with pytest.raises(intelligence_store.filelock.Timeout):
+            store.append_batch([sample_scenario], scope="project")
+
+        assert not store.project_path.exists()
+
+    def test_clear_serializes_with_inflight_append(
+        self, temp_store_paths, monkeypatch
+    ):
+        cwd, home = temp_store_paths
+        appending_store = IntelligenceStore(cwd=cwd, home=home)
+        clearing_store = IntelligenceStore(cwd=cwd, home=home)
+        appending_store.project_path.parent.mkdir(parents=True)
+        appending_store.project_path.write_text(
+            json.dumps(IntelligenceScenario(id="old", title="Old").to_wire()) + "\n",
+            encoding="utf-8",
+        )
+
+        append_read = Event()
+        release_append = Event()
+        original_read = appending_store.read_scenarios
+
+        def pause_after_read(path, scope):
+            result = original_read(path, scope)
+            append_read.set()
+            release_append.wait(timeout=1)
+            return result
+
+        monkeypatch.setattr(appending_store, "read_scenarios", pause_after_read)
+        append_thread = Thread(
+            target=lambda: appending_store.append_batch(
+                [IntelligenceScenario(id="new", title="New")], "project"
+            )
+        )
+        append_thread.start()
+        assert append_read.wait(timeout=1)
+
+        clear_started = Event()
+        real_write_text = Path.write_text
+
+        def spy_write_text(path, data, *args, **kwargs):
+            if path == appending_store.project_path and data == "":
+                clear_started.set()
+            return real_write_text(path, data, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", spy_write_text)
+        clear_thread = Thread(
+            target=lambda: asyncio.run(clearing_store.clear("project"))
+        )
+        clear_thread.start()
+        clear_started.wait(timeout=0.1)
+        release_append.set()
+        append_thread.join(timeout=1)
+        clear_thread.join(timeout=1)
+
+        assert intelligence_store.read_jsonl(
+            appending_store.project_path, "project"
+        ) == []
+
 class TestIntelligenceSearch:
     def test_search_matching_and_ranking(self, store: IntelligenceStore):
         s1 = IntelligenceScenario(
@@ -163,6 +302,20 @@ class TestIntelligenceSearch:
         assert len(results) > 0
         top_result = results[0]
         assert top_result["scenario"].id == "s1"
+
+    def test_search_does_not_match_short_tokens_inside_unrelated_words(
+        self, store: IntelligenceStore
+    ):
+        unrelated = IntelligenceScenario(
+            id="hidden",
+            title="Hidden deployment setting",
+            confidence=1.0,
+        )
+        store.append_batch([unrelated], scope="project")
+
+        results = store.search("id", limit=50)
+
+        assert all(result["scenario"].id != "hidden" for result in results)
 
 class TestContinuousLearning:
     @pytest.mark.asyncio

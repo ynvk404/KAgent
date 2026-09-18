@@ -244,9 +244,9 @@ def _cross_process_lock(path: Path):
             yield
     except filelock.Timeout:
         logger.warning(
-            "Timed out waiting for cross-process lock on %s; proceeding without it", path
+            "Timed out waiting for cross-process lock on %s; not proceeding", path
         )
-        yield
+        raise
 
 
 class IntelligenceStore:
@@ -369,7 +369,12 @@ class IntelligenceStore:
 
                 path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
-                with open(path, "a", encoding="utf-8") as f:
+                fd = os.open(
+                    path,
+                    os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                    0o600,
+                )
+                with os.fdopen(fd, "a", encoding="utf-8") as f:
                     for item in fresh:
                         f.write(json.dumps(item.to_wire(), ensure_ascii=False) + "\n")
                     f.flush()
@@ -385,6 +390,8 @@ class IntelligenceStore:
                 return fresh
 
     def prune_if_too_long(self, path: Path, scope: IntelligenceScope) -> None:
+        tmp: Path | None = None
+        created_tmp = False
         try:
             scenarios = self.read_scenarios(path, scope)
             if len(scenarios) <= MAX_SCENARIOS_PER_FILE:
@@ -393,7 +400,9 @@ class IntelligenceStore:
             kept = scenarios[-MAX_SCENARIOS_PER_FILE:]
             tmp = Path(f"{path}.tmp.{secrets.token_hex(3)}")
 
-            with open(tmp, "w", encoding="utf-8") as f:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            created_tmp = True
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 for item in kept:
                     f.write(json.dumps(item.to_wire(), ensure_ascii=False) + "\n")
                 f.flush()
@@ -403,6 +412,8 @@ class IntelligenceStore:
             os.replace(tmp, path)  # atomic on POSIX
             self.invalidate(path)
         except Exception:
+            if created_tmp and tmp is not None:
+                tmp.unlink(missing_ok=True)
             logger.exception(
                 "Failed to prune %s (scope=%s) to %d scenarios", path, scope, MAX_SCENARIOS_PER_FILE
             )
@@ -415,12 +426,14 @@ class IntelligenceStore:
             targets.append(self.personal_path)
 
         for path in targets:
-            try:
-                if path.exists():
-                    path.write_text("", encoding="utf-8")
-                self.invalidate(path)
-            except Exception:
-                logger.exception("Failed to clear intelligence file %s", path)
+            with self.write_lock:
+                with _cross_process_lock(path):
+                    try:
+                        if path.exists():
+                            path.write_text("", encoding="utf-8")
+                        self.invalidate(path)
+                    except Exception:
+                        logger.exception("Failed to clear intelligence file %s", path)
 
     def get_stats(self) -> dict[str, int]:
         return {
@@ -1038,10 +1051,17 @@ def score_scenario(s: IntelligenceScenario, tokens: list[str]) -> tuple[float, l
 
 
 def token_matches_lower(text: str, token: str) -> bool:
-    if token in text:
+    boundary = r"(?<![a-z0-9_.-])" + re.escape(token) + r"(?![a-z0-9_.-])"
+    if re.search(boundary, text):
         return True
     if "." in token:
-        return token.replace(".", " ") in text
+        phrase = token.replace(".", " ")
+        return bool(
+            re.search(
+                r"(?<![a-z0-9_.-])" + re.escape(phrase) + r"(?![a-z0-9_.-])",
+                text,
+            )
+        )
     return False
 
 
