@@ -78,6 +78,7 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(
             data,
             ensure_ascii=False,
+            default=str,
         )
 
 def _safe_extra(args: dict[str, Any] | None) -> dict[str, Any]:
@@ -134,7 +135,7 @@ def init(path: str | Path | None = None) -> None:
 
         handler.setFormatter(JsonFormatter())
 
-        log.handlers.clear()
+        _close_handlers(log)
         log.addHandler(handler)
         log.setLevel(_log_level())
         log.disabled = False
@@ -143,12 +144,18 @@ def init(path: str | Path | None = None) -> None:
         _current_logger = log
 
     except Exception as err:
-        log.handlers.clear()
+        _close_handlers(log)
         log.addHandler(logging.NullHandler())
         log.disabled = True
 
         _init_error = err
         _current_logger = log
+
+
+def _close_handlers(log: logging.Logger) -> None:
+    for handler in list(log.handlers):
+        log.removeHandler(handler)
+        handler.close()
 
 
 def init_error() -> Exception | None:

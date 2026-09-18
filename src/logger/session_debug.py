@@ -106,7 +106,7 @@ class FileSessionDebugLog(SessionDebugLog):
     ) -> None:
         self._seq += 1
 
-        payload: dict[str, Any] = {
+        metadata: dict[str, Any] = {
             "ts": (
                 datetime.now(UTC)
                 .isoformat()
@@ -117,8 +117,12 @@ class FileSessionDebugLog(SessionDebugLog):
             "session_id": self._session_id,
         }
 
+        payload: dict[str, Any] = {}
         if data:
             payload.update(data)
+        # Event metadata identifies the actual persisted record and must not
+        # be forgeable through the public data payload.
+        payload.update(metadata)
 
         try:
             self._path.parent.mkdir(

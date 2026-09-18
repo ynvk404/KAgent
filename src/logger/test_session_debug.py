@@ -131,3 +131,21 @@ def test_debug_log_is_not_world_readable(tmp_path: Path):
     log.write("session_start")
 
     assert path.stat().st_mode & 0o077 == 0
+
+
+def test_data_cannot_overwrite_session_debug_metadata(tmp_path: Path):
+    path = tmp_path / "session.jsonl"
+    log = create_session_debug_log(
+        SessionDebugOptions(enabled=True, path=str(path), session_id="real-session")
+    )
+
+    log.write(
+        "real-event",
+        {"ts": "forged", "seq": 0, "event": "forged", "session_id": "forged"},
+    )
+
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["event"] == "real-event"
+    assert record["session_id"] == "real-session"
+    assert record["seq"] == 1
+    assert record["ts"] != "forged"
