@@ -263,7 +263,10 @@ class Handler(BaseHTTPRequestHandler):
 
         on_event = self.server.on_event
         if on_event is not None:
-            on_event(event_text(path, parsed))
+            try:
+                on_event(event_text(path, parsed))
+            except Exception:
+                logger.warning("browser ingest callback failed", exc_info=True)
 
         self.send_json({"ok": True}, status=202, extra_headers=cors)
 

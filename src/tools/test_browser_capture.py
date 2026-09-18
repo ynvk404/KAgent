@@ -156,6 +156,26 @@ class TestBrowserCaptureRequestsToolLimitClamp:
 
 
 class TestBrowserCaptureEndpointsToolListingCaps:
+    def test_endpoint_parameter_names_are_sorted_for_stable_output(self):
+        store = CaptureStore()
+        store.ingest(
+            {
+                "url": "https://x.test/api?zeta=1&alpha=2&omega=3&beta=4",
+                "method": "POST",
+                "requestBody": {
+                    "zeta": "1",
+                    "alpha": "2",
+                    "omega": "3",
+                    "beta": "4",
+                },
+            }
+        )
+
+        endpoint = store.list_endpoints()[0]
+
+        assert endpoint.query_params == ["alpha", "beta", "omega", "zeta"]
+        assert endpoint.body_params == ["alpha", "beta", "omega", "zeta"]
+
     @pytest.mark.asyncio
     async def test_limits_endpoints_listed_and_notes_omission(self):
         eps = [

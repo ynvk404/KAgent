@@ -12,6 +12,8 @@ from .mcp_server import (
     to_dict,
     format_iso,
     text_result,
+    mcp_int_arg,
+    mcp_string_arg,
     ParsedArgs,
     DEFAULT_PORT,
 )
@@ -100,6 +102,24 @@ def test_text_result():
     assert res.isError is False
     assert len(res.content) == 1
     assert getattr(res.content[0], "text", None) == "Hello World"
+
+
+def test_mcp_argument_helpers_discard_wrong_types_and_bound_integers():
+    arguments = {
+        "url_contains": 42,
+        "method": ["GET"],
+        "limit": "500",
+        "body_max_chars": "999999",
+    }
+
+    assert mcp_string_arg(arguments, "url_contains") is None
+    assert mcp_string_arg(arguments, "method") is None
+    assert mcp_int_arg(arguments, "limit", 50, 1, 500) == 50
+    assert mcp_int_arg(arguments, "body_max_chars", 4000, 0) == 4000
+    assert mcp_int_arg({"body_max_chars": True}, "body_max_chars", 4000, 0) == 4000
+    assert mcp_int_arg({"body_max_chars": -1}, "body_max_chars", 4000, 0) == 0
+    assert mcp_int_arg({"body_max_chars": 999999}, "body_max_chars", 4000, 0) == 999999
+    assert mcp_int_arg({"limit": 999999}, "limit", 50, 1, 500) == 500
 
 
 @pytest.fixture

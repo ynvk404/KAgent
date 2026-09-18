@@ -101,3 +101,31 @@ def test_cors_only_reflects_valid_extension_origins(store):
             assert "Access-Control-Allow-Credentials" not in response.headers
     finally:
         handle.close()
+
+
+def test_callback_failure_does_not_fail_a_persisted_ingest(store):
+    def failing_callback(event: str) -> None:
+        raise RuntimeError("notification unavailable")
+
+    handle = start_ingest_server(
+        IngestServerOptions(
+            store=store,
+            port=0,
+            token="secret-token",
+            on_event=failing_callback,
+        )
+    )
+    try:
+        response = requests.post(
+            f"{handle.url}/ingest",
+            headers={
+                "Content-Type": "application/json",
+                "X-KAgent-Token": "secret-token",
+            },
+            json={"url": "https://app.example.com/api", "method": "GET"},
+        )
+
+        assert response.status_code == 202
+        assert store.status()["request_count"] == 1
+    finally:
+        handle.close()

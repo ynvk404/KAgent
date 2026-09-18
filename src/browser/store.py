@@ -314,8 +314,8 @@ class CaptureStore:
                 EndpointSummary(
                     method=e.method,
                     url=e.url,
-                    query_params=list(e.query_params),
-                    body_params=list(e.body_params),
+                    query_params=sorted(e.query_params),
+                    body_params=sorted(e.body_params),
                     hit_count=e.hit_count,
                     first_seen=e.first_seen,
                     last_seen=e.last_seen,

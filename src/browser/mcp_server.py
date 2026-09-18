@@ -108,6 +108,27 @@ def format_iso(val: Any) -> Optional[str]:
         return datetime.fromtimestamp(val, timezone.utc).isoformat().replace("+00:00", "Z")
     return str(val)
 
+
+def mcp_string_arg(arguments: dict[str, Any], name: str) -> Optional[str]:
+    value = arguments.get(name)
+    return value if isinstance(value, str) else None
+
+
+def mcp_int_arg(
+    arguments: dict[str, Any],
+    name: str,
+    default: int,
+    minimum: int,
+    maximum: Optional[int] = None,
+) -> int:
+    value = arguments.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    value = max(value, minimum)
+    if maximum is not None:
+        value = min(value, maximum)
+    return value
+
 async def main() -> int:
     args = parse_args(sys.argv[1:])
     if args.show_help:
@@ -202,7 +223,9 @@ async def main() -> int:
 
     @mcp.call_tool()
     async def handle_call_tool(name: str, arguments: dict | None) -> types.CallToolResult:
-        args_dict = arguments or {}
+        if arguments is not None and not isinstance(arguments, dict):
+            return text_result("error: tool arguments must be an object", is_error=True)
+        args_dict: dict[str, Any] = arguments or {}
 
         if name == "browser_capture_status":
             s = store.status()
@@ -216,18 +239,18 @@ async def main() -> int:
 
         elif name == "browser_capture_endpoints":
             eps = store.list_endpoints(
-                url_substr=args_dict.get("url_contains"),
-                method=args_dict.get("method")
+                url_substr=mcp_string_arg(args_dict, "url_contains"),
+                method=mcp_string_arg(args_dict, "method"),
             )
             if not eps:
                 return text_result('No endpoints captured yet. Confirm the extension is running with capture enabled and the scope regex matches the target.')
             return text_result(json.dumps([to_dict(ep) for ep in eps], indent=2))
 
         elif name == "browser_capture_requests":
-            limit = args_dict.get("limit", 50)
+            limit = mcp_int_arg(args_dict, "limit", 50, 1, 500)
             rows = store.list_requests(
-                url_substr=args_dict.get("url_contains"),
-                method=args_dict.get("method"),
+                url_substr=mcp_string_arg(args_dict, "url_contains"),
+                method=mcp_string_arg(args_dict, "method"),
                 limit=limit
             )
             if not rows:
@@ -256,7 +279,7 @@ async def main() -> int:
             if not r:
                 return text_result(f"error: no request with id {req_id}", is_error=True)
 
-            cap = args_dict.get("body_max_chars", 4000)
+            cap = mcp_int_arg(args_dict, "body_max_chars", 4000, 0)
             r_dict = to_dict(r)
             
             resp_body = get_val(r, 'response_body', 'responseBody')
@@ -274,7 +297,9 @@ async def main() -> int:
             return text_result(json.dumps(r_dict, indent=2))
 
         elif name == "browser_capture_snapshot":
-            snap = store.latest_snapshot(url_substr=args_dict.get("url_contains"))
+            snap = store.latest_snapshot(
+                url_substr=mcp_string_arg(args_dict, "url_contains")
+            )
             if not snap:
                 return text_result('No snapshots captured yet. Click "Snapshot tab" in the extension popup.')
             
