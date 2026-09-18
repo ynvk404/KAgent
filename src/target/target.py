@@ -56,12 +56,12 @@ class Target:
             return
 
         if isinstance(other, Target):
-            self._base_url = other._base_url
-            self._name = other._name
+            self.set_base_url(other._base_url)
+            self.set_name(other._name)
             return
 
-        self._base_url = other.baseURL
-        self._name = other.name
+        self.set_base_url(other.baseURL)
+        self.set_name(other.name)
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -81,10 +81,10 @@ class Target:
             name = raw.get("name")
 
             if isinstance(base_url, str):
-                target._base_url = base_url
+                target.set_base_url(base_url)
 
             if isinstance(name, str):
-                target._name = name
+                target.set_name(name)
 
         return target
 
