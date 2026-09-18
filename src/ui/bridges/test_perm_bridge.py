@@ -306,6 +306,36 @@ async def test_abort_signal_rejects_open_permission_prompt():
     assert shown[-1] is None
 
 
+@pytest.mark.asyncio
+async def test_preaborted_signal_rejects_cached_session_permission():
+    pending: BridgePermissionRequest | None = None
+
+    def publish(req: BridgePermissionRequest | None):
+        nonlocal pending
+        if req is not None:
+            pending = req
+
+    bridge = BridgedPrompter(publish)
+    request = PermissionRequest(
+        tool="http",
+        summary="s",
+        detail="d",
+        cache_key="https://example.test",
+    )
+
+    initial = asyncio.create_task(bridge.ask(request))
+    await asyncio.sleep(0)
+    assert pending is not None
+    pending.resolve(Decision.ALLOW_SESSION)
+    assert await initial == Decision.ALLOW_SESSION
+
+    signal = asyncio.Event()
+    signal.set()
+
+    with pytest.raises(Exception, match="aborted"):
+        await bridge.ask(request, signal)
+
+
 
 @pytest.mark.asyncio
 async def test_same_origin_fanout_uses_session_cache():

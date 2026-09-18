@@ -34,13 +34,18 @@ class BridgedPrompter(Prompter):
             else req.tool
         )
 
+    @staticmethod
+    def _is_aborted(signal) -> bool:
+        return (
+            getattr(signal, "aborted", False)
+            or getattr(signal, "is_set", lambda: False)()
+        )
+
     async def _await_with_signal(self, future, signal):
         if signal is None:
             return await future
 
-        if getattr(signal, "aborted", False) or getattr(
-            signal, "is_set", lambda: False
-        )():
+        if self._is_aborted(signal):
             future.cancel()
             raise Exception("aborted")
 
@@ -66,6 +71,9 @@ class BridgedPrompter(Prompter):
         req: PermissionRequest,
         signal=None,
     ) -> Decision:
+        if self._is_aborted(signal):
+            raise Exception("aborted")
+
         if (
             not req.no_session_cache
             and self._key_for(req) in self._session_allowed
