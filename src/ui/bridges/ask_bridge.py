@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Coroutine, Optional, cast
 
 from src.ask.ask import AskPrompter, Question
 
@@ -35,7 +35,9 @@ class BridgedAskPrompter(AskPrompter):
         if not callable(wait):
             return await future
 
-        abort_waiter = asyncio.create_task(wait())
+        abort_waiter = asyncio.create_task(
+            cast(Coroutine[Any, Any, Any], wait())
+        )
         try:
             done, _ = await asyncio.wait(
                 {future, abort_waiter},
@@ -48,7 +50,7 @@ class BridgedAskPrompter(AskPrompter):
         finally:
             abort_waiter.cancel()
 
-    async def ask(self, question: Question, signal: Any = None) -> str:
+    async def ask(self, q: Question, signal: Any = None) -> str:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
 
@@ -70,7 +72,7 @@ class BridgedAskPrompter(AskPrompter):
 
         self._publish(
             AskRequest(
-                question=question,
+                question=q,
                 resolve=resolve,
                 reject=reject,
             )

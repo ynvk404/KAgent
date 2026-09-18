@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from src.browser.store import CaptureStore
 from src.llm.openai import OpenAIClient
 from src.llm.types import ChatRequest, Message
 from src.tools.browser_capture import BrowserCaptureClearTool
@@ -207,7 +208,7 @@ async def test_non_stream_chat():
 
 async def test_serializes_browser_capture_clear_schema_without_action_argument():
     tools = ToolRegistry()
-    tools.register(BrowserCaptureClearTool(object()))
+    tools.register(BrowserCaptureClearTool(CaptureStore()))
     request = ChatRequest(
         model="qwen",
         messages=[Message(role="user", content="clear")],

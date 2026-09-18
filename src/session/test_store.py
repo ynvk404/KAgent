@@ -134,7 +134,11 @@ class TestMessageProviderState:
             ]
         )
 
-        tool_call = store.load().messages[0].tool_calls[0]
+        tool_calls = store.load().messages[0].tool_calls
+        assert tool_calls is not None
+        tool_call = tool_calls[0]
+        assert tool_call.provider is not None
+        assert tool_call.provider.gemini is not None
 
         assert tool_call.id == "call_1"
         assert tool_call.function.name == "lookup"

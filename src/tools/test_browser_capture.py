@@ -1,6 +1,6 @@
 
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -9,7 +9,7 @@ from src.browser.store import (
     CaptureStore,
     CapturedRequest,
 )
-from src.permission.permission import AlwaysAllow, AlwaysDeny, PermissionRequest, Prompter
+from src.permission.permission import AlwaysAllow, AlwaysDeny, Decision, PermissionRequest, Prompter
 from src.tools.browser_capture import (
     BrowserCaptureClearTool,
     BrowserCaptureBurpTasksTool,
@@ -48,9 +48,13 @@ async def test_clear_tool_rejects_unadvertised_arguments_before_permission():
     class RecordingPrompter:
         requests: list[PermissionRequest] = []
 
-        async def ask(self, request, signal=None):
+        async def ask(
+            self,
+            request: PermissionRequest,
+            signal: Any = None,
+        ) -> Decision:
             self.requests.append(request)
-            return "allow-once"
+            return Decision.ALLOW_ONCE
 
     store = FakeStore()
     registry = ToolRegistry()

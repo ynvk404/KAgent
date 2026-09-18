@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from textual import events
@@ -10,7 +11,16 @@ from textual.geometry import Offset
 
 from src.ui.bridges.ask_bridge import BridgedAskPrompter
 from src.ask.ask import Option, Question
-from src.ui.core.app import AbortEvent, AppProps, KAgent, _input_selection_text
+from src.agent.agent import Agent
+from src.config.config import Backend
+from src.ui.core.app import (
+    AbortEvent,
+    AppProps,
+    ConfigSnapshot,
+    KAgent,
+    ProviderChange,
+    _input_selection_text,
+)
 from src.ui.core.state import SetAsk, SetBusy
 from src.ui.widgets.banner import BannerData
 from src.ui.widgets.text_input_modal import TextInputRequest
@@ -18,13 +28,25 @@ from src.ui.widgets.text_input_modal import TextInputModal
 
 
 def make_app() -> KAgent:
+    async def apply_provider(_: ProviderChange) -> None:
+        pass
+
+    def read_config() -> ConfigSnapshot:
+        return {
+            "backend": cast(Backend, "openai"),
+            "base_url": "",
+            "api_key": "",
+            "api_keys": {},
+            "model": "test",
+        }
+
     app = KAgent(
         AppProps(
-            agent=SimpleNamespace(),
+            agent=cast(Agent, SimpleNamespace()),
             banner_data=BannerData(provider="test", model="test", cwd="."),
             parent_signal=asyncio.Event(),
-            read_config=lambda: {},
-            apply_provider=lambda _: None,
+            read_config=read_config,
+            apply_provider=apply_provider,
         )
     )
     app._recompute_view = lambda: None
@@ -125,8 +147,11 @@ def test_right_click_copies_the_last_mouse_selection() -> None:
             nonlocal stopped
             stopped = True
 
-    app.copy_to_clipboard = copied.append
-    app.on_mouse_down(Event())
+    def copy_to_clipboard(text: str) -> None:
+        copied.append(text)
+
+    app.copy_to_clipboard = copy_to_clipboard
+    app.on_mouse_down(cast(events.MouseDown, Event()))
 
     assert copied == ["selected output"]
     assert stopped is True

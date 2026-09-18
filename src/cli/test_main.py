@@ -1,5 +1,6 @@
 import json
 import asyncio
+from typing import cast
 
 import pytest
 
@@ -15,6 +16,7 @@ from src.logger.session_debug import (
     SessionDebugOptions,
     create_session_debug_log,
 )
+from src.tools.mcp_integration import MCPSession
 
 
 @pytest.mark.parametrize(
@@ -108,7 +110,7 @@ def test_normal_shutdown_closes_runtime_resources():
             root_ctl,
             None,
             [Observer()],
-            [Session()],
+            cast(list[MCPSession], [Session()]),
             close_bridge,
         )
     )

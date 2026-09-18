@@ -75,6 +75,7 @@ def test_reinitialization_closes_replaced_handler_and_writes_once(tmp_path):
     second = tmp_path / "second.log"
     kagent_logger.init(first)
     old_handler = logging.getLogger(kagent_logger.BASE_LOGGER_NAME).handlers[0]
+    assert isinstance(old_handler, logging.FileHandler)
 
     kagent_logger.init(second)
     kagent_logger.info("after reinitialization")

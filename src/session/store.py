@@ -9,10 +9,11 @@ import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from src.llm.types import (
     Message,
+    Role,
     ToolCall,
     FunctionCall,
     ToolProvider,
@@ -236,7 +237,7 @@ def _message_from_dict(data: Any) -> Message | None:
         name = None
 
     return Message(
-        role=role,
+        role=cast(Role, role),
         content=content,
         reasoning_content=reasoning_content,
         tool_calls=_tool_calls_from_list(data.get("tool_calls")),

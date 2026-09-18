@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Coroutine, Optional, cast
 
 from src.permission.permission import (
     Decision,
@@ -53,7 +53,9 @@ class BridgedPrompter(Prompter):
         if not callable(wait):
             return await future
 
-        abort_waiter = asyncio.create_task(wait())
+        abort_waiter = asyncio.create_task(
+            cast(Coroutine[Any, Any, Any], wait())
+        )
         try:
             done, _ = await asyncio.wait(
                 {future, abort_waiter},
@@ -68,15 +70,15 @@ class BridgedPrompter(Prompter):
 
     async def ask(
         self,
-        req: PermissionRequest,
+        request: PermissionRequest,
         signal=None,
     ) -> Decision:
         if self._is_aborted(signal):
             raise Exception("aborted")
 
         if (
-            not req.no_session_cache
-            and self._key_for(req) in self._session_allowed
+            not request.no_session_cache
+            and self._key_for(request) in self._session_allowed
         ):
             return Decision.ALLOW_ONCE
 
@@ -95,12 +97,12 @@ class BridgedPrompter(Prompter):
 
         try:
             if (
-                not req.no_session_cache
-                and self._key_for(req) in self._session_allowed
+                not request.no_session_cache
+                and self._key_for(request) in self._session_allowed
             ):
                 return Decision.ALLOW_ONCE
 
-            return await self._ask_once(req, signal)
+            return await self._ask_once(request, signal)
 
         finally:
             while self._waiters:
