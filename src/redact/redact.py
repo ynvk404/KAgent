@@ -47,7 +47,8 @@ PATTERNS = [
 
     # api_key=...
     re.compile(
-        r"((?:api[_-]?key|secret|password|passwd|token)\s*[:=]\s*[\"']?)"
+        r"([\"']?(?:api[_-]?key|secret|password|passwd|token)[\"']?"
+        r"\s*[:=]\s*[\"']?)"
         r"([A-Za-z0-9._\-+/=]{16,})",
         re.IGNORECASE,
     ),
@@ -111,6 +112,12 @@ def mask(secret: str) -> str:
     return f"{head}…[REDACTED:{dots}]…{tail}"
 
 
+_MASKED_SECRET = re.compile(
+    r"^(?:\[REDACTED\]|.{2}…\[REDACTED:·+\]….{2})$",
+    re.DOTALL,
+)
+
+
 class Redactor:
 
     def apply(self, text: str) -> str:
@@ -128,6 +135,8 @@ class Redactor:
             def repl(match):
                 prefix = match.group(1)
                 secret = match.group(2)
+                if _MASKED_SECRET.fullmatch(secret):
+                    return match.group(0)
                 return prefix + mask(secret)
             out = pattern.sub(repl, out)
 
