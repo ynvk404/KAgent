@@ -293,12 +293,13 @@ class CoverageTool(Tool):
             endpoint = c.get("endpoint", "")
             param = c.get("param", "")
 
-            if (
-                isinstance(endpoint, str)
-                and isinstance(param, str)
-                and endpoint
-                and param
-            ):
+            if not isinstance(endpoint, str) or not isinstance(param, str):
+                continue
+
+            endpoint = endpoint.strip()
+            param = param.strip()
+
+            if endpoint and param:
                 pairs.append(
                     {
                         "endpoint": endpoint,
@@ -307,9 +308,9 @@ class CoverageTool(Tool):
                 )
 
         classes = [
-            v
+            v.strip()
             for v in vuln_classes
-            if isinstance(v, str) and v
+            if isinstance(v, str) and v.strip()
         ]
 
         if not pairs or not classes:

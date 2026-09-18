@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import src.coverage.store as coverage_store
 from src.coverage.store import CoverageStore
 
 def make_store() -> tuple[CoverageStore, Path]:
@@ -235,6 +236,90 @@ async def test_corrupt_file_is_quarantined_instead_of_overwritten():
     assert backups[0].read_text(encoding="utf8") == "{{ not json"
 
     assert json.loads(path.read_text(encoding="utf8"))["version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_persist_preserves_colliding_temp_file(monkeypatch):
+    store, path = make_store()
+    monkeypatch.setattr(coverage_store.secrets, "token_hex", lambda _: "fixed")
+    temp = Path(f"{path}.tmp.fixed")
+    temp.write_text("another writer's data", encoding="utf8")
+
+    await store.mark(
+        endpoint="GET /api/x",
+        param="id",
+        vulnClass="idor",
+        status="tried",
+    )
+    await store.flush()
+
+    assert temp.read_text(encoding="utf8") == "another writer's data"
+    assert not path.exists()
+    assert isinstance(store.last_save_error, FileExistsError)
+
+
+@pytest.mark.asyncio
+async def test_load_skips_entries_with_invalid_field_values():
+    _, path = make_store()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": [
+                    {
+                        "endpoint": "GET /valid",
+                        "param": "id",
+                        "vulnClass": "idor",
+                        "status": "tried",
+                        "count": 1,
+                        "firstSeen": 1,
+                        "lastSeen": 2,
+                        "notes": None,
+                    },
+                    {
+                        "endpoint": ["not text"],
+                        "param": "id",
+                        "vulnClass": "idor",
+                        "status": ["not a status"],
+                        "count": True,
+                        "firstSeen": "now",
+                        "lastSeen": [],
+                        "notes": {"not": "text"},
+                    },
+                ],
+            }
+        ),
+        encoding="utf8",
+    )
+
+    store = CoverageStore(str(path))
+    summary = await store.summary()
+
+    assert summary.total == 1
+    assert summary.byStatus["tried"] == 1
+
+
+@pytest.mark.asyncio
+async def test_corrupt_quarantine_preserves_colliding_backup(monkeypatch):
+    _, path = make_store()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{{ corrupt", encoding="utf8")
+    backup = Path(f"{path}.corrupt.fixed")
+    backup.write_text("existing forensic evidence", encoding="utf8")
+    monkeypatch.setattr(coverage_store.secrets, "token_hex", lambda _: "fixed")
+
+    store = CoverageStore(str(path))
+    assert await store.list() == []
+
+    assert backup.read_text(encoding="utf8") == "existing forensic evidence"
+    quarantined = [
+        f
+        for f in path.parent.glob("coverage.json.corrupt.*")
+        if f != backup
+    ]
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text(encoding="utf8") == "{{ corrupt"
 
 
 @pytest.mark.asyncio

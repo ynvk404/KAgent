@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 import time
 from dataclasses import asdict, dataclass
@@ -118,9 +119,30 @@ class CoverageStore:
 
     def _quarantine(self) -> None:
         """Move an unusable store aside so the next save cannot destroy it."""
-        backup = self.path.with_suffix(
-            self.path.suffix + f".corrupt.{secrets.token_hex(3)}"
-        )
+        suffix = secrets.token_hex(3)
+        backup: Path | None = None
+        for i in range(100):
+            candidate_suffix = suffix if i == 0 else f"{suffix}-{i + 1}"
+            candidate = self.path.with_suffix(
+                self.path.suffix + f".corrupt.{candidate_suffix}"
+            )
+            try:
+                fd = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    STORE_FILE_MODE,
+                )
+                os.close(fd)
+                backup = candidate
+                break
+            except FileExistsError:
+                continue
+            except OSError:
+                break
+
+        if backup is None:
+            log.warning("coverage: could not reserve a quarantine path for %s", self.path)
+            return
 
         try:
             self.path.replace(backup)
@@ -133,6 +155,7 @@ class CoverageStore:
                 self.path,
                 exc_info=True,
             )
+            backup.unlink(missing_ok=True)
 
     async def mark(
         self,
@@ -237,11 +260,17 @@ class CoverageStore:
                 candidate["endpoint"]
             )
 
-            param = candidate["param"]
+            param = candidate["param"].strip()
+
+            if not ep or not param:
+                continue
 
             for vuln in vulnClasses:
 
-                vuln = vuln.lower()
+                vuln = vuln.strip().lower()
+
+                if not vuln:
+                    continue
 
                 key = _key_of(
                     ep,
@@ -375,23 +404,29 @@ class CoverageStore:
             self.path.suffix
             + f".tmp.{secrets.token_hex(3)}"
         )
-
-        tmp.touch(mode=STORE_FILE_MODE)
+        created_tmp = False
 
         try:
-            tmp.write_text(
-                json.dumps(
-                    payload,
-                    indent=2,
-                )
-                + "\n",
-                encoding="utf8",
+            fd = os.open(
+                tmp,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                STORE_FILE_MODE,
             )
+            created_tmp = True
+            with os.fdopen(fd, "w", encoding="utf8") as f:
+                f.write(
+                    json.dumps(
+                        payload,
+                        indent=2,
+                    )
+                    + "\n"
+                )
 
             tmp.replace(self.path)
 
         except Exception:
-            tmp.unlink(missing_ok=True)
+            if created_tmp:
+                tmp.unlink(missing_ok=True)
             raise
 
 
@@ -439,7 +474,26 @@ def _is_valid_entry(
         "lastSeen",
     )
 
-    return all(
-        key in value
-        for key in required
+    if not all(key in value for key in required):
+        return False
+
+    return (
+        all(
+            isinstance(value[key], str) and value[key]
+            for key in ("endpoint", "param", "vulnClass")
+        )
+        and isinstance(value["status"], str)
+        and value["status"] in {
+            "tried", "passed", "failed", "waf-blocked", "skipped",
+        }
+        and isinstance(value["count"], int)
+        and not isinstance(value["count"], bool)
+        and value["count"] > 0
+        and all(
+            isinstance(value[key], int)
+            and not isinstance(value[key], bool)
+            and value[key] >= 0
+            for key in ("firstSeen", "lastSeen")
+        )
+        and (value.get("notes") is None or isinstance(value.get("notes"), str))
     )

@@ -190,6 +190,38 @@ async def test_untested_all_covered(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_untested_uses_mark_normalization_for_param_and_vuln_class(tmp_path):
+    tool, _ = _tool(tmp_path)
+    await _run(
+        tool, action="mark", endpoint="/a", param="id", vuln_class="sqli"
+    )
+
+    out = await _run(
+        tool,
+        action="untested",
+        candidates=[{"endpoint": "/a?source=test", "param": " id "}],
+        vuln_classes=[" SQLI "],
+    )
+
+    assert "all combinations marked already" in out
+
+
+@pytest.mark.asyncio
+async def test_untested_rejects_whitespace_only_candidates_and_classes(tmp_path):
+    tool, _ = _tool(tmp_path)
+
+    out = await _run(
+        tool,
+        action="untested",
+        candidates=[{"endpoint": "/a", "param": "   "}],
+        vuln_classes=["   "],
+    )
+
+    assert out.startswith("error: untested requires")
+    assert "all combinations marked already" not in out
+
+
+@pytest.mark.asyncio
 async def test_untested_ignores_malformed_candidates(tmp_path):
     tool, _ = _tool(tmp_path)
 
