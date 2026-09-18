@@ -289,6 +289,16 @@ def test_load_dir_skips_broken_skill_but_loads_rest(tmp_path, monkeypatch):
     assert "good-skill" in names
     assert "broken-skill" not in names
 
+
+def test_load_dir_duplicate_metadata_names_have_stable_precedence(tmp_path):
+    write_skill(tmp_path, "a-first", "---\nname: duplicate\ndescription: first\n---\nBody\n")
+    write_skill(tmp_path, "z-last", "---\nname: duplicate\ndescription: last\n---\nBody\n")
+
+    registry = Registry()
+    registry.load_dir(tmp_path)
+
+    assert registry.get("duplicate").description == "last"
+
 def test_get_has_clear(tmp_path):
     write_skill(tmp_path, "alpha", "---\nname: alpha\ndescription: d\n---\nBody\n")
 

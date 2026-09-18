@@ -50,3 +50,11 @@ def test_configured_dirs_have_highest_priority():
         str(Path("/a").resolve()),
         str(Path("/b").resolve())
     ]
+
+
+def test_relative_configured_dirs_resolve_from_supplied_cwd(monkeypatch):
+    monkeypatch.chdir("/")
+
+    dirs = skill_search_dirs(["custom-skills"], "/project", "/home")
+
+    assert dirs[-1] == "/project/custom-skills"

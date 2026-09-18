@@ -82,7 +82,7 @@ class Registry:
             return
 
         try:
-            entries = list(directory.iterdir())
+            entries = sorted(directory.iterdir(), key=lambda item: item.name)
         except OSError:
             log.warning(
                 "skills: could not list %s; no skills loaded from it",

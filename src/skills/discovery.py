@@ -31,6 +31,6 @@ def skill_search_dirs(
         _lexical_resolve(home, ".kagent", "skills"),
     ]
 
-    dirs.extend(_lexical_resolve(os.getcwd(), d) for d in configured)
+    dirs.extend(_lexical_resolve(cwd, d) for d in configured)
 
     return dirs
