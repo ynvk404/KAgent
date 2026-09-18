@@ -151,7 +151,7 @@ class FileReadTool(Tool):
         self,
         args,
         signal,
-        p,
+        prompter,
     ):
         path = arg_string(
             args,
@@ -168,7 +168,7 @@ class FileReadTool(Tool):
         )
 
         real = await gate_sensitive_path(
-            p,
+            prompter,
             abs_path,
             "read",
             signal
@@ -269,7 +269,7 @@ class FileWriteTool(Tool):
         self,
         args,
         signal,
-        p,
+        prompter,
     ):
         path = arg_string(
             args,
@@ -291,7 +291,7 @@ class FileWriteTool(Tool):
         )
 
         real = await gate_sensitive_path(
-            p,
+            prompter,
             abs_path,
             "write to",
             signal
@@ -402,7 +402,7 @@ class FileEditTool(Tool):
         self,
         args,
         signal,
-        p,
+        prompter,
     ):
         path = arg_string(
             args,
@@ -434,7 +434,7 @@ class FileEditTool(Tool):
         )
 
         real = await gate_sensitive_path(
-            p,
+            prompter,
             abs_path,
             "edit",
             signal

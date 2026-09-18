@@ -87,9 +87,9 @@ class GeminiClient(StreamingClient, Pinger):
             "gemini",
         )
 
-    async def chat(self, req: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
+    async def chat(self, request: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
         return await with_retry(
-            lambda: self._chat_once(req, signal),
+            lambda: self._chat_once(request, signal),
             RetryOptions(signal=signal),
         )
 
@@ -147,12 +147,12 @@ class GeminiClient(StreamingClient, Pinger):
 
     async def chat_stream(
         self,
-        req: ChatRequest,
+        request: ChatRequest,
         on_delta: Callable[[str], None],
         signal: Optional[Any] = None,
     ) -> ChatResponse:
         client, resp = await with_retry(
-            lambda: self._open_stream(req, signal),
+            lambda: self._open_stream(request, signal),
             RetryOptions(signal=signal),
         )
         

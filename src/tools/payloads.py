@@ -98,8 +98,8 @@ class ReadPayloadsTool(Tool):
     async def run(
         self,
         args: dict[str, Any],
-        _signal,
-        _prompter: Prompter,
+        signal,
+        prompter: Prompter,
     ) -> str:
         skill_name = arg_string(
             args,

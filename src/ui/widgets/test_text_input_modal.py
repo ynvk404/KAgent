@@ -1,3 +1,4 @@
+from typing import cast
 from unittest.mock import Mock
 
 from src.ui.widgets.text_input_modal import (
@@ -24,7 +25,7 @@ def test_enter_resolve():
     modal.handle_key("b")
     modal.handle_key("enter")
 
-    req.resolve.assert_called_once_with("ab")
+    cast(Mock, req.resolve).assert_called_once_with("ab")
 
 
 def test_enter_trim_value():
@@ -37,7 +38,7 @@ def test_enter_trim_value():
 
     modal.handle_key("enter")
 
-    req.resolve.assert_called_once_with("a")
+    cast(Mock, req.resolve).assert_called_once_with("a")
 
 
 def test_backspace():
@@ -77,7 +78,7 @@ def test_escape_reject():
 
     modal.handle_key("esc")
 
-    req.reject.assert_called_once()
+    cast(Mock, req.reject).assert_called_once()
 
 
 def test_escape_long():
@@ -86,7 +87,7 @@ def test_escape_long():
 
     modal.handle_key("escape")
 
-    req.reject.assert_called_once()
+    cast(Mock, req.reject).assert_called_once()
 
 
 def test_render_placeholder():

@@ -7,7 +7,7 @@ import secrets
 import threading
 from dataclasses import asdict, dataclass, is_dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional, cast
 from urllib.parse import urlparse
 
 from src.logger.logger import get_logger
@@ -81,7 +81,9 @@ class IngestHTTPServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server: IngestHTTPServer 
+    @property
+    def ingest_server(self) -> IngestHTTPServer:
+        return cast(IngestHTTPServer, self.server)
 
     def log_message(self, format: str, *args: Any) -> None:
         pass
@@ -128,7 +130,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": False, "error": "invalid host"}, status=403)
             return False
 
-        if not authorized(self.headers.get("X-KAgent-Token"), self.server.token):
+        if not authorized(self.headers.get("X-KAgent-Token"), self.ingest_server.token):
             self.send_json(
                 {"ok": False, "error": "unauthorized"},
                 status=401,
@@ -152,7 +154,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._check_security():
             return
 
-        store = self.server.store
+        store = self.ingest_server.store
         cors = self.get_cors_headers()
         path = urlparse(self.path).path
 
@@ -173,7 +175,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._check_security():
             return
 
-        store = self.server.store
+        store = self.ingest_server.store
         cors = self.get_cors_headers()
         path = urlparse(self.path).path
 
@@ -187,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._check_security():
             return
 
-        store = self.server.store
+        store = self.ingest_server.store
         cors = self.get_cors_headers()
         path = urlparse(self.path).path
 
@@ -261,7 +263,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": False, "error": reason}, status=400, extra_headers=cors)
             return
 
-        on_event = self.server.on_event
+        on_event = self.ingest_server.on_event
         if on_event is not None:
             try:
                 on_event(event_text(path, parsed))

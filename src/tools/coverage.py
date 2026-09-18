@@ -143,8 +143,8 @@ class CoverageTool(Tool):
     async def run(
         self,
         args: dict[str, Any],
-        _signal,
-        _prompter: Prompter,
+        signal,
+        prompter: Prompter,
     ) -> str:
         action = arg_string(args, "action") or ""
 

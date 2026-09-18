@@ -182,7 +182,7 @@ class ShellTool(Tool):
         self,
         args: dict[str, Any],
         signal: Any,
-        _p: Prompter,
+        prompter: Prompter,
     ) -> str:
         original_cmd = arg_string(args, "command") or ""
         cmd_str = rewrite_portable_command(original_cmd)

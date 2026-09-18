@@ -62,9 +62,9 @@ class AnthropicClient(Client, Pinger):
             "anthropic",
         )
 
-    async def chat(self, req: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
+    async def chat(self, request: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
         return await with_retry(
-            lambda: self._chat_once(req, signal),
+            lambda: self._chat_once(request, signal),
             RetryOptions(signal=signal),
         )
 

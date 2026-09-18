@@ -103,7 +103,7 @@ class AskUserTool(Tool):
         self,
         args: dict,
         signal,
-        _p: Prompter,
+        prompter: Prompter,
     ) -> str:
         raw = args.get("questions")
 

@@ -63,11 +63,11 @@ class FakeClient(Client):
 
     async def chat(
         self,
-        req: ChatRequest,
+        request: ChatRequest,
         signal=None,
     ) -> ChatResponse:
 
-        self.requests.append(req)
+        self.requests.append(request)
 
         if self.idx >= len(self.scripted):
             raise Exception(
@@ -1639,7 +1639,7 @@ async def test_circuit_breaker_stops_retrying_auto_compact_after_three_failures(
 
         async def chat(
             self,
-            req: ChatRequest,
+            request: ChatRequest,
             signal=None,
         ) -> ChatResponse:
 
@@ -1686,7 +1686,7 @@ async def test_emits_error_event_when_exception_escapes():
 
         async def chat(
             self,
-            req: ChatRequest,
+            request: ChatRequest,
             signal=None,
         ) -> ChatResponse:
 
@@ -1733,8 +1733,8 @@ async def test_renders_user_cancellation_without_leaking_backend_abort_text():
 
         async def chat(
             self,
-            req: ChatRequest,
-            signal=None,
+            request: ChatRequest,
+            signal: Any = None,
         ) -> ChatResponse:
 
             if signal is not None:

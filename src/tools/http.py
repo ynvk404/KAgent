@@ -157,7 +157,7 @@ class HTTPTool(Tool):
         self,
         args: dict,
         signal,
-        p: Prompter,
+        prompter: Prompter,
     ) -> str:
 
         method = (
@@ -181,7 +181,7 @@ class HTTPTool(Tool):
         resolved = self.resolve_url(raw_url)
 
         private_reason = await gate_private_request(
-            p,
+            prompter,
             parse_http_url(resolved),
             signal,
             "http",

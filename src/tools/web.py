@@ -191,13 +191,13 @@ class WebFetchTool(Tool):
     def requires_permission(self) -> bool:
         return False
 
-    async def run(self, args: dict[str, Any], signal: Any, p: Prompter) -> str:
+    async def run(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> str:
         url = arg_string(args, "url")
         if not url:
             raise ValueError("url is required")
 
         parsed = parse_http_url(url)
-        private_reason = await gate_private_request(p, parsed, signal, "web_fetch")
+        private_reason = await gate_private_request(prompter, parsed, signal, "web_fetch")
 
         cache_key = f"fetch:{parsed}"
         cached = _cache_get(cache_key)
@@ -374,7 +374,7 @@ class WebSearchTool(Tool):
     def requires_permission(self) -> bool:
         return False
 
-    async def run(self, args: dict[str, Any], signal: Any, _p: Prompter) -> str:
+    async def run(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> str:
         query = arg_string(args, "query")
         if not query:
             raise ValueError("query is required")

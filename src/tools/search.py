@@ -70,7 +70,7 @@ class GlobTool(Tool):
         self,
         args: dict[str, Any],
         signal,
-        p,
+        prompter,
     ) -> str:
         pattern = arg_string(
             args,
@@ -97,7 +97,7 @@ class GlobTool(Tool):
             )
         )
         await gate_search_inputs(
-            p,
+            prompter,
             base,
             pattern,
             signal
@@ -110,7 +110,7 @@ class GlobTool(Tool):
         )
         for file in matches:
             await gate_sensitive_path(
-                p,
+                prompter,
                 file,
                 "search",
                 signal
@@ -159,7 +159,7 @@ class GrepTool(Tool):
         self,
         args,
         signal,
-        p,
+        prompter,
     ):
         raw_pattern = arg_string(
             args,
@@ -207,7 +207,7 @@ class GrepTool(Tool):
             )
         )
         await gate_search_inputs(
-            p,
+            prompter,
             base,
             glob_pattern,
             signal
@@ -223,7 +223,7 @@ class GrepTool(Tool):
             regex,
             limit,
             signal,
-            p,
+            prompter,
         )
         if not output:
             return "no matches"

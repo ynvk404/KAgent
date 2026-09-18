@@ -89,10 +89,10 @@ class OpenAIClient(Client):
 
     async def chat(
         self,
-        req: ChatRequest,
+        request: ChatRequest,
         signal: Any = None,
     ) -> ChatResponse:
-        body = self.encode_request(req, False)
+        body = self.encode_request(request, False)
 
         async def do_request() -> dict[str, Any]:
             async with httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC) as client:
