@@ -38,6 +38,7 @@ class _Handler(BaseHTTPRequestHandler):
                         {"id": "deepseek-v4-flash"},
                         {"id": "deepseek-flash"},
                         {"id": "deepseek-chat"},
+                        {"id": "qwen/qwen3.6-27b"},
                     ]
                 },
             )
@@ -57,7 +58,15 @@ class _Handler(BaseHTTPRequestHandler):
                             "supportedGenerationMethods": ["generateContent"],
                         },
                         {
-                            "name": "models/gemini-flash-lite-latest",
+                            "name": "models/gemini-3.8-flash",
+                            "supportedGenerationMethods": ["generateContent"],
+                        },
+                        {
+                            "name": "models/gemini-3.5-flash-lite",
+                            "supportedGenerationMethods": ["generateContent"],
+                        },
+                        {
+                            "name": "models/gemini-3.1-flash-lite",
                             "supportedGenerationMethods": ["generateContent"],
                         },
                         {
@@ -111,12 +120,13 @@ class TestListModels:
             "deepseek-v4-flash",
             "deepseek-flash",
             "deepseek-chat",
+            "qwen/qwen3.6-27b",
         ]
 
     def test_parses_openai_compat_v1_models_with_bearer_auth(self, base_url: str) -> None:
         models = list_models("openai-compat", f"{base_url}/v1", "sk-fake")
 
-        assert len(models) == 11
+        assert len(models) == 12
 
     def test_parses_kimi_v1_models_with_bearer_auth(self, base_url: str) -> None:
         models = list_models("kimi", f"{base_url}/v1", "sk-kimi")
@@ -129,7 +139,7 @@ class TestListModels:
         assert models == [
             "openai/gpt-oss-120b",
             "openai/gpt-oss-20b",
-            "llama-3.3-70b-versatile",
+            "qwen/qwen3.6-27b",
         ]
 
     def test_parses_openrouter_v1_models_and_prepends_auto_router(self, base_url: str) -> None:
@@ -147,7 +157,6 @@ class TestListModels:
         assert models == [
             "deepseek-flash",
             "deepseek-v4-pro",
-            "deepseek-chat",
             "qwen-coder-32b-instruct",
             "gpt-4o-mini",
             "kimi-k2.6",
@@ -156,15 +165,19 @@ class TestListModels:
             "llama-3.3-70b-versatile",
             "anthropic/claude-sonnet-4.5",
             "deepseek-v4-flash",
+            "deepseek-chat",
+            "qwen/qwen3.6-27b",
         ]
 
     def test_parses_gemini_models_and_sorts_recommendations_first(self, base_url: str) -> None:
         models = list_models("gemini", f"{base_url}/gemini", "gemini-key")
 
         assert models == [
-            "models/gemini-3.5-flash",
-            "models/gemini-flash-lite-latest",
+            "models/gemini-3.8-flash",
+            "models/gemini-3.5-flash-lite",
+            "models/gemini-3.1-flash-lite",
             "models/other",
+            "models/gemini-3.5-flash",
         ]
 
     def test_raises_on_non_200(self, base_url: str) -> None:

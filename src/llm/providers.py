@@ -58,14 +58,7 @@ GROQ_DEFAULT_MODEL: Final[str] = (
 GROQ_MODELS: Final[tuple[str, ...]] = (
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "meta-llama/llama-4-maverick-17b-128e-instruct",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "qwen/qwen3-32b",
-    "deepseek-r1-distill-llama-70b",
-    "compound-beta",
-    "compound-beta-mini",
+    "qwen/qwen3.6-27b",
 )
 
 # OpenRouter
@@ -172,8 +165,6 @@ DEEPSEEK_DEFAULT_MODEL: Final[str] = (
 DEEPSEEK_MODELS: Final[tuple[str, ...]] = (
     "deepseek-flash",
     "deepseek-v4-pro",
-    "deepseek-chat",
-    "deepseek-reasoner",
 )
 
 # Anthropic Claude
@@ -187,19 +178,15 @@ ANTHROPIC_VERSION: Final[str] = (
 )
 
 ANTHROPIC_DEFAULT_MODEL: Final[str] = (
-    "claude-opus-4-8"
+    "claude-sonnet-4-6"
 )
 
 ANTHROPIC_DEFAULT_MAX_TOKENS: Final[int] = 16000
 
 ANTHROPIC_MODELS: Final[tuple[str, ...]] = (
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-opus-4-6",
     "claude-sonnet-4-6",
+    "claude-opus-4-8",
     "claude-haiku-4-5",
-    "claude-opus-4-5",
-    "claude-sonnet-4-5",
 )
 
 ANTHROPIC_RECOMMENDED_MODELS: Final[tuple[str, ...]] = (
@@ -226,22 +213,18 @@ GEMINI_DEFAULT_BASE_URL: Final[str] = (
 )
 
 GEMINI_DEFAULT_MODEL: Final[str] = (
-    "models/gemini-3.5-flash"
+    "models/gemini-3.8-flash"
 )
 
 GEMINI_BEST_FIT_MODELS: Final[tuple[str, ...]] = (
-    "models/gemini-3.5-flash",
-    "models/gemini-3.1-pro-preview",
-    "models/gemini-flash-latest",
-    "models/gemini-3-flash-preview",
-    "models/gemini-3.1-flash-lite",
-    "models/gemini-2.5-flash-lite",
+    "models/gemini-3.8-flash",
+    "models/gemini-3.7-flash",
+    "models/gemini-3.6-flash",
 )
 
 GEMINI_CHEAP_MODELS: Final[tuple[str, ...]] = (
-    "models/gemini-flash-lite-latest",
-    "models/gemini-3.1-flash-lite-preview",
-    "models/gemma-4-26b-a4b-it",
+    "models/gemini-3.5-flash-lite",
+    "models/gemini-3.1-flash-lite",
 )
 
 GEMINI_RECOMMENDED_MODELS: Final[tuple[str, ...]] = (
