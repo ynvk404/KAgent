@@ -1,7 +1,11 @@
 import logging
+import os
+import stat
+from pathlib import Path
 
 import pytest
 
+import src.memory.store as memory_store
 from src.memory.store import (
     MemoryStore,
     AddMemoryInput,
@@ -117,6 +121,95 @@ def test_empty_text(store):
 def test_format_memory_empty():
     result = format_memory_recall([])
     assert result == ""
+
+
+def test_atomic_write_temp_is_private_before_chmod(tmp_path, monkeypatch):
+    path = tmp_path / "secret.md"
+    observed_modes = []
+    real_chmod = MemoryStore._chmod_safe
+
+    def spy_chmod(file, mode):
+        observed_modes.append(stat.S_IMODE(os.stat(file).st_mode))
+        real_chmod(file, mode)
+
+    monkeypatch.setattr(MemoryStore, "_chmod_safe", staticmethod(spy_chmod))
+
+    MemoryStore._atomic_write(path, "secret")
+
+    assert observed_modes == [0o600]
+
+
+def test_atomic_write_preserves_colliding_temp_file(tmp_path, monkeypatch):
+    path = tmp_path / "fact.md"
+    monkeypatch.setattr(memory_store.secrets, "token_hex", lambda _: "fixed")
+    temp = Path(f"{path}.tmp.fixed")
+    temp.write_text("another writer's data", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        MemoryStore._atomic_write(path, "new data")
+
+    assert temp.read_text(encoding="utf-8") == "another writer's data"
+    assert not path.exists()
+
+
+def test_list_refreshes_cached_fact_after_manual_edit(store):
+    fact = store.add(AddMemoryInput(text="old fact detail"))
+    assert fact is not None
+    assert store.list()[0].text == "old fact detail"
+
+    file = Path(fact.file)
+    file.write_text(
+        file.read_text(encoding="utf-8").replace("old fact detail", "new fact detail"),
+        encoding="utf-8",
+    )
+
+    assert store.list()[0].text == "new fact detail"
+
+
+def test_non_mapping_front_matter_is_skipped(store, caplog):
+    store.project_dir.mkdir(parents=True)
+    (store.project_dir / "bad.md").write_text(
+        "---\n- not a mapping\n---\nbody", encoding="utf-8"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="kagent.memory.store"):
+        assert store.list() == []
+
+    assert any("invalid front matter" in r.getMessage() for r in caplog.records)
+
+
+def test_invalid_metadata_types_are_normalized_before_search(store):
+    store.project_dir.mkdir(parents=True)
+    (store.project_dir / "bad-types.md").write_text(
+        "---\nname: {not: text}\ndescription: [not, text]\n"
+        "created_at: [not, a, timestamp]\n---\nsearchable body",
+        encoding="utf-8",
+    )
+
+    facts = store.search("searchable")
+
+    assert len(facts) == 1
+    assert facts[0].name == "bad-types"
+    assert facts[0].description == "searchable body"
+    assert facts[0].created_at == ""
+
+
+def test_description_round_trips_without_yaml_front_matter_injection(store):
+    fact = store.add(
+        AddMemoryInput(
+            text="ordinary body",
+            description="visible description\nname: injected",
+            created_at="2026-06-10T00:00:00Z\nname: injected",
+        )
+    )
+    assert fact is not None
+
+    store.scope_cache.clear()
+    loaded = store.list()[0]
+
+    assert loaded.name == fact.name
+    assert loaded.description == "visible description\nname: injected"
+    assert loaded.created_at == "2026-06-10T00:00:00Z\nname: injected"
 
 def test_unreadable_fact_is_reported_and_skipped(store, caplog):
     store.add(AddMemoryInput(text="target is example.com", scope="project"))

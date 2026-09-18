@@ -70,7 +70,10 @@ class MemoryStore:
         self.project_dir: Path = Path(cwd) / ".kagent" / "memory"
         self.personal_dir: Path = Path(home) / ".kagent" / "memory"
 
-        self.scope_cache: dict[MemoryScope, tuple[float, list[MemoryFact]]] = {}
+        self.scope_cache: dict[
+            MemoryScope,
+            tuple[tuple[tuple[str, int, int], ...], list[MemoryFact]],
+        ] = {}
 
     def _dir(self, scope: MemoryScope) -> Path:
         return self.personal_dir if scope == "personal" else self.project_dir
@@ -94,15 +97,17 @@ class MemoryStore:
         name = self._unique_name(folder, self.slugify(description) or "note")
         file = folder / f"{name}.md"
 
-        content = (
-            "---\n"
-            f"name: {name}\n"
-            f"description: {description}\n"
-            f"type: {mem_type}\n"
-            f"created_at: {created}\n"
-            "---\n\n"
-            f"{text}\n"
+        front_matter = yaml.safe_dump(
+            {
+                "name": name,
+                "description": description,
+                "type": mem_type,
+                "created_at": created,
+            },
+            allow_unicode=True,
+            sort_keys=False,
         )
+        content = f"---\n{front_matter}---\n\n{text}\n"
 
         self._atomic_write(file, content)
 
@@ -132,9 +137,9 @@ class MemoryStore:
         if not folder.exists():
             return []
 
-        mtime = folder.stat().st_mtime
+        fingerprint = self._scope_fingerprint(folder)
         cached = self.scope_cache.get(scope)
-        if cached and cached[0] == mtime:
+        if cached and cached[0] == fingerprint:
             return cached[1]
 
         facts: list[MemoryFact] = []
@@ -145,8 +150,21 @@ class MemoryStore:
             if fact:
                 facts.append(fact)
 
-        self.scope_cache[scope] = (mtime, facts)
+        self.scope_cache[scope] = (fingerprint, facts)
         return facts
+
+    @staticmethod
+    def _scope_fingerprint(folder: Path) -> tuple[tuple[str, int, int], ...]:
+        try:
+            return tuple(
+                sorted(
+                    (file.name, file.stat().st_mtime_ns, file.stat().st_size)
+                    for file in folder.glob("*.md")
+                    if file.name != "MEMORY.md"
+                )
+            )
+        except OSError:
+            return ()
 
     def load_file(self, file: Path, scope: MemoryScope) -> Optional[MemoryFact]:
         try:
@@ -161,11 +179,15 @@ class MemoryStore:
 
         _, fm, body = parts
         try:
-            meta: dict = yaml.safe_load(fm) or {}
+            meta = yaml.safe_load(fm) or {}
         except yaml.YAMLError:
             log.warning(
                 "memory: skipping fact %s with invalid front matter", file, exc_info=True
             )
+            return None
+
+        if not isinstance(meta, dict):
+            log.warning("memory: skipping fact %s with invalid front matter", file)
             return None
 
         body = body.strip()
@@ -176,13 +198,25 @@ class MemoryStore:
         if mem_type not in MEMORY_TYPES:
             mem_type = self._infer_type(body)
 
+        name = meta.get("name")
+        if not isinstance(name, str) or not name:
+            name = file.stem
+
+        description = meta.get("description")
+        if not isinstance(description, str):
+            description = self.first_line(body)
+
+        created_at = meta.get("created_at")
+        if not isinstance(created_at, str):
+            created_at = ""
+
         return MemoryFact(
-            name=meta.get("name", file.stem),
-            description=meta.get("description", self.first_line(body)),
+            name=name,
+            description=description,
             type=mem_type,
             scope=scope,
             text=body[:MAX_FACT_CHARS],
-            created_at=meta.get("created_at", ""),
+            created_at=created_at,
             file=str(file),
         )
 
@@ -316,12 +350,17 @@ class MemoryStore:
     @staticmethod
     def _atomic_write(file: Path, content: str) -> None:
         tmp = file.with_name(file.name + f".tmp.{secrets.token_hex(3)}")
+        created_tmp = False
         try:
-            tmp.write_text(content, encoding="utf-8")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            created_tmp = True
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
             MemoryStore._chmod_safe(tmp, 0o600)
             os.replace(tmp, file)
         except OSError:
-            tmp.unlink(missing_ok=True)
+            if created_tmp:
+                tmp.unlink(missing_ok=True)
             raise
 
     def _prune_scope(self, scope: MemoryScope) -> None:
