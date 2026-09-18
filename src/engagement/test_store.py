@@ -58,8 +58,45 @@ def test_truncates_combined_notes_past_char_limit_with_marker(temp_dirs):
 
     out = EngagementStore(cwd=cwd, home=home).load()
 
-    assert len(out) < ENGAGEMENT_CHAR_LIMIT + 200
+    assert len(out) <= ENGAGEMENT_CHAR_LIMIT
     assert "engagement notes truncated" in out
+
+
+def test_truncation_preserves_project_scope_after_large_personal_notes(temp_dirs):
+    cwd, home = temp_dirs
+    project_scope = "Out of scope: *.corp.internal"
+
+    write_engagement(home, "x" * ENGAGEMENT_CHAR_LIMIT)
+    write_engagement(cwd, project_scope)
+
+    out = EngagementStore(cwd=cwd, home=home).load()
+
+    assert project_scope in out
+    assert len(out) <= ENGAGEMENT_CHAR_LIMIT
+    assert "engagement notes truncated" in out
+
+
+def test_same_personal_and_project_file_is_not_duplicated(tmp_path):
+    write_engagement(tmp_path, "Target: app.example.com only")
+
+    out = EngagementStore(cwd=tmp_path, home=tmp_path).load()
+
+    assert out == "Target: app.example.com only"
+
+
+def test_invalid_utf8_notes_are_logged_and_ignored(tmp_path, caplog):
+    import logging
+
+    project = tmp_path / "project"
+    notes = project / ".kagent" / "engagement.md"
+    notes.parent.mkdir(parents=True)
+    notes.write_bytes(b"\xff\xfe")
+
+    with caplog.at_level(logging.WARNING, logger="kagent.engagement.store"):
+        loaded = EngagementStore(cwd=project, home=tmp_path / "home").load()
+
+    assert loaded == ""
+    assert any("engagement.md" in record.getMessage() for record in caplog.records)
 
 def test_unreadable_notes_are_reported_not_silently_dropped(tmp_path, caplog):
     import logging
