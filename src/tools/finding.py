@@ -12,6 +12,7 @@ from src.findings.store import (
 )
 from src.findings.classification import classify
 from src.permission.permission import Prompter
+from src.logger.logger import get_logger
 from .types import Tool, arg_string
 
 SEVERITIES: tuple[Severity, ...] = (
@@ -23,6 +24,7 @@ SEVERITIES: tuple[Severity, ...] = (
 )
 
 FindingNotifier = Callable[[Finding, str], None]
+log = get_logger("tools.finding")
 
 class ConfirmFindingTool:
     def __init__(
@@ -178,7 +180,12 @@ class ConfirmFindingTool:
 
         path = await self.store.save(finding)
 
-        self.notifier(finding, path)
+        try:
+            self.notifier(finding, path)
+        except Exception:
+            # Persistence succeeded.  Reporting a tool failure here invites a
+            # retry, which would create a duplicate numbered report.
+            log.warning("finding notifier failed after persistence", exc_info=True)
 
         return f'Finding "{finding.title}" written to {path}'
 

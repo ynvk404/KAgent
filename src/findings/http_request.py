@@ -14,9 +14,10 @@ CURL_DATA_FLAGS = {
     "--data-binary",
     "--data-urlencode",
     "--json",
-    "--form",
-    "-F",
 }
+
+CURL_FORM_FLAGS = {"--form", "-F"}
+CURL_GET_FLAGS = {"-G", "--get"}
 
 CURL_SKIP_VALUE_FLAGS = {
     "--connect-timeout",
@@ -77,6 +78,8 @@ def http_request_from_curl(
     target = ""
     body_parts: list[str] = []
     headers: list[str] = []
+    get_mode = False
+    explicit_method = False
 
     i = 0
 
@@ -84,20 +87,35 @@ def http_request_from_curl(
 
         arg = args[i]
 
+        if arg in CURL_GET_FLAGS:
+            get_mode = True
+            i += 1
+            continue
+
+        # A raw HTTP request with a URL-encoded pseudo-body is misleading for
+        # multipart data. Let the caller use the saved finding URL instead.
+        if arg in CURL_FORM_FLAGS or (
+            arg.startswith("-F") and len(arg) > 2
+        ) or arg.startswith("--form="):
+            return None
+
         if arg in ("-X", "--request"):
             i += 1
             if i < len(args):
                 method = args[i]
+                explicit_method = True
             i += 1
             continue
 
         if arg.startswith("--request="):
             method = arg[len("--request="):]
+            explicit_method = True
             i += 1
             continue
 
         if arg.startswith("-X") and len(arg) > 2:
             method = arg[2:]
+            explicit_method = True
             i += 1
             continue
 
@@ -152,7 +170,7 @@ def http_request_from_curl(
                 encode_curl_data(arg, value)
             )
 
-            if not method:
+            if not method and not get_mode:
                 method = "POST"
 
             i += 1
@@ -176,7 +194,7 @@ def http_request_from_curl(
                 encode_curl_data(flag, value)
             )
 
-            if not method:
+            if not method and not get_mode:
                 method = "POST"
 
             i += 1
@@ -308,8 +326,8 @@ def http_request_from_curl(
     body = "&".join(body_parts)
 
     normalized_method = (
-        method
-        or ("POST" if body else "GET")
+        method if method and (explicit_method or not get_mode)
+        else ("GET" if get_mode else ("POST" if body else "GET"))
     ).upper()
 
 
@@ -317,8 +335,12 @@ def http_request_from_curl(
         parsed.path or "/"
     )
 
-    if parsed.query:
-        path += f"?{parsed.query}"
+    query_parts = [parsed.query] if parsed.query else []
+    if get_mode and body:
+        query_parts.append(body)
+        body = ""
+    if query_parts:
+        path += f"?{'&'.join(query_parts)}"
 
 
     out = [
@@ -391,6 +413,9 @@ def fallback_request(
 def request_host(parsed: urllib.parse.ParseResult) -> str:
 
     host = parsed.hostname or ""
+
+    if ":" in host:
+        host = f"[{host}]"
 
     if parsed.port:
         host += f":{parsed.port}"

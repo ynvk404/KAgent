@@ -99,8 +99,23 @@ class Store:
                     0o600,
                 )
 
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(content)
+                try:
+                    f = os.fdopen(fd, "w", encoding="utf-8")
+                    fd = None  # The file object now owns the descriptor.
+                    with f:
+                        f.write(content)
+                except BaseException:
+                    # The name was reserved before writing.  Never leave a
+                    # partial report behind if writing or closing fails.
+                    try:
+                        if fd is not None:
+                            os.close(fd)
+                    finally:
+                        try:
+                            os.unlink(path)
+                        except FileNotFoundError:
+                            pass
+                    raise
 
                 return str(path)
 
@@ -139,7 +154,7 @@ def render(
 
     lines: list[str] = []
 
-    lines.append(f"# {f.title}")
+    lines.append(f"# {_inline(f.title)}")
     lines.append("")
 
     lines.append(f"- **Severity:** {f.severity}")
@@ -153,13 +168,13 @@ def render(
     if f.owasp:
         lines.append(f"- **OWASP:** {', '.join(f.owasp)}")
 
-    lines.append(f"- **URL:** {f.url}")
+    lines.append(f"- **URL:** {_inline(f.url)}")
 
     if f.method:
-        lines.append(f"- **Method:** {f.method}")
+        lines.append(f"- **Method:** {_inline(f.method)}")
 
     if f.parameter:
-        lines.append(f"- **Parameter:** {f.parameter}")
+        lines.append(f"- **Parameter:** {_inline(f.parameter)}")
 
     lines.append(f"- **Reported at:** {f.createdAt}")
 
@@ -178,9 +193,7 @@ def render(
             [
                 "## Payload",
                 "",
-                "```",
-                f.payload,
-                "```",
+                *_fenced(f.payload),
                 "",
             ]
         )
@@ -190,9 +203,7 @@ def render(
             [
                 "## Response excerpt",
                 "",
-                "```",
-                f.responseExcerpt,
-                "```",
+                *_fenced(f.responseExcerpt),
                 "",
             ]
         )
@@ -202,9 +213,7 @@ def render(
             [
                 "## Reproduce",
                 "",
-                "```sh",
-                f.curl,
-                "```",
+                *_fenced(f.curl, "sh"),
                 "",
             ]
         )
@@ -220,3 +229,15 @@ def render(
         )
 
     return "\n".join(lines)
+
+
+def _inline(value: str) -> str:
+    """Keep model-controlled metadata on its intended Markdown line."""
+    return " ".join(value.splitlines())
+
+
+def _fenced(value: str, language: str = "") -> list[str]:
+    """Use a fence that cannot be closed by backticks in evidence."""
+    longest = max((len(run) for run in re.findall(r"`+", value)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return [f"{fence}{language}", value, fence]

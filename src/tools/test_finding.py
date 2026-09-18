@@ -100,6 +100,28 @@ async def test_run_persists_finding_and_notifies(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_reports_success_when_notifier_raises(tmp_path):
+    def broken_notifier(*_):
+        raise RuntimeError("Burp bridge unavailable")
+
+    tool, _ = _tool(tmp_path, notifier=broken_notifier)
+
+    result = await tool.run(
+        {
+            "title": "Persisted despite notifier failure",
+            "severity": "high",
+            "url": "https://target.test/login",
+            "impact": "Impact",
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    assert "written to" in result
+    assert len(list((tmp_path / "findings").glob("*.md"))) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "vuln_class",
     ["sqli", " SQLI "],
@@ -172,6 +194,15 @@ async def test_run_persists_without_classification_when_class_is_omitted(tmp_pat
     assert seen[0].vulnerabilityType is None
     assert seen[0].cwe is None
     assert seen[0].owasp is None
+
+
+def test_classifications_do_not_share_mutable_lists():
+    first = classify("sqli")
+    second = classify("sqli")
+    assert first is not None and second is not None
+
+    first.cwe.append("CWE-test")
+    assert second.cwe == ["CWE-89"]
 
 
 @pytest.mark.asyncio

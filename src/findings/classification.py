@@ -39,4 +39,14 @@ def classify(vuln_class: str) -> VulnClassification | None:
     normalized = vuln_class.strip().lower()
     if not normalized:
         return None
-    return CLASSIFICATION.get(normalized)
+    classification = CLASSIFICATION.get(normalized)
+    if classification is None:
+        return None
+
+    # Findings own their classification metadata; callers must not be able to
+    # mutate the shared taxonomy (or another finding) through these lists.
+    return VulnClassification(
+        type=classification.type,
+        cwe=list(classification.cwe),
+        owasp=list(classification.owasp),
+    )

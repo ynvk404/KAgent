@@ -87,7 +87,7 @@ def test_user_equals_form_sets_basic_auth_header():
     assert "Authorization: Basic YWxpY2U6c2VjcmV0" in request
 
 
-def test_form_flag_is_treated_as_post_body():
+def test_form_flag_falls_back_instead_of_misrepresenting_multipart_body():
     request = finding_request_for_burp(
         finding_with_curl(
             'curl -F "file=@upload.txt" '
@@ -95,9 +95,42 @@ def test_form_flag_is_treated_as_post_body():
         )
     )
 
-    assert "POST /api/upload HTTP/1.1" in request
-    assert "<contents of file" not in request 
-    assert "file=@upload.txt" in request
+    assert request == (
+        "GET /fallback HTTP/1.1\r\n"
+        "Host: app.example.com\r\n"
+        "User-Agent: kagent\r\n"
+        "\r\n"
+    )
+
+
+def test_ipv6_host_keeps_required_brackets_and_port():
+    request = finding_request_for_burp(
+        finding_with_curl("curl http://[::1]:8080/test")
+    )
+
+    assert "Host: [::1]:8080" in request
+
+
+def test_get_moves_data_to_the_query_string():
+    request = finding_request_for_burp(
+        finding_with_curl(
+            "curl -G -d 'q=test' https://example.com/search?existing=1"
+        )
+    )
+
+    assert request.startswith("GET /search?existing=1&q=test HTTP/1.1")
+    assert "Content-Length:" not in request
+    assert request.endswith("\r\n\r\n")
+
+
+def test_json_sets_json_content_type_and_post_body():
+    request = finding_request_for_burp(
+        finding_with_curl("curl --json '{\"name\": \"test\"}' https://example.com/api")
+    )
+
+    assert request.startswith("POST /api HTTP/1.1")
+    assert "Content-Type: application/json" in request
+    assert request.endswith('\r\n\r\n{"name": "test"}')
 
 
 def test_explicit_host_header_from_curl_is_not_duplicated():

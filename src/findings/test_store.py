@@ -1,4 +1,5 @@
 import asyncio
+import os
 import stat
 import shutil
 import tempfile
@@ -92,6 +93,39 @@ async def test_concurrent_saves_with_same_slug_never_collide(temp_dir: str):
     assert len(set(paths)) == len(paths)  
     for path in paths:
         assert Path(path).exists()
+
+
+@pytest.mark.asyncio
+async def test_failed_write_removes_reserved_partial_file(temp_dir: str, monkeypatch):
+    store = Store(temp_dir)
+    real_fdopen = os.fdopen
+
+    class BrokenFile:
+        def __init__(self, fd):
+            self.fd = fd
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            os.close(self.fd)
+            return False
+
+        def write(self, _):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(
+        os,
+        "fdopen",
+        lambda fd, *_args, **_kwargs: BrokenFile(fd),
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        await store.save(make_finding(slug="write-failure"))
+
+    assert not (Path(temp_dir) / "write-failure.md").exists()
+    # Keep the monkeypatch local to this test while documenting the real API.
+    assert real_fdopen is not None
 
 @pytest.mark.parametrize(
     "title,expected",
@@ -187,3 +221,26 @@ def test_render_omits_classification_when_absent():
     assert "Vulnerability Type" not in content
     assert "- **CWE:**" not in content
     assert "- **OWASP:**" not in content
+
+
+def test_render_keeps_backticks_in_evidence_inside_a_single_code_block():
+    content = render(
+        make_finding(
+            payload="proof\n```\n# not a report heading",
+            responseExcerpt="response\n````\n## also evidence",
+            curl="curl x\n```\necho evidence",
+        )
+    )
+
+    assert "````\nproof\n```\n# not a report heading\n````" in content
+    assert "`````\nresponse\n````\n## also evidence\n`````" in content
+    assert "````sh\ncurl x\n```\necho evidence\n````" in content
+
+
+def test_render_keeps_metadata_on_its_own_lines():
+    content = render(
+        make_finding(title="A title\n## injected section", url="https://x\n- injected")
+    )
+
+    assert content.startswith("# A title ## injected section\n")
+    assert "- **URL:** https://x - injected" in content
