@@ -125,6 +125,7 @@ def test_frontmatter_allowed_tools(
         "shell",
         "http",
         "file_write",
+        "workflow",
     ]
 
 

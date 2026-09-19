@@ -40,9 +40,21 @@ allowed-tools:
   - file_write
   - ask_user
   - confirm_finding
+  - workflow
 ---
 
 # Access control playbook
+
+## Structured workflow contract
+
+Consume a matching Candidate with `workflow(action="start_validation",
+candidate_id="...")`. A concrete direct request may be validated immediately;
+record its details as a Candidate for result linkage without requiring earlier
+reconnaissance. Record every meaningful attempt via
+`workflow(action="record_result", ...)`; map missing identity/evidence to
+`insufficient-evidence` and write authorization gates to
+`authorization-required`. Use evidence references rather than response bodies.
+Only `confirmed` is eligible for `confirm_finding`, using the Candidate ID.
 
 You have a specific candidate that `web-input-analysis` flagged
 `suspected_class: access-control`, or that the user directly supplied with a

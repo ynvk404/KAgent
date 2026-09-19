@@ -24,6 +24,7 @@ class DecisionPlan:
 class PlannerContext:
     active_skills: frozenset[str] = frozenset()
     candidate_classes: frozenset[str] = frozenset()
+    completed_skills: frozenset[str] = frozenset()
 
 
 class SkillRecommendation(TypedDict):
@@ -214,9 +215,12 @@ def detect_intent(
     context: PlannerContext | None = None,
 ) -> List[IntentScore]:
     planner_context = context or PlannerContext()
-    active_skills = {
+    completed_or_active_skills = {
         normalize_metadata_skill_name(name)
-        for name in planner_context.active_skills
+        for name in (
+            planner_context.active_skills
+            | planner_context.completed_skills
+        )
     }
     contextual_classes = {
         normalize_candidate_class(name)
@@ -228,7 +232,7 @@ def detect_intent(
         if skill.disable_model_invocation:
             continue
 
-        explicit_hits = (
+        explicit_skill_hits = (
             [skill.name]
             if contains_keyword(normalized, skill.name)
             else []
@@ -238,6 +242,11 @@ def detect_intent(
             normalized,
             skill.candidate_classes,
         )
+        # A canonical candidate class and any of its unambiguous aliases are
+        # equally explicit references.  Avoid counting the canonical form a
+        # second time merely because it is also the skill name.
+        if candidate_hits and normalize_candidate_class(skill.name) in candidate_hits:
+            explicit_skill_hits = []
         contextual_candidate_hits = sorted(
             set(skill.candidate_classes) & contextual_classes
         )
@@ -250,6 +259,27 @@ def detect_intent(
             normalized,
             skill.triggers.weak,
         )
+
+        if candidate_hits:
+            explicit_candidate_terms = {
+                normalize(term)
+                for candidate_class in candidate_hits
+                for term in candidate_class_terms(candidate_class)
+            }
+
+            def duplicates_explicit_candidate(hit: str) -> bool:
+                normalized_hit = normalize(hit)
+                return any(
+                    normalized_hit == term or normalized_hit in term.split()
+                    for term in explicit_candidate_terms
+                )
+
+            strong_hits = [
+                hit for hit in strong_hits if not duplicates_explicit_candidate(hit)
+            ]
+            weak_hits = [
+                hit for hit in weak_hits if not duplicates_explicit_candidate(hit)
+            ]
 
         generic_strong_hits = [
             hit
@@ -271,7 +301,7 @@ def detect_intent(
         )
 
         primary_signal = bool(
-            explicit_hits
+            explicit_skill_hits
             or candidate_hits
             or contextual_candidate_hits
             or strong_hits
@@ -279,22 +309,22 @@ def detect_intent(
             or stage_hits
         )
         prerequisite_hits = (
-            sorted(set(skill.requires) & active_skills)
+            sorted(set(skill.requires) & completed_or_active_skills)
             if primary_signal
             else []
         )
 
         score = (
-            len(explicit_hits) * EXPLICIT_SKILL_WEIGHT
-            + (len(candidate_hits) + len(contextual_candidate_hits))
-            * CANDIDATE_CLASS_WEIGHT
+            (len(explicit_skill_hits) + len(candidate_hits))
+            * EXPLICIT_SKILL_WEIGHT
+            + len(contextual_candidate_hits) * CANDIDATE_CLASS_WEIGHT
             + len(strong_hits) * STRONG_KEYWORD_WEIGHT
             + len(weak_hits) * WEAK_KEYWORD_WEIGHT
             + len(prerequisite_hits) * PREREQUISITE_WEIGHT
             + len(stage_hits) * STAGE_WEIGHT
         )
         strong_count = (
-            len(explicit_hits)
+            len(explicit_skill_hits)
             + len(candidate_hits)
             + len(contextual_candidate_hits)
             + len(strong_hits)
@@ -304,7 +334,7 @@ def detect_intent(
             continue
 
         hits = (
-            [f"skill:{hit}" for hit in explicit_hits]
+            [f"skill:{hit}" for hit in explicit_skill_hits]
             + [f"candidate:{hit}" for hit in candidate_hits]
             + [f"context-candidate:{hit}" for hit in contextual_candidate_hits]
             + strong_hits
@@ -317,7 +347,7 @@ def detect_intent(
                 "skill_name": skill.name,
                 "score": score,
                 "strong_count": strong_count,
-                "explicit_count": len(explicit_hits),
+                "explicit_count": len(explicit_skill_hits) + len(candidate_hits),
                 "candidate_count": (
                     len(candidate_hits) + len(contextual_candidate_hits)
                 ),
@@ -385,18 +415,22 @@ def matching_candidate_classes(
     hits: list[str] = []
 
     for candidate_class in candidate_classes:
-        terms = {
-            candidate_class,
-            *(
-                alias
-                for alias, canonical in CANDIDATE_CLASS_ALIASES.items()
-                if canonical == candidate_class
-            ),
-        }
+        terms = candidate_class_terms(candidate_class)
         if any(contains_keyword(normalized, term) for term in terms):
             hits.append(candidate_class)
 
     return hits
+
+
+def candidate_class_terms(candidate_class: str) -> set[str]:
+    return {
+        candidate_class,
+        *(
+            alias
+            for alias, canonical in CANDIDATE_CLASS_ALIASES.items()
+            if canonical == candidate_class
+        ),
+    }
 
 
 def normalize_metadata_skill_name(name: str) -> str:

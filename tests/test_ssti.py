@@ -160,6 +160,8 @@ def test_allowed_tools_do_not_include_unexpected_impact_tools(skill):
         "read_payloads",
         "file_write",
         "ask_user",
+        "confirm_finding",
+        "workflow",
     }
 
 

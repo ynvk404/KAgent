@@ -30,6 +30,7 @@ allowed-tools:
   - shell
   - http
   - file_write
+  - workflow
 ---
 
 # Web input analysis playbook
@@ -223,6 +224,16 @@ enough for the next skill to decide where to spend effort.
 
 ## 6. Build the candidate list
 
+For every candidate strong enough to include in the list, also call
+`workflow(action="record_candidate", source_skill="web-input-analysis", ...)`
+with its canonical `candidate_class`, method, endpoint, parameter/location,
+short signals, and references to the baseline request or auth context when
+available. Store references, not raw request/response bodies. The returned
+Candidate ID is the handoff key for the validation skill. The workflow tool
+deduplicates the same semantic target/method/endpoint/input/class tuple, so do
+not manufacture alternate IDs. Weak/noisy observations that do not meet the
+candidate-list bar must not be recorded.
+
 Write `web-input-analysis/<target>/candidates.md`, using the same target
 identifier as `recon` and `web-enumeration`. One entry per candidate:
 
@@ -275,6 +286,8 @@ Summarize at the top of the candidate file:
 
 Hand off only the candidates relevant to each skill — don't hand a whole
 inventory back to a vulnerability skill and let it re-triage from scratch.
+The structured Candidate is the authoritative handoff; `candidates.md` remains
+the operator-readable analysis artifact.
 
 ## Stop conditions
 
@@ -285,6 +298,10 @@ Stop analysis when:
 - no probe has escalated into an actual exploit or proof;
 - the candidate list is prioritized and ready to route to the three active
   vulnerability skills, with deferred classes clearly flagged.
+
+Then call `workflow(action="complete_skill",
+skill_name="web-input-analysis", current_phase="validation")`. This records
+workflow progress independently of the conversational summary.
 
 Do not turn signal-gathering into confirmation. Do not chain probes into a
 working payload. Do not decide a finding exists here — that determination,

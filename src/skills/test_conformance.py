@@ -49,6 +49,7 @@ def test_shipped_skills_have_valid_selection_metadata(shipped_registry):
         "http",
         "read_payloads",
         "shell",
+        "workflow",
     }
     known_skills = {skill.name for skill in shipped_registry.list()}
 

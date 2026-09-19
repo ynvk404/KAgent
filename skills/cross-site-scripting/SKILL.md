@@ -38,9 +38,21 @@ allowed-tools:
   - file_write
   - ask_user
   - confirm_finding
+  - workflow
 ---
 
 # Cross-site scripting playbook
+
+## Structured workflow contract
+
+Consume a matching Candidate with `workflow(action="start_validation",
+candidate_id="...")`. For a concrete direct user request, validation may begin
+immediately; record its supplied details as a Candidate for the result handoff,
+without requiring prior recon/analysis. Finish every meaningful attempt
+with `workflow(action="record_result", ...)`, mapping browser-only proof to
+`browser-required` and keeping evidence as references. Use `force=true` only
+for an explicit retest or materially changed input. Call `confirm_finding`
+with the Candidate ID only after the structured outcome is `confirmed`.
 
 You have a specific candidate that `web-input-analysis` flagged
 `suspected_class: cross-site-scripting`, or that the user directly supplied

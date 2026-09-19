@@ -29,9 +29,22 @@ allowed-tools:
   - shell
   - file_write
   - ask_user
+  - confirm_finding
+  - workflow
 ---
 
 # SSRF validation
+
+## Structured workflow contract
+
+Consume a matching Candidate with `workflow(action="start_validation",
+candidate_id="...")`. A concrete direct request may be validated immediately;
+record its supplied details for result linkage without requiring prior stages. Finish a
+meaningful attempt with `workflow(action="record_result", ...)`, referencing
+stored request/response or callback evidence. Missing canary/evidence maps to
+`insufficient-evidence`; an ungranted internal-target check maps to
+`authorization-required`. Only `confirmed` may call `confirm_finding` with the
+Candidate ID.
 
 Scope: confirm whether a parameter causes the server to make a request you
 control the destination of, and characterize how far that reach extends.
@@ -148,3 +161,11 @@ with `-`). Never write a literal placeholder as the filename.
 Include: the exact request(s), the exact response(s) or canary evidence,
 the SSRF level reached (1–4), and — if applicable — a one-line note that
 deeper impact validation would require separate scope and authorization.
+
+## Confirm an evidence-backed finding
+
+After recording a `confirmed` ValidationResult, call `confirm_finding` with
+its `candidate_id` and the required `title`, `severity`, `url`, and `impact`,
+plus method, parameter, reproducible request, response excerpt, remediation,
+and canonical `vuln_class` when available. Do not call it for any other
+structured outcome.

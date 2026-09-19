@@ -46,9 +46,21 @@ allowed-tools:
   - file_write
   - ask_user
   - confirm_finding
+  - workflow
 ---
 
 # Authentication playbook
+
+## Structured workflow contract
+
+Consume a matching Candidate with `workflow(action="start_validation",
+candidate_id="...")`. A concrete direct request may be validated immediately;
+record its details for result linkage without requiring prior analysis. Record
+every meaningful attempt through
+`workflow(action="record_result", ...)`, using canonical outcomes and evidence
+references. Map unavailable identity material to `insufficient-evidence` and
+an ungranted mutation checkpoint to `authorization-required`. Only a
+`confirmed` result is eligible for `confirm_finding` with the Candidate ID.
 
 You have a specific candidate that `web-input-analysis` flagged
 `suspected_class: authentication`, or that the user directly supplied with a

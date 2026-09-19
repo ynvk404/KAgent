@@ -63,6 +63,7 @@ from src.skills.registry import (
 )
 
 from src.target.target import Target
+from src.workflow.state import WorkflowState
 
 from src.tools.aliases import canonical_tool_name
 from src.tools.registry import Registry as ToolRegistry
@@ -131,6 +132,7 @@ MAX_PARALLEL_TOOL_CALLS = 4
 
 STATEFUL_TOOLS = {
     "load_skill",
+    "workflow",
 }
 
 MIDTURN_ELISION_PREFIX = (
@@ -139,6 +141,9 @@ MIDTURN_ELISION_PREFIX = (
 
 MIDTURN_ELISION_KEEP_RECENT = 4
 MAX_MEMORY_LIST = 200
+WORKFLOW_HISTORY_MARKER = (
+    "[workflow tool result elided; current structured state is in the system prompt]"
+)
 
 COMPACTION_SYSTEM_PROMPT = (
     "Create a compact continuation memory for the same "
@@ -237,6 +242,7 @@ class AgentOptions:
         intelligence: Optional[IntelligenceStore] = None,
         memory_store: Optional[MemoryStore] = None,
         engagement: str = "",
+        workflow: WorkflowState | None = None,
     ):
         self.client = client
         self.tools = tools
@@ -263,6 +269,7 @@ class AgentOptions:
         self.intelligence = intelligence
         self.memory_store = memory_store
         self.engagement = engagement
+        self.workflow = workflow
 
 
 class Agent:
@@ -298,6 +305,7 @@ class Agent:
         )
 
         self.memory: Optional[SessionMemory] = None
+        self.workflow = opts.workflow or WorkflowState()
 
         self.auto_compact_threshold = (
             opts.auto_compact_threshold
@@ -353,7 +361,8 @@ class Agent:
                     self.memory_store.index()
                     if self.memory_store
                     else ""
-                )
+                ),
+                workflow=self.workflow,
             )
         )
 
@@ -897,6 +906,7 @@ class Agent:
 
     async def reset(self) -> None:
         self.memory = None
+        self.workflow.clear()
         self.rebuild_system_prompt()
 
         self.history = [
@@ -922,7 +932,11 @@ class Agent:
         try:
             loaded = self.store.load()
 
-            return len(loaded.messages) > 1
+            return (
+                len(loaded.messages) > 1
+                or bool(loaded.workflow.candidates)
+                or bool(loaded.workflow.validation_results)
+            )
 
         except Exception as err:
             log_error(
@@ -941,6 +955,7 @@ class Agent:
             self.target.copy_from(loaded.target)
 
         self.memory = loaded.memory
+        self.workflow.replace_from(loaded.workflow)
 
         self.rebuild_system_prompt()
 
@@ -971,6 +986,7 @@ class Agent:
             self.history,
             self.target,
             self.memory,
+            self.workflow,
         )
 
     async def save_context_snapshot(self, reason: str = "periodic") -> str:
@@ -1026,6 +1042,7 @@ class Agent:
                     if self.memory_store
                     else ""
                 ),
+                workflow=self.workflow,
             )
         )
 
@@ -1162,6 +1179,12 @@ class Agent:
         self.history = reconcile_tool_calls(
             self.history
         )
+        elide_persisted_workflow_results(self.history)
+        self.rebuild_system_prompt()
+        self.history = ensure_system_prompt(
+            self.history,
+            self.sys_prompt,
+        )
 
         expanded_user_msg = expand_file_mentions(
             user_msg
@@ -1201,6 +1224,8 @@ class Agent:
                 self.target,
                 PlannerContext(
                     active_skills=frozenset(self.active_skills),
+                    candidate_classes=self.workflow.relevant_candidate_classes(),
+                    completed_skills=frozenset(self.workflow.completed_skills),
                 ),
             )
 
@@ -1814,6 +1839,7 @@ class Agent:
         self.running = True
 
         try:
+            elide_persisted_workflow_results(self.history)
             history_snap = self.history.copy()
 
             if len(history_snap) <= 1:
@@ -2046,6 +2072,7 @@ class Agent:
         self,
         signal,
     ) -> bool:
+        elide_persisted_workflow_results(self.history)
         history_snap = self.history.copy()
 
         if len(history_snap) <= 1:
@@ -2133,6 +2160,19 @@ def count_memory_items(
         + len(memory.credentials)
         + len(memory.todos)
     )
+
+
+def elide_persisted_workflow_results(messages: list[Message]) -> None:
+    """Drop successful prior-turn workflow payloads once state is injected."""
+    for message in messages:
+        if message.role != "tool" or message.name != "workflow":
+            continue
+        try:
+            payload = json.loads(message.content)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict) and payload.get("ok") is True:
+            message.content = WORKFLOW_HISTORY_MARKER
 
 
 def append_memory_section(

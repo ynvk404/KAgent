@@ -27,9 +27,22 @@ allowed-tools:
   - shell
   - file_write
   - ask_user
+  - confirm_finding
+  - workflow
 ---
 
 # CSRF validation
+
+## Structured workflow contract
+
+Consume a matching Candidate with `workflow(action="start_validation",
+candidate_id="...")`. A concrete direct request may be validated immediately;
+record its supplied details for result linkage without requiring prior stages. Record a
+canonical ValidationResult after a meaningful attempt, using evidence
+references rather than raw bodies. Use `browser-required` when HTTP-only
+evidence cannot establish browser behavior and `authorization-required` when
+the safe state change is not authorized. Only `confirmed` may proceed to
+`confirm_finding` with the Candidate ID.
 
 Scope: determine whether a state-changing request can be triggered from a
 cross-site context without an effective CSRF defense. This skill confirms
@@ -238,3 +251,11 @@ Include:
 - whether cross-site execution was conclusively demonstrated
 - a note when evidence is inconclusive
 - a note that deeper impact validation requires separate authorization
+
+## Confirm an evidence-backed finding
+
+After recording a `confirmed` ValidationResult, call `confirm_finding` with
+its `candidate_id` and the required `title`, `severity`, `url`, and `impact`,
+plus method, parameter, reproducible request, response excerpt, remediation,
+and canonical `vuln_class` when available. Do not call it for any other
+structured outcome.

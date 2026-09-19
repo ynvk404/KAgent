@@ -78,11 +78,16 @@ def test_allowed_tools_includes_ask_user(skill):
 
 
 def test_allowed_tools_does_not_include_unexpected_tools(skill):
-    # Validation-only scope: http/shell/file_write/ask_user is the
-    # expected toolset. Anything else is a signal the skill has grown
-    # beyond validation without a corresponding architecture review.
+    # Phase 3 adds only structured state and evidence-gated finding handoff.
     allowed = set(skill["frontmatter"]["allowed-tools"])
-    assert allowed == {"http", "shell", "file_write", "ask_user"}
+    assert allowed == {
+        "http",
+        "shell",
+        "file_write",
+        "ask_user",
+        "confirm_finding",
+        "workflow",
+    }
 
 
 def test_description_does_not_advertise_impact_chaining(skill):

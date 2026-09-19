@@ -87,6 +87,8 @@ from src.tools.ask import AskUserTool
 from src.tools.coverage import CoverageTool
 from src.tools.payloads import ReadPayloadsTool
 from src.tools.skill_file import ReadSkillFileTool
+from src.tools.workflow import WorkflowTool
+from src.workflow.state import WorkflowState
 
 from src.tools.mcp_server import (
     BROWSER_MCP_NAMES,
@@ -513,6 +515,7 @@ async def main() -> int:
     intelligence_store = IntelligenceStore()
     memory_store = MemoryStore()
     engagement = EngagementStore().load()
+    workflow = WorkflowState()
 
     tools = ToolRegistry()
     tools.register(ShellTool())
@@ -561,12 +564,14 @@ async def main() -> int:
                     finding_request_for_burp(finding).encode("utf-8")
                 ).decode("ascii"),
             ),
+            workflow,
         )
     )
     tools.register(LoadSkillTool(skills))
     tools.register(ReadPayloadsTool(skills))
     tools.register(ReadSkillFileTool(skills))
     tools.register(CoverageTool(coverage_store))
+    tools.register(WorkflowTool(workflow, target))
 
     for plugin in cfg.plugins:
         tools.register(CommandPluginTool(plugin))
@@ -782,6 +787,7 @@ async def main() -> int:
         memory_store=memory_store,
         engagement=engagement,
         streaming_enabled=False if flags.no_stream else cfg.streaming_enabled,
+        workflow=workflow,
     )
 
     agent = Agent(opts)

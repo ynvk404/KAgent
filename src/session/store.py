@@ -21,6 +21,7 @@ from src.llm.types import (
 )
 from src.logger.logger import get_logger
 from src.target.target import Target
+from src.workflow.state import WorkflowState
 
 log = get_logger("session.store")
 
@@ -50,6 +51,7 @@ class SessionFile:
     id: str | None = None
     target: Target | None = None
     memory: SessionMemory | None = None
+    workflow: WorkflowState = field(default_factory=WorkflowState)
 
 
 @dataclass
@@ -284,6 +286,7 @@ class Store:
                 id=self.id,
                 target=None,
                 memory=None,
+                workflow=WorkflowState(),
             )
 
         try:
@@ -313,12 +316,18 @@ class Store:
         if isinstance(target_data, dict):
             target = Target.from_dict(target_data)
 
+        workflow_data = raw.get("workflow")
+        if workflow_data is not None and not isinstance(workflow_data, dict):
+            log.warning("session: ignoring malformed workflow state")
+        workflow = WorkflowState.from_dict(workflow_data)
+
         return SessionFile(
             updated_at=raw.get("updated_at", ""),
             id=raw.get("id", self.id),
             messages=messages,
             target=target,
             memory=memory,
+            workflow=workflow,
         )
 
     async def save(
@@ -326,6 +335,7 @@ class Store:
         messages: list[Message],
         target: Target | None = None,
         memory: SessionMemory | None = None,
+        workflow: WorkflowState | None = None,
     ) -> None:
         if not self.path or str(self.path) in ("", "."):
             return
@@ -354,6 +364,7 @@ class Store:
             "id": self.id if self.id else None,
             "target": target.to_dict() if target and not target.is_empty() else None,
             "memory": dataclasses.asdict(memory) if memory else None,
+            "workflow": workflow.to_dict() if workflow else None,
             "messages": serialized_messages,
         }
 

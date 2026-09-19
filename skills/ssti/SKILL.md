@@ -35,9 +35,21 @@ allowed-tools:
   - read_payloads
   - file_write
   - ask_user
+  - confirm_finding
+  - workflow
 ---
 
 # SSTI playbook
+
+## Structured workflow contract
+
+Consume a matching Candidate with `workflow(action="start_validation",
+candidate_id="...")`. A concrete direct request may be validated immediately;
+record its supplied details for result linkage without requiring prior stages. Finish a
+meaningful attempt with `workflow(action="record_result", ...)`, referencing
+stored evidence. An ungranted impact probe is `authorization-required`, not a
+confirmed impact result. Only a reproducible `confirmed` result may call
+`confirm_finding` with the Candidate ID.
 
 This skill covers three phases in one workflow: detection, validation,
 and optional impact. Phase 1 and Phase 2 run as part of normal SSTI
@@ -250,3 +262,11 @@ Include:
 - a note when evidence is inconclusive
 - if Phase 3 was not run: a note that deeper impact validation is
   available but requires explicit authorization
+
+## Confirm an evidence-backed finding
+
+After recording a `confirmed` ValidationResult, call `confirm_finding` with
+its `candidate_id` and the required `title`, `severity`, `url`, and `impact`,
+plus method, parameter, reproducible request, response excerpt, remediation,
+and canonical `vuln_class` when available. Do not call it for any other
+structured outcome.

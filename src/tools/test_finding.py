@@ -12,11 +12,85 @@ from src.tools.finding import (
     ConfirmFindingTool,
     is_severity,
 )
+from src.workflow.state import Candidate, ValidationResult, WorkflowState
 
 
 def _tool(tmp_path, notifier=None):
     store = Store(str(tmp_path / "findings"))
     return ConfirmFindingTool(store, notifier=notifier), store
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "not-confirmed",
+        "blocked",
+        "insufficient-evidence",
+        "deferred",
+        "browser-required",
+        "authorization-required",
+    ],
+)
+async def test_structured_non_confirmed_results_are_not_eligible(tmp_path, outcome):
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(
+        Candidate(candidate_class="xss", endpoint="/search", parameter="q")
+    )
+    workflow.add_validation_result(
+        ValidationResult(candidate.id, "cross-site-scripting", outcome)
+    )
+    tool = ConfirmFindingTool(
+        Store(str(tmp_path / "findings")),
+        workflow=workflow,
+    )
+
+    with pytest.raises(Exception, match="latest ValidationResult"):
+        await tool.run(
+            {
+                "candidate_id": candidate.id,
+                "title": "Not eligible",
+                "severity": "medium",
+                "url": "https://target.test/search",
+                "impact": "None proven",
+            },
+            None,
+            AlwaysAllow(),
+        )
+    assert not (tmp_path / "findings").exists()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_structured_result_is_eligible(tmp_path):
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(
+        Candidate(candidate_class="sqli", endpoint="/product", parameter="id")
+    )
+    workflow.add_validation_result(
+        ValidationResult(
+            candidate.id,
+            "sql-injection",
+            "confirmed",
+            evidence_refs=["captures/sql-proof"],
+        )
+    )
+    tool = ConfirmFindingTool(
+        Store(str(tmp_path / "findings")),
+        workflow=workflow,
+    )
+
+    result = await tool.run(
+        {
+            "candidate_id": candidate.id,
+            "title": "Confirmed SQL injection",
+            "severity": "high",
+            "url": "https://target.test/product",
+            "impact": "Database query manipulation",
+        },
+        None,
+        AlwaysAllow(),
+    )
+    assert "written to" in result
 
 
 def test_metadata(tmp_path):

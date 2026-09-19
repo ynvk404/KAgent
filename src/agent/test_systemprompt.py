@@ -2,9 +2,46 @@
 from src.skills.registry import Registry
 from src.session.store import SessionMemory
 from src.target.target import Target
-from .system_prompt import BuildOptions, build_system_prompt
+from src.workflow.state import Candidate, WorkflowState
+from .system_prompt import BuildOptions, build_system_prompt, render_workflow
 
 class Testbuild_system_prompt:
+    def test_workflow_prompt_prioritizes_active_status_before_bounded_truncation(self):
+        workflow = WorkflowState()
+        new_candidates = []
+        for index in range(9):
+            candidate, _ = workflow.add_candidate(
+                Candidate(
+                    candidate_class="xss",
+                    target="https://target.test",
+                    endpoint=f"/new/{index}",
+                )
+            )
+            new_candidates.append(candidate)
+        queued, _ = workflow.add_candidate(
+            Candidate(
+                candidate_class="sqli",
+                target="https://target.test",
+                endpoint="/queued",
+                status="queued",
+            )
+        )
+        validating, _ = workflow.add_candidate(
+            Candidate(
+                candidate_class="idor",
+                target="https://target.test",
+                endpoint="/validating",
+                status="validating",
+            )
+        )
+
+        rendered = render_workflow(workflow)
+
+        assert validating.id in rendered
+        assert queued.id in rendered
+        assert rendered.index(validating.id) < rendered.index(queued.id)
+        assert new_candidates[-1].id not in rendered
+
     def test_thinking_toggle_injects_the_right_directive(self):
         on = build_system_prompt(
             BuildOptions(skills=Registry(), thinking_enabled=True, target=None)

@@ -13,6 +13,7 @@ from src.findings.store import (
 from src.findings.classification import classify
 from src.permission.permission import Prompter
 from src.logger.logger import get_logger
+from src.workflow.state import WorkflowState
 from .types import Tool, arg_string
 
 SEVERITIES: tuple[Severity, ...] = (
@@ -31,9 +32,11 @@ class ConfirmFindingTool:
         self,
         store: Store,
         notifier: FindingNotifier | None = None,
+        workflow: WorkflowState | None = None,
     ) -> None:
         self.store = store
         self.notifier = notifier or (lambda *_: None)
+        self.workflow = workflow
 
     def name(self) -> str:
         return "confirm_finding"
@@ -58,6 +61,13 @@ class ConfirmFindingTool:
                 "title": {
                     "type": "string",
                     "description": "Short descriptive title.",
+                },
+                "candidate_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional structured Candidate ID. When supplied, its "
+                        "latest ValidationResult must be confirmed."
+                    ),
                 },
                 "severity": {
                     "type": "string",
@@ -142,6 +152,7 @@ class ConfirmFindingTool:
         severity = arg_string(args, "severity").lower()
         url = arg_string(args, "url")
         impact = arg_string(args, "impact")
+        candidate_id = arg_string(args, "candidate_id")
 
         if not title:
             raise Exception("title is required")
@@ -151,6 +162,16 @@ class ConfirmFindingTool:
 
         if not impact:
             raise Exception("impact is required")
+
+        if (
+            candidate_id
+            and self.workflow is not None
+            and not self.workflow.eligible_for_finding(candidate_id)
+        ):
+            raise Exception(
+                "candidate is not eligible for confirm_finding: its latest "
+                "ValidationResult must have outcome=confirmed"
+            )
 
         if not is_severity(severity):
             raise Exception(

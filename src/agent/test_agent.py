@@ -21,6 +21,8 @@ from src.agent.agent import (
     ParsedToolCall,
     make_safe_emit,
     reconcile_tool_calls,
+    elide_persisted_workflow_results,
+    WORKFLOW_HISTORY_MARKER,
 )
 from src.coverage.store import CoverageStore
 from src.intelligence.store import IntelligenceStore
@@ -37,8 +39,99 @@ from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.target.target import Target
 from src.tools.registry import Registry as ToolRegistry
 from src.tools.coverage import CoverageTool
+from src.workflow.state import Candidate, ValidationResult
 
 from src.session.store import Store, new_id
+
+
+def test_elides_successful_prior_workflow_results_but_preserves_errors():
+    messages = [
+        Message(
+            role="tool",
+            name="workflow",
+            tool_call_id="ok",
+            content=json.dumps({"ok": True, "candidate": {"id": "cand_1"}}),
+        ),
+        Message(
+            role="tool",
+            name="workflow",
+            tool_call_id="error",
+            content="error: unknown candidate",
+        ),
+        Message(
+            role="tool",
+            name="http",
+            tool_call_id="http",
+            content=json.dumps({"ok": True, "body": "keep"}),
+        ),
+    ]
+
+    elide_persisted_workflow_results(messages)
+
+    assert messages[0].content == WORKFLOW_HISTORY_MARKER
+    assert messages[1].content == "error: unknown candidate"
+    assert '"body": "keep"' in messages[2].content
+
+
+@pytest.mark.asyncio
+async def test_workflow_state_survives_compaction_and_resume(tmp_path):
+    session_id = new_id()
+    summary = "## Current objective\n- Continue validation\n## Open TODOs\n- Next candidate"
+    first = Agent(
+        AgentOptions(
+            client=FakeClient(
+                [
+                    ChatResponse(
+                        message=Message(role="assistant", content="first turn"),
+                        finish_reason="stop",
+                    ),
+                    ChatResponse(
+                        message=Message(role="assistant", content=summary),
+                        finish_reason="stop",
+                    ),
+                ]
+            ),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=Store.new_with_id(tmp_path, session_id),
+            target=Target(),
+        )
+    )
+    done, _ = first.workflow.add_candidate(
+        Candidate(candidate_class="sqli", endpoint="/done", parameter="id")
+    )
+    active, _ = first.workflow.add_candidate(
+        Candidate(candidate_class="xss", endpoint="/search", parameter="q")
+    )
+    first.workflow.add_validation_result(
+        ValidationResult(done.id, "sql-injection", "not-confirmed")
+    )
+
+    collector = collect()
+    await first.run("start", FakeSignal(), collector["sink"])
+    await first.compact(FakeSignal(), collector["sink"])
+
+    resumed = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=Store.new_with_id(tmp_path, session_id),
+            target=Target(),
+        )
+    )
+    resumed.resume_saved()
+
+    assert set(resumed.workflow.candidates) == {done.id, active.id}
+    assert resumed.workflow.latest_result(done.id) is not None
+    assert resumed.workflow.relevant_candidate_classes() == frozenset(
+        {"cross-site-scripting"}
+    )
+    prompt = resumed.get_history()[0].content
+    assert active.id in prompt
+    assert done.id in prompt
 class FakeSignal:
 
     def __init__(self):

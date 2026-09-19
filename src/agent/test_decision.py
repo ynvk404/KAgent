@@ -13,6 +13,7 @@ from src.agent.decision_planner import (
 )
 from src.skills.registry import Registry, Skill, SkillTriggers
 from src.target.target import Target
+from src.workflow.state import Candidate, WorkflowState
 
 
 SKILLS_ROOT = Path(__file__).resolve().parents[2] / "skills"
@@ -98,6 +99,26 @@ def test_candidate_class_aliases_are_normalized(alias, expected):
     assert planned_skill(f"validate candidate class {alias}") == expected
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Test this endpoint for SQL injection and XSS",
+        "Test this endpoint for sqli and cross-site-scripting",
+    ],
+)
+def test_canonical_and_alias_explicit_references_are_semantically_tied(text):
+    assert planned_skill(text) is None
+
+
+def test_aliases_are_explicit_candidate_references_not_skill_specific_routes():
+    access = metadata_skill("object-validator", candidate_classes=["access-control"])
+    sql = metadata_skill("database-validator", candidate_classes=["sql-injection"])
+
+    assert planned_skill("validate idor", [access, sql]) == "object-validator"
+    assert planned_skill("validate bola", [access, sql]) == "object-validator"
+    assert planned_skill("validate sqli", [access, sql]) == "database-validator"
+
+
 def test_known_candidate_context_outweighs_unrelated_vocabulary():
     context = PlannerContext(candidate_classes=frozenset({"idor"}))
     plan = build_decision_plan(
@@ -109,6 +130,63 @@ def test_known_candidate_context_outweighs_unrelated_vocabulary():
 
     assert plan is not None
     assert plan.recommended_skill == "access-control"
+
+
+@pytest.mark.parametrize(
+    ("candidate_class", "expected"),
+    [
+        ("sqli", "sql-injection"),
+        ("xss", "cross-site-scripting"),
+    ],
+)
+def test_structured_analysis_handoff_selects_matching_validator(
+    candidate_class,
+    expected,
+):
+    workflow = WorkflowState()
+    workflow.add_candidate(
+        Candidate(
+            candidate_class=candidate_class,
+            endpoint="/input",
+            parameter="value",
+            source_skill="web-input-analysis",
+        )
+    )
+    plan = build_decision_plan(
+        "continue validation",
+        shipped_skills(),
+        Target(),
+        PlannerContext(candidate_classes=workflow.relevant_candidate_classes()),
+    )
+    assert plan is not None
+    assert plan.recommended_skill == expected
+
+
+def test_multiple_structured_candidate_classes_remain_ambiguous():
+    workflow = WorkflowState()
+    workflow.add_candidate(Candidate(candidate_class="sqli", endpoint="/a"))
+    workflow.add_candidate(Candidate(candidate_class="xss", endpoint="/b"))
+
+    plan = build_decision_plan(
+        "continue test validation",
+        shipped_skills(),
+        Target(),
+        PlannerContext(candidate_classes=workflow.relevant_candidate_classes()),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill is None
+
+
+@pytest.mark.parametrize(
+    ("user_text", "expected"),
+    [
+        ("POST /product parameter=id test SQL injection", "sql-injection"),
+        ("GET /search parameter=q test XSS", "cross-site-scripting"),
+    ],
+)
+def test_direct_validation_does_not_require_structured_candidate(user_text, expected):
+    assert planned_skill(user_text) == expected
 
 
 @pytest.mark.parametrize("text", ["candidate", "endpoint", "test", "scan target"])

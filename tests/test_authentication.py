@@ -99,6 +99,7 @@ class TestSkillFileStructure:
             "file_write",
             "ask_user",
             "confirm_finding",
+            "workflow",
         ]
 
     REQUIRED_HEADERS_IN_ORDER = [
@@ -640,6 +641,8 @@ class TestRegistryIntegration:
         from src.tools.finding import ConfirmFindingTool
         from src.findings.store import Store
         from src.target.target import Target
+        from src.tools.workflow import WorkflowTool
+        from src.workflow.state import WorkflowState
 
         reg = Registry()
         target = Target()
@@ -653,6 +656,7 @@ class TestRegistryIntegration:
         reg.register(HTTPTool(target))
         reg.register(AskUserTool(StubPrompter()))
         reg.register(ConfirmFindingTool(Store(str(tmp_path / "findings"))))
+        reg.register(WorkflowTool(WorkflowState()))
 
         return reg
 

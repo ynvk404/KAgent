@@ -18,6 +18,58 @@ from src.session.store import (
     list_dir,
     new_id,
 )
+from src.workflow.state import Candidate, ValidationResult, WorkflowState
+
+
+class TestWorkflowPersistence:
+    @pytest.mark.asyncio
+    async def test_candidate_and_result_survive_round_trip(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "workflow-round-trip")
+        workflow = WorkflowState(current_phase="validation")
+        candidate, _ = workflow.add_candidate(
+            Candidate(
+                candidate_class="sqli",
+                method="POST",
+                endpoint="/product",
+                parameter="id",
+                source_skill="web-input-analysis",
+            )
+        )
+        workflow.add_validation_result(
+            ValidationResult(
+                candidate.id,
+                "sql-injection",
+                "confirmed",
+                evidence_refs=["captures/request-7"],
+            )
+        )
+
+        await store.save(
+            [Message(role="user", content="validate")],
+            workflow=workflow,
+        )
+        loaded = store.load().workflow
+
+        assert loaded.to_dict() == workflow.to_dict()
+        assert loaded.latest_result(candidate.id) is not None
+        assert loaded.eligible_for_finding(candidate.id) is True
+
+    def test_old_session_without_workflow_loads_empty_state(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "old")
+        store.path.write_text(
+            json.dumps({"messages": [{"role": "user", "content": "hi"}]}),
+            encoding="utf-8",
+        )
+
+        assert store.load().workflow.to_dict() == WorkflowState().to_dict()
+
+    @pytest.mark.parametrize("workflow", [None, "bad", ["bad"], {"candidates": "bad"}])
+    def test_malformed_or_empty_workflow_degrades_safely(self, tmp_path, workflow):
+        store = Store.new_with_id(tmp_path, "malformed-workflow")
+        store.path.write_text(json.dumps({"workflow": workflow}), encoding="utf-8")
+
+        assert store.load().workflow.candidates == {}
+        assert store.load().workflow.validation_results == []
 
 class TestEmptyPathGuards:
     @pytest.mark.asyncio

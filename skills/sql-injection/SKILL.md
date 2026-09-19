@@ -39,9 +39,24 @@ allowed-tools:
   - file_write
   - ask_user
   - confirm_finding
+  - workflow
 ---
 
 # SQL injection playbook
+
+## Structured workflow contract
+
+When a matching Candidate exists, call `workflow(action="start_validation",
+candidate_id="...")` and use its structured fields as the handoff. A concrete
+direct user request remains valid without prior analysis: first record the
+user-supplied endpoint/input as a Candidate as runtime bookkeeping; this does
+not block or require earlier workflow stages before validation. At the end of a
+meaningful attempt, call `workflow(action="record_result", ...)` with the
+canonical outcome, compact evidence references, techniques, repeatability,
+mutation/cleanup state, and any deferred reason. Use `force=true` only when the
+user explicitly requests a retest or the request/input materially changed.
+Only an outcome of `confirmed` is eligible for `confirm_finding`; pass the
+Candidate ID to that tool. All other outcomes stop without confirming.
 
 You have one or more concrete candidates, usually from
 `web-input-analysis/<target>/candidates.md` with
