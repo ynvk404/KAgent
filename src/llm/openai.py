@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any, Callable
 
@@ -13,9 +12,10 @@ from .errors import classify_backend
 from .providers import kimi_locks_temperature, kimi_supports_thinking_toggle
 from .retry import RetryInfo, RetryOptions, with_retry
 from .transport import (
-    CHAT_TIMEOUT_SEC,
     attach_retry_after,
     new_call_id,
+    new_provider_async_client,
+    ping_models_endpoint,
     resolve_max_tokens,
     run_cancellable,
 )
@@ -67,21 +67,7 @@ class OpenAIClient(StreamingClient):
         return headers
 
     async def ping(self) -> None:
-        import requests
-
-        loop = asyncio.get_running_loop()
-
-        def _do_request():
-            return requests.get(
-                f"{self.base_url}/models",
-                headers=self.headers(),
-                timeout=10,
-            )
-
-        resp = await loop.run_in_executor(None, _do_request)
-
-        if resp.status_code >= 500:
-            raise RuntimeError(f"{self.label} status {resp.status_code}")
+        await ping_models_endpoint(self.base_url, self.headers(), self.label)
 
     def _on_retry(self, info: RetryInfo) -> None:
         if not self.log_error:
@@ -107,7 +93,7 @@ class OpenAIClient(StreamingClient):
         body = self.encode_request(request, False)
 
         async def do_request() -> dict[str, Any]:
-            async with httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC) as client:
+            async with new_provider_async_client() as client:
                 try:
                     resp = await client.post(
                         f"{self.base_url}/chat/completions",
@@ -184,7 +170,7 @@ class OpenAIClient(StreamingClient):
         body = self.encode_request(request, True)
 
         async def open_stream() -> tuple[httpx.AsyncClient, httpx.Response]:
-            client = httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC)
+            client = new_provider_async_client()
             try:
                 req_obj = client.build_request(
                     "POST",

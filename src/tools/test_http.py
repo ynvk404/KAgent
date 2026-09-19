@@ -122,6 +122,36 @@ async def test_default_get_runtime():
         assert "HTTP/1.1 200 OK" in out
         assert "ok" in out
 
+
+@pytest.mark.asyncio
+async def test_target_http_keeps_its_environment_proxy_policy(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, **kwargs):
+            return FakeStream()
+
+    monkeypatch.setattr("src.tools.http.httpx.AsyncClient", FakeClient)
+
+    await HTTPTool(Target()).run(
+        {"url": "http://example.test"},
+        None,
+        FakePrompter(),
+    )
+
+    # Target traffic still uses httpx's default trust_env=True behavior, so
+    # intentional Burp/interception proxy environment settings keep working.
+    assert "trust_env" not in captured
+
 @pytest.mark.asyncio
 async def test_require_url():
 

@@ -21,6 +21,7 @@ from .providers import (
     OPENROUTER_RECOMMENDED_MODELS,
     validate_base_url,
 )
+from .transport import new_provider_session
 
 DEFAULT_TIMEOUT_S: float = 5.0
 
@@ -64,12 +65,15 @@ def list_models(
     elif api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    response = requests.get(
-        f"{base}/models",
-        headers=headers,
-        timeout=timeout,
-        allow_redirects=False,
-    )
+    # Model discovery is provider control-plane traffic, just like chat and
+    # health probes.  Do not let pentest/Burp proxy variables capture it.
+    with new_provider_session() as session:
+        response = session.get(
+            f"{base}/models",
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=False,
+        )
 
     if response.status_code != 200:
         raise requests.HTTPError(f"{b} list-models returned {response.status_code}")

@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-import httpx
-
 from .client import Client, Pinger
 from .errors import classify_backend
 from .providers import (
@@ -14,9 +12,9 @@ from .providers import (
 )
 from .retry import RetryOptions, with_retry
 from .transport import (
-    CHAT_TIMEOUT_SEC,
     aborted,
     attach_retry_after,
+    new_provider_async_client,
     ping_models_endpoint,
     resolve_max_tokens,
     run_cancellable,
@@ -72,7 +70,7 @@ class AnthropicClient(Client, Pinger):
         model = req.model or self.model_id
         body = encode_request(req, model, self._gen_opts())
 
-        async with httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC) as client:
+        async with new_provider_async_client() as client:
             try:
                 resp = await run_cancellable(
                     client.post(

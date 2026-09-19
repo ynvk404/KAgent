@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Awaitable, Mapping
 from typing import Any, TypeVar
 
 import httpx
+import requests
 
 from .errors import BackendError, parse_retry_after
 
@@ -18,6 +19,23 @@ CHAT_TIMEOUT_MS = 10 * 60 * 1000
 CHAT_TIMEOUT_SEC = CHAT_TIMEOUT_MS / 1000.0
 ABORT_POLL_INTERVAL_SEC = 0.1
 PING_TIMEOUT_SEC = 10.0
+
+
+def new_provider_async_client(timeout: float = CHAT_TIMEOUT_SEC) -> httpx.AsyncClient:
+    """Build an HTTP client for control-plane traffic to an LLM provider.
+
+    Provider requests must not inherit target/interception proxy variables from
+    the process environment.  Target-facing tools own their proxy policy
+    separately and intentionally do not use this factory.
+    """
+    return httpx.AsyncClient(timeout=timeout, trust_env=False)
+
+
+def new_provider_session() -> requests.Session:
+    """Build the synchronous equivalent used by provider model discovery."""
+    session = requests.Session()
+    session.trust_env = False
+    return session
 
 
 def aborted(signal: Any) -> bool:
@@ -67,7 +85,7 @@ async def ping_models_endpoint(
     provider: str,
 ) -> None:
     """GET `<base_url>/models` and treat any 5xx as the backend being unavailable."""
-    async with httpx.AsyncClient(timeout=PING_TIMEOUT_SEC) as client:
+    async with new_provider_async_client(PING_TIMEOUT_SEC) as client:
         resp = await client.get(f"{base_url}/models", headers=dict(headers))
         if resp.status_code >= 500:
             raise RuntimeError(f"{provider} status {resp.status_code}")

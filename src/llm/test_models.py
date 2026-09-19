@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 import requests
 
+from src.llm import models as models_module
 from src.llm.models import list_models
 from src.llm.providers import validate_base_url
 
@@ -105,6 +106,46 @@ def base_url() -> Iterator[str]:
 
 
 class TestListModels:
+    def test_model_discovery_uses_provider_transport_policy(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sessions = []
+
+        class FakeResponse:
+            status_code = 200
+
+            @staticmethod
+            def json() -> dict[str, list[dict[str, str]]]:
+                return {"data": []}
+
+        class FakeSession:
+            trust_env = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def get(self, *args: object, **kwargs: object) -> FakeResponse:
+                return FakeResponse()
+
+        def fake_provider_session() -> FakeSession:
+            session = FakeSession()
+            sessions.append(session)
+            return session
+
+        monkeypatch.setattr(
+            models_module,
+            "new_provider_session",
+            fake_provider_session,
+        )
+
+        assert list_models("openai-compat", "https://provider.invalid/v1") == []
+        assert len(sessions) == 1
+        assert sessions[0].trust_env is False
+
     def test_parses_lmstudio_openai_compat_v1_models(self, base_url: str) -> None:
         models = list_models("lmstudio", f"{base_url}/v1")
 

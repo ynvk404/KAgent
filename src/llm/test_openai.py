@@ -6,6 +6,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from src.llm import openai as openai_module
+from src.llm import transport
 from src.browser.store import CaptureStore
 from src.llm.openai import OpenAIClient
 from src.llm.types import ChatRequest, Message
@@ -204,6 +206,29 @@ async def test_non_stream_chat():
     c = OpenAIClient(base_url, "", "qwen")
     out = await c.chat(_req("qwen"))
     assert out.message.content == "hi"
+
+
+async def test_ping_streaming_and_non_streaming_share_provider_transport(monkeypatch):
+    calls = []
+    real_factory = transport.new_provider_async_client
+
+    def recording_factory(timeout=transport.CHAT_TIMEOUT_SEC):
+        calls.append(timeout)
+        return real_factory(timeout)
+
+    monkeypatch.setattr(openai_module, "new_provider_async_client", recording_factory)
+    monkeypatch.setattr(transport, "new_provider_async_client", recording_factory)
+
+    c = OpenAIClient(base_url, "", "qwen")
+    await c.ping()
+    await c.chat(_req("qwen"))
+    await c.chat_stream(_req("qwen"), lambda _: None)
+
+    assert calls == [
+        transport.PING_TIMEOUT_SEC,
+        transport.CHAT_TIMEOUT_SEC,
+        transport.CHAT_TIMEOUT_SEC,
+    ]
 
 
 async def test_serializes_browser_capture_clear_schema_without_action_argument():

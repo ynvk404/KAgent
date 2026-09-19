@@ -1,19 +1,17 @@
 import json
 from typing import Any, Callable, Dict, List, Optional
 
-import httpx
-
 from src.logger.logger import get_logger
 
 from .client import Client, Pinger, StreamingClient
 from .errors import classify_backend
 from .retry import RetryOptions, with_retry
 from .transport import (
-    CHAT_TIMEOUT_SEC,
     aborted,
     attach_retry_after,
     iter_sse_lines,
     new_call_id,
+    new_provider_async_client,
     ping_models_endpoint,
     resolve_max_tokens,
     run_cancellable,
@@ -107,7 +105,7 @@ class GeminiClient(StreamingClient, Pinger):
 
     async def _chat_once(self, req: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
         body = encode_request(req, self._gen_opts())
-        async with httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC) as client:
+        async with new_provider_async_client() as client:
             try:
                 resp = await run_cancellable(
                     client.post(
@@ -222,7 +220,7 @@ class GeminiClient(StreamingClient, Pinger):
     async def _open_stream(self, req: ChatRequest, signal: Optional[Any] = None):
  
         body = encode_request(req, self._gen_opts())
-        client = httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC)
+        client = new_provider_async_client()
         
         try:
 
