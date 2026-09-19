@@ -128,6 +128,11 @@ _KEY_ALIASES = {
 
 MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3
 COMPACTION_INPUT_CHAR_LIMIT = 22_000
+COMPACTION_MIN_SAVINGS_TOKENS = 64
+COMPACTION_MIN_REDUCTION_RATIO = 0.10
+COMPACTION_RECENT_MESSAGE_CHAR_LIMIT = 2_000
+COMPACTION_MIN_HISTORY_TOKENS = 2_048
+COMPACTION_MIN_HISTORY_RATIO = 1 / 3
 MAX_PARALLEL_TOOL_CALLS = 4
 
 STATEFUL_TOOLS = {
@@ -156,8 +161,14 @@ COMPACTION_SYSTEM_PROMPT = (
     "tool results that matter, confirmed negatives, and "
     "reproduction evidence. Redact secrets but keep stable "
     "placeholders. Omit chatter and failed dead ends unless "
-    "they prevent repeat work."
+    "they prevent repeat work. Do not restate Candidate or "
+    "ValidationResult records: authoritative WorkflowState is preserved "
+    "separately. Keep only evidence references needed to continue."
 )
+
+
+class IneffectiveCompactionError(RuntimeError):
+    pass
 
 
 @dataclass
@@ -867,27 +878,7 @@ class Agent:
         )
 
     def approx_tokens(self) -> int:
-        total = 0
-
-        for message in self.history:
-
-            if message.content:
-                total += len(message.content) // 4
-
-            if message.reasoning_content:
-                total += len(message.reasoning_content) // 4
-
-            for tc in (getattr(message, "tool_calls", None) or []):
-
-                function = tc.function
-
-                total += (
-                    len(function.name)
-                    +
-                    len(function.arguments)
-                ) // 4
-
-        return total
+        return approximate_message_tokens(self.history)
 
     def tools_token_estimate(self) -> int:
         tools_key = tuple(self.tools.names())
@@ -1199,12 +1190,15 @@ class Agent:
 
         history_tokens = self.approx_tokens()
         trigger_tokens = history_tokens + incoming_tokens + tools_tokens
+        compactable_history_tokens = approximate_message_tokens(self.history[1:])
 
         if (
             self.auto_compact_threshold > 0
             and self.consecutive_compact_failures
             < MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
             and trigger_tokens >= self.auto_compact_threshold
+            and compactable_history_tokens
+            >= minimum_compactable_history_tokens(self.auto_compact_threshold)
         ):
             await self.auto_compact(
                 signal,
@@ -1839,8 +1833,8 @@ class Agent:
         self.running = True
 
         try:
-            elide_persisted_workflow_results(self.history)
-            history_snap = self.history.copy()
+            history_snap = self.get_history()
+            elide_persisted_workflow_results(history_snap)
 
             if len(history_snap) <= 1:
                 safe_emit(
@@ -1883,66 +1877,20 @@ class Agent:
                 )
                 return
 
-            self.memory = merge_memory(
-                self.memory,
+            tokens_before, tokens_after = await self.apply_compaction_summary(
                 summary,
+                history_snap,
+                "manual compact",
             )
 
-            self.rebuild_system_prompt()
-
             self.consecutive_compact_failures = 0
-
-            await self.learn_intelligence(summary)
-
-            self.history = [
-                Message(
-                    role="system",
-                    content=self.sys_prompt,
-                ),
-                Message(
-                    role="user",
-                    content=(
-                        "Session context was compacted. "
-                        "Continue from this summary:\n\n"
-                        f"{summary}"
-                    ),
-                ),
-            ]
-
-            try:
-                await self.save()
-
-            except Exception as err:
-                safe_emit(
-                    {
-                        "type": "error",
-                        "err": RuntimeError(
-                            f"save compacted session: "
-                            f"{err_message(err)}"
-                        ),
-                    }
-                )
-
-            try:
-                await self.save_context_snapshot(
-                    "manual compact"
-                )
-
-            except Exception as err:
-                safe_emit(
-                    {
-                        "type": "error",
-                        "err": RuntimeError(
-                            f"save context snapshot: "
-                            f"{err_message(err)}"
-                        ),
-                    }
-                )
 
             safe_emit(
                 {
                     "type": "compact",
                     "summary": summary,
+                    "tokensBefore": tokens_before,
+                    "tokensAfter": tokens_after,
                     "memoryItems": count_memory_items(
                         self.memory
                     ),
@@ -2072,8 +2020,8 @@ class Agent:
         self,
         signal,
     ) -> bool:
-        elide_persisted_workflow_results(self.history)
-        history_snap = self.history.copy()
+        history_snap = self.get_history()
+        elide_persisted_workflow_results(history_snap)
 
         if len(history_snap) <= 1:
             return False
@@ -2108,39 +2056,101 @@ class Agent:
                 "compact returned empty summary"
             )
 
-        self.memory = merge_memory(
-            self.memory,
+        await self.apply_compaction_summary(
             summary,
-        )
-
-        self.rebuild_system_prompt()
-
-        await self.learn_intelligence(
-            summary
-        )
-
-        self.history = [
-            Message(
-                role="system",
-                content=self.sys_prompt,
-            ),
-            Message(
-                role="user",
-                content=(
-                    "Session context was compacted. "
-                    "Continue from this summary:\n\n"
-                    f"{summary}"
-                ),
-            ),
-        ]
-
-        await self.save()
-
-        await self.save_context_snapshot(
-            "auto compact"
+            history_snap,
+            "auto compact",
         )
 
         return True
+
+    async def apply_compaction_summary(
+        self,
+        summary: str,
+        history_snap: list[Message],
+        snapshot_reason: str,
+    ) -> tuple[int, int]:
+        next_memory = remove_workflow_duplicates(
+            merge_memory(self.memory, summary),
+            self.workflow,
+        )
+        parsed = parse_compaction_summary(summary)
+        structured = any(
+            (
+                parsed.objectives,
+                parsed.plan,
+                parsed.completed,
+                parsed.findings,
+                parsed.tested,
+                parsed.files,
+                parsed.commands,
+                parsed.credentials,
+                parsed.todos,
+            )
+        )
+        next_prompt = self.build_system_prompt_with_memory(next_memory)
+        recent = recent_useful_turn(history_snap[1:])
+        if structured:
+            next_history = [Message(role="system", content=next_prompt), *recent]
+        else:
+            next_history = [
+                Message(role="system", content=next_prompt),
+                Message(
+                    role="user",
+                    content=(
+                        "Session context was compacted. Continue from this "
+                        f"summary:\n\n{summary}"
+                    ),
+                ),
+                *recent,
+            ]
+
+        if len(next_history) == 1:
+            next_history.append(
+                Message(
+                    role="user",
+                    content="Session context was compacted. Continue from carried session state.",
+                )
+            )
+
+        tokens_before = approximate_message_tokens(history_snap)
+        tokens_after = approximate_message_tokens(next_history)
+        required_savings = max(
+            COMPACTION_MIN_SAVINGS_TOKENS,
+            int(tokens_before * COMPACTION_MIN_REDUCTION_RATIO),
+        )
+        if tokens_before - tokens_after < required_savings:
+            raise IneffectiveCompactionError(
+                "compact result rejected: context would not shrink meaningfully "
+                f"(~{tokens_before} -> ~{tokens_after} tokens; "
+                f"requires at least {required_savings} tokens saved)"
+            )
+
+        self.memory = next_memory
+        self.sys_prompt = next_prompt
+        self.history = next_history
+        await self.learn_intelligence(summary)
+        await self.save()
+        await self.save_context_snapshot(snapshot_reason)
+        return tokens_before, tokens_after
+
+    def build_system_prompt_with_memory(
+        self,
+        memory: SessionMemory | None,
+    ) -> str:
+        return build_system_prompt(
+            BuildOptions(
+                skills=self.skills,
+                thinking_enabled=self.thinking,
+                target=self.target,
+                tooling_profile=self.tooling_profile,
+                prompt_profile=self.prompt_profile,
+                memory=memory,
+                engagement=self.engagement,
+                curated_memory=(self.memory_store.index() if self.memory_store else ""),
+                workflow=self.workflow,
+            )
+        )
 
 
 def count_memory_items(
@@ -2159,6 +2169,97 @@ def count_memory_items(
         + len(memory.commands)
         + len(memory.credentials)
         + len(memory.todos)
+    )
+
+
+def approximate_message_tokens(messages: list[Message]) -> int:
+    total = 0
+    for message in messages:
+        if message.content:
+            total += len(message.content) // 4
+        if message.reasoning_content:
+            total += len(message.reasoning_content) // 4
+        for call in message.tool_calls or []:
+            total += (len(call.function.name) + len(call.function.arguments)) // 4
+    return total
+
+
+def minimum_compactable_history_tokens(auto_compact_threshold: int) -> int:
+    return max(
+        COMPACTION_MIN_HISTORY_TOKENS,
+        int(auto_compact_threshold * COMPACTION_MIN_HISTORY_RATIO),
+    )
+
+
+def recent_useful_turn(messages: list[Message]) -> list[Message]:
+    """Keep the latest raw user request and final answer, not bulky tool payloads."""
+    user_index = next(
+        (index for index in range(len(messages) - 1, -1, -1) if messages[index].role == "user"),
+        None,
+    )
+    if user_index is None:
+        return []
+
+    recent = [compact_recent_message(messages[user_index])]
+    final_answer = next(
+        (
+            message
+            for message in reversed(messages[user_index + 1 :])
+            if message.role == "assistant" and message.content and not message.tool_calls
+        ),
+        None,
+    )
+    if final_answer is not None:
+        recent.append(compact_recent_message(final_answer))
+    return recent
+
+
+def compact_recent_message(message: Message) -> Message:
+    content = message.content or ""
+    if len(content) <= COMPACTION_RECENT_MESSAGE_CHAR_LIMIT:
+        return replace(message)
+    marker_template = "\n[... {omitted} characters summarized during compaction ...]\n"
+    retained = COMPACTION_RECENT_MESSAGE_CHAR_LIMIT
+    for _ in range(10):
+        marker = marker_template.format(omitted=len(content) - retained)
+        next_retained = max(0, COMPACTION_RECENT_MESSAGE_CHAR_LIMIT - len(marker))
+        if next_retained >= retained:
+            break
+        retained = next_retained
+    marker = marker_template.format(omitted=len(content) - retained)
+    head = retained // 2
+    tail = retained - head
+    bounded = (
+        content[:head]
+        + marker
+        + content[-tail:]
+    )
+    return replace(message, content=bounded, reasoning_content=None, tool_calls=None)
+
+
+def remove_workflow_duplicates(
+    memory: SessionMemory,
+    workflow: WorkflowState,
+) -> SessionMemory:
+    """Do not mirror Candidate-linked facts into prose session memory."""
+    candidate_ids = tuple(workflow.candidates)
+    if not candidate_ids:
+        return memory
+
+    def keep(items: list[str]) -> list[str]:
+        return [item for item in items if not any(value in item for value in candidate_ids)]
+
+    return replace(
+        memory,
+        objectives=keep(memory.objectives),
+        plan=keep(memory.plan),
+        completed=keep(memory.completed),
+        findings=keep(memory.findings),
+        tested=keep(memory.tested),
+        files=keep(memory.files),
+        commands=keep(memory.commands),
+        credentials=keep(memory.credentials),
+        todos=keep(memory.todos),
     )
 
 

@@ -62,6 +62,7 @@ def skill_setup(tmp_path: Path):
         "---\n"
         "name: demo\n"
         "description: test skill\n"
+        "allowed-tools: []\n"
         "---\n"
         "# body\n",
         encoding="utf-8",
@@ -254,6 +255,7 @@ async def test_handles_missing_payload_directory(
         "---\n"
         "name: bare\n"
         "description: no payloads\n"
+        "allowed-tools: []\n"
         "---\n"
         "# body\n",
         encoding="utf-8",

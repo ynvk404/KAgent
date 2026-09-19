@@ -19,6 +19,8 @@ log = get_logger("memory.store")
 MAX_FACTS_PER_SCOPE = 500
 MAX_FACT_CHARS = 4000
 MAX_INDEX_LINES = 200
+MEMORY_INDEX_CHAR_LIMIT = 8_000
+MEMORY_RECALL_CHAR_LIMIT = 12_000
 
 RECENCY_BOOST = 0.25
 RECENCY_HALF_LIFE_MS = 14 * 24 * 60 * 60 * 1000
@@ -326,7 +328,7 @@ class MemoryStore:
         ]
         if len(facts) > MAX_INDEX_LINES:
             lines.append(f"- ...và {len(facts) - MAX_INDEX_LINES} mục khác")
-        return "\n".join(lines)
+        return _bounded_context("\n".join(lines), MEMORY_INDEX_CHAR_LIMIT)
 
     @staticmethod
     def tokenize(text: str) -> list[str]:
@@ -473,4 +475,16 @@ def format_memory_recall(facts: list[MemoryFact]) -> str:
     ]
     for fact in facts:
         output.append(f"\n## {fact.name} ({fact.type})\n\n{fact.text}\n")
-    return "\n".join(output)
+    return _bounded_context("\n".join(output), MEMORY_RECALL_CHAR_LIMIT)
+
+
+def _bounded_context(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    marker = "[... additional saved memory omitted ...]"
+    content_limit = max(0, limit - len(marker) - 1)
+    bounded = text[:content_limit]
+    boundary = bounded.rfind("\n")
+    if boundary > 0:
+        bounded = bounded[:boundary]
+    return (bounded + "\n" + marker)[:limit]

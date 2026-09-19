@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from src.logger.logger import get_logger
+from src.skills.registry import normalize_candidate_class
 
 log = get_logger("coverage.store")
 
@@ -107,6 +108,9 @@ class CoverageStore:
             for item in parsed["entries"]:
                 if _is_valid_entry(item):
                     entry = CoverageEntry(**item)
+                    entry.endpoint = _normalize_endpoint(entry.endpoint)
+                    entry.param = entry.param.strip()
+                    entry.vulnClass = normalize_candidate_class(entry.vulnClass)
                     entries[
                         _key_of(
                             entry.endpoint,
@@ -171,7 +175,7 @@ class CoverageStore:
 
         endpoint = _normalize_endpoint(endpoint)
         param = param.strip()
-        vulnClass = vulnClass.strip().lower()
+        vulnClass = normalize_candidate_class(vulnClass)
 
         if not endpoint or not param or not vulnClass:
             raise ValueError(
@@ -233,7 +237,7 @@ class CoverageStore:
             if param and e.param != param:
                 continue
 
-            if vulnClass and e.vulnClass != vulnClass.lower():
+            if vulnClass and e.vulnClass != normalize_candidate_class(vulnClass):
                 continue
 
             if status and e.status != status:
@@ -267,7 +271,7 @@ class CoverageStore:
 
             for vuln in vulnClasses:
 
-                vuln = vuln.strip().lower()
+                vuln = normalize_candidate_class(vuln)
 
                 if not vuln:
                     continue

@@ -26,6 +26,7 @@ except ImportError:
     _HAS_FILELOCK = False
 
 MAX_SCENARIOS_PER_FILE = 5000
+INTELLIGENCE_CONTEXT_CHAR_LIMIT = 10_000
 RECENCY_BOOST = 0.25
 RECENCY_HALF_LIFE_MS = 14 * 24 * 60 * 60 * 1000
 
@@ -506,7 +507,16 @@ def format_intelligence_context(results: list[dict[str, Any]]) -> str:
         if s.avoid_missing:
             out.append("Avoid missing: " + ", ".join(s.avoid_missing[:8]))
 
-    return "\n".join(out)
+    text = "\n".join(out)
+    if len(text) <= INTELLIGENCE_CONTEXT_CHAR_LIMIT:
+        return text
+    marker = "[... additional intelligence context omitted ...]"
+    content_limit = max(0, INTELLIGENCE_CONTEXT_CHAR_LIMIT - len(marker) - 1)
+    bounded = text[:content_limit]
+    boundary = bounded.rfind("\n")
+    if boundary > 0:
+        bounded = bounded[:boundary]
+    return (bounded + "\n" + marker)[:INTELLIGENCE_CONTEXT_CHAR_LIMIT]
 
 
 def extract_scenarios(

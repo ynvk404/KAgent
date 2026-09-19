@@ -6,12 +6,15 @@ import pytest
 
 from src.cli.main import (
     BURP_DEFAULT_PORT,
+    GROQ_AUTO_COMPACT_THRESHOLD,
     FlagParseError,
     close_runtime_resources,
+    effective_auto_compact_threshold,
     parse_flags,
     print_help,
     redacted_argv,
 )
+from src.config.config import Config, DEFAULT_AUTO_COMPACT_THRESHOLD
 from src.logger.session_debug import (
     SessionDebugOptions,
     create_session_debug_log,
@@ -85,6 +88,31 @@ def test_help_uses_the_runtime_burp_default(capsys):
     print_help()
 
     assert f"--burp [port]              start local Burp/KAgent bridge (default :{BURP_DEFAULT_PORT})" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("cfg", "expected"),
+    [
+        (Config(backend="groq"), GROQ_AUTO_COMPACT_THRESHOLD),
+        (Config(backend="groq", auto_compact_threshold=4_000), 4_000),
+        (Config(backend="groq", auto_compact_threshold=0), GROQ_AUTO_COMPACT_THRESHOLD),
+        (Config(backend="openai-compat"), DEFAULT_AUTO_COMPACT_THRESHOLD),
+        (Config(backend="kimi", model="moonshot-v1-8k"), 6_144),
+        (Config(backend="kimi", model="moonshot-v1-32k"), 24_576),
+        (Config(backend="kimi", model="kimi-k2.6"), 196_608),
+        (Config(backend="kimi", model="unknown"), DEFAULT_AUTO_COMPACT_THRESHOLD),
+        (
+            Config(
+                backend="kimi",
+                model="moonshot-v1-8k",
+                auto_compact_threshold=7_000,
+            ),
+            7_000,
+        ),
+    ],
+)
+def test_effective_auto_compact_threshold_selection(cfg, expected):
+    assert effective_auto_compact_threshold(cfg) == expected
 
 
 def test_normal_shutdown_closes_runtime_resources():

@@ -16,6 +16,7 @@ from .store import (
     tokenize,
     stable_scenario_id,
     format_intelligence_context,
+    INTELLIGENCE_CONTEXT_CHAR_LIMIT,
 )
 
 @pytest.fixture
@@ -371,3 +372,22 @@ class TestContextFormatter:
 
     def test_format_empty_results(self):
         assert format_intelligence_context([]) == ""
+
+    def test_format_intelligence_context_is_bounded(self):
+        results = [
+            {
+                "scenario": IntelligenceScenario(
+                    id=f"large-{index}",
+                    title=f"Large scenario {index}",
+                    lesson="x" * 4000,
+                    recommended_checks=["y" * 500] * 12,
+                ),
+                "score": 10,
+                "matched": ["large"],
+            }
+            for index in range(5)
+        ]
+
+        rendered = format_intelligence_context(results)
+        assert len(rendered) <= INTELLIGENCE_CONTEXT_CHAR_LIMIT
+        assert "omitted" in rendered

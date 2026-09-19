@@ -101,7 +101,7 @@ async def test_untested_returns_only_untested_pairs():
     assert not any(
         t["endpoint"] == "POST /login"
         and t["param"] == "username"
-        and t["vulnClass"] == "sqli"
+        and t["vulnClass"] == "sql-injection"
         for t in out
     )
 
@@ -120,8 +120,25 @@ async def test_summary_aggregates_by_status_and_vuln_class():
     assert s.byStatus["tried"] == 1
     assert s.byStatus["passed"] == 1
     assert s.byStatus["failed"] == 1
-    assert s.byVulnClass["xss"] == 2
-    assert s.byVulnClass["sqli"] == 1
+    assert s.byVulnClass["cross-site-scripting"] == 2
+    assert s.byVulnClass["sql-injection"] == 1
+
+
+@pytest.mark.asyncio
+async def test_candidate_class_aliases_share_coverage_identity():
+    store, _ = make_store()
+    await store.mark(
+        endpoint="GET /items",
+        param="id",
+        vulnClass="sqli",
+        status="tried",
+    )
+
+    assert await store.untested(
+        [{"endpoint": "GET /items", "param": "id"}],
+        ["sql-injection"],
+    ) == []
+    assert (await store.list(vulnClass="sqli"))[0].vulnClass == "sql-injection"
 
 @pytest.mark.asyncio
 async def test_persistence_round_trips_entries_through_json_file():

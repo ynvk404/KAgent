@@ -80,9 +80,9 @@ async def test_mark_records_entry(tmp_path):
     payload = json.loads(out)
     assert payload["ok"] is True
     entry = payload["entry"]
-    # query string stripped, vuln class lowercased
+    # Query string stripped; alias normalized to the canonical Candidate class.
     assert entry["endpoint"] == "GET /api/users"
-    assert entry["vulnClass"] == "sqli"
+    assert entry["vulnClass"] == "sql-injection"
     assert entry["status"] == "passed"
     assert entry["count"] == 1
     assert entry["notes"] == "union based"
@@ -120,7 +120,7 @@ async def test_list_empty_and_populated(tmp_path):
 
     rows = json.loads(await _run(tool, action="list"))
     assert len(rows) == 1
-    assert rows[0]["vuln_class"] == "xss"
+    assert rows[0]["vuln_class"] == "cross-site-scripting"
     assert rows[0]["count"] == 1
 
 
@@ -166,10 +166,10 @@ async def test_untested_returns_uncovered_tuples(tmp_path):
     tuples = json.loads(out)
     combos = {(t["endpoint"], t["param"], t["vulnClass"]) for t in tuples}
     # /a,q,sqli already marked -> excluded
-    assert ("/a", "q", "sqli") not in combos
-    assert ("/a", "q", "xss") in combos
-    assert ("/b", "p", "sqli") in combos
-    assert ("/b", "p", "xss") in combos
+    assert ("/a", "q", "sql-injection") not in combos
+    assert ("/a", "q", "cross-site-scripting") in combos
+    assert ("/b", "p", "sql-injection") in combos
+    assert ("/b", "p", "cross-site-scripting") in combos
 
 
 @pytest.mark.asyncio
@@ -261,7 +261,10 @@ async def test_summary_counts(tmp_path):
     assert summary["total"] == 2
     assert summary["byStatus"]["passed"] == 1
     assert summary["byStatus"]["failed"] == 1
-    assert summary["byVulnClass"] == {"sqli": 1, "xss": 1}
+    assert summary["byVulnClass"] == {
+        "sql-injection": 1,
+        "cross-site-scripting": 1,
+    }
 
 
 @pytest.mark.asyncio

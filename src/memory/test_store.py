@@ -10,6 +10,8 @@ from src.memory.store import (
     MemoryStore,
     AddMemoryInput,
     format_memory_recall,
+    MEMORY_INDEX_CHAR_LIMIT,
+    MEMORY_RECALL_CHAR_LIMIT,
 )
 
 @pytest.fixture
@@ -121,6 +123,21 @@ def test_empty_text(store):
 def test_format_memory_empty():
     result = format_memory_recall([])
     assert result == ""
+
+
+def test_memory_index_and_recall_have_deterministic_context_bounds(store):
+    for index in range(80):
+        store.add(
+            AddMemoryInput(
+                text=f"fact {index} " + "x" * 1000,
+                description=f"description {index} " + "y" * 140,
+            )
+        )
+
+    assert len(store.index()) <= MEMORY_INDEX_CHAR_LIMIT
+    recalled = format_memory_recall(store.list()[:20])
+    assert len(recalled) <= MEMORY_RECALL_CHAR_LIMIT
+    assert "omitted" in recalled
 
 
 def test_atomic_write_temp_is_private_before_chmod(tmp_path, monkeypatch):

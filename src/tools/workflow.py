@@ -43,12 +43,9 @@ class WorkflowTool(Tool):
 
     def description(self) -> str:
         return (
-            "Record and query compact structured pentest workflow state. "
-            "web-input-analysis records candidates; validation skills mark a "
-            "candidate validating and then record exactly one canonical result. "
-            "Evidence must be stored elsewhere and referenced by path or stable ID, "
-            "never copied as full request/response bodies. Use force=true only for "
-            "an intentional retest/new validation attempt."
+            "Record/query compact Candidate and ValidationResult state. Reference "
+            "stored evidence; never copy full requests/responses. Use force only "
+            "for an intentional retest."
         )
 
     def schema(self) -> dict[str, Any]:

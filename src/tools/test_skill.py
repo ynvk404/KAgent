@@ -44,6 +44,7 @@ def make_fixture() -> ReadSkillFileTool:
         "---\n"
         "name: demo\n"
         "description: t\n"
+        "allowed-tools: []\n"
         "---\n"
         "body\n",
         encoding="utf-8",

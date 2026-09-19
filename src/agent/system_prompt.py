@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     from workflow.state import WorkflowState
 
 APP_NAME = "kagent"
+SESSION_MEMORY_CONTEXT_CHAR_LIMIT = 10_000
+WORKFLOW_CONTEXT_CHAR_LIMIT = 6_000
+WORKFLOW_VALUE_CHAR_LIMIT = 200
 
 BASE_SYSTEM_PROMPT = """You are kagent, an agentic AI assistant for AUTHORIZED penetration testing and security research, specialized for offensive security workflows.
 
@@ -459,7 +462,11 @@ def render_memory(memory: Optional["SessionMemory"]) -> str:
         for item in items[-8:]:
             sb += f"- {item}\n"
 
-    return sb
+    return _bounded_prompt_context(
+        sb,
+        SESSION_MEMORY_CONTEXT_CHAR_LIMIT,
+        "[... older carried session items omitted ...]",
+    )
 
 
 def render_workflow(workflow: Optional["WorkflowState"]) -> str:
@@ -502,14 +509,33 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
             )
             lines.append(
                 f"  - {candidate.id} class={candidate.candidate_class} "
-                f"status={candidate.status} {scope}".rstrip()
+                f"status={candidate.status} {_workflow_brief(scope)}".rstrip()
             )
     if recent_results:
         lines.append("- Recent validation results:")
         for result in recent_results:
-            evidence = ",".join(result.evidence_refs[:3]) or "none"
+            evidence = ",".join(_workflow_brief(value) for value in result.evidence_refs[:3]) or "none"
             lines.append(
                 f"  - {result.candidate_id} skill={result.skill_name} "
                 f"outcome={result.outcome} evidence_refs={evidence}"
             )
-    return "\n".join(lines) + "\n"
+    return _bounded_prompt_context(
+        "\n".join(lines) + "\n",
+        WORKFLOW_CONTEXT_CHAR_LIMIT,
+        "[... additional workflow items omitted ...]",
+    )
+
+
+def _workflow_brief(value: str) -> str:
+    return value[:WORKFLOW_VALUE_CHAR_LIMIT]
+
+
+def _bounded_prompt_context(text: str, limit: int, marker: str) -> str:
+    if len(text) <= limit:
+        return text
+    content_limit = max(0, limit - len(marker) - 1)
+    bounded = text[:content_limit]
+    boundary = bounded.rfind("\n")
+    if boundary > 0:
+        bounded = bounded[:boundary]
+    return (bounded + "\n" + marker)[:limit]

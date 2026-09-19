@@ -23,7 +23,11 @@ from src.agent.agent import (
     reconcile_tool_calls,
     elide_persisted_workflow_results,
     WORKFLOW_HISTORY_MARKER,
+    COMPACTION_RECENT_MESSAGE_CHAR_LIMIT,
+    IneffectiveCompactionError,
+    minimum_compactable_history_tokens,
 )
+from src.agent.system_prompt import PromptProfile
 from src.coverage.store import CoverageStore
 from src.intelligence.store import IntelligenceStore
 from src.llm.client import Client
@@ -34,7 +38,7 @@ from src.llm.types import (
     ToolCall,
     FunctionCall,
 )
-from src.permission.permission import AlwaysAllow
+from src.permission.permission import AlwaysAllow, AlwaysDeny
 from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.target.target import Target
 from src.tools.registry import Registry as ToolRegistry
@@ -107,6 +111,7 @@ async def test_workflow_state_survives_compaction_and_resume(tmp_path):
     first.workflow.add_validation_result(
         ValidationResult(done.id, "sql-injection", "not-confirmed")
     )
+    seed_compactable_history(first)
 
     collector = collect()
     await first.run("start", FakeSignal(), collector["sink"])
@@ -304,6 +309,15 @@ def make_agent(
     return make_agent_with_client(
         scripted
     )["agent"]
+
+
+def seed_compactable_history(agent: Agent, size: int = 12_000) -> None:
+    agent.history.extend(
+        [
+            Message(role="user", content="older request " + "x" * size),
+            Message(role="assistant", content="older answer " + "y" * size),
+        ]
+    )
 
 
 def test_approx_tokens_counts_reasoning_content_without_changing_other_accounting():
@@ -898,7 +912,7 @@ async def test_auto_compacts_before_next_turn_when_over_threshold():
     compact_summary = ChatResponse(
         message=Message(
             role="assistant",
-            content="Compacted summary of prior turn.",
+            content="## Current objective\n- Continue the current test",
         ),
         finish_reason="stop",
     )
@@ -934,13 +948,13 @@ async def test_auto_compacts_before_next_turn_when_over_threshold():
     agent.history.append(
         Message(
             role="user",
-            content="previous useful turn",
+            content="previous useful turn " + "x" * 12_000,
         )
     )
     agent.history.append(
         Message(
             role="assistant",
-            content="previous useful answer",
+            content="previous useful answer " + "y" * 12_000,
         )
     )
 
@@ -976,6 +990,163 @@ async def test_auto_compacts_before_next_turn_when_over_threshold():
     ) in triggered_summary
 
     assert "auto-compacted" in compact_events[-1]["summary"]
+
+
+async def run_auto_compact_trigger_probe(
+    monkeypatch,
+    *,
+    threshold: int,
+    history_chars: int,
+    tool_description_chars: int = 0,
+    tools_enabled: bool = True,
+    prompt_profile: PromptProfile = "compact",
+) -> tuple[int, int, int, int, int]:
+    tools = ToolRegistry()
+    if tool_description_chars:
+        tools.register(NamedTool("large-schema", "s" * tool_description_chars))
+    client = FakeClient(
+        [
+            ChatResponse(
+                message=Message(role="assistant", content="answer"),
+                finish_reason="stop",
+            )
+        ]
+    )
+    agent = Agent(
+        AgentOptions(
+            client=client,
+            tools=tools,
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+            auto_compact_threshold=threshold,
+            prompt_profile=prompt_profile,
+        )
+    )
+    agent.history.append(Message(role="user", content="h" * history_chars))
+    attempts = 0
+
+    async def compact_probe(signal) -> bool:
+        nonlocal attempts
+        attempts += 1
+        return True
+
+    monkeypatch.setattr(agent, "compact_in_place", compact_probe)
+    history_tokens = agent.approx_tokens()
+    compactable_history_tokens = sum(
+        len(message.content) // 4 for message in agent.history[1:]
+    )
+    tools_tokens = agent.tools_token_estimate() if tools_enabled else 0
+    await agent.run(
+        "next",
+        FakeSignal(),
+        collect()["sink"],
+        AgentRunOptions(tools=tools_enabled),
+    )
+    return (
+        attempts,
+        history_tokens,
+        compactable_history_tokens,
+        tools_tokens,
+        len("next") // 4,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "threshold",
+        "history_chars",
+        "tool_description_chars",
+        "tools_enabled",
+        "prompt_profile",
+        "expected_attempts",
+    ),
+    [
+        # Groq-style: schema overhead pushes modest history over 5,500.
+        (5_500, 7_000, 19_000, True, "compact", 0),
+        # A larger compactable history should trigger at the same threshold.
+        (5_500, 14_000, 19_000, True, "compact", 1),
+        # Large history triggers even with no tool schemas.
+        (5_500, 20_000, 0, True, "compact", 1),
+        # At 16,000, fixed full prompt plus schemas cannot trigger modest history.
+        (16_000, 16_000, 19_000, True, "full", 0),
+        # The default threshold triggers once full-prompt history is genuinely large.
+        (16_000, 24_000, 19_000, True, "full", 1),
+        # A Kimi 8k-derived threshold still measures conversation, not full prompt.
+        (6_144, 7_000, 19_000, True, "full", 0),
+        # Disabling tools removes their schema cost from the trigger calculation.
+        (5_500, 7_000, 19_000, False, "compact", 0),
+    ],
+)
+async def test_characterizes_auto_compact_trigger_components(
+    monkeypatch,
+    threshold,
+    history_chars,
+    tool_description_chars,
+    tools_enabled,
+    prompt_profile,
+    expected_attempts,
+):
+    (
+        attempts,
+        history_tokens,
+        compactable_history_tokens,
+        tools_tokens,
+        incoming_tokens,
+    ) = (
+        await run_auto_compact_trigger_probe(
+            monkeypatch,
+            threshold=threshold,
+            history_chars=history_chars,
+            tool_description_chars=tool_description_chars,
+            tools_enabled=tools_enabled,
+            prompt_profile=prompt_profile,
+        )
+    )
+
+    assert attempts == expected_attempts
+    trigger_tokens = history_tokens + tools_tokens + incoming_tokens
+    if expected_attempts:
+        assert trigger_tokens >= threshold
+        assert compactable_history_tokens >= minimum_compactable_history_tokens(
+            threshold
+        )
+    else:
+        assert (
+            trigger_tokens < threshold
+            or compactable_history_tokens
+            < minimum_compactable_history_tokens(threshold)
+        )
+
+
+@pytest.mark.asyncio
+async def test_ineffective_auto_compaction_counts_as_a_circuit_breaker_failure():
+    agent = make_agent(
+        [
+            ChatResponse(
+                message=Message(role="assistant", content="z" * 20_000),
+                finish_reason="stop",
+            ),
+            ChatResponse(
+                message=Message(role="assistant", content="answer"),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    agent.set_auto_compact_threshold(1)
+    agent.history.append(Message(role="user", content="h" * 12_000))
+    collector = collect()
+
+    await agent.run("next", FakeSignal(), collector["sink"])
+
+    assert agent.consecutive_compact_failures == 1
+    assert any(
+        event["type"] == "error"
+        and "would not shrink meaningfully" in str(event["err"])
+        for event in collector["events"]
+    )
 
 
 @pytest.mark.asyncio
@@ -1014,6 +1185,122 @@ async def test_auto_compact_skip_does_not_emit_success_when_history_is_empty():
         for e in compact_events
     )
     assert agent.consecutive_compact_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_compaction_rejects_larger_summary_without_mutating_history():
+    agent = make_agent(
+        [
+            ChatResponse(
+                message=Message(role="assistant", content="z" * 20_000),
+                finish_reason="stop",
+            )
+        ]
+    )
+    agent.history.extend(
+        [
+            Message(role="user", content="short request"),
+            Message(
+                role="tool",
+                name="workflow",
+                tool_call_id="workflow-1",
+                content='{"ok": true, "candidate": {"id": "cand_keep"}}',
+            ),
+            Message(role="assistant", content="short answer"),
+        ]
+    )
+    before = agent.get_history()
+
+    with pytest.raises(IneffectiveCompactionError, match="would not shrink"):
+        await agent.compact_in_place(FakeSignal())
+
+    assert agent.get_history() == before
+    assert agent.memory is None
+
+
+@pytest.mark.asyncio
+async def test_compaction_preserves_latest_useful_turn_after_reducing_history():
+    summary = "## Current objective\n- Continue SQL injection validation"
+    agent = make_agent(
+        [
+            ChatResponse(
+                message=Message(role="assistant", content=summary),
+                finish_reason="stop",
+            )
+        ]
+    )
+    seed_compactable_history(agent)
+    agent.history.extend(
+        [
+            Message(role="user", content="keep this recent request"),
+            Message(role="assistant", content="keep this recent answer"),
+        ]
+    )
+    before = agent.approx_tokens()
+
+    assert await agent.compact_in_place(FakeSignal()) is True
+
+    assert agent.approx_tokens() < before
+    assert any(message.content == "keep this recent request" for message in agent.history)
+    assert any(message.content == "keep this recent answer" for message in agent.history)
+
+
+@pytest.mark.asyncio
+async def test_compaction_bounds_oversized_recent_message_and_preserves_its_edges():
+    summary = "## Current objective\n- Continue validation"
+    agent = make_agent(
+        [
+            ChatResponse(
+                message=Message(role="assistant", content=summary),
+                finish_reason="stop",
+            )
+        ]
+    )
+    seed_compactable_history(agent)
+    recent = "RECENT-START " + "r" * 8_000 + " RECENT-END"
+    agent.history.append(Message(role="user", content=recent))
+
+    assert await agent.compact_in_place(FakeSignal()) is True
+
+    preserved = next(message for message in agent.history if message.role == "user")
+    assert len(preserved.content) <= COMPACTION_RECENT_MESSAGE_CHAR_LIMIT
+    assert "characters summarized during compaction" in preserved.content
+    assert preserved.content.startswith("RECENT-START")
+    assert preserved.content.endswith("RECENT-END")
+
+
+@pytest.mark.asyncio
+async def test_compaction_does_not_duplicate_authoritative_workflow_candidate():
+    agent = make_agent([])
+    candidate, _ = agent.workflow.add_candidate(
+        Candidate(
+            candidate_class="sqli",
+            target="https://target.test",
+            endpoint="/product",
+            parameter="id",
+            status="queued",
+        )
+    )
+    agent.client = FakeClient(
+        [
+            ChatResponse(
+                message=Message(
+                    role="assistant",
+                    content=(
+                        "## Current objective\n- Continue validation\n"
+                        f"## Open TODOs\n- Candidate {candidate.id} remains queued"
+                    ),
+                ),
+                finish_reason="stop",
+            )
+        ]
+    )
+    seed_compactable_history(agent)
+
+    assert await agent.compact_in_place(FakeSignal()) is True
+
+    assert candidate.id not in agent.format_memory()
+    assert agent.get_history()[0].content.count(candidate.id) == 1
 
 @pytest.mark.asyncio
 async def test_stores_structured_memory_after_manual_compaction():
@@ -1056,6 +1343,7 @@ async def test_stores_structured_memory_after_manual_compaction():
     )
 
     agent = result["agent"]
+    seed_compactable_history(agent)
 
     collector = collect()
 
@@ -1116,6 +1404,7 @@ async def test_parses_plan_and_completed_tasks_headings_into_structured_memory()
     )
 
     agent = result["agent"]
+    seed_compactable_history(agent)
 
     collector = collect()
 
@@ -1170,6 +1459,7 @@ async def test_injects_carried_memory_into_system_prompt_after_compaction():
     )
 
     agent = result["agent"]
+    seed_compactable_history(agent)
 
     collector = collect()
 
@@ -1247,6 +1537,7 @@ async def test_accumulates_earlier_compactions_in_system_prompt_across_second_co
     )
 
     agent = result["agent"]
+    seed_compactable_history(agent)
 
     collector = collect()
 
@@ -1260,6 +1551,8 @@ async def test_accumulates_earlier_compactions_in_system_prompt_across_second_co
         FakeSignal(),
         collector["sink"],
     )
+
+    seed_compactable_history(agent)
 
     await agent.run(
         "second",
@@ -1331,6 +1624,7 @@ async def test_restores_carried_memory_into_system_prompt_on_resume():
                 target=Target(),
             )
         )
+        seed_compactable_history(first)
 
         collector = collect()
 
@@ -1439,6 +1733,7 @@ async def test_renders_staleness_caveat_above_carried_memory_block():
     )
 
     agent = result["agent"]
+    seed_compactable_history(agent)
 
     collector = collect()
 
@@ -1485,6 +1780,7 @@ async def test_clear_memory_wipes_carried_state_from_system_prompt():
     )
 
     agent = result["agent"]
+    seed_compactable_history(agent)
 
     collector = collect()
 
@@ -1542,6 +1838,7 @@ async def test_reset_rebuilds_system_prompt_without_carried_memory():
     )
 
     agent = result["agent"]
+    seed_compactable_history(agent)
     collector = collect()
 
     await agent.run("start", FakeSignal(), collector["sink"])
@@ -1587,6 +1884,7 @@ async def test_forget_memory_drops_only_matching_items():
     )
 
     agent = result["agent"]
+    seed_compactable_history(agent)
 
     collector = collect()
 
@@ -1650,6 +1948,7 @@ async def test_caps_the_findings_list_so_memory_cannot_grow_unbounded():
     for i in range(total):
 
         collector = collect()
+        seed_compactable_history(agent, size=5_000)
 
         await agent.run(
             f"turn {i}",
@@ -1755,6 +2054,7 @@ async def test_circuit_breaker_stops_retrying_auto_compact_after_three_failures(
             auto_compact_threshold=1,
         )
     )
+    agent.history.append(Message(role="user", content="h" * 12_000))
 
     for i in range(5):
 
@@ -2235,6 +2535,76 @@ async def test_allows_capability_tool_listed_in_active_skill():
     assert shell_result is not None
     assert shell_result.err == ""
     assert "ran:" in shell_result.result
+
+
+@pytest.mark.asyncio
+async def test_allowed_tools_never_bypasses_independent_permission_denial():
+    tools = ToolRegistry()
+    tools.register(RestrictedShellTool())
+    skills = SkillRegistry()
+    skills.add(
+        Skill(
+            name="shell-skill",
+            description="uses shell",
+            tools=["shell"],
+            disable_model_invocation=False,
+            path="/virtual/shell-skill/SKILL.md",
+            body="",
+        )
+    )
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=tools,
+            skills=skills,
+            prompter=AlwaysDeny(),
+            store=None,
+            target=Target(),
+        )
+    )
+    agent.active_skills.add("shell-skill")
+
+    result = await agent.run_parsed_tool_call(
+        ToolCall(
+            id="denied",
+            type="function",
+            function=FunctionCall(name="shell", arguments='{"command":"id"}'),
+        ),
+        ParsedToolCall({"command": "id"}, '{"command":"id"}'),
+        FakeSignal(),
+    )
+
+    assert "permission denied" in result.err_str
+
+
+def test_multiple_active_skills_use_union_for_permission_tool_capability():
+    tools = ToolRegistry()
+    tools.register(RestrictedShellTool())
+    skills = SkillRegistry()
+    for name, allowed in (("one", ["http"]), ("two", ["shell"])):
+        skills.add(
+            Skill(
+                name=name,
+                description=name,
+                tools=allowed,
+                disable_model_invocation=False,
+                path=f"/virtual/{name}/SKILL.md",
+                body="",
+            )
+        )
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=tools,
+            skills=skills,
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+        )
+    )
+    agent.active_skills.update({"one", "two"})
+
+    assert agent.is_tool_allowed("shell", {"command": "id"}).ok is True
 
 @pytest.mark.asyncio
 async def test_active_skill_with_empty_allowed_tools_means_unrestricted():

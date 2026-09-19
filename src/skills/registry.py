@@ -254,11 +254,13 @@ def parse_skill(path: str | Path) -> Skill:
         normalize_metadata_name,
     )
 
+    tool_keys = ("allowed-tools", "allowedTools", "tools")
+    if not any(key in metadata for key in tool_keys):
+        raise SkillMetadataError("missing required `allowed-tools` metadata")
+
     tools_value = first_metadata_value(
         metadata,
-        "allowed-tools",
-        "allowedTools",
-        "tools",
+        *tool_keys,
     )
     tools = parse_string_list(tools_value, "allowed-tools", str.strip)
 

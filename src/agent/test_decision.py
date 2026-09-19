@@ -9,6 +9,7 @@ from src.agent.decision_planner import (
     build_decision_plan,
     contains_keyword,
     has_host_like_text,
+    is_purely_informational,
     normalize,
 )
 from src.skills.registry import Registry, Skill, SkillTriggers
@@ -65,6 +66,39 @@ def test_explicit_skill_name_has_strong_preference():
     assert planned_skill(
         "Use web-input-analysis for these parameters",
     ) == "web-input-analysis"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What is SQL injection?",
+        "Explain XSS",
+        "Define SSRF",
+        "What is CSRF?",
+        "What is the difference between IDOR and BOLA?",
+        "How does server-side template injection work?",
+    ],
+)
+def test_informational_security_questions_do_not_recommend_validation_skills(text):
+    assert planned_skill(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Test parameter id for SQL injection", "sql-injection"),
+        ("Check this endpoint for XSS", "cross-site-scripting"),
+        ("How do I test this request for SQL injection?", "sql-injection"),
+        ("Explain SQL injection and test parameter id", "sql-injection"),
+    ],
+)
+def test_operational_action_overrides_informational_wording(text, expected):
+    assert planned_skill(text) == expected
+
+
+def test_informational_classifier_is_generic_not_vulnerability_specific():
+    assert is_purely_informational("explain a made up future vulnerability")
+    assert not is_purely_informational("explain it then validate this request")
 
 
 @pytest.mark.parametrize(

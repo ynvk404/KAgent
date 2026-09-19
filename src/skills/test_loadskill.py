@@ -41,6 +41,7 @@ use ${SKILL_DIR}/script.sh
         """---
 name: beta
 description: user-only skill
+allowed-tools: []
 disable-model-invocation: true
 ---
 
@@ -68,6 +69,7 @@ def test_parse_disable_model_invocation_kebab():
         """---
 name: kebab
 description: x
+allowed-tools: []
 disable-model-invocation: true
 ---
 
@@ -93,6 +95,7 @@ def test_parse_disable_model_invocation_camel():
         """---
 name: camel
 description: y
+allowed-tools: []
 disableModelInvocation: true
 ---
 
@@ -118,6 +121,7 @@ def test_parse_disable_default_false():
         """---
 name: plain
 description: z
+allowed-tools: []
 ---
 
 # body
@@ -153,6 +157,7 @@ def test_materialize_replace_multiple():
         """---
 name: multi
 description: x
+allowed-tools: []
 ---
 
 ${SKILL_DIR}/a

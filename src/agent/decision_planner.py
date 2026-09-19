@@ -133,6 +133,26 @@ WORKFLOW_TERMS = [
     "finding",
 ]
 
+INFORMATIONAL_PATTERNS = (
+    re.compile(r"^(?:what is|what are|define|explain|meaning of)\b"),
+    re.compile(r"^(?:what(?:'s| is) the )?difference between\b"),
+    re.compile(r"^how (?:does|do|is|are|can)\b"),
+)
+
+OPERATIONAL_ACTION_TERMS = (
+    "analyze",
+    "check",
+    "enumerate",
+    "exploit",
+    "inspect",
+    "probe",
+    "recon",
+    "scan",
+    "test",
+    "validate",
+    "verify",
+)
+
 
 def build_decision_plan(
     user_msg: str,
@@ -195,6 +215,9 @@ def recommend_skill(
     skills: List[Skill],
     context: PlannerContext | None = None,
 ) -> Optional[SkillRecommendation]:
+    if is_purely_informational(normalized):
+        return None
+
     scores = detect_intent(normalized, skills, context)
     best = confidence_check(scores)
 
@@ -207,6 +230,21 @@ def recommend_skill(
         "name": best["skill_name"],
         "reason": f"matched {best['skill_name']} signals: {top_hits}",
     }
+
+
+def is_purely_informational(normalized: str) -> bool:
+    """Return true for explanation requests with no testing action.
+
+    Candidate and skill names remain metadata-driven.  This only classifies
+    the requested mode of work, so future vulnerability classes need no
+    planner changes.
+    """
+    informational = any(pattern.search(normalized) for pattern in INFORMATIONAL_PATTERNS)
+    operational = any(
+        contains_keyword(normalized, term)
+        for term in OPERATIONAL_ACTION_TERMS
+    )
+    return informational and not operational
 
 
 def detect_intent(

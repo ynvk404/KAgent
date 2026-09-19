@@ -27,6 +27,7 @@ def test_frontmatter_with_triple_dash_in_value(tmp_path):
         "---\n"
         'name: mytool\n'
         'description: "A---B workflow"\n'
+        "allowed-tools: []\n"
         "---\n"
         "\n"
         "# Body\n"
@@ -46,6 +47,7 @@ def test_frontmatter_crlf_line_endings(tmp_path):
         "---\r\n"
         "name: crlf-tool\r\n"
         "description: uses CRLF\r\n"
+        "allowed-tools: []\r\n"
         "---\r\n"
         "\r\n"
         "# Body\r\n"
@@ -59,16 +61,12 @@ def test_frontmatter_crlf_line_endings(tmp_path):
     assert skill.description == "uses CRLF"
     assert skill.body.startswith("# Body")
 
-def test_no_frontmatter_falls_back_to_directory_name(tmp_path):
-    content = "# Just a body\nNo frontmatter at all.\n"
+def test_missing_allowed_tools_is_rejected(tmp_path):
+    content = "---\nname: plain-dir\ndescription: missing tools\n---\nBody\n"
     f = write_skill(tmp_path, "plain-dir", content)
 
-    skill = parse_skill(f)
-
-    assert skill.name == "plain-dir"
-    assert skill.description == ""
-    assert skill.tools == []
-    assert skill.body == content
+    with pytest.raises(SkillMetadataError, match="missing required `allowed-tools`"):
+        parse_skill(f)
 
 def test_frontmatter_non_dict_is_rejected(tmp_path):
     content = (
@@ -185,6 +183,7 @@ def test_disable_model_invocation_true(tmp_path, key):
         "---\n"
         "name: disabled-tool\n"
         "description: test\n"
+        "allowed-tools: []\n"
         f"{key}: true\n"
         "---\n"
         "\n"
@@ -201,6 +200,7 @@ def test_disable_model_invocation_default_false(tmp_path):
         "---\n"
         "name: normal-tool\n"
         "description: test\n"
+        "allowed-tools: []\n"
         "---\n"
         "\n"
         "Body\n"
@@ -216,6 +216,7 @@ def test_disable_model_invocation_non_bool_is_rejected(tmp_path):
         "---\n"
         "name: stringy-flag\n"
         "description: test\n"
+        "allowed-tools: []\n"
         'disable-model-invocation: "true"\n'
         "---\n"
         "\n"
@@ -227,9 +228,9 @@ def test_disable_model_invocation_non_bool_is_rejected(tmp_path):
         parse_skill(f)
 
 def test_load_dir_skips_hidden_and_template_dirs(tmp_path):
-    write_skill(tmp_path, "visible", "---\nname: visible\ndescription: d\n---\nBody\n")
-    write_skill(tmp_path, ".hidden", "---\nname: hidden\ndescription: d\n---\nBody\n")
-    write_skill(tmp_path, "_template", "---\nname: template\ndescription: d\n---\nBody\n")
+    write_skill(tmp_path, "visible", "---\nname: visible\ndescription: d\nallowed-tools: []\n---\nBody\n")
+    write_skill(tmp_path, ".hidden", "---\nname: hidden\ndescription: d\nallowed-tools: []\n---\nBody\n")
+    write_skill(tmp_path, "_template", "---\nname: template\ndescription: d\nallowed-tools: []\n---\nBody\n")
 
     r = Registry()
     r.load_dir(tmp_path)
@@ -242,7 +243,7 @@ def test_load_dir_skips_hidden_and_template_dirs(tmp_path):
 
 def test_load_dir_skips_non_directory_items(tmp_path):
     (tmp_path / "stray.txt").write_text("not a skill dir", encoding="utf-8")
-    write_skill(tmp_path, "real-skill", "---\nname: real-skill\ndescription: d\n---\nBody\n")
+    write_skill(tmp_path, "real-skill", "---\nname: real-skill\ndescription: d\nallowed-tools: []\n---\nBody\n")
 
     r = Registry()
     r.load_dir(tmp_path)
@@ -254,7 +255,7 @@ def test_load_dir_skips_non_directory_items(tmp_path):
 def test_load_dir_skips_dir_without_skill_md(tmp_path):
     empty_dir = tmp_path / "no-skill-here"
     empty_dir.mkdir()
-    write_skill(tmp_path, "has-skill", "---\nname: has-skill\ndescription: d\n---\nBody\n")
+    write_skill(tmp_path, "has-skill", "---\nname: has-skill\ndescription: d\nallowed-tools: []\n---\nBody\n")
 
     r = Registry()
     r.load_dir(tmp_path)
@@ -264,8 +265,8 @@ def test_load_dir_skips_dir_without_skill_md(tmp_path):
     assert names == ["has-skill"]
 
 def test_load_dir_skips_broken_skill_but_loads_rest(tmp_path, monkeypatch):
-    write_skill(tmp_path, "good-skill", "---\nname: good-skill\ndescription: d\n---\nBody\n")
-    write_skill(tmp_path, "broken-skill", "---\nname: broken-skill\ndescription: d\n---\nBody\n")
+    write_skill(tmp_path, "good-skill", "---\nname: good-skill\ndescription: d\nallowed-tools: []\n---\nBody\n")
+    write_skill(tmp_path, "broken-skill", "---\nname: broken-skill\ndescription: d\nallowed-tools: []\n---\nBody\n")
 
     import src.skills.registry as registry_mod
 
@@ -290,8 +291,8 @@ def test_load_dir_skips_broken_skill_but_loads_rest(tmp_path, monkeypatch):
 def test_load_dir_duplicate_metadata_names_have_stable_precedence(tmp_path):
     first = tmp_path / "first"
     second = tmp_path / "second"
-    write_skill(first, "duplicate", "---\nname: duplicate\ndescription: first\n---\nBody\n")
-    write_skill(second, "duplicate", "---\nname: duplicate\ndescription: last\n---\nBody\n")
+    write_skill(first, "duplicate", "---\nname: duplicate\ndescription: first\nallowed-tools: []\n---\nBody\n")
+    write_skill(second, "duplicate", "---\nname: duplicate\ndescription: last\nallowed-tools: []\n---\nBody\n")
 
     registry = Registry()
     registry.load_dir(first)
@@ -302,7 +303,7 @@ def test_load_dir_duplicate_metadata_names_have_stable_precedence(tmp_path):
     assert skill.description == "last"
 
 def test_get_has_clear(tmp_path):
-    write_skill(tmp_path, "alpha", "---\nname: alpha\ndescription: d\n---\nBody\n")
+    write_skill(tmp_path, "alpha", "---\nname: alpha\ndescription: d\nallowed-tools: []\n---\nBody\n")
 
     r = Registry()
     r.load_dir(tmp_path)
@@ -322,7 +323,7 @@ def test_get_has_clear(tmp_path):
     assert r.has("alpha") is False
 
 def test_clear_does_not_touch_disabled_set(tmp_path):
-    write_skill(tmp_path, "alpha", "---\nname: alpha\ndescription: d\n---\nBody\n")
+    write_skill(tmp_path, "alpha", "---\nname: alpha\ndescription: d\nallowed-tools: []\n---\nBody\n")
 
     r = Registry()
     r.load_dir(tmp_path)
@@ -434,7 +435,7 @@ def test_absent_optional_selection_metadata_has_safe_defaults(tmp_path):
     skill_file = write_skill(
         tmp_path,
         "simple",
-        "---\nname: simple\ndescription: Legacy simple skill\n---\nBody\n",
+        "---\nname: simple\ndescription: Legacy simple skill\nallowed-tools: []\n---\nBody\n",
     )
 
     skill = parse_skill(skill_file)
@@ -461,6 +462,7 @@ def test_malformed_selection_metadata_is_rejected(tmp_path, metadata, message):
         tmp_path,
         "broken",
         "---\nname: broken\ndescription: Broken metadata\n"
+        "allowed-tools: []\n"
         f"{metadata}\n---\nBody\n",
     )
 

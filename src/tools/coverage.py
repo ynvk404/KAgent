@@ -35,14 +35,10 @@ class CoverageTool(Tool):
         return "coverage"
 
     def description(self) -> str:
-        return "\n".join(
-            [
-                "Track which (endpoint, parameter, vuln_class) tuples have been tested this session, and figure out what still needs to be tried. Persists across resumes.",
-                "",
-                "Use this as a working set as you sweep a target. After each test (whether it confirmed a bug, came back clean, or hit a WAF), call action='mark'. Before picking the next test, call action='untested' with the candidates you have and the vuln classes you want to cover — it returns only the tuples you haven't tried.",
-                "",
-                "Vuln classes are free-form lowercase strings; the convention is to match a loaded skill name where possible (sqli, xss, ssti, idor, ssrf, jwt, deserialize, graphql, race, ...).",
-            ]
+        return (
+            "Track tested (endpoint, parameter, vulnerability-class) tuples "
+            "across resumes. Mark each meaningful test; query untested tuples "
+            "before choosing more work. Candidate-class aliases are normalized."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -53,48 +49,34 @@ class CoverageTool(Tool):
                     "type": "string",
                     "enum": list(ACTIONS),
                     "description": (
-                        "'mark' records one test; 'list' shows all recorded "
-                        "entries (filterable); 'untested' returns the "
-                        "candidate x vuln-class tuples that have not been "
-                        "marked yet; 'summary' returns counts; 'clear' wipes "
-                        "the session's coverage state."
+                        "mark, list, untested, or summary; clear "
+                        "removes session coverage after permission."
                     ),
                 },
                 "endpoint": {
                     "type": "string",
                     "description": (
-                        "For mark: target endpoint, ideally 'METHOD /path' "
-                        "(e.g. 'GET /api/users/{id}'). Query string is "
-                        "stripped automatically. For list: optional filter "
-                        "substring. For untested: not used here — provide "
-                        "endpoints inside each item of 'candidates' instead."
+                        "For mark/list: endpoint such as 'GET /api/users/{id}'. "
+                        "Query strings are stripped."
                     ),
                 },
                 "param": {
                     "type": "string",
                     "description": (
-                        "Parameter under test (header, query, body, or "
-                        "cookie name). For list: exact filter. For "
-                        "untested: not used here — provide params inside "
-                        "each item of 'candidates' instead."
+                        "Parameter name for mark or exact list filter."
                     ),
                 },
                 "vuln_class": {
                     "type": "string",
                     "description": (
-                        "Vulnerability class label, lowercase. Match a "
-                        "skill name when possible (e.g. 'sqli', 'xss', "
-                        "'jwt', 'ssrf', 'idor'). For list: filter."
+                        "Canonical candidate/vulnerability class or alias."
                     ),
                 },
                 "status": {
                     "type": "string",
                     "enum": list(STATUSES),
                     "description": (
-                        "Result: 'tried' (attempted, inconclusive), "
-                        "'passed' (confirmed vuln), 'failed' (definitely "
-                        "not vulnerable), 'waf-blocked' (could not test), "
-                        "'skipped' (out of scope / not applicable)."
+                        "Test result: tried, passed, failed, waf-blocked, or skipped."
                     ),
                 },
                 "notes": {
@@ -104,13 +86,7 @@ class CoverageTool(Tool):
                 "candidates": {
                     "type": "array",
                     "description": (
-                        "For action='untested': list of {endpoint, param} "
-                        "pairs to cross with vuln_classes. Each item must "
-                        "be an object with only 'endpoint' and 'param' "
-                        "keys — do NOT put vuln_class inside these items, "
-                        "it goes in the separate 'vuln_classes' field. "
-                        "Example: [{\"endpoint\": \"/rest/products\", "
-                        "\"param\": \"search\"}]"
+                        "For untested: {endpoint, param} pairs crossed with vuln_classes."
                     ),
                     "items": {
                         "type": "object",
@@ -124,9 +100,7 @@ class CoverageTool(Tool):
                 "vuln_classes": {
                     "type": "array",
                     "description": (
-                        "For action='untested': list of vuln class labels "
-                        "(strings) to check against every candidate. "
-                        "Example: [\"sqli\"]"
+                        "For untested: classes to check for every candidate."
                     ),
                     "items": {"type": "string"},
                 },

@@ -2,10 +2,57 @@
 from src.skills.registry import Registry
 from src.session.store import SessionMemory
 from src.target.target import Target
-from src.workflow.state import Candidate, WorkflowState
-from .system_prompt import BuildOptions, build_system_prompt, render_workflow
+from src.workflow.state import Candidate, ValidationResult, WorkflowState
+from .system_prompt import (
+    BuildOptions,
+    SESSION_MEMORY_CONTEXT_CHAR_LIMIT,
+    WORKFLOW_CONTEXT_CHAR_LIMIT,
+    build_system_prompt,
+    render_memory,
+    render_workflow,
+)
 
 class Testbuild_system_prompt:
+    def test_carried_session_memory_has_a_deterministic_hard_bound(self):
+        memory = SessionMemory(
+            compactions=2,
+            objectives=[f"objective-{index}-" + "x" * 1000 for index in range(24)],
+            findings=[f"finding-{index}-" + "y" * 1000 for index in range(24)],
+            todos=[f"todo-{index}-" + "z" * 1000 for index in range(24)],
+        )
+
+        first = render_memory(memory)
+        second = render_memory(memory)
+
+        assert first == second
+        assert len(first) <= SESSION_MEMORY_CONTEXT_CHAR_LIMIT
+        assert "older carried session items omitted" in first
+
+    def test_workflow_prompt_has_a_hard_character_bound(self):
+        workflow = WorkflowState()
+        for index in range(12):
+            candidate, _ = workflow.add_candidate(
+                Candidate(
+                    candidate_class="sqli",
+                    target="https://example.test",
+                    endpoint=f"/endpoint/{index}/" + "x" * 500,
+                    parameter="p" * 500,
+                    signals=["s" * 500],
+                    status="queued",
+                )
+            )
+            workflow.add_validation_result(
+                ValidationResult(
+                    candidate.id,
+                    "sql-injection",
+                    "insufficient-evidence",
+                    evidence_refs=["e" * 500] * 3,
+                )
+            )
+
+        rendered = render_workflow(workflow)
+        assert len(rendered) <= WORKFLOW_CONTEXT_CHAR_LIMIT
+
     def test_workflow_prompt_prioritizes_active_status_before_bounded_truncation(self):
         workflow = WorkflowState()
         new_candidates = []

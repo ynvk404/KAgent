@@ -48,4 +48,5 @@ dist/
 Thumbs.db
 
 # Local config
-config.local.json.VSCodeCounter/
+config.local.json
+.VSCodeCounter/

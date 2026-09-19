@@ -112,13 +112,9 @@ class ConfirmFindingTool:
                 "vuln_class": {
                     "type": "string",
                     "description": (
-                        "Canonical vuln class. Use the SAME canonical class "
-                        "identifier that was used in the corresponding "
-                        "coverage.mark() call for this test (e.g. sqli, "
-                        "xss, idor, ssrf). This is a class key, NOT a "
-                        "display name like 'SQL Injection'. Do NOT invent "
-                        "a CWE or OWASP code yourself — the system looks "
-                        "it up from this key."
+                        "Canonical class used by Workflow/Coverage, such as "
+                        "sql-injection, cross-site-scripting, access-control, "
+                        "or ssrf. Classification supplies CWE/OWASP values."
                     ),
                 },
             },

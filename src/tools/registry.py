@@ -58,6 +58,31 @@ class Registry:
             for tool in self.tools.values()
         ]
 
+    def schema_metrics(self) -> dict[str, Any]:
+        """Return deterministic approximate schema costs for diagnostics/tests."""
+        rows = []
+        for spec in self.as_llm_tools():
+            body = json.dumps(spec, ensure_ascii=False, separators=(",", ":"))
+            serialized = cast(dict[str, Any], cast(Any, spec))
+            function = cast(dict[str, Any], serialized["function"])
+            rows.append(
+                {
+                    "name": function["name"],
+                    "characters": len(body),
+                    "approx_tokens": len(body) // 4,
+                }
+            )
+        rows.sort(key=lambda item: (-item["characters"], item["name"]))
+        total_characters = len(
+            json.dumps(self.as_llm_tools(), ensure_ascii=False, separators=(",", ":"))
+        )
+        return {
+            "tool_count": len(rows),
+            "characters": total_characters,
+            "approx_tokens": total_characters // 4,
+            "tools": rows,
+        }
+
     async def execute(
         self,
         name: str,
