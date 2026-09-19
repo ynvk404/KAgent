@@ -7,6 +7,29 @@ description: >
   after `recon` has established a reachable web target and technology
   baseline, and before `web-input-analysis` or any vulnerability-specific
   testing. Does not attempt to exploit, classify, or confirm vulnerabilities.
+stage: enumeration
+triggers:
+  strong:
+    - web enumeration
+    - enumerate endpoints
+    - enumerate routes
+    - map attack surface
+    - content discovery
+    - directory discovery
+    - api entry points
+    - swagger
+    - openapi
+  weak:
+    - endpoint
+    - route
+    - parameter
+    - form
+    - inventory
+    - static resources
+    - javascript resources
+candidate-classes: []
+requires:
+  - recon
 allowed-tools:
   - shell
   - http

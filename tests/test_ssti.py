@@ -16,7 +16,7 @@ They pin down the agreed SSTI architecture:
 - reporting and filename hygiene
 
 Behavior/decision-level tests belong in a later test file once SSTI is
-registered in INTENT_TO_SKILL / INTENT_KEYWORDS.
+selected through its frontmatter metadata.
 """
 
 from __future__ import annotations

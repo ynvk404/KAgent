@@ -7,9 +7,30 @@ description: >
   testing needed to establish evidence. Produces tested evidence
   (request/response, impact, remediation direction) and calls
   `confirm_finding` only when that evidence meets the confirmed threshold.
-  Use only after
-  `web-input-analysis` has handed off a specific XSS candidate — never as a
-  first step, and never against a parameter it didn't flag.
+  Use after `web-input-analysis` has handed off a specific XSS candidate, or
+  when the user directly supplies a concrete endpoint, input, and reflection
+  context to validate. Never expand beyond the provided candidate.
+stage: validation
+triggers:
+  strong:
+    - cross site scripting
+    - xss
+    - script injection
+    - reflected xss
+    - stored xss
+    - dom xss
+    - html injection
+  weak:
+    - script tag
+    - innerhtml
+    - document.write
+    - postmessage
+    - escape output
+    - content security policy
+candidate-classes:
+  - cross-site-scripting
+requires:
+  - web-input-analysis
 allowed-tools:
   - shell
   - http
@@ -21,12 +42,12 @@ allowed-tools:
 
 # Cross-site scripting playbook
 
-You are handed a specific candidate that `web-input-analysis` already
-flagged `suspected_class: cross-site-scripting`, with a reasoned context
-(reflected in HTML/JS output) and a light signal. This phase answers "is
+You have a specific candidate that `web-input-analysis` flagged
+`suspected_class: cross-site-scripting`, or that the user directly supplied
+with an endpoint, input, and observed reflection context. This phase answers "is
 this parameter actually exploitable for script execution, and what's the
 concrete impact?" It does not re-triage the whole inventory and does not
-test parameters this skill wasn't handed. It may persist a tracked finding
+test parameters outside the provided candidate. It may persist a tracked finding
 only after the evidence meets step 5's confirmed threshold (see step 6).
 
 **Objective:** for each candidate routed here, either establish clear
@@ -118,27 +139,28 @@ identifier exactly — do not re-derive it differently here.
 
 ## Scope
 
-Only test candidates explicitly handed off from
-`web-input-analysis/<target>/candidates.md` with
-`suspected_class: cross-site-scripting` (or a class list that includes it).
+Only test concrete candidates from `web-input-analysis/<target>/candidates.md`
+with `suspected_class: cross-site-scripting` (or a class list that includes
+it), or candidates directly supplied by the user with equivalent endpoint,
+input, and context details.
 Do not:
 
 - test candidates suspected of a different class (`sql-injection`,
   `access-control`) — those route to their own skill instead;
-- expand scope to parameters or endpoints not present in the hand-off;
-- run this skill directly from an inventory or from `recon` without
-  `web-input-analysis` having produced a candidate first.
+- expand scope to parameters or endpoints outside the provided candidate;
+- invent endpoint, input, or context details from a generic "test XSS"
+  request.
 
 ## Preconditions
 
 Before starting, you should have:
 
-- `web-input-analysis/<target>/candidates.md` containing at least one
-  candidate with `suspected_class: cross-site-scripting`;
+- a `web-input-analysis` candidate, or equivalent endpoint/input/context
+  details supplied directly by the user;
 - confirmation the target is still in scope.
 
-If no such candidate exists, or the candidate file is missing or stale, go
-back to `web-input-analysis` rather than guessing at a parameter here.
+If no concrete candidate exists, use `web-input-analysis` rather than guessing
+at an endpoint or parameter here.
 
 ## Session / authentication consistency
 

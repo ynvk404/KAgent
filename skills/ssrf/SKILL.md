@@ -8,6 +8,22 @@ description: >
   establish impact. Use after web-input-analysis when a parameter appears
   to accept a URL, URI, hostname, redirect target, webhook, image URL, or
   similar remote resource reference.
+stage: validation
+triggers:
+  strong:
+    - ssrf
+    - server side request forgery
+  weak:
+    - url fetch
+    - webhook
+    - callback url
+    - image url
+    - remote url
+    - redirect url
+candidate-classes:
+  - ssrf
+requires:
+  - web-input-analysis
 allowed-tools:
   - http
   - shell

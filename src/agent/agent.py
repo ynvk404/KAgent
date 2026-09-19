@@ -68,7 +68,7 @@ from src.tools.aliases import canonical_tool_name
 from src.tools.registry import Registry as ToolRegistry
 from src.tools.types import ActionPermissionTool
 
-from .decision_planner import build_decision_plan
+from .decision_planner import PlannerContext, build_decision_plan
 
 from src.agent.events import (
     AgentEvent,
@@ -1199,6 +1199,9 @@ class Agent:
                 user_msg,
                 self.skills.list_enabled(),
                 self.target,
+                PlannerContext(
+                    active_skills=frozenset(self.active_skills),
+                ),
             )
 
         if decision and decision.recommended_skill:

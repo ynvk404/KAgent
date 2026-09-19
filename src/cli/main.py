@@ -787,6 +787,20 @@ async def main() -> int:
     agent = Agent(opts)
     resume_summary = ""
 
+    def report_skill_validation() -> None:
+        for skill_name, errors in skills.validation_errors(
+            known_tools=set(tools.names()),
+        ).items():
+            logger.warn(
+                "skill metadata validation failed",
+                {
+                    "skill": skill_name,
+                    "errors": errors,
+                },
+            )
+
+    report_skill_validation()
+
     if resuming:
         try:
             agent.resume_saved()
@@ -822,6 +836,7 @@ async def main() -> int:
                 for d in skill_dirs_to_watch:
                     skills.load_dir(d)
                 skills.set_disabled_names(cfg.disabled_skills)
+                report_skill_validation()
                 agent.rebuild_from_skills()
                 count = len(skills.list_enabled())
                 if getattr(notice_holder, "publish", None):

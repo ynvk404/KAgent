@@ -8,9 +8,32 @@ description: >
   material the user or a prior skill has actually provided — never
   fabricated or self-provisioned without explicit authorization. Produces
   tested evidence and calls `confirm_finding` only when that evidence meets
-  the confirmed threshold. Use only after `web-input-analysis` has handed off
-  a specific access-control candidate — never as a first step, and never
-  against a parameter it didn't flag.
+  the confirmed threshold. Use after `web-input-analysis` has handed off a
+  specific access-control candidate, or when the user directly supplies a
+  concrete endpoint/object and expected authorization boundary. Never expand
+  beyond the provided candidate.
+stage: validation
+triggers:
+  strong:
+    - access control
+    - idor
+    - bola
+    - horizontal privilege escalation
+    - vertical privilege escalation
+    - missing authorization
+    - authorization bypass
+    - function level authorization
+  weak:
+    - object identifier
+    - object ownership
+    - admin endpoint
+    - authorization check
+    - unauthorized access
+    - cross user access
+candidate-classes:
+  - access-control
+requires:
+  - web-input-analysis
 allowed-tools:
   - shell
   - http
@@ -21,12 +44,12 @@ allowed-tools:
 
 # Access control playbook
 
-You are handed a specific candidate that `web-input-analysis` already
-flagged `suspected_class: access-control`, with a reasoned context (object
-identifier, state-changing action, or admin-like endpoint) and a light
-signal. This phase answers "can an identity that shouldn't be allowed to do
+You have a specific candidate that `web-input-analysis` flagged
+`suspected_class: access-control`, or that the user directly supplied with a
+concrete endpoint/object and expected authorization boundary. This phase
+answers "can an identity that shouldn't be allowed to do
 this, do it anyway?" It does not re-triage the whole inventory and does not
-test parameters this skill wasn't handed. It may persist a tracked finding
+test parameters outside the provided candidate. It may persist a tracked finding
 only after the evidence meets step 5's confirmed threshold (see step 6).
 
 **Objective:** for each candidate routed here, either establish clear
@@ -66,16 +89,17 @@ for this skill specifically:
 
 ## Scope
 
-Only test candidates explicitly handed off from
-`web-input-analysis/<target>/candidates.md` with
-`suspected_class: access-control` (or a class list that includes it). Do
+Only test concrete candidates from `web-input-analysis/<target>/candidates.md`
+with `suspected_class: access-control` (or a class list that includes it), or
+candidates directly supplied by the user with equivalent endpoint/object and
+authorization-boundary details. Do
 not:
 
 - test candidates suspected of a different class (`sql-injection`,
   `cross-site-scripting`) — those route to their own skill instead;
-- expand scope to parameters or endpoints not present in the hand-off;
-- run this skill directly from an inventory or from `recon` without
-  `web-input-analysis` having produced a candidate first.
+- expand scope to parameters or endpoints outside the provided candidate;
+- invent endpoint, object, identity, or boundary details from a generic
+  request.
 
 This skill covers: horizontal privilege escalation, vertical privilege
 escalation, IDOR/BOLA, missing authorization (including unauthenticated
@@ -426,7 +450,7 @@ step 5 and been written to `results.md`.
 Stop the skill entirely when every `access-control`-tagged candidate handed
 to you has been worked to an outcome and `results.md` is complete.
 
-Do not: test candidates this skill was not explicitly handed, fabricate or
+Do not: test outside the candidates explicitly provided for this run, fabricate or
 self-provision identities without explicit authorization, execute real
 state-changing actions against another user's data without explicit
 authorization, dump or enumerate multiple victims' data, run automated

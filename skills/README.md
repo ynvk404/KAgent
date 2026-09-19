@@ -16,13 +16,22 @@ skills/
 | Field | Required | Notes |
 | --- | --- | --- |
 | `name` | yes | Lowercase-kebab (`[a-z0-9-]`), ≤64 chars. Should match the directory name. |
-| `description` | yes | ≤1024 chars. **This is the only thing the model sees until it loads the skill** — include explicit "Use when …" trigger conditions so it knows when to invoke it. There is no separate `triggers` list (description-driven). |
+| `description` | yes | ≤1024 chars. Human/model-facing summary shown before the body is loaded. |
+| `stage` | no | Organizational signal: `reconnaissance`, `enumeration`, `analysis`, `validation`, or `reporting`. Does not impose a rigid workflow. |
+| `triggers` | no | `strong` and `weak` phrase lists used by the deterministic planner. Keep generic words out of `strong`. |
+| `candidate-classes` | no | Canonical lowercase-kebab vulnerability classes handled by the skill. Common aliases such as `sqli`, `xss`, `idor`, and `bola` are normalized. |
+| `requires` | no | Other skill names that provide useful prior context. These are soft ranking signals, not mandatory dependencies. |
 | `allowed-tools` | no | List restricting which tools the skill may call (e.g. `http`, `shell`, `file_write`). Omit for no restriction. Legacy alias: `tools`. |
 | `disable-model-invocation` | no | `true` = user-only: hidden from the model, invoked only via the `/<name>` slash command. |
 
 Everything after the frontmatter is the playbook body, delivered to the
 model verbatim when it calls `load_skill`. `${SKILL_DIR}` in the body is
 replaced with the skill's absolute directory path.
+
+Automatic selection is metadata-driven: discovery parses and registers the
+fields above, then the planner ranks enabled/model-invokable skills using
+explicit names, candidate classes, triggers, stage, and available prerequisite
+context. Detailed testing methodology remains in the Markdown body.
 
 ## Where skills load from
 

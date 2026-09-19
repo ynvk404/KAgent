@@ -8,6 +8,27 @@ description: >
   engine-specific execution or sensitive-read probe. Use after
   web-input-analysis when user input appears to be reflected through a
   template context, or when an expression like {{7*7}} evaluates to 49.
+stage: validation
+triggers:
+  strong:
+    - ssti
+    - server side template injection
+    - template injection
+    - template engine injection
+  weak:
+    - jinja2
+    - twig template
+    - velocity template
+    - freemarker
+    - smarty template
+    - erb template
+    - template engine
+    - template expression
+    - expression evaluation
+candidate-classes:
+  - ssti
+requires:
+  - web-input-analysis
 allowed-tools:
   - http
   - shell

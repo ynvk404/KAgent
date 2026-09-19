@@ -16,8 +16,7 @@ ones — instead it pins the CSRF-specific epistemic guards (token absent
 != confirmed, HTTP 200 != confirmed, HTTP replay != browser execution).
 
 Behavior/decision-level tests (routing via the Decision Planner) belong
-in a later test file once csrf is registered in INTENT_TO_SKILL /
-INTENT_KEYWORDS — that registration is explicitly deferred, so this file
+in the planner tests using the skill's frontmatter selection metadata, so this file
 only covers the skill contract.
 """
 

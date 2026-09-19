@@ -1,6 +1,15 @@
 ---
 name: my-skill
-description: One line on what this playbook does, then a "Use when ..." clause so the agent knows when to load it (e.g. "Use when the target exposes X / you see Y in requests"). Max 1024 chars. This description is the ONLY thing the model sees until it loads the skill — make the trigger conditions explicit, since there is no separate `triggers` list.
+description: One line describing what this playbook does and when it applies. Max 1024 chars.
+stage: validation
+triggers:
+  strong:
+    - specific workflow phrase
+  weak:
+    - supporting signal
+candidate-classes:
+  - my-skill
+requires: []
 allowed-tools:
   - http
   - shell

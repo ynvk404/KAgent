@@ -7,6 +7,22 @@ description: >
   http://localhost:3000). Use when the agent has just received a new
   target and has no prior information about it — before endpoint-level
   enumeration or vulnerability testing.
+stage: reconnaissance
+triggers:
+  strong:
+    - recon
+    - reconnaissance
+    - enumerate subdomains
+    - certificate transparency
+    - fingerprint live hosts
+    - new target
+  weak:
+    - attack surface
+    - technology stack
+    - reachable service
+    - apex domain
+candidate-classes: []
+requires: []
 allowed-tools:
   - shell
   - http

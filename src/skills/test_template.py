@@ -26,6 +26,13 @@ def test_render_skill_template_frontmatter():
     description = post["description"]
     assert isinstance(description, str)
     assert len(description) <= 1024
+    assert post["stage"] == "validation"
+    assert post["triggers"] == {
+        "strong": ["my skill"],
+        "weak": [],
+    }
+    assert post["candidate-classes"] == ["my-skill"]
+    assert post["requires"] == []
     assert post.content.strip()
 
 def test_render_skill_template_allowed_tools():

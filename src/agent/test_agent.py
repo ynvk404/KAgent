@@ -33,7 +33,7 @@ from src.llm.types import (
     FunctionCall,
 )
 from src.permission.permission import AlwaysAllow
-from src.skills.registry import Registry as SkillRegistry, Skill
+from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.target.target import Target
 from src.tools.registry import Registry as ToolRegistry
 from src.tools.coverage import CoverageTool
@@ -409,6 +409,8 @@ async def test_injects_decision_guidance_before_user_message_for_normal_turn():
             disable_model_invocation=False,
             path="/tmp/recon/SKILL.md",
             body="",
+            stage="reconnaissance",
+            triggers=SkillTriggers(strong=["enumerate subdomains"]),
         )
     )
 

@@ -2,10 +2,19 @@ from __future__ import annotations
 
 
 def render_skill_template(name: str) -> str:
+    trigger = name.replace("-", " ")
     return (
         "---\n"
         f"name: {name}\n"
-        'description: One line on what this playbook does, then a "Use when ..." clause so the agent knows when to load it (e.g. "Use when the target exposes X / you see Y"). Max 1024 chars. This text is the ONLY thing the model sees until it loads the skill, so make the trigger conditions explicit.\n'
+        'description: Describe what this playbook does and when it applies. Max 1024 chars.\n'
+        "stage: validation\n"
+        "triggers:\n"
+        "  strong:\n"
+        f"    - {trigger}\n"
+        "  weak: []\n"
+        "candidate-classes:\n"
+        f"  - {name}\n"
+        "requires: []\n"
         "allowed-tools:\n"
         "  - http\n"
         "  - shell\n"

@@ -3,7 +3,11 @@ import ipaddress
 import re
 from typing import List, Optional, TypedDict
 
-from src.skills.registry import Skill
+from src.skills.registry import (
+    CANDIDATE_CLASS_ALIASES,
+    Skill,
+    normalize_candidate_class,
+)
 from src.target.target import Target
 
 
@@ -16,6 +20,12 @@ class DecisionPlan:
     guidance: str
 
 
+@dataclass(frozen=True)
+class PlannerContext:
+    active_skills: frozenset[str] = frozenset()
+    candidate_classes: frozenset[str] = frozenset()
+
+
 class SkillRecommendation(TypedDict):
     name: str
     reason: str
@@ -25,12 +35,33 @@ class IntentScore(TypedDict):
     skill_name: str
     score: int
     strong_count: int
+    explicit_count: int
+    candidate_count: int
+    prerequisite_count: int
     hits: List[str]
 
 
 STRONG_KEYWORD_WEIGHT = 5
 WEAK_KEYWORD_WEIGHT = 1
+EXPLICIT_SKILL_WEIGHT = 20
+CANDIDATE_CLASS_WEIGHT = 10
+PREREQUISITE_WEIGHT = 2
+STAGE_WEIGHT = 1
 MIN_RECOMMEND_SCORE = 5
+
+GENERIC_TRIGGER_TERMS = frozenset(
+    {
+        "candidate",
+        "candidates",
+        "check",
+        "endpoint",
+        "endpoints",
+        "route",
+        "routes",
+        "scan",
+        "test",
+    }
+)
 
 _HOST_TOKEN_RE = re.compile(
     r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b",
@@ -64,261 +95,6 @@ _FILE_SUFFIXES = {
     "xml",
     "yaml",
     "yml",
-}
-
-# NOTE: only intents for currently-active, fully rolled-out skills belong
-# here. When a new vulnerability-specific skill completes its full rollout
-# checklist, add its intent + keywords here at
-# that point. Do not pre-register intents for skills that haven't finished
-# rollout — an unmapped INTENT_TO_SKILL entry is silently dropped by
-# detect_intent() via the available_skill_names check, which would hide
-# the fact that the mapping is stale rather than surfacing it.
-#
-# recon, web-enumeration, web-input-analysis, sql-injection,
-# cross-site-scripting, access-control, authentication, ssrf, csrf, and
-# ssti have completed their rollout checklists and are registered below.
-#
-# ssrf is registered as validation-only: its keywords route to the
-# confirm/characterize workflow in skills/ssrf/SKILL.md, which stops at
-# SSRF-1..4 and leaves deeper impact work for a separately authorized
-# follow-up. Do not broaden these keywords to imply impact/exploitation
-# intent.
-#
-# csrf is likewise validation-only: it stops at CSRF-1..3 (candidate ->
-# suspected -> confirmed) and hands off account-takeover/destructive
-# follow-up to a separate, not-yet-registered workflow. Its keywords
-# should stay scoped to CSRF terminology — do not let generic terms like
-# "token" or "session" bleed in, since those already belong to
-# authentication and access_control.
-#
-# ssti is registered as a single, fully self-contained skill (unlike
-# ssrf/csrf): skills/ssti/SKILL.md gates its own impact work internally —
-# Phase 3 (command execution / sensitive-read probes) only runs after
-# SSTI-2 is confirmed AND the user explicitly authorizes via ask_user.
-# There is no separate ssti-impact skill to register later, so these
-# keywords may route straight to detection+validation without needing a
-# parallel "impact-only" split.
-INTENT_TO_SKILL: dict[str, str] = {
-    "recon": "recon",
-    "web_enumeration": "web-enumeration",
-    "web_input_analysis": "web-input-analysis",
-    "sql_injection": "sql-injection",
-    "cross_site_scripting": "cross-site-scripting",
-    "access_control": "access-control",
-    "authentication": "authentication",
-    "ssrf": "ssrf",
-    "csrf": "csrf",
-    "ssti": "ssti",
-}
-
-INTENT_KEYWORDS: dict[str, dict[str, List[str]]] = {
-    "recon": {
-        "strong": [
-            "recon",
-            "reconnaissance",
-            "subdomain",
-            "subdomains",
-            "crt",
-            "certificate transparency",
-            "liveness",
-            "fingerprint",
-            "fingerprinting",
-            "apex",
-            "new target",
-        ],
-        "weak": [
-            "attack surface",
-            "technology stack",
-            "reachable",
-        ],
-    },
-    "web_enumeration": {
-        "strong": [
-            "endpoint",
-            "endpoints",
-            "route",
-            "routes",
-            "map attack surface",
-            "enumerate web application",
-            "web enumeration",
-            "content discovery",
-            "directory discovery",
-            "api entry point",
-            "api entry points",
-            "swagger",
-            "openapi",
-        ],
-        "weak": [
-            "parameter",
-            "parameters",
-            "form",
-            "forms",
-            "graphql endpoint",
-            "inventory",
-            "static resources",
-            "javascript resources",
-        ],
-    },
-    "web_input_analysis": {
-        "strong": [
-            "candidate",
-            "candidates",
-            "input analysis",
-            "web input analysis",
-            "triage input",
-            "triage endpoint",
-            "suspected vulnerability class",
-            "prioritize testing",
-        ],
-        "weak": [
-            "context",
-            "signal",
-            "reflected",
-            "object identifier",
-            "which parameter",
-            "which endpoint",
-        ],
-    },
-    "sql_injection": {
-        "strong": [
-            "sql injection",
-            "sqli",
-            "union select",
-            "boolean based",
-            "time based",
-            "error based",
-            "database error",
-        ],
-        "weak": [
-            "database",
-            "injection",
-            "syntax sensitive",
-        ],
-    },
-    "cross_site_scripting": {
-        "strong": [
-            "xss",
-            "cross site scripting",
-            "script injection",
-            "reflected xss",
-            "stored xss",
-            "dom xss",
-            "dom based xss",
-            "html injection",
-        ],
-        "weak": [
-            "script tag",
-            "innerhtml",
-            "document.write",
-            "postmessage",
-            "sanitize input",
-            "escape output",
-            "content security policy",
-        ],
-    },
-    "access_control": {
-        "strong": [
-            "access control",
-            "idor",
-            "bola",
-            "horizontal privilege escalation",
-            "vertical privilege escalation",
-            "missing authorization",
-            "authorization bypass",
-            "function level authorization",
-        ],
-        "weak": [
-            "object identifier",
-            "object ownership",
-            "owner vs non-owner",
-            "admin endpoint",
-            "authorization check",
-            "unauthorized access",
-            "cross-user access",
-        ],
-    },
-    "authentication": {
-        "strong": [
-            "session fixation",
-            "session invalidation",
-            "login bypass",
-            "login flow bypass",
-            "mfa bypass",
-            "2fa bypass",
-            "otp bypass",
-            "password reset flow",
-            "password reset bypass",
-            "reset token",
-            "logout invalidation",
-            "user enumeration",
-            "account enumeration",
-        ],
-        "weak": [
-            "login flow",
-            "logout",
-            "session cookie",
-            "mfa",
-            "2fa",
-            "otp",
-            "password reset",
-            "forgot password",
-            "remember me",
-            "session token",
-            "account lockout",
-            "rate limiting login",
-        ],
-    },
-    "ssrf": {
-        "strong": [
-            "ssrf",
-            "server-side request forgery",
-            "server side request forgery",
-        ],
-        "weak": [
-            "url fetch",
-            "webhook",
-            "callback url",
-            "image url",
-            "remote url",
-            "redirect url",
-        ],
-    },
-    "csrf": {
-        "strong": [
-            "csrf",
-            "cross-site request forgery",
-            "cross site request forgery",
-        ],
-        "weak": [
-            "csrf token",
-            "anti-csrf",
-            "state-changing request",
-            "samesite",
-            "double-submit cookie",
-            "forged request",
-        ],
-    },
-    "ssti": {
-        "strong": [
-            "ssti",
-            "server-side template injection",
-            "server side template injection",
-            "template injection",
-            "template engine injection",
-        ],
-        "weak": [
-            "jinja2",
-            "twig template",
-            "velocity template",
-            "freemarker",
-            "smarty template",
-            "erb template",
-            "template engine",
-            "template expression",
-            "expression evaluation",
-            "sandbox escape",
-        ],
-    },
 }
 
 HIGH_RISK_TERMS = [
@@ -361,6 +137,7 @@ def build_decision_plan(
     user_msg: str,
     skills: List[Skill],
     target: Target,
+    context: PlannerContext | None = None,
 ) -> Optional[DecisionPlan]:
     text = user_msg.strip()
 
@@ -369,7 +146,7 @@ def build_decision_plan(
 
     normalized = normalize(text)
 
-    recommended = recommend_skill(normalized, skills)
+    recommended = recommend_skill(normalized, skills, context)
 
     risk = (
         "high"
@@ -415,12 +192,9 @@ def build_decision_plan(
 def recommend_skill(
     normalized: str,
     skills: List[Skill],
+    context: PlannerContext | None = None,
 ) -> Optional[SkillRecommendation]:
-    available_skill_names = {
-        skill.name
-        for skill in skills
-    }
-    scores = detect_intent(normalized, available_skill_names)
+    scores = detect_intent(normalized, skills, context)
     best = confidence_check(scores)
 
     if best is None:
@@ -436,51 +210,123 @@ def recommend_skill(
 
 def detect_intent(
     normalized: str,
-    available_skill_names: set[str],
+    skills: List[Skill],
+    context: PlannerContext | None = None,
 ) -> List[IntentScore]:
-    by_skill: dict[str, IntentScore] = {}
+    planner_context = context or PlannerContext()
+    active_skills = {
+        normalize_metadata_skill_name(name)
+        for name in planner_context.active_skills
+    }
+    contextual_classes = {
+        normalize_candidate_class(name)
+        for name in planner_context.candidate_classes
+    }
+    scores: list[IntentScore] = []
 
-    for intent_name, keyword_groups in INTENT_KEYWORDS.items():
-        skill_name = INTENT_TO_SKILL.get(intent_name)
-
-        if skill_name not in available_skill_names:
+    for skill in skills:
+        if skill.disable_model_invocation:
             continue
+
+        explicit_hits = (
+            [skill.name]
+            if contains_keyword(normalized, skill.name)
+            else []
+        )
+
+        candidate_hits = matching_candidate_classes(
+            normalized,
+            skill.candidate_classes,
+        )
+        contextual_candidate_hits = sorted(
+            set(skill.candidate_classes) & contextual_classes
+        )
 
         strong_hits = matching_keywords(
             normalized,
-            keyword_groups["strong"],
+            skill.triggers.strong,
         )
         weak_hits = matching_keywords(
             normalized,
-            keyword_groups["weak"],
+            skill.triggers.weak,
         )
 
-        if not strong_hits and not weak_hits:
+        generic_strong_hits = [
+            hit
+            for hit in strong_hits
+            if normalize(hit) in GENERIC_TRIGGER_TERMS
+        ]
+        strong_hits = [
+            hit
+            for hit in strong_hits
+            if normalize(hit) not in GENERIC_TRIGGER_TERMS
+        ]
+        weak_hits.extend(generic_strong_hits)
+
+        stage_hits = (
+            [skill.stage]
+            if skill.stage is not None
+            and contains_keyword(normalized, skill.stage)
+            else []
+        )
+
+        primary_signal = bool(
+            explicit_hits
+            or candidate_hits
+            or contextual_candidate_hits
+            or strong_hits
+            or weak_hits
+            or stage_hits
+        )
+        prerequisite_hits = (
+            sorted(set(skill.requires) & active_skills)
+            if primary_signal
+            else []
+        )
+
+        score = (
+            len(explicit_hits) * EXPLICIT_SKILL_WEIGHT
+            + (len(candidate_hits) + len(contextual_candidate_hits))
+            * CANDIDATE_CLASS_WEIGHT
+            + len(strong_hits) * STRONG_KEYWORD_WEIGHT
+            + len(weak_hits) * WEAK_KEYWORD_WEIGHT
+            + len(prerequisite_hits) * PREREQUISITE_WEIGHT
+            + len(stage_hits) * STAGE_WEIGHT
+        )
+        strong_count = (
+            len(explicit_hits)
+            + len(candidate_hits)
+            + len(contextual_candidate_hits)
+            + len(strong_hits)
+        )
+
+        if score == 0:
             continue
 
-        skill_score = by_skill.setdefault(
-            skill_name,
+        hits = (
+            [f"skill:{hit}" for hit in explicit_hits]
+            + [f"candidate:{hit}" for hit in candidate_hits]
+            + [f"context-candidate:{hit}" for hit in contextual_candidate_hits]
+            + strong_hits
+            + weak_hits
+            + [f"stage:{hit}" for hit in stage_hits]
+            + [f"requires:{hit}" for hit in prerequisite_hits]
+        )
+        scores.append(
             {
-                "skill_name": skill_name,
-                "score": 0,
-                "strong_count": 0,
-                "hits": [],
+                "skill_name": skill.name,
+                "score": score,
+                "strong_count": strong_count,
+                "explicit_count": len(explicit_hits),
+                "candidate_count": (
+                    len(candidate_hits) + len(contextual_candidate_hits)
+                ),
+                "prerequisite_count": len(prerequisite_hits),
+                "hits": sorted(set(hits)),
             },
         )
-        skill_score["score"] += (
-            len(strong_hits) * STRONG_KEYWORD_WEIGHT
-            + len(weak_hits) * WEAK_KEYWORD_WEIGHT
-        )
-        skill_score["strong_count"] += len(strong_hits)
-        skill_score["hits"].extend(strong_hits + weak_hits)
 
-    return [
-        {
-            **score,
-            "hits": sorted(set(score["hits"])),
-        }
-        for score in by_skill.values()
-    ]
+    return scores
 
 
 def confidence_check(scores: List[IntentScore]) -> Optional[IntentScore]:
@@ -494,14 +340,67 @@ def confidence_check(scores: List[IntentScore]) -> Optional[IntentScore]:
     if not candidates:
         return None
 
-    return sorted(
+    ordered = sorted(
         candidates,
         key=lambda item: (
             -item["score"],
             -item["strong_count"],
+            -item["explicit_count"],
+            -item["candidate_count"],
+            -item["prerequisite_count"],
             item["skill_name"],
         ),
-    )[0]
+    )
+
+    best = ordered[0]
+    semantic_rank = (
+        best["score"],
+        best["strong_count"],
+        best["explicit_count"],
+        best["candidate_count"],
+        best["prerequisite_count"],
+    )
+    tied = [
+        candidate
+        for candidate in ordered
+        if (
+            candidate["score"],
+            candidate["strong_count"],
+            candidate["explicit_count"],
+            candidate["candidate_count"],
+            candidate["prerequisite_count"],
+        ) == semantic_rank
+    ]
+
+    if len(tied) > 1:
+        return None
+
+    return best
+
+
+def matching_candidate_classes(
+    normalized: str,
+    candidate_classes: List[str],
+) -> List[str]:
+    hits: list[str] = []
+
+    for candidate_class in candidate_classes:
+        terms = {
+            candidate_class,
+            *(
+                alias
+                for alias, canonical in CANDIDATE_CLASS_ALIASES.items()
+                if canonical == candidate_class
+            ),
+        }
+        if any(contains_keyword(normalized, term) for term in terms):
+            hits.append(candidate_class)
+
+    return hits
+
+
+def normalize_metadata_skill_name(name: str) -> str:
+    return re.sub(r"[\s_]+", "-", name.strip().lower())
 
 
 def matching_keywords(

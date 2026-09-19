@@ -7,7 +7,13 @@ import pytest
 
 from src.findings.store import Store
 from src.permission.permission import AlwaysAllow
-from src.skills.registry import Registry
+from src.agent.decision_planner import GENERIC_TRIGGER_TERMS, normalize
+from src.skills.registry import (
+    VALID_STAGES,
+    Registry,
+    normalize_candidate_class,
+    validate_skill,
+)
 from src.tools.finding import ConfirmFindingTool
 from src.tools.payloads import ReadPayloadsTool
 from src.tools.skill_file import ReadSkillFileTool
@@ -33,6 +39,31 @@ def shipped_registry() -> Registry:
     registry = Registry()
     registry.load_dir(SKILLS_ROOT)
     return registry
+
+
+def test_shipped_skills_have_valid_selection_metadata(shipped_registry):
+    known_tools = {
+        "ask_user",
+        "confirm_finding",
+        "file_write",
+        "http",
+        "read_payloads",
+        "shell",
+    }
+    known_skills = {skill.name for skill in shipped_registry.list()}
+
+    for skill in shipped_registry.list():
+        assert skill.stage in VALID_STAGES
+        assert skill.triggers.strong
+        assert validate_skill(skill, known_tools, known_skills) == []
+        assert all(
+            normalize(trigger) not in GENERIC_TRIGGER_TERMS
+            for trigger in skill.triggers.strong
+        )
+        assert skill.candidate_classes == [
+            normalize_candidate_class(candidate_class)
+            for candidate_class in skill.candidate_classes
+        ]
 
 
 def test_explicit_skill_handoffs_resolve_to_shipped_skills(shipped_registry):

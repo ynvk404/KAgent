@@ -8,6 +8,24 @@ description: >
   candidate list that hands off to sql-injection, cross-site-scripting, or
   access-control. Use after `web-enumeration` has produced an inventory and
   before any vulnerability-specific testing.
+stage: analysis
+triggers:
+  strong:
+    - input analysis
+    - web input analysis
+    - triage input candidates
+    - suspected vulnerability class
+    - prioritize testing candidates
+  weak:
+    - candidate
+    - context
+    - signal
+    - reflected input
+    - object identifier
+    - which parameter
+candidate-classes: []
+requires:
+  - web-enumeration
 allowed-tools:
   - shell
   - http

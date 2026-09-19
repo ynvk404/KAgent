@@ -1,15 +1,64 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 import yaml
 
 from src.logger.logger import get_logger
 
 log = get_logger("skills.registry")
+
+
+SkillStage = Literal[
+    "reconnaissance",
+    "enumeration",
+    "analysis",
+    "validation",
+    "reporting",
+]
+
+VALID_STAGES: frozenset[str] = frozenset(
+    {
+        "reconnaissance",
+        "enumeration",
+        "analysis",
+        "validation",
+        "reporting",
+    }
+)
+
+CANDIDATE_CLASS_ALIASES: dict[str, str] = {
+    "sqli": "sql-injection",
+    "sql-injection": "sql-injection",
+    "xss": "cross-site-scripting",
+    "cross-site-scripting": "cross-site-scripting",
+    "idor": "access-control",
+    "bola": "access-control",
+    "access-control": "access-control",
+    "auth": "authentication",
+    "authentication": "authentication",
+    "csrf": "csrf",
+    "ssrf": "ssrf",
+    "ssti": "ssti",
+}
+
+OPTIONAL_TOOL_PREFIXES = (
+    "mcp_",
+    "plugin_",
+)
+
+
+class SkillMetadataError(ValueError):
+    pass
+
+
+@dataclass(slots=True)
+class SkillTriggers:
+    strong: list[str] = field(default_factory=list)
+    weak: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -20,6 +69,10 @@ class Skill:
     disable_model_invocation: bool
     path: str
     body: str
+    stage: SkillStage | None = None
+    triggers: SkillTriggers = field(default_factory=SkillTriggers)
+    candidate_classes: list[str] = field(default_factory=list)
+    requires: list[str] = field(default_factory=list)
 
 
 class Registry:
@@ -61,6 +114,23 @@ class Registry:
 
     def clear(self):
         self.skills.clear()
+
+    def validation_errors(
+        self,
+        known_tools: set[str] | None = None,
+    ) -> dict[str, list[str]]:
+        known_skills = set(self.skills)
+        return {
+            skill.name: errors
+            for skill in self.list()
+            if (
+                errors := validate_skill(
+                    skill,
+                    known_tools=known_tools,
+                    known_skills=known_skills,
+                )
+            )
+        }
 
     def set_disabled(self, name: str, on: bool) -> bool:
         old = name in self.disabled
@@ -135,34 +205,76 @@ def parse_skill(path: str | Path) -> Skill:
 
     if match:
         parsed = yaml.safe_load(match.group("yaml"))
-        metadata = parsed if isinstance(parsed, dict) else {}
+        if parsed is None:
+            metadata = {}
+        elif isinstance(parsed, dict):
+            metadata = parsed
+        else:
+            raise SkillMetadataError("frontmatter must be a mapping")
         body = raw[match.end():]
 
-    name = metadata.get("name")
-    if not isinstance(name, str) or not name:
+    name_value = metadata.get("name")
+    if name_value is None:
         name = path.parent.name
+    elif not isinstance(name_value, str) or not name_value.strip():
+        raise SkillMetadataError("`name` must be a non-empty string")
+    else:
+        name = name_value.strip()
 
-    description = metadata.get("description")
-    if not isinstance(description, str):
+    description_value = metadata.get("description")
+    if description_value is None:
         description = ""
+    elif not isinstance(description_value, str):
+        raise SkillMetadataError("`description` must be a string")
+    else:
+        description = description_value.strip()
 
-    tools = metadata.get("allowed-tools")
-    if tools is None:
-        tools = metadata.get("allowedTools")
-    if tools is None:
-        tools = metadata.get("tools")
-    if tools is None:
-        tools = []
+    stage_value = metadata.get("stage")
+    stage: SkillStage | None = None
+    if stage_value is not None:
+        if not isinstance(stage_value, str):
+            raise SkillMetadataError("`stage` must be a string")
+        normalized_stage = normalize_metadata_name(stage_value)
+        if normalized_stage not in VALID_STAGES:
+            raise SkillMetadataError(
+                f'unknown `stage` "{stage_value}"; expected one of: '
+                + ", ".join(sorted(VALID_STAGES))
+            )
+        stage = normalized_stage  # type: ignore[assignment]
 
-    if not isinstance(tools, list):
-        tools = []
-
-    tools = [x for x in tools if isinstance(x, str)]
-
-    disable = (
-        metadata.get("disable-model-invocation") is True
-        or metadata.get("disableModelInvocation") is True
+    triggers = parse_triggers(metadata.get("triggers"))
+    candidate_classes = parse_string_list(
+        metadata.get("candidate-classes"),
+        "candidate-classes",
+        normalize_candidate_class,
     )
+    requires = parse_string_list(
+        metadata.get("requires"),
+        "requires",
+        normalize_metadata_name,
+    )
+
+    tools_value = first_metadata_value(
+        metadata,
+        "allowed-tools",
+        "allowedTools",
+        "tools",
+    )
+    tools = parse_string_list(tools_value, "allowed-tools", str.strip)
+
+    disable_value = first_metadata_value(
+        metadata,
+        "disable-model-invocation",
+        "disableModelInvocation",
+    )
+    if disable_value is None:
+        disable = False
+    elif isinstance(disable_value, bool):
+        disable = disable_value
+    else:
+        raise SkillMetadataError(
+            "`disable-model-invocation` must be a boolean"
+        )
 
     return Skill(
         name=name,
@@ -171,10 +283,86 @@ def parse_skill(path: str | Path) -> Skill:
         disable_model_invocation=disable,
         path=str(path),
         body=_LEADING_BLANK_LINES_RE.sub("", body),
+        stage=stage,
+        triggers=triggers,
+        candidate_classes=candidate_classes,
+        requires=requires,
     )
 
 
-def validate_skill(skill: Skill, known_tools: set[str]) -> list[str]:
+def first_metadata_value(metadata: dict, *keys: str):
+    for key in keys:
+        if key in metadata:
+            return metadata[key]
+    return None
+
+
+def normalize_metadata_name(value: str) -> str:
+    return re.sub(
+        r"-+",
+        "-",
+        re.sub(r"[\s_]+", "-", value.strip().lower()),
+    ).strip("-")
+
+
+def normalize_candidate_class(value: str) -> str:
+    normalized = normalize_metadata_name(value)
+    return CANDIDATE_CLASS_ALIASES.get(normalized, normalized)
+
+
+def normalize_trigger(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().lower()).replace("_", " ")
+
+
+def parse_string_list(
+    value,
+    field_name: str,
+    normalizer,
+) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise SkillMetadataError(f"`{field_name}` must be a list of strings")
+
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise SkillMetadataError(
+                f"`{field_name}` must contain only non-empty strings"
+            )
+        normalized = normalizer(item)
+        if normalized not in result:
+            result.append(normalized)
+    return result
+
+
+def parse_triggers(value) -> SkillTriggers:
+    if value is None:
+        return SkillTriggers()
+    if not isinstance(value, dict):
+        raise SkillMetadataError("`triggers` must be a mapping")
+
+    unknown = set(value) - {"strong", "weak"}
+    if unknown:
+        raise SkillMetadataError(
+            "`triggers` contains unknown keys: " + ", ".join(sorted(unknown))
+        )
+
+    return SkillTriggers(
+        strong=parse_string_list(value.get("strong"), "triggers.strong", normalize_trigger),
+        weak=parse_string_list(value.get("weak"), "triggers.weak", normalize_trigger),
+    )
+
+
+def is_optional_external_tool(name: str) -> bool:
+    return name.startswith(OPTIONAL_TOOL_PREFIXES)
+
+
+def validate_skill(
+    skill: Skill,
+    known_tools: set[str] | None = None,
+    known_skills: set[str] | None = None,
+) -> list[str]:
     errors: list[str] = []
     directory = Path(skill.path).parent.name
 
@@ -197,8 +385,37 @@ def validate_skill(skill: Skill, known_tools: set[str]) -> list[str]:
             f"(max {MAX_DESCRIPTION})"
         )
 
+    if skill.stage is not None and skill.stage not in VALID_STAGES:
+        errors.append(
+            f'unknown stage "{skill.stage}"; expected one of: '
+            + ", ".join(sorted(VALID_STAGES))
+        )
+
+    if not isinstance(skill.disable_model_invocation, bool):
+        errors.append("`disable-model-invocation` must be a boolean")
+
+    for candidate_class in skill.candidate_classes:
+        if not NAME_RE.match(candidate_class):
+            errors.append(
+                f'candidate class "{candidate_class}" must be lowercase-kebab'
+            )
+
+    for requirement in skill.requires:
+        if not NAME_RE.match(requirement):
+            errors.append(
+                f'requires entry "{requirement}" must be lowercase-kebab'
+            )
+        elif known_skills is not None and requirement not in known_skills:
+            errors.append(
+                f'requires entry "{requirement}" is not a loaded skill'
+            )
+
     for tool in skill.tools:
-        if tool not in known_tools:
+        if (
+            known_tools is not None
+            and tool not in known_tools
+            and not is_optional_external_tool(tool)
+        ):
             errors.append(
                 f'allowed-tools entry "{tool}" is not a known tool'
             )

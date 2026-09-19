@@ -9,9 +9,37 @@ description: >
   prior skill has actually provided — never fabricated, brute-forced, or
   self-provisioned without explicit authorization. Produces tested evidence
   and calls `confirm_finding` only when that evidence meets the confirmed
-  threshold. Use only after `web-input-analysis` has handed off a specific
-  authentication candidate — never as a first step, and never against a
-  mechanism it didn't flag.
+  threshold. Use after `web-input-analysis` has handed off a specific
+  authentication candidate, or when the user directly supplies a concrete
+  authentication flow and property to validate. Never expand beyond the
+  provided candidate.
+stage: validation
+triggers:
+  strong:
+    - session fixation
+    - session invalidation
+    - login bypass
+    - mfa bypass
+    - 2fa bypass
+    - otp bypass
+    - password reset flow
+    - password reset bypass
+    - logout invalidation
+    - user enumeration
+    - account enumeration
+  weak:
+    - login flow
+    - logout
+    - session cookie
+    - mfa
+    - otp
+    - password reset
+    - remember me
+    - account lockout
+candidate-classes:
+  - authentication
+requires:
+  - web-input-analysis
 allowed-tools:
   - shell
   - http
@@ -22,13 +50,13 @@ allowed-tools:
 
 # Authentication playbook
 
-You are handed a specific candidate that `web-input-analysis` already
-flagged `suspected_class: authentication`, with a reasoned context (login
-form, password-reset flow, MFA step, session-management behavior) and a
-light signal. This phase answers "does the authentication mechanism itself
+You have a specific candidate that `web-input-analysis` flagged
+`suspected_class: authentication`, or that the user directly supplied with a
+concrete authentication flow and property to validate. This phase answers
+"does the authentication mechanism itself
 hold up — issuing, verifying, and invalidating identity correctly?" It does
 not re-triage the whole inventory and does not test mechanisms this skill
-wasn't handed. It may persist a tracked finding only after the evidence
+wasn't provided. It may persist a tracked finding only after the evidence
 meets step 5's confirmed threshold (see step 6).
 
 **Objective:** for each candidate routed here, either establish clear
@@ -76,17 +104,18 @@ for this skill specifically:
 
 ## Scope
 
-Only test candidates explicitly handed off from
-`web-input-analysis/<target>/candidates.md` with
-`suspected_class: authentication` (or a class list that includes it). Do
+Only test concrete candidates from `web-input-analysis/<target>/candidates.md`
+with `suspected_class: authentication` (or a class list that includes it), or
+candidates directly supplied by the user with equivalent flow/property
+details. Do
 not:
 
 - test candidates suspected of a different class (`access-control`,
   `sql-injection`, `cross-site-scripting`) — those route to their own
   skill instead;
-- expand scope to endpoints or flows not present in the hand-off;
-- run this skill directly from an inventory or from `recon` without
-  `web-input-analysis` having produced a candidate first.
+- expand scope to endpoints or flows outside the provided candidate;
+- invent flow, identity, credential, or expected-property details from a
+  generic request.
 
 This skill covers: login-flow mechanics (credential verification,
 error-message parity, response-timing-based user enumeration observed
@@ -590,7 +619,7 @@ step 5 and been written to `results.md`.
 Stop the skill entirely when every `authentication`-tagged candidate
 handed to you has been worked to an outcome and `results.md` is complete.
 
-Do not: test candidates this skill was not explicitly handed, guess or
+Do not: test outside the candidates explicitly provided for this run, guess or
 brute-force real credentials/OTPs/reset tokens, trigger reset or MFA flows
 against real users' identifiers, exceed the Tier 5 five-attempt cap,
 fabricate or self-provision test accounts without explicit authorization,

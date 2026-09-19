@@ -10,9 +10,28 @@ description: >
   the confirmed threshold. Does not scan
   broadly, does not extract real data by default, and does not use
   automated exploitation frameworks unless explicitly requested. Covers
-  SQL injection only, not NoSQL/operator injection. Use only after
+  SQL injection only, not NoSQL/operator injection. Use after
   `web-input-analysis` has produced a candidate with
-  `suspected_class: sql-injection`.
+  `suspected_class: sql-injection`, or when the user directly supplies a
+  concrete endpoint, method, and input to validate for SQL injection.
+stage: validation
+triggers:
+  strong:
+    - sql injection
+    - sqli
+    - union select
+    - boolean based
+    - time based
+    - error based
+    - database error
+  weak:
+    - database
+    - injection
+    - syntax sensitive
+candidate-classes:
+  - sql-injection
+requires:
+  - web-input-analysis
 allowed-tools:
   - shell
   - http
@@ -24,9 +43,10 @@ allowed-tools:
 
 # SQL injection playbook
 
-You have been handed one or more candidates from
+You have one or more concrete candidates, usually from
 `web-input-analysis/<target>/candidates.md` with
-`suspected_class: sql-injection`. This skill answers "is this candidate
+`suspected_class: sql-injection`, or directly specified by the user with an
+endpoint, method, and input location. This skill answers "is this candidate
 actually SQL-injectable, and if so, what's the minimum evidence that proves
 it?" It does not re-triage the whole inventory, does not go looking for new
 candidates, and does not decide on its own what becomes a tracked finding.
@@ -564,8 +584,8 @@ format; `confirm_finding` owns canonical finding persistence and naming.
 Stop working a candidate when it has reached one of the five outcomes in
 Recording the result and been written to `results.md`.
 
-Stop the skill entirely when every `sql-injection`-tagged candidate handed
-to you has been worked to an outcome and `results.md` is complete.
+Stop the skill entirely when every `sql-injection` candidate provided for
+this run has been worked to an outcome and `results.md` is complete.
 
 Do not: scan for new candidates, run automated SQLi tools by default,
 extract real data or credentials, chain into other vulnerability classes,

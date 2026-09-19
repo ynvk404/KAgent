@@ -7,6 +7,21 @@ description: >
   request can be accepted. Use when a state-changing action appears to
   rely on browser ambient authority such as cookies or session credentials
   and may lack effective CSRF protection.
+stage: validation
+triggers:
+  strong:
+    - csrf
+    - cross site request forgery
+  weak:
+    - csrf token
+    - anti csrf
+    - state changing request
+    - samesite
+    - double submit cookie
+    - forged request
+candidate-classes:
+  - csrf
+requires: []
 allowed-tools:
   - http
   - shell

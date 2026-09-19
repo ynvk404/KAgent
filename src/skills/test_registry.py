@@ -1,4 +1,5 @@
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,9 @@ import pytest
 from src.skills.registry import (
     Registry,
     Skill,
+    SkillMetadataError,
+    SkillTriggers,
+    normalize_candidate_class,
     parse_skill,
     validate_skill,
     materialize_skill_body,
@@ -66,7 +70,7 @@ def test_no_frontmatter_falls_back_to_directory_name(tmp_path):
     assert skill.tools == []
     assert skill.body == content
 
-def test_frontmatter_non_dict_falls_back_to_empty_metadata(tmp_path):
+def test_frontmatter_non_dict_is_rejected(tmp_path):
     content = (
         "---\n"
         "- item1\n"
@@ -77,12 +81,8 @@ def test_frontmatter_non_dict_falls_back_to_empty_metadata(tmp_path):
     )
     f = write_skill(tmp_path, "non-dict-fm", content)
 
-    skill = parse_skill(f)
-
-    assert skill.name == "non-dict-fm"
-    assert skill.description == ""
-    assert skill.tools == []
-    assert skill.body.startswith("# Body")
+    with pytest.raises(SkillMetadataError, match="frontmatter must be a mapping"):
+        parse_skill(f)
 
 @pytest.mark.parametrize(
     "key",
@@ -145,7 +145,7 @@ def test_explicit_empty_tools_list_is_respected(tmp_path):
 
     assert skill.tools == []
 
-def test_tools_not_a_list_falls_back_to_empty(tmp_path):
+def test_tools_not_a_list_is_rejected(tmp_path):
     content = (
         "---\n"
         "name: bad-tools\n"
@@ -157,11 +157,10 @@ def test_tools_not_a_list_falls_back_to_empty(tmp_path):
     )
     f = write_skill(tmp_path, "bad-tools", content)
 
-    skill = parse_skill(f)
+    with pytest.raises(SkillMetadataError, match="must be a list"):
+        parse_skill(f)
 
-    assert skill.tools == []
-
-def test_tools_filters_non_string_entries(tmp_path):
+def test_tools_rejects_non_string_entries(tmp_path):
     content = (
         "---\n"
         "name: mixed-tools\n"
@@ -177,9 +176,8 @@ def test_tools_filters_non_string_entries(tmp_path):
     )
     f = write_skill(tmp_path, "mixed-tools", content)
 
-    skill = parse_skill(f)
-
-    assert skill.tools == ["bash", "web_search"]
+    with pytest.raises(SkillMetadataError, match="non-empty strings"):
+        parse_skill(f)
 
 @pytest.mark.parametrize("key", ["disable-model-invocation", "disableModelInvocation"])
 def test_disable_model_invocation_true(tmp_path, key):
@@ -213,7 +211,7 @@ def test_disable_model_invocation_default_false(tmp_path):
 
     assert skill.disable_model_invocation is False
 
-def test_disable_model_invocation_non_bool_is_falsy(tmp_path):
+def test_disable_model_invocation_non_bool_is_rejected(tmp_path):
     content = (
         "---\n"
         "name: stringy-flag\n"
@@ -225,9 +223,8 @@ def test_disable_model_invocation_non_bool_is_falsy(tmp_path):
     )
     f = write_skill(tmp_path, "stringy-flag", content)
 
-    skill = parse_skill(f)
-
-    assert skill.disable_model_invocation is False
+    with pytest.raises(SkillMetadataError, match="must be a boolean"):
+        parse_skill(f)
 
 def test_load_dir_skips_hidden_and_template_dirs(tmp_path):
     write_skill(tmp_path, "visible", "---\nname: visible\ndescription: d\n---\nBody\n")
@@ -291,11 +288,14 @@ def test_load_dir_skips_broken_skill_but_loads_rest(tmp_path, monkeypatch):
 
 
 def test_load_dir_duplicate_metadata_names_have_stable_precedence(tmp_path):
-    write_skill(tmp_path, "a-first", "---\nname: duplicate\ndescription: first\n---\nBody\n")
-    write_skill(tmp_path, "z-last", "---\nname: duplicate\ndescription: last\n---\nBody\n")
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    write_skill(first, "duplicate", "---\nname: duplicate\ndescription: first\n---\nBody\n")
+    write_skill(second, "duplicate", "---\nname: duplicate\ndescription: last\n---\nBody\n")
 
     registry = Registry()
-    registry.load_dir(tmp_path)
+    registry.load_dir(first)
+    registry.load_dir(second)
 
     skill = registry.get("duplicate")
     assert skill is not None
@@ -340,6 +340,10 @@ def make_skill(
     disable_model_invocation: bool = False,
     path: str = "/skills/valid-skill/SKILL.md",
     body: str = "body",
+    stage: str | None = None,
+    triggers: SkillTriggers | None = None,
+    candidate_classes: list[str] | None = None,
+    requires: list[str] | None = None,
 ) -> Skill:
     return Skill(
         name=name,
@@ -348,6 +352,10 @@ def make_skill(
         disable_model_invocation=disable_model_invocation,
         path=path,
         body=body,
+        stage=stage,  # type: ignore[arg-type]
+        triggers=triggers or SkillTriggers(),
+        candidate_classes=candidate_classes or [],
+        requires=requires or [],
     )
 
 def test_validate_skill_valid_case():
@@ -384,6 +392,117 @@ def test_validate_skill_unknown_tool():
     skill = make_skill(tools=["bash", "made-up-tool"])
     errors = validate_skill(skill, known_tools={"bash"})
     assert any('"made-up-tool" is not a known tool' in e for e in errors)
+
+
+def test_parse_complete_selection_metadata(tmp_path):
+    skill_file = write_skill(
+        tmp_path,
+        "xxe",
+        """---
+name: xxe
+description: Validate XML external entity candidates.
+stage: validation
+triggers:
+  strong:
+    - XML external entity
+    - XXE
+  weak:
+    - XML parser
+candidate-classes:
+  - xxe
+requires:
+  - web_input_analysis
+allowed-tools:
+  - http
+disable-model-invocation: false
+---
+Body
+""",
+    )
+
+    skill = parse_skill(skill_file)
+
+    assert skill.stage == "validation"
+    assert skill.triggers.strong == ["xml external entity", "xxe"]
+    assert skill.triggers.weak == ["xml parser"]
+    assert skill.candidate_classes == ["xxe"]
+    assert skill.requires == ["web-input-analysis"]
+    assert skill.disable_model_invocation is False
+
+
+def test_absent_optional_selection_metadata_has_safe_defaults(tmp_path):
+    skill_file = write_skill(
+        tmp_path,
+        "simple",
+        "---\nname: simple\ndescription: Legacy simple skill\n---\nBody\n",
+    )
+
+    skill = parse_skill(skill_file)
+
+    assert skill.stage is None
+    assert skill.triggers == SkillTriggers()
+    assert skill.candidate_classes == []
+    assert skill.requires == []
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ("stage: exploitation", "unknown `stage`"),
+        ("triggers: [xxe]", "`triggers` must be a mapping"),
+        ("triggers:\n  strong: xxe", "`triggers.strong` must be a list"),
+        ("triggers:\n  other: [xxe]", "unknown keys"),
+        ("candidate-classes: xxe", "`candidate-classes` must be a list"),
+        ("requires: web-input-analysis", "`requires` must be a list"),
+    ],
+)
+def test_malformed_selection_metadata_is_rejected(tmp_path, metadata, message):
+    skill_file = write_skill(
+        tmp_path,
+        "broken",
+        "---\nname: broken\ndescription: Broken metadata\n"
+        f"{metadata}\n---\nBody\n",
+    )
+
+    with pytest.raises(SkillMetadataError, match=re.escape(message)):
+        parse_skill(skill_file)
+
+
+def test_candidate_class_alias_normalization():
+    assert normalize_candidate_class("SQLI") == "sql-injection"
+    assert normalize_candidate_class("xss") == "cross-site-scripting"
+    assert normalize_candidate_class("IDOR") == "access-control"
+    assert normalize_candidate_class("bola") == "access-control"
+    assert normalize_candidate_class("XXE") == "xxe"
+
+
+def test_validate_skill_accepts_optional_external_tool_prefixes():
+    skill = make_skill(tools=["bash", "mcp_burp_repeater", "plugin_custom"])
+    errors = validate_skill(skill, known_tools={"bash"})
+
+    assert errors == []
+
+
+def test_validate_skill_reports_missing_prerequisite():
+    skill = make_skill(requires=["missing-skill"])
+    errors = validate_skill(
+        skill,
+        known_tools={"bash"},
+        known_skills={"valid-skill"},
+    )
+
+    assert any('"missing-skill" is not a loaded skill' in error for error in errors)
+
+
+def test_registry_validation_uses_loaded_skill_and_tool_sets():
+    registry = Registry()
+    registry.add(make_skill(requires=["missing"], tools=["ghost"]))
+
+    errors = registry.validation_errors(known_tools={"bash"})
+
+    assert "valid-skill" in errors
+    assert any("not a known tool" in error for error in errors["valid-skill"])
+    assert any("not a loaded skill" in error for error in errors["valid-skill"])
 
 def test_validate_skill_multiple_errors_accumulate():
     skill = make_skill(name="", description="", tools=["ghost"])
