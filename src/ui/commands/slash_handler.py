@@ -929,6 +929,9 @@ async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
 
     try:
         await app.apply_provider(ProviderChange(backend=cur["backend"], model=m))
+        # The banner contains the active model, so refresh it along with the
+        # successful switch while preserving the confirmation message.
+        dispatch(Clear())
         dispatch(Append(entry=TranscriptEntry(kind="system", text=f"model set to {m}")))
     except Exception as err:
         dispatch(Append(entry=TranscriptEntry(kind="error", text=f"model: {err}")))

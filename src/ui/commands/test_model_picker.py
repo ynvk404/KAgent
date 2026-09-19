@@ -2,7 +2,7 @@ import asyncio
 
 from src.ui.commands import model_picker
 from src.ui.core.app import ProviderChange
-from src.ui.core.state import Append, SetAsk
+from src.ui.core.state import Append, Clear, SetAsk
 
 
 def test_fetch_and_pick_model_reports_listing_errors(monkeypatch):
@@ -69,6 +69,7 @@ def test_fetch_and_pick_model_dispatches_model_picker(monkeypatch):
         assert seen_payloads[0].model == "model-b"
         assert seen_payloads[0].base_url == "http://localhost:11434"
         assert seen_payloads[0].api_key == ""
+        assert isinstance(dispatched[-2], Clear)
         assert isinstance(dispatched[-1], Append)
         assert dispatched[-1].entry.kind == "system"
 

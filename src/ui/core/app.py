@@ -444,6 +444,7 @@ class KAgent(App):
             header=input_req.header,
             question=input_req.question,
             placeholder=input_req.placeholder,
+            masked=input_req.masked,
             resolve=lambda value: self.resolve_text_input(value),
             reject=lambda err: self.reject_text_input(err),
         )

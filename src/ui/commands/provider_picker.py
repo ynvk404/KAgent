@@ -168,6 +168,7 @@ def open_provider_picker(
                             header=header,
                             question=question,
                             placeholder=placeholder,
+                            masked=True,
                             resolve=lambda _value: None,
                             reject=lambda _err: None,
                         )
@@ -350,6 +351,7 @@ def open_provider_picker(
                     header=f"{label} API key",
                     question=f"Enter new {label} API key",
                     placeholder=placeholder,
+                    masked=True,
                     resolve=lambda _value: None,
                     reject=lambda _err: None,
                 )

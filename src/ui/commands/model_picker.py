@@ -8,7 +8,7 @@ from src.ask.ask import Option, Question
 from src.config.config import Backend
 from src.llm.models import list_models
 from src.ui.bridges.ask_bridge import AskRequest
-from src.ui.core.state import Action, Append, SetAsk, TranscriptEntry
+from src.ui.core.state import Action, Append, Clear, SetAsk, TranscriptEntry
 from src.llm.providers import (
     KIMI_MODELS,
     GROQ_MODELS,
@@ -210,6 +210,10 @@ async def fetch_and_pick_model(
             if not isinstance(message, str):
                 message = str(message)
 
+            # A provider/model switch changes the data behind the welcome
+            # banner.  Reset the transcript generation so it is rendered
+            # again before the confirmation below.
+            dispatch(Clear())
             dispatch(
                 Append(
                     entry=TranscriptEntry(

@@ -112,3 +112,17 @@ def test_render_plain_value():
 
     assert "sk-live-key" in frame
     assert "*******-key" not in frame
+
+
+def test_render_masked_value_does_not_expose_secret():
+    req = make_req()
+    req.masked = True
+    modal = TextInputModal(req)
+
+    for c in "sk-live-key":
+        modal.handle_key(c)
+
+    frame = "\n".join(modal.render())
+
+    assert "sk-live-key" not in frame
+    assert "•" * len("sk-live-key") in frame

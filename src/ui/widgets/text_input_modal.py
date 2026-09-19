@@ -12,6 +12,7 @@ class TextInputRequest:
 
     resolve: Callable[[str], None]
     reject: Callable[[Exception], None]
+    masked: bool = False
 
 
 class TextInputModal:
@@ -61,14 +62,14 @@ class TextInputModal:
             )
 
     def render(self) -> list[str]:
-        shown = (
-            self.value
-            if self.value
-            else (
-                self.req.placeholder
-                or ""
+        if self.value:
+            shown = (
+                "•" * len(self.value)
+                if self.req.masked
+                else self.value
             )
-        )
+        else:
+            shown = self.req.placeholder or ""
 
         return [
             f"[{self.req.header}]",
