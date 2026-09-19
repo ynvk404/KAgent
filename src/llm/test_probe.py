@@ -58,7 +58,7 @@ class _BlockingClient(Client):
 
     async def chat(
         self,
-        req: ChatRequest,
+        request: ChatRequest,
         signal: Optional[Any] = None,
     ) -> ChatResponse:
         self.started.set()
