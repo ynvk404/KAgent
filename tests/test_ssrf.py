@@ -293,7 +293,7 @@ def test_metadata_validation_stops_short_of_credentials(skill):
     section = body[idx: idx + 600]
 
     assert "do not enumerate iam roles" in section
-    assert "ssrf-impact" in section
+    assert "separately scoped authorization" in section
 
 
 # ---------------------------------------------------------------------------
@@ -311,9 +311,8 @@ def test_impact_ladder_covers_ssrf_1_through_4(skill):
 def test_impact_ladder_does_not_include_ssrf_5(skill):
     body = skill["body"]
 
-    # SSRF-5 (credential material disclosed) belongs to ssrf-impact, not
-    # this skill. Its presence here would signal scope creep back toward
-    # the exploit-chain draft.
+    # SSRF-5 (credential material disclosed) is separately scoped impact
+    # work. Its presence here would signal scope creep.
     assert "SSRF-5" not in body
 
 
@@ -328,11 +327,11 @@ def test_stops_before_credential_use_or_rce(skill):
     assert "rce" in section
 
 
-def test_hands_off_deeper_impact_to_ssrf_impact_skill(skill):
+def test_defers_deeper_impact_to_separately_authorized_followup(skill):
     body = skill["body"]
 
-    assert "ssrf-impact" in body
-    assert "separate authorization" in body.lower() or "separate, explicitly authorized" in body.lower()
+    assert "separately scoped follow-up" in body
+    assert "explicit authorization" in body.lower()
 
 
 # ---------------------------------------------------------------------------

@@ -8,8 +8,8 @@ description: >
   using only credentials, test accounts, and session material the user or a
   prior skill has actually provided — never fabricated, brute-forced, or
   self-provisioned without explicit authorization. Produces tested evidence
-  for `finding-validation` to turn into a finding. Does not create findings
-  itself. Use only after `web-input-analysis` has handed off a specific
+  and calls `confirm_finding` only when that evidence meets the confirmed
+  threshold. Use only after `web-input-analysis` has handed off a specific
   authentication candidate — never as a first step, and never against a
   mechanism it didn't flag.
 allowed-tools:
@@ -17,6 +17,7 @@ allowed-tools:
   - http
   - file_write
   - ask_user
+  - confirm_finding
 ---
 
 # Authentication playbook
@@ -27,8 +28,8 @@ form, password-reset flow, MFA step, session-management behavior) and a
 light signal. This phase answers "does the authentication mechanism itself
 hold up — issuing, verifying, and invalidating identity correctly?" It does
 not re-triage the whole inventory and does not test mechanisms this skill
-wasn't handed. It does not decide on its own what becomes a tracked
-finding — `finding-validation` owns that decision (see step 6).
+wasn't handed. It may persist a tracked finding only after the evidence
+meets step 5's confirmed threshold (see step 6).
 
 **Objective:** for each candidate routed here, either establish clear
 evidence that an authentication mechanism can be bypassed, weakened, or
@@ -392,8 +393,8 @@ behavior demonstrates that specific expected control is absent. If the
 candidate didn't establish a specific expected control, record the raw
 observation (throttled / not throttled within 5 attempts) as
 `not confirmed` and note the absence of an established baseline to
-compare against — this is evidence for `finding-validation` to weigh, not
-a conclusion this skill should draw on its own. Record this bounded
+compare against — this is evidence to preserve, not sufficient support for
+a finding or a conclusion this skill should draw on its own. Record this bounded
 observation even when the outcome is `not confirmed`; do not discard the
 evidence merely because an expected control wasn't established for
 comparison.
@@ -534,18 +535,21 @@ using the same target identifier as `recon`, `web-enumeration`, and
 `web-input-analysis`. One entry per candidate, in the same style as
 `web-input-analysis/candidates.md`.
 
-## 6. Hand off to finding-validation
+## 6. Confirm an evidence-backed finding
 
-`authentication` does not create a final finding itself — it produces
-tested evidence in `results.md`. Whether that evidence becomes a tracked
-finding is `finding-validation`'s decision:
+`authentication` first produces tested evidence in `results.md`. For each
+candidate marked `confirmed`, call `confirm_finding` to persist the canonical
+finding:
 
 ```
-authentication → results.md → finding-validation → final finding
+authentication → results.md → confirm_finding → final finding
 ```
 
-For each candidate marked `confirmed`, hand off to `finding-validation`
-with:
+Populate the tool call from the recorded evidence. Supply `title`,
+`severity`, exact `url`, `parameter` when applicable, `method`, a short
+proving `response_excerpt`, concrete `impact`, a copy-pasteable `curl`,
+remediation, and the same canonical `vuln_class` used when recording
+coverage, including:
 
 - affected endpoint(s)/flow and mechanism;
 - which property failed (fixation / invalidation / MFA bypass / reset-flow
@@ -566,7 +570,7 @@ with:
   implementation, since you don't have the application's real
   authentication logic.
 
-Do not hand off `not confirmed`, `blocked`, `insufficient-identity`,
+Do not call `confirm_finding` for `not confirmed`, `blocked`, `insufficient-identity`,
 `requires-authorization-for-write`, or `deferred (out of scope)`
 candidates as findings — they stay in `results.md` only. For
 `insufficient-identity` and `requires-authorization-for-write` candidates
@@ -574,9 +578,9 @@ specifically, flag in the summary exactly what credential, test account,
 or authorization would be needed to finish testing them, so the user can
 decide whether to supply it.
 
-Findings follow their own naming convention, defined in
-`finding-validation` — do not reuse the recon target identifier as the
-finding file name, and do not hand-roll a different finding format here.
+Do not reuse the recon target identifier as the finding file name or
+hand-roll a different finding format; `confirm_finding` owns canonical
+finding persistence and naming.
 
 ## Stop conditions
 

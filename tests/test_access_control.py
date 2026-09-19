@@ -15,7 +15,7 @@ Three classes:
   used to emit `deferred (authentication, out of scope)`, which didn't
   cover the CSRF/JWT/session-management out-of-scope cases also listed in
   Scope; it's now generic-outcome-string + free-text-reason, matching
-  `authentication`'s taxonomy so `finding-validation` can parse one enum
+  `authentication`'s taxonomy so the final finding path receives one enum
   across skills), and the permission-prompt-cache operational note.
 
 - `TestRegistryIntegration` — checks that every string in `allowed-tools`
@@ -87,8 +87,8 @@ class TestSkillFileStructure:
     def test_description_references_upstream_skill(self, frontmatter):
         assert "web-input-analysis" in frontmatter["description"]
 
-    def test_description_references_downstream_skill(self, frontmatter):
-        assert "finding-validation" in frontmatter["description"]
+    def test_description_references_finding_tool(self, frontmatter):
+        assert "confirm_finding" in frontmatter["description"]
 
     def test_allowed_tools_exact_set(self, frontmatter):
         assert frontmatter.get("allowed-tools") == [
@@ -96,6 +96,7 @@ class TestSkillFileStructure:
             "http",
             "file_write",
             "ask_user",
+            "confirm_finding",
         ]
 
     REQUIRED_HEADERS_IN_ORDER = [
@@ -109,7 +110,7 @@ class TestSkillFileStructure:
         "## 3. Test the relevant boundary, least intrusive first",
         "## 4. Bound the proof — do not escalate into impact demonstration",
         "## 5. Record the result",
-        "## 6. Hand off to finding-validation",
+        "## 6. Confirm an evidence-backed finding",
         "## Stop conditions",
     ]
 
@@ -134,7 +135,7 @@ class TestSkillFileStructure:
         section = self._section(
             body,
             "## 5. Record the result",
-            "## 6. Hand off to finding-validation",
+            "## 6. Confirm an evidence-backed finding",
         )
         outcomes = [
             "`confirmed`",
@@ -306,7 +307,7 @@ class TestSkillDecisionContract:
             self._section(
                 body,
                 "## 5. Record the result",
-                "## 6. Hand off to finding-validation",
+                "## 6. Confirm an evidence-backed finding",
             )
         )
         assert "`deferred (out of scope)`" in step5
@@ -374,24 +375,24 @@ class TestSkillDecisionContract:
         section = self._norm(
             self._section(
                 body,
-                "## 6. Hand off to finding-validation",
+                "## 6. Confirm an evidence-backed finding",
                 "## Stop conditions",
             )
         )
 
-        assert "Do not hand off" in section
+        assert "Do not call `confirm_finding`" in section
         assert "deferred (out of scope)" in section
 
     def test_only_confirmed_is_handed_off(self, body):
         section = self._norm(
             self._section(
                 body,
-                "## 6. Hand off to finding-validation",
+                "## 6. Confirm an evidence-backed finding",
                 "## Stop conditions",
             )
         )
 
-        assert "Do not hand off" in section
+        assert "Do not call `confirm_finding`" in section
 
         for non_handoff in [
             "not confirmed",
@@ -413,7 +414,7 @@ class TestSkillDecisionContract:
             self._section(
                 body,
                 "## 5. Record the result",
-                "## 6. Hand off to finding-validation",
+                "## 6. Confirm an evidence-backed finding",
             )
         )
         assert "the specific reason for a `deferred` outcome" in section
@@ -426,12 +427,14 @@ class TestSkillDecisionContract:
 class TestRegistryIntegration:
 
     @pytest.fixture
-    def registry(self):
+    def registry(self, tmp_path):
         from src.tools.registry import Registry
         from src.tools.shell import ShellTool
         from src.tools.file import FileWriteTool
         from src.tools.http import HTTPTool
         from src.tools.ask import AskUserTool
+        from src.tools.finding import ConfirmFindingTool
+        from src.findings.store import Store
         from src.target.target import Target
 
         reg = Registry()
@@ -445,6 +448,7 @@ class TestRegistryIntegration:
         reg.register(FileWriteTool())
         reg.register(HTTPTool(target))
         reg.register(AskUserTool(StubPrompter()))
+        reg.register(ConfirmFindingTool(Store(str(tmp_path / "findings"))))
 
         return reg
 

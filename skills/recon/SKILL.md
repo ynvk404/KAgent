@@ -268,9 +268,8 @@ The summary should contain:
 
 Do not create a security finding from reconnaissance observations alone unless
 reproducible evidence already demonstrates a vulnerability. (Findings, when
-they eventually exist, follow their own naming convention in
-`finding-validation` — do not reuse the target identifier for a finding
-file name.)
+they eventually exist, are persisted and named by `confirm_finding` — do not
+reuse the target identifier for a finding file name.)
 
 ## 6. Transition to the next phase
 

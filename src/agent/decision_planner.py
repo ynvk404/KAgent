@@ -67,8 +67,8 @@ _FILE_SUFFIXES = {
 }
 
 # NOTE: only intents for currently-active, fully rolled-out skills belong
-# here. When a new vulnerability-specific skill (finding-validation, ...)
-# completes its full rollout checklist, add its intent + keywords here at
+# here. When a new vulnerability-specific skill completes its full rollout
+# checklist, add its intent + keywords here at
 # that point. Do not pre-register intents for skills that haven't finished
 # rollout — an unmapped INTENT_TO_SKILL entry is silently dropped by
 # detect_intent() via the available_skill_names check, which would hide
@@ -80,9 +80,9 @@ _FILE_SUFFIXES = {
 #
 # ssrf is registered as validation-only: its keywords route to the
 # confirm/characterize workflow in skills/ssrf/SKILL.md, which stops at
-# SSRF-1..4 and hands off deeper impact work to a separate, not-yet-
-# registered ssrf-impact skill. Do not broaden these keywords to also
-# imply impact/exploitation intent without registering that skill too.
+# SSRF-1..4 and leaves deeper impact work for a separately authorized
+# follow-up. Do not broaden these keywords to imply impact/exploitation
+# intent.
 #
 # csrf is likewise validation-only: it stops at CSRF-1..3 (candidate ->
 # suspected -> confirmed) and hands off account-takeover/destructive

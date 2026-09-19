@@ -276,27 +276,28 @@ class TestScopeBounds:
 
 
 # ---------------------------------------------------------------------------
-# 5. Handoff contract (only confirmed findings go to finding-validation)
+# 5. Finding contract (only confirmed findings reach confirm_finding)
 # ---------------------------------------------------------------------------
 
-class TestHandoffContract:
-    def test_handoff_schema_present(self, skill_text: str):
-        assert "handoff:" in skill_text
+class TestFindingContract:
+    def test_confirm_finding_schema_present(self, skill_text: str):
+        assert "confirm_finding:" in skill_text
         for field_name in (
-            "target:", "endpoint:", "method:", "parameter:", "location:",
-            "sqli_level:", "technique:", "engine:", "proof_scope:",
+            "title:", "severity:", "url:", "method:", "parameter:",
+            "payload:", "response_excerpt:", "impact:", "curl:",
+            "remediation:", "vuln_class:",
         ):
             assert field_name in skill_text
 
-    def test_only_confirmed_outcomes_handed_off(self, skill_text: str):
-        assert "Do not hand off `not confirmed`, `blocked`, or `deferred` candidates" in skill_text
+    def test_only_confirmed_outcomes_are_persisted(self, skill_text: str):
+        assert "Do not call `confirm_finding` for `not confirmed`, `blocked`, or `deferred`" in skill_text
 
     def test_no_concrete_query_rewrite_in_handoff(self, skill_text: str):
-        assert "Do not fill in a rewritten, drop-in query fix" in skill_text
+        assert "Do not fill in a rewritten, drop-in query fix" in _norm(skill_text)
 
-    def test_proof_scope_declares_no_extraction_by_default(self, skill_text: str):
-        assert 'data_extracted: false' in skill_text
-        assert "no data extraction performed; confirmation only" in skill_text
+    def test_proof_scope_remains_in_durable_evidence(self, skill_text: str):
+        assert "proof scope" in skill_text
+        assert "results.md" in skill_text
 
 
 # ---------------------------------------------------------------------------

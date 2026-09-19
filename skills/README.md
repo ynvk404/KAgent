@@ -6,10 +6,9 @@ file with YAML frontmatter and a Markdown body.
 
 ```
 skills/
-  jwt/
+  sql-injection/
     SKILL.md
-    payloads/
-      alg-none-variants.txt
+    payloads.txt
 ```
 
 ## SKILL.md frontmatter
@@ -57,5 +56,5 @@ Just drop a `<name>/SKILL.md` into one of these — no config needed. Skills
 - `/skills enable|disable <name>` — toggle from the prompt.
 - `/<name>` — invoke a skill explicitly for your next turn.
 
-All shipped skills are validated by `src/skills/conformance.test.ts`
-(name/description/allowed-tools), so a malformed skill fails CI.
+Shipped skill handoffs, help examples, and payload references are validated
+by `src/skills/test_conformance.py`, so stale runtime references fail CI.

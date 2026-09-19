@@ -10,6 +10,9 @@ from src.skills.registry import Registry
 from src.tools.payloads import ReadPayloadsTool
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 class DummyInnerPrompter:
 
     async def ask(
@@ -278,4 +281,69 @@ async def test_handles_missing_payload_directory(
         noop_prompter,
     )
 
-    assert "no payloads" in out
+    assert out == (
+        'skill "bare" has no payload sources; '
+        "expected payloads/ directory or payloads.txt file"
+    )
+
+
+@pytest.fixture(scope="module")
+def shipped_payload_tool():
+    registry = Registry()
+    registry.load_dir(REPO_ROOT / "skills")
+    return ReadPayloadsTool(registry)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill_name",
+    [
+        "sql-injection",
+        "cross-site-scripting",
+        "ssti",
+    ],
+)
+async def test_reads_top_level_payloads_from_shipped_skills(
+    shipped_payload_tool,
+    noop_prompter,
+    skill_name,
+):
+    listed = await shipped_payload_tool.run(
+        {
+            "skill": skill_name,
+            "action": "list",
+        },
+        None,
+        noop_prompter,
+    )
+    assert json.loads(listed) == ["payloads.txt"]
+
+    out = await shipped_payload_tool.run(
+        {
+            "skill": skill_name,
+            "file": "payloads.txt",
+        },
+        None,
+        noop_prompter,
+    )
+
+    assert f"# {skill_name}/payloads.txt" in out
+    assert "PHASE 1" in out
+    assert not out.startswith("error:")
+
+
+@pytest.mark.asyncio
+async def test_shipped_payload_reader_rejects_traversal(
+    shipped_payload_tool,
+    noop_prompter,
+):
+    out = await shipped_payload_tool.run(
+        {
+            "skill": "sql-injection",
+            "file": "../SKILL.md",
+        },
+        None,
+        noop_prompter,
+    )
+
+    assert out == 'error: path "../SKILL.md" escapes <skill>/payloads/'

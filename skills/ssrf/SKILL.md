@@ -21,7 +21,7 @@ Scope: confirm whether a parameter causes the server to make a request you
 control the destination of, and characterize how far that reach extends.
 This skill stops once SSRF is conclusively demonstrated. It does not chain
 into credential theft, RCE, or broad internal network scanning — that is
-a separate, explicitly authorized skill (`ssrf-impact`).
+a separately scoped follow-up that requires explicit authorization.
 
 Execution rule: use the actual target URL, parameter, and (if needed)
 callback/canary host before running commands. Never write literal
@@ -102,9 +102,8 @@ Do not sweep `127.0.0.1:1-65535` or `10.0.0.0/8`.
 If the target environment is plausibly cloud-hosted, a single request to
 the relevant metadata root (e.g. `http://169.254.169.254/latest/meta-data/`)
 is sufficient to demonstrate metadata-endpoint reachability. Do not
-enumerate IAM roles or retrieve credential material — that is impact
-work, not validation, and belongs to `ssrf-impact` under separate
-authorization.
+enumerate IAM roles or retrieve credential material — that is impact work,
+not validation, and requires a separately scoped authorization.
 
 ## 6. Stop when impact is proven
 
@@ -120,8 +119,8 @@ step number that applies:
 
 Do not continue toward credential retrieval, credential use, RCE
 chaining, or file disclosure. If the finding warrants deeper impact
-validation, say so in the report and hand off to `ssrf-impact` — do not
-perform that work here, even if it looks like "just one more step."
+validation, say so in the report and stop — do not perform that work here,
+even if it looks like "just one more step."
 
 ## Reporting
 
@@ -132,5 +131,4 @@ with `-`). Never write a literal placeholder as the filename.
 
 Include: the exact request(s), the exact response(s) or canary evidence,
 the SSRF level reached (1–4), and — if applicable — a one-line note that
-deeper impact validation would require `ssrf-impact` with separate
-authorization.
+deeper impact validation would require separate scope and authorization.

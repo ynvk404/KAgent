@@ -7,8 +7,8 @@ description: >
   testing needed to establish evidence, and using only identity/session
   material the user or a prior skill has actually provided — never
   fabricated or self-provisioned without explicit authorization. Produces
-  tested evidence for `finding-validation` to turn into a finding. Does not
-  create findings itself. Use only after `web-input-analysis` has handed off
+  tested evidence and calls `confirm_finding` only when that evidence meets
+  the confirmed threshold. Use only after `web-input-analysis` has handed off
   a specific access-control candidate — never as a first step, and never
   against a parameter it didn't flag.
 allowed-tools:
@@ -16,6 +16,7 @@ allowed-tools:
   - http
   - file_write
   - ask_user
+  - confirm_finding
 ---
 
 # Access control playbook
@@ -25,9 +26,8 @@ flagged `suspected_class: access-control`, with a reasoned context (object
 identifier, state-changing action, or admin-like endpoint) and a light
 signal. This phase answers "can an identity that shouldn't be allowed to do
 this, do it anyway?" It does not re-triage the whole inventory and does not
-test parameters this skill wasn't handed. It does not decide on its own
-what becomes a tracked finding — `finding-validation` owns that decision
-(see step 6).
+test parameters this skill wasn't handed. It may persist a tracked finding
+only after the evidence meets step 5's confirmed threshold (see step 6).
 
 **Objective:** for each candidate routed here, either establish clear
 evidence that authorization is missing or bypassable at the relevant
@@ -377,18 +377,21 @@ using the same target identifier as `recon`, `web-enumeration`, and
 `web-input-analysis`. One entry per candidate, in the same style as
 `web-input-analysis/candidates.md`.
 
-## 6. Hand off to finding-validation
+## 6. Confirm an evidence-backed finding
 
-`access-control` does not create a final finding itself — it produces
-tested evidence in `results.md`. Whether that evidence becomes a tracked
-finding is `finding-validation`'s decision:
+`access-control` first produces tested evidence in `results.md`. For each
+candidate marked `confirmed`, call `confirm_finding` to persist the canonical
+finding:
 
 ```
-access-control → results.md → finding-validation → final finding
+access-control → results.md → confirm_finding → final finding
 ```
 
-For each candidate marked `confirmed`, hand off to `finding-validation`
-with:
+Populate the tool call from the recorded evidence. Supply `title`,
+`severity`, exact `url`, `parameter` when applicable, `method`, a short
+proving `response_excerpt`, concrete `impact`, a copy-pasteable `curl`,
+remediation, and the matching coverage class in `vuln_class` (for example,
+`idor` for an IDOR), including:
 
 - affected endpoint/method/object;
 - which authorization boundary failed (missing auth / horizontal /
@@ -403,7 +406,7 @@ with:
   implementation, since you don't have the application's real
   authorization logic.
 
-Do not hand off `not confirmed`, `blocked`, `insufficient-identity`,
+Do not call `confirm_finding` for `not confirmed`, `blocked`, `insufficient-identity`,
 `requires-authorization-for-write`, or `deferred (out of scope)`
 candidates as findings — they stay in `results.md` only. For
 `insufficient-identity` and
@@ -411,9 +414,9 @@ candidates as findings — they stay in `results.md` only. For
 summary exactly what identity or authorization would be needed to finish
 testing them, so the user can decide whether to supply it.
 
-Findings follow their own naming convention, defined in
-`finding-validation` — do not reuse the recon target identifier as the
-finding file name, and do not hand-roll a different finding format here.
+Do not reuse the recon target identifier as the finding file name or
+hand-roll a different finding format; `confirm_finding` owns canonical
+finding persistence and naming.
 
 ## Stop conditions
 

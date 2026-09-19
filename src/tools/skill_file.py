@@ -42,9 +42,9 @@ class ReadSkillFileTool:
             "${SKILL_DIR} for absolute paths; this tool is the "
             "skill-name-relative way to fetch the same file.\n\n"
             "Examples:\n"
-            '  read_skill_file(skill="takeover", action="list")\n'
-            '  read_skill_file(skill="takeover", path="payloads/fingerprints.json")\n'
-            '  read_skill_file(skill="ssti", path="payloads/jinja2.txt", limit=50)'
+            '  read_skill_file(skill="sql-injection", action="list")\n'
+            '  read_skill_file(skill="sql-injection", path="payloads.txt", limit=50)\n'
+            '  read_skill_file(skill="recon", action="list")'
         )
 
     def schema(self) -> dict[str, Any]:
@@ -72,7 +72,7 @@ class ReadSkillFileTool:
                     "type": "string",
                     "description": (
                         "Relative path within the skill directory "
-                        '(example: "payloads/jwt.txt").'
+                        '(example: "payloads.txt").'
                     ),
                 },
                 "limit": {

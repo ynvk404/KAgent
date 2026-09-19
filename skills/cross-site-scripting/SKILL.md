@@ -5,15 +5,18 @@ description: >
   specific candidate that `web-input-analysis` flagged as
   `suspected_class: cross-site-scripting`, using the minimum non-destructive
   testing needed to establish evidence. Produces tested evidence
-  (request/response, impact, remediation direction) for `finding-validation`
-  to turn into a finding. Does not create findings itself. Use only after
+  (request/response, impact, remediation direction) and calls
+  `confirm_finding` only when that evidence meets the confirmed threshold.
+  Use only after
   `web-input-analysis` has handed off a specific XSS candidate — never as a
   first step, and never against a parameter it didn't flag.
 allowed-tools:
   - shell
   - http
+  - read_payloads
   - file_write
   - ask_user
+  - confirm_finding
 ---
 
 # Cross-site scripting playbook
@@ -23,9 +26,8 @@ flagged `suspected_class: cross-site-scripting`, with a reasoned context
 (reflected in HTML/JS output) and a light signal. This phase answers "is
 this parameter actually exploitable for script execution, and what's the
 concrete impact?" It does not re-triage the whole inventory and does not
-test parameters this skill wasn't handed. It does not decide on its own
-what becomes a tracked finding — `finding-validation` owns that decision
-(see step 6).
+test parameters this skill wasn't handed. It may persist a tracked finding
+only after the evidence meets step 5's confirmed threshold (see step 6).
 
 **Objective:** for each candidate routed here, either establish clear
 evidence that the payload is exploitable in the observed context, using the
@@ -388,21 +390,23 @@ traceability — they don't affect gating or outcome logic. `cleanup_performed`
 exists so the stored-payload cleanup requirement in step 3 is independently
 auditable rather than trusted to have happened silently.
 
-A `confirmed` result here is evidence ready for `finding-validation`; it is
-not yet a tracked finding until that phase accepts it.
+A `confirmed` result here is evidence ready for `confirm_finding`; it is not
+yet a tracked finding until that tool persists it.
 
-## 6. Hand off to finding-validation
+## 6. Confirm an evidence-backed finding
 
-`cross-site-scripting` does not create a final finding itself — it produces
-tested evidence in `results.md`. Whether that evidence becomes a tracked
-finding, and in what format, is `finding-validation`'s decision:
+`cross-site-scripting` first produces tested evidence in `results.md`. For
+each candidate marked `confirmed`, call `confirm_finding` to persist the
+canonical finding:
 
 ```
-cross-site-scripting → results.md → finding-validation → final finding
+cross-site-scripting → results.md → confirm_finding → final finding
 ```
 
-For each candidate marked `confirmed` in `results.md`, hand off to
-`finding-validation` with:
+Populate the tool call from the recorded evidence. Supply `title`,
+`severity`, exact `url`, `parameter`, `payload`, `method`, a short proving
+`response_excerpt`, concrete `impact`, a copy-pasteable `curl`, remediation,
+and `vuln_class: xss`, including:
 
 - affected endpoint/parameter/method;
 - reflection type and authentication context;
@@ -414,12 +418,11 @@ For each candidate marked `confirmed` in `results.md`, hand off to
   Content-Security-Policy as defense-in-depth. Do not recommend
   blacklist-based input filtering as the primary fix.
 
-Do not hand off `not confirmed`, `blocked`, or `requires-browser-
-confirmation` candidates to `finding-validation` as findings — they stay
-recorded in `results.md` only. For `requires-browser-confirmation`
+Do not call `confirm_finding` for `not confirmed`, `blocked`, or
+`requires-browser-confirmation` candidates — they stay recorded in
+`results.md` only. For `requires-browser-confirmation`
 candidates specifically, flag in the summary that browser-level
-confirmation is needed before `finding-validation` (or the user) decides
-whether to pursue it further.
+confirmation is needed before the user decides whether to pursue it further.
 
 Also summarize, across all candidates processed:
 
@@ -431,9 +434,9 @@ Also summarize, across all candidates processed:
   flagging back to `web-input-analysis` for a broader look at similar
   parameters.
 
-Findings follow their own naming convention, defined in
-`finding-validation` — do not reuse the recon target identifier as the
-finding file name, and do not hand-roll a different finding format here.
+Do not reuse the recon target identifier as the finding file name or
+hand-roll a different finding format; `confirm_finding` owns canonical
+finding persistence and naming.
 
 Do not re-run `web-input-analysis` or `web-enumeration` from here — flag it
 in the summary and let the user or a fresh phase decide whether to expand

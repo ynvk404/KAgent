@@ -36,7 +36,8 @@ class ReadPayloadsTool(Tool):
             [
                 (
                     "Read a curated payload list shipped with a skill. "
-                    "Each skill can carry a payloads/ directory."
+                    "A skill can carry a payloads/ directory or a "
+                    "top-level payloads.txt file."
                 ),
                 "",
                 (
@@ -47,8 +48,8 @@ class ReadPayloadsTool(Tool):
                 "",
                 "Examples:",
                 '  read_payloads(skill="ssti", action="list")',
-                '  read_payloads(skill="jwt", file="alg-confusion.txt")',
-                '  read_payloads(skill="ssti", file="jinja2.txt", limit=50)',
+                '  read_payloads(skill="ssti", file="payloads.txt", limit=50)',
+                '  read_payloads(skill="sql-injection", file="payloads.txt")',
             ]
         )
 
@@ -59,7 +60,7 @@ class ReadPayloadsTool(Tool):
                 "skill": {
                     "type": "string",
                     "description": (
-                        "Skill name whose payloads directory to read."
+                        "Skill name whose bundled payload source to read."
                     ),
                 },
                 "action": {
@@ -76,7 +77,8 @@ class ReadPayloadsTool(Tool):
                 "file": {
                     "type": "string",
                     "description": (
-                        "Relative path inside skill/payloads."
+                        "Relative path inside skill/payloads, or payloads.txt "
+                        "for a skill's top-level compatibility file."
                     ),
                 },
                 "limit": {
@@ -115,11 +117,17 @@ class ReadPayloadsTool(Tool):
             return error or "error: skill is required"
 
         payloads_dir = skill_dir / "payloads"
+        top_level_payloads = skill_dir / "payloads.txt"
+        has_payloads_dir = payloads_dir.is_dir()
+        has_top_level_payloads = (
+            top_level_payloads.is_file()
+            and contained_in(skill_dir, top_level_payloads)
+        )
 
-        if not payloads_dir.exists():
+        if not has_payloads_dir and not has_top_level_payloads:
             return (
-                f'skill "{skill_name}" has no payloads/ directory '
-                f"at {payloads_dir}"
+                f'skill "{skill_name}" has no payload sources; '
+                "expected payloads/ directory or payloads.txt file"
             )
 
         file = arg_string(
@@ -136,10 +144,16 @@ class ReadPayloadsTool(Tool):
         )
 
         if action == "list":
+            files = list_files(payloads_dir) if has_payloads_dir else []
+
+            if (
+                has_top_level_payloads
+                and top_level_payloads.stat().st_size <= MAX_BYTES
+            ):
+                files.append("payloads.txt")
+
             return json.dumps(
-                list_files(
-                    payloads_dir
-                ),
+                sorted(set(files)),
                 indent=2,
             )
 
@@ -153,7 +167,7 @@ class ReadPayloadsTool(Tool):
                 "error: file is required for action=read"
             )
 
-        resolved = (
+        directory_candidate = (
             payloads_dir /
             file
         ).resolve(
@@ -162,11 +176,22 @@ class ReadPayloadsTool(Tool):
 
         if not contained_in(
             payloads_dir,
-            resolved,
+            directory_candidate,
         ):
             return (
                 f'error: path "{file}" escapes '
                 "<skill>/payloads/"
+            )
+
+        if directory_candidate.is_file():
+            resolved = directory_candidate
+            relative_path = resolved.relative_to(payloads_dir.resolve())
+        elif file == "payloads.txt" and has_top_level_payloads:
+            resolved = top_level_payloads.resolve()
+            relative_path = resolved.relative_to(skill_dir.resolve())
+        else:
+            return (
+                f"error: not a file: {file}"
             )
 
         if (
@@ -176,10 +201,6 @@ class ReadPayloadsTool(Tool):
             return (
                 f"error: not a file: {file}"
             )
-
-        relative_path = resolved.relative_to(
-            payloads_dir.resolve()
-        )
 
         return render_file_preview(
             f"{skill_name}/{relative_path}",

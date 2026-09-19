@@ -52,7 +52,7 @@ _KEYBINDINGS: list[tuple[str, str]] = [
 _TIPS: list[str] = [
     "browser_capture_* tools surface live request / cookie / storage data once Burp/browser traffic is forwarding to a --burp bridge.",
     "coverage(action=\"untested\", candidates=[...], vuln_classes=[...]) returns the (endpoint, param, class) tuples you have NOT tested yet — drive the next pass off of it.",
-    "read_payloads(skill=\"<name>\") pulls curated wordlists from disk. Skills like ssti / jwt ship pre-canned payload files in their payloads/ directory.",
+    "read_payloads(skill=\"<name>\") pulls curated wordlists from disk. Skills may ship a payloads/ directory or a top-level payloads.txt file.",
     "Disabled skills are hidden from the agent's system prompt entirely. Use /skills to flip a skill back on without restarting.",
     "/model list opens an interactive backend model picker; /model <id> validates against the live catalog and suggests the closest match on typo.",
     "/memory intel stats shows learned background scenarios count; /memory intel clear wipes them (project/personal/all). Intelligence is auto-pruned but grows to the cap on long engagements.",

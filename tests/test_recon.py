@@ -310,7 +310,7 @@ def test_recon_does_not_use_findings_for_plain_recon_output():
         ]
     ).lower()
 
-    assert "finding-validation" in finding_section
+    assert "confirm_finding" in finding_section
     assert (
         "do not reuse the target identifier for a finding file name"
         in finding_section

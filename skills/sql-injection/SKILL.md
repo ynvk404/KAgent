@@ -6,7 +6,8 @@ description: >
   to demonstrate the vulnerability, and — only with explicit user
   authorization after SQL injection is confirmed — optionally validate
   impact through a minimal, non-sensitive fingerprint probe. Records the
-  result for `finding-validation` to turn into a finding. Does not scan
+  result and calls `confirm_finding` only when the recorded evidence meets
+  the confirmed threshold. Does not scan
   broadly, does not extract real data by default, and does not use
   automated exploitation frameworks unless explicitly requested. Covers
   SQL injection only, not NoSQL/operator injection. Use only after
@@ -18,6 +19,7 @@ allowed-tools:
   - read_payloads
   - file_write
   - ask_user
+  - confirm_finding
 ---
 
 # SQL injection playbook
@@ -56,8 +58,9 @@ Phase 3: Minimal Impact Validation    — only with explicit ask_user
 reproducible proof that SQL injection exists (with impact bounded to
 "proof of concept," not "full compromise"), or record a clear negative or
 blocked result. Then record the result and stop. This skill produces
-evidence, not a final finding — `finding-validation` owns that decision
-(see "Hand off to finding-validation").
+evidence first; only a result that meets the confirmation threshold below
+may be persisted with `confirm_finding` (see "Confirm an evidence-backed
+finding").
 
 ## Authorization matrix
 
@@ -514,50 +517,47 @@ independent of whether anything gets turned into a finding. The
 `timestamp` and `agent_session_id` fields exist purely for audit
 traceability — they don't affect gating or outcome logic.
 
-## Hand off to finding-validation
+## Confirm an evidence-backed finding
 
-`sql-injection` does not create a final finding itself — it produces tested
-evidence in `results.md`. Whether that evidence becomes a tracked finding,
-and in what format, is `finding-validation`'s decision:
+`sql-injection` first produces tested evidence in `results.md`. For each
+candidate marked `confirmed (SQLI-2)` or `confirmed (SQLI-3)`, call
+`confirm_finding` to persist the canonical finding:
 
 ```
-sql-injection → results.md → finding-validation → final finding
+sql-injection → results.md → confirm_finding → final finding
 ```
 
-For each candidate marked `confirmed (SQLI-2)` or `confirmed (SQLI-3)` in
-`results.md`, hand off to `finding-validation` with a structured block in
-this form (YAML front-matter, so `finding-validation` can parse it
-mechanically instead of extracting facts from prose):
+Populate the tool call from the recorded evidence. Include `title`,
+`severity`, exact `url`, `parameter`, `payload`, `method`, a short proving
+`response_excerpt`, concrete `impact`, a copy-pasteable `curl`, remediation,
+and `vuln_class: sqli`:
 
 ```yaml
-handoff:
-  target: <target identifier>
-  endpoint: <endpoint>
+confirm_finding:
+  title: <short descriptive title>
+  severity: <critical|high|medium|low|info>
+  url: <exact affected endpoint>
   method: <GET|POST|...>
   parameter: <parameter>
-  location: <query|path|body|header|cookie>
-  sqli_level: <2|3>
-  technique: <1b|2a|2b|2d>
-  engine: <mysql|postgres|mssql|oracle|sqlite|undetermined>
-  injection_context: <inferred context, or "unknown">
-  order: <first-order|second-order-suspected>
-  proof_scope:
-    data_extracted: false
-    extraction_note: "no data extraction performed; confirmation only"
-    phase_3_run: <true|false>
-    phase_3_evidence: <if phase_3_run is true, the fingerprint value obtained; else omit>
-  suggested_remediation_direction: "parameterized queries / prepared statements / ORM parameter binding for this input"
+  payload: <exact confirming payload>
+  response_excerpt: <short excerpt proving the SQLi>
+  impact: <concrete evidence-supported impact>
+  curl: <copy-pasteable reproduction>
+  remediation: "Use parameterized queries, prepared statements, or ORM parameter binding for this input."
+  vuln_class: sqli
 ```
 
-Do not fill in a rewritten, drop-in query fix — the general remediation
-category above is appropriate; a concrete query rewrite is not, since you
-don't have the application's real query.
+Keep SQLi-specific details such as level, technique, engine, injection
+context, proof scope, and any separately authorized Phase 3 evidence in
+`results.md` so the finding remains auditable. Do not fill in a rewritten,
+drop-in query fix — the general remediation category above is appropriate;
+a concrete query rewrite is not, since you don't have the application's real
+query.
 
-Do not hand off `not confirmed`, `blocked`, or `deferred` candidates to
-`finding-validation` as findings — they stay recorded in `results.md` only.
-Findings follow their own naming convention, defined in
-`finding-validation` — do not reuse the recon target identifier as the
-finding file name, and do not hand-roll a different finding format here.
+Do not call `confirm_finding` for `not confirmed`, `blocked`, or `deferred`
+candidates — they stay recorded in `results.md` only. Do not reuse the recon
+target identifier as a finding file name or hand-roll a different finding
+format; `confirm_finding` owns canonical finding persistence and naming.
 
 ## Stop conditions
 

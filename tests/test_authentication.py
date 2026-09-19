@@ -84,8 +84,8 @@ class TestSkillFileStructure:
     def test_description_references_upstream_skill(self, frontmatter):
         assert "web-input-analysis" in frontmatter["description"]
 
-    def test_description_references_downstream_skill(self, frontmatter):
-        assert "finding-validation" in frontmatter["description"]
+    def test_description_references_finding_tool(self, frontmatter):
+        assert "confirm_finding" in frontmatter["description"]
 
     def test_description_disclaims_self_provisioning(self, frontmatter):
         desc = frontmatter["description"]
@@ -98,6 +98,7 @@ class TestSkillFileStructure:
             "http",
             "file_write",
             "ask_user",
+            "confirm_finding",
         ]
 
     REQUIRED_HEADERS_IN_ORDER = [
@@ -111,7 +112,7 @@ class TestSkillFileStructure:
         "## 3. Test the relevant property, least intrusive first",
         "## 4. Bound the proof — do not escalate into impact demonstration",
         "## 5. Record the result",
-        "## 6. Hand off to finding-validation",
+        "## 6. Confirm an evidence-backed finding",
         "## Stop conditions",
     ]
 
@@ -136,7 +137,7 @@ class TestSkillFileStructure:
         section = self._section(
             body,
             "## 5. Record the result",
-            "## 6. Hand off to finding-validation",
+            "## 6. Confirm an evidence-backed finding",
         )
         outcomes = [
             "`confirmed`",
@@ -513,7 +514,7 @@ class TestSkillDecisionContract:
             self._section(
                 body,
                 "## 5. Record the result",
-                "## 6. Hand off to finding-validation",
+                "## 6. Confirm an evidence-backed finding",
             )
         )
         assert "In this skill, this outcome specifically" in section
@@ -535,7 +536,7 @@ class TestSkillDecisionContract:
         raw_section = self._section(
             body,
             "## 5. Record the result",
-            "## 6. Hand off to finding-validation",
+            "## 6. Confirm an evidence-backed finding",
         )
         section = self._norm(raw_section)
         assert "one **overall** outcome" in raw_section
@@ -560,15 +561,15 @@ class TestSkillDecisionContract:
 
     def test_impact_must_be_evidence_supported_not_overclaimed(self, body):
         """
-        Patch point 2: impact described in the hand-off to
-        finding-validation must be framed as a reasoned consequence of
+        Patch point 2: impact described before calling `confirm_finding`
+        must be framed as a reasoned consequence of
         the confirmed weakness, not as an action actually executed —
         since step 4 forbids demonstrating real account takeover.
         """
         section = self._norm(
             self._section(
                 body,
-                "## 6. Hand off to finding-validation",
+                "## 6. Confirm an evidence-backed finding",
                 "## Stop conditions",
             )
         )
@@ -580,24 +581,24 @@ class TestSkillDecisionContract:
         section = self._norm(
             self._section(
                 body,
-                "## 6. Hand off to finding-validation",
+                "## 6. Confirm an evidence-backed finding",
                 "## Stop conditions",
             )
         )
 
-        assert "Do not hand off" in section
+        assert "Do not call `confirm_finding`" in section
         assert "deferred (out of scope)" in section
 
     def test_only_confirmed_is_handed_off(self, body):
         section = self._norm(
             self._section(
                 body,
-                "## 6. Hand off to finding-validation",
+                "## 6. Confirm an evidence-backed finding",
                 "## Stop conditions",
             )
         )
 
-        assert "Do not hand off" in section
+        assert "Do not call `confirm_finding`" in section
 
         for non_handoff in [
             "not confirmed",
@@ -630,12 +631,14 @@ class TestSkillDecisionContract:
 class TestRegistryIntegration:
 
     @pytest.fixture
-    def registry(self):
+    def registry(self, tmp_path):
         from src.tools.registry import Registry
         from src.tools.shell import ShellTool
         from src.tools.file import FileWriteTool
         from src.tools.http import HTTPTool
         from src.tools.ask import AskUserTool
+        from src.tools.finding import ConfirmFindingTool
+        from src.findings.store import Store
         from src.target.target import Target
 
         reg = Registry()
@@ -649,6 +652,7 @@ class TestRegistryIntegration:
         reg.register(FileWriteTool())
         reg.register(HTTPTool(target))
         reg.register(AskUserTool(StubPrompter()))
+        reg.register(ConfirmFindingTool(Store(str(tmp_path / "findings"))))
 
         return reg
 
