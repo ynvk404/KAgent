@@ -257,6 +257,22 @@ async def test_streams_answer_deltas_surfaces_thoughts_and_parses_tool_calls(bas
     assert tool_call["provider"]["gemini"]["thoughtSignature"] == "sig-http"
 
 @pytest.mark.asyncio
+async def test_stream_preserves_response_when_delta_callback_raises(base_url):
+    c = GeminiClient(base_url, "test-key", "models/gemini-test")
+
+    def broken_callback(_: str) -> None:
+        raise RuntimeError("UI disconnected")
+
+    out = await c.chat_stream(
+        ChatRequest(model="models/gemini-test", messages=[Message(role="user", content="hi")]),
+        broken_callback,
+    )
+
+    assert out.message.content == "working"
+    assert out.message.tool_calls is not None
+    assert out.message.tool_calls[0].function.name == "http"
+
+@pytest.mark.asyncio
 async def test_pings_the_model_list_endpoint(base_url):
     c = GeminiClient(base_url, "test-key", "models/gemini-test")
     assert await c.ping() is None

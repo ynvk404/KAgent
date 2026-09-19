@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
 import pytest
 
 from src.llm.client import Client
+from src.llm import probe
 from src.llm.probe import PING_TOOL_NAME, probe_tool_support
 from src.llm.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 
@@ -41,6 +43,31 @@ class _RejectingClient:
         signal: Optional[Any] = None,
     ) -> ChatResponse:
         raise self._err
+
+
+class _BlockingClient(Client):
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    def name(self) -> str:
+        return "stub"
+
+    def model(self) -> str:
+        return "stub-model"
+
+    async def chat(
+        self,
+        req: ChatRequest,
+        signal: Optional[Any] = None,
+    ) -> ChatResponse:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+            raise AssertionError("blocking event unexpectedly resolved")
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
 
 def _stub_client(reply: ChatResponse) -> Client:
     return _StubClient(reply)  # type: ignore[return-value]
@@ -119,3 +146,28 @@ class TestProbeToolSupport:
 
         r = await probe_tool_support(c)
         assert r.tool_support == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_cancels_an_inflight_probe_when_parent_signal_is_set(self) -> None:
+        c = _BlockingClient()
+        signal = asyncio.Event()
+        task = asyncio.create_task(probe_tool_support(c, signal))
+
+        await c.started.wait()
+        signal.set()
+        result = await task
+
+        assert result.tool_support == "unknown"
+        assert result.detail == "probe cancelled"
+        assert c.cancelled is True
+
+    @pytest.mark.asyncio
+    async def test_times_out_and_cancels_an_inflight_probe(self, monkeypatch) -> None:
+        monkeypatch.setattr(probe, "PROBE_TIMEOUT", 0)
+        c = _BlockingClient()
+
+        result = await probe_tool_support(c)
+
+        assert result.tool_support == "unknown"
+        assert result.detail == "probe timed out after 0s"
+        assert c.cancelled is True

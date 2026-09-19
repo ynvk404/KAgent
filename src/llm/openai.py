@@ -6,7 +6,9 @@ from typing import Any, Callable
 
 import httpx
 
-from .client import Client
+from src.logger.logger import get_logger
+
+from .client import StreamingClient
 from .errors import classify_backend
 from .providers import kimi_locks_temperature, kimi_supports_thinking_toggle
 from .retry import RetryInfo, RetryOptions, with_retry
@@ -19,8 +21,18 @@ from .transport import (
 )
 from .types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 
+logger = get_logger("llm.openai")
 
-class OpenAIClient(Client):
+
+def _emit_delta(on_delta: Callable[[str], None], text: str) -> None:
+    """Keep a display callback failure from aborting a provider response."""
+    try:
+        on_delta(text)
+    except Exception:
+        logger.debug("LLM stream delta callback failed", exc_info=True)
+
+
+class OpenAIClient(StreamingClient):
     def __init__(
         self,
         base_url: str,
@@ -165,11 +177,11 @@ class OpenAIClient(Client):
 
     async def chat_stream(
         self,
-        req: ChatRequest,
+        request: ChatRequest,
         on_delta: Callable[[str], None],
         signal: Any = None,
     ) -> ChatResponse:
-        body = self.encode_request(req, True)
+        body = self.encode_request(request, True)
 
         async def open_stream() -> tuple[httpx.AsyncClient, httpx.Response]:
             client = httpx.AsyncClient(timeout=CHAT_TIMEOUT_SEC)
@@ -245,11 +257,11 @@ class OpenAIClient(Client):
                     # DeepSeek's structured CoT is not transcript text.  Do
                     # not leak it to the UI, while preserving it for replay.
                     if self.label != "deepseek":
-                        on_delta(reasoning)
+                        _emit_delta(on_delta, reasoning)
 
                 if delta.get("content"):
                     text = delta["content"]
-                    on_delta(text)
+                    _emit_delta(on_delta, text)
                     chunks.append(text)
 
                 for tc in delta.get("tool_calls", []):

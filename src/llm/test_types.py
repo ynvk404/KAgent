@@ -48,6 +48,13 @@ class TestParsedArgs:
         with pytest.raises(json.JSONDecodeError):
             parsed_args(call)
 
+    @pytest.mark.parametrize("arguments", ["null", "[]", '["value"]'])
+    def test_rejects_json_that_is_not_an_object(self, arguments: str) -> None:
+        call = FunctionCall(name="shell", arguments=arguments)
+
+        with pytest.raises(ValueError, match="JSON object"):
+            parsed_args(call)
+
 
 class TestFunctionCall:
 

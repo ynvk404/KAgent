@@ -4,6 +4,7 @@ import pytest
 
 from src.config.config import Backend, Config
 from src.llm.anthropic import AnthropicClient
+from src.llm.client import is_streaming
 from src.llm.factory import new_from_config
 from src.llm.gemini import GeminiClient
 from src.llm.openai import OpenAIClient
@@ -66,6 +67,7 @@ def test_openai_compat_builds_client():
     assert client.name() == "openai-compat"
     assert client.temperature == 0.3
     assert client.max_tokens == 123
+    assert is_streaming(client)
 
 
 @pytest.mark.parametrize(

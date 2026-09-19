@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from .client import Client
 from .types import (
     ChatRequest,
+    ChatResponse,
     Message,
     ToolFunction,
     ToolSpec,
@@ -88,10 +90,7 @@ async def probe_tool_support(
 
 
     try:
-
-        response = await client.chat(
-            request,
-        )
+        response = await _probe_chat(client, request, parent_signal)
 
     except Exception as exc:
 
@@ -123,3 +122,41 @@ async def probe_tool_support(
             "Model có thể không hỗ trợ Function Calling."
         ),
     )
+
+
+async def _probe_chat(
+    client: Client,
+    request: ChatRequest,
+    parent_signal: asyncio.Event | None,
+) -> ChatResponse:
+    """Bound a billable probe and stop it when KAgent is shutting down."""
+    chat_task = asyncio.create_task(client.chat(request))
+    signal_task: asyncio.Task[bool] | None = None
+
+    if parent_signal is not None:
+        signal_task = asyncio.create_task(parent_signal.wait())
+
+    try:
+        wait_for: set[asyncio.Future[Any]] = {chat_task}
+        if signal_task is not None:
+            wait_for.add(signal_task)
+
+        done, _ = await asyncio.wait(
+            wait_for,
+            timeout=PROBE_TIMEOUT,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if chat_task in done:
+            return chat_task.result()
+
+        if signal_task is not None and signal_task in done:
+            raise RuntimeError("probe cancelled")
+
+        raise TimeoutError(f"probe timed out after {PROBE_TIMEOUT}s")
+    finally:
+        for task in (chat_task, signal_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task

@@ -3,6 +3,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
+from src.logger.logger import get_logger
+
 from .client import Client, Pinger, StreamingClient
 from .errors import classify_backend
 from .retry import RetryOptions, with_retry
@@ -26,6 +28,16 @@ from .types import (
     ToolProvider,
     ToolSpec,
 )
+
+logger = get_logger("llm.gemini")
+
+
+def _emit_delta(on_delta: Callable[[str], None], text: str) -> None:
+    """Keep a display callback failure from aborting a provider response."""
+    try:
+        on_delta(text)
+    except Exception:
+        logger.debug("LLM stream delta callback failed", exc_info=True)
 
 
 class _CompatToolCall(ToolCall):
@@ -191,7 +203,7 @@ class GeminiClient(StreamingClient, Pinger):
                     if not part.get("text"):
                         continue
 
-                    on_delta(part["text"])
+                    _emit_delta(on_delta, part["text"])
                     if not part.get("thought"):
                         chunks.append(part["text"])
 

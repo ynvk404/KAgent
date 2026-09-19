@@ -323,6 +323,18 @@ async def test_stream_tool_call_fragment():
     assert tool.function.name == "http"
     assert tool.function.arguments == '{"url":"https://x.example.com"}'
 
+async def test_stream_preserves_response_when_delta_callback_raises():
+    c = OpenAIClient(base_url, "", "qwen")
+
+    def broken_callback(_: str) -> None:
+        raise RuntimeError("UI disconnected")
+
+    out = await c.chat_stream(_req("qwen", "scan"), broken_callback)
+
+    assert out.message.content == "Working on it"
+    assert out.message.tool_calls is not None
+    assert out.message.tool_calls[0].function.name == "http"
+
 async def test_proxy_error_body():
     c = OpenAIClient(base_url, "sk", "proxy-200-ratelimit", "openrouter")
     with pytest.raises(RuntimeError):

@@ -101,4 +101,7 @@ class ChatResponse:
 def parsed_args(call: FunctionCall) -> dict[str, Any]:
     if not call.arguments:
         return {}
-    return json.loads(call.arguments)
+    args = json.loads(call.arguments)
+    if not isinstance(args, dict):
+        raise ValueError("tool call arguments must be a JSON object")
+    return args
