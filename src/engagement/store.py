@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.logger.logger import get_logger
+from src.paths import legacy_project_data_root, project_data_root, user_data_root
 
 log = get_logger("engagement.store")
 
@@ -13,20 +14,23 @@ _TRUNCATION_MARKER = (
     "— keep them concise]"
 )
 
+
 @dataclass(slots=True)
 class EngagementStore:
-    cwd: str | Path |None = None
+    cwd: str | Path | None = None
     home: str | Path | None = None
 
     project_path: Path = field(init=False)
     personal_path: Path = field(init=False)
+    legacy_project_path: Path | None = field(init=False)
 
     def __post_init__(self) -> None:
-        cwd = Path(self.cwd).resolve() if self.cwd else Path.cwd().resolve()
-        home = Path(self.home).expanduser() if self.home else Path.home()
-
-        self.project_path = cwd / ".kagent" / "engagement.md"
-        self.personal_path = home / ".kagent" / "engagement.md"
+        self.project_path = project_data_root(self.cwd) / "engagement.md"
+        legacy_root = legacy_project_data_root(self.cwd)
+        self.legacy_project_path = (
+            legacy_root / "engagement.md" if legacy_root is not None else None
+        )
+        self.personal_path = user_data_root(self.home) / "engagement.md"
 
     def load(self) -> str:
         parts: list[str] = []
@@ -38,6 +42,10 @@ class EngagementStore:
         project = ""
         if not _same_file(self.personal_path, self.project_path):
             project = _read_text(self.project_path)
+        if self.legacy_project_path is not None:
+            legacy = _read_text(self.legacy_project_path)
+            if legacy and legacy != project:
+                project = "\n\n".join(part for part in (legacy, project) if part)
         if project:
             parts.append(project)
 
@@ -71,9 +79,7 @@ def _truncate(personal: str, project: str) -> str:
     if len(project) > project_budget:
         return _with_marker(project, project_budget)
 
-    personal_budget = (
-        ENGAGEMENT_CHAR_LIMIT - len(project) - len(_TRUNCATION_MARKER) - 4
-    )
+    personal_budget = ENGAGEMENT_CHAR_LIMIT - len(project) - len(_TRUNCATION_MARKER) - 4
     if personal_budget <= 0:
         return _with_marker(project, project_budget)
 

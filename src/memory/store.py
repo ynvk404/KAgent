@@ -3,13 +3,15 @@ from __future__ import annotations
 import os
 import re
 import secrets
-import yaml
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final, Literal, Optional
 
+import yaml
+
 from src.logger.logger import get_logger
+from src.paths import legacy_project_data_root, project_data_root, user_data_root
 from src.redact.redact import apply as redact
 
 log = get_logger("memory.store")
@@ -64,11 +66,10 @@ class MemoryStore:
         cwd: Optional[str] = None,
         home: Optional[str] = None,
     ) -> None:
-        cwd = cwd or os.getcwd()
-        home = home or str(Path.home())
-
-        self.project_dir: Path = Path(cwd) / ".kagent" / "memory"
-        self.personal_dir: Path = Path(home) / ".kagent" / "memory"
+        self.project_dir = project_data_root(cwd) / "memory"
+        legacy_root = legacy_project_data_root(cwd)
+        self.legacy_project_dir = legacy_root / "memory" if legacy_root else None
+        self.personal_dir = user_data_root(home) / "memory"
 
         self.scope_cache: dict[
             MemoryScope,
@@ -77,6 +78,12 @@ class MemoryStore:
 
     def _dir(self, scope: MemoryScope) -> Path:
         return self.personal_dir if scope == "personal" else self.project_dir
+
+    def _read_dirs(self, scope: MemoryScope) -> list[Path]:
+        dirs = [self._dir(scope)]
+        if scope == "project" and self.legacy_project_dir is not None:
+            dirs.append(self.legacy_project_dir)
+        return dirs
 
     def add(self, memory: AddMemoryInput) -> Optional[MemoryFact]:
         text = redact(memory.text.strip())
@@ -133,32 +140,36 @@ class MemoryStore:
         return sorted(result, key=lambda f: f.created_at, reverse=True)
 
     def _read_scope(self, scope: MemoryScope) -> list[MemoryFact]:
-        folder = self._dir(scope)
-        if not folder.exists():
+        folders = [folder for folder in self._read_dirs(scope) if folder.exists()]
+        if not folders:
             return []
 
-        fingerprint = self._scope_fingerprint(folder)
+        fingerprint = self._scope_fingerprint(folders)
         cached = self.scope_cache.get(scope)
         if cached and cached[0] == fingerprint:
             return cached[1]
 
         facts: list[MemoryFact] = []
-        for file in folder.glob("*.md"):
-            if file.name == "MEMORY.md":
-                continue
-            fact = self.load_file(file, scope)
-            if fact:
-                facts.append(fact)
+        seen: set[str] = set()
+        for folder in folders:
+            for file in folder.glob("*.md"):
+                if file.name == "MEMORY.md":
+                    continue
+                fact = self.load_file(file, scope)
+                if fact and fact.name not in seen:
+                    seen.add(fact.name)
+                    facts.append(fact)
 
         self.scope_cache[scope] = (fingerprint, facts)
         return facts
 
     @staticmethod
-    def _scope_fingerprint(folder: Path) -> tuple[tuple[str, int, int], ...]:
+    def _scope_fingerprint(folders: list[Path]) -> tuple[tuple[str, int, int], ...]:
         try:
             return tuple(
                 sorted(
-                    (file.name, file.stat().st_mtime_ns, file.stat().st_size)
+                    (str(file), file.stat().st_mtime_ns, file.stat().st_size)
+                    for folder in folders
                     for file in folder.glob("*.md")
                     if file.name != "MEMORY.md"
                 )
@@ -182,7 +193,9 @@ class MemoryStore:
             meta = yaml.safe_load(fm) or {}
         except yaml.YAMLError:
             log.warning(
-                "memory: skipping fact %s with invalid front matter", file, exc_info=True
+                "memory: skipping fact %s with invalid front matter",
+                file,
+                exc_info=True,
             )
             return None
 
@@ -253,30 +266,29 @@ class MemoryStore:
 
         removed: list[str] = []
         for scope in SCOPES:
-            folder = self._dir(scope)
-            if not folder.exists():
-                continue
-
             changed = False
-            for file in folder.glob("*.md"):
-                if file.name == "MEMORY.md":
+            for folder in self._read_dirs(scope):
+                if not folder.exists():
                     continue
-                fact = self.load_file(file, scope)
-                if not fact:
-                    continue
+                for file in folder.glob("*.md"):
+                    if file.name == "MEMORY.md":
+                        continue
+                    fact = self.load_file(file, scope)
+                    if not fact:
+                        continue
 
-                hay = f"{fact.name}\n{fact.description}\n{fact.text}".lower()
-                if needle in hay:
-                    try:
-                        file.unlink()
-                        removed.append(fact.name)
-                        changed = True
-                    except OSError:
-                        log.warning(
-                            "memory: could not forget %s; it is still stored",
-                            file,
-                            exc_info=True,
-                        )
+                    hay = f"{fact.name}\n{fact.description}\n{fact.text}".lower()
+                    if needle in hay:
+                        try:
+                            file.unlink()
+                            removed.append(fact.name)
+                            changed = True
+                        except OSError:
+                            log.warning(
+                                "memory: could not forget %s; it is still stored",
+                                file,
+                                exc_info=True,
+                            )
 
             if changed:
                 self.scope_cache.pop(scope, None)
@@ -310,8 +322,7 @@ class MemoryStore:
         if not facts:
             return ""
         lines = [
-            f"- [{f.type}] {f.name} - {f.description}"
-            for f in facts[:MAX_INDEX_LINES]
+            f"- [{f.type}] {f.name} - {f.description}" for f in facts[:MAX_INDEX_LINES]
         ]
         if len(facts) > MAX_INDEX_LINES:
             lines.append(f"- ...và {len(facts) - MAX_INDEX_LINES} mục khác")
@@ -388,7 +399,9 @@ class MemoryStore:
             t,
         ):
             return "target"
-        if re.search(r"\b(http|https|url|ticket|dashboard|jira|doc|reference|see )\b", t):
+        if re.search(
+            r"\b(http|https|url|ticket|dashboard|jira|doc|reference|see )\b", t
+        ):
             return "reference"
         if re.search(
             r"\b(idor|ssrf|xss|sqli|bypass|payload|exploit|technique|works?|worked|chain)\b",
@@ -406,9 +419,7 @@ class MemoryStore:
             if isinstance(value, datetime):
                 dt = value
             else:
-                dt = datetime.fromisoformat(
-                    value.replace("Z", "+00:00")
-                )
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
 
             return dt.timestamp() * 1000
 

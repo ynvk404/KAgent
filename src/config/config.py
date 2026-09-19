@@ -4,11 +4,13 @@ import json
 import os
 import random
 import string
-
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+
+from src.paths import user_data_root
+
 
 class Backend(StrEnum):
     EMPTY = ""
@@ -25,7 +27,9 @@ class ToolingProfile(StrEnum):
     MINIMAL = "minimal"
     FULL = "full"
 
+
 DEFAULT_AUTO_COMPACT_THRESHOLD = 16000
+
 
 @dataclass
 class MCPServerConfig:
@@ -33,6 +37,7 @@ class MCPServerConfig:
     command: str
     args: list[str] = field(default_factory=list)
     env: dict[str, str] | None = None
+
 
 @dataclass
 class PluginConfig:
@@ -43,31 +48,22 @@ class PluginConfig:
     schema: dict[str, Any] | None = None
     requires_permission: bool = False
 
+
 @dataclass
 class Config:
     backend: Backend | str = Backend.EMPTY
     model: str = ""
     base_url: str = ""
     api_keys: dict[str, str] = field(default_factory=dict)
-    skills_dirs: list[str] = field(
-        default_factory=list
-    )
-    disabled_skills: list[str] = field(
-        default_factory=list
-    )
-    mcp_servers: list[MCPServerConfig] = field(
-        default_factory=list
-    )
-    plugins: list[PluginConfig] = field(
-        default_factory=list
-    )
+    skills_dirs: list[str] = field(default_factory=list)
+    disabled_skills: list[str] = field(default_factory=list)
+    mcp_servers: list[MCPServerConfig] = field(default_factory=list)
+    plugins: list[PluginConfig] = field(default_factory=list)
     session_path: str = ""
     thinking_enabled: bool = False
     streaming_enabled: bool = True
     max_steps: int = 0
-    auto_compact_threshold: int = (
-        DEFAULT_AUTO_COMPACT_THRESHOLD
-    )
+    auto_compact_threshold: int = DEFAULT_AUTO_COMPACT_THRESHOLD
     temperature: float | None = None
     max_tokens: int | None = None
     gemini_thinking_budget: int | None = None
@@ -87,6 +83,7 @@ class Config:
             return
         self.api_keys[backend] = value
 
+
 def no_shell_meta(value: str) -> bool:
     forbidden = (
         "|",
@@ -105,17 +102,12 @@ def no_shell_meta(value: str) -> bool:
         and "${" not in value
     )
 
+
 def config_path() -> Path:
-    override = os.getenv(
-        "kagent_CONFIG"
-    )
+    override = os.getenv("kagent_CONFIG")
     if override:
         return Path(override)
-    return (
-        Path.home()
-        / ".kagent"
-        / "config.json"
-    )
+    return user_data_root() / "config.json"
 
 
 def config_to_dict(
@@ -131,11 +123,10 @@ def config_to_dict(
         cfg.tooling_profile,
         ToolingProfile,
     ):
-        data["tooling_profile"] = (
-            cfg.tooling_profile.value
-        )
+        data["tooling_profile"] = cfg.tooling_profile.value
 
     return data
+
 
 def config_from_dict(
     data: dict[str, Any],
@@ -172,14 +163,8 @@ def config_from_dict(
         api_keys=normalized_api_keys,
         skills_dirs=_string_list_field(data, "skills_dirs"),
         disabled_skills=_string_list_field(data, "disabled_skills"),
-        mcp_servers=[
-            _validate_mcp_server(x)
-            for x in _list_field(data, "mcp_servers")
-        ],
-        plugins=[
-            _validate_plugin(x)
-            for x in _list_field(data, "plugins")
-        ],
+        mcp_servers=[_validate_mcp_server(x) for x in _list_field(data, "mcp_servers")],
+        plugins=[_validate_plugin(x) for x in _list_field(data, "plugins")],
         session_path=data.get("session_path", ""),
         thinking_enabled=_bool_field(data, "thinking_enabled", False),
         streaming_enabled=_bool_field(data, "streaming_enabled", True),
@@ -205,22 +190,15 @@ def load() -> Config:
         return default_config()
 
     try:
-        raw = json.loads(
-            path.read_text(
-                encoding="utf-8"
-            )
-        )
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
-        raise RuntimeError(
-            f"config: failed to read {path}: {e}"
-        )
+        raise RuntimeError(f"config: failed to read {path}: {e}")
 
     if not isinstance(raw, dict):
-        raise RuntimeError(
-            f"config: {path}: invalid json"
-        )
+        raise RuntimeError(f"config: {path}: invalid json")
 
     return config_from_dict(raw)
+
 
 async def save(
     cfg: Config,
@@ -239,17 +217,12 @@ async def save(
         + "\n"
     )
 
-    tmp = (
-        path.parent
-        /
-        (
-            ".kagent.cfg.tmp."
-            +
-            "".join(
-                random.choices(
-                    string.hexdigits.lower(),
-                    k=6,
-                )
+    tmp = path.parent / (
+        ".kagent.cfg.tmp."
+        + "".join(
+            random.choices(
+                string.hexdigits.lower(),
+                k=6,
             )
         )
     )
@@ -265,9 +238,7 @@ async def save(
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(body)
             f.flush()
-            os.fsync(
-                f.fileno()
-            )
+            os.fsync(f.fileno())
 
         os.replace(
             tmp,
@@ -281,12 +252,9 @@ async def save(
 
     except Exception as e:
         if created_tmp and tmp.exists():
-            tmp.unlink(
-                missing_ok=True
-            )
-        raise RuntimeError(
-            f"config: save failed: {e}"
-        )
+            tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"config: save failed: {e}")
+
 
 def default_config() -> Config:
     return Config()
@@ -350,9 +318,7 @@ def _int_or_none_field(
     name: str,
 ) -> int | None:
     value = data.get(name)
-    if value is not None and (
-        not isinstance(value, int) or isinstance(value, bool)
-    ):
+    if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
         raise ValueError(f"{name} must be an integer or null")
     return value
 
@@ -380,9 +346,7 @@ def _tooling_profile_field(
     try:
         return ToolingProfile(value)
     except ValueError as e:
-        raise ValueError(
-            f"tooling_profile is invalid: {value!r}"
-        ) from e
+        raise ValueError(f"tooling_profile is invalid: {value!r}") from e
 
 
 def _validate_mcp_server(
@@ -394,15 +358,14 @@ def _validate_mcp_server(
     name = _required_string(data, section, "name")
     command = _required_string(data, section, "command")
     if not no_shell_meta(command):
-        raise ValueError(
-            f"{section}.command must not contain shell metacharacters"
-        )
+        raise ValueError(f"{section}.command must not contain shell metacharacters")
     return MCPServerConfig(
         name=name,
         command=command,
         args=_entry_string_list(data, section, "args"),
         env=_entry_string_dict(data, section, "env"),
     )
+
 
 def _validate_plugin(
     data: Any,
@@ -413,9 +376,7 @@ def _validate_plugin(
     name = _required_string(data, section, "name")
     command = _required_string(data, section, "command")
     if not no_shell_meta(command):
-        raise ValueError(
-            f"{section}.command must not contain shell metacharacters"
-        )
+        raise ValueError(f"{section}.command must not contain shell metacharacters")
     return PluginConfig(
         name=name,
         command=command,
@@ -459,9 +420,7 @@ def _entry_string_list(
     name: str,
 ) -> list[str]:
     value = data.get(name, [])
-    if not isinstance(value, list) or not all(
-        isinstance(item, str) for item in value
-    ):
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"{section}.{name} must be a list of strings")
     return value
 
@@ -475,8 +434,7 @@ def _entry_string_dict(
     if value is None:
         return None
     if not isinstance(value, dict) or not all(
-        isinstance(key, str) and isinstance(item, str)
-        for key, item in value.items()
+        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
     ):
         raise ValueError(f"{section}.{name} must be a string map or null")
     return value

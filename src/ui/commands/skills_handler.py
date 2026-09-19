@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import re
-from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from src.agent.agent import Agent
+from src.paths import project_data_root
 from src.skills.template import render_skill_template
 from src.ui.core.state import Append, SetActiveSkill, SetSkillsPicker, TranscriptEntry
 
@@ -46,7 +46,7 @@ def handle_skills_command(
             )
             return
 
-        skills_root = Path.cwd() / ".kagent" / "skills"
+        skills_root = project_data_root() / "skills"
         skill_dir = skills_root / name
         skill_file = skill_dir / "SKILL.md"
         if skill_file.exists():
@@ -174,11 +174,7 @@ def handle_skills_command(
 
         if not target_enabled and was_active:
             active_skills = getattr(agent, "active_skills", set())
-            next_active = (
-                sorted(active_skills)[0]
-                if active_skills
-                else None
-            )
+            next_active = sorted(active_skills)[0] if active_skills else None
             dispatch(SetActiveSkill(name=next_active))
 
         dispatch(

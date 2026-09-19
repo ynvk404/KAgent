@@ -9,8 +9,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from src.redact.redact import apply as redact
 from src.logger.logger import get_logger
+from src.paths import user_data_root
+from src.redact.redact import apply as redact
+
 log = get_logger("session_debug")
 DEBUG_DIR_MODE = 0o700
 DEBUG_FILE_MODE = 0o600
@@ -29,28 +31,24 @@ def redact_payload(value: Any) -> Any:
 class SessionDebugLog(ABC):
     @property
     @abstractmethod
-    def enabled(self) -> bool:
-        ...
+    def enabled(self) -> bool: ...
 
     @property
     @abstractmethod
-    def path(self) -> str:
-        ...
+    def path(self) -> str: ...
 
     @abstractmethod
     def write(
         self,
         event: str,
         data: dict[str, Any] | None = None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @abstractmethod
     def agent_event(
         self,
         ev: dict[str, Any],
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class DisabledSessionDebugLog(SessionDebugLog):
@@ -107,11 +105,7 @@ class FileSessionDebugLog(SessionDebugLog):
         self._seq += 1
 
         metadata: dict[str, Any] = {
-            "ts": (
-                datetime.now(UTC)
-                .isoformat()
-                .replace("+00:00", "Z")
-            ),
+            "ts": (datetime.now(UTC).isoformat().replace("+00:00", "Z")),
             "seq": self._seq,
             "event": event,
             "session_id": self._session_id,
@@ -178,11 +172,7 @@ def create_session_debug_log(
     if not opts.enabled:
         return disabled_session_debug_log
 
-    path = (
-        Path(opts.path)
-        if opts.path
-        else default_debug_path(opts.session_id)
-    )
+    path = Path(opts.path) if opts.path else default_debug_path(opts.session_id)
 
     return FileSessionDebugLog(
         opts.session_id,
@@ -201,12 +191,7 @@ def default_debug_path(
         .replace(".", "-")
     )
 
-    return (
-        Path.home()
-        / ".kagent"
-        / "debug"
-        / f"session-{session_id}-{stamp}.jsonl"
-    )
+    return user_data_root() / "debug" / f"session-{session_id}-{stamp}.jsonl"
 
 
 def serialize_agent_event(

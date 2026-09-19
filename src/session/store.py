@@ -1,25 +1,26 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import random
 import string
 import uuid
-import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
 from src.llm.types import (
+    FunctionCall,
+    GeminiProvider,
     Message,
     Role,
     ToolCall,
-    FunctionCall,
     ToolProvider,
-    GeminiProvider,
 )
 from src.logger.logger import get_logger
+from src.paths import user_data_root
 from src.target.target import Target
 from src.workflow.state import WorkflowState
 
@@ -76,7 +77,7 @@ def validate_id(session_id: str) -> None:
 
 def dir_from_path(path=None):
     if not path:
-        return Path.home() / ".kagent" / "sessions"
+        return user_data_root() / "sessions"
     return Path(path).parent
 
 
@@ -117,10 +118,12 @@ def _tool_call_from_dict(d: Any) -> ToolCall | None:
     arguments = fn_data.get("arguments", "")
     call_id = d.get("id", "")
     call_type = d.get("type", "function")
-    if not all(
-        isinstance(value, str)
-        for value in (name, arguments, call_id, call_type)
-    ) or call_type != "function":
+    if (
+        not all(
+            isinstance(value, str) for value in (name, arguments, call_id, call_type)
+        )
+        or call_type != "function"
+    ):
         return None
 
     function = FunctionCall(
@@ -371,9 +374,7 @@ class Store:
         body = json.dumps(data, ensure_ascii=False) + "\n"
 
         self.save_count += 1
-        need_fsync = (
-            self.save_count == 1 or self.save_count % FSYNC_EVERY == 0
-        )
+        need_fsync = self.save_count == 1 or self.save_count % FSYNC_EVERY == 0
 
         tmp = Path(str(self.path) + ".tmp." + random_tmp_id())
         created_tmp = False

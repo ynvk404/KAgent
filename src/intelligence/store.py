@@ -6,22 +6,23 @@ import json
 import os
 import re
 import secrets
-
 from dataclasses import dataclass, field
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Lock
 from typing import Any, Literal, Optional
 
 from src.logger.logger import get_logger
+from src.paths import legacy_project_data_root, project_data_root, user_data_root
 
 logger = get_logger("intelligence.store")
 
 try:
-    import filelock 
+    import filelock
+
     _HAS_FILELOCK = True
-except ImportError:  
-    filelock = None  
+except ImportError:
+    filelock = None
     _HAS_FILELOCK = False
 
 MAX_SCENARIOS_PER_FILE = 5000
@@ -255,22 +256,27 @@ class IntelligenceStore:
         cwd: str | Path | None = None,
         home: str | Path | None = None,
     ):
-        cwd_path = Path(cwd).resolve() if cwd else Path.cwd().resolve()
-        home_path = Path(home) if home else Path.home()
-
-        self.project_path = (
-            cwd_path / ".kagent" / "intelligence" / "scenarios.jsonl"
+        self.project_path = project_data_root(cwd) / "intelligence" / "scenarios.jsonl"
+        legacy_root = legacy_project_data_root(cwd)
+        self.legacy_project_path = (
+            legacy_root / "intelligence" / "scenarios.jsonl"
+            if legacy_root is not None
+            else None
         )
-        self.personal_path = (
-            home_path / ".kagent" / "intelligence" / "scenarios.jsonl"
-        )
+        self.personal_path = user_data_root(home) / "intelligence" / "scenarios.jsonl"
 
         self.file_cache: dict[str, dict[str, Any]] = {}
         self.write_lock = Lock()
 
     def list(self) -> list[IntelligenceScenario]:
+        legacy = (
+            self.read_scenarios(self.legacy_project_path, "project")
+            if self.legacy_project_path is not None
+            else []
+        )
         return dedupe_scenarios(
             self.read_scenarios(self.project_path, "project")
+            + legacy
             + self.read_scenarios(self.personal_path, "personal")
             + BUILTIN_SCENARIOS
         )
@@ -336,7 +342,9 @@ class IntelligenceStore:
 
         return results[: max(1, int(limit))]
 
-    async def append(self, scenario: IntelligenceScenario) -> Optional[IntelligenceScenario]:
+    async def append(
+        self, scenario: IntelligenceScenario
+    ) -> Optional[IntelligenceScenario]:
         scope = scenario.scope or "project"
         saved = self.append_batch([scenario], scope)  # type: ignore[arg-type]
         return saved[0] if saved else None
@@ -356,7 +364,9 @@ class IntelligenceStore:
 
                 fresh: list[IntelligenceScenario] = []
                 for candidate in scenarios:
-                    normalized = normalize_scenario(dataclasses.replace(candidate, scope=scope))
+                    normalized = normalize_scenario(
+                        dataclasses.replace(candidate, scope=scope)
+                    )
                     key = duplicate_key(normalized.title, normalized.category)
                     if normalized.id in seen_ids or key in seen_keys:
                         continue
@@ -383,7 +393,9 @@ class IntelligenceStore:
                 try:
                     os.chmod(path, 0o600)
                 except OSError:
-                    logger.warning("Could not chmod %s to 0600 after append", path, exc_info=True)
+                    logger.warning(
+                        "Could not chmod %s to 0600 after append", path, exc_info=True
+                    )
 
                 self.invalidate(path)
                 self.prune_if_too_long(path, scope)
@@ -415,13 +427,18 @@ class IntelligenceStore:
             if created_tmp and tmp is not None:
                 tmp.unlink(missing_ok=True)
             logger.exception(
-                "Failed to prune %s (scope=%s) to %d scenarios", path, scope, MAX_SCENARIOS_PER_FILE
+                "Failed to prune %s (scope=%s) to %d scenarios",
+                path,
+                scope,
+                MAX_SCENARIOS_PER_FILE,
             )
 
     async def clear(self, scope: Literal["project", "personal", "all"] = "all") -> None:
         targets = []
         if scope in ("project", "all"):
             targets.append(self.project_path)
+            if self.legacy_project_path is not None:
+                targets.append(self.legacy_project_path)
         if scope in ("personal", "all"):
             targets.append(self.personal_path)
 
@@ -436,8 +453,17 @@ class IntelligenceStore:
                         logger.exception("Failed to clear intelligence file %s", path)
 
     def get_stats(self) -> dict[str, int]:
+        legacy = (
+            self.read_scenarios(self.legacy_project_path, "project")
+            if self.legacy_project_path is not None
+            else []
+        )
         return {
-            "project": len(self.read_scenarios(self.project_path, "project")),
+            "project": len(
+                dedupe_scenarios(
+                    self.read_scenarios(self.project_path, "project") + legacy
+                )
+            ),
             "personal": len(self.read_scenarios(self.personal_path, "personal")),
         }
 
@@ -501,8 +527,13 @@ def extract_scenarios(
                 title="Node source exposure should check PM2 deployment files",
                 category="recon-gap",
                 triggers=[
-                    "server.js", "package.json", "node", "express",
-                    "source leak", "deployment", "nginx",
+                    "server.js",
+                    "package.json",
+                    "node",
+                    "express",
+                    "source leak",
+                    "deployment",
+                    "nginx",
                 ],
                 technologies=["Node.js", "Express", "PM2"],
                 lesson=(
@@ -511,9 +542,15 @@ def extract_scenarios(
                     "in the next enumeration pass."
                 ),
                 recommended_checks=[
-                    "ecosystem.config.js", "ecosystem.config.cjs",
-                    "ecosystem.config.mjs", "pm2.json", "process.json",
-                    "app.js", "index.js", "server.js~", "package-lock.json",
+                    "ecosystem.config.js",
+                    "ecosystem.config.cjs",
+                    "ecosystem.config.mjs",
+                    "pm2.json",
+                    "process.json",
+                    "app.js",
+                    "index.js",
+                    "server.js~",
+                    "package-lock.json",
                 ],
                 avoid_missing=["ecosystem.config.js", "PM2 deployment files"],
                 source="automatic compaction learning",
@@ -574,7 +611,9 @@ def extract_scenarios(
                     "Carry this prior decision forward when the same project "
                     "or pattern recurs: " + trim_sentence(item, 500)
                 ),
-                recommended_checks=["reuse this decision unless new evidence invalidates it"],
+                recommended_checks=[
+                    "reuse this decision unless new evidence invalidates it"
+                ],
                 avoid_missing=[trim_sentence(item, 160)],
                 source="continuous learning",
                 source_session_id=source_session_id,
@@ -589,8 +628,11 @@ def extract_scenarios(
         for i in section_items(
             sections,
             [
-                "what worked well", "successful solutions",
-                "proven workflows", "workflow optimization", "task outcome",
+                "what worked well",
+                "successful solutions",
+                "proven workflows",
+                "workflow optimization",
+                "task outcome",
             ],
         )
         if is_workflow_like_item(i)
@@ -617,10 +659,9 @@ def extract_scenarios(
             )
         )
 
-    failure_items = (
-        section_items(sections, ["what failed and why", "past mistakes", "lessons learned"])
-        + [i for i in bullet_items(text) if is_failure_like_item(i)]
-    )
+    failure_items = section_items(
+        sections, ["what failed and why", "past mistakes", "lessons learned"]
+    ) + [i for i in bullet_items(text) if is_failure_like_item(i)]
     for item in failure_items[:12]:
         title = title_from_item("Lesson learned", item)
         result.append(
@@ -630,8 +671,11 @@ def extract_scenarios(
                 category="lesson-learned",
                 triggers=merge_strings(context_triggers, extract_triggers(item)),
                 technologies=technologies,
-                lesson="Avoid repeating this mistake or failed path: " + trim_sentence(item, 500),
-                recommended_checks=["choose a better strategy before repeating this action"],
+                lesson="Avoid repeating this mistake or failed path: "
+                + trim_sentence(item, 500),
+                recommended_checks=[
+                    "choose a better strategy before repeating this action"
+                ],
                 avoid_missing=[trim_sentence(item, 160)],
                 source="continuous learning",
                 source_session_id=source_session_id,
@@ -647,7 +691,9 @@ def extract_scenarios(
             sections,
             [
                 "frequently used tools commands and configurations",
-                "frequently used tools", "files and commands", "tools and commands",
+                "frequently used tools",
+                "files and commands",
+                "tools and commands",
             ],
         )
         if is_tool_config_like_item(i)
@@ -665,7 +711,9 @@ def extract_scenarios(
                     "pattern: " + trim_sentence(item, 500)
                 ),
                 recommended_checks=recommended_checks_from_item(item),
-                avoid_missing=["reuse known working tool/config pattern when applicable"],
+                avoid_missing=[
+                    "reuse known working tool/config pattern when applicable"
+                ],
                 source="continuous learning",
                 source_session_id=source_session_id,
                 updated_at=now,
@@ -675,7 +723,8 @@ def extract_scenarios(
         )
 
     for item in (
-        section_items(sections, ["open todos"]) + section_items(sections, ["next best actions"])
+        section_items(sections, ["open todos"])
+        + section_items(sections, ["next best actions"])
     )[:10]:
         title = title_from_item("Next scan step", item)
         result.append(
@@ -685,7 +734,8 @@ def extract_scenarios(
                 category="next-step",
                 triggers=merge_strings(context_triggers, extract_triggers(item)),
                 technologies=technologies,
-                lesson="In similar scan context, include this follow-up: " + trim_sentence(item, 500),
+                lesson="In similar scan context, include this follow-up: "
+                + trim_sentence(item, 500),
                 recommended_checks=recommended_checks_from_item(item),
                 avoid_missing=[trim_sentence(item, 160)],
                 source="automatic compaction learning",
@@ -696,7 +746,9 @@ def extract_scenarios(
             )
         )
 
-    for item in section_items(sections, ["findings and evidence", "confirmed findings"])[:10]:
+    for item in section_items(
+        sections, ["findings and evidence", "confirmed findings"]
+    )[:10]:
         title = title_from_item("Finding validation pattern", item)
         result.append(
             IntelligenceScenario(
@@ -707,10 +759,14 @@ def extract_scenarios(
                 technologies=technologies,
                 lesson=(
                     "When this behavior appears, validate it with "
-                    "reproducible evidence before reporting: " + trim_sentence(item, 500)
+                    "reproducible evidence before reporting: "
+                    + trim_sentence(item, 500)
                 ),
                 recommended_checks=recommended_checks_from_item(item),
-                avoid_missing=["evidence-backed validation", "copy-pasteable reproduction request"],
+                avoid_missing=[
+                    "evidence-backed validation",
+                    "copy-pasteable reproduction request",
+                ],
                 source="automatic compaction learning",
                 source_session_id=source_session_id,
                 updated_at=now,
@@ -721,7 +777,9 @@ def extract_scenarios(
 
     for item in [
         i
-        for i in section_items(sections, ["tested surface", "decisions and assumptions"])
+        for i in section_items(
+            sections, ["tested surface", "decisions and assumptions"]
+        )
         if is_gap_like_item(i)
     ]:
         title = title_from_item("Coverage gap", item)
@@ -821,13 +879,15 @@ def extract_triggers(text: str) -> list[str]:
     raw: list[str] = []
     raw += re.findall(
         r"[a-z0-9_.-]+\.(?:js|json|env|yml|yaml|php|py|rb|go|ts|tsx|jsx|html)",
-        text, re.I,
+        text,
+        re.I,
     )
     raw += re.findall(r"/[a-z0-9_./?=&%-]{2,}", text, re.I)
     raw += re.findall(
         r"\b(?:idor|ssrf|xss|sqli|csrf|cors|rate-limit|source leak|admin|"
         r"token|jwt|graphql|supabase|pm2|nginx|postgres|express|node)\b",
-        text, re.I,
+        text,
+        re.I,
     )
     return merge_strings([], raw)[:30]
 
@@ -838,34 +898,47 @@ def recommended_checks_from_item(item: str) -> list[str]:
 
 
 def is_workflow_like_item(item: str) -> bool:
-    return bool(re.search(
-        r"\b(?:worked|successful|proven|use|run|command|workflow|approach|"
-        r"strategy|implemented|fixed|verified|passed)\b", item, re.I,
-    ))
+    return bool(
+        re.search(
+            r"\b(?:worked|successful|proven|use|run|command|workflow|approach|"
+            r"strategy|implemented|fixed|verified|passed)\b",
+            item,
+            re.I,
+        )
+    )
 
 
 def is_failure_like_item(item: str) -> bool:
-    return bool(re.search(
-        r"\b(?:failed|failure|mistake|wrong|avoid repeating|did not work|"
-        r"doesn't work|blocked|error|regression|hallucination|missed)\b",
-        item, re.I,
-    ))
+    return bool(
+        re.search(
+            r"\b(?:failed|failure|mistake|wrong|avoid repeating|did not work|"
+            r"doesn't work|blocked|error|regression|hallucination|missed)\b",
+            item,
+            re.I,
+        )
+    )
 
 
 def is_tool_config_like_item(item: str) -> bool:
-    return bool(re.search(
-        r"`[^`]+`|\b(?:curl|npm|git|rg|python|node|tsx|vitest|biome|tsc|"
-        r"ffuf|nuclei|sqlmap|burp|grep|jq|awk|sed)\b|(?:^|\s)--[a-z0-9-]+",
-        item, re.I,
-    ))
+    return bool(
+        re.search(
+            r"`[^`]+`|\b(?:curl|npm|git|rg|python|node|tsx|vitest|biome|tsc|"
+            r"ffuf|nuclei|sqlmap|burp|grep|jq|awk|sed)\b|(?:^|\s)--[a-z0-9-]+",
+            item,
+            re.I,
+        )
+    )
 
 
 def is_gap_like_item(item: str) -> bool:
-    return bool(re.search(
-        r"\b(?:not tested|needs?|todo|check|verify|retest|miss(?:ed|ing)|"
-        r"failed|blocked|403|404|unknown|inaccessible|fallback)\b",
-        item, re.I,
-    ))
+    return bool(
+        re.search(
+            r"\b(?:not tested|needs?|todo|check|verify|retest|miss(?:ed|ing)|"
+            r"failed|blocked|403|404|unknown|inaccessible|fallback)\b",
+            item,
+            re.I,
+        )
+    )
 
 
 def title_from_item(prefix: str, item: str) -> str:
@@ -895,7 +968,9 @@ def merge_strings(a: list[str], b: list[str]) -> list[str]:
     return result[:40]
 
 
-def dedupe_scenario_inputs(items: list[IntelligenceScenario]) -> list[IntelligenceScenario]:
+def dedupe_scenario_inputs(
+    items: list[IntelligenceScenario],
+) -> list[IntelligenceScenario]:
     seen = set()
     out = []
     for item in items:
@@ -952,17 +1027,24 @@ def read_jsonl(path: Path, scope: IntelligenceScope) -> list[IntelligenceScenari
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
-            logger.warning("Skipping corrupt JSONL line %d in %s (invalid JSON)", line_no, path)
+            logger.warning(
+                "Skipping corrupt JSONL line %d in %s (invalid JSON)", line_no, path
+            )
             continue
 
         if not isinstance(data, dict):
-            logger.warning("Skipping JSONL line %d in %s (not a JSON object)", line_no, path)
+            logger.warning(
+                "Skipping JSONL line %d in %s (not a JSON object)", line_no, path
+            )
             continue
 
         unknown = [k for k in data if k not in _KNOWN_WIRE_OR_PY_KEYS]
         if unknown:
             logger.debug(
-                "Line %d in %s has unrecognized field(s) %s (ignored)", line_no, path, unknown
+                "Line %d in %s has unrecognized field(s) %s (ignored)",
+                line_no,
+                path,
+                unknown,
             )
 
         data["scope"] = scope
@@ -970,7 +1052,9 @@ def read_jsonl(path: Path, scope: IntelligenceScope) -> list[IntelligenceScenari
         try:
             result.append(normalize_scenario(IntelligenceScenario.from_wire(data)))
         except Exception:
-            logger.warning("Skipping unparsable JSONL line %d in %s", line_no, path, exc_info=True)
+            logger.warning(
+                "Skipping unparsable JSONL line %d in %s", line_no, path, exc_info=True
+            )
 
     return result
 
@@ -989,7 +1073,8 @@ def normalize_scenario(raw: IntelligenceScenario) -> IntelligenceScenario:
         avoid_missing=normalize_list(raw.avoid_missing),
         source=redact(safe_string(raw.source))[:200] or "local",
         source_session_id=source_session_id or None,
-        created_at=safe_string(raw.created_at) or datetime.now(timezone.utc).isoformat(),
+        created_at=safe_string(raw.created_at)
+        or datetime.now(timezone.utc).isoformat(),
         updated_at=safe_string(raw.updated_at) or None,
         confidence=clamp_confidence(raw.confidence),
         scope=raw.scope if raw.scope in ("personal", "builtin") else "project",
@@ -1020,7 +1105,9 @@ def clamp_confidence(v: Any) -> float:
     return max(0.0, min(1.0, v))
 
 
-def score_scenario(s: IntelligenceScenario, tokens: list[str]) -> tuple[float, list[str]]:
+def score_scenario(
+    s: IntelligenceScenario, tokens: list[str]
+) -> tuple[float, list[str]]:
     fields = [
         (s.title.lower(), 7, "title"),
         (s.category.lower(), 5, "category"),
@@ -1108,9 +1195,13 @@ def dedupe_scenarios(items: list[IntelligenceScenario]) -> list[IntelligenceScen
     return result
 
 
-def redact(text: Optional[str], patterns: Optional[list[tuple[str, str]]] = None) -> str:
+def redact(
+    text: Optional[str], patterns: Optional[list[tuple[str, str]]] = None
+) -> str:
     if not text:
         return ""
-    for pattern, replacement in (patterns if patterns is not None else DEFAULT_REDACT_PATTERNS):
+    for pattern, replacement in (
+        patterns if patterns is not None else DEFAULT_REDACT_PATTERNS
+    ):
         text = re.sub(pattern, replacement, text, flags=re.I)
     return text

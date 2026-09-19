@@ -7,6 +7,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+from src.paths import user_data_root
+
 MAX_LOG_BYTES = 4 * 1024 * 1024
 MAX_LOG_GENERATIONS = 3
 
@@ -81,6 +83,7 @@ class JsonFormatter(logging.Formatter):
             default=str,
         )
 
+
 def _safe_extra(args: dict[str, Any] | None) -> dict[str, Any]:
     if not args:
         return {}
@@ -92,12 +95,7 @@ def _safe_extra(args: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def default_log_path() -> Path:
-    return (
-        Path.home()
-        / ".kagent"
-        / "logs"
-        / "kagent.log"
-    )
+    return user_data_root() / "logs" / "kagent.log"
 
 
 def _log_level() -> int:
