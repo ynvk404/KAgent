@@ -6,6 +6,7 @@ from textual.geometry import Offset
 from textual.selection import Selection
 
 from src.ui.core.state import TranscriptEntry
+from src.ui.widgets.transcript import EntryKind, ROLE_STYLES, entry_view
 from src.ui.widgets.transcript_view import TranscriptView
 
 
@@ -109,6 +110,61 @@ async def test_four_column_table_is_laid_out_at_transcript_content_width() -> No
         assert all(line.startswith("  ") for line in table_lines)
         assert all(line.endswith(("╮", "│", "┤", "╯")) for line in table_lines)
         assert len({tuple(i for i, char in enumerate(line) if char == "│") for line in body_lines}) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "content", "expected"),
+    [
+        ("tool-result", "[ok] http", "↳ [ok] http"),
+        ("user", "message", "› message"),
+        ("assistant", "response", "  response"),
+        ("system", "compacted", "· compacted"),
+        ("error", "error text", "! error text"),
+        ("finding", "finding text", "★ finding text"),
+        ("decision", "decision text", "· decision text"),
+    ],
+)
+async def test_transcript_role_prefixes_preserve_their_configured_separator(
+    kind: EntryKind,
+    content: str,
+    expected: str,
+) -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(80, 8)) as pilot:
+        app.transcript.clear()
+        app.transcript._write_entry(TranscriptEntry(kind=kind, text=content))
+        await pilot.pause()
+
+        assert app.transcript.lines[0].text == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("Ask User", "⚙  Ask User"),
+        ("http GET https://example.test", "⚙  http GET https://example.test"),
+    ],
+)
+async def test_tool_call_uses_extra_visual_separator(
+    content: str,
+    expected: str,
+) -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(80, 8)) as pilot:
+        app.transcript.clear()
+        app.transcript._write_entry(TranscriptEntry(kind="tool-call", text=content))
+        await pilot.pause()
+
+        assert app.transcript.lines[0].text == expected
+
+
+@pytest.mark.parametrize("kind", ROLE_STYLES)
+def test_entry_view_preserves_each_configured_prefix(kind: EntryKind) -> None:
+    entry = TranscriptEntry(kind=kind, text="content")
+
+    assert entry_view(entry)[0].text == f"{ROLE_STYLES[kind].prefix}content"
 
 
 @pytest.mark.asyncio

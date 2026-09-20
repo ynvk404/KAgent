@@ -257,7 +257,7 @@ def test_rich_banner_panel_groups_all_header_content_at_narrow_width():
     console.print(banner.render_panel())
     rendered = output.getvalue()
 
-    assert "Welcome / Header" in rendered
+    assert "Overview" in rendered
     assert "Welcome to KAgent" in rendered
     assert "Provider: openrouter" in rendered
     assert "Model: deepseek" in rendered
