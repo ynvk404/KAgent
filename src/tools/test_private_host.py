@@ -8,6 +8,7 @@ from src.tools.private_host import (
     parse_http_url,
     same_authorized_origin,
 )
+from src.permission.permission import UserControlledRefusal
 
 
 class FakePrompter:
@@ -229,7 +230,7 @@ async def test_gate_deny_raises_even_for_declared_target():
         "src.tools.private_host.private_host_reason",
         new=AsyncMock(return_value="loopback IPv4"),
     ):
-        with pytest.raises(Exception, match="denied"):
+        with pytest.raises(UserControlledRefusal, match="denied"):
             await gate_private_request(
                 prompter,
                 parsed,

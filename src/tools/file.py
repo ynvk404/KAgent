@@ -5,7 +5,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from src.permission.permission import Decision, PermissionRequest
+from src.permission.permission import (
+    Decision,
+    PermissionRequest,
+    UserControlledRefusal,
+)
 
 from .types import (
     Tool,
@@ -83,7 +87,7 @@ async def gate_sensitive_path(
     )
 
     if decision == Decision.DENY:
-        raise PermissionError(
+        raise UserControlledRefusal(
             f"{verb} of sensitive path denied: {real}"
         )
 

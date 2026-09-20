@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable, Any
 
+
+class UserControlledRefusal(PermissionError):
+    """A permission request explicitly declined by the operator."""
+
 class Decision(str, Enum):
     ALLOW_ONCE = "allow-once"
     ALLOW_SESSION = "allow-session"

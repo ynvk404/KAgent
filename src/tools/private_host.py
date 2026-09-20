@@ -3,7 +3,11 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
-from src.permission.permission import PermissionRequest, Decision
+from src.permission.permission import (
+    PermissionRequest,
+    Decision,
+    UserControlledRefusal,
+)
 
 
 def parse_http_url(raw: str):
@@ -134,7 +138,7 @@ async def gate_private_request(
     )
 
     if decision == Decision.DENY:
-        raise Exception(
+        raise UserControlledRefusal(
             f"request to private/internal URL denied: "
             f"{parsed.geturl()}"
         )

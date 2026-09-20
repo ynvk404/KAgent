@@ -24,7 +24,13 @@ from src.agent.agent import (
     elide_persisted_workflow_results,
     WORKFLOW_HISTORY_MARKER,
     COMPACTION_RECENT_MESSAGE_CHAR_LIMIT,
+    MIDTURN_ELISION_PREFIX,
+    MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR,
+    MIDTURN_MIN_SAFETY_TOKENS,
+    approximate_message_tokens,
+    bound_recent_tool_result,
     IneffectiveCompactionError,
+    MaxStepsError,
     minimum_compactable_history_tokens,
 )
 from src.agent.system_prompt import PromptProfile
@@ -38,10 +44,11 @@ from src.llm.types import (
     ToolCall,
     FunctionCall,
 )
-from src.permission.permission import AlwaysAllow, AlwaysDeny
+from src.permission.permission import AlwaysAllow, AlwaysDeny, Decision
 from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.target.target import Target
 from src.tools.registry import Registry as ToolRegistry
+from src.tools.http import HTTPTool
 from src.tools.coverage import CoverageTool
 from src.workflow.state import Candidate, ValidationResult
 
@@ -2217,6 +2224,266 @@ class RestrictedShellTool(Tool):
         return f"ran: {args.get('command', '')}"
 
 
+class PermissionTool(Tool):
+    def __init__(self, name: str):
+        self._name = name
+
+    def name(self) -> str:
+        return self._name
+
+    def description(self) -> str:
+        return self._name
+
+    def schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}}
+
+    def requires_permission(self) -> bool:
+        return True
+
+    async def run(self, args, signal, prompter) -> str:
+        return f"ran:{self._name}"
+
+
+class FailingTool(PermissionTool):
+    def requires_permission(self) -> bool:
+        return False
+
+    async def run(self, args, signal, prompter) -> str:
+        raise RuntimeError("recoverable failure")
+
+
+class EscPrompter:
+    """The permission modal maps Esc to DENY."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def ask(self, request, signal=None) -> Decision:
+        self.calls += 1
+        return Decision.DENY
+
+
+class SequencePrompter:
+    def __init__(self, *decisions: Decision):
+        self.decisions = list(decisions)
+
+    async def ask(self, request, signal=None) -> Decision:
+        return self.decisions.pop(0)
+
+
+def refusal_agent(
+    scripted: list[ChatResponse],
+    tools: list[Tool],
+    prompter,
+    *,
+    store=None,
+    max_steps: int = 20,
+) -> tuple[Agent, FakeClient]:
+    registry = ToolRegistry()
+    for tool in tools:
+        registry.register(tool)
+    client = FakeClient(scripted)
+    return (
+        Agent(
+            AgentOptions(
+                client=client,
+                tools=registry,
+                skills=SkillRegistry(),
+                prompter=prompter,
+                store=store,
+                target=Target(),
+                max_steps=max_steps,
+            )
+        ),
+        client,
+    )
+
+
+def tool_batch(*calls: ToolCall) -> ChatResponse:
+    return ChatResponse(
+        message=Message(role="assistant", content="", tool_calls=list(calls)),
+        finish_reason="tool_calls",
+    )
+
+
+@pytest.mark.asyncio
+async def test_generic_permission_denial_ends_turn_without_synthesis():
+    agent, client = refusal_agent(
+        [tool_batch(tool_call("deny", "denied", {}))],
+        [PermissionTool("denied")],
+        AlwaysDeny(),
+    )
+    collector = collect()
+
+    await agent.run("go", FakeSignal(), collector["sink"])
+
+    assert len(client.requests) == 1
+    results = [event for event in collector["events"] if event.type == "tool-result"]
+    assert len(results) == 1
+    assert results[0].err == "permission denied by user for denied"
+    assert collector["events"][-1].type == "done"
+    assert agent.get_history()[-1].role == "tool"
+    assert agent.get_history()[-1].content == "ERROR: permission denied by user for denied"
+
+
+@pytest.mark.asyncio
+async def test_permission_escape_denial_ends_turn_without_synthesis():
+    prompter = EscPrompter()
+    agent, client = refusal_agent(
+        [tool_batch(tool_call("esc", "denied", {}))],
+        [PermissionTool("denied")],
+        prompter,
+    )
+
+    await agent.run("go", FakeSignal(), collect()["sink"])
+
+    assert prompter.calls == 1
+    assert len(client.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_private_host_denial_ends_turn_without_synthesis():
+    target = Target()
+    tool = HTTPTool(target)
+    client = FakeClient(
+        [tool_batch(tool_call("private", "http", {"url": "http://127.0.0.1/status"}))]
+    )
+    agent = Agent(
+        AgentOptions(
+            client=client,
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=SequencePrompter(Decision.ALLOW_ONCE, Decision.DENY),
+            store=None,
+            target=target,
+        )
+    )
+    agent.tools.register(tool)
+    collector = collect()
+
+    await agent.run("go", FakeSignal(), collector["sink"])
+
+    assert len(client.requests) == 1
+    result = next(event for event in collector["events"] if event.type == "tool-result")
+    assert "private/internal URL denied" in result.err
+    assert collector["events"][-1].type == "done"
+
+
+@pytest.mark.asyncio
+async def test_all_refused_tool_batch_ends_turn_without_synthesis():
+    agent, client = refusal_agent(
+        [
+            tool_batch(
+                tool_call("one", "one", {}),
+                tool_call("two", "two", {}),
+            )
+        ],
+        [PermissionTool("one"), PermissionTool("two")],
+        AlwaysDeny(),
+    )
+    collector = collect()
+
+    await agent.run("go", FakeSignal(), collector["sink"])
+
+    assert len(client.requests) == 1
+    assert [event.name for event in collector["events"] if event.type == "tool-result"] == ["one", "two"]
+    assert collector["events"][-1].type == "done"
+
+
+@pytest.mark.asyncio
+async def test_mixed_denial_and_success_still_synthesizes():
+    agent, client = refusal_agent(
+        [
+            tool_batch(tool_call("deny", "denied", {}), tool_call("ok", "ok", {})),
+            ChatResponse(message=Message(role="assistant", content="synthesized"), finish_reason="stop"),
+        ],
+        [PermissionTool("denied"), PermissionTool("ok")],
+        SequencePrompter(Decision.DENY, Decision.ALLOW_ONCE),
+    )
+
+    await agent.run("go", FakeSignal(), collect()["sink"])
+
+    assert len(client.requests) == 2
+    assert agent.get_history()[-1].content == "synthesized"
+
+
+@pytest.mark.asyncio
+async def test_mixed_denial_and_recoverable_error_still_synthesizes():
+    agent, client = refusal_agent(
+        [
+            tool_batch(tool_call("deny", "denied", {}), tool_call("fail", "fail", {})),
+            ChatResponse(message=Message(role="assistant", content="recovered"), finish_reason="stop"),
+        ],
+        [PermissionTool("denied"), FailingTool("fail")],
+        AlwaysDeny(),
+    )
+
+    await agent.run("go", FakeSignal(), collect()["sink"])
+
+    assert len(client.requests) == 2
+    assert agent.get_history()[-1].content == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_next_turn_after_refusal_keeps_valid_history_and_runs_normally():
+    agent, client = refusal_agent(
+        [
+            tool_batch(tool_call("deny", "denied", {})),
+            ChatResponse(message=Message(role="assistant", content="next answer"), finish_reason="stop"),
+        ],
+        [PermissionTool("denied")],
+        AlwaysDeny(),
+    )
+
+    await agent.run("first", FakeSignal(), collect()["sink"])
+    await agent.run("second", FakeSignal(), collect()["sink"])
+
+    assert len(client.requests) == 2
+    history = agent.get_history()
+    call_index = next(index for index, message in enumerate(history) if message.tool_calls)
+    assert history[call_index + 1].role == "tool"
+    assert history[-1].content == "next answer"
+
+
+@pytest.mark.asyncio
+async def test_save_resume_after_refusal_preserves_tool_pair(tmp_path):
+    store = Store.new_with_id(tmp_path, "refusal-session")
+    agent, client = refusal_agent(
+        [tool_batch(tool_call("deny", "denied", {}))],
+        [PermissionTool("denied")],
+        AlwaysDeny(),
+        store=store,
+    )
+
+    await agent.run("go", FakeSignal(), collect()["sink"])
+
+    resumed, _ = refusal_agent([], [PermissionTool("denied")], AlwaysDeny(), store=store)
+    resumed.resume_saved()
+    history = resumed.get_history()
+    call_index = next(index for index, message in enumerate(history) if message.tool_calls)
+
+    assert len(client.requests) == 1
+    assert history[call_index + 1].role == "tool"
+    assert history[call_index + 1].content.startswith("ERROR: permission denied")
+    assert not any(message.role == "assistant" and message.content == "synthesized" for message in history)
+
+
+@pytest.mark.asyncio
+async def test_successful_final_step_tool_call_keeps_existing_max_step_behavior():
+    agent, client = refusal_agent(
+        [tool_batch(tool_call("ok", "ok", {}))],
+        [PermissionTool("ok")],
+        AlwaysAllow(),
+        max_steps=1,
+    )
+    collector = collect()
+
+    await agent.run("go", FakeSignal(), collector["sink"])
+
+    assert len(client.requests) == 1
+    assert any(event.type == "error" and isinstance(event.err, MaxStepsError) for event in collector["events"])
+
+
 class FakeLoadSkillTool(Tool):
 
     def __init__(self, registry: SkillRegistry):
@@ -3460,6 +3727,363 @@ class BigOutputTool(Tool):
         prompter=None,
     ) -> str:
         return "x" * self.size
+
+
+class BigErrorTool(BigOutputTool):
+    def name(self) -> str:
+        return "big_error"
+
+    async def run(self, args, signal=None, prompter=None) -> str:
+        raise RuntimeError("e" * self.size)
+
+
+def tool_content(request: ChatRequest, call_id: str) -> str:
+    return next(
+        message.content
+        for message in request.messages
+        if message.role == "tool" and message.tool_call_id == call_id
+    )
+
+
+def make_big_output_agent(
+    size: int,
+    *,
+    store=None,
+    tool: Tool | None = None,
+) -> tuple[Agent, FakeClient]:
+    selected_tool = tool or BigOutputTool(size)
+    client = FakeClient(
+        [
+            tool_batch(tool_call("large", selected_tool.name(), {})),
+            ChatResponse(
+                message=Message(role="assistant", content="synthesized"),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(selected_tool)
+    agent = Agent(
+        AgentOptions(
+            client=client,
+            tools=registry,
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=store,
+            target=Target(),
+            prompt_profile="compact",
+        )
+    )
+    return agent, client
+
+
+@pytest.mark.asyncio
+async def test_small_immediate_tool_result_reaches_synthesis_unchanged():
+    agent, client = make_big_output_agent(200)
+    agent.set_auto_compact_threshold(agent.approx_tokens() + 5_000)
+
+    await agent.run("go", FakeSignal(), collect()["sink"])
+
+    assert len(client.requests) == 2
+    assert tool_content(client.requests[1], "large") == "x" * 200
+    assert next(m.content for m in agent.get_history() if m.role == "tool") == "x" * 200
+
+
+@pytest.mark.asyncio
+async def test_large_immediate_result_is_bounded_only_for_synthesis():
+    raw = "x" * 12_000
+    agent, client = make_big_output_agent(len(raw))
+    agent.set_auto_compact_threshold(agent.approx_tokens() + 1_000)
+
+    await agent.run("go", FakeSignal(), collect()["sink"])
+
+    bounded = tool_content(client.requests[1], "large")
+    persisted = next(m.content for m in agent.get_history() if m.role == "tool")
+    assert len(client.requests) == 2
+    assert persisted == raw
+    assert bounded != raw
+    assert MIDTURN_ELISION_PREFIX in bounded
+    assert len(bounded) > MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR
+    assert len(raw) - len(bounded) < 10_000
+
+
+def test_context_guard_bounds_only_oversized_results_and_preserves_pairing():
+    agent = make_agent([])
+    agent.set_auto_compact_threshold(1)
+    raw = "H" * 12_000
+    working = [
+        Message(role="tool", name="small", tool_call_id="a", content="small"),
+        Message(role="tool", name="huge", tool_call_id="b", content=raw),
+    ]
+
+    agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
+
+    assert [(m.name, m.tool_call_id) for m in working] == [("small", "a"), ("huge", "b")]
+    assert working[0].content == "small"
+    assert MIDTURN_ELISION_PREFIX in working[1].content
+    assert raw.startswith(working[1].content.split("\n", 1)[0])
+
+
+def test_context_guard_bounds_each_oversized_recent_result_idempotently():
+    agent = make_agent([])
+    agent.set_auto_compact_threshold(1)
+    working = [
+        Message(role="tool", name="one", tool_call_id="a", content="A" * 12_000),
+        Message(role="tool", name="two", tool_call_id="b", content="B" * 15_000),
+    ]
+
+    agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
+    first = [message.content for message in working]
+    agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
+
+    assert [message.content for message in working] == first
+    assert all(len(content) == MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR for content in first)
+    assert all(content.count(MIDTURN_ELISION_PREFIX) >= 1 for content in first)
+
+
+def test_context_guard_slight_pressure_removes_only_required_budget_plus_safety():
+    agent = make_agent([])
+    events = []
+    raw = "x" * 12_000
+    working = [Message(role="tool", name="large", tool_call_id="a", content=raw)]
+    threshold = 2_628
+    safety = max(MIDTURN_MIN_SAFETY_TOKENS, round(threshold * 0.02))
+    target = threshold - safety
+    original_tokens = approximate_message_tokens(working)
+    agent.set_auto_compact_threshold(threshold)
+
+    agent.guard_working_context(working, events.append, AgentRunOptions(tools=False))
+
+    required_reduction = (original_tokens - target) * 4
+    assert original_tokens == 3_000
+    assert safety == 128
+    assert target == 2_500
+    assert required_reduction == 2_000
+    assert len(working[0].content) == 10_000
+    assert approximate_message_tokens(working) == target
+    assert len(working[0].content) > MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR
+    assert len(events) == 1
+    assert "reduced 2000 characters" in events[0]["summary"]
+    assert "unresolved pressure" not in events[0]["summary"]
+
+
+def test_context_guard_pressure_without_tool_output_emits_no_event():
+    agent = make_agent([])
+    agent.set_auto_compact_threshold(1)
+    working = [Message(role="user", content="hi")]
+    original = list(working)
+    events = []
+
+    agent.guard_working_context(working, events.append)
+
+    assert working == original
+    assert events == []
+
+
+def test_context_guard_no_reducible_candidate_never_reports_zero_reduction():
+    agent = make_agent([])
+    agent.set_auto_compact_threshold(1)
+    working = [Message(role="system", content="fixed request overhead" * 100)]
+    events = []
+
+    agent.guard_working_context(working, events.append, AgentRunOptions(tools=False))
+
+    assert events == []
+    assert not any("reduced 0 characters" in event["summary"] for event in events)
+
+
+def test_context_guard_severe_pressure_reaches_floor_and_reports_residual():
+    agent = make_agent([])
+    events = []
+    working = [
+        Message(role="user", content="u" * 512),
+        Message(role="tool", name="large", tool_call_id="a", content="x" * 12_000),
+    ]
+    agent.set_auto_compact_threshold(500)
+
+    agent.guard_working_context(working, events.append, AgentRunOptions(tools=False))
+
+    assert len(working[1].content) == MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR
+    assert approximate_message_tokens(working) == 628
+    assert len(events) == 1
+    assert "reduced 10000 characters" in events[0]["summary"]
+    assert "unresolved pressure: 256 tokens" in events[-1]["summary"]
+    assert "reduced 0 characters" not in events[0]["summary"]
+
+
+def _source_with_canaries(size: int = 12_000) -> tuple[str, list[str]]:
+    chars = ["."] * size
+    canaries = ["HEAD-CANARY", "Q1-CANARY", "MID-CANARY", "Q3-CANARY", "TAIL-CANARY"]
+    positions = [0, size // 4, size // 2, size * 3 // 4, size - len(canaries[-1])]
+    for position, canary in zip(positions, canaries):
+        chars[position : position + len(canary)] = canary
+    return "".join(chars), canaries
+
+
+def test_distributed_windows_preserve_canaries_and_characterize_gaps():
+    raw, canaries = _source_with_canaries()
+
+    bounded = bound_recent_tool_result(raw, 4_000)
+
+    assert len(bounded) == 4_000
+    assert all(canary in bounded for canary in canaries)
+    assert bounded.count(MIDTURN_ELISION_PREFIX) == 4
+    assert re.search(r"characters \d+-\d+ omitted; original length 12000", bounded)
+
+
+def test_distributed_windows_have_no_slight_pressure_size_cliff():
+    raw, canaries = _source_with_canaries()
+
+    bounded = bound_recent_tool_result(raw, 11_999)
+
+    assert len(bounded) == 11_999
+    assert all(canary in bounded for canary in canaries)
+
+
+@pytest.mark.parametrize(
+    ("evidence", "position"),
+    [
+        ('<script>alert("reflected-xss")</script>', 6_000),
+        ("SQL syntax error near unexpected token", 3_000),
+        ('"critical_field":"keep-this-value"', 6_000),
+        ("PORT 8443/tcp open critical-service", 9_000),
+    ],
+)
+def test_distributed_windows_preserve_middle_security_evidence(evidence, position):
+    chars = ["."] * 12_000
+    chars[position : position + len(evidence)] = evidence
+    raw = "".join(chars)
+    old_head_tail = raw[:1_500] + raw[-500:]
+
+    bounded = bound_recent_tool_result(raw, 4_000)
+
+    assert evidence not in old_head_tail
+    assert evidence in bounded
+
+
+def test_context_guard_allocates_multi_result_reduction_proportionally():
+    agent = make_agent([])
+    working = [
+        Message(role="tool", name="small", tool_call_id="s", content="ok"),
+        Message(role="tool", name="one", tool_call_id="a", content="A" * 6_000),
+        Message(role="tool", name="two", tool_call_id="b", content="B" * 10_000),
+    ]
+    agent.set_auto_compact_threshold(3_628)
+
+    agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
+
+    reductions = [6_000 - len(working[1].content), 10_000 - len(working[2].content)]
+    assert working[0].content == "ok"
+    assert [(m.name, m.tool_call_id) for m in working] == [
+        ("small", "s"), ("one", "a"), ("two", "b")
+    ]
+    assert reductions == [667, 1_333]
+    assert all(len(message.content) > 2_000 for message in working[1:])
+    assert approximate_message_tokens(working) <= 3_500
+
+
+def test_context_guard_stops_after_actual_rendered_reduction_reaches_target():
+    agent = make_agent([])
+    first_raw = "A" * 12_001
+    later_raw = "B" * 2_020
+    working = [
+        Message(role="tool", name="first", tool_call_id="a", content=first_raw),
+        Message(role="tool", name="later", tool_call_id="b", content=later_raw),
+    ]
+    # Current estimate is 3,505 tokens. With the 128-token safety margin,
+    # target is 3,377 and the proportional character plan is [511, 1].
+    # Because 12,001 -> 11,490 crosses a token-accounting boundary, the first
+    # rendered replacement alone recovers all 128 required tokens.
+    agent.set_auto_compact_threshold(3_505)
+
+    agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
+
+    assert len(first_raw) - len(working[0].content) == 511
+    assert approximate_message_tokens(working) == 3_377
+    assert working[1].content == later_raw
+
+
+def test_context_guard_stops_after_older_elision_recovers_budget():
+    agent = make_agent([])
+    working = [
+        Message(role="tool", name=str(i), tool_call_id=str(i), content=chr(65 + i) * 12_000)
+        for i in range(5)
+    ]
+    recent_raw = [message.content for message in working[-4:]]
+    agent.set_auto_compact_threshold(12_800)
+
+    agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
+
+    assert working[0].content.startswith(MIDTURN_ELISION_PREFIX)
+    assert [message.content for message in working[-4:]] == recent_raw
+
+
+@pytest.mark.asyncio
+async def test_large_recoverable_error_still_synthesizes_with_bounded_copy():
+    tool = BigErrorTool(12_000)
+    agent, client = make_big_output_agent(12_000, tool=tool)
+    agent.set_auto_compact_threshold(agent.approx_tokens() + 1_000)
+
+    await agent.run("go", FakeSignal(), collect()["sink"])
+
+    assert len(client.requests) == 2
+    assert MIDTURN_ELISION_PREFIX in tool_content(client.requests[1], "large")
+    raw = next(m.content for m in agent.get_history() if m.role == "tool")
+    assert raw.startswith("ERROR: ")
+    assert len(raw) > 12_000
+
+
+@pytest.mark.asyncio
+async def test_mixed_refusal_and_large_success_bounds_result_and_synthesizes():
+    client = FakeClient(
+        [
+            tool_batch(
+                tool_call("denied", "denied", {}),
+                tool_call("large", "big", {}),
+            ),
+            ChatResponse(
+                message=Message(role="assistant", content="synthesized"),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(PermissionTool("denied"))
+    registry.register(BigOutputTool(12_000))
+    agent = Agent(
+        AgentOptions(
+            client=client,
+            tools=registry,
+            skills=SkillRegistry(),
+            prompter=AlwaysDeny(),
+            store=None,
+            target=Target(),
+            prompt_profile="compact",
+        )
+    )
+    agent.set_auto_compact_threshold(agent.approx_tokens() + 1_000)
+
+    await agent.run("go", FakeSignal(), collect()["sink"])
+
+    assert len(client.requests) == 2
+    assert tool_content(client.requests[1], "denied").startswith("ERROR: permission denied")
+    assert MIDTURN_ELISION_PREFIX in tool_content(client.requests[1], "large")
+    assert next(m.content for m in agent.get_history() if m.tool_call_id == "large") == "x" * 12_000
+
+
+@pytest.mark.asyncio
+async def test_large_result_save_resume_preserves_raw_history(tmp_path):
+    store = Store.new_with_id(tmp_path, "large-result")
+    agent, client = make_big_output_agent(12_000, store=store)
+    agent.set_auto_compact_threshold(agent.approx_tokens() + 1_000)
+
+    await agent.run("go", FakeSignal(), collect()["sink"])
+
+    resumed, _ = make_big_output_agent(1, store=store)
+    resumed.resume_saved()
+    raw = next(m.content for m in resumed.get_history() if m.role == "tool")
+    assert len(client.requests) == 2
+    assert raw == "x" * 12_000
 
 @pytest.mark.asyncio
 async def test_mid_turn_context_guard_elides_old_tool_results_without_touching_history():

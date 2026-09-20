@@ -50,7 +50,7 @@ from src.memory.store import (
     format_memory_recall,
 )
 
-from src.permission.permission import Prompter
+from src.permission.permission import Prompter, UserControlledRefusal
 
 from src.session.store import (
     SessionMemory,
@@ -145,6 +145,10 @@ MIDTURN_ELISION_PREFIX = (
 )
 
 MIDTURN_ELISION_KEEP_RECENT = 4
+MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR = COMPACTION_RECENT_MESSAGE_CHAR_LIMIT
+MIDTURN_SAFETY_RATIO = 0.02
+MIDTURN_MIN_SAFETY_TOKENS = 128
+MIDTURN_WINDOW_WEIGHTS = (40, 15, 15, 15, 15)
 MAX_MEMORY_LIST = 200
 WORKFLOW_HISTORY_MARKER = (
     "[workflow tool result elided; current structured state is in the system prompt]"
@@ -202,10 +206,170 @@ class ToolCallResult:
         result: str,
         err_str: str,
         duration_ms: int,
+        terminal_user_controlled_refusal: bool = False,
     ):
         self.result = result
         self.err_str = err_str
         self.duration_ms = duration_ms
+        self.terminal_user_controlled_refusal = (
+            terminal_user_controlled_refusal
+        )
+
+
+def _weighted_window_lengths(total: int) -> list[int]:
+    """Split a source budget deterministically across the five windows."""
+    lengths = [total * weight // 100 for weight in MIDTURN_WINDOW_WEIGHTS]
+    remainder = total - sum(lengths)
+    for index in range(remainder):
+        lengths[index % len(lengths)] += 1
+    return lengths
+
+
+def _distributed_window_ranges(source_length: int, budget: int) -> list[tuple[int, int]]:
+    lengths = _weighted_window_lengths(min(source_length, max(0, budget)))
+    anchors = (0.0, 0.25, 0.5, 0.75, 1.0)
+    ranges: list[tuple[int, int]] = []
+
+    for index, (anchor, length) in enumerate(zip(anchors, lengths)):
+        if length <= 0:
+            continue
+        if index == 0:
+            start = 0
+        elif index == len(anchors) - 1:
+            start = source_length - length
+        else:
+            center = round(source_length * anchor)
+            start = center - length // 2
+        start = min(max(0, start), source_length - length)
+        end = start + length
+
+        if ranges and start <= ranges[-1][1]:
+            ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
+        else:
+            ranges.append((start, end))
+
+    return ranges
+
+
+def _render_distributed_windows(content: str, source_budget: int) -> str:
+    ranges = _distributed_window_ranges(len(content), source_budget)
+    if not ranges:
+        return ""
+
+    parts: list[str] = []
+    previous_end = 0
+    for start, end in ranges:
+        if start > previous_end:
+            parts.append(
+                "\n"
+                f"{MIDTURN_ELISION_PREFIX}; characters "
+                f"{previous_end}-{start} omitted; original length {len(content)}]"
+                "\n"
+            )
+        parts.append(content[start:end])
+        previous_end = end
+
+    if previous_end < len(content):
+        parts.append(
+            "\n"
+            f"{MIDTURN_ELISION_PREFIX}; characters "
+            f"{previous_end}-{len(content)} omitted; original length {len(content)}]"
+            "\n"
+        )
+    return "".join(parts)
+
+
+def _render_distributed_omissions(content: str, omitted: int) -> str:
+    """Render four ordered gaps between the five evidence anchor points."""
+    source_length = len(content)
+    anchors = [0, source_length // 4, source_length // 2, source_length * 3 // 4, source_length]
+    capacities = [max(0, anchors[i + 1] - anchors[i] - 2) for i in range(4)]
+    gap_lengths = _proportional_reductions(capacities, omitted)
+    gaps: list[tuple[int, int]] = []
+    for index, gap_length in enumerate(gap_lengths):
+        if gap_length <= 0:
+            continue
+        segment_start = anchors[index] + 1
+        segment_end = anchors[index + 1] - 1
+        start = segment_start + (segment_end - segment_start - gap_length) // 2
+        gaps.append((start, start + gap_length))
+
+    parts: list[str] = []
+    previous_end = 0
+    for start, end in gaps:
+        parts.append(content[previous_end:start])
+        parts.append(
+            "\n"
+            f"{MIDTURN_ELISION_PREFIX}; characters "
+            f"{start}-{end} omitted; original length {source_length}]"
+            "\n"
+        )
+        previous_end = end
+    parts.append(content[previous_end:])
+    return "".join(parts)
+
+
+def bound_recent_tool_result(content: str, target_length: int) -> str:
+    """Bound one LLM-facing result with ordered windows including marker cost."""
+    target_length = max(
+        MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR,
+        min(len(content), target_length),
+    )
+    if len(content) <= target_length or MIDTURN_ELISION_PREFIX in content:
+        return content
+
+    low = 0
+    high = len(content)
+    best = ""
+    while low <= high:
+        source_budget = (low + high) // 2
+        rendered = _render_distributed_windows(content, source_budget)
+        if len(rendered) <= target_length:
+            if len(rendered) > len(best):
+                best = rendered
+            low = source_budget + 1
+        else:
+            high = source_budget - 1
+
+    # When weighted windows overlap under slight pressure, filling their gaps
+    # can otherwise produce a large representational cliff. A complementary
+    # four-gap search keeps almost all source while retaining the same five
+    # distributed evidence regions.
+    low = 1
+    high = len(content)
+    while low <= high:
+        omitted = (low + high) // 2
+        rendered = _render_distributed_omissions(content, omitted)
+        if len(rendered) <= target_length:
+            if len(rendered) > len(best):
+                best = rendered
+            high = omitted - 1
+        else:
+            low = omitted + 1
+
+    if not best or len(best) >= len(content):
+        return content
+    return best
+
+
+def _proportional_reductions(capacities: list[int], required: int) -> list[int]:
+    """Allocate an integer reduction using stable largest remainders."""
+    total_capacity = sum(capacities)
+    amount = min(max(0, required), total_capacity)
+    if amount == 0 or total_capacity == 0:
+        return [0] * len(capacities)
+
+    reductions = [amount * capacity // total_capacity for capacity in capacities]
+    remainders = [amount * capacity % total_capacity for capacity in capacities]
+    left = amount - sum(reductions)
+    order = sorted(range(len(capacities)), key=lambda i: (-remainders[i], i))
+    for index in order:
+        if left == 0:
+            break
+        if reductions[index] < capacities[index]:
+            reductions[index] += 1
+            left -= 1
+    return reductions
 
 
 @dataclass(slots=True)
@@ -1401,12 +1565,15 @@ class Agent:
 
                 return
 
-            await self.execute_tool_calls(
+            all_refused = await self.execute_tool_calls(
                 tool_calls,
                 signal,
                 emit,
                 working,
             )
+
+            if all_refused:
+                return
 
         emit(
             {
@@ -1427,29 +1594,17 @@ class Agent:
             tools_tokens = self.tools_token_estimate()
 
         def size() -> int:
+            return tools_tokens + approximate_message_tokens(working)
 
-            total = tools_tokens
-
-            for msg in working:
-
-                total += len(msg.content) // 4
-
-                if msg.reasoning_content:
-                    total += len(msg.reasoning_content) // 4
-
-                if msg.tool_calls:
-
-                    for tc in msg.tool_calls:
-
-                        total += (
-                            len(tc.function.name)
-                            + len(tc.function.arguments)
-                        ) // 4
-
-            return total
-
-        if size() < self.auto_compact_threshold:
+        threshold = self.auto_compact_threshold
+        if threshold <= 0 or size() < threshold:
             return
+
+        safety_tokens = max(
+            MIDTURN_MIN_SAFETY_TOKENS,
+            round(threshold * MIDTURN_SAFETY_RATIO),
+        )
+        target_tokens = max(0, threshold - safety_tokens)
 
         tool_indexes: list[int] = []
 
@@ -1470,7 +1625,7 @@ class Agent:
 
         for i in elidable:
 
-            if size() < self.auto_compact_threshold:
+            if size() <= target_tokens:
                 break
 
             msg = working[i]
@@ -1480,21 +1635,64 @@ class Agent:
             ):
                 continue
 
-            bytes_dropped = len(msg.content)
+            original_length = len(msg.content)
+            marker = (
+                f"{MIDTURN_ELISION_PREFIX}"
+                f" — {original_length} bytes dropped]"
+            )
 
             working[i] = Message(
                 role=msg.role,
-                content=(
-                    f"{MIDTURN_ELISION_PREFIX}"
-                    f" — {bytes_dropped} bytes dropped]"
-                ),
+                content=marker,
                 tool_calls=msg.tool_calls,
                 tool_call_id=msg.tool_call_id,
                 name=msg.name,
             )
 
-            dropped += bytes_dropped
+            dropped += original_length - len(marker)
 
+        current_tokens = size()
+        if current_tokens > target_tokens:
+            candidates = [
+                i
+                for i in tool_indexes
+                if len(working[i].content) > MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR
+                and MIDTURN_ELISION_PREFIX not in working[i].content
+            ]
+
+            # Token estimates round each message independently. Keep the
+            # proportional plan, but let each rendered replacement own the
+            # stopping condition before touching a later result.
+            if candidates:
+                capacities = [
+                    len(working[i].content) - MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR
+                    for i in candidates
+                ]
+                required_chars = (current_tokens - target_tokens) * 4
+                reductions = _proportional_reductions(capacities, required_chars)
+
+                for i, reduction in zip(candidates, reductions):
+                    if reduction <= 0:
+                        continue
+                    msg = working[i]
+                    bounded = bound_recent_tool_result(
+                        msg.content,
+                        len(msg.content) - reduction,
+                    )
+                    if bounded == msg.content:
+                        continue
+                    dropped += len(msg.content) - len(bounded)
+                    working[i] = Message(
+                        role=msg.role,
+                        content=bounded,
+                        tool_calls=msg.tool_calls,
+                        tool_call_id=msg.tool_call_id,
+                        name=msg.name,
+                    )
+                    if size() <= target_tokens:
+                        break
+
+        residual_tokens = max(0, size() - target_tokens)
         if dropped > 0:
 
             emit(
@@ -1502,9 +1700,14 @@ class Agent:
                     "type": "decision",
                     "summary": (
                         "context guard: "
-                        f"elided {dropped} bytes "
-                        "of older tool output "
+                        f"reduced {dropped} characters "
+                        "of tool output "
                         "mid-turn to fit the context window"
+                        + (
+                            f"; unresolved pressure: {residual_tokens} tokens"
+                            if residual_tokens > 0
+                            else ""
+                        )
                     ),
                 }
             )
@@ -1515,7 +1718,7 @@ class Agent:
         signal,
         emit,
         working: list[Message],
-    ) -> None:
+    ) -> bool:
         sequential = (
             len(tool_calls) <= 1
             or any(
@@ -1525,6 +1728,8 @@ class Agent:
         )
 
         if sequential:
+
+            results: list[ToolCallResult] = []
 
             for tc in tool_calls:
 
@@ -1554,6 +1759,7 @@ class Agent:
                     emit,
                     working,
                 )
+                results.append(result)
 
             try:
                 await self.save()
@@ -1567,8 +1773,10 @@ class Agent:
                     }
                 )
 
-            return
-
+            return all(
+                result.terminal_user_controlled_refusal
+                for result in results
+            )
         parsed_all = [
             self.parse_tool_call(tc)
             for tc in tool_calls
@@ -1624,6 +1832,11 @@ class Agent:
 
         if signal.aborted:
             raise Exception("aborted")
+
+        return all(
+            result.terminal_user_controlled_refusal
+            for result in results
+        )
 
     def parse_tool_call(
         self,
@@ -1717,6 +1930,10 @@ class Agent:
             result=result,
             err_str=err_str,
             duration_ms=duration_ms,
+            terminal_user_controlled_refusal=isinstance(
+                run_err,
+                UserControlledRefusal,
+            ),
         )
 
     def record_tool_result(

@@ -6,6 +6,7 @@ from src.permission.permission import (
     Decision,
     PermissionRequest,
     Prompter,
+    UserControlledRefusal,
     YoloPrompter,
 )
 from src.tools.registry import Registry
@@ -128,6 +129,20 @@ async def test_prompts_and_denies_when_yolo_disabled():
         )
 
     assert len(inner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_permission_denial_has_typed_user_controlled_refusal():
+    reg = Registry()
+    reg.register(GatedTool())
+
+    with pytest.raises(UserControlledRefusal, match="permission denied"):
+        await reg.execute(
+            "http",
+            {"url": "http://example.test/"},
+            None,
+            SpyPrompter(Decision.DENY),
+        )
 
 
 @pytest.mark.asyncio

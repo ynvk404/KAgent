@@ -7,6 +7,7 @@ from src.permission.permission import (
     Decision,
     PermissionRequest,
     Prompter,
+    UserControlledRefusal,
 )
 from .types import (
     Tool,
@@ -141,7 +142,7 @@ class Registry:
             )
 
             if decision == Decision.DENY:
-                raise PermissionError(
+                raise UserControlledRefusal(
                     f"permission denied by user for {tool.name()}"
                 )
 
