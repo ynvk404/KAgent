@@ -32,7 +32,7 @@ class RoleStyle:
 ROLE_STYLES: dict[EntryKind, RoleStyle] = {
     "user": RoleStyle(color=ACCENT, prefix="› "),
     "assistant": RoleStyle(color=PRIMARY, prefix="  "),
-    "tool-call": RoleStyle(color=ACCENT, prefix="⚙ "),
+    "tool-call": RoleStyle(color=ACCENT, prefix="⚙  "),
     "tool-result": RoleStyle(color=MUTED, prefix="↳ "),
     "system": RoleStyle(color=MUTED, prefix="· "),
     "error": RoleStyle(color=ERROR, prefix="! "),
@@ -129,6 +129,7 @@ class Transcript:
         self._printed_count = 0
         self._last_generation: object | None = None
         self._banner_printed = False
+        self._last_banner_data: BannerData | None = None
 
     def flush(
         self,
@@ -150,6 +151,16 @@ class Transcript:
             columns, _rows = get_terminal_size()
             self._write_banner(banner_data, columns)
             self._banner_printed = True
+            self._last_banner_data = banner_data
+        elif (
+            self._write_banner_panel is not None
+            and banner_data != self._last_banner_data
+        ):
+            # The TUI supplies a replaceable Overview widget here. Updating it
+            # leaves the RichLog and its scrollback untouched.
+            columns, _rows = get_terminal_size()
+            self._write_banner(banner_data, columns)
+            self._last_banner_data = banner_data
 
         new_entries = committed[self._printed_count :]
         for entry in new_entries:

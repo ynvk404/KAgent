@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import IO, cast
+from io import StringIO
+from typing import IO, Callable, cast
+
+import pytest
+from rich.console import Console
 
 from src.ui.core.state import TranscriptEntry
-from src.ui.widgets.banner import BannerData
+from src.ui.widgets.banner import Banner, BannerData, ToolSupportPill
 from src.ui.widgets.transcript import Transcript
 
 
@@ -20,6 +24,103 @@ class _RichLogOutput:
     def clear(self) -> None:
         self.clear_calls += 1
         self.lines.clear()
+
+
+@dataclass
+class _Overview:
+    current: BannerData | None = None
+    updates: int = 0
+
+    def update(self, data: BannerData) -> None:
+        self.current = data
+        self.updates += 1
+
+
+def _overview_writer(overview: _Overview) -> Callable[[BannerData], None]:
+    return overview.update
+
+
+def _rendered_overview(data: BannerData) -> str:
+    output = StringIO()
+    Console(file=output, force_terminal=False, width=80).print(
+        Banner(data, width=80).render_panel()
+    )
+    return output.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("final_state", "expected"),
+    [
+        ("yes", "tools ✓"),
+        ("no", "NO TOOLS"),
+        ("unknown", "tools ?"),
+    ],
+)
+def test_banner_refresh_replaces_overview_without_clearing_transcript(
+    final_state: str,
+    expected: str,
+) -> None:
+    output = _RichLogOutput()
+    overview = _Overview()
+    transcript = Transcript(
+        out=cast(IO[str], output),
+        clear=output.clear,
+        width=lambda: 80,
+        write_banner=_overview_writer(overview),
+    )
+    probing = BannerData(
+        provider="openai", model="test-model", cwd="/workspace", tool_support="probing"
+    )
+    final = BannerData(
+        provider="openai",
+        model="test-model",
+        cwd="/workspace",
+        tool_support=cast(ToolSupportPill, final_state),
+    )
+    entries = [TranscriptEntry(kind="tool-result", text="existing tool output")]
+
+    transcript.flush(entries, probing, generation="startup")
+    assert overview.current is probing
+    assert output.lines == ["↳ existing tool output", ""]
+
+    transcript.flush(entries, final, generation="startup")
+
+    assert overview.current is final
+    assert overview.updates == 2
+    assert output.clear_calls == 1
+    assert output.lines == ["↳ existing tool output", ""]
+    assert "probing…" not in _rendered_overview(final)
+    assert expected in _rendered_overview(final)
+
+
+def test_banner_updates_and_new_generations_keep_one_current_overview() -> None:
+    output = _RichLogOutput()
+    overview = _Overview()
+    transcript = Transcript(
+        out=cast(IO[str], output),
+        clear=output.clear,
+        width=lambda: 80,
+        write_banner=_overview_writer(overview),
+    )
+    probing = BannerData(
+        provider="openai", model="test-model", cwd="/workspace", tool_support="probing"
+    )
+    supported = BannerData(
+        provider="openai", model="test-model", cwd="/workspace", tool_support="yes"
+    )
+    unknown = BannerData(
+        provider="openai", model="test-model", cwd="/workspace", tool_support="unknown"
+    )
+
+    transcript.flush([TranscriptEntry(kind="assistant", text="keep this")], probing, "initial")
+    transcript.flush([TranscriptEntry(kind="assistant", text="keep this")], supported, "initial")
+    transcript.flush([], unknown, "after-reset", clear_message="conversation reset")
+
+    assert overview.current is unknown
+    assert overview.updates == 3
+    assert output.clear_calls == 2
+    assert output.lines == ["· conversation reset", ""]
+    assert "tools ?" in _rendered_overview(unknown)
 
 
 def test_new_generation_replaces_richlog_content_with_a_fresh_banner() -> None:

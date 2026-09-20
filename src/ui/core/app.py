@@ -186,8 +186,9 @@ class RunAgentOptions:
 
 class _RichLogWriter:
 
-    def __init__(self, log: RichLog) -> None:
+    def __init__(self, log: RichLog, overview: Static | None = None) -> None:
         self._log = log
+        self._overview = overview
 
     def content_width(self) -> int:
         if isinstance(self._log, TranscriptView):
@@ -203,7 +204,11 @@ class _RichLogWriter:
 
     def write_banner(self, data: BannerData) -> None:
         width = self.content_width()
-        self._log.write(Banner(data, width=width).render_panel(), width=width)
+        banner = Banner(data, width=width).render_panel()
+        if self._overview is not None:
+            self._overview.update(banner)
+        else:
+            self._log.write(banner, width=width)
 
 _INPUT_STYLE_MAP: dict[str, str] = {
     "gray": MUTED,
@@ -319,6 +324,11 @@ class KAgent(App):
         padding: 0 1;
     }}
 
+    #overview {{
+        width: 100%;
+        height: auto;
+    }}
+
     #input-box {{
         width: 100%;
         border: round {MUTED};
@@ -426,13 +436,16 @@ class KAgent(App):
         self.transcript_panel = Vertical(id="transcript-panel")
         self.transcript_panel.border_title = "Transcript"
         with self.transcript_panel:
+            self.overview_static = Static(id="overview")
+            yield self.overview_static
+
             self.transcript_log = TranscriptView(auto_scroll=True)
             yield self.transcript_log
 
             self.live_entry_static = Static(id="live-entry")
             yield self.live_entry_static
 
-        rich_log_writer = _RichLogWriter(self.transcript_log)
+        rich_log_writer = _RichLogWriter(self.transcript_log, self.overview_static)
         self.transcript_writer = Transcript(
             out=cast(IO[str], rich_log_writer),
             width=rich_log_writer.content_width,

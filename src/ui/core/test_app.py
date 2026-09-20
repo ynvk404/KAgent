@@ -221,6 +221,7 @@ async def test_main_shell_regions_have_distinct_native_panels(
     async with app.run_test(size=(64, 22)) as pilot:
         assert app.transcript_panel.border_title == "Transcript"
         assert app.input_static.border_title == "Input"
+        assert app.overview_static.parent is app.transcript_panel
         assert app.transcript_log.parent is app.transcript_panel
         assert app.live_entry_static.parent is app.transcript_panel
         assert app.transcript_panel.styles.border.top[0] == "round"
