@@ -148,6 +148,40 @@ class TestTempCollisionOwnership:
 
 class TestMessageProviderState:
     @pytest.mark.asyncio
+    async def test_preserves_raw_ask_user_tool_result_across_session_round_trip(
+        self, tmp_path
+    ):
+        raw = json.dumps(
+            {
+                "answers": [
+                    {
+                        "question": "Which endpoint should be tested?",
+                        "answer": "POST /login username",
+                    }
+                ]
+            },
+            indent=2,
+        )
+        store = Store.new_with_id(tmp_path, new_id())
+        await store.save(
+            [
+                Message(
+                    role="tool",
+                    content=raw,
+                    tool_call_id="call_ask",
+                    name="ask_user",
+                )
+            ]
+        )
+
+        loaded = store.load().messages[0]
+
+        assert loaded.role == "tool"
+        assert loaded.content == raw
+        assert loaded.tool_call_id == "call_ask"
+        assert loaded.name == "ask_user"
+
+    @pytest.mark.asyncio
     async def test_preserves_reasoning_content_across_session_round_trip(self, tmp_path):
         store = Store.new_with_id(tmp_path, new_id())
         await store.save(

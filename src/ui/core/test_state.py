@@ -12,10 +12,12 @@ from src.ui.core.state import (
     SetBusy,
     Clear,
     CycleTranscriptFilter,
+    ExpandToolOutput,
 )
 
 from src.agent.events import (
     ToolCallEvent,
+    ToolResultEvent,
     AssistantDeltaEvent,
     DoneEvent,
 )
@@ -244,6 +246,102 @@ def test_clear():
 
     assert len(s.transcript) == 0
     assert s.clear_gen == 1
+
+
+def test_ask_user_result_is_human_readable_without_mutating_event():
+    raw = json.dumps(
+        {
+            "answers": [
+                {
+                    "question": "Which endpoint and parameter would you like to test?",
+                    "answer": "sql injection",
+                }
+            ]
+        },
+        indent=2,
+    )
+    event = ToolResultEvent(
+        name="ask_user",
+        result=raw,
+        duration_ms=12,
+    )
+
+    out = reducer(seed(), AgentEventAction(event))
+
+    entry = out.transcript[-1]
+    assert entry.text == "\n".join(
+        [
+            "[ok] Ask User (12ms)",
+            "answers:",
+            "- sql injection",
+            "  Which endpoint and parameter would you like to test?",
+        ]
+    )
+    assert '"answers"' not in entry.text
+    assert event.result == raw
+    assert entry.collapsible is False
+    assert entry.full_text is None
+
+
+def test_invalid_ask_user_result_falls_back_to_raw_output():
+    raw = '{"unexpected":"technical payload"}'
+
+    out = reducer(
+        seed(),
+        AgentEventAction(
+            ToolResultEvent(
+                name="ask_user",
+                result=raw,
+                duration_ms=3,
+            )
+        ),
+    )
+
+    assert out.transcript[-1].text == f"[ok] Ask User (3ms)\n{raw}"
+
+
+def test_ask_user_error_is_not_summarized_or_hidden():
+    raw = "ERROR: aborted"
+
+    out = reducer(
+        seed(),
+        AgentEventAction(
+            ToolResultEvent(
+                name="ask_user",
+                result=raw,
+                err="aborted",
+                duration_ms=1,
+            )
+        ),
+    )
+
+    assert out.transcript[-1].text == f"[error] Ask User: aborted\n{raw}"
+
+
+def test_evidence_result_remains_raw_and_expandable():
+    raw = "HTTP/1.1 200 OK\ncontent-type: text/plain\n\n" + "\n".join(
+        f"evidence line {i}" for i in range(40)
+    )
+
+    collapsed = reducer(
+        seed(),
+        AgentEventAction(
+            ToolResultEvent(
+                name="http",
+                result=raw,
+                duration_ms=20,
+            )
+        ),
+    )
+
+    entry = collapsed.transcript[-1]
+    assert entry.collapsible is True
+    assert entry.full_text is not None
+    assert "evidence line 39" in entry.full_text
+    assert "Ctrl-O to expand" in entry.text
+
+    expanded = reducer(collapsed, ExpandToolOutput())
+    assert "evidence line 39" in expanded.transcript[-1].text
 
 
 def test_confirm_finding_card():
