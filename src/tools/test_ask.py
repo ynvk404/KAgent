@@ -53,6 +53,17 @@ def test_description_explains_when_to_omit_or_use_options():
     assert "every choice merely leads to a free-text question" in description
 
 
+def test_description_distinguishes_blocking_tool_questions_from_conversation():
+    description = AskUserTool(CaptureAskPrompter()).description()
+
+    assert "blocks a concrete workflow" in description
+    assert "continue in the same turn" in description
+    assert "target URL" in description
+    assert "credential/session/token/OTP" in description
+    assert "normal assistant text" in description
+    assert "does not replace a runtime permission prompt" in description
+
+
 @pytest.mark.asyncio
 async def test_accepts_open_ended_question_without_options():
     class FreeTextPrompter(CaptureAskPrompter):

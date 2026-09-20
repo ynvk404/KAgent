@@ -1,6 +1,7 @@
 from __future__ import annotations
 from src.ui.widgets.banner import BannerData
 import json
+from typing import Any
 
 import pytest
 from src.ui.theme import ACCENT, DANGER, ERROR, MUTED, WARNING
@@ -10,6 +11,8 @@ from src.ui.core.state import (
     reducer,
     AgentEventAction,
     SetBusy,
+    SetAsk,
+    SetPerm,
     Clear,
     CycleTranscriptFilter,
     ExpandToolOutput,
@@ -18,6 +21,7 @@ from src.ui.core.state import (
 from src.agent.events import (
     ToolCallEvent,
     ToolResultEvent,
+    ErrorEvent,
     AssistantDeltaEvent,
     DoneEvent,
 )
@@ -186,6 +190,41 @@ def test_delta_changes_planning_to_answering():
     assert s.transcript[-1].text == "hello"
 
 
+def test_busy_turn_transitions_through_waiting_input_and_back_to_answering():
+    request: Any = object()
+    s = reducer(seed(), SetBusy(True))
+
+    s = reducer(s, SetAsk(request))
+    assert s.busy is True
+    assert s.phase == "waiting-user"
+
+    s = reducer(s, SetAsk(None))
+    assert s.busy is True
+    assert s.phase == "answering"
+
+
+def test_busy_turn_transitions_through_waiting_approval_and_back_to_tool():
+    request: Any = object()
+    s = reducer(seed(), SetBusy(True))
+
+    s = reducer(s, SetPerm(request))
+    assert s.busy is True
+    assert s.phase == "waiting-approval"
+
+    s = reducer(s, SetPerm(None))
+    assert s.busy is True
+    assert s.phase == "running-tool"
+
+
+def test_finishing_turn_returns_to_idle():
+    s = reducer(seed(), SetBusy(True))
+
+    s = reducer(s, SetBusy(False))
+
+    assert s.busy is False
+    assert s.phase == "idle"
+
+
 
 def test_streaming_finalized_by_done():
 
@@ -300,22 +339,77 @@ def test_invalid_ask_user_result_falls_back_to_raw_output():
     assert out.transcript[-1].text == f"[ok] Ask User (3ms)\n{raw}"
 
 
-def test_ask_user_error_is_not_summarized_or_hidden():
+def test_exact_ask_user_error_duplicate_is_rendered_once_without_mutating_event():
     raw = "ERROR: aborted"
+    event = ToolResultEvent(
+        name="ask_user",
+        result=raw,
+        err="aborted",
+        duration_ms=1,
+    )
+
+    out = reducer(
+        seed(),
+        AgentEventAction(event),
+    )
+
+    assert out.transcript[-1].text == "[error] Ask User: aborted"
+    assert event.err == "aborted"
+    assert event.result == raw
+
+
+@pytest.mark.parametrize(
+    ("name", "err"),
+    [
+        ("http", "permission denied by user for http"),
+        ("file_read", "unexpected tool exception"),
+        ("shell", "could not parse arguments: invalid JSON"),
+        ("browser", "tool blocked by active skills"),
+    ],
+)
+def test_exact_tool_error_duplicate_is_rendered_once(name, err):
+    event = ToolResultEvent(
+        name=name,
+        result=f"ERROR: {err}",
+        err=err,
+        duration_ms=4,
+    )
+
+    out = reducer(seed(), AgentEventAction(event))
+
+    entry = out.transcript[-1]
+    assert entry.text == f"[error] {name}: {err}"
+    assert entry.text.count(err) == 1
+    assert event.result == f"ERROR: {err}"
+    assert event.err == err
+
+
+def test_distinct_tool_error_body_is_preserved():
+    result = "ERROR: command failed\nstderr: detailed diagnostics"
 
     out = reducer(
         seed(),
         AgentEventAction(
             ToolResultEvent(
-                name="ask_user",
-                result=raw,
-                err="aborted",
-                duration_ms=1,
+                name="shell",
+                result=result,
+                err="command failed",
+                duration_ms=5,
             )
         ),
     )
 
-    assert out.transcript[-1].text == f"[error] Ask User: aborted\n{raw}"
+    assert out.transcript[-1].text == f"[error] shell: command failed\n{result}"
+
+
+def test_runtime_error_event_rendering_is_unchanged():
+    out = reducer(
+        seed(),
+        AgentEventAction(ErrorEvent(err=RuntimeError("provider unavailable"))),
+    )
+
+    assert out.transcript[-1].kind == "error"
+    assert out.transcript[-1].text == "provider unavailable"
 
 
 def test_evidence_result_remains_raw_and_expandable():

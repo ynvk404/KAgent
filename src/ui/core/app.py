@@ -89,7 +89,7 @@ from src.ui.utils.text_field import (
 )
 from src.ui.widgets.ask_modal import AskModal
 from src.ui.widgets.banner import BannerData
-from src.ui.widgets.input_box import InputBox
+from src.ui.widgets.input_box import DEFAULT_PROMPT, InputBox
 from src.ui.widgets.mention_menu import MentionMenu
 from src.ui.widgets.permission_modal import PermissionModal
 from src.ui.widgets.skills_modal import SkillsModal
@@ -205,6 +205,24 @@ def _input_style(name: str | None) -> str:
     return _INPUT_STYLE_MAP.get(name or "text", name or "")
 
 
+def _modal_text(modal) -> Text:
+    text = Text()
+    for i, line in enumerate(modal.render()):
+        if i > 0:
+            text.append("\n")
+        if isinstance(modal, TextInputModal) and line.startswith(DEFAULT_PROMPT):
+            text.append(DEFAULT_PROMPT, style=_input_style("prompt"))
+            value = line[len(DEFAULT_PROMPT):]
+            if value.endswith("▌"):
+                text.append(value[:-1], style=_input_style("text"))
+                text.append("▌", style=_input_style("cursor"))
+            else:
+                text.append(value, style=_input_style("text"))
+        else:
+            text.append(line)
+    return text
+
+
 def _input_selection_text(value: str, selection: Selection) -> str:
     lines = value.split("\n")
 
@@ -274,11 +292,17 @@ def transcript_entry_matches_filter(
 
 class KAgent(App):
 
-    CSS = """
-    Screen > .screen--selection {
+    CSS = f"""
+    Screen > .screen--selection {{
         background: #38BDF8 30%;
         color: transparent;
-    }
+    }}
+
+    #overlay.modal-panel {{
+        border-top: solid {MUTED};
+        border-bottom: solid {MUTED};
+        padding: 0 1;
+    }}
     """
 
     def __init__(self, props: AppProps):
@@ -844,9 +868,13 @@ class KAgent(App):
     def _sync_overlay(self) -> None:
 
         modal = self._get_active_modal()
+        self.overlay_static.set_class(
+            isinstance(modal, (TextInputModal, AskModal, PermissionModal)),
+            "modal-panel",
+        )
 
         if modal is not None:
-            self.overlay_static.update(Text("\n".join(modal.render())))
+            self.overlay_static.update(_modal_text(modal))
             self.overlay_static.display = True
         elif self.mention_matches:
             menu = MentionMenu(
@@ -1211,6 +1239,7 @@ class KAgent(App):
 
     def on_resize(self, event: events.Resize) -> None:
         self.cols = event.size.width
+        self._render_input()
         self.refresh()
 
     def on_mount(self) -> None:

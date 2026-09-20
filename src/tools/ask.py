@@ -28,7 +28,16 @@ class AskUserTool(Tool):
     def description(self) -> str:
         return (
             "Ask the user a question, optionally with multiple-choice options, "
-            "to disambiguate or get a decision. Omit options when collecting "
+            "to disambiguate or get a decision. Prefer this tool when missing "
+            "user-supplied information blocks a concrete workflow and execution "
+            "should continue in the same turn, such as a target URL, endpoint, "
+            "HTTP method, target identity, finite selection, workflow branch, "
+            "required credential/session/token/OTP, or explicit scope or "
+            "authorization checkpoint. Use normal assistant text for open-ended "
+            "discussion or clarification that does not need same-turn continuation. "
+            "This tool collects user intent, context, or inputs; it does not replace "
+            "a runtime permission prompt for a proposed tool action. Omit options "
+            "when collecting "
             "an arbitrary user-supplied value that cannot be enumerated in "
             "advance. Use options only for a genuinely finite set of known "
             "choices that materially changes the next step; do not add an "

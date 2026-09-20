@@ -21,6 +21,14 @@ UiPhase = Literal[
 ]
 
 SUPERMODE_COLOR = BOLD_DANGER
+SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+PROCESSING_PHASES: frozenset[UiPhase] = frozenset(
+    {"planning", "running-tool", "answering"}
+)
+WAITING_PHASES: frozenset[UiPhase] = frozenset(
+    {"waiting-approval", "waiting-user"}
+)
+WAITING_MARKER = "○"
 
 def format_elapsed(total_seconds: float) -> str:
     """mm:ss elapsed clock. 42 -> "0:42", 125 -> "2:05", 3700 -> "61:40"."""
@@ -86,9 +94,16 @@ def busy_line(p: StatusProps) -> Text:
         else ""
     )
 
+    indicator = (
+        SPINNER_FRAMES[int(p.elapsed_seconds or 0) % len(SPINNER_FRAMES)]
+        if p.phase in PROCESSING_PHASES
+        else WAITING_MARKER
+    )
+
     line = Text()
-    line.append("⠋ ", style=ACCENT)
-    line.append(f" {label}{clock} · Esc to cancel", style=MUTED)
+    line.append(f"{indicator} ", style=ACCENT)
+    cancel_hint = "" if p.phase in WAITING_PHASES else " · Esc to cancel"
+    line.append(f"{label}{clock}{cancel_hint}", style=MUTED)
     if p.active_skill:
         line.append(f" · skill: {p.active_skill}", style=MUTED)
     return line

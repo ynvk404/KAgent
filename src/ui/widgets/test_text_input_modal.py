@@ -98,7 +98,7 @@ def test_render_placeholder():
 
     assert "[API Key]" in frame
     assert "Enter API key" in frame
-    assert "Answer:\n> sk-...▌" in frame
+    assert "Answer:\n❯ sk-...▌" in frame
 
 
 def test_render_empty_input_has_visible_focused_answer_field():
@@ -108,7 +108,7 @@ def test_render_empty_input_has_visible_focused_answer_field():
 
     frame = "\n".join(modal.render())
 
-    assert "Answer:\n> ▌" in frame
+    assert "Answer:\n❯ ▌" in frame
 
 
 def test_render_plain_value():
@@ -120,7 +120,7 @@ def test_render_plain_value():
 
     frame = "\n".join(modal.render())
 
-    assert "Answer:\n> sk-live-key▌" in frame
+    assert "Answer:\n❯ sk-live-key▌" in frame
     assert "*******-key" not in frame
 
 
@@ -135,4 +135,4 @@ def test_render_masked_value_does_not_expose_secret():
     frame = "\n".join(modal.render())
 
     assert "sk-live-key" not in frame
-    assert f"> {'•' * len('sk-live-key')}▌" in frame
+    assert f"❯ {'•' * len('sk-live-key')}▌" in frame

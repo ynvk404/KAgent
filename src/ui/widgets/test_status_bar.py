@@ -4,7 +4,14 @@ from __future__ import annotations
 import pytest
 from textual.app import App, ComposeResult
 
-from .status_bar import StatusBar, StatusProps, busy_line, format_elapsed
+from .status_bar import (
+    SPINNER_FRAMES,
+    WAITING_MARKER,
+    StatusBar,
+    StatusProps,
+    busy_line,
+    format_elapsed,
+)
 from src.ui.theme import ACCENT, BOLD_SUCCESS, WARNING
 
 
@@ -75,6 +82,44 @@ class TestStatusBarBusyLine:
     def test_uses_accent_for_running_state(self) -> None:
         line = busy_line(props(busy=True, phase="planning"))
         assert line.spans[0].style == ACCENT
+
+    @pytest.mark.parametrize("phase", ["planning", "answering", "running-tool"])
+    def test_animates_active_processing_phases(self, phase: str) -> None:
+        first = busy_line(
+            props(busy=True, phase=phase, elapsed_seconds=0)
+        ).plain
+        second = busy_line(
+            props(busy=True, phase=phase, elapsed_seconds=1)
+        ).plain
+
+        assert first.startswith(SPINNER_FRAMES[0])
+        assert second.startswith(SPINNER_FRAMES[1])
+        assert first[0] != second[0]
+
+    @pytest.mark.parametrize(
+        ("phase", "label"),
+        [("waiting-user", "waiting input"), ("waiting-approval", "waiting approval")],
+    )
+    def test_waiting_phases_use_a_stable_marker(self, phase: str, label: str) -> None:
+        first = busy_line(
+            props(busy=True, phase=phase, elapsed_seconds=0)
+        ).plain
+        later = busy_line(
+            props(busy=True, phase=phase, elapsed_seconds=9)
+        ).plain
+
+        assert first.startswith(f"{WAITING_MARKER} {label}")
+        assert later.startswith(f"{WAITING_MARKER} {label}")
+        assert "Esc to cancel" not in first
+        assert "Esc to cancel" not in later
+
+    def test_idle_state_does_not_render_the_busy_indicator(self) -> None:
+        from .status_bar import idle_line
+
+        line = idle_line(props(busy=False, phase="idle")).plain
+
+        assert line.startswith("ready · idle")
+        assert not line.startswith((*SPINNER_FRAMES, WAITING_MARKER))
 
     def test_keeps_success_and_warning_semantics_distinct(self) -> None:
         from .status_bar import idle_line

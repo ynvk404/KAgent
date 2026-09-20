@@ -638,6 +638,16 @@ def _apply_agent_event(state: AppState, ev: AgentEvent) -> AppState:
 
             prefix = _tool_result_prefix(name, err, result, duration_ms, state.transcript)
 
+            if err and result == f"ERROR: {err}":
+                return replace(
+                    state,
+                    phase="answering",
+                    transcript=(
+                        *state.transcript,
+                        TranscriptEntry(kind="tool-result", text=prefix),
+                    ),
+                )
+
             if (
                 not err
                 and _is_shell_tool(name)

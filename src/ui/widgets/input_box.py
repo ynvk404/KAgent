@@ -17,6 +17,7 @@ class InputLine:
 
 
 CONTINUATION_INDENT = "  "
+DEFAULT_PROMPT = "❯ "
 
 
 class InputBox:
@@ -25,7 +26,7 @@ class InputBox:
         self,
         value: str,
         cursor: int,
-        prompt: str = "❯ ",
+        prompt: str = DEFAULT_PROMPT,
         placeholder: str | None = None,
         disabled: bool = False,
     ):

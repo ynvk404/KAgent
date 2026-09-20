@@ -2564,17 +2564,30 @@ async def test_allowed_tools_never_bypasses_independent_permission_denial():
     )
     agent.active_skills.add("shell-skill")
 
+    tool_call = ToolCall(
+        id="denied",
+        type="function",
+        function=FunctionCall(name="shell", arguments='{"command":"id"}'),
+    )
+    parsed = ParsedToolCall({"command": "id"}, '{"command":"id"}')
     result = await agent.run_parsed_tool_call(
-        ToolCall(
-            id="denied",
-            type="function",
-            function=FunctionCall(name="shell", arguments='{"command":"id"}'),
-        ),
-        ParsedToolCall({"command": "id"}, '{"command":"id"}'),
+        tool_call,
+        parsed,
         FakeSignal(),
     )
 
     assert "permission denied" in result.err_str
+    assert result.result == f"ERROR: {result.err_str}"
+
+    events = []
+    working = []
+    agent.record_tool_result(tool_call, parsed, result, events.append, working)
+
+    assert events[-1]["err"] == result.err_str
+    assert events[-1]["result"] == result.result
+    assert working[-1].role == "tool"
+    assert working[-1].content == result.result
+    assert agent.get_history()[-1].content == result.result
 
 
 def test_multiple_active_skills_use_union_for_permission_tool_capability():

@@ -162,3 +162,11 @@ def test_escape_key():
     resolve.assert_called_once_with(
         Decision.DENY
     )
+
+
+def test_footer_distinguishes_explicit_deny_from_escape_cancel():
+    modal = PermissionModal(make_req())
+
+    frame = "\n".join(modal.render())
+
+    assert "n deny · Esc cancel" in frame

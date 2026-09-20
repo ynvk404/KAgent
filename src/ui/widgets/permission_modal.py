@@ -130,7 +130,7 @@ class PermissionModal:
             "y allow once · "
             "a allow session · "
             "n deny · "
-            "Esc deny"
+            "Esc cancel"
         )
 
 

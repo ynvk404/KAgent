@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from textual import events
@@ -10,6 +10,8 @@ from textual.selection import Selection
 from textual.geometry import Offset
 
 from src.ui.bridges.ask_bridge import BridgedAskPrompter
+from src.ui.bridges.perm_bridge import BridgedPermissionRequest, BridgedPrompter
+from src.permission.permission import PermissionRequest
 from src.ask.ask import Option, Question
 from src.agent.agent import Agent
 from src.config.config import Backend
@@ -20,8 +22,9 @@ from src.ui.core.app import (
     KAgent,
     ProviderChange,
     _input_selection_text,
+    _modal_text,
 )
-from src.ui.core.state import SetAsk, SetBusy
+from src.ui.core.state import SetAsk, SetBusy, SetPerm
 from src.ui.widgets.banner import BannerData
 from src.ui.widgets.text_input_modal import TextInputRequest
 from src.ui.widgets.text_input_modal import TextInputModal
@@ -107,6 +110,120 @@ async def test_escape_aborts_an_active_tui_ask_modal_and_clears_it() -> None:
 
 
 @pytest.mark.asyncio
+async def test_escape_aborts_active_tui_permission_instead_of_denying() -> None:
+    app = make_app()
+    bridge = BridgedPrompter(lambda req: app.dispatch(SetPerm(req=req)))
+    app.run_abort_event = AbortEvent()
+    app.dispatch(SetBusy(busy=True))
+
+    pending = asyncio.create_task(
+        bridge.ask(
+            PermissionRequest(tool="shell", summary="Run command", detail="echo ok"),
+            app.run_abort_event,
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert app.state.pending_perm is not None
+    await app._process_key(events.Key("escape", None))
+
+    with pytest.raises(Exception, match="aborted"):
+        await pending
+    assert app.run_abort_event.is_set()
+    assert app.state.pending_perm is None
+
+
+@pytest.mark.asyncio
+async def test_escape_keeps_aborting_an_active_processing_turn() -> None:
+    app = make_app()
+    app.run_abort_event = AbortEvent()
+    app.dispatch(SetBusy(busy=True))
+
+    await app._process_key(events.Key("escape", None))
+
+    assert app.run_abort_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_input_editor_remains_visible_while_a_turn_is_active() -> None:
+    app = make_app()
+    app.overlay_static = cast(
+        Any,
+        SimpleNamespace(
+            update=lambda _: None,
+            display=False,
+            set_class=lambda *_: None,
+        ),
+    )
+    app.input_static = cast(Any, SimpleNamespace(display=True))
+    app.status_bar = cast(Any, SimpleNamespace(elapsed_seconds=None))
+
+    app.dispatch(SetBusy(busy=True))
+    KAgent._sync_overlay(app)
+    assert app.input_static.display is True
+
+    app.dispatch(SetBusy(busy=False))
+    KAgent._sync_overlay(app)
+    assert app.input_static.display is True
+
+
+def test_prompt_panels_receive_modal_separator_class() -> None:
+    app = make_app()
+    class_changes: list[tuple[bool, str]] = []
+    app.overlay_static = cast(
+        Any,
+        SimpleNamespace(
+            update=lambda _: None,
+            display=False,
+            set_class=lambda on, name: class_changes.append((on, name)),
+        ),
+    )
+    app.input_static = cast(Any, SimpleNamespace(display=True))
+    app.text_input = TextInputRequest(
+        header="Question",
+        question="What should be reset?",
+        placeholder=None,
+        resolve=lambda _: None,
+        reject=lambda _: None,
+    )
+
+    KAgent._sync_overlay(app)
+
+    assert class_changes[-1] == (True, "modal-panel")
+    assert app.overlay_static.display is True
+
+    app.text_input = None
+    app.dispatch(
+        SetPerm(
+            BridgedPermissionRequest(
+                tool="shell",
+                summary="Run command",
+                detail="echo ok",
+                resolve=lambda _: None,
+                reject=lambda _: None,
+            )
+        )
+    )
+    KAgent._sync_overlay(app)
+
+    assert class_changes[-1] == (True, "modal-panel")
+
+
+def test_resize_rebuilds_width_dependent_composer_rules() -> None:
+    app = make_app()
+    rendered: list[bool] = []
+    app_any = cast(Any, app)
+    app_any._render_input = lambda: rendered.append(True)
+    app_any.refresh = lambda: None
+    event = cast(Any, SimpleNamespace(size=SimpleNamespace(width=47)))
+
+    KAgent.on_resize(app, event)
+
+    assert app.cols == 47
+    assert rendered == [True]
+
+
+@pytest.mark.asyncio
 async def test_open_ended_ask_uses_text_input_and_returns_the_typed_answer() -> None:
     app = make_app()
     bridge = BridgedAskPrompter(lambda req: app.dispatch(SetAsk(req=req)))
@@ -115,13 +232,35 @@ async def test_open_ended_ask_uses_text_input_and_returns_the_typed_answer() -> 
     await asyncio.sleep(0)
     modal = app._get_active_modal()
     assert isinstance(modal, TextInputModal)
-    assert "Answer:\n> ▌" in "\n".join(modal.render())
+    assert "Answer:\n❯ ▌" in "\n".join(modal.render())
 
     await app._process_key(events.Key("c", "c"))
     await app._process_key(events.Key("enter", None))
 
     assert await pending == "c"
     assert app.state.pending_ask is None
+
+
+def test_free_text_modal_uses_composer_prompt_styles() -> None:
+    modal = TextInputModal(
+        TextInputRequest(
+            header="Question",
+            question="What should be reset?",
+            placeholder=None,
+            resolve=lambda _: None,
+            reject=lambda _: None,
+        )
+    )
+    modal.handle_key("x")
+
+    rendered = _modal_text(modal)
+
+    assert "Answer:\n❯ x▌" in rendered.plain
+    assert [span.style for span in rendered.spans] == [
+        "bold #38BDF8",
+        "#D6DEE8",
+        "bold #D6DEE8",
+    ]
 
 
 def test_input_selection_excludes_prompt_and_border() -> None:

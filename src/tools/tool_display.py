@@ -230,7 +230,7 @@ def format_ask_user_call(
     count_text = (
         f"{count} question"
         if count == 1
-        else f"{count} questions"
+        else f"{count} questions total"
     )
 
     if header and question:

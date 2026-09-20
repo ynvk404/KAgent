@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from src.ui.widgets.input_box import DEFAULT_PROMPT
+
 
 @dataclass(slots=True)
 class TextInputRequest:
@@ -76,7 +78,7 @@ class TextInputModal:
             self.req.question,
             "",
             "Answer:",
-            f"> {shown}▌",
+            f"{DEFAULT_PROMPT}{shown}▌",
             "",
             "type key · Enter submit · Esc cancel",
         ]

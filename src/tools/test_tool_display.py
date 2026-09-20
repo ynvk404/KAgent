@@ -212,7 +212,7 @@ def test_primary_ask_user():
             },
         )
         == (
-            "Scope · 2 questions · "
+            "Scope · 2 questions total · "
             "Confirming scope — I want to make sure "
             "I test the right surface. "
             "Which of these matches the engagement?"

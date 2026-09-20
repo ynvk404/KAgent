@@ -174,6 +174,24 @@ class Testbuild_system_prompt:
             assert "explicitly identify both the action and its object or scope" in prompt
             assert "not evidence that the proposal matches the user's intent" in prompt
 
+    def test_permission_denial_guidance_is_present_in_both_prompt_profiles(self):
+        guidance = (
+            "After an explicit permission denial, do not immediately re-request "
+            "equivalent authorization for the same concrete action unless the user "
+            "changes intent or the proposed action materially changes."
+        )
+
+        for profile in ("full", "compact"):
+            prompt = build_system_prompt(
+                BuildOptions(
+                    skills=Registry(),
+                    thinking_enabled=False,
+                    target=None,
+                    prompt_profile=profile,
+                )
+            )
+            assert guidance in prompt
+
     def test_carries_the_bug_bounty_owasp_vrt_portswigger_playbook(self):
         p = build_system_prompt(
             BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
