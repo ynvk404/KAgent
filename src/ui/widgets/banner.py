@@ -3,6 +3,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+
+from rich import box
+from rich.console import Group, RenderableType
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
 from src.ui.theme import ACCENT, ERROR, MUTED, SUCCESS, WARNING, PRIMARY
 
 
@@ -94,6 +101,56 @@ class Banner:
         self.width = max(
             20,
             width,
+        )
+
+    def _detail_lines(self) -> list[Text]:
+        """Build the welcome metadata used by the framed TUI header."""
+        data = self.data
+        pill = model_pill(data.tool_support)
+        context = f" · ctx {data.context_window}" if data.context_window else ""
+        provider = (
+            f"{data.provider} ({data.state})" if data.state else data.provider
+        )
+        fields = [
+            ("Provider", provider),
+            ("Model", f"{data.model}{context}"),
+        ]
+        if data.endpoint:
+            fields.append(("Endpoint", data.endpoint))
+        fields.append(("Path", data.cwd))
+        if data.status:
+            fields.append(("Status", data.status))
+
+        lines = [Text("Welcome to KAgent", style=f"bold {ACCENT}")]
+        for label, value in fields:
+            line = Text(f"{label}: ", style=MUTED)
+            line.append(value, style=PRIMARY)
+            if label == "Model" and pill:
+                line.append(f"  [{pill.text}]", style=pill.color)
+            lines.append(line)
+        return lines
+
+    def render_panel(self) -> RenderableType:
+        """Render the welcome block as one compact, responsive Rich panel."""
+        details = Group(*self._detail_lines())
+        logo = Text("\n".join(LOGO), style=ACCENT, no_wrap=True)
+
+        if self.width >= 52:
+            content = Table.grid(padding=(0, 2), expand=True)
+            content.add_column(width=max(len(row) for row in LOGO), no_wrap=True)
+            content.add_column(ratio=1)
+            content.add_row(logo, details)
+        else:
+            content = Group(logo, Text(""), details)
+
+        return Panel(
+            content,
+            title=Text(" Overview ", style=ACCENT),
+            title_align="left",
+            border_style=MUTED,
+            box=box.ROUNDED,
+            padding=(0, 1),
+            expand=True,
         )
 
 

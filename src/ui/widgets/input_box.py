@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.ui.core.terminal_size import get_terminal_size
 from src.ui.utils.text_field import position_of
 
 @dataclass(frozen=True, slots=True)
@@ -36,16 +35,8 @@ class InputBox:
         self.placeholder = placeholder
         self.disabled = disabled
 
-    def _rule(self) -> InputLine:
-        columns, _rows = get_terminal_size()
-        return InputLine(
-            [InputSegment("─" * max(1, columns), "gray")]
-        )
-
     def render(self) -> list[InputLine]:
-        rule = self._rule()
-
-        lines: list[InputLine] = [rule]
+        lines: list[InputLine] = []
 
         is_empty = len(self.value) == 0
 
@@ -58,7 +49,6 @@ class InputBox:
                     ]
                 )
             )
-            lines.append(rule)
             return lines
 
         if is_empty and self.placeholder:
@@ -71,7 +61,6 @@ class InputBox:
                 segments.append(InputSegment("▌", "cursor"))
 
             lines.append(InputLine(segments))
-            lines.append(rule)
             return lines
 
         text_lines = self.value.split("\n")
@@ -111,5 +100,4 @@ class InputBox:
 
             lines.append(InputLine(segments))
 
-        lines.append(rule)
         return lines

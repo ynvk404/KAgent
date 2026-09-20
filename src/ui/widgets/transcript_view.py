@@ -17,6 +17,17 @@ class TranscriptView(RichLog):
     TranscriptView {
         width: 100%;
         height: 1fr;
+        overflow-y: scroll;
+        overflow-x: hidden;
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 0;
+        scrollbar-color: #7E8A9A;
+        scrollbar-color-hover: #38BDF8;
+        scrollbar-color-active: #38BDF8;
+        scrollbar-background: transparent;
+        scrollbar-background-hover: transparent;
+        scrollbar-background-active: transparent;
+        scrollbar-gutter: auto;
     }
     """
 
@@ -51,9 +62,9 @@ class TranscriptView(RichLog):
 
     @property
     def transcript_content_width(self) -> int:
-        """Width available to transcript rows, reserving the vertical scrollbar."""
+        """Width available to transcript rows and the native scrollbar."""
         content_width = self.content_region.width or self.size.width
-        return max(1, content_width - self.styles.scrollbar_size_vertical)
+        return max(1, content_width - self.scrollbar_size_vertical)
 
     def render_line(self, y: int):
         scroll_x, scroll_y = self.scroll_offset

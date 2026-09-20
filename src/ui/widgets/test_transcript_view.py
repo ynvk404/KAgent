@@ -104,7 +104,7 @@ async def test_four_column_table_is_laid_out_at_transcript_content_width() -> No
         table_lines = [line.text for line in app.transcript.lines if line.text]
         body_lines = [line for line in table_lines if "│" in line]
 
-        assert width == 58
+        assert width == 59
         assert max(map(len, table_lines)) <= width
         assert all(line.startswith("  ") for line in table_lines)
         assert all(line.endswith(("╮", "│", "┤", "╯")) for line in table_lines)
@@ -136,7 +136,7 @@ async def test_two_column_table_still_fits_without_secondary_wrapping() -> None:
 async def test_new_table_uses_content_width_after_terminal_resize() -> None:
     app = _TranscriptHarness()
     async with app.run_test(size=(80, 12)) as pilot:
-        assert app.transcript.transcript_content_width == 78
+        assert app.transcript.transcript_content_width == 79
         await pilot.resize_terminal(50, 12)
         app.transcript.clear()
         app.transcript._write_entry(
@@ -147,9 +147,21 @@ async def test_new_table_uses_content_width_after_terminal_resize() -> None:
         width = app.transcript.transcript_content_width
         table_lines = [line.text for line in app.transcript.lines if line.text]
 
-        assert width == 48
+        assert width == 49
         assert max(map(len, table_lines)) <= width
         assert all(line.startswith("  ") for line in table_lines)
+
+
+@pytest.mark.asyncio
+async def test_scrollbar_stays_narrow_to_preserve_stable_table_width() -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(40, 8)) as pilot:
+        await pilot.pause()
+
+        assert app.transcript.show_vertical_scrollbar is True
+        assert app.transcript.scrollbar_size_vertical == 1
+        assert app.transcript.transcript_content_width == 39
+        assert app.transcript.styles.scrollbar_color.hex == "#7E8A9A"
 
 
 @pytest.mark.asyncio

@@ -120,10 +120,12 @@ class Transcript:
         out: IO[str] | None = None,
         width: Callable[[], int] | None = None,
         clear: Callable[[], object] | None = None,
+        write_banner: Callable[[BannerData], None] | None = None,
     ) -> None:
         self._out: IO[str] = out if out is not None else sys.stdout
         self._width = width
         self._clear = clear
+        self._write_banner_panel = write_banner
         self._printed_count = 0
         self._last_generation: object | None = None
         self._banner_printed = False
@@ -156,6 +158,9 @@ class Transcript:
         self._printed_count = len(committed)
 
     def _write_banner(self, banner_data: BannerData, columns: int) -> None:
+        if self._write_banner_panel is not None:
+            self._write_banner_panel(banner_data)
+            return
         for line in Banner(banner_data, width=columns).render():
             self._out.write(line.text + "\n")
         self._out.write("\n")

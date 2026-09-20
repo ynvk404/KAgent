@@ -1,4 +1,8 @@
 
+from io import StringIO
+
+from rich.console import Console
+
 from src.ui.widgets.banner import (
     Banner,
     BannerData,
@@ -234,3 +238,30 @@ def test_banner_line_has_color():
     )
 
     assert lines[0].color == ACCENT
+
+
+def test_rich_banner_panel_groups_all_header_content_at_narrow_width():
+    banner = Banner(
+        BannerData(
+            provider="openrouter",
+            model="deepseek",
+            endpoint="https://openrouter.ai",
+            cwd="/workspace/project",
+            status="Session abc123",
+        ),
+        width=38,
+    )
+    output = StringIO()
+    console = Console(file=output, width=38, color_system=None)
+
+    console.print(banner.render_panel())
+    rendered = output.getvalue()
+
+    assert "Welcome / Header" in rendered
+    assert "Welcome to KAgent" in rendered
+    assert "Provider: openrouter" in rendered
+    assert "Model: deepseek" in rendered
+    assert "Endpoint:" in rendered
+    assert "Path: /workspace/project" in rendered
+    assert "Status: Session abc123" in rendered
+    assert max(len(line) for line in rendered.splitlines()) <= 38

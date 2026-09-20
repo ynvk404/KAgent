@@ -167,6 +167,8 @@ class StatusBar(Widget):
     StatusBar {
         width: 100%;
         height: 1;
+        padding: 0 1;
+        background: #7E8A9A 12%;
     }
     """
 

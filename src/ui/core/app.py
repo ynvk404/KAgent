@@ -13,6 +13,7 @@ from typing import Any, TypedDict, cast, IO
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual import events
+from textual.containers import Vertical
 from textual.selection import Selection
 from textual.widgets import RichLog, Static
 
@@ -88,7 +89,7 @@ from src.ui.utils.text_field import (
     strip_paste_markers,
 )
 from src.ui.widgets.ask_modal import AskModal
-from src.ui.widgets.banner import BannerData
+from src.ui.widgets.banner import Banner, BannerData
 from src.ui.widgets.input_box import DEFAULT_PROMPT, InputBox
 from src.ui.widgets.mention_menu import MentionMenu
 from src.ui.widgets.permission_modal import PermissionModal
@@ -200,6 +201,10 @@ class _RichLogWriter:
         )
         return len(s)
 
+    def write_banner(self, data: BannerData) -> None:
+        width = self.content_width()
+        self._log.write(Banner(data, width=width).render_panel(), width=width)
+
 _INPUT_STYLE_MAP: dict[str, str] = {
     "gray": MUTED,
     "prompt": f"bold {ACCENT}",
@@ -306,9 +311,24 @@ class KAgent(App):
         color: transparent;
     }}
 
+    #transcript-panel {{
+        width: 100%;
+        height: 1fr;
+        border: round {MUTED};
+        border-title-color: {ACCENT};
+        padding: 0 1;
+    }}
+
+    #input-box {{
+        width: 100%;
+        border: round {MUTED};
+        border-title-color: {ACCENT};
+        padding: 0 1;
+    }}
+
     #overlay.modal-panel {{
-        border-top: solid {MUTED};
-        border-bottom: solid {MUTED};
+        border: round {MUTED};
+        border-title-color: {ACCENT};
         padding: 0 1;
     }}
     """
@@ -403,23 +423,28 @@ class KAgent(App):
 
 
     def compose(self) -> ComposeResult:
+        self.transcript_panel = Vertical(id="transcript-panel")
+        self.transcript_panel.border_title = "Transcript"
+        with self.transcript_panel:
+            self.transcript_log = TranscriptView(auto_scroll=True)
+            yield self.transcript_log
 
-        self.transcript_log = TranscriptView(auto_scroll=True)
-        yield self.transcript_log
+            self.live_entry_static = Static(id="live-entry")
+            yield self.live_entry_static
+
         rich_log_writer = _RichLogWriter(self.transcript_log)
         self.transcript_writer = Transcript(
             out=cast(IO[str], rich_log_writer),
             width=rich_log_writer.content_width,
             clear=self.transcript_log.clear,
+            write_banner=rich_log_writer.write_banner,
         )
-
-        self.live_entry_static = Static(id="live-entry")
-        yield self.live_entry_static
 
         self.overlay_static = Static(id="overlay")
         yield self.overlay_static
 
         self.input_static = _InputStatic()
+        self.input_static.border_title = "Input"
         yield self.input_static
 
         self.status_bar = StatusBar()
@@ -881,14 +906,24 @@ class KAgent(App):
 
         modal = self._get_active_modal()
         self.overlay_static.set_class(
-            isinstance(modal, (TextInputModal, AskModal, PermissionModal)),
+            isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal)),
             "modal-panel",
         )
 
         if modal is not None:
+            self.overlay_static.border_title = (
+                "Permission"
+                if isinstance(modal, PermissionModal)
+                else "Ask User"
+                if isinstance(modal, AskModal)
+                else "Input"
+                if isinstance(modal, TextInputModal)
+                else "Skills"
+            )
             self.overlay_static.update(_modal_text(modal))
             self.overlay_static.display = True
         elif self.mention_matches:
+            self.overlay_static.border_title = ""
             menu = MentionMenu(
                 cwd=(self.mention_ctx or {}).get("dir", ""),
                 candidates=self.mention_matches,
@@ -897,10 +932,12 @@ class KAgent(App):
             self.overlay_static.update(self._menu_lines_to_text(menu.render()))
             self.overlay_static.display = True
         elif self.slash_matches:
+            self.overlay_static.border_title = ""
             menu = SlashMenu(items=self.slash_matches, selected=self.slash_idx)
             self.overlay_static.update(self._menu_lines_to_text(menu.render()))
             self.overlay_static.display = True
         else:
+            self.overlay_static.border_title = ""
             self.overlay_static.update("")
             self.overlay_static.display = False
 
