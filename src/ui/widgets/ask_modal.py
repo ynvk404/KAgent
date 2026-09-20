@@ -12,6 +12,8 @@ class AskModal:
     Keys:
         ↑ / up       previous
         ↓ / down     next
+        Shift+Tab    previous
+        Tab          next
         Enter        select
         1-9          jump
         Esc          cancel
@@ -41,13 +43,13 @@ class AskModal:
         if not options:
             return
 
-        if key in ("up", "arrowup"):
+        if key in ("up", "arrowup", "shift+tab"):
             self.idx = (
                 self.idx - 1 + len(options)
             ) % len(options)
             return
 
-        if key in ("down", "arrowdown"):
+        if key in ("down", "arrowdown", "tab"):
             self.idx = (
                 self.idx + 1
             ) % len(options)
@@ -107,7 +109,7 @@ class AskModal:
 
         lines.append("")
         lines.append(
-            "↑↓ select · Enter pick · Esc cancel"
+            "↑↓/Tab select · Enter pick · Esc cancel"
         )
 
         return lines

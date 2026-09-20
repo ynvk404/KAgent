@@ -84,6 +84,23 @@ def test_up_arrow_wraps():
     assert "› Cloud" in frame
 
 
+def test_tab_and_shift_tab_navigate_without_resolving():
+    resolve = Mock()
+    modal = AskModal(make_req(resolve=resolve))
+
+    modal.handle_key("tab")
+    assert modal.idx == 1
+    resolve.assert_not_called()
+
+    modal.handle_key("shift+tab")
+    assert modal.idx == 0
+    resolve.assert_not_called()
+
+    modal.handle_key("tab")
+    modal.handle_key("enter")
+    resolve.assert_called_once_with("Remote")
+
+
 def test_enter_resolves_selected_option():
 
     resolve = Mock()

@@ -199,7 +199,7 @@ def test_help_groups_commands_and_keeps_runtime_summary_compact():
     assert "/memory [add <text>|list|forget <text>|clear|intel]  manage saved/session memory" in text
     assert "/model <id|list>" in text
     assert "/skills [<name>|enable|disable <name>|new <name>]    list, toggle, or create skills" in text
-    assert "/ then Tab" in text
+    assert "/ then Tab, Tab" in text
     assert "browser_capture_*" not in text
     assert "coverage(action=" not in text
     for item in SLASH_ITEMS:

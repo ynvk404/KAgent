@@ -79,6 +79,7 @@ class FirstRunPicker:
         if key in (
             "up",
             "arrowup",
+            "shift+tab",
         ):
             self.idx = (
                 self.idx - 1
@@ -91,6 +92,7 @@ class FirstRunPicker:
         if key in (
             "down",
             "arrowdown",
+            "tab",
         ):
             self.idx = (
                 self.idx + 1
@@ -167,7 +169,7 @@ class FirstRunPicker:
 
 
         lines.append(
-            "↑↓ select · Enter pick · "
+            "↑↓/Tab select · Enter pick · "
             "Esc cancel · changeable later via config"
         )
 

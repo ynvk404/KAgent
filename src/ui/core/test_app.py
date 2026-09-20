@@ -47,7 +47,10 @@ def make_app() -> KAgent:
 
     app = KAgent(
         AppProps(
-            agent=cast(Agent, SimpleNamespace()),
+            agent=cast(
+                Agent,
+                SimpleNamespace(skills=SimpleNamespace(list_enabled=lambda: [])),
+            ),
             banner_data=BannerData(provider="test", model="test", cwd="."),
             parent_signal=asyncio.Event(),
             read_config=read_config,
@@ -68,6 +71,72 @@ async def test_bracketed_paste_reaches_custom_input() -> None:
 
     assert app.input.value == "[Pasted text #1 +2 lines, 10 chars]"
     assert app.pasted_text == {1: "alpha\nbeta"}
+
+
+@pytest.mark.asyncio
+async def test_slash_tab_completes_then_executes_on_second_tab() -> None:
+    app = make_app()
+    submitted: list[str] = []
+
+    def submit(value: str) -> None:
+        submitted.append(value)
+
+    app.submit = submit
+    app.input.set_value("/pro")
+    app._recompute_menus()
+
+    await app.on_key(events.Key("tab", None))
+
+    assert app.input.value == "/provider"
+    assert submitted == []
+
+    await app.on_key(events.Key("tab", None))
+    await app.on_key(events.Key("tab", None))
+
+    assert submitted == ["/provider"]
+
+
+@pytest.mark.asyncio
+async def test_slash_tab_completion_resets_after_edit_or_selection_change() -> None:
+    app = make_app()
+    submitted: list[str] = []
+
+    def submit(value: str) -> None:
+        submitted.append(value)
+
+    app.submit = submit
+    app.input.set_value("/pro")
+    app._recompute_menus()
+
+    await app.on_key(events.Key("tab", None))
+    await app.on_key(events.Key("x", "x"))
+    await app.on_key(events.Key("tab", None))
+
+    assert submitted == []
+
+    app.input.set_value("/")
+    app._recompute_menus()
+    app._slash_tab_completion = "/help"
+    await app._process_key(events.Key("down", None))
+
+    assert app._slash_tab_completion is None
+
+
+@pytest.mark.asyncio
+async def test_slash_enter_executes_completed_command_normally() -> None:
+    app = make_app()
+    submitted: list[str] = []
+
+    def submit(value: str) -> None:
+        submitted.append(value)
+
+    app.submit = submit
+    app.input.set_value("/provider")
+    app._recompute_menus()
+
+    await app.on_key(events.Key("enter", None))
+
+    assert submitted == ["/provider"]
 
 
 @pytest.mark.asyncio

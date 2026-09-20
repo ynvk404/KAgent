@@ -113,6 +113,19 @@ def test_up_wraps():
     assert modal.idx == 2
 
 
+def test_tab_and_shift_tab_navigate_without_toggling():
+    agent = FakeAgent()
+    modal = SkillsModal(agent, Mock())
+
+    modal.handle_key("tab")
+    assert modal.idx == 1
+    agent.set_skill_enabled.assert_not_called()
+
+    modal.handle_key("shift+tab")
+    assert modal.idx == 0
+    agent.set_skill_enabled.assert_not_called()
+
+
 def test_number_select():
 
     agent = FakeAgent()

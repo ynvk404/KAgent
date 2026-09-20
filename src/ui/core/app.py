@@ -389,6 +389,7 @@ class KAgent(App):
         self.mention_matches: list = []
         self.mention_ctx: dict | None = None
         self._prev_slash_match_count: int | None = None
+        self._slash_tab_completion: str | None = None
         self._prev_mention_match_count: int | None = None
         self.run_task: asyncio.Task | None = None
         self.run_abort_event: AbortEvent | None = None
@@ -602,6 +603,8 @@ class KAgent(App):
 
         if self.input.value != prev_value:
             self._recompute_menus()
+            if self.input.value.strip() != self._slash_tab_completion:
+                self._slash_tab_completion = None
 
         self._sync_overlay()
         self._render_input()
@@ -625,6 +628,7 @@ class KAgent(App):
             self._insert_pasted_text(event.text)
             if self.input.value != previous_value:
                 self._recompute_menus()
+                self._slash_tab_completion = None
         else:
             return
 
@@ -687,19 +691,32 @@ class KAgent(App):
         if len(self.slash_matches) > 0:
             if key == "up":
                 self.slash_idx = (self.slash_idx - 1 + len(self.slash_matches)) % len(self.slash_matches)
+                self._slash_tab_completion = None
                 return
             if key == "down":
                 self.slash_idx = (self.slash_idx + 1) % len(self.slash_matches)
+                self._slash_tab_completion = None
                 return
             if key == "tab":
                 picked = self.slash_matches[self.slash_idx] if self.slash_idx < len(self.slash_matches) else None
                 if picked:
+                    completed = self.input.value.strip()
+                    if (
+                        self._slash_tab_completion == picked.name
+                        and completed == picked.name
+                    ):
+                        self._slash_tab_completion = None
+                        self.input.clear()
+                        self.submit(completed)
+                        return
                     self.input.set_value(f"{picked.name} " if picked.args else picked.name)
+                    self._slash_tab_completion = picked.name
                 return
             if key == "enter":
                 picked = self.slash_matches[self.slash_idx] if self.slash_idx < len(self.slash_matches) else None
                 typed = self.input.value.strip()
                 if picked and typed == picked.name:
+                    self._slash_tab_completion = None
                     self.input.clear()
                     self.submit(typed)
                     return
@@ -707,6 +724,7 @@ class KAgent(App):
                     self.input.set_value(f"{picked.name} " if picked.args else picked.name)
                     return
             if key == "escape":
+                self._slash_tab_completion = None
                 self.input.clear()
                 return
 

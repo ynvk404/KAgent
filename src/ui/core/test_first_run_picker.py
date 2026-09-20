@@ -50,6 +50,18 @@ def test_up_wraps():
     assert picker.idx == len(OPTIONS) - 1
 
 
+def test_tab_and_shift_tab_navigate_without_picking():
+    picker, picked, _, _ = make_picker()
+
+    picker.handle_key("tab")
+    assert picker.idx == 1
+    assert picked == []
+
+    picker.handle_key("shift+tab")
+    assert picker.idx == 0
+    assert picked == []
+
+
 def test_enter_picks_minimal():
 
     picker, picked, _, _ = make_picker()

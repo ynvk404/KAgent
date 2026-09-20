@@ -160,7 +160,7 @@ class SkillsModal:
             return
 
 
-        if key in ("up", "arrowup"):
+        if key in ("up", "arrowup", "shift+tab"):
 
             self.idx = (
                 self.idx - 1
@@ -169,7 +169,7 @@ class SkillsModal:
             return
 
 
-        if key in ("down", "arrowdown"):
+        if key in ("down", "arrowdown", "tab"):
 
             self.idx = (
                 self.idx + 1
@@ -290,7 +290,7 @@ class SkillsModal:
         lines.extend([
             "",
             (
-                "↑↓ select · Space/Enter toggle · "
+                "↑↓/Tab select · Space/Enter toggle · "
                 "a enable all · d disable all · "
                 "Esc/q close"
             )

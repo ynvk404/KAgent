@@ -23,7 +23,7 @@ _DOMAIN_LABEL_RE = re.compile(
 
 
 _KEYBINDINGS: list[tuple[str, str]] = [
-    ("/ then Tab", "open and complete slash commands"),
+    ("/ then Tab, Tab", "complete a slash command, then run it"),
     ("@<file> then Tab", "attach a file to the next turn"),
     ("#<text> / #!<text>", "save project / personal memory"),
     (
