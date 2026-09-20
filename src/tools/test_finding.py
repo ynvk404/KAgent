@@ -97,6 +97,7 @@ def test_metadata(tmp_path):
     tool, _ = _tool(tmp_path)
 
     assert tool.name() == "confirm_finding"
+    assert tool.context_reduction_policy() == "preserve"
     assert isinstance(tool.description(), str) and tool.description()
     assert tool.requires_permission() is False
 
@@ -171,6 +172,7 @@ async def test_run_persists_finding_and_notifies(tmp_path):
     assert finding.severity == "high"
     assert finding.slug == "reflected-xss-in-search"
     assert path.endswith(".md")
+    assert path in result
 
 
 @pytest.mark.asyncio

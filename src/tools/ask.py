@@ -104,6 +104,10 @@ class AskUserTool(Tool):
     def requires_permission(self) -> bool:
         return False
 
+    def context_reduction_policy(self) -> str:
+        # Answers carry user intent needed by the remainder of the same turn.
+        return "preserve"
+
     def summarize(
         self,
         args: dict,

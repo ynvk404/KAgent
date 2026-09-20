@@ -94,6 +94,10 @@ class WorkflowTool(Tool):
     def requires_permission(self) -> bool:
         return False
 
+    def context_reduction_policy(self) -> str:
+        """Keep same-turn workflow mutations intact for the next LLM call."""
+        return "preserve"
+
     async def run(
         self,
         args: dict[str, Any],

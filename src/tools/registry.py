@@ -17,6 +17,8 @@ from .types import (
     PermissionHintTool,
     ActionPermissionTool,
     ArgumentValidatingTool,
+    ContextReductionPolicy,
+    ContextReductionTool,
 )
 from src.llm.types import ToolSpec
 
@@ -40,6 +42,15 @@ class Registry:
         return sorted(
             self.tools.keys()
         )
+
+    def context_reduction_policy(self, name: str | None) -> ContextReductionPolicy:
+        tool = self.tools.get(name) if name is not None else None
+        if (
+            isinstance(tool, ContextReductionTool)
+            and tool.context_reduction_policy() == "preserve"
+        ):
+            return "preserve"
+        return "adaptive"
 
     def as_llm_tools(
         self,

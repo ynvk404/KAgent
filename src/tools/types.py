@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol, TypedDict, runtime_checkable
+from typing import Any, Literal, Optional, Protocol, TypedDict, runtime_checkable
+
+ContextReductionPolicy = Literal["adaptive", "preserve"]
 
 class PermissionHints(TypedDict, total=False):
     noSessionCache: bool
@@ -62,6 +64,14 @@ class ArgumentValidatingTool(Protocol):
     """Optional tool-side validation that runs before permission is requested."""
 
     def validate_args(self, args: dict[str, Any]) -> None:
+        ...
+
+
+@runtime_checkable
+class ContextReductionTool(Protocol):
+    """Optional policy for tool results copied into the LLM working context."""
+
+    def context_reduction_policy(self) -> ContextReductionPolicy:
         ...
 
 def arg_string(

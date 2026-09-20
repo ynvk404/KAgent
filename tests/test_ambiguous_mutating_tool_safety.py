@@ -120,7 +120,20 @@ async def test_coverage_clear_is_gated_but_mark_remains_autonomous(tmp_path):
     assert len(denied.requests) == 1
 
     allowed = RecordingPrompter(Decision.ALLOW_ONCE)
-    assert await registry.execute("coverage", {"action": "clear"}, None, allowed) == "cleared."
+
+    result = await registry.execute(
+        "coverage",
+        {"action": "clear"},
+        None,
+        allowed,
+    )
+
+    payload = json.loads(result)
+
+    assert payload["ok"] is True
+    assert payload["action"] == "clear"
+    assert payload["cleared"] is True
+
     assert store.entries == {}
     assert len(allowed.requests) == 1
 

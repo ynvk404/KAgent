@@ -43,6 +43,12 @@ def test_schema_advertises_options_for_each_question():
     assert "free text" in options_description
 
 
+def test_ask_user_preserves_user_control_answers_in_working_context():
+    tool = AskUserTool(CaptureAskPrompter())
+
+    assert tool.context_reduction_policy() == "preserve"
+
+
 def test_description_explains_when_to_omit_or_use_options():
     description = AskUserTool(CaptureAskPrompter()).description()
 

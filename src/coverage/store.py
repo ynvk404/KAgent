@@ -224,7 +224,12 @@ class CoverageStore:
 
         rows = sorted(
             self.entries.values(),
-            key=lambda e: e.lastSeen,
+            key=lambda e: (
+                e.lastSeen,
+                e.endpoint,
+                e.param,
+                e.vulnClass,
+            ),
         )
 
         result = []
@@ -256,7 +261,7 @@ class CoverageStore:
 
         await self.load()
 
-        out: list[dict[str, str]] = []
+        out: dict[tuple[str, str, str], dict[str, str]] = {}
 
         for candidate in candidates:
 
@@ -283,15 +288,13 @@ class CoverageStore:
                 )
 
                 if key not in self.entries:
-                    out.append(
-                        {
-                            "endpoint": ep,
-                            "param": param,
-                            "vulnClass": vuln,
-                        }
-                    )
+                    out[(ep, param, vuln)] = {
+                        "endpoint": ep,
+                        "param": param,
+                        "vulnClass": vuln,
+                    }
 
-        return out
+        return [out[key] for key in sorted(out)]
 
 
     async def summary(self) -> CoverageSummary:

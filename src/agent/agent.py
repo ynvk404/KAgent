@@ -1252,6 +1252,11 @@ class Agent:
                 str(entries),
                 "",
                 (
+                    "Coverage collection results are paginated. "
+                    "complete=false means the displayed page is not the full "
+                    "matching set; has_more/next_cursor describe continuation."
+                ),
+                (
                     "Use this coverage state to choose next tests. "
                     "Prefer untested endpoint/parameter/vulnerability-class "
                     "combinations. Do not repeat entries already marked "
@@ -1613,6 +1618,12 @@ class Agent:
             if msg.role == "tool":
                 tool_indexes.append(i)
 
+        def is_adaptive_tool_result(index: int) -> bool:
+            return (
+                self.tools.context_reduction_policy(working[index].name)
+                == "adaptive"
+            )
+
         elidable = tool_indexes[
             : max(
                 0,
@@ -1627,6 +1638,9 @@ class Agent:
 
             if size() <= target_tokens:
                 break
+
+            if not is_adaptive_tool_result(i):
+                continue
 
             msg = working[i]
 
@@ -1656,7 +1670,8 @@ class Agent:
             candidates = [
                 i
                 for i in tool_indexes
-                if len(working[i].content) > MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR
+                if is_adaptive_tool_result(i)
+                and len(working[i].content) > MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR
                 and MIDTURN_ELISION_PREFIX not in working[i].content
             ]
 

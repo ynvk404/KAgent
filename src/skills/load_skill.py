@@ -50,6 +50,11 @@ class LoadSkillTool:
     def requires_permission(self) -> bool:
         return False
 
+    def context_reduction_policy(self) -> str:
+        # The result is the full playbook, not the short acknowledgment shown
+        # by the transcript renderer.
+        return "preserve"
+
     async def run(
         self,
         args: dict[str, Any],

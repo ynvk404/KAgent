@@ -191,6 +191,12 @@ async def test_load_skill_normal():
     assert "# alpha body" in result
     assert "${SKILL_DIR}" not in result
 
+
+def test_load_skill_preserves_full_playbook_in_working_context():
+    _, reg = make_tmp_skills()
+
+    assert LoadSkillTool(reg).context_reduction_policy() == "preserve"
+
 @pytest.mark.asyncio
 async def test_load_skill_disabled():
     _, reg = make_tmp_skills()

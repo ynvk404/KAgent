@@ -10,6 +10,12 @@ from src.tools.workflow import DEFAULT_LIST_LIMIT, WorkflowTool
 from src.workflow.state import Candidate, WorkflowState
 
 
+def test_workflow_preserves_same_turn_result_context():
+    tool = WorkflowTool(WorkflowState())
+
+    assert tool.context_reduction_policy() == "preserve"
+
+
 @pytest.mark.asyncio
 async def test_structured_candidate_to_validation_handoff_and_dedup():
     state = WorkflowState()

@@ -129,6 +129,10 @@ class ConfirmFindingTool:
     def requires_permission(self) -> bool:
         return False
 
+    def context_reduction_policy(self) -> str:
+        """Preserve persistence success/failure and the final report path."""
+        return "preserve"
+
     def summarize(self, args: dict) -> dict:
         title = arg_string(args, "title")
         severity = arg_string(args, "severity")

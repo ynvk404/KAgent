@@ -10,6 +10,7 @@ import tempfile
 import shutil
 import tempfile
 import asyncio
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from src.tools.types import Tool
@@ -34,7 +35,8 @@ from src.agent.agent import (
     minimum_compactable_history_tokens,
 )
 from src.agent.system_prompt import PromptProfile
-from src.coverage.store import CoverageStore
+from src.coverage.store import CoverageEntry, CoverageStore
+from src.findings.store import Store as FindingsStore
 from src.intelligence.store import IntelligenceStore
 from src.llm.client import Client
 from src.llm.types import (
@@ -50,7 +52,9 @@ from src.target.target import Target
 from src.tools.registry import Registry as ToolRegistry
 from src.tools.http import HTTPTool
 from src.tools.coverage import CoverageTool
-from src.workflow.state import Candidate, ValidationResult
+from src.tools.finding import ConfirmFindingTool
+from src.tools.workflow import WorkflowTool
+from src.workflow.state import Candidate, ValidationResult, WorkflowState
 
 from src.session.store import Store, new_id
 
@@ -3737,6 +3741,11 @@ class BigErrorTool(BigOutputTool):
         raise RuntimeError("e" * self.size)
 
 
+class PreservedBigOutputTool(BigOutputTool):
+    def context_reduction_policy(self) -> str:
+        return "preserve"
+
+
 def tool_content(request: ChatRequest, call_id: str) -> str:
     return next(
         message.content
@@ -3805,6 +3814,24 @@ async def test_large_immediate_result_is_bounded_only_for_synthesis():
     assert MIDTURN_ELISION_PREFIX in bounded
     assert len(bounded) > MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR
     assert len(raw) - len(bounded) < 10_000
+
+
+@pytest.mark.asyncio
+async def test_preserved_semantic_result_reaches_synthesis_and_history_raw():
+    tool = PreservedBigOutputTool(12_000)
+    agent, client = make_big_output_agent(12_000, tool=tool)
+    collector = collect()
+    agent.set_auto_compact_threshold(agent.approx_tokens() + 1_000)
+
+    await agent.run("go", FakeSignal(), collector["sink"])
+
+    assert len(client.requests) == 2
+    assert tool_content(client.requests[1], "large") == "x" * 12_000
+    assert next(m.content for m in agent.get_history() if m.role == "tool") == "x" * 12_000
+    assert not any(
+        event.type == "decision" and "context guard" in event.summary
+        for event in collector["events"]
+    )
 
 
 def test_context_guard_bounds_only_oversized_results_and_preserves_pairing():
@@ -3909,6 +3936,286 @@ def test_context_guard_severe_pressure_reaches_floor_and_reports_residual():
     assert "reduced 10000 characters" in events[0]["summary"]
     assert "unresolved pressure: 256 tokens" in events[-1]["summary"]
     assert "reduced 0 characters" not in events[0]["summary"]
+
+
+def test_context_guard_preserves_recent_semantic_result_under_severe_pressure():
+    agent = make_agent([])
+    agent.tools.register(PreservedBigOutputTool(12_000))
+    raw = "S" * 12_000
+    working = [Message(role="tool", name="big", tool_call_id="s", content=raw)]
+    events = []
+    agent.set_auto_compact_threshold(1)
+
+    agent.guard_working_context(working, events.append, AgentRunOptions(tools=False))
+
+    assert working[0].content == raw
+    assert events == []
+
+
+def test_context_guard_does_not_old_elide_protected_semantic_result():
+    agent = make_agent([])
+    agent.tools.register(PreservedBigOutputTool(12_000))
+    protected = "S" * 12_000
+    working = [
+        Message(role="tool", name="big", tool_call_id="protected", content=protected),
+        *[
+            Message(role="tool", name=f"small-{i}", tool_call_id=str(i), content="x" * 100)
+            for i in range(4)
+        ],
+    ]
+    events = []
+    agent.set_auto_compact_threshold(1)
+
+    agent.guard_working_context(working, events.append, AgentRunOptions(tools=False))
+
+    assert working[0].content == protected
+    assert [message.content for message in working[1:]] == ["x" * 100] * 4
+    assert events == []
+
+
+def test_context_guard_mixed_policy_reduces_only_adaptive_capacity():
+    agent = make_agent([])
+    agent.tools.register(PreservedBigOutputTool(12_000))
+    protected = "S" * 12_000
+    working = [
+        Message(role="tool", name="big", tool_call_id="s", content=protected),
+        Message(role="tool", name="adaptive-one", tool_call_id="a", content="A" * 6_000),
+        Message(role="tool", name="adaptive-two", tool_call_id="b", content="B" * 10_000),
+    ]
+    agent.set_auto_compact_threshold(6_633)
+
+    agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
+
+    assert working[0].content == protected
+    assert [6_000 - len(working[1].content), 10_000 - len(working[2].content)] == [
+        667,
+        1_333,
+    ]
+    assert approximate_message_tokens(working) == 6_499
+
+
+def test_context_guard_preserves_production_workflow_and_finding_results(tmp_path):
+    agent = make_agent([])
+    agent.tools.register(WorkflowTool(WorkflowState()))
+    agent.tools.register(ConfirmFindingTool(FindingsStore(str(tmp_path / "findings"))))
+    workflow_result = "W" * 12_000
+    finding_result = "F" * 12_000
+    history = [
+        Message(
+            role="tool",
+            name="workflow",
+            tool_call_id="workflow",
+            content=workflow_result,
+        ),
+        Message(
+            role="tool",
+            name="confirm_finding",
+            tool_call_id="finding",
+            content=finding_result,
+        ),
+        Message(
+            role="tool",
+            name="adaptive-old",
+            tool_call_id="old",
+            content="O" * 12_000,
+        ),
+        *[
+            Message(
+                role="tool",
+                name=f"adaptive-{index}",
+                tool_call_id=f"adaptive-{index}",
+                content="A" * 12_000,
+            )
+            for index in range(4)
+        ],
+    ]
+    working = deepcopy(history)
+    agent.set_auto_compact_threshold(1)
+
+    agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
+
+    assert working[0].content == workflow_result
+    assert working[1].content == finding_result
+    assert MIDTURN_ELISION_PREFIX in working[2].content
+    assert all(MIDTURN_ELISION_PREFIX in message.content for message in working[3:])
+    assert [message.content for message in history] == [
+        workflow_result,
+        finding_result,
+        "O" * 12_000,
+        *("A" * 12_000 for _ in range(4)),
+    ]
+
+
+def test_context_guard_preserves_confirm_finding_error_semantics(tmp_path):
+    agent = make_agent([])
+    agent.tools.register(ConfirmFindingTool(FindingsStore(str(tmp_path / "findings"))))
+    error = "ERROR: severity must be one of: critical, high, medium, low, info"
+    working = [
+        Message(
+            role="tool",
+            name="confirm_finding",
+            tool_call_id="finding-error",
+            content=error,
+        ),
+        *[
+            Message(
+                role="tool",
+                name=f"later-{index}",
+                tool_call_id=f"later-{index}",
+                content="x" * 100,
+            )
+            for index in range(4)
+        ],
+    ]
+    agent.set_auto_compact_threshold(1)
+
+    agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
+
+    assert working[0].content == error
+
+
+@pytest.mark.asyncio
+async def test_complete_workflow_result_reaches_immediate_next_request():
+    workflow = WorkflowState()
+    tool = WorkflowTool(workflow)
+    client = FakeClient(
+        [
+            tool_batch(
+                tool_call(
+                    "workflow-call",
+                    "workflow",
+                    {
+                        "action": "record_candidate",
+                        "candidate_class": "xss",
+                        "target": "https://target.test",
+                        "endpoint": "/search",
+                        "parameter": "q",
+                    },
+                )
+            ),
+            ChatResponse(
+                message=Message(role="assistant", content="candidate recorded"),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(tool)
+    agent = Agent(
+        AgentOptions(
+            client=client,
+            tools=registry,
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+            auto_compact_threshold=1,
+            prompt_profile="compact",
+        )
+    )
+
+    await agent.run("record it", FakeSignal(), collect()["sink"])
+
+    raw = next(
+        message.content
+        for message in agent.get_history()
+        if message.tool_call_id == "workflow-call"
+    )
+    assert tool_content(client.requests[1], "workflow-call") == raw
+    payload = json.loads(raw)
+    assert payload["created"] is True
+    assert payload["candidate"]["id"]
+
+
+@pytest.mark.asyncio
+async def test_incomplete_coverage_page_stays_explicit_under_context_pressure(tmp_path):
+    coverage_store = CoverageStore(str(tmp_path / "coverage.json"))
+    coverage_store.loaded = True
+    for index in range(40):
+        coverage_store.entries[str(index)] = CoverageEntry(
+            endpoint=f"GET /coverage/{index:03d}/" + "e" * 180,
+            param=f"p{index:03d}",
+            vulnClass="cross-site-scripting",
+            status="tried",
+            count=1,
+            firstSeen=index,
+            lastSeen=index,
+            notes="n" * 300,
+        )
+    tool = CoverageTool(coverage_store)
+    client = FakeClient(
+        [
+            tool_batch(
+                tool_call(
+                    "coverage-page",
+                    "coverage",
+                    {"action": "list", "limit": 25},
+                )
+            ),
+            ChatResponse(
+                message=Message(role="assistant", content="continue later"),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(tool)
+    agent = Agent(
+        AgentOptions(
+            client=client,
+            tools=registry,
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+            auto_compact_threshold=1_000,
+            prompt_profile="compact",
+        )
+    )
+
+    await agent.run("show coverage", FakeSignal(), collect()["sink"])
+
+    raw = next(
+        message.content
+        for message in agent.get_history()
+        if message.tool_call_id == "coverage-page"
+    )
+    llm_facing = tool_content(client.requests[1], "coverage-page")
+    payload = json.loads(raw)
+    assert payload["complete"] is False
+    assert payload["next_cursor"] is not None
+    assert payload["returned_count"] < payload["total_count"]
+    assert MIDTURN_ELISION_PREFIX in llm_facing
+    assert '"complete": false' in llm_facing
+    assert '"next_cursor":' in llm_facing
+    assert raw != llm_facing
+
+
+@pytest.mark.asyncio
+async def test_coverage_context_keeps_next_flow_compatible_with_paginated_results(tmp_path):
+    coverage_store = CoverageStore(str(tmp_path / "coverage.json"))
+    coverage_store.loaded = True
+    for index in range(11):
+        coverage_store.entries[str(index)] = CoverageEntry(
+            endpoint=f"GET /next/{index:02d}",
+            param="id",
+            vulnClass="access-control",
+            status="tried",
+            count=1,
+            firstSeen=index,
+            lastSeen=index,
+        )
+    agent = make_agent([])
+    agent.tools.register(CoverageTool(coverage_store))
+
+    context = await agent.coverage_context(FakeSignal())
+
+    assert "Coverage summary:" in context
+    assert "Coverage entries:" in context
+    assert '"total_count": 11' in context
+    assert '"returned_count": 10' in context
+    assert '"complete": false' in context
+    assert '"next_cursor": "10"' in context
 
 
 def _source_with_canaries(size: int = 12_000) -> tuple[str, list[str]]:
@@ -4075,6 +4382,22 @@ async def test_mixed_refusal_and_large_success_bounds_result_and_synthesizes():
 async def test_large_result_save_resume_preserves_raw_history(tmp_path):
     store = Store.new_with_id(tmp_path, "large-result")
     agent, client = make_big_output_agent(12_000, store=store)
+    agent.set_auto_compact_threshold(agent.approx_tokens() + 1_000)
+
+    await agent.run("go", FakeSignal(), collect()["sink"])
+
+    resumed, _ = make_big_output_agent(1, store=store)
+    resumed.resume_saved()
+    raw = next(m.content for m in resumed.get_history() if m.role == "tool")
+    assert len(client.requests) == 2
+    assert raw == "x" * 12_000
+
+
+@pytest.mark.asyncio
+async def test_preserved_semantic_result_save_resume_is_unchanged(tmp_path):
+    store = Store.new_with_id(tmp_path, "preserved-result")
+    tool = PreservedBigOutputTool(12_000)
+    agent, client = make_big_output_agent(12_000, store=store, tool=tool)
     agent.set_auto_compact_threshold(agent.approx_tokens() + 1_000)
 
     await agent.run("go", FakeSignal(), collect()["sink"])

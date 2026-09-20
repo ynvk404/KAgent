@@ -53,6 +53,16 @@ class ActionAwareTool(GatedTool):
     def requires_permission_for(self, args) -> bool:
         return self.requires
 
+
+class PreserveContextTool(GatedTool):
+    def context_reduction_policy(self) -> str:
+        return "preserve"
+
+
+class InvalidContextPolicyTool(GatedTool):
+    def context_reduction_policy(self) -> str:
+        return "invalid"
+
 class SpyPrompter:
     def __init__(
         self,
@@ -171,3 +181,26 @@ async def test_action_aware_permission_hook_executes_without_permission_when_fal
     assert tool.ran is True
     assert tool.legacy_checked is False
     assert prompter.calls == []
+
+
+def test_context_reduction_policy_defaults_to_adaptive_for_known_and_unknown_tools():
+    reg = Registry()
+    reg.register(GatedTool())
+
+    assert reg.context_reduction_policy("http") == "adaptive"
+    assert reg.context_reduction_policy("historical_tool") == "adaptive"
+    assert reg.context_reduction_policy(None) == "adaptive"
+
+
+def test_context_reduction_policy_uses_optional_tool_metadata():
+    reg = Registry()
+    reg.register(PreserveContextTool())
+
+    assert reg.context_reduction_policy("http") == "preserve"
+
+
+def test_invalid_context_reduction_metadata_falls_back_to_adaptive():
+    reg = Registry()
+    reg.register(InvalidContextPolicyTool())
+
+    assert reg.context_reduction_policy("http") == "adaptive"
