@@ -17,7 +17,6 @@ from src.skills.registry import (
 from src.tools.finding import ConfirmFindingTool
 from src.tools.payloads import ReadPayloadsTool
 from src.tools.skill_file import ReadSkillFileTool
-from src.ui.commands.slash_handler import _TIPS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -99,7 +98,6 @@ def test_user_facing_tool_examples_name_loaded_skills(shipped_registry):
         [
             ReadPayloadsTool(shipped_registry).description(),
             ReadSkillFileTool(shipped_registry).description(),
-            *_TIPS,
         ]
     )
     examples = set(TOOL_SKILL_EXAMPLE_RE.findall(help_text))

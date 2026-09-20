@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from typing import cast
+from src.agent.agent import Agent
 from src.ui.core.app import KAgent, RunAgentOptions
 from src.ui.commands.slash_handler import build_help_text, handle_slash
 from src.ui.commands.slash_items import SLASH_ITEMS
@@ -152,7 +153,7 @@ def test_normal_clear_is_not_a_slash_command():
 
 def test_help_groups_commands_and_keeps_runtime_summary_compact():
     text = build_help_text(
-        cast(KAgent, HelpAgent()),
+        cast(Agent, HelpAgent()),
         lambda: {"backend": "openrouter", "model": "configured-model"},
     )
 
