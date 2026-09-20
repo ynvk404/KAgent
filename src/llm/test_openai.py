@@ -267,6 +267,7 @@ async def test_serializes_ask_user_with_optional_options():
 
     assert question["required"] == ["question"]
     assert question["properties"]["options"]["minItems"] == 2
+    assert "arbitrary user-supplied values" in question["properties"]["options"]["description"]
 
 async def test_stream_reasoning_content():
     c = OpenAIClient(base_url, "", "reasoning-stream")

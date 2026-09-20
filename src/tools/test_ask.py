@@ -30,12 +30,27 @@ class CaptureAskPrompter(AskPrompter):
 
 
 def test_schema_advertises_options_for_each_question():
-    schema = AskUserTool(CaptureAskPrompter()).schema()
+    tool = AskUserTool(CaptureAskPrompter())
+    schema = tool.schema()
     question = schema["properties"]["questions"]["items"]
+    options_description = question["properties"]["options"]["description"]
 
     assert question["required"] == ["question"]
     assert question["properties"]["options"]["minItems"] == 2
     assert "choices" not in question["properties"]
+    assert "finite" in options_description
+    assert "arbitrary user-supplied values" in options_description
+    assert "free text" in options_description
+
+
+def test_description_explains_when_to_omit_or_use_options():
+    description = AskUserTool(CaptureAskPrompter()).description()
+
+    assert "Omit options" in description
+    assert "arbitrary user-supplied value" in description
+    assert "finite set of known choices" in description
+    assert "materially changes the next step" in description
+    assert "every choice merely leads to a free-text question" in description
 
 
 @pytest.mark.asyncio

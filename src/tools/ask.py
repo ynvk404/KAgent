@@ -28,9 +28,13 @@ class AskUserTool(Tool):
     def description(self) -> str:
         return (
             "Ask the user a question, optionally with multiple-choice options, "
-            "to disambiguate or get a decision. When the requested action "
-            "or object is ambiguous, ask neutrally about the missing object "
-            "or scope; do not invent one."
+            "to disambiguate or get a decision. Omit options when collecting "
+            "an arbitrary user-supplied value that cannot be enumerated in "
+            "advance. Use options only for a genuinely finite set of known "
+            "choices that materially changes the next step; do not add an "
+            "option question when every choice merely leads to a free-text "
+            "question. When the requested action or object is ambiguous, ask "
+            "neutrally about the missing object or scope; do not invent one."
         )
 
     def schema(self) -> dict:
@@ -56,7 +60,13 @@ class AskUserTool(Tool):
                                 "type": "array",
                                 "minItems": 2,
                                 "maxItems": 4,
-                                "description": "Two to four choices for the user. Use this field, not choices.",
+                                "description": (
+                                    "Two to four finite, known choices that "
+                                    "materially change the next step. Omit "
+                                    "options for arbitrary user-supplied "
+                                    "values; ask for those directly as free "
+                                    "text. Use this field, not choices."
+                                ),
                                 "items": {
                                     "type": "object",
                                     "properties": {
