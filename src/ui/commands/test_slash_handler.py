@@ -4,7 +4,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import cast
 from src.ui.core.app import KAgent, RunAgentOptions
-from src.ui.commands.slash_handler import handle_slash
+from src.ui.commands.slash_handler import build_help_text, handle_slash
+from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.app import KAgent
 from src.ui.core.state import Append
 
@@ -81,6 +82,46 @@ class DummyAgent:
 
 
 @dataclass(slots=True)
+class HelpSkills:
+    def list_enabled(self) -> list[str]:
+        return ["web", "auth"]
+
+    def list(self) -> list[str]:
+        return ["web", "auth", "burp"]
+
+
+@dataclass(slots=True)
+class HelpMemory:
+    items: int = 4
+    compactions: int = 1
+
+
+@dataclass(slots=True)
+class HelpClient:
+    def model(self) -> str:
+        return "fallback-model"
+
+
+@dataclass(slots=True)
+class HelpAgent:
+    skills: HelpSkills = field(default_factory=HelpSkills)
+    target: DummyTarget = field(default_factory=lambda: DummyTarget("https://lab.test"))
+    client: HelpClient = field(default_factory=HelpClient)
+
+    def get_memory_stats(self) -> HelpMemory:
+        return HelpMemory()
+
+    def get_max_steps(self) -> int:
+        return 20
+
+    def get_auto_compact_threshold(self) -> int:
+        return 8_000
+
+    def thinking_is_enabled(self) -> bool:
+        return True
+
+
+@dataclass(slots=True)
 class DummyApp:
     agent: DummyAgent = field(default_factory=DummyAgent)
     state: DummyState = field(default_factory=DummyState)
@@ -107,6 +148,33 @@ def test_normal_clear_is_not_a_slash_command():
 
     assert handle_slash(cast(KAgent, app), "clear") is False
     assert app.actions == []
+
+
+def test_help_groups_commands_and_keeps_runtime_summary_compact():
+    text = build_help_text(
+        cast(KAgent, HelpAgent()),
+        lambda: {"backend": "openrouter", "model": "configured-model"},
+    )
+
+    assert "Session" in text
+    assert "provider   openrouter" in text
+    assert "model      configured-model" in text
+    assert "target     https://lab.test" in text
+    assert "skills     2/3 enabled" in text
+    assert "Everyday" in text
+    assert "Workflow" in text
+    assert "Advanced" in text
+    assert "Installed skills" in text
+    assert "/exit (/quit)" in text
+    assert "/burp [port|stop|status]" in text
+    assert "/memory [add <text>|list|forget <text>|clear|intel]  manage saved/session memory" in text
+    assert "/model <id|list>" in text
+    assert "/skills [<name>|enable|disable <name>|new <name>]    list, toggle, or create skills" in text
+    assert "/ then Tab" in text
+    assert "browser_capture_*" not in text
+    assert "coverage(action=" not in text
+    for item in SLASH_ITEMS:
+        assert item.name in text
 
 
 def test_maxsteps_without_argument_shows_current_value():

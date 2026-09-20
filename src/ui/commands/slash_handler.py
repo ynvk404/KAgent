@@ -23,40 +23,38 @@ _DOMAIN_LABEL_RE = re.compile(
 
 
 _KEYBINDINGS: list[tuple[str, str]] = [
-    ("@<file>", "inline a file into the next turn (Tab opens a picker)"),
-    (
-        "#<text>",
-        "remember a durable fact (#!<text> = personal); recalled automatically",
-    ),
-    ("/", "open the slash-command menu"),
+    ("/ then Tab", "open and complete slash commands"),
+    ("@<file> then Tab", "attach a file to the next turn"),
+    ("#<text> / #!<text>", "save project / personal memory"),
     (
         "↑ / ↓",
-        "walk session prompt history (on first / last line of input)",
+        "browse prompt history at the first / last input line",
     ),
     ("Ctrl-N / Ctrl-J", "insert a newline inside the input"),
     ("Ctrl-A / Ctrl-E", "jump to start / end of the current line"),
-    ("Ctrl-O", "reprint the latest truncated tool output in full"),
-    ("Ctrl-F", "cycle the transcript filter"),
-    (
-        "mouse wheel / scrollbar",
-        "scroll the conversation (native terminal scrollback)",
-    ),
-    (
-        "Esc",
-        "cancel an in-flight turn / clear the input draft",
-    ),
-    ("Ctrl-C", "quit kagent"),
+    ("Ctrl-O / Ctrl-F", "expand tool output / cycle transcript filter"),
+    ("Esc / Ctrl-C", "clear or cancel / quit"),
 ]
 
-
-_TIPS: list[str] = [
-    "browser_capture_* tools surface live request / cookie / storage data once Burp/browser traffic is forwarding to a --burp bridge.",
-    "coverage(action=\"untested\", candidates=[...], vuln_classes=[...]) returns the (endpoint, param, class) tuples you have NOT tested yet — drive the next pass off of it.",
-    "read_payloads(skill=\"<name>\") pulls curated wordlists from disk. Skills may ship a payloads/ directory or a top-level payloads.txt file.",
-    "Disabled skills are hidden from the agent's system prompt entirely. Use /skills to flip a skill back on without restarting.",
-    "/model list opens an interactive backend model picker; /model <id> validates against the live catalog and suggests the closest match on typo.",
-    "/memory intel stats shows learned background scenarios count; /memory intel clear wipes them (project/personal/all). Intelligence is auto-pruned but grows to the cap on long engagements.",
+_COMMAND_GROUPS: list[tuple[str, tuple[str, ...]]] = [
+    ("Everyday", ("/help", "/target", "/plan", "/provider", "/model", "/clear", "/reset", "/exit")),
+    ("Workflow", ("/next", "/compact", "/memory", "/skills", "/snapshot")),
+    ("Advanced", ("/burp", "/maxsteps", "/thinking", "/yolo")),
 ]
+
+_HELP_OVERRIDES: dict[str, tuple[str, str]] = {
+    "/burp": ("[port|stop|status]", "manage the local Burp bridge"),
+    "/exit": ("(/quit)", "quit kagent"),
+    "/memory": (
+        "[add <text>|list|forget <text>|clear|intel]",
+        "manage saved/session memory",
+    ),
+    "/model": ("<id|list>", "switch model; list also accepts ls"),
+    "/skills": (
+        "[<name>|enable|disable <name>|new <name>]",
+        "list, toggle, or create skills",
+    ),
+}
 
 
 
@@ -92,11 +90,21 @@ def build_help_text(agent: "Agent", read_config) -> str:
     )
     out.append("")
 
-    out.append("Slash commands")
-    namelines = [f"{s.name} {s.args}" if s.args else s.name for s in SLASH_ITEMS]
-    w = min(36, (max((len(n) for n in namelines), default=0)) + 2)
-    for name_line, item in zip(namelines, SLASH_ITEMS):
-        out.append(f"  {name_line.ljust(w)}{item.description}")
+    items = {item.name: item for item in SLASH_ITEMS}
+    for group, names in _COMMAND_GROUPS:
+        out.append(group)
+        rows: list[tuple[str, str]] = []
+        for name in names:
+            item = items[name]
+            args, description = _HELP_OVERRIDES.get(name, (item.args or "", item.description))
+            rows.append((f"{name} {args}".rstrip(), description))
+        w = max(len(name) for name, _ in rows) + 2
+        for name, description in rows:
+            out.append(f"  {name.ljust(w)}{description}")
+        out.append("")
+
+    out.append("Installed skills")
+    out.append("  /<skill-name>  load an installed skill for the next prompt")
     out.append("")
 
     out.append("Input & navigation")
@@ -105,18 +113,6 @@ def build_help_text(agent: "Agent", read_config) -> str:
         out.append(f"  {keys.ljust(kw)}{desc}")
     out.append("")
 
-    out.append("Tips")
-    for tip in _TIPS:
-        words = tip.split(" ")
-        line = "  • "
-        for word in words:
-            if len(line) + len(word) + 1 > 88:
-                out.append(line.rstrip())
-                line = "    "
-            line += f"{word} "
-        if line.strip():
-            out.append(line.rstrip())
-    out.append("")
     out.append("Type / for the live command menu.")
 
     return "\n".join(out)
