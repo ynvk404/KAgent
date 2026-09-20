@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from typing import cast
+import pytest
 from src.agent.agent import Agent
 from src.ui.core.app import KAgent, RunAgentOptions
 from src.ui.commands.slash_handler import build_help_text, handle_slash
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.app import KAgent
-from src.ui.core.state import Append
+from src.ui.core.state import Append, Clear
 
 
 @dataclass(slots=True)
@@ -37,6 +38,7 @@ class DummyAgent:
     target: DummyTarget = field(default_factory=DummyTarget)
     sys_prompt: str = ""
     history: list = field(default_factory=list)
+    reset_calls: int = 0
 
     def get_max_steps(self) -> int:
         return self.max_steps
@@ -80,6 +82,9 @@ class DummyAgent:
         # the "target set to ..." / "target cleared ..." message the tests
         # assert on. No-op is sufficient — tests don't assert persistence.
         pass
+
+    async def reset(self) -> None:
+        self.reset_calls += 1
 
 
 @dataclass(slots=True)
@@ -149,6 +154,29 @@ def test_normal_clear_is_not_a_slash_command():
 
     assert handle_slash(cast(KAgent, app), "clear") is False
     assert app.actions == []
+
+
+def test_clear_only_requests_transcript_replacement_and_preserves_agent_state():
+    app = DummyApp()
+    app.agent.history = ["existing conversation"]
+    app.agent.target.set_base_url("https://lab.test")
+
+    assert handle_slash(cast(KAgent, app), "/clear")
+
+    assert app.actions == [Clear()]
+    assert app.agent.history == ["existing conversation"]
+    assert app.agent.target.base_url() == "https://lab.test"
+
+
+@pytest.mark.asyncio
+async def test_reset_keeps_reset_invocation_and_replaces_the_transcript_with_a_status_line():
+    app = DummyApp()
+
+    assert handle_slash(cast(KAgent, app), "/reset")
+    await asyncio.sleep(0)
+
+    assert app.agent.reset_calls == 1
+    assert app.actions == [Clear(message="conversation reset")]
 
 
 def test_help_groups_commands_and_keeps_runtime_summary_compact():

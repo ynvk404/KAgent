@@ -90,6 +90,7 @@ class AppState:
     transcript: tuple[TranscriptEntry, ...] = field(default_factory=tuple)
     busy: bool = False
     clear_gen: int = 0
+    clear_message: str | None = None
     api_ready: bool = True
     active_skill: str | None = None
     pending_perm: BridgedPermissionRequest  | None = None
@@ -172,7 +173,7 @@ class ExpandToolOutput:
 
 @dataclass(frozen=True, slots=True)
 class Clear:
-    pass
+    message: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,8 +274,13 @@ def reducer(state: AppState, action: Action) -> AppState:
             transcript.append(TranscriptEntry(kind="tool-result", text=entry.full_text or entry.text))
             return replace(state, transcript=tuple(transcript))
 
-        case Clear():
-            return replace(state, transcript=(), clear_gen=state.clear_gen + 1)
+        case Clear(message=message):
+            return replace(
+                state,
+                transcript=(),
+                clear_gen=state.clear_gen + 1,
+                clear_message=message,
+            )
 
         case AgentEventAction(event=event):
             return _apply_agent_event(state, event)

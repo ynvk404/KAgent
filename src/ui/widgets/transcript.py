@@ -119,9 +119,11 @@ class Transcript:
         self,
         out: IO[str] | None = None,
         width: Callable[[], int] | None = None,
+        clear: Callable[[], object] | None = None,
     ) -> None:
         self._out: IO[str] = out if out is not None else sys.stdout
         self._width = width
+        self._clear = clear
         self._printed_count = 0
         self._last_generation: object | None = None
         self._banner_printed = False
@@ -131,13 +133,18 @@ class Transcript:
         committed: list[TranscriptEntry],
         banner_data: BannerData,
         generation: object,
+        clear_message: str | None = None,
     ) -> None:
         if generation != self._last_generation:
+            if self._clear is not None:
+                self._clear()
             self._printed_count = 0
             self._banner_printed = False
             self._last_generation = generation
 
         if not self._banner_printed:
+            if clear_message is not None:
+                self._write_entry(TranscriptEntry(kind="system", text=clear_message))
             columns, _rows = get_terminal_size()
             self._write_banner(banner_data, columns)
             self._banner_printed = True

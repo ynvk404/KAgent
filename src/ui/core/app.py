@@ -410,6 +410,7 @@ class KAgent(App):
         self.transcript_writer = Transcript(
             out=cast(IO[str], rich_log_writer),
             width=rich_log_writer.content_width,
+            clear=self.transcript_log.clear,
         )
 
         self.live_entry_static = Static(id="live-entry")
@@ -460,12 +461,6 @@ class KAgent(App):
 
     def clear_screen(self) -> None:
         self.dispatch(Clear())
-        self.transcript_log.clear()
-        rich_log_writer = _RichLogWriter(self.transcript_log)
-        self.transcript_writer = Transcript(
-            out=cast(IO[str], rich_log_writer),
-            width=rich_log_writer.content_width,
-        )
 
 
     async def prompt_text(
@@ -841,7 +836,12 @@ class KAgent(App):
 
         filtered_committed = filter_transcript(list(committed), tfilter)
         generation = f"{self.state.clear_gen}:{tfilter}"
-        self.transcript_writer.flush(filtered_committed, self.state.banner_data, generation)
+        self.transcript_writer.flush(
+            filtered_committed,
+            self.state.banner_data,
+            generation,
+            clear_message=self.state.clear_message,
+        )
 
         show_live = transcript_entry_matches_filter(live, tfilter) if live else False
         if live and show_live:

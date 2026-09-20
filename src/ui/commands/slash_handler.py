@@ -304,8 +304,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             await agent.reset()
 
         asyncio.create_task(_reset())
-        dispatch(Clear())
-        dispatch(Append(entry=TranscriptEntry(kind="system", text="conversation reset")))
+        dispatch(Clear(message="conversation reset"))
         return True
 
     if cmd == "/help":
