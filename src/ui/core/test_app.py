@@ -15,6 +15,7 @@ from src.ui.bridges.perm_bridge import BridgedPermissionRequest, BridgedPrompter
 from src.permission.permission import PermissionRequest
 from src.ask.ask import Option, Question
 from src.agent.agent import Agent
+from src.agent.events import DoneEvent
 from src.config.config import Backend
 from src.ui.core.app import (
     AbortEvent,
@@ -26,7 +27,7 @@ from src.ui.core.app import (
     _input_selection_text,
     _modal_text,
 )
-from src.ui.core.state import SetAsk, SetBusy, SetPerm
+from src.ui.core.state import AgentEventAction, SetAsk, SetBusy, SetPerm
 from src.ui.widgets.banner import BannerData
 from src.ui.widgets.text_input_modal import TextInputRequest
 from src.ui.widgets.text_input_modal import TextInputModal
@@ -61,6 +62,134 @@ def make_app() -> KAgent:
     app._sync_overlay = lambda: None
     app._render_input = lambda: None
     return app
+
+
+class FakeInterval:
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def timer_app() -> tuple[KAgent, FakeClock, list[FakeInterval]]:
+    app = make_app()
+    clock = FakeClock()
+    intervals: list[FakeInterval] = []
+    app._monotonic = clock
+    app.status_bar = cast(Any, SimpleNamespace(elapsed_seconds=None))
+
+    def set_interval(*_args, **_kwargs):
+        interval = FakeInterval()
+        intervals.append(interval)
+        return interval
+
+    app.set_interval = cast(Any, set_interval)
+    return app, clock, intervals
+
+
+def test_turn_timer_resets_ticks_and_retains_final_idle_value() -> None:
+    app, clock, intervals = timer_app()
+
+    app._start_turn_timer()
+    assert app.status_bar.elapsed_seconds == 0
+    clock.advance(18)
+    app._tick_elapsed()
+    assert app.status_bar.elapsed_seconds == 18
+
+    app._stop_turn_timer()
+    assert intervals[-1].stopped is True
+    clock.advance(40)
+    app._tick_elapsed()
+    assert app.status_bar.elapsed_seconds == 18
+
+    app._start_turn_timer()
+    assert app.status_bar.elapsed_seconds == 0
+
+
+def test_turn_timer_continues_while_waiting_for_permission_or_user() -> None:
+    app, clock, _ = timer_app()
+    app._start_turn_timer()
+    app.dispatch(SetBusy(busy=True))
+
+    app.dispatch(SetPerm(req=cast(Any, object())))
+    clock.advance(4)
+    app._tick_elapsed()
+    assert app.state.phase == "waiting-approval"
+    assert app.status_bar.elapsed_seconds == 4
+
+    app.dispatch(SetPerm(req=None))
+    app.dispatch(SetAsk(req=cast(Any, object())))
+    clock.advance(5)
+    app._tick_elapsed()
+    assert app.state.phase == "waiting-user"
+    assert app.status_bar.elapsed_seconds == 9
+
+
+def test_done_event_stops_timer_for_normal_refusal_and_abort_completion() -> None:
+    app, clock, intervals = timer_app()
+
+    for elapsed in (3, 7, 11):
+        app._start_turn_timer()
+        app.dispatch(SetBusy(busy=True))
+        clock.advance(elapsed)
+        app.dispatch(AgentEventAction(event=DoneEvent()))
+        final = app.status_bar.elapsed_seconds
+        clock.advance(20)
+        app._tick_elapsed()
+        assert app.state.busy is False
+        assert app.status_bar.elapsed_seconds == final == elapsed
+        assert intervals[-1].stopped is True
+
+
+@pytest.mark.asyncio
+async def test_turn_timer_stops_when_agent_turn_aborts() -> None:
+    app, clock, intervals = timer_app()
+    requests: list[str] = []
+
+    async def aborting_run(*_args, **_kwargs) -> None:
+        clock.advance(7)
+        raise Exception("aborted")
+
+    app.agent = cast(
+        Any,
+        SimpleNamespace(
+            is_running=lambda: False,
+            run=aborting_run,
+            requests=requests,
+        ),
+    )
+
+    await app.run_agent_turn("go")
+
+    assert app.status_bar.elapsed_seconds == 7
+    assert intervals[-1].stopped is True
+    assert app._elapsed_active is False
+    assert requests == []
+
+
+def test_turn_timer_is_local_and_does_not_mutate_agent_history() -> None:
+    app, clock, _ = timer_app()
+    history = ["unchanged"]
+    app.agent = cast(Any, SimpleNamespace(history=history))
+
+    app._start_turn_timer()
+    clock.advance(5)
+    app._tick_elapsed()
+    app._stop_turn_timer()
+
+    assert app.agent.history == ["unchanged"]
 
 
 @pytest.mark.asyncio

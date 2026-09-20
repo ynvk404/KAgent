@@ -4,6 +4,7 @@ plastic_imports = None
 import dataclasses
 import traceback
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -18,7 +19,7 @@ from textual.selection import Selection
 from textual.widgets import RichLog, Static
 
 from src.agent.agent import Agent, AgentRunOptions
-from src.agent.events import AgentEvent, MaxStepsError
+from src.agent.events import AgentEvent, DoneEvent, MaxStepsError
 from src.agent.agent import AddMemoryInput
 from src.agent.mentions import (
     find_active_mention,
@@ -428,9 +429,10 @@ class KAgent(App):
         self._status_cache_key: tuple | None = None
         self._status_info: dict = {}
 
-        self._elapsed_busy = False
+        self._elapsed_active = False
         self._elapsed_timer = None
         self._elapsed_start: float = 0.0
+        self._monotonic: Callable[[], float] = time.monotonic
 
 
     def compose(self) -> ComposeResult:
@@ -476,8 +478,13 @@ class KAgent(App):
             cast(Any, action),
         )
 
+        if (
+            isinstance(action, AgentEventAction)
+            and isinstance(action.event, DoneEvent)
+        ):
+            self._stop_turn_timer()
+
         self._recompute_view()
-        self._sync_elapsed_timer(self.state.busy)
 
         self.refresh()
 
@@ -1018,23 +1025,28 @@ class KAgent(App):
             )
         )
 
-    def _sync_elapsed_timer(self, busy: bool) -> None:
+    def _start_turn_timer(self) -> None:
+        if self._elapsed_timer is not None:
+            self._elapsed_timer.stop()
 
-        if busy and not self._elapsed_busy:
-            import time
+        self._elapsed_start = self._monotonic()
+        self._elapsed_active = True
+        self.status_bar.elapsed_seconds = 0.0
+        self._elapsed_timer = self.set_interval(1.0, self._tick_elapsed)
 
-            self._elapsed_start = time.monotonic()
-            self._elapsed_timer = self.set_interval(1.0, self._tick_elapsed)
-        elif not busy and self._elapsed_busy:
-            if self._elapsed_timer is not None:
-                self._elapsed_timer.stop()
-            self.status_bar.elapsed_seconds = None
-        self._elapsed_busy = busy
+    def _stop_turn_timer(self) -> None:
+        if not self._elapsed_active:
+            return
+
+        self._tick_elapsed()
+        self._elapsed_active = False
+        if self._elapsed_timer is not None:
+            self._elapsed_timer.stop()
+            self._elapsed_timer = None
 
     def _tick_elapsed(self) -> None:
-        import time
-
-        self.status_bar.elapsed_seconds = time.monotonic() - self._elapsed_start
+        if self._elapsed_active:
+            self.status_bar.elapsed_seconds = self._monotonic() - self._elapsed_start
 
 
     async def run_agent_turn(
@@ -1055,6 +1067,8 @@ class KAgent(App):
                 )
             )
             return
+
+        self._start_turn_timer()
 
         if self.session_debug:
             self.session_debug.write(
@@ -1231,6 +1245,8 @@ class KAgent(App):
 
         finally:
             self.run_abort_event = None
+
+            self._stop_turn_timer()
 
             self.dispatch(
                 SetBusy(

@@ -31,10 +31,13 @@ WAITING_PHASES: frozenset[UiPhase] = frozenset(
 WAITING_MARKER = "○"
 
 def format_elapsed(total_seconds: float) -> str:
-    """mm:ss elapsed clock. 42 -> "0:42", 125 -> "2:05", 3700 -> "61:40"."""
+    """Stable turn duration: mm:ss below one hour, then h:mm:ss."""
     s = max(0, int(total_seconds // 1))
-    mins, secs = divmod(s, 60)
-    return f"{mins}:{secs:02d}"
+    hours, remainder = divmod(s, 3600)
+    mins, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{mins:02d}:{secs:02d}"
+    return f"{mins:02d}:{secs:02d}"
 
 
 def tool_pill(t: ToolSupportPill | None) -> tuple[str, str] | None:
@@ -89,7 +92,7 @@ def busy_line(p: StatusProps) -> Text:
         else phase_text
     )
     clock = (
-        f" · {format_elapsed(p.elapsed_seconds)}"
+        f" · time {format_elapsed(p.elapsed_seconds)}"
         if p.elapsed_seconds is not None
         else ""
     )
@@ -109,13 +112,13 @@ def busy_line(p: StatusProps) -> Text:
     return line
 
 
-def idle_line(p: StatusProps) -> Text:
+def idle_line(p: StatusProps, width: int | None = None) -> Text:
     phase_text = phase_label(p.phase)
 
     if p.ctx_tokens >= 1000:
-        ctx_hint = f"  ·  ctx: ~{p.ctx_tokens / 1000:.1f}k"
+        ctx_hint = f" · ctx: ~{p.ctx_tokens / 1000:.1f}k"
     elif p.ctx_tokens > 0:
-        ctx_hint = f"  ·  ctx: ~{p.ctx_tokens}"
+        ctx_hint = f" · ctx: ~{p.ctx_tokens}"
     else:
         ctx_hint = ""
 
@@ -126,39 +129,80 @@ def idle_line(p: StatusProps) -> Text:
     )
     pill = tool_pill(p.tool_support)
 
-    line = Text()
-    if p.api_ready:
-        line.append("ready", style=BOLD_SUCCESS)
-    else:
-        line.append("disconnected", style=BOLD_ERROR)
+    def build(
+        *,
+        include_input_hints: bool,
+        include_extras: bool,
+        include_expand: bool,
+    ) -> Text:
+        line = Text()
+        if p.api_ready:
+            line.append("ready", style=BOLD_SUCCESS)
+        else:
+            line.append("disconnected", style=BOLD_ERROR)
 
-    line.append(f" · {phase_text} · Enter send · / commands", style=MUTED)
+        line.append(f" · {phase_text}", style=MUTED)
+        if p.model:
+            line.append(f" · {p.model}", style=MUTED)
+        if pill:
+            text, color = pill
+            line.append(f" [{text}]", style=color)
+        if p.target and include_extras:
+            line.append(f" · target: {compact_target(p.target)}", style=MUTED)
 
-    if p.model:
-        line.append(f" · {p.model}", style=MUTED)
-    if p.target:
-        line.append(f" · target: {compact_target(p.target)}", style=MUTED)
-    if pill:
-        text, color = pill
-        line.append(f" [{text}]", style=color)
-    if p.expand_hint:
-        line.append(" · Ctrl-O expand output", style=ACCENT)
-    if p.transcript_filter != "all":
-        line.append(f" · filter: {p.transcript_filter}", style=ACCENT)
-    if p.active_skill:
-        line.append(f" · skill: {p.active_skill}", style=MUTED)
-    if ctx_hint:
-        style = WARNING if ctx_percent >= 90 else MUTED
-        suffix = (
-            f"/{round(p.compact_threshold / 1000)}k {ctx_percent}%"
-            if ctx_percent
-            else ""
-        )
-        line.append(f"{ctx_hint}{suffix}", style=style)
-    if p.memory_items > 0:
-        line.append(f" · mem: {p.memory_items}", style=MUTED)
+        if include_input_hints:
+            line.append(" · Enter send · / commands", style=MUTED)
 
-    return line
+        if ctx_hint:
+            style = WARNING if ctx_percent >= 90 else MUTED
+            suffix = (
+                f"/{round(p.compact_threshold / 1000)}k {ctx_percent}%"
+                if ctx_percent
+                else ""
+            )
+            line.append(f"{ctx_hint}{suffix}", style=style)
+        if p.elapsed_seconds is not None:
+            line.append(f" · time {format_elapsed(p.elapsed_seconds)}", style=MUTED)
+
+        if include_extras and p.transcript_filter != "all":
+            line.append(f" · filter: {p.transcript_filter}", style=ACCENT)
+        if include_extras and p.active_skill:
+            line.append(f" · skill: {p.active_skill}", style=MUTED)
+        if include_extras and p.memory_items > 0:
+            line.append(f" · mem: {p.memory_items}", style=MUTED)
+        if include_expand and p.expand_hint:
+            line.append(" · Ctrl-O expand output", style=ACCENT)
+        return line
+
+    full = build(
+        include_input_hints=True,
+        include_extras=True,
+        include_expand=True,
+    )
+    if width is None or full.cell_len <= width:
+        return full
+
+    without_expand = build(
+        include_input_hints=True,
+        include_extras=True,
+        include_expand=False,
+    )
+    if without_expand.cell_len <= width:
+        return without_expand
+
+    without_extras = build(
+        include_input_hints=True,
+        include_extras=False,
+        include_expand=False,
+    )
+    if without_extras.cell_len <= width:
+        return without_extras
+
+    return build(
+        include_input_hints=False,
+        include_extras=False,
+        include_expand=False,
+    )
 
 class StatusBar(Widget):
     """Right-aligned AutoApprove badge + left-aligned status content."""
@@ -214,13 +258,13 @@ class StatusBar(Widget):
 
     def render(self) -> Text:
         props = self._to_props()
-        content = busy_line(props) if props.busy else idle_line(props)
+        width = self.size.width or 80
+        content = busy_line(props) if props.busy else idle_line(props, width=width)
 
         if not props.yolo:
             return content
 
         badge = Text("AutoApprove", style=SUPERMODE_COLOR)
-        width = self.size.width or 80
         pad = max(1, width - content.cell_len - badge.cell_len)
         line = content.copy()
         line.append(" " * pad)

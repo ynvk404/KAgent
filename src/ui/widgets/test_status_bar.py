@@ -52,10 +52,10 @@ async def render_frame(status_props: StatusProps, size: tuple[int, int] = (100, 
 
 class TestFormatElapsed:
     def test_formats_seconds_as_mmss(self) -> None:
-        assert format_elapsed(0) == "0:00"
-        assert format_elapsed(42) == "0:42"
-        assert format_elapsed(125) == "2:05"
-        assert format_elapsed(3700) == "61:40"
+        assert format_elapsed(0) == "00:00"
+        assert format_elapsed(42) == "00:42"
+        assert format_elapsed(125) == "02:05"
+        assert format_elapsed(3807) == "1:03:27"
 
 
 class TestStatusBarBusyLine:
@@ -69,7 +69,8 @@ class TestStatusBarBusyLine:
             )
         ).plain
         assert "Shell · HTTP request" in frame
-        assert "0:42" in frame
+        assert "time 00:42" in frame
+        assert "turn 00:42" not in frame
         assert "Esc to cancel" in frame
 
     def test_falls_back_to_phase_word_when_no_tool_is_running(self) -> None:
@@ -77,7 +78,7 @@ class TestStatusBarBusyLine:
             props(busy=True, phase="planning", elapsed_seconds=3)
         ).plain
         assert "planning" in frame
-        assert "0:03" in frame
+        assert "time 00:03" in frame
 
     def test_uses_accent_for_running_state(self) -> None:
         line = busy_line(props(busy=True, phase="planning"))
@@ -121,6 +122,87 @@ class TestStatusBarBusyLine:
         assert line.startswith("ready · idle")
         assert not line.startswith((*SPINNER_FRAMES, WAITING_MARKER))
 
+    def test_idle_state_retains_final_turn_time_after_context(self) -> None:
+        from .status_bar import idle_line
+
+        line = idle_line(
+            props(
+                busy=False,
+                phase="idle",
+                ctx_tokens=2300,
+                compact_threshold=6000,
+                elapsed_seconds=18,
+            )
+        ).plain
+
+        assert "ctx: ~2.3k/6k 38% · time 00:18" in line
+
+    @pytest.mark.asyncio
+    async def test_wide_idle_status_orders_hints_metrics_then_expand_last(self) -> None:
+        frame = await render_frame(
+            props(
+                model="openai/gpt-oss-20b",
+                tool_support="yes",
+                ctx_tokens=2400,
+                compact_threshold=6000,
+                elapsed_seconds=1,
+                expand_hint=True,
+            ),
+            size=(140, 3),
+        )
+        line = next(line for line in frame.splitlines() if "ready" in line)
+
+        fields = [
+            "ready · idle",
+            "openai/gpt-oss-20b [tools ✓]",
+            "Enter send",
+            "/ commands",
+            "ctx: ~2.4k/6k 40%",
+            "time 00:01",
+            "Ctrl-O expand output",
+        ]
+        positions = [line.index(field) for field in fields]
+        assert positions == sorted(positions)
+        assert line.endswith("Ctrl-O expand output")
+        assert "turn 00:01" not in line
+
+    @pytest.mark.asyncio
+    async def test_medium_width_drops_only_expand_before_hints_and_metrics(self) -> None:
+        frame = await render_frame(
+            props(
+                model="openai/gpt-oss-20b",
+                tool_support="yes",
+                ctx_tokens=2400,
+                compact_threshold=6000,
+                elapsed_seconds=1,
+                expand_hint=True,
+            ),
+            size=(120, 3),
+        )
+
+        assert "Enter send · / commands" in frame
+        assert "ctx: ~2.4k/6k 40%" in frame
+        assert "time 00:01" in frame
+        assert "Ctrl-O expand output" not in frame
+
+    @pytest.mark.asyncio
+    async def test_narrow_status_preserves_context_and_time_before_expand_hint(self) -> None:
+        frame = await render_frame(
+            props(
+                model="gpt-oss-20b",
+                tool_support="yes",
+                ctx_tokens=2300,
+                compact_threshold=6000,
+                elapsed_seconds=18,
+                expand_hint=True,
+            ),
+            size=(72, 3),
+        )
+
+        assert "ctx: ~2.3k/6k 38%" in frame
+        assert "time 00:18" in frame
+        assert "Ctrl-O expand output" not in frame
+
     def test_keeps_success_and_warning_semantics_distinct(self) -> None:
         from .status_bar import idle_line
 
@@ -128,7 +210,7 @@ class TestStatusBarBusyLine:
         pressure = idle_line(props(ctx_tokens=90, compact_threshold=100))
 
         assert ready.spans[0].style == BOLD_SUCCESS
-        assert pressure.spans[-1].style == WARNING
+        assert any(span.style == WARNING for span in pressure.spans)
 
 
 @pytest.mark.asyncio
