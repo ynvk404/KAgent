@@ -331,7 +331,8 @@ async def test_resume_after_real_compaction_persists_context_planner_and_tool_co
         planner_events["sink"],
     )
     assert any(
-        event["type"] == "decision" and "selected skill: sql-injection" in event["summary"]
+        event["type"] == "decision"
+        and "Planner · sql-injection · risk: normal" in event["summary"]
         for event in planner_events["events"]
     )
     assert resumed.workflow.candidates[active.id].status == "queued"

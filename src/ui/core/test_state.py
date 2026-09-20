@@ -24,7 +24,9 @@ from src.agent.events import (
     ErrorEvent,
     AssistantDeltaEvent,
     DoneEvent,
+    DecisionEvent,
 )
+from src.ui.widgets.transcript import entry_view
 
 
 def seed():
@@ -36,6 +38,31 @@ def seed():
             cwd="",
         ),
     )
+
+
+def test_decision_summary_keeps_one_prefix_and_indents_matched_signals():
+    out = reducer(
+        seed(),
+        AgentEventAction(
+            DecisionEvent(
+                summary=(
+                    "Planner · web-enumeration · risk: normal\n"
+                    "matched: skill:web-enumeration · stage:enumeration · web enumeration"
+                )
+            )
+        ),
+    )
+
+    entry = out.transcript[-1]
+    lines = entry_view(entry)
+
+    assert entry.kind == "decision"
+    assert lines[0].text == "· Planner · web-enumeration · risk: normal"
+    assert lines[1].text == (
+        "  matched: skill:web-enumeration · stage:enumeration · web enumeration"
+    )
+    assert not lines[0].text.startswith("· ·")
+
 
 def test_collapses_escaped_newline_in_args_preview():
 

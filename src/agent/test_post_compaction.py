@@ -170,7 +170,7 @@ async def test_complete_post_compaction_planner_and_tool_continuation(tmp_path) 
         assert topic in first_context
     assert any(
         event["type"] == "decision"
-        and "selected skill: sql-injection" in event["summary"]
+        and "Planner · sql-injection · risk: normal" in event["summary"]
         for event in post_compaction_events["events"]
     )
 

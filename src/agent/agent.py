@@ -1224,15 +1224,18 @@ class Agent:
             )
 
         if decision and decision.recommended_skill:
+            matched_prefix = f"matched {decision.recommended_skill} signals:"
+            matched_signals = decision.reason.removeprefix(matched_prefix).strip()
+            summary = (
+                f"Planner · {decision.recommended_skill} · "
+                f"risk: {decision.risk}"
+            )
+            if matched_signals:
+                summary += f"\nmatched: {matched_signals}"
             emit(
                 {
                     "type": "decision",
-                    "summary": (
-                        f"decision planner: selected skill: "
-                        f"{decision.recommended_skill} · "
-                        f"risk: {decision.risk} · "
-                        f"{decision.reason}"
-                    ),
+                    "summary": summary,
                 }
             )
 

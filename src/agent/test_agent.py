@@ -545,12 +545,15 @@ async def test_injects_decision_guidance_before_user_message_for_normal_turn():
         collector["sink"],
     )
 
-    assert any(
-        event["type"] == "decision"
-        and "selected skill: recon"
-        in event["summary"]
-        for event in collector["events"]
+    decision = next(
+        event for event in collector["events"] if event["type"] == "decision"
     )
+    assert decision["summary"] == (
+        "Planner · recon · risk: normal\n"
+        "matched: enumerate subdomains"
+    )
+    assert "decision planner:" not in decision["summary"]
+    assert "selected skill:" not in decision["summary"]
 
     messages = client.requests[0].messages
 
