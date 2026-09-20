@@ -115,9 +115,10 @@ async def test_open_ended_ask_uses_text_input_and_returns_the_typed_answer() -> 
     await asyncio.sleep(0)
     modal = app._get_active_modal()
     assert isinstance(modal, TextInputModal)
+    assert "Answer:\n> ▌" in "\n".join(modal.render())
 
-    modal.handle_key("c")
-    modal.handle_key("enter")
+    await app._process_key(events.Key("c", "c"))
+    await app._process_key(events.Key("enter", None))
 
     assert await pending == "c"
     assert app.state.pending_ask is None

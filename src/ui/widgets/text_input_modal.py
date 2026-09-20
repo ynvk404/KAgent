@@ -75,7 +75,8 @@ class TextInputModal:
             f"[{self.req.header}]",
             self.req.question,
             "",
-            shown,
+            "Answer:",
+            f"> {shown}▌",
             "",
             "type key · Enter submit · Esc cancel",
         ]
