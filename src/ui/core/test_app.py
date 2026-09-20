@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from rich.text import Text
 from textual import events
 from textual.selection import Selection
 from textual.geometry import Offset
@@ -21,6 +22,7 @@ from src.ui.core.app import (
     ConfigSnapshot,
     KAgent,
     ProviderChange,
+    _RichLogWriter,
     _input_selection_text,
     _modal_text,
 )
@@ -295,3 +297,45 @@ def test_right_click_copies_the_last_mouse_selection() -> None:
 
     assert copied == ["selected output"]
     assert stopped is True
+
+
+def test_rich_log_writer_decodes_ansi_without_background_resets() -> None:
+    written: list[tuple[Text, int]] = []
+
+    def write(text: Text, *, width: int) -> None:
+        written.append((text, width))
+
+    log = cast(
+        Any,
+        SimpleNamespace(
+            scrollable_content_region=SimpleNamespace(width=40),
+            write=write,
+        ),
+    )
+
+    _RichLogWriter(log).write("\x1b[36mstyled\x1b[0m plain\n")
+
+    assert len(written) == 1
+    text, width = written[0]
+    assert text.plain == "styled plain"
+    assert "\x1b" not in text.plain
+    assert any(getattr(span.style, "color", None) is not None for span in text.spans)
+    assert all(getattr(span.style, "bgcolor", None) is None for span in text.spans)
+    assert width == 40
+
+
+@pytest.mark.asyncio
+async def test_text_selected_ignores_stale_transcript_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(KAgent, "on_mount", lambda self: None)
+    app = make_app()
+    async with app.run_test(size=(40, 8)):
+        app.transcript_log.write("current line")
+        app.screen.selections = {
+            app.transcript_log: Selection(Offset(60, 219), Offset(63, 219))
+        }
+
+        app.on_text_selected(events.TextSelected())
+
+        assert app._last_selected_text == ""

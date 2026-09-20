@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rich.segment import Segment
 from rich.text import Text
+from textual.geometry import Offset
 from textual.selection import Selection
 from textual.strip import Strip
 from textual.widgets import RichLog
@@ -41,8 +42,18 @@ class TranscriptView(RichLog):
         self._printed_count = len(committed)
 
     def _write_entry(self, entry: TranscriptEntry) -> None:
-        for line in entry_view(entry):
-            self.write(Text(line.text, style=line.color or ""))
+        width = self.transcript_content_width
+        for line in entry_view(entry, width=width):
+            self.write(
+                Text.from_ansi(line.text, style=line.color or ""),
+                width=width,
+            )
+
+    @property
+    def transcript_content_width(self) -> int:
+        """Width available to transcript rows, reserving the vertical scrollbar."""
+        content_width = self.content_region.width or self.size.width
+        return max(1, content_width - self.styles.scrollbar_size_vertical)
 
     def render_line(self, y: int):
         scroll_x, scroll_y = self.scroll_offset
@@ -74,4 +85,46 @@ class TranscriptView(RichLog):
         return line.apply_offsets(scroll_x, scroll_y + y)
 
     def get_selection(self, selection: Selection) -> tuple[str, str] | None:
-        return selection.extract("\n".join(line.text for line in self.lines)), "\n"
+        if not self.lines:
+            return None
+
+        line_count = len(self.lines)
+        start = selection.start
+        end = selection.end
+
+        # Textual retains selections while an attached widget's content changes.
+        # Validate against the current RichLog lines. Textual's Selection.extract
+        # also drops trailing blank lines via splitlines(), so extract directly
+        # from this list after normalizing the offsets.
+        if start is not None:
+            if start.y >= line_count:
+                return None
+            if start.y < 0:
+                start = Offset(0, 0)
+            else:
+                start = Offset(max(0, min(start.x, len(self.lines[start.y].text))), start.y)
+
+        if end is not None:
+            if end.y < 0:
+                return None
+            if end.y >= line_count:
+                last_line = self.lines[-1].text
+                end = Offset(len(last_line), line_count - 1)
+            else:
+                end = Offset(max(0, min(end.x, len(self.lines[end.y].text))), end.y)
+
+        start = start or Offset(0, 0)
+        end = end or Offset(len(self.lines[-1].text), line_count - 1)
+        if end.transpose < start.transpose:
+            return None
+
+        if start.y == end.y:
+            selected = self.lines[start.y].text[start.x : end.x]
+        else:
+            selected_lines = [self.lines[start.y].text[start.x :]]
+            selected_lines.extend(
+                line.text for line in self.lines[start.y + 1 : end.y]
+            )
+            selected_lines.append(self.lines[end.y].text[: end.x])
+            selected = "\n".join(selected_lines)
+        return selected, "\n"

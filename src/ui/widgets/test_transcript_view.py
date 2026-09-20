@@ -5,7 +5,13 @@ from textual.app import App, ComposeResult
 from textual.geometry import Offset
 from textual.selection import Selection
 
+from src.ui.core.state import TranscriptEntry
 from src.ui.widgets.transcript_view import TranscriptView
+
+
+_FOUR_COLUMN_TABLE = """| Technique | Target | Evidence | Mitigation |
+| --- | --- | --- | --- |
+| Error-based injection | `/api/report` | Database error reveals detailed schema information | Parameterize queries and validate every untrusted value before execution |"""
 
 
 class _TranscriptHarness(App):
@@ -82,3 +88,150 @@ async def test_selection_style_uses_richlog_virtual_line_coordinates() -> None:
             and segment.style.color is not None
             for segment in selected_line
         )
+
+
+@pytest.mark.asyncio
+async def test_four_column_table_is_laid_out_at_transcript_content_width() -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(60, 12)) as pilot:
+        app.transcript.clear()
+        app.transcript._write_entry(
+            TranscriptEntry(kind="assistant", text=_FOUR_COLUMN_TABLE)
+        )
+        await pilot.pause()
+
+        width = app.transcript.transcript_content_width
+        table_lines = [line.text for line in app.transcript.lines if line.text]
+        body_lines = [line for line in table_lines if "│" in line]
+
+        assert width == 58
+        assert max(map(len, table_lines)) <= width
+        assert all(line.startswith("  ") for line in table_lines)
+        assert all(line.endswith(("╮", "│", "┤", "╯")) for line in table_lines)
+        assert len({tuple(i for i, char in enumerate(line) if char == "│") for line in body_lines}) == 1
+
+
+@pytest.mark.asyncio
+async def test_two_column_table_still_fits_without_secondary_wrapping() -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(40, 10)) as pilot:
+        app.transcript.clear()
+        app.transcript._write_entry(
+            TranscriptEntry(
+                kind="assistant",
+                text="| Name | Value |\n| --- | --- |\n| alpha | beta |",
+            )
+        )
+        await pilot.pause()
+
+        table_lines = [line.text for line in app.transcript.lines if line.text]
+
+        assert max(map(len, table_lines)) <= app.transcript.transcript_content_width
+        assert all(line.startswith("  ") for line in table_lines)
+        assert table_lines[0].endswith("╮")
+        assert table_lines[-1].endswith("╯")
+
+
+@pytest.mark.asyncio
+async def test_new_table_uses_content_width_after_terminal_resize() -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(80, 12)) as pilot:
+        assert app.transcript.transcript_content_width == 78
+        await pilot.resize_terminal(50, 12)
+        app.transcript.clear()
+        app.transcript._write_entry(
+            TranscriptEntry(kind="assistant", text=_FOUR_COLUMN_TABLE)
+        )
+        await pilot.pause()
+
+        width = app.transcript.transcript_content_width
+        table_lines = [line.text for line in app.transcript.lines if line.text]
+
+        assert width == 48
+        assert max(map(len, table_lines)) <= width
+        assert all(line.startswith("  ") for line in table_lines)
+
+
+@pytest.mark.asyncio
+async def test_get_selection_preserves_valid_single_and_multiline_text() -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(40, 8)):
+        app.transcript.write("gamma delta")
+
+        assert app.transcript.get_selection(
+            Selection(Offset(1, 0), Offset(5, 0))
+        ) == ("lpha", "\n")
+        assert app.transcript.get_selection(
+            Selection(Offset(6, 0), Offset(5, 1))
+        ) == ("beta\ngamma", "\n")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start_line", [1, 2, 219])
+async def test_get_selection_rejects_start_at_or_beyond_end(
+    start_line: int,
+) -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(40, 8)):
+        assert app.transcript.get_selection(
+            Selection(Offset(60, start_line), Offset(63, start_line))
+        ) is None
+
+
+@pytest.mark.asyncio
+async def test_get_selection_handles_last_blank_transcript_line() -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(80, 8)):
+        for index in range(218):
+            app.transcript.write(f"row-{index}")
+        app.transcript.write("")
+
+        assert len(app.transcript.lines) == 220
+        assert app.transcript.get_selection(
+            Selection(Offset(60, 219), Offset(63, 219))
+        ) == ("", "\n")
+
+
+@pytest.mark.asyncio
+async def test_get_selection_clamps_end_beyond_current_content() -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(40, 8)):
+        app.transcript.write("gamma")
+
+        assert app.transcript.get_selection(
+            Selection(Offset(6, 0), Offset(99, 219))
+        ) == ("beta\ngamma", "\n")
+
+
+@pytest.mark.asyncio
+async def test_get_selection_handles_empty_transcript() -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(40, 8)):
+        app.transcript.clear()
+
+        assert app.transcript.get_selection(
+            Selection(Offset(0, 0), Offset(1, 0))
+        ) is None
+
+
+@pytest.mark.asyncio
+async def test_get_selection_handles_stale_selection_after_content_shrinks() -> None:
+    app = _ScrolledTranscriptHarness()
+    async with app.run_test(size=(40, 8)):
+        stale_selection = Selection(Offset(7, 15), Offset(15, 15))
+        app.transcript.clear()
+        app.transcript.write("replacement")
+
+        assert app.transcript.get_selection(stale_selection) is None
+
+
+@pytest.mark.asyncio
+async def test_get_selection_clamps_negative_offsets_without_negative_indexing() -> None:
+    app = _TranscriptHarness()
+    async with app.run_test(size=(40, 8)):
+        assert app.transcript.get_selection(
+            Selection(Offset(-4, -1), Offset(5, 0))
+        ) == ("alpha", "\n")
+        assert app.transcript.get_selection(
+            Selection(None, Offset(1, -1))
+        ) is None

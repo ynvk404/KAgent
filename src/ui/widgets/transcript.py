@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import weakref
 from dataclasses import dataclass
-from typing import IO, Literal
+from typing import IO, Callable, Literal
 
 from src.ui.core.state import TranscriptEntry
 from src.ui.core.terminal_size import get_terminal_size
@@ -59,18 +59,25 @@ class RenderedLine:
     color: str
 
 
-_row_cache: dict[int, tuple["weakref.ReferenceType[TranscriptEntry]", list[Row]]] = {}
+_row_cache: dict[
+    int,
+    tuple["weakref.ReferenceType[TranscriptEntry]", int | None, list[Row]],
+] = {}
 
 
-def rows_for_entry(entry: TranscriptEntry) -> list[Row]:
+def rows_for_entry(entry: TranscriptEntry, width: int | None = None) -> list[Row]:
     key = id(entry)
     cached = _row_cache.get(key)
     if cached is not None:
-        ref, rows = cached
-        if ref() is entry:
+        ref, cached_width, rows = cached
+        if ref() is entry and cached_width == width:
             return rows
 
-    text = render_markdown(entry.text) if entry.kind in MARKDOWN_KINDS else entry.text
+    text = (
+        render_markdown(entry.text, width=width)
+        if entry.kind in MARKDOWN_KINDS
+        else entry.text
+    )
     lines = text.split("\n")
     out = [Row(kind=entry.kind, text=line, is_first=(j == 0)) for j, line in enumerate(lines)]
     out.append(Row(kind=entry.kind, text="", is_first=False))
@@ -78,7 +85,7 @@ def rows_for_entry(entry: TranscriptEntry) -> list[Row]:
     def _on_collected(_ref: object, key: int = key) -> None:
         _row_cache.pop(key, None)
 
-    _row_cache[key] = (weakref.ref(entry, _on_collected), out)
+    _row_cache[key] = (weakref.ref(entry, _on_collected), width, out)
     return out
 
 
@@ -89,9 +96,13 @@ def plain_rows_for_entry(entry: TranscriptEntry) -> list[Row]:
     return out
 
 
-def entry_view(entry: TranscriptEntry, streaming: bool = False) -> list[RenderedLine]:
+def entry_view(
+    entry: TranscriptEntry,
+    streaming: bool = False,
+    width: int | None = None,
+) -> list[RenderedLine]:
     style = ROLE_STYLES[entry.kind]
-    rows = plain_rows_for_entry(entry) if streaming else rows_for_entry(entry)
+    rows = plain_rows_for_entry(entry) if streaming else rows_for_entry(entry, width)
 
     lines: list[RenderedLine] = []
     for row in rows:
@@ -104,8 +115,13 @@ def entry_view(entry: TranscriptEntry, streaming: bool = False) -> list[Rendered
 
 class Transcript:
 
-    def __init__(self, out: IO[str] | None = None) -> None:
+    def __init__(
+        self,
+        out: IO[str] | None = None,
+        width: Callable[[], int] | None = None,
+    ) -> None:
         self._out: IO[str] = out if out is not None else sys.stdout
+        self._width = width
         self._printed_count = 0
         self._last_generation: object | None = None
         self._banner_printed = False
@@ -138,5 +154,6 @@ class Transcript:
         self._out.write("\n")
 
     def _write_entry(self, entry: TranscriptEntry) -> None:
-        for line in entry_view(entry):
+        width = self._width() if self._width is not None else None
+        for line in entry_view(entry, width=width):
             self._out.write(line.text + "\n")

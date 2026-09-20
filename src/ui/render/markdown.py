@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+from io import StringIO
 import re
 from typing import List
+
+from rich import box
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
+
+from src.ui.core.terminal_size import terminal_columns
+from src.ui.theme import MUTED
 
 from .color_level import color_level
 
@@ -59,7 +68,7 @@ def _blue_underline(text: str) -> str:
     return f"{_ESC}[34m{_ESC}[4m{text}{_RESET}"
 
 
-def render_markdown(s: str) -> str:
+def render_markdown(s: str, *, width: int | None = None) -> str:
     if not s:
         return s
 
@@ -97,7 +106,7 @@ def render_markdown(s: str) -> str:
             while j < len(lines) and _is_table_row(lines[j]):
                 block.append(lines[j])
                 j += 1
-            out.append(_render_table(block))
+            out.append(_render_table(block, width=width))
             i = j
             continue
 
@@ -208,11 +217,19 @@ _BOLD_STAR_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 _BOLD_UNDER_RE = re.compile(r"__([^_\n]+)__")
 _ITALIC_STAR_RE = re.compile(r"(?<![\w*])\*([^*\n]+)\*(?!\w)")
 _ITALIC_UNDER_RE = re.compile(r"(?<![\w_])_([^_\n]+)_(?!\w)")
+_TABLE_BREAK_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_CODE_TOKEN_RE = re.compile(r"\ue000(\d+)\ue001")
 
 
-def _render_inline(s: str) -> str:
+def _render_inline(s: str, *, normalize_table_breaks: bool = False) -> str:
     if not s:
         return s
+
+    code_spans: list[str] = []
+
+    def _protect_code(m: re.Match) -> str:
+        code_spans.append(m.group(1))
+        return f"\ue000{len(code_spans) - 1}\ue001"
 
     def _link_sub(m: re.Match) -> str:
         label, url = m.group(1), m.group(2)
@@ -220,20 +237,16 @@ def _render_inline(s: str) -> str:
             return _blue_underline(url)
         return f"{_blue_underline(label)} {_dim(f'({url})')}"
 
+    s = _CODE_RE.sub(_protect_code, s)
+    if normalize_table_breaks:
+        s = _TABLE_BREAK_RE.sub("\n", s)
     s = _LINK_RE.sub(_link_sub, s)
-    s = _CODE_RE.sub(lambda m: _cyan(m.group(1)), s)
     s = _BOLD_STAR_RE.sub(lambda m: _bold(m.group(1)), s)
     s = _BOLD_UNDER_RE.sub(lambda m: _bold(m.group(1)), s)
     s = _ITALIC_STAR_RE.sub(lambda m: _italic(m.group(1)), s)
     s = _ITALIC_UNDER_RE.sub(lambda m: _italic(m.group(1)), s)
+    s = _CODE_TOKEN_RE.sub(lambda m: _cyan(code_spans[int(m.group(1))]), s)
     return s
-
-
-_ANSI_RE = re.compile(rf"{_ESC}\[[0-9;]*m")
-
-
-def _visible_width(s: str) -> int:
-    return len(_ANSI_RE.sub("", s))
 
 
 def _is_table_row(line: str) -> bool:
@@ -260,33 +273,40 @@ def _split_table_row(line: str) -> List[str]:
     return [c.replace("\\|", "|").strip() for c in cells]
 
 
-def _render_table(block: List[str]) -> str:
+def _render_table(block: List[str], *, width: int | None = None) -> str:
     header = _split_table_row(block[0]) if block else []
     body_rows = [_split_table_row(row) for row in block[1:]]
     cols = max(len(header), max((len(r) for r in body_rows), default=0), 1)
 
-    def cell(cells: List[str], c: int) -> str:
-        return _render_inline(cells[c] if c < len(cells) else "")
+    def cell(cells: List[str], column: int) -> Text:
+        value = cells[column] if column < len(cells) else ""
+        rendered = _render_inline(value, normalize_table_breaks=True)
+        return Text.from_ansi(rendered)
 
-    widths = []
-    for c in range(cols):
-        w = _visible_width(cell(header, c))
-        for row in body_rows:
-            w = max(w, _visible_width(cell(row, c)))
-        widths.append(w)
-
-    def pad(text: str, width: int) -> str:
-        return text + " " * max(0, width - _visible_width(text))
-
-    def render_row(cells: List[str], bold: bool) -> str:
-        parts = []
-        for c in range(cols):
-            styled = _bold(cell(cells, c)) if bold else cell(cells, c)
-            parts.append(pad(styled, widths[c]))
-        return _dim(" \u2502 ").join(parts)
-
-    rule = _dim("\u2500\u253c\u2500").join("\u2500" * w for w in widths)
-    out = [render_row(header, True), rule]
+    table = Table(
+        box=box.ROUNDED,
+        border_style=MUTED,
+        collapse_padding=False,
+        expand=False,
+        header_style="bold",
+        highlight=False,
+        padding=(0, 1),
+        show_lines=False,
+    )
+    for column in range(cols):
+        table.add_column(cell(header, column))
     for row in body_rows:
-        out.append(render_row(row, False))
-    return "\n".join(out)
+        table.add_row(*(cell(row, column) for column in range(cols)))
+
+    output = StringIO()
+    use_color = color_level() != 0
+    console = Console(
+        color_system="standard" if use_color else None,
+        file=output,
+        force_terminal=use_color,
+        highlight=False,
+        markup=False,
+        width=max(10, (width or terminal_columns()) - 2),
+    )
+    console.print(table, end="")
+    return output.getvalue().rstrip("\n")

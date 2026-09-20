@@ -188,8 +188,16 @@ class _RichLogWriter:
     def __init__(self, log: RichLog) -> None:
         self._log = log
 
+    def content_width(self) -> int:
+        if isinstance(self._log, TranscriptView):
+            return self._log.transcript_content_width
+        return max(1, self._log.scrollable_content_region.width)
+
     def write(self, s: str) -> int:
-        self._log.write(s.rstrip("\n"))
+        self._log.write(
+            Text.from_ansi(s.rstrip("\n")),
+            width=self.content_width(),
+        )
         return len(s)
 
 _INPUT_STYLE_MAP: dict[str, str] = {
@@ -398,8 +406,10 @@ class KAgent(App):
 
         self.transcript_log = TranscriptView(auto_scroll=True)
         yield self.transcript_log
+        rich_log_writer = _RichLogWriter(self.transcript_log)
         self.transcript_writer = Transcript(
-            out=cast(IO[str], _RichLogWriter(self.transcript_log))
+            out=cast(IO[str], rich_log_writer),
+            width=rich_log_writer.content_width,
         )
 
         self.live_entry_static = Static(id="live-entry")
@@ -451,8 +461,10 @@ class KAgent(App):
     def clear_screen(self) -> None:
         self.dispatch(Clear())
         self.transcript_log.clear()
+        rich_log_writer = _RichLogWriter(self.transcript_log)
         self.transcript_writer = Transcript(
-            out=cast(IO[str], _RichLogWriter(self.transcript_log))
+            out=cast(IO[str], rich_log_writer),
+            width=rich_log_writer.content_width,
         )
 
 

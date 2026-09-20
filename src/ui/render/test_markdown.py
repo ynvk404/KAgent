@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from rich.text import Text
 
 from src.ui.render.markdown import render_markdown
 
@@ -188,14 +189,79 @@ class TestRenderMarkdown:
             "| XSS | Medium |",
         ])
         lines = strip_ansi(render_markdown(input_)).split("\n")
-        assert len(lines) == 4
-        assert "Vuln" in lines[0]
-        assert "Severity" in lines[0]
-        assert "\u253c" in lines[1]
-        assert re.match(r"^\u2500+\u253c\u2500+$", lines[1])
-        assert lines[2].index("\u2502") == lines[3].index("\u2502")
-        assert "IDOR" in lines[2]
-        assert "Medium" in lines[3]
+        assert lines[0].startswith("╭") and lines[0].endswith("╮")
+        assert "Vuln" in lines[1]
+        assert "Severity" in lines[1]
+        assert lines[2].startswith("├") and lines[2].endswith("┤")
+        assert "IDOR" in lines[3]
+        assert "Medium" in lines[4]
+        assert lines[-1].startswith("╰") and lines[-1].endswith("╯")
+        separators = [line.index("│", 1) for line in lines[1:-1] if "│" in line[1:]]
+        assert len(set(separators)) == 1
+
+    def test_wraps_long_table_cells_inside_coherent_borders(self):
+        input_ = "\n".join([
+            "| Technique | Description |",
+            "| --- | --- |",
+            "| Error-based | Forces the database to reveal detailed schema information |",
+        ])
+
+        lines = strip_ansi(render_markdown(input_, width=38)).splitlines()
+
+        assert max(map(len, lines)) <= 36
+        assert all(line[0] in "╭│├╰" for line in lines)
+        assert all(line[-1] in "╮│┤╯" for line in lines)
+        assert sum("│" in line[1:-1] for line in lines) >= 3
+
+    def test_table_inline_code_keeps_color_without_background(self):
+        input_ = "\n".join([
+            "| Technique | Payload |",
+            "| --- | --- |",
+            "| Boolean | `OR 1=1` |",
+        ])
+
+        out = render_markdown(input_)
+        decoded = Text.from_ansi(out)
+
+        assert "OR 1=1" in decoded.plain
+        assert CYAN in out
+        assert all(getattr(span.style, "bgcolor", None) is None for span in decoded.spans)
+
+    @pytest.mark.parametrize("break_tag", ["<br>", "<br/>", "<br />", "<BR>"])
+    def test_table_break_tags_create_cell_line_breaks(self, break_tag: str):
+        input_ = "\n".join([
+            "| Layer | Technique |",
+            "| --- | --- |",
+            f"| Server | Escape output {break_tag} Encode data |",
+        ])
+
+        plain = strip_ansi(render_markdown(input_))
+
+        assert break_tag not in plain
+        assert "Escape output" in plain
+        assert "Encode data" in plain
+        assert plain.count("│") >= 9
+
+    def test_table_break_tag_inside_inline_code_remains_literal(self):
+        input_ = "\n".join([
+            "| Example |",
+            "| --- |",
+            "| `<br>` |",
+        ])
+
+        assert "<br>" in strip_ansi(render_markdown(input_))
+
+    def test_narrow_table_respects_requested_terminal_width(self):
+        input_ = "\n".join([
+            "| Technique | Description |",
+            "| --- | --- |",
+            "| Union-based | Uses UNION SELECT to append controlled rows |",
+        ])
+
+        lines = strip_ansi(render_markdown(input_, width=30)).splitlines()
+
+        assert max(map(len, lines)) <= 28
+        assert "Union" in "\n".join(lines)
 
     def test_leaves_lone_pipe_line_untouched(self):
         stripped = strip_ansi(render_markdown("a | b without a separator row"))
