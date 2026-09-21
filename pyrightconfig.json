@@ -1,4 +1,4 @@
 {
-  "venvPath": ".",
-  "venv": "venv-linux"
+  "include": ["src", "tests"],
+  "pythonVersion": "3.11"
 }

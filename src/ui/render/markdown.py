@@ -148,7 +148,7 @@ def _render_fenced_block(lines: List[str], lang: str) -> str:
     out = []
     for idx, row in enumerate(highlighted):
         num = str(idx + 1).rjust(gutter_width, " ")
-        out.append(f"{_dim(f'{num}\u2502')} {row}")
+        out.append(f"{_dim(f'{num}│')} {row}")
     return "\n".join(out)
 
 
@@ -201,12 +201,12 @@ def _render_line(line: str) -> str:
     bullet = _BULLET_RE.match(line)
     if bullet:
         indent, _, text = bullet.group(1), bullet.group(2), bullet.group(3)
-        return f"{indent}{_gray('\u2022')} {_render_inline(text)}"
+        return f"{indent}{_gray('•')} {_render_inline(text)}"
 
     quote = _QUOTE_RE.match(line)
     if quote:
         indent, text = quote.group(1), quote.group(2)
-        return f"{indent}{_gray('\u2502 ')}{_dim(_render_inline(text))}"
+        return f"{indent}{_gray('│ ')}{_dim(_render_inline(text))}"
 
     return _render_inline(line)
 
