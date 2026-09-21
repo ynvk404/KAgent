@@ -1,3 +1,4 @@
+```
 ┌──────────────────────────────────────────────────────────────────────┐
 │  src/cli/main.py                                                     │
 │  parse flags · load config · construct providers/tools/stores        │
@@ -42,3 +43,4 @@
 │  session · target · memory · intelligence · coverage · findings      │
 │  .kagent/ and ~/.kagent/ stores                                      │
 └──────────────────────────────────────────────────────────────────────┘
+```
