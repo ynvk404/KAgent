@@ -252,7 +252,10 @@ class FileWriteTool(Tool):
                             "path"
                         )
                     ).resolve()
-                )
+                ),
+            "sessionScopeDisplay": (
+                "writes to " + str(Path(arg_string(args, "path")).resolve())
+            ),
         }
 
     def summarize(
@@ -384,7 +387,10 @@ class FileEditTool(Tool):
                             "path"
                         )
                     ).resolve()
-                )
+                ),
+            "sessionScopeDisplay": (
+                "edits to " + str(Path(arg_string(args, "path")).resolve())
+            ),
         }
 
     def summarize(

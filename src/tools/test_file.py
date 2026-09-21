@@ -56,6 +56,17 @@ async def test_file_read_regular_file(file_tmp, signal):
 
     assert out == "hello world"
 
+
+def test_file_permission_scopes_use_resolved_paths(file_tmp):
+    path = file_tmp / "nested" / "notes.txt"
+
+    assert FileWriteTool().permission_hints({"path": str(path)})[
+        "sessionScopeDisplay"
+    ] == f"writes to {path.resolve()}"
+    assert FileEditTool().permission_hints({"path": str(path)})[
+        "sessionScopeDisplay"
+    ] == f"edits to {path.resolve()}"
+
 @pytest.mark.asyncio
 async def test_file_read_missing_path(signal):
     with pytest.raises(

@@ -273,6 +273,7 @@ def test_does_not_opt_out_of_allow_session_caching():
     t = ShellTool()
     hints = t.permission_hints({"command": "id"})
     assert hints.get("noSessionCache") is not True
+    assert hints["sessionScopeDisplay"] == "this exact shell command only"
 
 
 # ==========================================================

@@ -126,9 +126,19 @@ class PermissionModal:
 
         lines.append("")
 
+        if req.no_session_cache:
+            lines.append("Session trust unavailable for this sensitive action")
+        else:
+            lines.append(
+                "Session trust: "
+                + (req.session_scope_display or "this tool for the current runtime")
+            )
+
+        lines.append("")
+
         lines.append(
             "y allow once · "
-            "a allow session · "
+            "a trust for session · "
             "n deny · "
             "Esc cancel"
         )

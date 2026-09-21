@@ -132,6 +132,46 @@ def test_allow_session_key():
     )
 
 
+def test_displays_actual_session_trust_scope():
+    frame = "\n".join(
+        PermissionModal(
+            make_req(
+                tool="http",
+                session_scope_display="HTTP requests to http://juice.lab:3000",
+            )
+        ).render()
+    )
+
+    assert "Session trust: HTTP requests to http://juice.lab:3000" in frame
+    assert "a trust for session" in frame
+
+
+def test_displays_exact_shell_trust_scope():
+    frame = "\n".join(
+        PermissionModal(
+            make_req(session_scope_display="this exact shell command only")
+        ).render()
+    )
+
+    assert "Session trust: this exact shell command only" in frame
+
+
+def test_displays_unavailable_session_trust_for_non_cacheable_request():
+    frame = "\n".join(
+        PermissionModal(make_req(no_session_cache=True)).render()
+    )
+
+    assert "Session trust unavailable for this sensitive action" in frame
+
+
+def test_displays_tool_wide_scope_when_no_cache_scope_is_provided():
+    frame = "\n".join(
+        PermissionModal(make_req(tool="plugin_tool")).render()
+    )
+
+    assert "Session trust: this tool for the current runtime" in frame
+
+
 
 def test_deny_key():
 

@@ -170,7 +170,10 @@ class ShellTool(Tool):
         return True
 
     def permission_hints(self, args: dict[str, Any]) -> dict[str, str]:
-        return {"cacheKey": rewrite_portable_command(arg_string(args, "command") or "")}
+        return {
+            "cacheKey": rewrite_portable_command(arg_string(args, "command") or ""),
+            "sessionScopeDisplay": f"this exact {self.tool_name} command only",
+        }
 
     def summarize(self, args: dict[str, Any]) -> dict[str, str]:
         cmd = rewrite_portable_command(arg_string(args, "command") or "")

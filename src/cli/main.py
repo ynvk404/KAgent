@@ -531,7 +531,7 @@ async def main() -> int:
     tools.register(GlobTool())
     tools.register(GrepTool())
     tools.register(HTTPTool(target, engagement_state))
-    tools.register(WebFetchTool(engagement_state))
+    tools.register(WebFetchTool(engagement_state, target))
     tools.register(WebSearchTool())
     tools.register(AskUserTool(bridged_ask))
     tools.register(

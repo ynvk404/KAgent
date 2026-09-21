@@ -7,6 +7,7 @@ ContextReductionPolicy = Literal["adaptive", "preserve"]
 class PermissionHints(TypedDict, total=False):
     noSessionCache: bool
     cacheKey: str
+    sessionScopeDisplay: str
 
 class ToolSummary(TypedDict):
     summary: str

@@ -145,6 +145,9 @@ class Registry:
                 cache_key=hints.get(
                     "cacheKey",
                 ),
+                session_scope_display=hints.get(
+                    "sessionScopeDisplay",
+                ),
             )
 
             decision = await prompter.ask(

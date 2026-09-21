@@ -148,6 +148,7 @@ class BridgedPrompter(Prompter):
             detail=req.detail,
             no_session_cache=req.no_session_cache,
             cache_key=req.cache_key,
+            session_scope_display=req.session_scope_display,
             resolve=resolve,
             reject=reject,
         )

@@ -42,6 +42,7 @@ def test_metadata(tmp_path):
     assert schema["properties"]["cursor"]["type"] == "string"
     assert str(MAX_PAGE_SIZE) in schema["properties"]["limit"]["description"]
     assert schema["required"] == ["action"]
+    assert tool.permission_hints({"action": "clear"}) == {"noSessionCache": True}
 
 
 @pytest.mark.asyncio

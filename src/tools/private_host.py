@@ -98,6 +98,11 @@ async def gate_private_request(
                 if is_declared_target
                 else None
             ),
+            session_scope_display=(
+                f"HTTP requests to {origin.as_url()}"
+                if is_declared_target
+                else None
+            ),
         ),
         signal,
     )

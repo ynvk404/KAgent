@@ -8,6 +8,7 @@ import pytest
 
 from src.permission.permission import Decision, PermissionRequest, AlwaysAllow, AlwaysDeny
 from src.engagement.state import EngagementState, OutOfScopeError
+from src.target.target import Target
 from src.tools.web import WebFetchTool, WebSearchTool, clear_web_cache
 
 class _Prompter:
@@ -208,6 +209,22 @@ async def test_fetch_scope_preflight_blocks_before_private_gate_or_network(monke
 
     private_gate.assert_not_awaited()
     assert FakeAsyncClient.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_private_fetch_passes_active_target_to_private_host_gate(monkeypatch):
+    target = Target("http://juice.lab:3000")
+    engagement = EngagementState()
+    engagement.initialize_target(target.base_url())
+    gate = AsyncMock(return_value="")
+    monkeypatch.setattr("src.tools.web.gate_private_request", gate)
+    set_handler(ok_handler("ok"))
+
+    await WebFetchTool(engagement, target).run(
+        {"url": "http://juice.lab:3000/status"}, None, prompter
+    )
+
+    assert gate.call_args.kwargs["target"] is target
 
 
 @pytest.mark.asyncio

@@ -252,8 +252,8 @@ def test_permission_scope():
             "https://app.example.com/a?x=1"
         }
     ) == {
-        "cacheKey":
-        "https://app.example.com"
+        "cacheKey": "https://app.example.com",
+        "sessionScopeDisplay": "HTTP requests to https://app.example.com",
     }
 
     assert tool.permission_hints(
@@ -262,8 +262,8 @@ def test_permission_scope():
             "http://169.254.169.254/"
         }
     ) == {
-        "cacheKey":
-        "http://169.254.169.254"
+        "cacheKey": "http://169.254.169.254",
+        "sessionScopeDisplay": "HTTP requests to http://169.254.169.254",
     }
 
 
@@ -299,7 +299,8 @@ def test_permission_cache_key_uses_canonical_origin():
     tool = scoped_tool()
 
     assert tool.permission_hints({"url": "HTTPS://App.Example:443/path"}) == {
-        "cacheKey": "https://app.example"
+        "cacheKey": "https://app.example",
+        "sessionScopeDisplay": "HTTP requests to https://app.example",
     }
 
 

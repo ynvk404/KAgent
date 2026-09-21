@@ -20,6 +20,9 @@ class PermissionRequest:
     detail: str
     no_session_cache: bool = field(default=False, kw_only=True)
     cache_key: str | None = field(default=None, kw_only=True)
+    # Human-readable description of the cache scope.  This is presentation
+    # metadata only; cache enforcement continues to use ``cache_key``.
+    session_scope_display: str | None = field(default=None, kw_only=True)
 
 @runtime_checkable
 class Prompter(Protocol):

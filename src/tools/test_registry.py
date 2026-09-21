@@ -114,6 +114,21 @@ async def test_yolo_auto_approves_permission_tool_without_calling_prompter():
     assert tool.ran is True
     assert len(inner.calls) == 0
 
+
+@pytest.mark.asyncio
+async def test_yolo_does_not_bypass_non_cacheable_coverage_clear(tmp_path):
+    registry = Registry()
+    store = CoverageStore(str(tmp_path / "coverage.json"))
+    registry.register(CoverageTool(store))
+    inner = SpyPrompter(Decision.DENY)
+    yolo = YoloPrompter(inner, True)
+
+    with pytest.raises(UserControlledRefusal):
+        await registry.execute("coverage", {"action": "clear"}, None, yolo)
+
+    assert len(inner.calls) == 1
+    assert inner.calls[0].no_session_cache is True
+
 @pytest.mark.asyncio
 async def test_prompts_and_denies_when_yolo_disabled():
     reg = Registry()

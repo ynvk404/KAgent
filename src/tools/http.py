@@ -97,7 +97,8 @@ class HTTPTool(Tool):
             origin = HTTPOrigin.from_url(resolved)
 
             return {
-                "cacheKey": origin.as_url()
+                "cacheKey": origin.as_url(),
+                "sessionScopeDisplay": f"HTTP requests to {origin.as_url()}",
             }
 
         except Exception:
@@ -106,7 +107,8 @@ class HTTPTool(Tool):
                 "cacheKey": arg_string(
                     args,
                     "url",
-                )
+                ),
+                "sessionScopeDisplay": "this exact HTTP request origin",
             }
 
     def summarize(

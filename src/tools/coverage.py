@@ -6,7 +6,7 @@ from typing import Any
 from dataclasses import asdict
 from src.coverage.store import CoverageStore, CoverageStatus
 from src.permission.permission import Prompter
-from .types import Tool, arg_string
+from .types import Tool, PermissionHints, arg_string
 
 ACTIONS = (
     "mark",
@@ -138,6 +138,11 @@ class CoverageTool(Tool):
 
     def requires_permission_for(self, args: dict[str, Any]) -> bool:
         return arg_string(args, "action") == "clear"
+
+    def permission_hints(self, args: dict[str, Any]) -> PermissionHints:
+        if arg_string(args, "action") == "clear":
+            return {"noSessionCache": True}
+        return {}
 
     async def run(
         self,
