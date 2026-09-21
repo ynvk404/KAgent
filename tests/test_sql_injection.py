@@ -251,6 +251,52 @@ class TestScopeBounds:
     def test_forbids_automated_tooling_escalation(self, skill_text: str):
         assert '"see how bad it is"' in skill_text or "see how bad it is" in skill_text
 
+    def test_login_boolean_token_is_evidence_not_a_followup_target(
+        self, skill_text: str
+    ):
+        assert "token is incidental evidence" in skill_text
+        assert "do not replay it, decode it, request it again" in skill_text
+        assert "[REDACTED_TOKEN]" in skill_text
+        assert "without sending another request" in skill_text
+
+    def test_missing_jq_never_causes_another_target_request(self, skill_text: str):
+        normalized = _norm(skill_text)
+        assert "`jq` may be used when available" in normalized
+        assert "workflow behavior must not depend on it being installed" in normalized
+        assert "Never repeat a target request" in normalized
+
+    def test_sqli2_stops_escalation_but_preserves_authorized_phase3(
+        self, skill_text: str
+    ):
+        section = skill_text.split("### Bound the proof", 1)[1]
+        section = section.split("## Phase 3: Minimal Impact Validation", 1)[0]
+        normalized = _norm(section)
+        assert "stop further confirmation probes and payload escalation" in normalized
+        assert "Phase 3 remains available only when its separate authorization" in normalized
+        assert "never an automatic next step" in normalized
+
+    def test_phase2a_can_confirm_a_clear_phase1_signal(self, skill_text: str):
+        section = skill_text.split("### 2a. Boolean-based differential check", 1)[1]
+        section = section.split("### 2b. Time-based check", 1)[0]
+        normalized = _norm(section)
+        assert "including a clear error-based SQLI-1 signal" in normalized
+        assert "Phase 1 alone does not establish SQLI-2" in normalized
+
+    def test_direct_candidate_enters_workflow_before_active_probes(
+        self, skill_text: str
+    ):
+        contract = skill_text.split("## Structured workflow contract", 1)[1]
+        contract = contract.split("## Authorization matrix", 1)[0]
+        assert "call `start_validation` **before** sending active SQL probes" in _norm(contract)
+
+    def test_finding_impact_does_not_overclaim_admin_access(self, skill_text: str):
+        assert "Do not claim full administrative access or account takeover" in _norm(skill_text)
+
+    def test_audit_metadata_must_come_from_runtime(self, skill_text: str):
+        normalized = _norm(skill_text)
+        assert "Populate them only from runtime-supplied values" in normalized
+        assert "never invent a plausible value" in normalized
+
     def test_phase3_requires_separate_authorization(self, skill_text: str):
         section = skill_text.split("## Phase 3: Minimal Impact Validation", 1)[1]
         section = section.split("## Recording the result", 1)[0]
@@ -263,6 +309,16 @@ class TestScopeBounds:
         assert "minimal, non-sensitive fingerprint reads" in section
         assert "not user data" in section
         assert "not credentials" in section
+
+    def test_existing_login_impact_evidence_does_not_trigger_another_request(
+        self, skill_text: str
+    ):
+        section = skill_text.split("## Phase 3: Minimal Impact Validation", 1)[1]
+        section = section.split("## Recording the result", 1)[0]
+        normalized = _norm(section)
+        assert "confirming response already contains minimum sufficient impact evidence" in normalized
+        assert "without sending another request" in normalized
+        assert "does not by itself make the result SQLI-3" in normalized
 
     def test_column_enumeration_forbidden_in_payloads_and_skill(
         self, skill_text: str, payloads_text: str
@@ -432,12 +488,22 @@ class Phase2dGate:
 class Phase3Gate:
     sqli_confirmed_level2: bool = False
     user_authorized: bool = False
+    impact_probe_succeeded: bool = False
+    impact_evidence_already_sufficient: bool = False
 
     def may_run(self) -> tuple[bool, str]:
         if not self.sqli_confirmed_level2:
             return False, "sqli_not_confirmed"
         if not self.user_authorized:
             return False, "not_authorized"
+        return True, "ok"
+
+    def should_send_probe(self) -> tuple[bool, str]:
+        allowed, reason = self.may_run()
+        if not allowed:
+            return False, reason
+        if self.impact_evidence_already_sufficient:
+            return False, "evidence_already_sufficient"
         return True, "ok"
 
 
@@ -463,7 +529,7 @@ def resolve_outcome(
 
     if sqli2 and phase3_gate is not None:
         allowed, _ = phase3_gate.may_run()
-        if allowed:
+        if allowed and phase3_gate.impact_probe_succeeded:
             return "confirmed (SQLI-3)"
 
     if sqli2:
@@ -605,6 +671,22 @@ class TestPhase3GateLogic:
         allowed, reason = gate.may_run()
         assert allowed
 
+    def test_sufficient_existing_evidence_stops_an_authorized_phase3_probe(self):
+        gate = Phase3Gate(
+            sqli_confirmed_level2=True,
+            user_authorized=True,
+            impact_evidence_already_sufficient=True,
+        )
+        should_probe, reason = gate.should_send_probe()
+        assert not should_probe
+        assert reason == "evidence_already_sufficient"
+
+    def test_phase3_probe_is_optional_even_when_authorized(self):
+        gate = Phase3Gate(sqli_confirmed_level2=True, user_authorized=True)
+        should_probe, reason = gate.should_send_probe()
+        assert should_probe
+        assert reason == "ok"
+
 
 class TestOutcomeResolution:
     def test_blocked_takes_precedence(self):
@@ -641,7 +723,11 @@ class TestOutcomeResolution:
         assert outcome == "confirmed (SQLI-2)"
 
     def test_confirmed_sqli3_requires_phase3_gate_allowed(self):
-        phase3 = Phase3Gate(sqli_confirmed_level2=True, user_authorized=True)
+        phase3 = Phase3Gate(
+            sqli_confirmed_level2=True,
+            user_authorized=True,
+            impact_probe_succeeded=True,
+        )
         outcome = resolve_outcome(
             phase1_signal=True,
             phase2=Phase2State(technique_2a_tried=True, technique_2a_signal=True),
@@ -649,6 +735,16 @@ class TestOutcomeResolution:
             phase3_gate=phase3,
         )
         assert outcome == "confirmed (SQLI-3)"
+
+    def test_phase3_authorization_alone_does_not_upgrade_sqli2(self):
+        phase3 = Phase3Gate(sqli_confirmed_level2=True, user_authorized=True)
+        outcome = resolve_outcome(
+            phase1_signal=True,
+            phase2=Phase2State(technique_2a_tried=True, technique_2a_signal=True),
+            phase2d_gate=None,
+            phase3_gate=phase3,
+        )
+        assert outcome == "confirmed (SQLI-2)"
 
     def test_sqli2_without_phase3_authorization_stays_sqli2(self):
         phase3 = Phase3Gate(sqli_confirmed_level2=True, user_authorized=False)

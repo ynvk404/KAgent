@@ -50,8 +50,12 @@ When a matching Candidate exists, call `workflow(action="start_validation",
 candidate_id="...")` and use its structured fields as the handoff. A concrete
 direct user request remains valid without prior analysis: first record the
 user-supplied endpoint/input as a Candidate as runtime bookkeeping; this does
-not block or require earlier workflow stages before validation. At the end of a
-meaningful attempt, call `workflow(action="record_result", ...)` with the
+not block or require earlier workflow stages before validation. If endpoint
+discovery is needed, resolve the concrete backend endpoint/input first; once
+resolved, record that Candidate and call `start_validation` **before** sending
+active SQL probes. Preserve the originally requested route/input in the
+Candidate signals or notes when discovery resolves it to a different sink. At
+the end of a meaningful attempt, call `workflow(action="record_result", ...)` with the
 canonical outcome, compact evidence references, techniques, repeatability,
 mutation/cleanup state, and any deferred reason. Use `force=true` only when the
 user explicitly requests a retest or the request/input materially changed.
@@ -388,8 +392,10 @@ candidate.
 
 ### 2a. Boolean-based differential check
 
-Use only if 1b's error-based signal was ambiguous, or absent but you
-suspect the query shape changed. Use the `PHASE 2 — VALIDATION` section of
+Use this as the minimum confirmation step after a Phase 1 signal, including a
+clear error-based SQLI-1 signal, because Phase 1 alone does not establish
+SQLI-2. It also applies when 1b was absent or ambiguous but the surrounding
+context still suggests the query shape may be controllable. Use the `PHASE 2 — VALIDATION` section of
 `payloads.txt` for the paired TRUE/FALSE probes — send a logically TRUE and
 a logically FALSE request, otherwise identical to each other and to the
 baseline.
@@ -399,6 +405,15 @@ A consistent, repeatable difference between the TRUE and FALSE response
 `web-input-analysis`) across at least two repetitions is real evidence and
 establishes **SQLI-2**. A one-off difference is not — repeat once before
 concluding anything.
+
+On an authentication endpoint, the TRUE member of this pair may naturally
+return the application's normal successful-login response, including a session
+token. The status/body differential may be used as SQLI-2 evidence, but the
+token is incidental evidence: do not replay it, decode it, request it again,
+or use it against another endpoint. Record only a redacted marker such as
+`token issued` plus the minimum non-sensitive identity fields already visible
+in the same response. Any further token or account characterization requires a
+separately authorized workflow.
 
 ### 2b. Time-based check
 
@@ -471,13 +486,31 @@ here is binary (did a callback happen or not), not extractive.
 ### Bound the proof — do not escalate into extraction
 
 Once Phase 2 (via 2a, 2b, or — if available and authorized — 2d) gives a
-clear, repeatable positive signal (SQLI-2), stop probing that candidate
-with anything beyond Phase 2. In particular, do not:
+clear, repeatable positive signal (SQLI-2), stop further confirmation probes
+and payload escalation for that candidate. Do not automatically move into
+extraction or post-exploitation. Phase 3 remains available only when its
+separate authorization is granted and a minimal additional impact probe is
+useful; it is never an automatic next step. In particular, do not:
 
 - build or run a `UNION SELECT` chain to pull columns or table names;
 - dump table/column names, credentials, session tokens, or any real row data;
-- chain the injection into file read/write, command execution, or authentication bypass;
+- chain the injection into file read/write or command execution, replay an
+  issued session/token against other functionality, or otherwise extend an
+  authentication bypass beyond the response already observed;
 - run automated tooling (`sqlmap` etc.) to "see how bad it is."
+
+Do not send another confirming request merely to pretty-print, decode, or
+enrich evidence already obtained. `jq` may be used when available for local
+JSON parsing or formatting, but workflow behavior must not depend on it being
+installed. Never repeat a target request just because a local formatter is
+unavailable; use a portable standard-library mechanism on the already captured
+response when local processing is necessary and authorized. Prefer the built-in
+`http` tool for ordinary HTTP requests.
+
+Before any evidence reaches a transcript or artifact, redact bearer tokens,
+session cookies, password/password-hash fields, API keys, and sensitive profile
+fields. A token prefix is not needed to prove issuance; use a placeholder such
+as `[REDACTED_TOKEN]`.
 
 If Phase 2 never produces a clear, repeatable signal — including when 2d
 was unavailable and therefore not attempted — that's a valid outcome:
@@ -493,10 +526,20 @@ or payload variety to force a result.
 
 Do not enter this phase automatically.
 
+If the confirming response already contains minimum sufficient impact evidence
+(for example, a successful authentication response, a redacted session/token
+issuance marker, or a visible role/admin marker), record that observed evidence
+without sending another request. It can support the impact description for a
+confirmed SQLI-2 result, but does not by itself make the result SQLI-3: that
+level requires a separately authorized Phase 3 probe. Do not decode or replay
+the token, or use it against another endpoint.
+
 Only proceed when:
 
 1. SQL injection has already been confirmed (SQLI-2), and
-2. the user explicitly authorizes deeper impact validation via `ask_user`.
+2. the user explicitly authorizes deeper impact validation via `ask_user`, and
+3. the existing response does not already provide the minimum sufficient
+   impact evidence.
 
 Use the `PHASE 3 — IMPACT` section of `payloads.txt` for the impact probes.
 That section is limited to minimal, non-sensitive fingerprint reads — e.g.
@@ -530,6 +573,7 @@ tested:
 ```markdown
 ## Candidate: <endpoint> [<method>] — param: <parameter> (<location>)
 
+- **candidate_id:** <structured Workflow Candidate ID>
 - **timestamp:** <ISO 8601 UTC timestamp when this entry was recorded, e.g. 2026-08-27T09:14:32Z>
 - **agent_session_id:** <identifier for the current agent run/session, for audit-trail correlation with logs elsewhere>
 - **outcome:** <confirmed (SQLI-2) | confirmed (SQLI-3) | not confirmed | blocked | deferred (nosql, out of scope)>
@@ -550,7 +594,9 @@ tested:
 This is the durable record of what was actually tested and what was found,
 independent of whether anything gets turned into a finding. The
 `timestamp` and `agent_session_id` fields exist purely for audit
-traceability — they don't affect gating or outcome logic.
+traceability — they don't affect gating or outcome logic. Populate them only
+from runtime-supplied values. If the exact timestamp or session identifier is
+not exposed, write `unavailable`; never invent a plausible value.
 
 ## Confirm an evidence-backed finding
 
@@ -588,6 +634,12 @@ context, proof scope, and any separately authorized Phase 3 evidence in
 drop-in query fix — the general remediation category above is appropriate;
 a concrete query rewrite is not, since you don't have the application's real
 query.
+
+When a login differential naturally returns an administrative session token,
+describe the demonstrated impact as `obtained a valid administrative session
+token` or `administrative authentication bypass`. Do not claim full
+administrative access or account takeover unless a separately authorized
+workflow actually validated that access against administrative functionality.
 
 Do not call `confirm_finding` for `not confirmed`, `blocked`, or `deferred`
 candidates — they stay recorded in `results.md` only. Do not reuse the recon
