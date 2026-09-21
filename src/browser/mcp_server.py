@@ -17,7 +17,7 @@ from .store import CaptureStore
 log: Any = logger
 
 SERVER_NAME = 'kagent-browser'
-SERVER_VERSION = '0.1.0'
+SERVER_VERSION = '0.2.0'
 DEFAULT_PORT = 9999
 
 class ParsedArgs:
