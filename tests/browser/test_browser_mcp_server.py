@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
-from .mcp_server import (
+from src.browser.mcp_server import (
     parse_args,
     get_val,
     to_dict,

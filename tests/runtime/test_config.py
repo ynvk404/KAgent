@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from . import config
-from .config import (
+from src.config import config
+from src.config.config import (
     Backend,
     ToolingProfile,
     MCPServerConfig,

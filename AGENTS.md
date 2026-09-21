@@ -97,9 +97,9 @@ but contributors must still preserve scope in tool and workflow changes.
 - For production behavior changes, add or update focused regression tests that
   assert behavior rather than incidental Markdown wrapping or whitespace. Keep
   live/external-model skip semantics; never weaken a test merely to pass.
-- Run targeted tests first. `pytest.ini` collects `src/`; repository-level
-  integration tests also live in `tests/`, so run those explicitly when they
-  cover the change. Run the broader suite when the change crosses components.
+- Run targeted tests first. `pytest.ini` collects the suite under `tests/`;
+  run the relevant responsibility group explicitly when it covers the change.
+  Run the broader suite when the change crosses components.
   Use the configured `venv-linux` for pyright where applicable.
 - Before handoff, run `git diff --check`, inspect `git diff`, and inspect
   `git status --short`. Report tests not run and leave unrelated changes alone.

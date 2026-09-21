@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-SKILL_PATH = Path(__file__).parent.parent / "skills" / "ssrf" / "SKILL.md"
+SKILL_PATH = Path(__file__).resolve().parents[2] / "skills" / "ssrf" / "SKILL.md"
 
 
 def load_skill():

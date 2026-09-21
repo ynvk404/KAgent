@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.agent.agent import Agent, AgentOptions
-from src.agent.test_agent import EchoTool, FakeClient, FakeSignal, collect
+from tests.helpers.agent_fakes import EchoTool, FakeClient, FakeSignal, collect
 from src.llm.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import AlwaysAllow
 from src.session.store import Store

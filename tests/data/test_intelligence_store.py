@@ -7,8 +7,8 @@ import pytest
 import stat
 from threading import Event, Thread
 
-from . import store as intelligence_store
-from .store import (
+from src.intelligence import store as intelligence_store
+from src.intelligence.store import (
     IntelligenceScenario,
     IntelligenceStore,
     BUILTIN_SCENARIOS,

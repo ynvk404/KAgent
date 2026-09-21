@@ -58,6 +58,13 @@ from src.tools.workflow import WorkflowTool
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
 
 from src.session.store import SessionMemory, Store, new_id
+from tests.helpers.agent_fakes import (
+    EchoTool,
+    FakeClient,
+    FakeSignal,
+    collect,
+    seed_compactable_history,
+)
 
 
 @pytest.mark.asyncio
@@ -489,87 +496,6 @@ async def test_workflow_state_survives_compaction_and_resume(tmp_path):
     prompt = resumed.get_history()[0].content
     assert active.id in prompt
     assert done.id in prompt
-class FakeSignal:
-
-    def __init__(self):
-        self.aborted = False
-
-
-class FakeClient(Client):
-
-    def __init__(
-        self,
-        scripted: list[ChatResponse],
-    ):
-        self.scripted = scripted
-        self.idx = 0
-        self.requests: list[ChatRequest] = []
-
-    def name(self) -> str:
-        return "fake"
-
-    def model(self) -> str:
-        return "fake-model"
-
-    async def chat(
-        self,
-        request: ChatRequest,
-        signal=None,
-    ) -> ChatResponse:
-
-        self.requests.append(request)
-
-        if self.idx >= len(self.scripted):
-            raise Exception(
-                "FakeClient: script exhausted"
-            )
-
-        response = self.scripted[self.idx]
-
-        self.idx += 1
-
-        return response
-
-
-class EchoTool:
-
-    def __init__(self):
-        self.calls = 0
-
-    def name(self) -> str:
-        return "echo"
-
-    def description(self) -> str:
-        return "echo"
-
-    def schema(self) -> dict:
-        return {
-            "type": "object",
-            "properties": {
-                "msg": {
-                    "type": "string"
-                }
-            }
-        }
-
-    def requires_permission(self) -> bool:
-        return False
-
-    async def run(
-        self,
-        args: dict[str, Any],
-        signal,
-        prompter,
-    ) -> str:
-
-        self.calls += 1
-
-        return (
-            f"echoed: "
-            f"{str(args.get('msg', ''))}"
-        )
-
-
 class NamedTool:
 
     def __init__(self, name: str, description: str):
@@ -663,15 +589,6 @@ def make_agent(
     )["agent"]
 
 
-def seed_compactable_history(agent: Agent, size: int = 12_000) -> None:
-    agent.history.extend(
-        [
-            Message(role="user", content="older request " + "x" * size),
-            Message(role="assistant", content="older answer " + "y" * size),
-        ]
-    )
-
-
 def test_approx_tokens_counts_reasoning_content_without_changing_other_accounting():
     agent = make_agent([])
     agent.history = [
@@ -716,20 +633,6 @@ def test_context_guard_accounts_for_reasoning_without_eliding_assistant_state():
     assert working[0].reasoning_content == reasoning
     assert working[1].content.startswith("[tool output elided mid-turn to fit context")
     assert any("context guard" in event["summary"] for event in events)
-
-
-def collect():
-
-    events = []
-
-    def sink(event):
-
-        events.append(event)
-
-    return {
-        "events": events,
-        "sink": sink,
-    }
 
 
 def test_tools_token_estimate_cache_key_tracks_tool_names_not_only_count():

@@ -1,14 +1,14 @@
 from __future__ import annotations
 import json
 import threading
-from .types import ToolCall
+from src.llm.types import ToolCall
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, cast
 import pytest
-from . import anthropic as anthropic_module
-from .anthropic import AnthropicClient, map_finish_reason
-from .types import ChatRequest, FunctionCall, Message, ToolCall, ToolFunction, ToolSpec
+from src.llm import anthropic as anthropic_module
+from src.llm.anthropic import AnthropicClient, map_finish_reason
+from src.llm.types import ChatRequest, FunctionCall, Message, ToolCall, ToolFunction, ToolSpec
 
 @dataclass
 class _Captured:
@@ -220,7 +220,7 @@ async def test_falls_back_to_default_max_tokens_when_not_configured(base_url):
     )
     assert captured.last_body is not None
 
-    from .providers import ANTHROPIC_DEFAULT_MAX_TOKENS
+    from src.llm.providers import ANTHROPIC_DEFAULT_MAX_TOKENS
 
     assert captured.last_body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_TOKENS
 

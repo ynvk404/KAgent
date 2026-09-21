@@ -66,4 +66,4 @@ Just drop a `<name>/SKILL.md` into one of these — no config needed. Skills
 - `/<name>` — invoke a skill explicitly for your next turn.
 
 Shipped skill handoffs, help examples, and payload references are validated
-by `src/skills/test_conformance.py`, so stale runtime references fail CI.
+by `tests/skills/test_conformance.py`, so stale runtime references fail CI.

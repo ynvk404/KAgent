@@ -4,7 +4,7 @@ from src.agent.planner_benchmark import load_cases, run_benchmark
 from src.skills.registry import Registry
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_offline_planner_benchmark_matches_expected_outcomes():

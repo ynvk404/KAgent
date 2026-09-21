@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from . import transport
+from src.llm import transport
 
 
 PROXY_ENV_VARS = (

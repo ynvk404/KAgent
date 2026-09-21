@@ -66,17 +66,15 @@ python -m src.cli.main --help
 
 - `src/` — CLI, TUI, agent loop, providers, tools, workflow, and persistence
 - `skills/` — skill metadata, playbooks, and payload assets
-- `tests/` and `src/**/test_*.py` — integration and focused tests
+- `tests/` — focused, integration, skill-contract, and regression tests
 - `.kagent/` — local project runtime data when created
 
 ## Testing
 
-`pytest.ini` collects tests under `src/`; repository-level integration tests
-live under `tests/` and are run explicitly when needed.
+`pytest.ini` collects the complete test suite under `tests/`.
 
 ```bash
 pytest -q
-pytest -q tests
 ```
 
 Skill contracts and runtime behavior are still being refined through testing.

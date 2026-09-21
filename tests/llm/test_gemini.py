@@ -8,8 +8,8 @@ from typing import Any, cast
 
 import pytest
 
-from .gemini import GeminiClient
-from .types import ChatRequest, FunctionCall, Message, ToolCall, ToolFunction, ToolSpec
+from src.llm.gemini import GeminiClient
+from src.llm.types import ChatRequest, FunctionCall, Message, ToolCall, ToolFunction, ToolSpec
 
 @dataclass
 class _Captured:

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from textual.app import App, ComposeResult
 
-from .status_bar import (
+from src.ui.widgets.status_bar import (
     SPINNER_FRAMES,
     WAITING_MARKER,
     StatusBar,
@@ -173,7 +173,7 @@ class TestStatusBarBusyLine:
         assert "Esc to cancel" not in later
 
     def test_idle_state_does_not_render_the_busy_indicator(self) -> None:
-        from .status_bar import idle_line
+        from src.ui.widgets.status_bar import idle_line
 
         line = idle_line(props(busy=False, phase="idle")).plain
 
@@ -181,7 +181,7 @@ class TestStatusBarBusyLine:
         assert not line.startswith((*SPINNER_FRAMES, WAITING_MARKER))
 
     def test_idle_state_retains_final_turn_time_after_context(self) -> None:
-        from .status_bar import idle_line
+        from src.ui.widgets.status_bar import idle_line
 
         line = idle_line(
             props(
@@ -266,7 +266,7 @@ class TestStatusBarBusyLine:
         assert "Ctrl-O expand output" not in frame
 
     def test_keeps_success_and_warning_semantics_distinct(self) -> None:
-        from .status_bar import idle_line
+        from src.ui.widgets.status_bar import idle_line
 
         ready = idle_line(props(api_ready=True))
         pressure = idle_line(

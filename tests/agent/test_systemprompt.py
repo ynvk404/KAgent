@@ -4,7 +4,7 @@ from src.session.store import SessionMemory
 from src.target.target import Target
 from src.engagement.state import EngagementState
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
-from .system_prompt import (
+from src.agent.system_prompt import (
     BuildOptions,
     SESSION_MEMORY_CONTEXT_CHAR_LIMIT,
     WORKFLOW_CONTEXT_CHAR_LIMIT,

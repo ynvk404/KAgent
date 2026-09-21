@@ -7,7 +7,7 @@ from typing import Callable
 import pytest
 
 from src.agent.agent import Agent, AgentOptions
-from src.agent.test_agent import EchoTool, FakeSignal, collect, seed_compactable_history
+from tests.helpers.agent_fakes import EchoTool, FakeSignal, collect, seed_compactable_history
 from src.llm.client import Client
 from src.llm.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import AlwaysAllow

@@ -16,7 +16,7 @@ from src.tools.finding import ConfirmFindingTool
 from src.workflow.state import WorkflowState
 
 
-SKILLS_ROOT = Path(__file__).resolve().parents[1] / "skills"
+SKILLS_ROOT = Path(__file__).resolve().parents[2] / "skills"
 
 
 def shipped_skills() -> Registry:

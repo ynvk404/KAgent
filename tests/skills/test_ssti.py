@@ -28,7 +28,7 @@ import pytest
 import yaml
 
 
-SKILL_DIR = Path(__file__).parent.parent / "skills" / "ssti"
+SKILL_DIR = Path(__file__).resolve().parents[2] / "skills" / "ssti"
 SKILL_PATH = SKILL_DIR / "SKILL.md"
 PAYLOADS_PATH = SKILL_DIR / "payloads.txt"
 

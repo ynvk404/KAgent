@@ -133,9 +133,39 @@ def test_shows_command_not_json():
 
     last = out.transcript[-1]
 
-    assert last.prefix == "⏺ "
+    assert last.prefix == "⏺  "
     assert '{"command"' not in last.text
     assert "curl -ksS https://example.com" in last.text
+
+
+def test_short_shell_command_uses_ui_separator_not_function_call_style():
+    out = reducer(
+        seed(),
+        AgentEventAction(
+            ToolCallEvent(
+                name="shell",
+                args_json=json.dumps({"command": "echo hello"}),
+            )
+        ),
+    )
+
+    assert out.transcript[-1].text == "Shell · echo hello"
+    assert "Shell(echo hello)" not in out.transcript[-1].text
+
+
+def test_long_shell_command_keeps_descriptive_header_and_command_block():
+    command = "curl -s " + "https://example.test/path?query=value&" * 8
+    out = reducer(
+        seed(),
+        AgentEventAction(
+            ToolCallEvent(name="shell", args_json=json.dumps({"command": command}))
+        ),
+    )
+
+    text = out.transcript[-1].text
+    assert text.startswith("Shell · HTTP request\n$ ")
+    assert command not in text
+    assert text.endswith("…")
 
 
 
@@ -158,7 +188,7 @@ def test_BashTool_compact_style():
 
     last = out.transcript[-1]
 
-    assert last.prefix == "⏺ "
+    assert last.prefix == "⏺  "
     assert "mkdir -p recon/gobus.net" in last.text
 
 
@@ -190,7 +220,7 @@ def test_comment_shell_command():
 
     assert "Laravel debug mode" in last.text
     assert "curl -s" in last.text
-    assert last.prefix == "⏺ "
+    assert last.prefix == "⏺  "
 
 
 def test_delta_changes_planning_to_answering():

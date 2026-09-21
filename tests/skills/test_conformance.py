@@ -184,7 +184,7 @@ def test_finding_skills_document_required_production_arguments(
 
 def test_documented_conformance_test_path_exists():
     readme = (SKILLS_ROOT / "README.md").read_text(encoding="utf-8")
-    matches = re.findall(r"`(src/skills/[^`]*conformance[^`]*)`", readme)
+    matches = re.findall(r"`(tests/skills/[^`]*conformance[^`]*)`", readme)
 
     assert matches
     for relative_path in matches:

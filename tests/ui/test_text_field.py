@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 
-from .text_field import (
+from src.ui.utils.text_field import (
     expand_pasted_text_markers,
     looks_like_paste,
     normalize_pasted_text,

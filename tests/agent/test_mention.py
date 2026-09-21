@@ -2,8 +2,8 @@ import os
 import tempfile
 from pathlib import Path
 
-from . import mentions
-from .mentions import (
+from src.agent import mentions
+from src.agent.mentions import (
     INLINE_BYTE_CAP,
     expand_file_mentions,
     find_active_mention,
