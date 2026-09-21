@@ -506,7 +506,7 @@ def _format_tool_call_text(name: str, args_json: str) -> str:
             action = _shell_action_from_command(command) or _shell_long_command_block(command)
         if action:
             return f"{shell_name} · {action['title']}\n$ {action['command']}"
-        return f"{shell_name}({args_preview})"
+        return f"{shell_name} · {args_preview}"
     if name == "ask_user":
         return f"{display_tool_name(name)} · {args_preview}"
     return f"{display_tool_name(name)} {args_preview}"
@@ -616,7 +616,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent) -> AppState:
                     TranscriptEntry(
                         kind="tool-call",
                         text=_format_tool_call_text(name, args_json),
-                        prefix="⏺ " if _is_shell_tool(name) else None,
+                        prefix="⏺  " if _is_shell_tool(name) else None,
                         color=_tool_call_color(name),
                     ),
                 ),
