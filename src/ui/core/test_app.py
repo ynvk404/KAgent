@@ -567,6 +567,7 @@ def test_free_text_modal_uses_composer_prompt_styles() -> None:
     modal.handle_key("x")
 
     rendered = _modal_text(modal)
+    assert isinstance(rendered, Text)
 
     assert "Answer:\n❯ x▌" in rendered.plain
     assert [span.style for span in rendered.spans] == [
@@ -685,7 +686,11 @@ async def test_permission_group_panel_selection_and_right_click_copy(
         )
 
         copied: list[str] = []
-        app.copy_to_clipboard = copied.append
+
+        def copy_to_clipboard(text: str) -> None:
+            copied.append(text)
+
+        app.copy_to_clipboard = copy_to_clipboard
         await pilot.mouse_down(
             app.overlay_text_static,
             offset=(command_line.index("echo hello"), command_y),
