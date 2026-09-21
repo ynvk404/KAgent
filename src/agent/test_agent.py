@@ -336,6 +336,70 @@ def test_scope_mutations_clear_cache_only_when_scope_changes():
     assert prompter.clears == 2
 
 
+def test_real_scope_mutations_replace_the_next_turn_scope_context():
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target("http://juice.lab:3000"),
+        )
+    )
+    # This mirrors a prior assistant refusal retained in the conversation.
+    agent.history.append(
+        Message(
+            role="assistant",
+            content="The engagement contains exactly one origin: http://juice.lab:3000",
+        )
+    )
+
+    _, changed = agent.add_scope_origin("http://juice.lab:4000/path")
+    assert changed
+    assert agent.engagement_state.is_in_scope("http://juice.lab:4000/anything")
+    assert "http://juice.lab:4000" in agent.sys_prompt
+    assert agent.history[-1].role == "system"
+    assert "http://juice.lab:3000" in agent.history[-1].content
+    assert "http://juice.lab:4000" in agent.history[-1].content
+    assert "complete, current allowed HTTP-origin list" in agent.history[-1].content
+
+    _, changed = agent.remove_scope_origin("http://juice.lab:4000")
+    assert changed
+    assert "http://juice.lab:4000" not in agent.sys_prompt
+    assert "http://juice.lab:4000" not in agent.history[-1].content
+    assert "http://juice.lab:3000" in agent.history[-1].content
+
+    agent.add_scope_origin("http://juice.lab:4000")
+    _, changed = agent.reset_scope_to_target()
+    assert changed
+    assert "http://juice.lab:3000" in agent.history[-1].content
+    assert "http://juice.lab:4000" not in agent.history[-1].content
+
+
+def test_scope_duplicate_add_does_not_refresh_prompt_or_working_context():
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target("https://juice.lab"),
+        )
+    )
+    _, changed = agent.add_scope_origin("https://extra.lab:8443")
+    assert changed
+    prompt_before = agent.sys_prompt
+    history_before = list(agent.history)
+
+    _, changed = agent.add_scope_origin("HTTPS://EXTRA.LAB.:8443/other-path")
+
+    assert not changed
+    assert agent.sys_prompt == prompt_before
+    assert agent.history == history_before
+
+
 def test_elides_successful_prior_workflow_results_but_preserves_errors():
     messages = [
         Message(

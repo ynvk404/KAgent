@@ -133,6 +133,7 @@ COMPACTION_INPUT_CHAR_LIMIT = 22_000
 COMPACTION_MIN_SAVINGS_TOKENS = 64
 COMPACTION_MIN_REDUCTION_RATIO = 0.10
 COMPACTION_RECENT_MESSAGE_CHAR_LIMIT = 2_000
+SCOPE_CONTEXT_MARKER = "# Current engagement scope (authoritative)"
 COMPACTION_MIN_HISTORY_TOKENS = 2_048
 COMPACTION_MIN_HISTORY_RATIO = 1 / 3
 MAX_PARALLEL_TOOL_CALLS = 4
@@ -1247,11 +1248,7 @@ class Agent:
             self._clear_permission_cache()
         elif scope_changed:
             self._clear_permission_cache()
-        self.rebuild_system_prompt()
-        self.history = ensure_system_prompt(
-            self.history,
-            self.sys_prompt,
-        )
+        self.refresh_scope_context()
 
     def apply_target_clear(self) -> None:
         scope_changed = self.engagement_state.clear()
@@ -1260,8 +1257,7 @@ class Agent:
         if scope_changed or target_changed:
             self.workflow.clear()
         self._clear_permission_cache()
-        self.rebuild_system_prompt()
-        self.history = ensure_system_prompt(self.history, self.sys_prompt)
+        self.refresh_scope_context()
 
     def _clear_permission_cache(self) -> None:
         clear = getattr(self.prompter, "clear_session_cache", None)
@@ -1294,8 +1290,7 @@ class Agent:
         origin, changed = self.engagement_state.add_origin(url)
         if changed:
             self._clear_permission_cache()
-            self.rebuild_system_prompt()
-            self.history = ensure_system_prompt(self.history, self.sys_prompt)
+            self.refresh_scope_context()
         return origin, changed
 
     def remove_scope_origin(self, url: str) -> tuple[HTTPOrigin, bool]:
@@ -1307,8 +1302,7 @@ class Agent:
         removed_origin, changed = self.engagement_state.remove_origin(url)
         if changed:
             self._clear_permission_cache()
-            self.rebuild_system_prompt()
-            self.history = ensure_system_prompt(self.history, self.sys_prompt)
+            self.refresh_scope_context()
         return removed_origin, changed
 
     def reset_scope_to_target(self) -> tuple[HTTPOrigin, bool]:
@@ -1319,9 +1313,40 @@ class Agent:
         )
         if changed:
             self._clear_permission_cache()
-            self.rebuild_system_prompt()
-            self.history = ensure_system_prompt(self.history, self.sys_prompt)
+            self.refresh_scope_context()
         return origin, changed
+
+    def refresh_scope_context(self) -> None:
+        """Refresh the current scope instructions after a real mutation."""
+        self.rebuild_system_prompt()
+        self.history = ensure_system_prompt(self.history, self.sys_prompt)
+        self.history = [
+            message
+            for message in self.history
+            if not (
+                message.role == "system"
+                and message.content.startswith(SCOPE_CONTEXT_MARKER)
+            )
+        ]
+        origins = "\n".join(
+            f"- {origin.as_url()}"
+            for origin in sorted(self.engagement_state.allowed_origins)
+        ) or "- (none)"
+        self.history.append(
+            Message(
+                role="system",
+                content=(
+                    f"{SCOPE_CONTEXT_MARKER}\n"
+                    f"Revision: {self.engagement_state.revision}\n"
+                    "This is the complete, current allowed HTTP-origin list. "
+                    "Every listed origin is in scope for http and web_fetch; "
+                    "do not treat one as out of scope because of an earlier "
+                    "conversation message. Runtime tool validation remains "
+                    "authoritative.\n"
+                    f"{origins}"
+                ),
+            )
+        )
 
     async def coverage_context(self, signal) -> str:
         if self.tools.get("coverage") is None:
