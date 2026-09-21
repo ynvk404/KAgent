@@ -51,7 +51,7 @@ async def test_auto_approves_without_prompting():
 
 
 @pytest.mark.asyncio
-async def test_auto_approves_sensitive_requests():
+async def test_yolo_defers_sensitive_requests_to_the_real_prompter():
 
     inner = ScriptedPrompter(
         Decision.DENY,
@@ -71,8 +71,8 @@ async def test_auto_approves_sensitive_requests():
         )
     )
 
-    assert decision == Decision.ALLOW_ONCE
-    assert len(inner.seen) == 0
+    assert decision == Decision.DENY
+    assert len(inner.seen) == 1
 
 
 @pytest.mark.asyncio

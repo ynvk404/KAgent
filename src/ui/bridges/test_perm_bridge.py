@@ -61,6 +61,22 @@ async def test_cache_allow_session_per_tool():
 
 
 @pytest.mark.asyncio
+async def test_allow_once_does_not_populate_the_session_cache():
+    ask, modals = make_bridge(Decision.ALLOW_ONCE)
+    req = PermissionRequest(
+        tool="http",
+        summary="s",
+        detail="d",
+        cache_key="https://example.test",
+    )
+
+    await ask(req)
+    await ask(req)
+
+    assert modals() == 2
+
+
+@pytest.mark.asyncio
 async def test_no_session_cache_always_reprompt():
 
     ask, modals = make_bridge(

@@ -106,10 +106,11 @@ def busy_line(p: StatusProps) -> Text:
 
     line = Text()
     line.append(f"{indicator} ", style=ACCENT)
-    cancel_hint = "" if p.phase in WAITING_PHASES else " · Esc to cancel"
-    line.append(f"{label}{clock}{cancel_hint}", style=MUTED)
+    line.append(f"{label}{clock}", style=MUTED)
     if p.active_skill:
         line.append(f" · skill: {p.active_skill}", style=MUTED)
+    if p.phase not in WAITING_PHASES:
+        line.append(" · Esc to cancel", style=MUTED)
     return line
 
 

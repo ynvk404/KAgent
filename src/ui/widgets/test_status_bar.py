@@ -74,6 +74,63 @@ class TestStatusBarBusyLine:
         assert "turn 00:42" not in frame
         assert "Esc to cancel" in frame
 
+    def test_tool_skill_precedes_final_cancel_hint(self) -> None:
+        frame = busy_line(
+            props(
+                busy=True,
+                phase="running-tool",
+                running_tool="Shell · Print text",
+                elapsed_seconds=30,
+                active_skill="recon",
+            )
+        ).plain
+
+        assert frame.endswith("skill: recon · Esc to cancel")
+        assert "Esc to cancel · skill: recon" not in frame
+
+    def test_tool_without_skill_keeps_cancel_hint_last(self) -> None:
+        frame = busy_line(
+            props(
+                busy=True,
+                phase="running-tool",
+                running_tool="HTTP · GET /health",
+                elapsed_seconds=4,
+            )
+        ).plain
+
+        assert frame.endswith("Esc to cancel")
+        assert frame.count("Esc to cancel") == 1
+
+    def test_prompt_processing_skill_precedes_final_cancel_hint(self) -> None:
+        frame = busy_line(
+            props(
+                busy=True,
+                phase="planning",
+                elapsed_seconds=8,
+                active_skill="recon",
+            )
+        ).plain
+
+        assert frame.endswith("skill: recon · Esc to cancel")
+
+    def test_repeated_busy_refresh_does_not_duplicate_cancel_hint(self) -> None:
+        status = StatusBar()
+        status.apply(
+            props(
+                busy=True,
+                phase="running-tool",
+                running_tool="HTTP · GET /",
+                active_skill="recon",
+            )
+        )
+        first = status.render().plain
+        status.elapsed_seconds = 1
+        second = status.render().plain
+
+        assert first.count("Esc to cancel") == 1
+        assert second.count("Esc to cancel") == 1
+        assert second.endswith("skill: recon · Esc to cancel")
+
     def test_falls_back_to_phase_word_when_no_tool_is_running(self) -> None:
         frame = busy_line(
             props(busy=True, phase="planning", elapsed_seconds=3)

@@ -60,7 +60,7 @@ class YoloPrompter:
         request: PermissionRequest,
         signal: Any = None,
     ) -> Decision:
-        if self._yolo:
+        if self._yolo and not request.no_session_cache:
             return Decision.ALLOW_ONCE
 
         return await self._inner.ask(
