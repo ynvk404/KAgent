@@ -4128,6 +4128,58 @@ async def test_complete_workflow_result_reaches_immediate_next_request():
 
 
 @pytest.mark.asyncio
+async def test_confirm_finding_success_and_path_reach_immediate_next_request(tmp_path):
+    tool = ConfirmFindingTool(FindingsStore(str(tmp_path / "findings")))
+    client = FakeClient(
+        [
+            tool_batch(
+                tool_call(
+                    "finding-call",
+                    "confirm_finding",
+                    {
+                        "title": "Reflected XSS",
+                        "severity": "high",
+                        "url": "https://target.test/search?q=1",
+                        "impact": "Arbitrary JavaScript execution",
+                    },
+                )
+            ),
+            ChatResponse(
+                message=Message(role="assistant", content="finding recorded"),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(tool)
+    agent = Agent(
+        AgentOptions(
+            client=client,
+            tools=registry,
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+            auto_compact_threshold=1,
+            prompt_profile="compact",
+        )
+    )
+
+    await agent.run("save the finding", FakeSignal(), collect()["sink"])
+
+    raw = next(
+        message.content
+        for message in agent.get_history()
+        if message.tool_call_id == "finding-call"
+    )
+    llm_facing = tool_content(client.requests[1], "finding-call")
+    report = next((tmp_path / "findings").glob("*.md"))
+    assert raw == llm_facing
+    assert 'Finding "Reflected XSS" written to' in llm_facing
+    assert str(report) in llm_facing
+
+
+@pytest.mark.asyncio
 async def test_incomplete_coverage_page_stays_explicit_under_context_pressure(tmp_path):
     coverage_store = CoverageStore(str(tmp_path / "coverage.json"))
     coverage_store.loaded = True

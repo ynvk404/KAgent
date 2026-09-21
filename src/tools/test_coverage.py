@@ -8,6 +8,7 @@ from src.coverage.store import CoverageEntry, CoverageStore
 from src.permission.permission import AlwaysAllow
 from src.tools.coverage import (
     ACTIONS,
+    COLLECTION_TEXT_LIMIT,
     DEFAULT_PAGE_SIZE,
     MAX_COLLECTION_RESULT_CHARS,
     MAX_PAGE_SIZE,
@@ -403,6 +404,13 @@ async def test_list_clamps_limit_rejects_invalid_cursor_and_bounds_output(tmp_pa
 
     assert page["limit"] == MAX_PAGE_SIZE
     assert page["returned_count"] <= MAX_PAGE_SIZE
+    # The output-size bound removes whole structured items, never a fragment
+    # that would make the continuation metadata or JSON invalid.
+    assert page["returned_count"] < MAX_PAGE_SIZE
+    assert [item["endpoint"] for item in page["items"]] == [
+        f"GET /stable/{index:04d}" + "x" * (COLLECTION_TEXT_LIMIT - 16)
+        for index in range(page["returned_count"])
+    ]
     assert page["complete"] is False
     assert page["next_cursor"] == str(page["returned_count"])
     assert len(page_text) <= MAX_COLLECTION_RESULT_CHARS

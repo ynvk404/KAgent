@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.findings.store import Store as FindingsStore
 from src.permission.permission import (
     Decision,
     PermissionRequest,
@@ -10,7 +11,12 @@ from src.permission.permission import (
     YoloPrompter,
 )
 from src.tools.registry import Registry
+from src.tools.coverage import CoverageTool
+from src.tools.finding import ConfirmFindingTool
 from src.tools.types import Tool
+from src.tools.workflow import WorkflowTool
+from src.coverage.store import CoverageStore
+from src.workflow.state import WorkflowState
 
 class GatedTool:
     def __init__(self):
@@ -204,3 +210,15 @@ def test_invalid_context_reduction_metadata_falls_back_to_adaptive():
     reg.register(InvalidContextPolicyTool())
 
     assert reg.context_reduction_policy("http") == "adaptive"
+
+
+def test_real_tool_metadata_resolves_protected_and_adaptive_policies(tmp_path):
+    """Exercise the registry path used by the context guard, not a test double."""
+    reg = Registry()
+    reg.register(WorkflowTool(WorkflowState()))
+    reg.register(ConfirmFindingTool(FindingsStore(str(tmp_path / "findings"))))
+    reg.register(CoverageTool(CoverageStore(str(tmp_path / "coverage.json"))))
+
+    assert reg.context_reduction_policy("workflow") == "preserve"
+    assert reg.context_reduction_policy("confirm_finding") == "preserve"
+    assert reg.context_reduction_policy("coverage") == "adaptive"
