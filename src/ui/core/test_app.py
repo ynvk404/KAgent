@@ -23,7 +23,9 @@ from src.ui.core.app import (
     ConfigSnapshot,
     KAgent,
     ProviderChange,
+    _PermissionStatic,
     _RichLogWriter,
+    _clean_permission_selection,
     _input_selection_text,
     _modal_text,
 )
@@ -606,6 +608,170 @@ def test_right_click_copies_the_last_mouse_selection() -> None:
 
     assert copied == ["selected output"]
     assert stopped is True
+
+
+def test_permission_selection_text_omits_panel_borders() -> None:
+    selected = _clean_permission_selection(
+        "╭─ Shell command ─╮\n│ echo hello       │\n╰──────────────────╯"
+    )
+
+    assert selected == "Shell command\necho hello"
+    assert "╭" not in selected
+    assert "│" not in selected
+
+
+async def _drag_select_visible_text(pilot, widget, needle: str) -> None:
+    lines = [widget.render_line(y).text for y in range(widget.virtual_size.height)]
+    y, line = next((y, line) for y, line in enumerate(lines) if needle in line)
+    x = line.index(needle)
+    await pilot.mouse_down(widget, offset=(x, y))
+    await pilot.hover(widget, offset=(x + len(needle) - 1, y))
+    await pilot.mouse_up(widget, offset=(x + len(needle) - 1, y))
+    await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_permission_group_panel_selection_and_right_click_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(KAgent, "on_mount", lambda self: None)
+    app = make_app()
+    request = BridgedPermissionRequest(
+        tool="shell",
+        summary="shell: echo hello",
+        detail="echo hello",
+        session_scope_display="this exact shell command only",
+        resolve=lambda _: None,
+        reject=lambda _: None,
+    )
+
+    async with app.run_test(size=(80, 30)) as pilot:
+        app.dispatch(SetPerm(request))
+        KAgent._sync_overlay(app)
+        await pilot.pause()
+
+        assert isinstance(app.overlay_text_static, _PermissionStatic)
+        lines = [
+            app.overlay_text_static.render_line(y).text
+            for y in range(app.overlay_text_static.virtual_size.height)
+        ]
+        title_y, _title_line = next(
+            (y, line) for y, line in enumerate(lines) if "Shell command" in line
+        )
+        command_y, command_line = next(
+            (y, line) for y, line in enumerate(lines) if "echo hello" in line
+        )
+        await pilot.mouse_down(app.overlay_text_static, offset=(0, title_y))
+        await pilot.hover(
+            app.overlay_text_static,
+            offset=(len(command_line) - 1, command_y),
+        )
+        await pilot.mouse_up(
+            app.overlay_text_static,
+            offset=(len(command_line) - 1, command_y),
+        )
+        await pilot.pause()
+
+        assert app.screen.selections.get(app.overlay_text_static) is not None
+        assert app._last_selected_text == "Shell command\necho hello"
+        assert "╭" not in app._last_selected_text
+        assert "│" not in app._last_selected_text
+        selected_line = app.overlay_text_static.render_line(command_y)
+        assert any(
+            segment.style is not None
+            and segment.style.bgcolor == app.overlay_text_static.selection_style.bgcolor
+            for segment in selected_line
+            if "echo hello" in segment.text
+        )
+
+        copied: list[str] = []
+        app.copy_to_clipboard = copied.append
+        await pilot.mouse_down(
+            app.overlay_text_static,
+            offset=(command_line.index("echo hello"), command_y),
+            button=3,
+        )
+        assert copied == ["Shell command\necho hello"]
+
+
+@pytest.mark.asyncio
+async def test_permission_selection_keeps_structured_and_explanatory_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(KAgent, "on_mount", lambda self: None)
+    app = make_app()
+    request = BridgedPermissionRequest(
+        tool="http",
+        summary="http: private/internal URL http://127.0.0.1/status",
+        detail="host: 127.0.0.1\nreason: DNS resolves to loopback IPv4 (127.0.0.1)",
+        no_session_cache=True,
+        resolve=lambda _: None,
+        reject=lambda _: None,
+    )
+
+    async with app.run_test(size=(80, 30)) as pilot:
+        app.dispatch(SetPerm(request))
+        KAgent._sync_overlay(app)
+        await pilot.pause()
+
+        await _drag_select_visible_text(
+            pilot,
+            app.overlay_text_static,
+            "http://127.0.0.1/status",
+        )
+        assert app._last_selected_text == "http://127.0.0.1/status"
+
+        await _drag_select_visible_text(
+            pilot,
+            app.overlay_text_static,
+            "DNS resolves to loopback IPv4",
+        )
+        assert app._last_selected_text == "DNS resolves to loopback IPv4"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("permission_req", "needle"),
+    [
+        (
+            BridgedPermissionRequest(
+                tool="http",
+                summary="http: GET http://juice.lab:3000/robots.txt",
+                detail="GET http://juice.lab:3000/robots.txt",
+                resolve=lambda _: None,
+                reject=lambda _: None,
+            ),
+            "GET http://juice.lab:3000/robots.txt",
+        ),
+        (
+            BridgedPermissionRequest(
+                tool="file_write",
+                summary="write file: report.txt",
+                detail="path: report.txt\n--- content ---\nsummary",
+                resolve=lambda _: None,
+                reject=lambda _: None,
+            ),
+            "report.txt",
+        ),
+    ],
+)
+async def test_structured_permission_content_supports_real_mouse_drag(
+    monkeypatch: pytest.MonkeyPatch,
+    permission_req: BridgedPermissionRequest,
+    needle: str,
+) -> None:
+    monkeypatch.setattr(KAgent, "on_mount", lambda self: None)
+    app = make_app()
+
+    async with app.run_test(size=(80, 30)) as pilot:
+        app.dispatch(SetPerm(permission_req))
+        KAgent._sync_overlay(app)
+        await pilot.pause()
+
+        await _drag_select_visible_text(pilot, app.overlay_text_static, needle)
+
+        assert app.screen.selections.get(app.overlay_text_static) is not None
+        assert app._last_selected_text == needle
 
 
 def test_rich_log_writer_decodes_ansi_without_background_resets() -> None:

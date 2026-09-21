@@ -11,11 +11,14 @@ from pathlib import Path
 import sys
 from typing import Any, TypedDict, cast, IO
 
+from rich.console import RenderableType
+from rich.segment import Segment
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual import events
 from textual.containers import Vertical
 from textual.selection import Selection
+from textual.strip import Strip
 from textual.widgets import RichLog, Static
 
 from src.agent.agent import Agent, AgentRunOptions
@@ -224,7 +227,10 @@ def _input_style(name: str | None) -> str:
     return _INPUT_STYLE_MAP.get(name or "text", name or "")
 
 
-def _modal_text(modal) -> Text:
+def _modal_text(modal) -> RenderableType:
+    if isinstance(modal, PermissionModal):
+        return modal.render()
+
     text = Text()
     for i, line in enumerate(modal.render()):
         if i > 0:
@@ -265,6 +271,28 @@ def _input_selection_text(value: str, selection: Selection) -> str:
     return value[min(start, end) : max(start, end)]
 
 
+def _clean_permission_selection(text: str) -> str:
+    """Drop Rich Panel framing from copied permission-overlay content."""
+    cleaned: list[str] = []
+    for line in text.splitlines():
+        line = line.rstrip()
+        if line.startswith("╭") and line.endswith("╮"):
+            title = line[1:-1].strip("─ ")
+            if title:
+                cleaned.append(title)
+            continue
+        if line.startswith("╰") and line.endswith("╯"):
+            continue
+        if line.startswith("│"):
+            line = line[1:]
+            if line.endswith("│"):
+                line = line[:-1]
+            line = line[1:] if line.startswith(" ") else line
+            line = line.rstrip()
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+
 class _InputStatic(Static):
     def __init__(self) -> None:
         super().__init__(id="input-box")
@@ -272,6 +300,57 @@ class _InputStatic(Static):
 
     def get_selection(self, selection: Selection) -> tuple[str, str] | None:
         return _input_selection_text(self.value, selection), "\n"
+
+
+class _PermissionStatic(Static):
+    """A selectable Static for permission renderables such as Rich Panels."""
+
+    def __init__(self) -> None:
+        super().__init__(id="overlay-text")
+
+    def render_line(self, y: int) -> Strip:
+        line = super().render_line(y)
+        selection = self.text_selection
+        if selection is not None:
+            span = selection.get_span(y)
+            if span is not None:
+                start, end = span
+                if end == -1:
+                    end = line.cell_length
+                start = max(0, start)
+                end = min(line.cell_length, end)
+                if start < end:
+                    selected = line.crop(start, end)
+                    line = Strip.join(
+                        (
+                            line.crop(0, start),
+                            Strip(
+                                Segment.apply_style(
+                                    selected,
+                                    post_style=self.selection_style,
+                                ),
+                                selected.cell_length,
+                            ),
+                            line.crop(end, line.cell_length),
+                        )
+                    )
+        # Textual's screen selection lifecycle needs offset metadata on the
+        # rendered segments to translate mouse cells into content offsets.
+        return line.apply_offsets(0, y)
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        # Static's default implementation only supports Text/Content. Use its
+        # already-rendered lines so mouse offsets still match the visual Group
+        # / Panel layout, then omit framing characters from copied text.
+        if self._dirty_regions:
+            self._render_content()
+        lines = getattr(self._render_cache, "lines", [])
+        if not lines:
+            return None
+        visual_text = "\n".join(line.text for line in lines)
+        selected = selection.extract(visual_text)
+        cleaned = _clean_permission_selection(selected)
+        return (cleaned, "\n") if cleaned else None
 
 
 def filter_transcript(
@@ -486,7 +565,7 @@ class KAgent(App):
         with self.overlay_static:
             self.overlay_content_static = Vertical(id="overlay-content")
             with self.overlay_content_static:
-                self.overlay_text_static = Static(id="overlay-text")
+                self.overlay_text_static = _PermissionStatic()
                 yield self.overlay_text_static
 
         self.input_static = _InputStatic()
