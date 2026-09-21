@@ -380,11 +380,12 @@ async def test_input_editor_remains_visible_while_a_turn_is_active() -> None:
     app.overlay_static = cast(
         Any,
         SimpleNamespace(
-            update=lambda _: None,
             display=False,
             set_class=lambda *_: None,
         ),
     )
+    app.overlay_content_static = cast(Any, SimpleNamespace(set_class=lambda *_: None))
+    app.overlay_text_static = cast(Any, SimpleNamespace(update=lambda _: None))
     app.input_static = cast(Any, SimpleNamespace(display=True))
     app.status_bar = cast(Any, SimpleNamespace(elapsed_seconds=None))
 
@@ -403,11 +404,12 @@ def test_prompt_panels_receive_shared_modal_frame_class() -> None:
     app.overlay_static = cast(
         Any,
         SimpleNamespace(
-            update=lambda _: None,
             display=False,
             set_class=lambda on, name: class_changes.append((on, name)),
         ),
     )
+    app.overlay_content_static = cast(Any, SimpleNamespace(set_class=lambda *_: None))
+    app.overlay_text_static = cast(Any, SimpleNamespace(update=lambda _: None))
     app.input_static = cast(Any, SimpleNamespace(display=True))
     app.text_input = TextInputRequest(
         header="Question",
@@ -419,7 +421,7 @@ def test_prompt_panels_receive_shared_modal_frame_class() -> None:
 
     KAgent._sync_overlay(app)
 
-    assert class_changes[-1] == (True, "modal-panel")
+    assert (True, "modal-panel") in class_changes
     assert app.overlay_static.display is True
 
     app.text_input = None
@@ -436,7 +438,63 @@ def test_prompt_panels_receive_shared_modal_frame_class() -> None:
     )
     KAgent._sync_overlay(app)
 
-    assert class_changes[-1] == (True, "modal-panel")
+    assert (True, "modal-panel") in class_changes
+    assert class_changes[-1] == (True, "permission-panel")
+
+
+@pytest.mark.asyncio
+async def test_long_permission_panel_is_capped_and_scrolls_without_hiding_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(KAgent, "on_mount", lambda self: None)
+    app = make_app()
+    request = BridgedPermissionRequest(
+        tool="shell",
+        summary="Run command",
+        detail="\n".join(f"argument line {line}" for line in range(80)),
+        resolve=lambda _: None,
+        reject=lambda _: None,
+    )
+
+    async with app.run_test(size=(64, 40)) as pilot:
+        app.dispatch(SetPerm(request))
+        KAgent._sync_overlay(app)
+        await pilot.pause()
+
+        assert app.overlay_content_static.styles.max_height is not None
+        assert app.overlay_content_static.styles.overflow_y == "auto"
+        assert app.overlay_content_static.styles.scrollbar_size_vertical == 1
+        assert app.overlay_content_static.styles.scrollbar_color.hex == "#7E8A9A"
+        assert app.overlay_static.region.height <= 15
+        assert app.overlay_content_static.max_scroll_y > 0
+        assert app.transcript_panel.display is True
+        assert app.transcript_panel.region.height > 0
+
+
+@pytest.mark.asyncio
+async def test_short_permission_panel_keeps_content_driven_height(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(KAgent, "on_mount", lambda self: None)
+    app = make_app()
+    request = BridgedPermissionRequest(
+        tool="shell",
+        summary="Run command",
+        detail="echo ok",
+        resolve=lambda _: None,
+        reject=lambda _: None,
+    )
+
+    async with app.run_test(size=(64, 40)) as pilot:
+        app.dispatch(SetPerm(request))
+        KAgent._sync_overlay(app)
+        await pilot.pause()
+
+        height = app.overlay_content_static.styles.height
+        assert height is not None
+        assert height.is_auto
+        assert app.overlay_static.region.height < 15
+        assert app.overlay_content_static.max_scroll_y == 0
 
 
 @pytest.mark.asyncio

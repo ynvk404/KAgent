@@ -311,6 +311,10 @@ def transcript_entry_matches_filter(
 
 class KAgent(App):
 
+    overlay_static: Vertical
+    overlay_content_static: Vertical
+    overlay_text_static: Static
+
     CSS = f"""
     Screen > .screen--selection {{
         background: #38BDF8 30%;
@@ -341,6 +345,28 @@ class KAgent(App):
         border: round {MUTED};
         border-title-color: {ACCENT};
         padding: 0 1;
+    }}
+
+    #overlay {{
+        height: auto;
+    }}
+
+    #overlay-content {{
+        height: auto;
+    }}
+
+    #overlay-content.permission-content {{
+        max-height: 33vh;
+        overflow-y: auto;
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 0;
+        scrollbar-color: #7E8A9A;
+        scrollbar-color-hover: #38BDF8;
+        scrollbar-color-active: #38BDF8;
+        scrollbar-background: transparent;
+        scrollbar-background-hover: transparent;
+        scrollbar-background-active: transparent;
+        scrollbar-gutter: auto;
     }}
     """
 
@@ -456,8 +482,12 @@ class KAgent(App):
             write_banner=rich_log_writer.write_banner,
         )
 
-        self.overlay_static = Static(id="overlay")
-        yield self.overlay_static
+        self.overlay_static = Vertical(id="overlay")
+        with self.overlay_static:
+            self.overlay_content_static = Vertical(id="overlay-content")
+            with self.overlay_content_static:
+                self.overlay_text_static = Static(id="overlay-text")
+                yield self.overlay_text_static
 
         self.input_static = _InputStatic()
         self.input_static.border_title = "Input"
@@ -947,6 +977,14 @@ class KAgent(App):
             isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal)),
             "modal-panel",
         )
+        self.overlay_static.set_class(
+            isinstance(modal, PermissionModal),
+            "permission-panel",
+        )
+        self.overlay_content_static.set_class(
+            isinstance(modal, PermissionModal),
+            "permission-content",
+        )
 
         if modal is not None:
             self.overlay_static.border_title = (
@@ -958,7 +996,7 @@ class KAgent(App):
                 if isinstance(modal, TextInputModal)
                 else "Skills"
             )
-            self.overlay_static.update(_modal_text(modal))
+            self.overlay_text_static.update(_modal_text(modal))
             self.overlay_static.display = True
         elif self.mention_matches:
             self.overlay_static.border_title = ""
@@ -967,16 +1005,16 @@ class KAgent(App):
                 candidates=self.mention_matches,
                 selected=self.mention_idx,
             )
-            self.overlay_static.update(self._menu_lines_to_text(menu.render()))
+            self.overlay_text_static.update(self._menu_lines_to_text(menu.render()))
             self.overlay_static.display = True
         elif self.slash_matches:
             self.overlay_static.border_title = ""
             menu = SlashMenu(items=self.slash_matches, selected=self.slash_idx)
-            self.overlay_static.update(self._menu_lines_to_text(menu.render()))
+            self.overlay_text_static.update(self._menu_lines_to_text(menu.render()))
             self.overlay_static.display = True
         else:
             self.overlay_static.border_title = ""
-            self.overlay_static.update("")
+            self.overlay_text_static.update("")
             self.overlay_static.display = False
 
         self.input_static.display = modal is None
