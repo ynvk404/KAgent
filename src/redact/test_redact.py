@@ -12,6 +12,20 @@ def test_redacts_json_style_quoted_api_key_assignment():
     assert '"api_key": "ab…[REDACTED:' in redacted
 
 
+def test_redacts_short_json_password_without_altering_safe_examples():
+    text = '{"username":"admin","password":"admin123"}'
+
+    redacted = apply(text)
+
+    assert "admin123" not in redacted
+    assert '"username":"admin","password":' in redacted
+    assert apply("' OR 1=1 --") == "' OR 1=1 --"
+    assert apply('\"><script>alert(1)</script>') == '\"><script>alert(1)</script>'
+    assert apply("http://juice.lab:3000/rest/user/login") == (
+        "http://juice.lab:3000/rest/user/login"
+    )
+
+
 @pytest.mark.parametrize(
     "text",
     [

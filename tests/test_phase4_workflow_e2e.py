@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from src.agent.decision_planner import build_decision_plan
+from src.findings.store import Store as FindingsStore
 from src.llm.types import Message
 from src.permission.permission import AlwaysAllow
 from src.session.store import Store
@@ -11,6 +12,7 @@ from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry
 from src.target.target import Target
 from src.tools.workflow import WorkflowTool
+from src.tools.finding import ConfirmFindingTool
 from src.workflow.state import WorkflowState
 
 
@@ -169,3 +171,90 @@ async def test_offline_resume_preserves_existing_candidate_and_result(tmp_path):
     assert candidate_id in loaded.candidates
     assert loaded.latest_result(candidate_id) is not None
     assert loaded.eligible_for_finding(candidate_id) is False
+
+
+@pytest.mark.asyncio
+async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp_path):
+    """Exercise the real handoff without a network, LLM, or browser."""
+    skills = shipped_skills().list_enabled()
+    target = Target("https://target.test")
+    plan = build_decision_plan(
+        "Validate the login id database error candidate for SQL injection",
+        skills,
+        target,
+    )
+    assert plan is not None and plan.recommended_skill == "sql-injection"
+
+    state = WorkflowState()
+    workflow = WorkflowTool(state, target)
+    recorded = json.loads(
+        await workflow.run(
+            {
+                "action": "record_candidate",
+                "candidate_class": "sqli",
+                "method": "POST",
+                "endpoint": "/login",
+                "parameter": "id",
+                "source_skill": "web-input-analysis",
+                "signals": ["repeatable boolean differential"],
+            },
+            None,
+            AlwaysAllow(),
+        )
+    )
+    candidate_id = recorded["candidate"]["id"]
+
+    started = json.loads(
+        await workflow.run(
+            {"action": "start_validation", "candidate_id": candidate_id},
+            None,
+            AlwaysAllow(),
+        )
+    )
+    assert started["candidate"]["status"] == "validating"
+
+    result = json.loads(
+        await workflow.run(
+            {
+                "action": "record_result",
+                "candidate_id": candidate_id,
+                "skill_name": "sql-injection",
+                "outcome": "confirmed",
+                "evidence_refs": ["captures/login-sqli-confirmation"],
+                "techniques": ["boolean differential"],
+                "repeatable": True,
+            },
+            None,
+            AlwaysAllow(),
+        )
+    )
+    assert result["created"] is True
+    assert result["eligible_for_confirm_finding"] is True
+    assert state.relevant_candidate_classes() == frozenset()
+
+    finding = ConfirmFindingTool(
+        FindingsStore(str(tmp_path / "findings")), workflow=state
+    )
+    await finding.run(
+        {
+            "candidate_id": candidate_id,
+            "title": "SQL injection in login",
+            "severity": "high",
+            "url": "https://target.test/login",
+            "parameter": "id",
+            "impact": "Database query manipulation only; no account takeover proven.",
+            "response_excerpt": "authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYWRtaW4ifQ.signature",
+            "vuln_class": "sqli",
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    reports = list((tmp_path / "findings").glob("*.md"))
+    assert len(reports) == 1
+    report = reports[0].read_text(encoding="utf-8")
+    assert "SQL Injection" in report
+    assert "CWE-89" in report
+    assert "eyJhbGciOiJIUzI1NiJ9" not in report
+    assert "[REDACTED" in report
+    assert len(state.validation_results) == 1

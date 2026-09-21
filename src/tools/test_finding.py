@@ -180,6 +180,31 @@ async def test_run_persists_finding_and_notifies(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_redacts_session_material_from_persisted_evidence(tmp_path):
+    tool, _ = _tool(tmp_path)
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.signature"
+    password = "correct-horse-battery-staple"
+
+    await tool.run(
+        {
+            "title": "Authentication response evidence",
+            "severity": "medium",
+            "url": f"https://target.test/login?token={jwt}",
+            "impact": f"password={password}",
+            "response_excerpt": f"authorization: Bearer {jwt}",
+            "curl": f"curl -H 'Authorization: Bearer {jwt}' https://target.test",
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    report = next((tmp_path / "findings").glob("*.md")).read_text(encoding="utf-8")
+    assert jwt not in report
+    assert password not in report
+    assert "[REDACTED" in report
+
+
+@pytest.mark.asyncio
 async def test_run_reports_success_when_notifier_raises(tmp_path):
     def broken_notifier(*_):
         raise RuntimeError("Burp bridge unavailable")

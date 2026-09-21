@@ -12,6 +12,7 @@ from src.findings.store import (
 )
 from src.findings.classification import classify
 from src.permission.permission import Prompter
+from src.redact.redact import apply as redact
 from src.logger.logger import get_logger
 from src.workflow.state import WorkflowState
 from .types import Tool, arg_string
@@ -182,16 +183,19 @@ class ConfirmFindingTool:
         classification = classify(arg_string(args, "vuln_class"))
 
         finding = Finding(
-            title=title,
+            # Finding reports are durable evidence artifacts.  Preserve the
+            # minimum useful reproduction details, but never write credentials
+            # or session material supplied in tool arguments verbatim.
+            title=redact(title),
             severity=severity,
-            url=url,
-            impact=impact,
-            method=arg_string(args, "method") or None,
-            parameter=arg_string(args, "parameter") or None,
-            payload=arg_string(args, "payload") or None,
-            responseExcerpt=arg_string(args, "response_excerpt") or None,
-            curl=arg_string(args, "curl") or None,
-            remediation=arg_string(args, "remediation") or None,
+            url=redact(url),
+            impact=redact(impact),
+            method=redact(arg_string(args, "method")) or None,
+            parameter=redact(arg_string(args, "parameter")) or None,
+            payload=redact(arg_string(args, "payload")) or None,
+            responseExcerpt=redact(arg_string(args, "response_excerpt")) or None,
+            curl=redact(arg_string(args, "curl")) or None,
+            remediation=redact(arg_string(args, "remediation")) or None,
             vulnerabilityType=(classification.type if classification else None),
             cwe=(classification.cwe if classification else None),
             owasp=(classification.owasp if classification else None),

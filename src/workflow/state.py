@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeGuard
 
 from src.skills.registry import normalize_candidate_class, normalize_metadata_name
+from src.redact.redact import apply as redact
 
 
 CandidateStatus = Literal[
@@ -54,7 +55,7 @@ def _text(value: Any, *, limit: int = _MAX_ITEM_LENGTH) -> str | None:
         return None
     if not isinstance(value, str):
         raise ValueError("expected a string")
-    normalized = " ".join(value.strip().split())
+    normalized = redact(" ".join(value.strip().split()))
     return normalized[:limit] or None
 
 

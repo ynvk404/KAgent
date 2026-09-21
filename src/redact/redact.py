@@ -45,6 +45,9 @@ PATTERNS = [
         r"\b(eyJ[A-Za-z0-9_-]{8,}\.)([A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?)\b"
     ),
 
+    # Short JSON password value
+    re.compile(r'("password"\s*:\s*")([^"]+)(?=")', re.IGNORECASE),
+
     # api_key=...
     re.compile(
         r"([\"']?(?:api[_-]?key|secret|password|passwd|token)[\"']?"

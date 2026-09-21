@@ -78,6 +78,27 @@ def test_candidate_dedup_merges_compact_signals():
     assert second.signals == ["syntax-sensitive response", "reflected error"]
 
 
+def test_workflow_records_redact_secret_bearing_observation_text():
+    token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.signature"
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(
+        make_candidate(signals=[f"authorization: Bearer {token}"])
+    )
+    result = ValidationResult(
+        candidate.id,
+        "sql-injection",
+        "confirmed",
+        evidence_refs=[f"captures/login?token={token}"],
+        notes="password=correct-horse-battery-staple",
+    )
+    state.add_validation_result(result)
+
+    persisted = state.to_dict()
+    assert token not in str(persisted)
+    assert "correct-horse-battery-staple" not in str(persisted)
+    assert "[REDACTED" in str(persisted)
+
+
 @pytest.mark.parametrize("outcome", sorted(VALIDATION_OUTCOMES))
 def test_validation_result_outcomes_round_trip_and_link(outcome):
     state = WorkflowState()
