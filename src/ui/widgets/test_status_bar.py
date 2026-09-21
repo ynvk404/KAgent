@@ -22,6 +22,7 @@ def props(**overrides) -> StatusProps:
         active_skill=None,
         yolo=False,
         ctx_tokens=0,
+        request_tokens=0,
         compact_threshold=0,
         memory_items=0,
         phase="idle",
@@ -130,12 +131,13 @@ class TestStatusBarBusyLine:
                 busy=False,
                 phase="idle",
                 ctx_tokens=2300,
+                request_tokens=7300,
                 compact_threshold=6000,
                 elapsed_seconds=18,
             )
         ).plain
 
-        assert "ctx: ~2.3k/6k 38% · time 00:18" in line
+        assert "hist ~2.3k · req ~7.3k/6k 122% · time 00:18" in line
 
     @pytest.mark.asyncio
     async def test_wide_idle_status_orders_hints_metrics_then_expand_last(self) -> None:
@@ -144,6 +146,7 @@ class TestStatusBarBusyLine:
                 model="openai/gpt-oss-20b",
                 tool_support="yes",
                 ctx_tokens=2400,
+                request_tokens=5400,
                 compact_threshold=6000,
                 elapsed_seconds=1,
                 expand_hint=True,
@@ -157,7 +160,7 @@ class TestStatusBarBusyLine:
             "openai/gpt-oss-20b [tools ✓]",
             "Enter send",
             "/ commands",
-            "ctx: ~2.4k/6k 40%",
+            "hist ~2.4k · req ~5.4k/6k 90%",
             "time 00:01",
             "Ctrl-O expand output",
         ]
@@ -173,6 +176,7 @@ class TestStatusBarBusyLine:
                 model="openai/gpt-oss-20b",
                 tool_support="yes",
                 ctx_tokens=2400,
+                request_tokens=5400,
                 compact_threshold=6000,
                 elapsed_seconds=1,
                 expand_hint=True,
@@ -181,7 +185,7 @@ class TestStatusBarBusyLine:
         )
 
         assert "Enter send · / commands" in frame
-        assert "ctx: ~2.4k/6k 40%" in frame
+        assert "hist ~2.4k · req ~5.4k/6k 90%" in frame
         assert "time 00:01" in frame
         assert "Ctrl-O expand output" not in frame
 
@@ -192,6 +196,7 @@ class TestStatusBarBusyLine:
                 model="gpt-oss-20b",
                 tool_support="yes",
                 ctx_tokens=2300,
+                request_tokens=5300,
                 compact_threshold=6000,
                 elapsed_seconds=18,
                 expand_hint=True,
@@ -199,7 +204,7 @@ class TestStatusBarBusyLine:
             size=(72, 3),
         )
 
-        assert "ctx: ~2.3k/6k 38%" in frame
+        assert "h~2.3k · r~5.3k/6k 88%" in frame
         assert "time 00:18" in frame
         assert "Ctrl-O expand output" not in frame
 
@@ -207,7 +212,9 @@ class TestStatusBarBusyLine:
         from .status_bar import idle_line
 
         ready = idle_line(props(api_ready=True))
-        pressure = idle_line(props(ctx_tokens=90, compact_threshold=100))
+        pressure = idle_line(
+            props(ctx_tokens=90, request_tokens=90, compact_threshold=100)
+        )
 
         assert ready.spans[0].style == BOLD_SUCCESS
         assert any(span.style == WARNING for span in pressure.spans)

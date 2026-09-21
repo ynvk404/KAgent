@@ -998,10 +998,17 @@ class KAgent(App):
         cache_key = (len(self.state.transcript), self.state.busy)
         if cache_key != self._status_cache_key:
             self._status_cache_key = cache_key
+            history_tokens = self.agent.approx_tokens()
             self._status_info = {
                 "target": self.agent.target.base_url() or self.agent.target.name(),
                 "memory_items": self.agent.get_memory_stats().items,
-                "ctx_tokens": self.agent.approx_tokens(),
+                "ctx_tokens": history_tokens,
+                # Idle telemetry has no pending user input.  Use the same two
+                # existing estimators that pre-turn compaction combines.
+                "request_tokens": (
+                    history_tokens
+                    + self.agent.tools_token_estimate()
+                ),
                 "compact_threshold": self.agent.get_auto_compact_threshold(),
             }
 
@@ -1019,6 +1026,7 @@ class KAgent(App):
                 expand_hint=expand_hint,
                 running_tool=self.state.running_tool,
                 ctx_tokens=self._status_info["ctx_tokens"],
+                request_tokens=self._status_info["request_tokens"],
                 compact_threshold=self._status_info["compact_threshold"],
                 memory_items=self._status_info["memory_items"],
                 elapsed_seconds=self.status_bar.elapsed_seconds,

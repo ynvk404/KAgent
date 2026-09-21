@@ -137,6 +137,36 @@ def test_turn_timer_continues_while_waiting_for_permission_or_user() -> None:
     assert app.status_bar.elapsed_seconds == 9
 
 
+def test_status_telemetry_separates_history_from_next_request_pressure() -> None:
+    app = make_app()
+    received = []
+    app.agent = cast(
+        Agent,
+        SimpleNamespace(
+            target=SimpleNamespace(base_url=lambda: "", name=lambda: "target"),
+            get_memory_stats=lambda: SimpleNamespace(items=0),
+            approx_tokens=lambda: 9_002,
+            tools_token_estimate=lambda: 5_019,
+            get_auto_compact_threshold=lambda: 16_000,
+        ),
+    )
+    app.status_bar = cast(
+        Any,
+        SimpleNamespace(
+            apply=received.append,
+            elapsed_seconds=None,
+        ),
+    )
+    app._status_cache_key = None
+
+    app._sync_status_bar(expand_hint=False)
+
+    props = received[-1]
+    assert props.ctx_tokens == 9_002
+    assert props.request_tokens == 14_021
+    assert props.compact_threshold == 16_000
+
+
 def test_done_event_stops_timer_for_normal_refusal_and_abort_completion() -> None:
     app, clock, intervals = timer_app()
 

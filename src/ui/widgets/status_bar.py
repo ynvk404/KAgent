@@ -72,6 +72,7 @@ class StatusProps:
     active_skill: str | None
     yolo: bool
     ctx_tokens: int
+    request_tokens: int
     compact_threshold: int
     memory_items: int
     phase: UiPhase
@@ -116,18 +117,46 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
     phase_text = phase_label(p.phase)
 
     if p.ctx_tokens >= 1000:
-        ctx_hint = f" · ctx: ~{p.ctx_tokens / 1000:.1f}k"
+        history_hint = f"~{p.ctx_tokens / 1000:.1f}k"
     elif p.ctx_tokens > 0:
-        ctx_hint = f" · ctx: ~{p.ctx_tokens}"
+        history_hint = f"~{p.ctx_tokens}"
     else:
-        ctx_hint = ""
+        history_hint = ""
+
+    if p.request_tokens >= 1000:
+        request_hint = f"~{p.request_tokens / 1000:.1f}k"
+    elif p.request_tokens > 0:
+        request_hint = f"~{p.request_tokens}"
+    else:
+        request_hint = ""
 
     ctx_percent = (
-        min(999, round((p.ctx_tokens / p.compact_threshold) * 100))
-        if p.compact_threshold > 0 and p.ctx_tokens > 0
+        min(999, round((p.request_tokens / p.compact_threshold) * 100))
+        if p.compact_threshold > 0 and p.request_tokens > 0
         else 0
     )
     pill = tool_pill(p.tool_support)
+
+    # The status bar is idle here, so no submitted input exists to estimate.
+    # ``request_tokens`` is therefore history plus the current tool registry.
+    # Use a shorter spelling on narrow terminals before dropping telemetry.
+    compact_context = width is not None and width < 90
+    if history_hint and request_hint:
+        context_hint = (
+            f" · h{history_hint} · r{request_hint}"
+            if compact_context
+            else f" · hist {history_hint} · req {request_hint}"
+        )
+    elif request_hint:
+        context_hint = f" · req {request_hint}"
+    else:
+        context_hint = ""
+
+    context_suffix = (
+        f"/{round(p.compact_threshold / 1000)}k {ctx_percent}%"
+        if ctx_percent
+        else ""
+    )
 
     def build(
         *,
@@ -153,14 +182,9 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
         if include_input_hints:
             line.append(" · Enter send · / commands", style=MUTED)
 
-        if ctx_hint:
+        if context_hint:
             style = WARNING if ctx_percent >= 90 else MUTED
-            suffix = (
-                f"/{round(p.compact_threshold / 1000)}k {ctx_percent}%"
-                if ctx_percent
-                else ""
-            )
-            line.append(f"{ctx_hint}{suffix}", style=style)
+            line.append(f"{context_hint}{context_suffix}", style=style)
         if p.elapsed_seconds is not None:
             line.append(f" · time {format_elapsed(p.elapsed_seconds)}", style=MUTED)
 
@@ -221,6 +245,7 @@ class StatusBar(Widget):
     active_skill: reactive[str | None] = reactive(None)
     yolo: reactive[bool] = reactive(False)
     ctx_tokens: reactive[int] = reactive(0)
+    request_tokens: reactive[int] = reactive(0)
     compact_threshold: reactive[int] = reactive(0)
     memory_items: reactive[int] = reactive(0)
     model: reactive[str | None] = reactive(None)
@@ -244,6 +269,7 @@ class StatusBar(Widget):
             active_skill=self.active_skill,
             yolo=self.yolo,
             ctx_tokens=self.ctx_tokens,
+            request_tokens=self.request_tokens,
             compact_threshold=self.compact_threshold,
             memory_items=self.memory_items,
             phase=self.phase,
