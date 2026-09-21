@@ -16,6 +16,25 @@ def test_workflow_preserves_same_turn_result_context():
     assert tool.context_reduction_policy() == "preserve"
 
 
+def test_schema_describes_action_specific_required_fields():
+    tool = WorkflowTool(WorkflowState())
+    schema = tool.schema()
+
+    assert schema["required"] == ["action"]
+    assert "record_result needs candidate_id, skill_name, and outcome" in (
+        tool.description()
+    )
+    assert "Required for start_validation and record_result" in (
+        schema["properties"]["candidate_id"]["description"]
+    )
+    assert "Required for record_result" in (
+        schema["properties"]["outcome"]["description"]
+    )
+    assert "not used by record_result" in (
+        schema["properties"]["status"]["description"]
+    )
+
+
 @pytest.mark.asyncio
 async def test_structured_candidate_to_validation_handoff_and_dedup():
     state = WorkflowState()

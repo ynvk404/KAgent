@@ -45,7 +45,11 @@ class WorkflowTool(Tool):
         return (
             "Record/query compact Candidate and ValidationResult state. Reference "
             "stored evidence; never copy full requests/responses. Use force only "
-            "for an intentional retest."
+            "for an intentional retest. Required fields by action: "
+            "record_candidate needs candidate_class and a target (explicit or "
+            "active); start_validation needs candidate_id; record_result needs "
+            "candidate_id, skill_name, and outcome; complete_skill needs "
+            "skill_name. The status field applies to candidates, not results."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -54,8 +58,14 @@ class WorkflowTool(Tool):
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": list(ACTIONS)},
-                "candidate_id": {"type": "string"},
-                "candidate_class": {"type": "string"},
+                "candidate_id": {
+                    "type": "string",
+                    "description": "Required for start_validation and record_result.",
+                },
+                "candidate_class": {
+                    "type": "string",
+                    "description": "Required for record_candidate.",
+                },
                 "target": optional_string,
                 "endpoint": optional_string,
                 "method": optional_string,
@@ -65,9 +75,22 @@ class WorkflowTool(Tool):
                 "baseline_request_ref": optional_string,
                 "auth_context_ref": optional_string,
                 "source_skill": optional_string,
-                "status": {"type": "string", "enum": sorted(CANDIDATE_STATUSES)},
-                "skill_name": optional_string,
-                "outcome": {"type": "string", "enum": sorted(VALIDATION_OUTCOMES)},
+                "status": {
+                    "type": "string",
+                    "enum": sorted(CANDIDATE_STATUSES),
+                    "description": "Candidate status; not used by record_result.",
+                },
+                "skill_name": {
+                    "type": "string",
+                    "description": (
+                        "Required for record_result and complete_skill."
+                    ),
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": sorted(VALIDATION_OUTCOMES),
+                    "description": "Required for record_result.",
+                },
                 "evidence_refs": {"type": "array", "items": {"type": "string"}},
                 "techniques": {"type": "array", "items": {"type": "string"}},
                 "repeatable": {"type": "boolean"},

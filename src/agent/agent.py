@@ -3028,7 +3028,7 @@ def build_turn_learning_text(
 ) -> str:
     return "\n".join(
         [
-            "## User preferences and working style",
+            "## User request",
             user_msg,
             "",
             "## Task outcome",

@@ -113,7 +113,11 @@ def test_metadata(tmp_path):
     "value,expected",
     [
         ("  SQLI  ", "SQL Injection"),
+        ("sql-injection", "SQL Injection"),
         (" xSs ", "Cross-Site Scripting (XSS)"),
+        ("cross-site-scripting", "Cross-Site Scripting (XSS)"),
+        ("idor", "Insecure Direct Object Reference (IDOR)"),
+        ("access-control", "Insecure Direct Object Reference (IDOR)"),
         ("unknown", None),
         ("", None),
     ],
@@ -200,7 +204,7 @@ async def test_run_reports_success_when_notifier_raises(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "vuln_class",
-    ["sqli", " SQLI "],
+    ["sqli", " SQLI ", "sql-injection"],
 )
 async def test_run_enriches_finding_from_vuln_class(tmp_path, vuln_class):
     seen: list[Finding] = []
