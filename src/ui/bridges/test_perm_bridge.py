@@ -109,6 +109,37 @@ async def test_cache_scoped_by_cache_key():
 
 
 @pytest.mark.asyncio
+async def test_clear_session_cache_requires_a_new_decision():
+    shown = 0
+    pending: BridgePermissionRequest | None = None
+
+    def publish(req: BridgePermissionRequest | None):
+        nonlocal shown, pending
+        if req is not None:
+            shown += 1
+            pending = req
+
+    bridge = BridgedPrompter(publish)
+    request = PermissionRequest(tool="http", summary="s", detail="d", cache_key="a")
+
+    async def allow_session():
+        nonlocal pending
+        task = asyncio.create_task(bridge.ask(request))
+        await asyncio.sleep(0)
+        assert pending is not None
+        pending.resolve(Decision.ALLOW_SESSION)
+        pending = None
+        return await task
+
+    await allow_session()
+    assert await bridge.ask(request) == Decision.ALLOW_ONCE
+    bridge.clear_session_cache()
+    await allow_session()
+
+    assert shown == 2
+
+
+@pytest.mark.asyncio
 async def test_cache_key_does_not_whitelist_other_command():
 
     denials = 0

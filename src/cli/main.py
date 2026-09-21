@@ -32,6 +32,7 @@ from src.logger.session_debug import (
 )
 
 from src.target.target import new_target
+from src.engagement.state import EngagementState
 
 from src.agent.agent import Agent, AgentOptions
 from src.agent.system_prompt import PromptToolingProfile, PromptProfile
@@ -461,6 +462,7 @@ async def main() -> int:
     skills.set_disabled_names(cfg.disabled_skills)
 
     target = new_target()
+    engagement_state = EngagementState()
     perm_holder: dict = {"publish": None}
     ask_holder: dict = {"publish": None}
     banner_holder = BannerHolder()
@@ -528,8 +530,8 @@ async def main() -> int:
     tools.register(FileEditToolAlias())
     tools.register(GlobTool())
     tools.register(GrepTool())
-    tools.register(HTTPTool(target))
-    tools.register(WebFetchTool())
+    tools.register(HTTPTool(target, engagement_state))
+    tools.register(WebFetchTool(engagement_state))
     tools.register(WebSearchTool())
     tools.register(AskUserTool(bridged_ask))
     tools.register(
@@ -788,6 +790,7 @@ async def main() -> int:
         engagement=engagement,
         streaming_enabled=False if flags.no_stream else cfg.streaming_enabled,
         workflow=workflow,
+        engagement_state=engagement_state,
     )
 
     agent = Agent(opts)

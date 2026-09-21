@@ -79,6 +79,12 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     ),
 
     SlashItem(
+        name="/scope",
+        args="[show|add <origin>|remove <origin>|reset]",
+        description="show or edit exact origins for this engagement",
+    ),
+
+    SlashItem(
         name="/skills",
         args="[enable|disable|new <name>]",
         description="list/toggle skills",

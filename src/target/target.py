@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .origin import HTTPOrigin
+
 @dataclass(slots=True)
 class TargetSnapshot:
     baseURL: str = ""
@@ -22,6 +24,14 @@ class Target:
 
     def name(self) -> str:
         return self._name
+
+    def origin(self) -> HTTPOrigin | None:
+        if not self._base_url:
+            return None
+        try:
+            return HTTPOrigin.from_url(self._base_url)
+        except ValueError:
+            return None
 
     def set_base_url(
         self,

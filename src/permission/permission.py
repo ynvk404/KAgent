@@ -50,6 +50,11 @@ class YoloPrompter:
     ) -> bool:
         return self._yolo
 
+    def clear_session_cache(self) -> None:
+        clear = getattr(self._inner, "clear_session_cache", None)
+        if callable(clear):
+            clear()
+
     async def ask(
         self,
         request: PermissionRequest,

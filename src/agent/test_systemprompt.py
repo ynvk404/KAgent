@@ -2,6 +2,7 @@
 from src.skills.registry import Registry
 from src.session.store import SessionMemory
 from src.target.target import Target
+from src.engagement.state import EngagementState
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
 from .system_prompt import (
     BuildOptions,
@@ -107,6 +108,25 @@ class Testbuild_system_prompt:
         )
         assert "Active engagement" in p
         assert "https://app.example.com" in p
+
+    def test_injects_all_exact_allowed_origins_for_active_engagement(self):
+        target = Target("http://juice.lab:3000")
+        engagement = EngagementState()
+        engagement.initialize_target(target.base_url())
+        engagement.add_origin("http://juice.lab:4000")
+
+        prompt = build_system_prompt(
+            BuildOptions(
+                skills=Registry(),
+                thinking_enabled=False,
+                target=target,
+                engagement_state=engagement,
+            )
+        )
+
+        assert "Allowed HTTP origins:" in prompt
+        assert "  - http://juice.lab:3000" in prompt
+        assert "  - http://juice.lab:4000" in prompt
 
     def test_omits_engagement_section_when_target_is_empty(self):
         p = build_system_prompt(

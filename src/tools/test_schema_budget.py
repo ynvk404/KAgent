@@ -6,6 +6,7 @@ from src.findings.store import Store as FindingsStore
 from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
+from src.engagement.state import EngagementState
 from src.tools.ask import AskUserTool
 from src.tools.browser_capture import register_browser_capture_tools
 from src.tools.coverage import CoverageTool
@@ -37,6 +38,7 @@ def test_default_tool_schema_budget_is_measured_and_bounded(tmp_path):
     skills.load_dir(SKILLS_ROOT)
     target = Target()
     workflow = WorkflowState()
+    engagement = EngagementState()
     registry = Registry()
     core = [
         ShellTool(),
@@ -49,8 +51,8 @@ def test_default_tool_schema_budget_is_measured_and_bounded(tmp_path):
         FileEditToolAlias(),
         GlobTool(),
         GrepTool(),
-        HTTPTool(target),
-        WebFetchTool(),
+        HTTPTool(target, engagement),
+        WebFetchTool(engagement),
         WebSearchTool(),
         AskUserTool(None),  # type: ignore[arg-type]
         ConfirmFindingTool(FindingsStore(str(tmp_path / "findings")), workflow=workflow),

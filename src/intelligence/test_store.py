@@ -335,6 +335,57 @@ class TestContinuousLearning:
 
         assert all(item.category != "user-preference" for item in scenarios)
 
+    @pytest.mark.parametrize(
+        "heading",
+        [
+            "Decisions and assumptions",
+            "What worked well",
+            "What failed and why",
+            "Frequently used tools",
+            "Open TODOs",
+            "Next best actions",
+            "Findings and evidence",
+            "Tested surface",
+        ],
+    )
+    def test_session_authorization_is_never_learned_from_any_section(self, heading):
+        scenarios = extract_scenarios(
+            f"## {heading}\n- Operator authorized this target and granted permission.",
+            source_session_id="sess-auth",
+        )
+
+        assert scenarios == []
+
+    @pytest.mark.parametrize(
+        "item",
+        [
+            "/scope add http://juice.lab:4000",
+            "/scope remove http://juice.lab:4000",
+            "/scope reset",
+            "The operator approved the permission request.",
+            "Authorization was granted for http://juice.lab:3000.",
+            "YOLO enabled for this session.",
+        ],
+    )
+    def test_scope_commands_and_session_approvals_are_not_learned(self, item):
+        scenarios = extract_scenarios(
+            f"## Decisions and assumptions\n- {item}",
+            source_session_id="sess-scope",
+        )
+
+        assert scenarios == []
+
+    def test_file_permission_lesson_remains_learnable(self):
+        scenarios = extract_scenarios(
+            "## What failed and why\n"
+            "- Deployment failed because the file permission error required chmod 0600.",
+            source_session_id="sess-file-permission",
+        )
+
+        assert len(scenarios) == 1
+        assert scenarios[0].category == "lesson-learned"
+        assert "file permission error" in scenarios[0].lesson
+
     def test_explicit_style_preference_remains_learnable(self):
         scenarios = extract_scenarios(
             "## User request\nI prefer concise answers with clear explanations.",

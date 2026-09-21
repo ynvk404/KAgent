@@ -21,6 +21,7 @@ from src.llm.types import (
 )
 from src.logger.logger import get_logger
 from src.paths import user_data_root
+from src.engagement.state import EngagementState
 from src.target.target import Target
 from src.workflow.state import WorkflowState
 
@@ -53,6 +54,7 @@ class SessionFile:
     target: Target | None = None
     memory: SessionMemory | None = None
     workflow: WorkflowState = field(default_factory=WorkflowState)
+    engagement_state: EngagementState = field(default_factory=EngagementState)
 
 
 @dataclass
@@ -290,6 +292,7 @@ class Store:
                 target=None,
                 memory=None,
                 workflow=WorkflowState(),
+                engagement_state=EngagementState(),
             )
 
         try:
@@ -324,6 +327,18 @@ class Store:
             log.warning("session: ignoring malformed workflow state")
         workflow = WorkflowState.from_dict(workflow_data)
 
+        engagement_data = raw.get("engagement_state")
+        if engagement_data is not None and not isinstance(engagement_data, dict):
+            log.warning("session: ignoring malformed engagement state")
+        engagement_state = EngagementState.from_dict(engagement_data)
+        if not engagement_state.allowed_origins and target is not None:
+            target_url = target.base_url()
+            if target_url:
+                try:
+                    engagement_state.initialize_target(target_url)
+                except ValueError:
+                    log.warning("session: could not derive engagement scope from target")
+
         return SessionFile(
             updated_at=raw.get("updated_at", ""),
             id=raw.get("id", self.id),
@@ -331,6 +346,7 @@ class Store:
             target=target,
             memory=memory,
             workflow=workflow,
+            engagement_state=engagement_state,
         )
 
     async def save(
@@ -339,6 +355,7 @@ class Store:
         target: Target | None = None,
         memory: SessionMemory | None = None,
         workflow: WorkflowState | None = None,
+        engagement_state: EngagementState | None = None,
     ) -> None:
         if not self.path or str(self.path) in ("", "."):
             return
@@ -368,6 +385,9 @@ class Store:
             "target": target.to_dict() if target and not target.is_empty() else None,
             "memory": dataclasses.asdict(memory) if memory else None,
             "workflow": workflow.to_dict() if workflow else None,
+            "engagement_state": (
+                engagement_state.to_dict() if engagement_state else None
+            ),
             "messages": serialized_messages,
         }
 

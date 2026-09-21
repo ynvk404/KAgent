@@ -13,6 +13,7 @@ import yaml
 from src.logger.logger import get_logger
 from src.paths import legacy_project_data_root, project_data_root, user_data_root
 from src.redact.redact import apply as redact
+from src.engagement.safeguards import is_session_authorization_text
 
 log = get_logger("memory.store")
 
@@ -90,6 +91,8 @@ class MemoryStore:
     def add(self, memory: AddMemoryInput) -> Optional[MemoryFact]:
         text = redact(memory.text.strip())
         if not text:
+            return None
+        if is_session_authorization_text(text):
             return None
 
         scope = memory.scope

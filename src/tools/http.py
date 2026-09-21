@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
 import httpx
 
+from src.engagement.state import EngagementState
 from src.permission.permission import Prompter
 from src.target.target import Target
+from src.target.origin import HTTPOrigin
 from .private_host import (
     gate_private_request,
     parse_http_url,
@@ -22,8 +22,10 @@ class HTTPTool(Tool):
     def __init__(
         self,
         target: Target,
+        engagement: EngagementState,
     ):
         self.target = target
+        self.engagement = engagement
 
     def name(self) -> str:
         return "http"
@@ -78,21 +80,24 @@ class HTTPTool(Tool):
     def requires_permission(self) -> bool:
         return True
 
+    def validate_args(self, args: dict) -> None:
+        raw_url = arg_string(args, "url")
+        if not raw_url:
+            raise ValueError("url is required")
+        resolved = self.resolve_url(raw_url)
+        parse_http_url(resolved)
+        self._require_scope(resolved)
+
     def permission_hints(
         self,
         args: dict,
     ) -> dict:
         try:
-            parsed = urlparse(
-                self.resolve_url(
-                    arg_string(args, "url")
-                )
-            )
+            resolved = self.resolve_url(arg_string(args, "url"))
+            origin = HTTPOrigin.from_url(resolved)
 
             return {
-                "cacheKey": (
-                    f"{parsed.scheme}://{parsed.netloc}"
-                )
+                "cacheKey": origin.as_url()
             }
 
         except Exception:
@@ -179,6 +184,7 @@ class HTTPTool(Tool):
             raise Exception("url is required")
 
         resolved = self.resolve_url(raw_url)
+        self._require_scope(resolved)
 
         private_reason = await gate_private_request(
             prompter,
@@ -267,6 +273,9 @@ class HTTPTool(Tool):
             )
 
         return output
+
+    def _require_scope(self, url: str) -> None:
+        self.engagement.require_in_scope(url)
 
     def resolve_url(
         self,

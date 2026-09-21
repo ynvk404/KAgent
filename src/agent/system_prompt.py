@@ -13,10 +13,11 @@ from typing import List, Literal, Optional, TYPE_CHECKING
 from enum import StrEnum
 
 if TYPE_CHECKING:
-    from session.store import SessionMemory
-    from skills.registry import Registry
-    from target.target import Target
-    from workflow.state import WorkflowState
+    from src.engagement.state import EngagementState
+    from src.session.store import SessionMemory
+    from src.skills.registry import Registry
+    from src.target.target import Target
+    from src.workflow.state import WorkflowState
 
 APP_NAME = "kagent"
 SESSION_MEMORY_CONTEXT_CHAR_LIMIT = 10_000
@@ -335,6 +336,9 @@ class BuildOptions:
     # Compact, typed pentest handoff state. This survives history compaction.
     workflow: Optional["WorkflowState"] = None
 
+    # Exact HTTP origins authorized for this session engagement.
+    engagement_state: Optional["EngagementState"] = None
+
 
 def build_system_prompt(opts: BuildOptions) -> str:
     # Chọn prompt đầy đủ hoặc prompt rút gọn
@@ -365,6 +369,10 @@ def build_system_prompt(opts: BuildOptions) -> str:
         sb += f"- Target base URL: {opts.target.base_url()}\n"
         if opts.target.name():
             sb += f"- Engagement: {opts.target.name()}\n"
+        if opts.engagement_state and opts.engagement_state.allowed_origins:
+            sb += "- Allowed HTTP origins:\n"
+            for origin in sorted(opts.engagement_state.allowed_origins):
+                sb += f"  - {origin.as_url()}\n"
         sb += "- All HTTP testing should default to this host unless explicitly directed otherwise.\n"
         sb += (
             "- The 'http' tool accepts both absolute URLs and paths (e.g. /api/users). Relative paths resolve against the target base URL.\n"
@@ -372,7 +380,7 @@ def build_system_prompt(opts: BuildOptions) -> str:
         sb += (
             "- For curl one-liners in BashTool, write the full URL so the command is copy-pasteable into a report.\n"
         )
-        sb += "- Do not probe hosts outside this target without the user explicitly asking.\n"
+        sb += "- Do not probe origins outside the allowed HTTP origins.\n"
 
     # Thêm engagement, memory lâu dài và session memory
     sb += render_engagement(opts.engagement)

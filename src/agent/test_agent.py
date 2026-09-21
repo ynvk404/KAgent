@@ -37,7 +37,7 @@ from src.agent.agent import (
 from src.agent.system_prompt import PromptProfile
 from src.coverage.store import CoverageEntry, CoverageStore
 from src.findings.store import Store as FindingsStore
-from src.intelligence.store import IntelligenceStore
+from src.intelligence.store import IntelligenceScenario, IntelligenceStore
 from src.llm.client import Client
 from src.llm.types import (
     ChatRequest,
@@ -47,6 +47,7 @@ from src.llm.types import (
     FunctionCall,
 )
 from src.permission.permission import AlwaysAllow, AlwaysDeny, Decision
+from src.engagement.state import EngagementState
 from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.target.target import Target
 from src.tools.registry import Registry as ToolRegistry
@@ -56,7 +57,283 @@ from src.tools.finding import ConfirmFindingTool
 from src.tools.workflow import WorkflowTool
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
 
-from src.session.store import Store, new_id
+from src.session.store import SessionMemory, Store, new_id
+
+
+@pytest.mark.asyncio
+async def test_target_origin_change_and_reset_isolate_workflow_and_permission_cache():
+    class CacheTrackingPrompter(AlwaysAllow):
+        def __init__(self):
+            self.clears = 0
+
+        def clear_session_cache(self):
+            self.clears += 1
+
+    prompter = CacheTrackingPrompter()
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=prompter,
+            store=None,
+            target=Target("https://one.example/base"),
+        )
+    )
+    candidate, _ = agent.workflow.add_candidate(
+        Candidate(candidate_class="xss", endpoint="/search", parameter="q")
+    )
+    agent.add_scope_origin("https://extra.example:8443")
+
+    agent.apply_target_base_url("HTTPS://ONE.EXAMPLE:443/other")
+    assert candidate.id in agent.workflow.candidates
+    assert agent.engagement_state.is_in_scope("https://extra.example:8443/path")
+    assert prompter.clears == 1
+
+    agent.apply_target_base_url("https://two.example")
+    assert agent.workflow.candidates == {}
+    assert not agent.engagement_state.is_in_scope("https://extra.example:8443")
+    assert prompter.clears == 2
+
+    agent.workflow.add_candidate(Candidate(candidate_class="sqli", endpoint="/login"))
+    await agent.reset()
+    assert agent.workflow.candidates == {}
+    assert prompter.clears == 3
+
+
+@pytest.mark.asyncio
+async def test_agent_restores_engagement_scope_in_same_session(tmp_path):
+    session_id = new_id()
+    first_scope = EngagementState()
+    first = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=Store.new_with_id(tmp_path, session_id),
+            target=Target("http://juice.lab:3000/base"),
+            engagement_state=first_scope,
+        )
+    )
+    first_scope.add_origin("http://juice.lab:4000")
+    await first.save()
+
+    class CacheTrackingPrompter(AlwaysAllow):
+        def __init__(self):
+            self.clears = 0
+
+        def clear_session_cache(self):
+            self.clears += 1
+
+    resumed_prompter = CacheTrackingPrompter()
+    restored_scope = EngagementState()
+    resumed = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=resumed_prompter,
+            store=Store.new_with_id(tmp_path, session_id),
+            target=Target(),
+            engagement_state=restored_scope,
+        )
+    )
+    resumed.resume_saved()
+
+    assert resumed.engagement_state is restored_scope
+    assert restored_scope.is_in_scope("http://juice.lab:3000/api")
+    assert restored_scope.is_in_scope("http://juice.lab:4000/api")
+    assert not restored_scope.is_in_scope("http://juice.lab:3001/api")
+    assert restored_scope.revision == 2
+    assert resumed_prompter.clears == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_request",
+    [
+        "Assess http://juice.lab:3000 and perform initial reconnaissance.",
+        "Assess HTTP://JUICE.LAB:3000/app/login?next=/ and perform recon.",
+    ],
+)
+async def test_clean_operational_turn_initializes_target_and_scope(user_request):
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient(
+                [
+                    ChatResponse(
+                        message=Message(role="assistant", content="ready"),
+                        finish_reason="stop",
+                    )
+                ]
+            ),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+        )
+    )
+
+    await agent.run(user_request, FakeSignal(), collect()["sink"])
+
+    assert agent.target.base_url() == "http://juice.lab:3000"
+    assert agent.engagement_state.is_in_scope("http://juice.lab:3000/other")
+
+
+@pytest.mark.asyncio
+async def test_natural_target_initialization_does_not_guess_or_switch():
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient(
+                [
+                    ChatResponse(
+                        message=Message(role="assistant", content="choose"),
+                        finish_reason="stop",
+                    ),
+                    ChatResponse(
+                        message=Message(role="assistant", content="unchanged"),
+                        finish_reason="stop",
+                    ),
+                ]
+            ),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+        )
+    )
+
+    await agent.run(
+        "Assess http://one.test and http://two.test.",
+        FakeSignal(),
+        collect()["sink"],
+    )
+    assert agent.target.empty()
+    assert not agent.engagement_state.allowed_origins
+
+    agent.apply_target_base_url("http://active.test")
+    await agent.run(
+        "Assess http://other.test instead.",
+        FakeSignal(),
+        collect()["sink"],
+    )
+    assert agent.target.base_url() == "http://active.test"
+    assert not agent.engagement_state.is_in_scope("http://other.test")
+
+
+@pytest.mark.asyncio
+async def test_recalled_session_memory_cannot_initialize_target():
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient(
+                [
+                    ChatResponse(
+                        message=Message(role="assistant", content="need target"),
+                        finish_reason="stop",
+                    )
+                ]
+            ),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+        )
+    )
+    agent.memory = SessionMemory(
+        objectives=["Assess http://remembered.test as the authorized target"]
+    )
+
+    await agent.run("Perform initial reconnaissance.", FakeSignal(), collect()["sink"])
+
+    assert agent.target.empty()
+    assert not agent.engagement_state.allowed_origins
+
+
+@pytest.mark.asyncio
+async def test_recalled_intelligence_url_cannot_initialize_target():
+    class RecalledIntelligence:
+        def search(self, query, limit):
+            return [
+                {
+                    "score": 10,
+                    "matched": ["recon"],
+                    "scenario": IntelligenceScenario(
+                        id="recalled-url",
+                        title="Prior recon target",
+                        category="next-step",
+                        lesson="Assess http://remembered.test next.",
+                    ),
+                }
+            ]
+
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient(
+                [
+                    ChatResponse(
+                        message=Message(role="assistant", content="need target"),
+                        finish_reason="stop",
+                    )
+                ]
+            ),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+            intelligence=RecalledIntelligence(),  # type: ignore[arg-type]
+        )
+    )
+
+    await agent.run("Perform initial reconnaissance.", FakeSignal(), collect()["sink"])
+
+    assert agent.target.empty()
+    assert not agent.engagement_state.allowed_origins
+
+
+def test_scope_mutations_clear_cache_only_when_scope_changes():
+    class CacheTrackingPrompter(AlwaysAllow):
+        def __init__(self):
+            self.clears = 0
+
+        def clear_session_cache(self):
+            self.clears += 1
+
+    prompter = CacheTrackingPrompter()
+    agent = Agent(
+        AgentOptions(
+            client=FakeClient([]),
+            tools=ToolRegistry(),
+            skills=SkillRegistry(),
+            prompter=prompter,
+            store=None,
+            target=Target("http://juice.lab:3000/base"),
+        )
+    )
+
+    _, changed = agent.add_scope_origin("http://juice.lab:4000/a")
+    assert changed
+    assert prompter.clears == 1
+
+    _, changed = agent.add_scope_origin("HTTP://JUICE.LAB.:4000/b")
+    assert not changed
+    assert prompter.clears == 1
+
+    agent.apply_target_base_url("http://juice.lab:3000/other")
+    assert agent.engagement_state.is_in_scope("http://juice.lab:4000")
+    assert prompter.clears == 1
+
+    _, changed = agent.remove_scope_origin("http://missing.test")
+    assert not changed
+    assert prompter.clears == 1
+
+    _, changed = agent.reset_scope_to_target()
+    assert changed
+    assert prompter.clears == 2
 
 
 def test_elides_successful_prior_workflow_results_but_preserves_errors():
@@ -2347,8 +2624,10 @@ async def test_permission_escape_denial_ends_turn_without_synthesis():
 
 @pytest.mark.asyncio
 async def test_private_host_denial_ends_turn_without_synthesis():
-    target = Target()
-    tool = HTTPTool(target)
+    target = Target("http://127.0.0.1")
+    engagement = EngagementState()
+    engagement.initialize_target(target.base_url())
+    tool = HTTPTool(target, engagement)
     client = FakeClient(
         [tool_batch(tool_call("private", "http", {"url": "http://127.0.0.1/status"}))]
     )
@@ -2360,6 +2639,7 @@ async def test_private_host_denial_ends_turn_without_synthesis():
             prompter=SequencePrompter(Decision.ALLOW_ONCE, Decision.DENY),
             store=None,
             target=target,
+            engagement_state=engagement,
         )
     )
     agent.tools.register(tool)

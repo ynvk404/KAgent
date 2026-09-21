@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
+from src.engagement.state import EngagementState
 from src.permission.permission import Prompter
 from .private_host import gate_private_request, parse_http_url
 from .types import Tool, arg_string
@@ -169,6 +170,9 @@ async def _decode_capped(response: httpx.Response, cap: int) -> str:
     return "".join(parts)
 
 class WebFetchTool(Tool):
+    def __init__(self, engagement: EngagementState) -> None:
+        self.engagement = engagement
+
     def name(self) -> str:
         return "web_fetch"
 
@@ -197,6 +201,7 @@ class WebFetchTool(Tool):
             raise ValueError("url is required")
 
         parsed = parse_http_url(url)
+        self.engagement.require_in_scope(url)
         private_reason = await gate_private_request(prompter, parsed, signal, "web_fetch")
 
         cache_key = f"fetch:{parsed}"

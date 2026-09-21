@@ -51,6 +51,7 @@ from src.memory.store import (
 )
 
 from src.permission.permission import Prompter, UserControlledRefusal
+from src.engagement.state import EngagementState
 
 from src.session.store import (
     SessionMemory,
@@ -62,6 +63,7 @@ from src.skills.registry import (
     materialize_skill_body,
 )
 
+from src.target.origin import HTTPOrigin
 from src.target.target import Target
 from src.workflow.state import WorkflowState
 
@@ -134,6 +136,13 @@ COMPACTION_RECENT_MESSAGE_CHAR_LIMIT = 2_000
 COMPACTION_MIN_HISTORY_TOKENS = 2_048
 COMPACTION_MIN_HISTORY_RATIO = 1 / 3
 MAX_PARALLEL_TOOL_CALLS = 4
+
+_EXPLICIT_HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+_OPERATIONAL_TARGET_TERMS = re.compile(
+    r"\b(?:assess|audit|check|enumerate|exploit|inspect|investigate|probe|"
+    r"recon|reconnaissance|scan|test|validate|verify)\b",
+    re.IGNORECASE,
+)
 
 STATEFUL_TOOLS = {
     "load_skill",
@@ -418,6 +427,7 @@ class AgentOptions:
         memory_store: Optional[MemoryStore] = None,
         engagement: str = "",
         workflow: WorkflowState | None = None,
+        engagement_state: EngagementState | None = None,
     ):
         self.client = client
         self.tools = tools
@@ -445,6 +455,7 @@ class AgentOptions:
         self.memory_store = memory_store
         self.engagement = engagement
         self.workflow = workflow
+        self.engagement_state = engagement_state
 
 
 class Agent:
@@ -481,6 +492,9 @@ class Agent:
 
         self.memory: Optional[SessionMemory] = None
         self.workflow = opts.workflow or WorkflowState()
+        self.engagement_state = opts.engagement_state or EngagementState()
+        if not self.target.empty():
+            self.engagement_state.add_origin(self.target.base_url())
 
         self.auto_compact_threshold = (
             opts.auto_compact_threshold
@@ -538,6 +552,7 @@ class Agent:
                     else ""
                 ),
                 workflow=self.workflow,
+                engagement_state=self.engagement_state,
             )
         )
 
@@ -1062,6 +1077,7 @@ class Agent:
     async def reset(self) -> None:
         self.memory = None
         self.workflow.clear()
+        self._clear_permission_cache()
         self.rebuild_system_prompt()
 
         self.history = [
@@ -1105,12 +1121,16 @@ class Agent:
             return
 
         loaded = self.store.load()
+        self._clear_permission_cache()
 
         if loaded.target is not None:
             self.target.copy_from(loaded.target)
 
         self.memory = loaded.memory
         self.workflow.replace_from(loaded.workflow)
+        self.engagement_state.replace_from(loaded.engagement_state)
+        if not self.target.empty():
+            self.engagement_state.add_origin(self.target.base_url())
 
         self.rebuild_system_prompt()
 
@@ -1142,6 +1162,7 @@ class Agent:
             self.target,
             self.memory,
             self.workflow,
+            self.engagement_state,
         )
 
     async def save_context_snapshot(self, reason: str = "periodic") -> str:
@@ -1198,26 +1219,109 @@ class Agent:
                     else ""
                 ),
                 workflow=self.workflow,
+                engagement_state=self.engagement_state,
             )
         )
 
     async def set_target_base_url(self, url: str) -> None:
-        self.target.set_base_url(url)
-        self.rebuild_system_prompt()
-        self.history = ensure_system_prompt(
-            self.history,
-            self.sys_prompt,
-        )
+        self.apply_target_base_url(url)
         await self.save()
 
     async def clear_target(self) -> None:
-        self.target.clear()
+        self.apply_target_clear()
+        await self.save()
+
+    def apply_target_base_url(self, url: str) -> None:
+        new_origin = HTTPOrigin.from_url(url)
+        current_origin = self.target.origin()
+        origin_changed = current_origin != new_origin
+
+        if origin_changed:
+            _, scope_changed = self.engagement_state.reset_to_origin(url)
+        else:
+            _, scope_changed = self.engagement_state.add_origin(url)
+
+        self.target.set_base_url(url)
+        if origin_changed:
+            self.workflow.clear()
+            self._clear_permission_cache()
+        elif scope_changed:
+            self._clear_permission_cache()
         self.rebuild_system_prompt()
         self.history = ensure_system_prompt(
             self.history,
             self.sys_prompt,
         )
-        await self.save()
+
+    def apply_target_clear(self) -> None:
+        scope_changed = self.engagement_state.clear()
+        target_changed = not self.target.empty()
+        self.target.clear()
+        if scope_changed or target_changed:
+            self.workflow.clear()
+        self._clear_permission_cache()
+        self.rebuild_system_prompt()
+        self.history = ensure_system_prompt(self.history, self.sys_prompt)
+
+    def _clear_permission_cache(self) -> None:
+        clear = getattr(self.prompter, "clear_session_cache", None)
+        if callable(clear):
+            clear()
+
+    def initialize_target_from_user_request(self, user_msg: str) -> bool:
+        if not self.target.empty() or self.engagement_state.allowed_origins:
+            return False
+        if not _OPERATIONAL_TARGET_TERMS.search(user_msg):
+            return False
+
+        origins: list[HTTPOrigin] = []
+        for match in _EXPLICIT_HTTP_URL_RE.finditer(user_msg):
+            candidate = match.group(0).rstrip(".,;!?)]}")
+            try:
+                origins.append(HTTPOrigin.from_url(candidate))
+            except ValueError:
+                continue
+
+        if len(origins) != 1:
+            return False
+
+        self.apply_target_base_url(origins[0].as_url())
+        return True
+
+    def add_scope_origin(self, url: str) -> tuple[HTTPOrigin, bool]:
+        if self.target.empty():
+            raise ValueError("no active engagement")
+        origin, changed = self.engagement_state.add_origin(url)
+        if changed:
+            self._clear_permission_cache()
+            self.rebuild_system_prompt()
+            self.history = ensure_system_prompt(self.history, self.sys_prompt)
+        return origin, changed
+
+    def remove_scope_origin(self, url: str) -> tuple[HTTPOrigin, bool]:
+        if self.target.empty():
+            raise ValueError("no active engagement")
+        origin = HTTPOrigin.from_url(url)
+        if origin == self.target.origin():
+            raise ValueError("cannot remove the active target origin")
+        removed_origin, changed = self.engagement_state.remove_origin(url)
+        if changed:
+            self._clear_permission_cache()
+            self.rebuild_system_prompt()
+            self.history = ensure_system_prompt(self.history, self.sys_prompt)
+        return removed_origin, changed
+
+    def reset_scope_to_target(self) -> tuple[HTTPOrigin, bool]:
+        if self.target.empty():
+            raise ValueError("no active engagement")
+        origin, changed = self.engagement_state.reset_to_origin(
+            self.target.base_url()
+        )
+        if changed:
+            self._clear_permission_cache()
+            self.rebuild_system_prompt()
+            self.history = ensure_system_prompt(self.history, self.sys_prompt)
+        return origin, changed
 
     async def coverage_context(self, signal) -> str:
         if self.tools.get("coverage") is None:
@@ -1330,6 +1434,10 @@ class Agent:
     ) -> None:
         if isinstance(opts, dict):
             opts = AgentRunOptions(**opts)
+
+        tools_enabled = opts is None or getattr(opts, "tools", True)
+        if tools_enabled:
+            self.initialize_target_from_user_request(user_msg)
 
         self.active_skills = set(self.pending_skills)
         self.pending_skills.clear()
@@ -2384,6 +2492,7 @@ class Agent:
                 engagement=self.engagement,
                 curated_memory=(self.memory_store.index() if self.memory_store else ""),
                 workflow=self.workflow,
+                engagement_state=self.engagement_state,
             )
         )
 

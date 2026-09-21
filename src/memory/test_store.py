@@ -120,6 +120,30 @@ def test_empty_text(store):
     )
     assert result is None
 
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "/scope add http://juice.lab:4000",
+        "Operator authorized this target.",
+        "Target is http://juice.lab:3000",
+        "The permission request was approved.",
+        "YOLO enabled for this session.",
+    ],
+)
+def test_session_authorization_is_not_saved_as_durable_memory(store, text):
+    assert store.add(AddMemoryInput(text=text)) is None
+    assert store.list() == []
+
+
+def test_file_permission_knowledge_can_still_be_saved(store):
+    fact = store.add(
+        AddMemoryInput(text="Fix the file permission error with chmod 0600.")
+    )
+
+    assert fact is not None
+    assert "file permission error" in fact.text
+
 def test_format_memory_empty():
     result = format_memory_recall([])
     assert result == ""
@@ -229,7 +253,7 @@ def test_description_round_trips_without_yaml_front_matter_injection(store):
     assert loaded.created_at == "2026-06-10T00:00:00Z\nname: injected"
 
 def test_unreadable_fact_is_reported_and_skipped(store, caplog):
-    store.add(AddMemoryInput(text="target is example.com", scope="project"))
+    store.add(AddMemoryInput(text="reference is example.com", scope="project"))
 
     fact_file = next(
         f for f in store.project_dir.glob("*.md") if f.name != "MEMORY.md"
@@ -248,7 +272,7 @@ def test_unreadable_fact_is_reported_and_skipped(store, caplog):
 
 
 def test_forget_reports_facts_it_could_not_delete(store, caplog):
-    store.add(AddMemoryInput(text="target is example.com", scope="project"))
+    store.add(AddMemoryInput(text="reference is example.com", scope="project"))
 
     store.project_dir.chmod(0o500)
     try:

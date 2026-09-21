@@ -19,6 +19,45 @@ from src.session.store import (
     new_id,
 )
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
+from src.engagement.state import EngagementState
+
+
+class TestEngagementPersistence:
+    @pytest.mark.asyncio
+    async def test_exact_origin_scope_survives_round_trip(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "engagement-round-trip")
+        engagement = EngagementState()
+        engagement.initialize_target("https://App.Example:443/base")
+        engagement.add_origin("https://api.example:8443/path")
+
+        await store.save(
+            [Message(role="user", content="continue")],
+            engagement_state=engagement,
+        )
+
+        loaded = store.load()
+        assert loaded.engagement_state == engagement
+        assert loaded.engagement_state.is_in_scope("https://app.example/path")
+        assert loaded.engagement_state.is_in_scope("https://api.example:8443/other")
+        assert loaded.engagement_state.revision == 2
+
+    def test_legacy_session_derives_scope_from_saved_target(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "legacy-target")
+        store.path.write_text(
+            json.dumps(
+                {
+                    "updated_at": "",
+                    "messages": [],
+                    "target": {"baseURL": "http://juice.lab:3000/app", "name": ""},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = store.load()
+
+        assert loaded.engagement_state.is_in_scope("http://juice.lab:3000/api")
+        assert not loaded.engagement_state.is_in_scope("http://juice.lab:4000/api")
 
 
 class TestWorkflowPersistence:

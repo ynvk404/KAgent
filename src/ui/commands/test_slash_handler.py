@@ -10,6 +10,8 @@ from src.ui.commands.slash_handler import build_help_text, handle_slash
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.app import KAgent
 from src.ui.core.state import Append, Clear
+from src.engagement.state import EngagementState
+from src.target.origin import HTTPOrigin
 
 
 @dataclass(slots=True)
@@ -30,6 +32,12 @@ class DummyTarget:
     def clear(self) -> None:
         self.value = ""
 
+    def empty(self) -> bool:
+        return not self.value
+
+    def origin(self) -> HTTPOrigin | None:
+        return HTTPOrigin.from_url(self.value) if self.value else None
+
 
 @dataclass(slots=True)
 class DummyAgent:
@@ -39,6 +47,8 @@ class DummyAgent:
     sys_prompt: str = ""
     history: list = field(default_factory=list)
     reset_calls: int = 0
+    permission_cache_clears: int = 0
+    engagement_state: EngagementState = field(default_factory=EngagementState)
 
     def get_max_steps(self) -> int:
         return self.max_steps
@@ -60,6 +70,46 @@ class DummyAgent:
 
     async def clear_target(self) -> None:
         self.target.clear()
+
+    def apply_target_base_url(self, url: str) -> None:
+        current = self.target.origin()
+        next_origin = HTTPOrigin.from_url(url)
+        if current != next_origin:
+            self.engagement_state.reset_to_origin(url)
+            self.permission_cache_clears += 1
+        else:
+            self.engagement_state.add_origin(url)
+        self.target.set_base_url(url)
+        self.rebuild_system_prompt()
+
+    def apply_target_clear(self) -> None:
+        self.target.clear()
+        self.engagement_state.clear()
+        self.permission_cache_clears += 1
+        self.rebuild_system_prompt()
+
+    def add_scope_origin(self, url: str):
+        origin, changed = self.engagement_state.add_origin(url)
+        if changed:
+            self.permission_cache_clears += 1
+        return origin, changed
+
+    def remove_scope_origin(self, url: str):
+        origin = HTTPOrigin.from_url(url)
+        if origin == self.target.origin():
+            raise ValueError("cannot remove the active target origin")
+        origin, changed = self.engagement_state.remove_origin(url)
+        if changed:
+            self.permission_cache_clears += 1
+        return origin, changed
+
+    def reset_scope_to_target(self):
+        origin, changed = self.engagement_state.reset_to_origin(
+            self.target.base_url()
+        )
+        if changed:
+            self.permission_cache_clears += 1
+        return origin, changed
 
     async def coverage_context(self, signal) -> str:
         return "coverage fixture"
@@ -443,6 +493,119 @@ def test_target_invalid_input_shows_usage():
 
     assert app.agent.target.base_url() == ""
     assert last_text(app) == "usage: /target <url|clear>"
+
+
+def test_scope_show_without_engagement_is_clear():
+    app = DummyApp()
+
+    assert handle_slash(cast(KAgent, app), "/scope")
+    assert last_text(app) == "No active engagement. Set a target with /target <url>."
+
+
+@pytest.mark.asyncio
+async def test_scope_show_and_add_are_canonical_and_deterministic():
+    app = DummyApp()
+    app.agent.apply_target_base_url("http://juice.lab:3000/base")
+    baseline_revision = app.agent.engagement_state.revision
+    baseline_clears = app.agent.permission_cache_clears
+
+    assert handle_slash(cast(KAgent, app), "/scope add HTTP://JUICE.LAB.:4000/path?q=1")
+    assert last_text(app) == "Added scope origin: http://juice.lab:4000"
+    assert app.agent.engagement_state.revision == baseline_revision + 1
+    assert app.agent.permission_cache_clears == baseline_clears + 1
+    await asyncio.sleep(0)
+
+    assert handle_slash(cast(KAgent, app), "/scope show")
+    assert last_text(app) == (
+        "Active target: http://juice.lab:3000/base\n"
+        "Allowed origins:\n"
+        "  - http://juice.lab:3000\n"
+        "  - http://juice.lab:4000\n"
+        f"Engagement revision: {baseline_revision + 1}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_scope_duplicate_add_is_noop_including_default_port_equivalence():
+    app = DummyApp()
+    app.agent.apply_target_base_url("https://juice.lab")
+    revision = app.agent.engagement_state.revision
+    clears = app.agent.permission_cache_clears
+
+    assert handle_slash(cast(KAgent, app), "/scope add https://JUICE.LAB:443/a")
+    assert last_text(app) == "Origin is already in scope: https://juice.lab"
+    assert app.agent.engagement_state.revision == revision
+    assert app.agent.permission_cache_clears == clears
+    await asyncio.sleep(0)
+
+
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        ("/scope add", "usage: /scope add <origin>"),
+        ("/scope remove", "usage: /scope remove <origin>"),
+        ("/scope add ftp://juice.lab", "invalid scope origin: ftp://juice.lab"),
+        ("/scope unknown", "usage: /scope [show|add <origin>|remove <origin>|reset]"),
+    ],
+)
+def test_scope_invalid_or_missing_arguments(command, message):
+    app = DummyApp()
+    app.agent.apply_target_base_url("http://juice.lab:3000")
+
+    assert handle_slash(cast(KAgent, app), command)
+    assert last_text(app) == message
+
+
+@pytest.mark.asyncio
+async def test_scope_remove_missing_real_and_active_target_cases():
+    app = DummyApp()
+    app.agent.apply_target_base_url("http://juice.lab:3000")
+    app.agent.add_scope_origin("http://juice.lab:4000")
+
+    revision = app.agent.engagement_state.revision
+    clears = app.agent.permission_cache_clears
+    assert handle_slash(cast(KAgent, app), "/scope remove http://missing.test")
+    assert last_text(app) == "Origin is not in scope: http://missing.test"
+    assert app.agent.engagement_state.revision == revision
+    assert app.agent.permission_cache_clears == clears
+    await asyncio.sleep(0)
+
+    assert handle_slash(cast(KAgent, app), "/scope remove http://juice.lab:3000/a")
+    assert last_text(app) == (
+        "Cannot remove the active target origin from scope.\n"
+        "Change the active target first."
+    )
+
+    assert handle_slash(cast(KAgent, app), "/scope remove http://juice.lab:4000")
+    assert last_text(app) == "Removed scope origin: http://juice.lab:4000"
+    assert app.agent.engagement_state.revision == revision + 1
+    assert app.agent.permission_cache_clears == clears + 1
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_scope_reset_and_reset_noop_keep_active_target():
+    app = DummyApp()
+    app.agent.apply_target_base_url("http://juice.lab:3000/base")
+    app.agent.add_scope_origin("http://juice.lab:4000")
+
+    revision = app.agent.engagement_state.revision
+    assert handle_slash(cast(KAgent, app), "/scope reset")
+    assert last_text(app) == (
+        "Scope reset to active target only:\n  http://juice.lab:3000"
+    )
+    assert app.agent.target.base_url() == "http://juice.lab:3000/base"
+    assert app.agent.engagement_state.revision == revision + 1
+    await asyncio.sleep(0)
+
+    clears = app.agent.permission_cache_clears
+    assert handle_slash(cast(KAgent, app), "/scope reset")
+    assert last_text(app) == (
+        "Scope already contains only the active target: http://juice.lab:3000"
+    )
+    assert app.agent.engagement_state.revision == revision + 1
+    assert app.agent.permission_cache_clears == clears
+    await asyncio.sleep(0)
 
 
 def test_plan_turn_disables_agent_tools():

@@ -27,6 +27,9 @@ class BridgedPrompter(Prompter):
         self._busy = False
         self._waiters: list[asyncio.Future[None]] = []
 
+    def clear_session_cache(self) -> None:
+        self._session_allowed.clear()
+
     def _key_for(self, req: PermissionRequest) -> str:
         return (
             f"{req.tool} {req.cache_key}"

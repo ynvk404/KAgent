@@ -14,6 +14,7 @@ from typing import Any, Literal, Optional
 
 from src.logger.logger import get_logger
 from src.paths import legacy_project_data_root, project_data_root, user_data_root
+from src.engagement.safeguards import is_session_authorization_text
 
 logger = get_logger("intelligence.store")
 
@@ -574,6 +575,9 @@ def extract_scenarios(
 
     sections = split_markdown_sections(text)
 
+    def durable(items: list[str]) -> list[str]:
+        return [item for item in items if not is_session_authorization_text(item)]
+
     # A heading alone must not promote arbitrary task, scope, or authorization
     # text into durable preference memory. Every candidate passes the same
     # explicit, presentation-style preference filter.
@@ -604,8 +608,8 @@ def extract_scenarios(
             )
         )
 
-    for item in section_items(
-        sections, ["decisions and assumptions", "important decisions"]
+    for item in durable(
+        section_items(sections, ["decisions and assumptions", "important decisions"])
     )[:10]:
         title = title_from_item("Decision memory", item)
         result.append(
@@ -643,7 +647,7 @@ def extract_scenarios(
                 "task outcome",
             ],
         )
-        if is_workflow_like_item(i)
+        if is_workflow_like_item(i) and not is_session_authorization_text(i)
     ][:10]:
         title = title_from_item("Proven workflow", item)
         result.append(
@@ -670,7 +674,7 @@ def extract_scenarios(
     failure_items = section_items(
         sections, ["what failed and why", "past mistakes", "lessons learned"]
     ) + [i for i in bullet_items(text) if is_failure_like_item(i)]
-    for item in failure_items[:12]:
+    for item in durable(failure_items)[:12]:
         title = title_from_item("Lesson learned", item)
         result.append(
             IntelligenceScenario(
@@ -704,7 +708,7 @@ def extract_scenarios(
                 "tools and commands",
             ],
         )
-        if is_tool_config_like_item(i)
+        if is_tool_config_like_item(i) and not is_session_authorization_text(i)
     ][:12]:
         title = title_from_item("Tool/config memory", item)
         result.append(
@@ -730,7 +734,7 @@ def extract_scenarios(
             )
         )
 
-    for item in (
+    for item in durable(
         section_items(sections, ["open todos"])
         + section_items(sections, ["next best actions"])
     )[:10]:
@@ -754,8 +758,8 @@ def extract_scenarios(
             )
         )
 
-    for item in section_items(
-        sections, ["findings and evidence", "confirmed findings"]
+    for item in durable(
+        section_items(sections, ["findings and evidence", "confirmed findings"])
     )[:10]:
         title = title_from_item("Finding validation pattern", item)
         result.append(
@@ -788,7 +792,7 @@ def extract_scenarios(
         for i in section_items(
             sections, ["tested surface", "decisions and assumptions"]
         )
-        if is_gap_like_item(i)
+        if is_gap_like_item(i) and not is_session_authorization_text(i)
     ]:
         title = title_from_item("Coverage gap", item)
         result.append(
@@ -845,6 +849,8 @@ def bullet_items(text: str) -> list[str]:
         line = line.strip()
         if not line:
             continue
+        if re.match(r"^#{1,6}\s+", line):
+            continue
         line = re.sub(r"^[-*]\s+", "", line)
         line = re.sub(r"^\d+\.\s+", "", line)
         line = re.sub(r"^\[[ xX]\]\s+", "", line)
@@ -872,15 +878,9 @@ def explicit_preference_items(text: str) -> list[str]:
         re.I,
     )
     negative_pattern = re.compile(r"\b(?:do not|don't|dont|avoid)\b", re.I)
-    non_durable_pattern = re.compile(
-        r"\b(?:authori[sz](?:e|ed|ation)|permission|in[ -]scope|"
-        r"out[ -]of[ -]scope|target|ask_user|yolo)\b",
-        re.I,
-    )
-
     result: list[str] = []
     for item in bullet_items(text):
-        if non_durable_pattern.search(item):
+        if is_session_authorization_text(item):
             continue
         if presentation_pattern.search(item) and (
             explicit_pattern.search(item) or negative_pattern.search(item)

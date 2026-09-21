@@ -37,7 +37,7 @@ _KEYBINDINGS: list[tuple[str, str]] = [
 ]
 
 _COMMAND_GROUPS: list[tuple[str, tuple[str, ...]]] = [
-    ("Everyday", ("/help", "/target", "/plan", "/provider", "/model", "/clear", "/reset", "/exit")),
+    ("Everyday", ("/help", "/target", "/scope", "/plan", "/provider", "/model", "/clear", "/reset", "/exit")),
     ("Workflow", ("/next", "/compact", "/memory", "/skills", "/snapshot")),
     ("Advanced", ("/burp", "/maxsteps", "/thinking", "/yolo")),
 ]
@@ -506,6 +506,117 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         asyncio.create_task(_handle_model(app, rest, dispatch))
         return True
 
+    if cmd == "/scope":
+        sub = rest[0].lower() if rest else "show"
+
+        if sub == "show" and len(rest) <= 1:
+            if agent.target.empty():
+                text = "No active engagement. Set a target with /target <url>."
+            else:
+                origins = sorted(agent.engagement_state.allowed_origins)
+                lines = [
+                    f"Active target: {agent.target.base_url()}",
+                    "Allowed origins:",
+                    *(f"  - {origin.as_url()}" for origin in origins),
+                    f"Engagement revision: {agent.engagement_state.revision}",
+                ]
+                text = "\n".join(lines)
+            dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
+            return True
+
+        if sub not in {"add", "remove", "reset"}:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text="usage: /scope [show|add <origin>|remove <origin>|reset]",
+                    )
+                )
+            )
+            return True
+
+        if agent.target.empty():
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text="No active engagement. Set a target with /target <url>.",
+                    )
+                )
+            )
+            return True
+
+        if sub == "reset":
+            if len(rest) != 1:
+                dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="error",
+                            text="usage: /scope reset",
+                        )
+                    )
+                )
+                return True
+            origin, changed = agent.reset_scope_to_target()
+            text = (
+                f"Scope reset to active target only:\n  {origin.as_url()}"
+                if changed
+                else f"Scope already contains only the active target: {origin.as_url()}"
+            )
+        else:
+            if len(rest) != 2:
+                dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="error",
+                            text=f"usage: /scope {sub} <origin>",
+                        )
+                    )
+                )
+                return True
+            try:
+                if sub == "add":
+                    origin, changed = agent.add_scope_origin(rest[1])
+                    text = (
+                        f"Added scope origin: {origin.as_url()}"
+                        if changed
+                        else f"Origin is already in scope: {origin.as_url()}"
+                    )
+                else:
+                    origin, changed = agent.remove_scope_origin(rest[1])
+                    text = (
+                        f"Removed scope origin: {origin.as_url()}"
+                        if changed
+                        else f"Origin is not in scope: {origin.as_url()}"
+                    )
+            except ValueError as err:
+                if str(err) == "cannot remove the active target origin":
+                    text = (
+                        "Cannot remove the active target origin from scope.\n"
+                        "Change the active target first."
+                    )
+                else:
+                    text = f"invalid scope origin: {rest[1]}"
+                dispatch(Append(entry=TranscriptEntry(kind="error", text=text)))
+                return True
+
+        async def _persist_scope():
+            try:
+                await agent.save()
+            except Exception as err:
+                dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="error",
+                            text=f"scope save failed (state remains updated): {err}",
+                        )
+                    )
+                )
+
+        asyncio.create_task(_persist_scope())
+        dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
+        return True
+
     if cmd == "/target":
         u = " ".join(rest).strip()
         if not u:
@@ -519,9 +630,13 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             # so the very next turn is guaranteed to see the cleared target
             # in its context — this must not depend on the event loop
             # scheduling an async task before the user's next message runs.
-            agent.target.clear()
-            agent.rebuild_system_prompt()
-            agent.history = ensure_system_prompt(agent.history, agent.sys_prompt)
+            apply_clear = getattr(agent, "apply_target_clear", None)
+            if callable(apply_clear):
+                apply_clear()
+            else:
+                agent.target.clear()
+                agent.rebuild_system_prompt()
+                agent.history = ensure_system_prompt(agent.history, agent.sys_prompt)
 
             async def _persist_target_clear():
                 try:
@@ -567,9 +682,13 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         # the new target before this function returns. Only the disk
         # write (agent.save()) is pushed to the background — it doesn't
         # affect what the next turn sees.
-        agent.target.set_base_url(normalized)
-        agent.rebuild_system_prompt()
-        agent.history = ensure_system_prompt(agent.history, agent.sys_prompt)
+        apply_target = getattr(agent, "apply_target_base_url", None)
+        if callable(apply_target):
+            apply_target(normalized)
+        else:
+            agent.target.set_base_url(normalized)
+            agent.rebuild_system_prompt()
+            agent.history = ensure_system_prompt(agent.history, agent.sys_prompt)
 
         async def _persist_target_set():
             try:

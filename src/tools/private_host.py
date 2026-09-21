@@ -3,6 +3,8 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
+from src.target.origin import HTTPOrigin
+
 from src.permission.permission import (
     PermissionRequest,
     Decision,
@@ -49,45 +51,9 @@ def same_authorized_origin(
         return False
 
     try:
-        target_parsed = urlparse(target_raw)
-    except Exception:
+        return HTTPOrigin.from_parsed(parsed) == HTTPOrigin.from_url(target_raw)
+    except ValueError:
         return False
-
-    request_host = (
-        (parsed.hostname or "")
-        .lower()
-        .rstrip(".")
-    )
-    target_host = (
-        (target_parsed.hostname or "")
-        .lower()
-        .rstrip(".")
-    )
-
-    if not request_host or request_host != target_host:
-        return False
-
-    def effective_port(p):
-        try:
-            port = p.port
-        except ValueError:
-            port = None
-
-        if port is not None:
-            return port
-
-        return (
-            443
-            if p.scheme.lower() == "https"
-            else 80
-        )
-
-    return (
-        parsed.scheme.lower()
-        == target_parsed.scheme.lower()
-        and effective_port(parsed)
-        == effective_port(target_parsed)
-    )
 
 
 async def gate_private_request(
@@ -109,6 +75,7 @@ async def gate_private_request(
         target,
     )
 
+    origin = HTTPOrigin.from_parsed(parsed)
     decision = await prompter.ask(
         PermissionRequest(
             tool=tool_name,
@@ -127,9 +94,7 @@ async def gate_private_request(
                 not is_declared_target
             ),
             cache_key=(
-                f"private-declared://"
-                f"{parsed.scheme}://"
-                f"{parsed.netloc}"
+                f"private-declared://{origin.as_url()}"
                 if is_declared_target
                 else None
             ),

@@ -87,6 +87,13 @@ def test_target_catalog_entry():
     assert item.description == "show, set, or clear engagement target"
 
 
+def test_scope_catalog_entry():
+    item = next(s for s in SLASH_ITEMS if s.name == "/scope")
+
+    assert item.args == "[show|add <origin>|remove <origin>|reset]"
+    assert item.description == "show or edit exact origins for this engagement"
+
+
 def test_maxsteps_catalog_entry():
 
     item = next(

@@ -653,7 +653,8 @@ class TestRegistryIntegration:
 
         reg.register(ShellTool())
         reg.register(FileWriteTool())
-        reg.register(HTTPTool(target))
+        from src.engagement.state import EngagementState
+        reg.register(HTTPTool(target, EngagementState()))
         reg.register(AskUserTool(StubPrompter()))
         reg.register(ConfirmFindingTool(Store(str(tmp_path / "findings"))))
         reg.register(WorkflowTool(WorkflowState()))
