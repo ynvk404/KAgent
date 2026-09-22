@@ -97,6 +97,7 @@ from src.ui.widgets.banner import Banner, BannerData
 from src.ui.widgets.input_box import DEFAULT_PROMPT, InputBox
 from src.ui.widgets.mention_menu import MentionMenu
 from src.ui.widgets.permission_modal import PermissionModal
+from src.ui.widgets.provider_picker_modal import ProviderPickerModal
 from src.ui.widgets.skills_modal import SkillsModal
 from src.ui.widgets.text_input_modal import TextInputModal, TextInputRequest
 from src.ui.widgets.slash_menu import SlashMenu
@@ -528,6 +529,7 @@ class KAgent(App):
         self._ask_text_input_for: AskRequest | None = None
         self._ask_text_input_modal: TextInputModal | None = None
         self._ask_modal: AskModal | None = None
+        self._provider_modal: ProviderPickerModal | None = None
         self._perm_modal: PermissionModal | None = None
         self._skills_modal: SkillsModal | None = None
 
@@ -633,6 +635,7 @@ class KAgent(App):
             masked=input_req.masked,
             resolve=lambda value: self.resolve_text_input(value),
             reject=lambda err: self.reject_text_input(err),
+            initial_value=getattr(input_req, "initial_value", "") or "",
         )
 
         self.refresh()
@@ -761,6 +764,97 @@ class KAgent(App):
         if event.button == 3 and self._last_selected_text:
             self.copy_to_clipboard(self._last_selected_text)
             event.stop()
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        modal = self._get_active_modal()
+        if modal is not None:
+            if isinstance(modal, ProviderPickerModal):
+                modal.handle_scroll(1)
+            else:
+                modal.handle_key("down")
+            self._sync_overlay()
+            event.stop()
+            return
+
+        if self.slash_matches:
+            self.slash_idx = min(len(self.slash_matches) - 1, self.slash_idx + 1)
+            self._sync_overlay()
+            event.stop()
+            return
+
+        if self.mention_matches:
+            self.mention_idx = min(len(self.mention_matches) - 1, self.mention_idx + 1)
+            self._sync_overlay()
+            event.stop()
+            return
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        modal = self._get_active_modal()
+        if modal is not None:
+            if isinstance(modal, ProviderPickerModal):
+                modal.handle_scroll(-1)
+            else:
+                modal.handle_key("up")
+            self._sync_overlay()
+            event.stop()
+            return
+
+        if self.slash_matches:
+            self.slash_idx = max(0, self.slash_idx - 1)
+            self._sync_overlay()
+            event.stop()
+            return
+
+        if self.mention_matches:
+            self.mention_idx = max(0, self.mention_idx - 1)
+            self._sync_overlay()
+            event.stop()
+            return
+
+    def on_click(self, event: events.Click) -> None:
+        if event.button != 1:
+            return
+
+        modal = self._get_active_modal()
+        if modal is not None:
+            region = self.overlay_text_static.region
+            rel_x = event.x - region.x
+            rel_y = event.y - region.y
+
+            if isinstance(modal, ProviderPickerModal):
+                modal.handle_click(rel_x, rel_y)
+                self._sync_overlay()
+                event.stop()
+                return
+
+            if isinstance(modal, AskModal):
+                q = modal.req.question
+                start_y = 3 if q.header else 2
+                opt_idx = rel_y - start_y
+                if 0 <= opt_idx < len(q.options):
+                    modal.idx = opt_idx
+                    self._sync_overlay()
+                    event.stop()
+                    return
+
+            if isinstance(modal, SkillsModal):
+                skills = modal.skills()
+                skill_idx = rel_y - 3
+                if 0 <= skill_idx < len(skills):
+                    modal.idx = skill_idx
+                    asyncio.create_task(modal.toggle())
+                    self._sync_overlay()
+                    event.stop()
+                    return
+
+        elif self.slash_matches:
+            region = self.overlay_text_static.region
+            rel_y = event.y - region.y
+            if 0 <= rel_y < len(self.slash_matches):
+                self.slash_idx = rel_y
+                self._sync_overlay()
+                event.stop()
+                return
 
     async def _process_key(self, event: events.Key) -> None:
         raw_input = event.character or ""
@@ -952,12 +1046,18 @@ class KAgent(App):
                 return self._ask_text_input_modal
             self._ask_text_input_for = None
             self._ask_text_input_modal = None
+            if hasattr(self.state.pending_ask, "adapter") or getattr(getattr(self.state.pending_ask, "question", None), "header", "") == "provider":
+                if self._provider_modal is None or self._provider_modal.req is not self.state.pending_ask:
+                    self._provider_modal = ProviderPickerModal(self.state.pending_ask)
+                return self._provider_modal
+            self._provider_modal = None
             if self._ask_modal is None or self._ask_modal.req is not self.state.pending_ask:
                 self._ask_modal = AskModal(self.state.pending_ask)
             return self._ask_modal
         self._ask_text_input_for = None
         self._ask_text_input_modal = None
         self._ask_modal = None
+        self._provider_modal = None
 
         if self.state.pending_perm:
             if self._perm_modal is None or self._perm_modal.req is not self.state.pending_perm:
@@ -1053,7 +1153,7 @@ class KAgent(App):
 
         modal = self._get_active_modal()
         self.overlay_static.set_class(
-            isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal)),
+            isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal, ProviderPickerModal)),
             "modal-panel",
         )
         self.overlay_static.set_class(
@@ -1069,6 +1169,8 @@ class KAgent(App):
             self.overlay_static.border_title = (
                 "Permission"
                 if isinstance(modal, PermissionModal)
+                else "Provider"
+                if isinstance(modal, ProviderPickerModal)
                 else "Ask User"
                 if isinstance(modal, AskModal)
                 else "Input"

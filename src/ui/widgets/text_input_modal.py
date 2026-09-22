@@ -15,6 +15,7 @@ class TextInputRequest:
     resolve: Callable[[str], None]
     reject: Callable[[Exception], None]
     masked: bool = False
+    initial_value: str = ""
 
 
 class TextInputModal:
@@ -25,6 +26,7 @@ class TextInputModal:
     ):
         self.req = req
         self.value = ""
+        self.value = getattr(req, "initial_value", "") or ""
 
     def handle_key(
         self,

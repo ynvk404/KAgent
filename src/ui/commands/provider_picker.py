@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable
 from src.ui.core.app import ConfigSnapshot
 from src.ask.ask import Question, Option
 from src.ui.bridges.ask_bridge import AskRequest
-from src.ui.core.state import Action, Append, SetAsk, TranscriptEntry
+from src.ui.core.state import Action, Append, Clear, SetAsk, TranscriptEntry
 from src.ui.widgets.text_input_modal import TextInputRequest
 from src.llm.providers import (
     KIMI_DEFAULT_BASE_URL,
@@ -14,6 +14,18 @@ from src.llm.providers import (
     OPENROUTER_DEFAULT_BASE_URL,
     DEEPSEEK_DEFAULT_BASE_URL,
     ANTHROPIC_DEFAULT_BASE_URL,
+)
+
+from src.ui.core.custom_provider_adapter import (
+    CustomProviderAdapter,
+    CustomProviderProfile,
+    get_custom_provider_adapter,
+)
+from src.ui.widgets.provider_picker_modal import (
+    ProviderPickerModal,
+    SECTION_OFFICIAL,
+    SECTION_CUSTOM,
+    SECTION_MANUAL,
 )
 
 REMOTE_PROVIDERS: tuple[tuple[str, str, str], ...] = (
@@ -25,6 +37,32 @@ REMOTE_PROVIDERS: tuple[tuple[str, str, str], ...] = (
     ("deepseek", "DeepSeek", "sk-..."),
     ("openai-compat", "OpenAI-compatible", "sk-..."),
 )
+
+
+class ProviderPickerRequest(AskRequest):
+    def __init__(
+        self,
+        question: Question,
+        resolve: Callable[[str], None],
+        reject: Callable[[Exception], None],
+        adapter: CustomProviderAdapter,
+        current_backend: str,
+        on_add_provider: Callable[[], Any],
+        on_edit_provider: Callable[[CustomProviderProfile], Any],
+        on_delete_provider: Callable[[CustomProviderProfile], Any],
+        on_activate_provider: Callable[[CustomProviderProfile], Any],
+        on_active_delete_blocked: Callable[[CustomProviderProfile], Any],
+        initial_section: int = SECTION_OFFICIAL,
+    ) -> None:
+        super().__init__(question=question, resolve=resolve, reject=reject)
+        self.adapter = adapter
+        self.current_backend = current_backend
+        self.on_add_provider = on_add_provider
+        self.on_edit_provider = on_edit_provider
+        self.on_delete_provider = on_delete_provider
+        self.on_activate_provider = on_activate_provider
+        self.on_active_delete_blocked = on_active_delete_blocked
+        self.initial_section = initial_section
 
 def mask_api_key(value: str) -> str:
     if not value:
@@ -52,6 +90,8 @@ def open_provider_picker(
         [],
         Awaitable[None],
     ] | None = None,
+    adapter: CustomProviderAdapter | None = None,
+    initial_section: int = SECTION_OFFICIAL,
 ) -> None:
     cur = read_config()
     current_backend = cur.get("backend", "")
@@ -498,13 +538,276 @@ def open_provider_picker(
             )
         )
 
+    active_adapter = adapter or get_custom_provider_adapter()
+
+    async def _add_custom_provider_flow() -> None:
+        dispatch(SetAsk(req=None))
+        try:
+            name = await prompt_text(
+                TextInputRequest(
+                    header="custom provider",
+                    question="Enter provider name",
+                    placeholder="e.g. My Gateway",
+                    resolve=lambda _v: None,
+                    reject=lambda _e: None,
+                )
+            )
+            if not name or not name.strip():
+                dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="error",
+                            text="Provider name cannot be empty.",
+                        )
+                    )
+                )
+                open_provider_picker(
+                    dispatch,
+                    read_config,
+                    apply_provider,
+                    prompt_text,
+                    update_provider_api_key,
+                    test_connection,
+                    adapter=active_adapter,
+                    initial_section=SECTION_CUSTOM,
+                )
+                return
+
+            base_url = await prompt_text(
+                TextInputRequest(
+                    header="custom provider",
+                    question="Enter base URL",
+                    placeholder="https://api.example.com/v1",
+                    resolve=lambda _v: None,
+                    reject=lambda _e: None,
+                )
+            )
+            if not base_url or not base_url.strip():
+                dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="error",
+                            text="Base URL cannot be empty.",
+                        )
+                    )
+                )
+                open_provider_picker(
+                    dispatch,
+                    read_config,
+                    apply_provider,
+                    prompt_text,
+                    update_provider_api_key,
+                    test_connection,
+                    adapter=active_adapter,
+                    initial_section=SECTION_CUSTOM,
+                )
+                return
+
+            api_key = await prompt_text(
+                TextInputRequest(
+                    header="custom provider",
+                    question="Enter API key (optional)",
+                    placeholder="sk-...",
+                    masked=True,
+                    resolve=lambda _v: None,
+                    reject=lambda _e: None,
+                )
+            )
+
+            model = await prompt_text(
+                TextInputRequest(
+                    header="custom provider",
+                    question="Enter default model (optional)",
+                    placeholder="e.g. llama-3.3-70b",
+                    resolve=lambda _v: None,
+                    reject=lambda _e: None,
+                )
+            )
+
+            profile = active_adapter.add_custom_provider(
+                name=name.strip(),
+                base_url=base_url.strip(),
+                api_key=api_key or "",
+                default_model=model.strip() if model else "",
+            )
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text=f"Custom provider '{profile.name}' added.",
+                    )
+                )
+            )
+        except Exception:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text="Custom provider setup cancelled.",
+                    )
+                )
+            )
+        finally:
+            open_provider_picker(
+                dispatch,
+                read_config,
+                apply_provider,
+                prompt_text,
+                update_provider_api_key,
+                test_connection,
+                adapter=active_adapter,
+                initial_section=SECTION_CUSTOM,
+            )
+
+    async def _edit_custom_provider_flow(profile: CustomProviderProfile) -> None:
+        dispatch(SetAsk(req=None))
+        try:
+            name = await prompt_text(
+                TextInputRequest(
+                    header="edit provider",
+                    question="Edit provider name",
+                    placeholder="e.g. My Gateway",
+                    initial_value=profile.name,
+                    resolve=lambda _v: None,
+                    reject=lambda _e: None,
+                )
+            )
+            if not name or not name.strip():
+                name = profile.name
+
+            base_url = await prompt_text(
+                TextInputRequest(
+                    header="edit provider",
+                    question="Edit base URL",
+                    placeholder="https://api.example.com/v1",
+                    initial_value=profile.base_url,
+                    resolve=lambda _v: None,
+                    reject=lambda _e: None,
+                )
+            )
+            if not base_url or not base_url.strip():
+                base_url = profile.base_url
+
+            api_key = await prompt_text(
+                TextInputRequest(
+                    header="edit provider",
+                    question="Edit API key",
+                    placeholder="(leave blank to keep existing key)",
+                    masked=True,
+                    initial_value="",
+                    resolve=lambda _v: None,
+                    reject=lambda _e: None,
+                )
+            )
+
+            model = await prompt_text(
+                TextInputRequest(
+                    header="edit provider",
+                    question="Edit default model",
+                    placeholder="e.g. llama-3.3-70b",
+                    initial_value=profile.default_model,
+                    resolve=lambda _v: None,
+                    reject=lambda _e: None,
+                )
+            )
+
+            updated = active_adapter.edit_custom_provider(
+                profile_id=profile.id,
+                name=name.strip(),
+                base_url=base_url.strip(),
+                api_key=api_key if api_key else None,
+                default_model=model.strip() if model else "",
+            )
+            name_shown = updated.name if updated else profile.name
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text=f"Custom provider '{name_shown}' updated.",
+                    )
+                )
+            )
+        except Exception:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text="Provider edit cancelled.",
+                    )
+                )
+            )
+        finally:
+            open_provider_picker(
+                dispatch,
+                read_config,
+                apply_provider,
+                prompt_text,
+                update_provider_api_key,
+                test_connection,
+                adapter=active_adapter,
+                initial_section=SECTION_CUSTOM,
+            )
+
+    def on_add_cb() -> None:
+        asyncio.ensure_future(_add_custom_provider_flow())
+
+    def on_edit_cb(p: CustomProviderProfile) -> None:
+        asyncio.ensure_future(_edit_custom_provider_flow(p))
+
+    def on_delete_cb(p: CustomProviderProfile) -> None:
+        active_adapter.delete_custom_provider(p.id)
+        dispatch(
+            Append(
+                entry=TranscriptEntry(
+                    kind="system",
+                    text=f"Custom provider '{p.name}' deleted.",
+                )
+            )
+        )
+        open_provider_picker(
+            dispatch,
+            read_config,
+            apply_provider,
+            prompt_text,
+            update_provider_api_key,
+            test_connection,
+            adapter=active_adapter,
+            initial_section=SECTION_CUSTOM,
+        )
+
+    def on_activate_cb(p: CustomProviderProfile) -> None:
+        dispatch(SetAsk(req=None))
+        active_adapter.activate_custom_provider(p.id)
+        dispatch(Clear())
+        dispatch(
+            Append(
+                entry=TranscriptEntry(
+                    kind="system",
+                    text=f"provider set to {p.name} · custom provider active",
+                )
+            )
+        )
+
+    def on_delete_blocked_cb(p: CustomProviderProfile) -> None:
+        dispatch(
+            Append(
+                entry=TranscriptEntry(
+                    kind="error",
+                    text=(
+                        "This custom provider is currently active.\n"
+                        "Select another provider before deleting it."
+                    ),
+                )
+            )
+        )
+
     def on_resolve(picked: str) -> None:
         asyncio.ensure_future(resolve(picked))
 
     def reject(_err: Exception) -> None:
         dispatch(SetAsk(req=None))
-        
-    req = AskRequest(
+
+    req = ProviderPickerRequest(
         question=Question(
             header="provider",
             question="Select LLM provider or manage provider settings",
@@ -526,6 +829,14 @@ def open_provider_picker(
         ),
         resolve=on_resolve,
         reject=reject,
+        adapter=active_adapter,
+        current_backend=current_backend,
+        on_add_provider=on_add_cb,
+        on_edit_provider=on_edit_cb,
+        on_delete_provider=on_delete_cb,
+        on_activate_provider=on_activate_cb,
+        on_active_delete_blocked=on_delete_blocked_cb,
+        initial_section=initial_section,
     )
 
     dispatch(SetAsk(req=req))
