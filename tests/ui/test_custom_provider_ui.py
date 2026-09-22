@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 import pytest
 
@@ -11,8 +12,9 @@ from src.ui.commands.provider_picker import (
     ProviderPickerRequest,
     open_provider_picker,
 )
-from src.ui.core.app import ConfigSnapshot, _modal_text
+from src.ui.core.app import AppProps, ConfigSnapshot, KAgent, _modal_text
 from src.ui.theme import ACCENT
+from src.ui.widgets.banner import BannerData
 from src.ui.core.custom_provider_adapter import (
     CustomProviderProfile,
     InMemoryCustomProviderAdapter,
@@ -619,3 +621,277 @@ def test_active_section_tab_styling():
     manual_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
     assert len(manual_spans) == 1
     assert rendered_modal.plain[manual_spans[0].start:manual_spans[0].end] == "[ Manual ]"
+
+
+class _DummyWidget:
+    def __init__(self) -> None:
+        self.text = ""
+        self.display = False
+        self.border_title = ""
+        self.classes: set[str] = set()
+
+    def update(self, val: Any) -> None:
+        self.text = val
+
+    def set_class(self, val: bool, cls: str) -> None:
+        if val:
+            self.classes.add(cls)
+        else:
+            self.classes.discard(cls)
+
+
+def _make_test_kagent() -> KAgent:
+    from types import SimpleNamespace
+    from src.agent.agent import Agent
+
+    app = KAgent(
+        AppProps(
+            agent=cast(
+                Agent,
+                SimpleNamespace(skills=SimpleNamespace(list_enabled=lambda: [])),
+            ),
+            banner_data=BannerData(provider="test", model="test", cwd="."),
+            parent_signal=asyncio.Event(),
+            read_config=lambda: {
+                "backend": Backend.GROQ,
+                "model": "llama-test",
+                "base_url": "",
+                "api_key": "k",
+                "api_keys": {},
+            },
+            apply_provider=AsyncMock(),
+        )
+    )
+    app.overlay_static = cast(Any, _DummyWidget())
+    app.overlay_content_static = cast(Any, _DummyWidget())
+    app.overlay_text_static = cast(Any, _DummyWidget())
+    app.input_static = cast(Any, _DummyWidget())
+    app._recompute_view = lambda: app._sync_overlay()
+    return app
+
+
+@pytest.mark.asyncio
+async def test_prompt_text_lifecycle_syncs_overlay_immediately():
+    app = _make_test_kagent()
+    assert app.overlay_static.display is False
+
+    task = asyncio.create_task(
+        app.prompt_text(
+            TextInputRequest(
+                header="custom provider",
+                question="Enter provider name",
+                placeholder="e.g. My Gateway",
+                resolve=lambda _v: None,
+                reject=lambda _e: None,
+            )
+        )
+    )
+    # The overlay must be displayed immediately without waiting for any timer or event
+    await asyncio.sleep(0)
+    assert app.text_input is not None
+    assert app.text_input.question == "Enter provider name"
+    assert app.overlay_static.display is True
+    assert app.overlay_static.border_title == "Input"
+
+    # Resolving immediately updates overlay and completes future
+    app.resolve_text_input("My Provider")
+    result = await task
+    assert result == "My Provider"
+    assert app.text_input is None
+    assert app.overlay_static.display is False
+
+
+@pytest.mark.asyncio
+async def test_add_custom_provider_consecutive_field_transitions():
+    app = _make_test_kagent()
+    adapter = InMemoryCustomProviderAdapter()
+    dispatched = []
+
+    def dispatch(action: Any) -> None:
+        dispatched.append(action)
+        app.dispatch(action)
+
+    open_provider_picker(
+        dispatch=dispatch,
+        read_config=lambda: {
+            "backend": Backend.GROQ,
+            "model": "llama-test",
+            "base_url": "",
+            "api_key": "k",
+            "api_keys": {},
+        },
+        apply_provider=AsyncMock(),
+        prompt_text=app.prompt_text,
+        adapter=adapter,
+    )
+
+    req = dispatched[0].req
+    assert isinstance(req, ProviderPickerRequest)
+
+    # 1. Trigger Add flow -> Provider name appears immediately
+    req.on_add_provider()
+    await asyncio.sleep(0)
+
+    assert app.text_input is not None
+    assert app.text_input.question == "Enter provider name"
+    assert app.overlay_static.display is True
+
+    # 2. Enter provider name -> Base URL prompt appears immediately without delay
+    app.resolve_text_input("Token Harbor")
+    await asyncio.sleep(0)
+
+    assert app.text_input is not None
+    assert app.text_input.question == "Enter base URL"
+    assert app.overlay_static.display is True
+
+    # 3. Enter base URL -> API key prompt appears immediately
+    app.resolve_text_input("https://api.tokenharbor.test/v1")
+    await asyncio.sleep(0)
+
+    assert app.text_input is not None
+    assert app.text_input.question == "Enter API key (optional)"
+    assert app.text_input.masked is True
+    assert app.overlay_static.display is True
+
+    # 4. Enter API key -> Default model prompt appears immediately
+    app.resolve_text_input("sk-secret-123")
+    await asyncio.sleep(0)
+
+    assert app.text_input is not None
+    assert app.text_input.question == "Enter default model (optional)"
+    assert app.overlay_static.display is True
+
+    # 5. Enter model -> Completed and provider picker restored
+    app.resolve_text_input("llama-3.3-70b")
+    await asyncio.sleep(0)
+
+    profiles = adapter.list_custom_providers()
+    assert len(profiles) == 1
+    assert profiles[0].name == "Token Harbor"
+    assert profiles[0].base_url == "https://api.tokenharbor.test/v1"
+    assert profiles[0].default_model == "llama-3.3-70b"
+    assert profiles[0].has_api_key is True
+
+    # Picker re-opened on custom section
+    last_set_ask = [a for a in dispatched if isinstance(a, SetAsk)][-1]
+    assert isinstance(last_set_ask.req, ProviderPickerRequest)
+    assert last_set_ask.req.initial_section == SECTION_CUSTOM
+
+
+@pytest.mark.asyncio
+async def test_add_custom_provider_cancellation_restores_picker_immediately():
+    app = _make_test_kagent()
+    adapter = InMemoryCustomProviderAdapter()
+    dispatched = []
+
+    def dispatch(action: Any) -> None:
+        dispatched.append(action)
+        app.dispatch(action)
+
+    open_provider_picker(
+        dispatch=dispatch,
+        read_config=lambda: {
+            "backend": Backend.GROQ,
+            "model": "llama-test",
+            "base_url": "",
+            "api_key": "k",
+            "api_keys": {},
+        },
+        apply_provider=AsyncMock(),
+        prompt_text=app.prompt_text,
+        adapter=adapter,
+    )
+
+    req = dispatched[0].req
+    req.on_add_provider()
+    await asyncio.sleep(0)
+
+    assert app.text_input is not None
+    assert app.text_input.question == "Enter provider name"
+
+    # User cancels at provider name step
+    app.reject_text_input(Exception("cancelled"))
+    await asyncio.sleep(0)
+
+    # Re-opened provider picker on custom section
+    last_set_ask = [a for a in dispatched if isinstance(a, SetAsk)][-1]
+    assert isinstance(last_set_ask.req, ProviderPickerRequest)
+    assert last_set_ask.req.initial_section == SECTION_CUSTOM
+    assert adapter.list_custom_providers() == []
+
+
+@pytest.mark.asyncio
+async def test_edit_custom_provider_consecutive_field_transitions():
+    app = _make_test_kagent()
+    adapter = InMemoryCustomProviderAdapter()
+    profile = adapter.add_custom_provider("Old Name", "http://old.url", api_key="old-key", default_model="old-model")
+    dispatched = []
+
+    def dispatch(action: Any) -> None:
+        dispatched.append(action)
+        app.dispatch(action)
+
+    open_provider_picker(
+        dispatch=dispatch,
+        read_config=lambda: {
+            "backend": Backend.GROQ,
+            "model": "llama-test",
+            "base_url": "",
+            "api_key": "k",
+            "api_keys": {},
+        },
+        apply_provider=AsyncMock(),
+        prompt_text=app.prompt_text,
+        adapter=adapter,
+    )
+
+    req = dispatched[0].req
+    req.on_edit_provider(profile)
+    await asyncio.sleep(0)
+
+    # 1. Name prompt with initial value
+    assert app.text_input is not None
+    assert app.text_input.question == "Edit provider name"
+    assert app.text_input.initial_value == "Old Name"
+    assert app.overlay_static.display is True
+
+    # 2. Enter new name -> Base URL prompt appears immediately
+    app.resolve_text_input("New Name")
+    await asyncio.sleep(0)
+
+    assert app.text_input is not None
+    assert app.text_input.question == "Edit base URL"
+    assert app.text_input.initial_value == "http://old.url"
+    assert app.overlay_static.display is True
+
+    # 3. Enter empty -> API key prompt appears immediately
+    app.resolve_text_input("")
+    await asyncio.sleep(0)
+
+    assert app.text_input is not None
+    assert app.text_input.question == "Edit API key"
+    assert app.text_input.masked is True
+    assert app.overlay_static.display is True
+
+    # 4. Enter empty key -> Default model prompt appears immediately
+    app.resolve_text_input("")
+    await asyncio.sleep(0)
+
+    assert app.text_input is not None
+    assert app.text_input.question == "Edit default model"
+    assert app.text_input.initial_value == "old-model"
+    assert app.overlay_static.display is True
+
+    # 5. Enter new model -> Profile updated and picker restored
+    app.resolve_text_input("new-model")
+    await asyncio.sleep(0)
+
+    updated = adapter.list_custom_providers()[0]
+    assert updated.name == "New Name"
+    assert updated.base_url == "http://old.url"
+    assert updated.default_model == "new-model"
+    assert updated.has_api_key is True
+
+    last_set_ask = [a for a in dispatched if isinstance(a, SetAsk)][-1]
+    assert isinstance(last_set_ask.req, ProviderPickerRequest)
+    assert last_set_ask.req.initial_section == SECTION_CUSTOM

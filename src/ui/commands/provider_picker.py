@@ -561,16 +561,6 @@ def open_provider_picker(
                         )
                     )
                 )
-                open_provider_picker(
-                    dispatch,
-                    read_config,
-                    apply_provider,
-                    prompt_text,
-                    update_provider_api_key,
-                    test_connection,
-                    adapter=active_adapter,
-                    initial_section=SECTION_CUSTOM,
-                )
                 return
 
             base_url = await prompt_text(
@@ -590,16 +580,6 @@ def open_provider_picker(
                             text="Base URL cannot be empty.",
                         )
                     )
-                )
-                open_provider_picker(
-                    dispatch,
-                    read_config,
-                    apply_provider,
-                    prompt_text,
-                    update_provider_api_key,
-                    test_connection,
-                    adapter=active_adapter,
-                    initial_section=SECTION_CUSTOM,
                 )
                 return
 

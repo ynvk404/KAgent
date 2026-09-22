@@ -640,6 +640,7 @@ class KAgent(App):
             initial_value=getattr(input_req, "initial_value", "") or "",
         )
 
+        self._sync_overlay()
         self.refresh()
 
         return await self.text_input_future
@@ -654,6 +655,7 @@ class KAgent(App):
         self.text_input_future = None
         self.text_input = None
 
+        self._sync_overlay()
         self.refresh()
 
     def reject_text_input(
@@ -666,6 +668,7 @@ class KAgent(App):
         self.text_input_future = None
         self.text_input = None
 
+        self._sync_overlay()
         self.refresh()
 
 
@@ -1152,6 +1155,8 @@ class KAgent(App):
         self.input_static.update(text)
 
     def _sync_overlay(self) -> None:
+        if not hasattr(self, "overlay_static"):
+            return
 
         modal = self._get_active_modal()
         self.overlay_static.set_class(
