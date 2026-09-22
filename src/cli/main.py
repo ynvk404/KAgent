@@ -96,11 +96,10 @@ from src.tools.mcp_server import (
     session_mcp_servers,
 )
 
-from src.tools.mcp_integration import (
-    MCPServerConfig,
-    MCPSession,
-    discover_mcp_tools,
-)
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.tools.mcp_integration import MCPSession
 
 from src.browser.store import CaptureStore
 
@@ -697,24 +696,28 @@ async def main() -> int:
         except Exception as err:
             sys.stderr.write(f"warning: failed to start burp bridge: {err}\n")
 
-    mcp_results = await asyncio.gather(
-        *(discover_mcp_tools(server) for server in session_servers),
-        return_exceptions=True,
-    )
-
     mcp_sessions: list[MCPSession] = []
 
-    for server, result in zip(session_servers, mcp_results):
-        if isinstance(result, Exception):
-            print(f"mcp {server.name}: {result}", file=sys.stderr)
-            continue
+    if session_servers:
+        from src.tools.mcp_integration import discover_mcp_tools  # noqa: PLC0415
 
-        result = cast(dict[str, Any], result)
+        mcp_results = await asyncio.gather(
+            *(discover_mcp_tools(server) for server in session_servers),
+            return_exceptions=True,
+        )
 
-        mcp_sessions.append(result["session"])
+        for server, result in zip(session_servers, mcp_results):
+            if isinstance(result, BaseException):
+                print(f"mcp {server.name}: {result}", file=sys.stderr)
+                continue
 
-        for tool in result["tools"]:
-            tools.register(tool)
+            result = cast(dict[str, Any], result)
+
+            mcp_sessions.append(result["session"])
+
+            for tool in result["tools"]:
+                tools.register(tool)
+
 
     if flags.list_skills:
         for sk in skills.list():
@@ -982,6 +985,7 @@ async def main() -> int:
             banner_data=banner_data,
             parent_signal=root_ctl,
             yolo_initial=flags.yolo,
+            show_splash=True,
 
             bind_perm_publisher=lambda publish:
                 perm_holder.update({"publish": publish}),

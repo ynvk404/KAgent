@@ -102,6 +102,7 @@ from src.ui.widgets.permission_modal import PermissionModal
 from src.ui.widgets.provider_picker_modal import ProviderPickerModal
 from src.ui.widgets.skills_modal import SkillsModal
 from src.ui.widgets.skills_modal import SKILLS_MODAL_VISIBLE_CAP, SkillsModal
+from src.ui.widgets.startup_splash import SplashProps, StartupPhase, StartupSplash
 from src.ui.widgets.text_input_modal import TextInputModal, TextInputRequest
 from src.ui.widgets.slash_menu import SlashMenu
 from src.ui.widgets.status_bar import StatusBar, StatusProps
@@ -183,7 +184,8 @@ class AppProps:
     burp_bridge_status: (
         Callable[[], Awaitable[BurpBridgeResult]] | None
     ) = None
-    resume_summary: str | None = None   
+    resume_summary: str | None = None
+    show_splash: bool = False
 
 @dataclass(slots=True)
 class RunAgentOptions:
@@ -200,8 +202,15 @@ class _RichLogWriter:
 
     def content_width(self) -> int:
         if isinstance(self._log, TranscriptView):
-            return self._log.transcript_content_width
-        return max(1, self._log.scrollable_content_region.width)
+            width = self._log.transcript_content_width
+            if width > 1:
+                return width
+        elif self._log.scrollable_content_region.width > 1:
+            return self._log.scrollable_content_region.width
+
+        app = getattr(self._log, "app", None)
+        cols = getattr(app, "cols", 80) if app is not None else 80
+        return max(1, cols - 5)
 
     def write(self, s: str) -> int:
         self._log.write(
@@ -504,6 +513,13 @@ class KAgent(App):
         scrollbar-background-active: transparent;
         scrollbar-gutter: auto;
     }}
+
+    #startup-splash {{
+        width: 100%;
+        height: 1fr;
+        content-align: center middle;
+        align: center middle;
+    }}
     """
 
     def __init__(self, props: AppProps):
@@ -533,6 +549,9 @@ class KAgent(App):
         self.close_burp_bridge = props.close_burp_bridge
         self.burp_bridge_status = props.burp_bridge_status
         self.resume_summary = props.resume_summary
+        self.show_splash = props.show_splash
+        self.startup_splash: StartupSplash | None = None
+        self.startup_task: asyncio.Task | None = None
         self.state = initial_state(
             "",
             self.banner_data,
@@ -599,6 +618,38 @@ class KAgent(App):
 
 
     def compose(self) -> ComposeResult:
+        if self.show_splash:
+            skill_cnt = None
+            if hasattr(self.agent, "skills") and hasattr(self.agent.skills, "list_enabled"):
+                try:
+                    skill_cnt = len(self.agent.skills.list_enabled())
+                except Exception:
+                    pass
+            tool_cnt = None
+            tools_obj = getattr(self.agent, "tools", None)
+            if tools_obj is not None:
+                try:
+                    if hasattr(tools_obj, "tools") and isinstance(getattr(tools_obj, "tools"), dict):
+                        tool_cnt = len(getattr(tools_obj, "tools"))
+                    elif hasattr(tools_obj, "names") and callable(getattr(tools_obj, "names")):
+                        tool_cnt = len(tools_obj.names())
+                    elif isinstance(tools_obj, (list, dict, set, tuple)):
+                        tool_cnt = len(tools_obj)
+                except Exception:
+                    pass
+
+            self.startup_splash = StartupSplash(
+                props=SplashProps(
+                    provider=self.banner_data.provider if hasattr(self, "banner_data") and self.banner_data else None,
+                    model=self.banner_data.model if hasattr(self, "banner_data") and self.banner_data else None,
+                    skill_count=skill_cnt,
+                    tool_count=tool_cnt,
+                    resumed=bool(self.resume_summary),
+                    resume_summary=self.resume_summary,
+                ),
+            )
+            yield self.startup_splash
+
         self.transcript_panel = Vertical(id="transcript-panel")
         self.transcript_panel.border_title = "Transcript"
         with self.transcript_panel:
@@ -632,6 +683,11 @@ class KAgent(App):
 
         self.status_bar = StatusBar()
         yield self.status_bar
+
+        if self.show_splash:
+            self.transcript_panel.display = False
+            self.input_static.display = False
+            self.status_bar.display = False
 
         self._render_input()
 
@@ -874,6 +930,13 @@ class KAgent(App):
         if event.button != 1:
             return
 
+        if self.startup_splash is not None and self.startup_splash.display:
+            if self.startup_task is not None and not self.startup_task.done():
+                self.startup_task.cancel()
+            self._finish_splash()
+            event.stop()
+            return
+
         modal = self._get_active_modal()
         if modal is not None:
             region = self.overlay_text_static.region
@@ -945,6 +1008,12 @@ class KAgent(App):
             if self.run_abort_event is not None:
                 self.run_abort_event.set()
             self.exit()
+            return
+
+        if self.startup_splash is not None and self.startup_splash.display:
+            if self.startup_task is not None and not self.startup_task.done():
+                self.startup_task.cancel()
+            self._finish_splash()
             return
 
         if key == "escape" and self.state.busy:
@@ -1282,7 +1351,10 @@ class KAgent(App):
             self.overlay_text_static.update("")
             self.overlay_static.display = False
 
-        self.input_static.display = modal is None
+        if self.startup_splash is not None and self.startup_splash.display:
+            self.input_static.display = False
+        else:
+            self.input_static.display = modal is None
 
     def _menu_lines_to_text(self, lines) -> Text:
         text = Text()
@@ -1647,6 +1719,9 @@ class KAgent(App):
     def on_resize(self, event: events.Resize) -> None:
         self.cols = event.size.width
         self._render_input()
+        if hasattr(self, "overview_static") and self.overview_static is not None and hasattr(self, "state") and self.state.banner_data:
+            width = max(1, self.cols - 5)
+            self.overview_static.update(Banner(self.state.banner_data, width=width).render_panel())
         self.refresh()
 
     def on_mount(self) -> None:
@@ -1708,7 +1783,15 @@ class KAgent(App):
             self._snapshot_loop()
         )
 
+        if self.show_splash:
+            self.startup_task = asyncio.create_task(
+                self._run_startup_sequence()
+            )
+
     async def on_unmount(self) -> None:
+        if self.startup_task is not None and not self.startup_task.done():
+            self.startup_task.cancel()
+
         if self.snapshot_task:
             self.snapshot_task.cancel()
 
@@ -1718,6 +1801,41 @@ class KAgent(App):
         if self.ping_task is not None:
             await self.ping_task.stop()
 
+    def _advance_splash(self, phase: StartupPhase, error: str | None = None) -> None:
+        if self.startup_splash is not None:
+            self.startup_splash.set_phase(phase, error)
+            self.refresh()
+
+    def _finish_splash(self) -> None:
+        if self.startup_splash is not None and self.startup_splash.display:
+            self.startup_splash.display = False
+            self.transcript_panel.display = True
+            self.input_static.display = True
+            self.status_bar.display = True
+            if hasattr(self, "overview_static") and self.overview_static is not None and hasattr(self, "state") and self.state.banner_data:
+                width = self.transcript_log.transcript_content_width if self.transcript_log.transcript_content_width > 1 else max(1, self.cols - 5)
+                self.overview_static.update(Banner(self.state.banner_data, width=width).render_panel())
+            self._render_input()
+            self.refresh()
+
+    async def _run_startup_sequence(self) -> None:
+        try:
+            self._advance_splash("identity")      # 0.0 s — immediate first frame
+            await asyncio.sleep(0.8)              # 0.8 s — shine sweep completes
+            self._advance_splash("workspace")     # 0.8 s → workspace (25%)
+            await asyncio.sleep(1.2)              # 2.0 s → skills (50%)
+            self._advance_splash("skills")
+            await asyncio.sleep(1.2)              # 3.2 s → provider (75%)
+            self._advance_splash("provider")
+            await asyncio.sleep(1.0)              # 4.2 s → ready (100%)
+            self._advance_splash("ready")
+            await asyncio.sleep(0.8)              # 5.0 s — brief Ready dwell
+        except asyncio.CancelledError:
+            return
+        except Exception as err:
+            self._advance_splash("failed", error=str(err))
+            return
+        self._finish_splash()
 
     async def _save_snapshot(self) -> None:
         if self.agent.is_running():
