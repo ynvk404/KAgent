@@ -11,7 +11,8 @@ from src.ui.commands.provider_picker import (
     ProviderPickerRequest,
     open_provider_picker,
 )
-from src.ui.core.app import ConfigSnapshot
+from src.ui.core.app import ConfigSnapshot, _modal_text
+from src.ui.theme import ACCENT
 from src.ui.core.custom_provider_adapter import (
     CustomProviderProfile,
     InMemoryCustomProviderAdapter,
@@ -568,3 +569,53 @@ async def test_edit_custom_provider_flow():
     assert updated.default_model == "new-model"
     assert updated.has_api_key is True  # Blank key kept existing key
 
+
+def test_active_section_tab_styling():
+    req = AskRequest(
+        question=Question(header="provider", question="Select provider"),
+        resolve=Mock(),
+        reject=Mock(),
+    )
+    modal = ProviderPickerModal(req=req, current_backend="groq")
+
+    # 1. Official section active by default
+    assert modal.section == SECTION_OFFICIAL
+    h_text = modal.render_header_text()
+    assert h_text.plain == "[ Official ]   Custom   Manual"
+    assert len(h_text.spans) == 1
+    assert h_text.spans[0].start == 0
+    assert h_text.spans[0].end == len("[ Official ]")
+    assert str(h_text.spans[0].style) == f"bold {ACCENT}"
+
+    rendered_modal = _modal_text(modal)
+    official_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
+    assert len(official_spans) == 1
+    assert rendered_modal.plain[official_spans[0].start:official_spans[0].end] == "[ Official ]"
+
+    # 2. Switch to Custom section
+    modal.handle_key("right")
+    assert modal.section == SECTION_CUSTOM
+    h_text = modal.render_header_text()
+    assert h_text.plain == "Official   [ Custom ]   Manual"
+    assert len(h_text.spans) == 1
+    assert h_text.plain[h_text.spans[0].start:h_text.spans[0].end] == "[ Custom ]"
+    assert str(h_text.spans[0].style) == f"bold {ACCENT}"
+
+    rendered_modal = _modal_text(modal)
+    custom_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
+    assert len(custom_spans) == 1
+    assert rendered_modal.plain[custom_spans[0].start:custom_spans[0].end] == "[ Custom ]"
+
+    # 3. Switch to Manual section
+    modal.handle_key("right")
+    assert modal.section == SECTION_MANUAL
+    h_text = modal.render_header_text()
+    assert h_text.plain == "Official   Custom   [ Manual ]"
+    assert len(h_text.spans) == 1
+    assert h_text.plain[h_text.spans[0].start:h_text.spans[0].end] == "[ Manual ]"
+    assert str(h_text.spans[0].style) == f"bold {ACCENT}"
+
+    rendered_modal = _modal_text(modal)
+    manual_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
+    assert len(manual_spans) == 1
+    assert rendered_modal.plain[manual_spans[0].start:manual_spans[0].end] == "[ Manual ]"

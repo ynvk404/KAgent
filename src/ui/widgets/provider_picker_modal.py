@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, Callable, Sequence
+from rich.text import Text
 from src.ask.ask import Option, Question
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.core.custom_provider_adapter import (
@@ -9,6 +10,7 @@ from src.ui.core.custom_provider_adapter import (
     CustomProviderProfile,
     get_custom_provider_adapter,
 )
+from src.ui.theme import ACCENT
 
 SECTION_OFFICIAL = 0
 SECTION_CUSTOM = 1
@@ -313,6 +315,22 @@ class ProviderPickerModal:
         clicked_idx = y - item_y_start
         if 0 <= clicked_idx < len(items):
             self.idx = clicked_idx
+
+    def render_header_text(self) -> Text:
+        header = Text()
+        if self.section == SECTION_OFFICIAL:
+            header.append("[ Official ]", style=f"bold {ACCENT}")
+            header.append("   Custom   Manual")
+        elif self.section == SECTION_CUSTOM:
+            header.append("Official   ")
+            header.append("[ Custom ]", style=f"bold {ACCENT}")
+            header.append("   Manual")
+        elif self.section == SECTION_MANUAL:
+            header.append("Official   Custom   ")
+            header.append("[ Manual ]", style=f"bold {ACCENT}")
+        else:
+            header.append("Official   Custom   Manual")
+        return header
 
     def render(self) -> list[str]:
         if self.confirming_delete is not None:

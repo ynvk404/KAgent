@@ -244,6 +244,8 @@ def _modal_text(modal) -> RenderableType:
                 text.append("▌", style=_input_style("cursor"))
             else:
                 text.append(value, style=_input_style("text"))
+        elif isinstance(modal, ProviderPickerModal) and i == 0 and modal.confirming_delete is None:
+            text.append_text(modal.render_header_text())
         else:
             text.append(line)
     return text
