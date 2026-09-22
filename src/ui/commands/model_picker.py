@@ -51,6 +51,7 @@ def model_description(
 
     if current_model and model == current_model:
         parts.append("current / used before")
+        parts.append("● active")
 
     if backend_name == "kimi" and model in KIMI_MODELS:
         parts.append("Kimi/Moonshot")
@@ -93,6 +94,24 @@ async def fetch_and_pick_model(
         options = success_text
         success_text = None
 
+    loading_cancelled = False
+
+    def on_loading_cancel(_: Exception) -> None:
+        nonlocal loading_cancelled
+        loading_cancelled = True
+        dispatch(SetAsk(req=None))
+
+    loading_req = AskRequest(
+        question=Question(
+            header="model",
+            question=f"⠋ Fetching available models for {backend_label(backend)}…",
+            options=[],
+        ),
+        resolve=lambda _: None,
+        reject=on_loading_cancel,
+    )
+    dispatch(SetAsk(req=loading_req))
+
     try:
         models = await asyncio.to_thread(
             list_models,
@@ -101,14 +120,19 @@ async def fetch_and_pick_model(
             api_key,
         )
     except Exception as err:
-        dispatch(
-            Append(
-                entry=TranscriptEntry(
-                    kind="error",
-                    text=f"{backend_label(backend).lower()} list-models failed: {err}",
+        dispatch(SetAsk(req=None))
+        if not loading_cancelled:
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="error",
+                        text=f"{backend_label(backend).lower()} list-models failed: {err}",
+                    )
                 )
             )
-        )
+        return
+
+    if loading_cancelled:
         return
 
     current_model_value: str | None
@@ -140,6 +164,7 @@ async def fetch_and_pick_model(
     )
 
     if not all_models:
+        dispatch(SetAsk(req=None))
         dispatch(
             Append(
                 entry=TranscriptEntry(

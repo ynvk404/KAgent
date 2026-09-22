@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Callable, Awaitable
 
+from src.ui.commands.menu_window import compute_menu_window
+
+SKILLS_MODAL_VISIBLE_CAP = 8
+
 
 PersistDisabledSkills = Callable[[list[str]], Awaitable[None]]
 
@@ -230,7 +234,7 @@ class SkillsModal:
 
 
         lines.append(
-            f"[skills] {enabled_count}/{len(skills)} enabled"
+            f"{enabled_count}/{len(skills)} enabled"
         )
 
         lines.append(
@@ -239,9 +243,17 @@ class SkillsModal:
 
         lines.append("")
 
+        window = compute_menu_window(
+            len(skills),
+            self.idx,
+            cap=SKILLS_MODAL_VISIBLE_CAP,
+        )
 
-        for i, skill in enumerate(skills):
+        if window.hidden_above > 0:
+            lines.append(f"  ↑ {window.hidden_above} more")
 
+        for i in range(window.start, window.end):
+            skill = skills[i]
             selected = i == self.idx
 
             disabled = (
@@ -278,6 +290,8 @@ class SkillsModal:
                 f" — {truncate(skill.description, 60)}"
             )
 
+        if window.hidden_below > 0:
+            lines.append(f"  ↓ {window.hidden_below} more")
 
         if self.error:
 

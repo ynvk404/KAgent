@@ -543,49 +543,41 @@ def open_provider_picker(
     async def _add_custom_provider_flow() -> None:
         dispatch(SetAsk(req=None))
         try:
-            name = await prompt_text(
-                TextInputRequest(
-                    header="custom provider",
-                    question="Enter provider name",
-                    placeholder="e.g. My Gateway",
-                    resolve=lambda _v: None,
-                    reject=lambda _e: None,
-                )
-            )
-            if not name or not name.strip():
-                dispatch(
-                    Append(
-                        entry=TranscriptEntry(
-                            kind="error",
-                            text="Provider name cannot be empty.",
-                        )
+            name_hint = ""
+            while True:
+                q_text = "Enter provider name" + (f" ({name_hint})" if name_hint else "")
+                name = await prompt_text(
+                    TextInputRequest(
+                        header="Step 1 of 4: Provider name",
+                        question=q_text,
+                        placeholder="e.g. My Gateway",
+                        resolve=lambda _v: None,
+                        reject=lambda _e: None,
                     )
                 )
-                return
+                if name and name.strip():
+                    break
+                name_hint = "cannot be empty"
 
-            base_url = await prompt_text(
-                TextInputRequest(
-                    header="custom provider",
-                    question="Enter base URL",
-                    placeholder="https://api.example.com/v1",
-                    resolve=lambda _v: None,
-                    reject=lambda _e: None,
-                )
-            )
-            if not base_url or not base_url.strip():
-                dispatch(
-                    Append(
-                        entry=TranscriptEntry(
-                            kind="error",
-                            text="Base URL cannot be empty.",
-                        )
+            url_hint = ""
+            while True:
+                q_text = "Enter base URL" + (f" ({url_hint})" if url_hint else "")
+                base_url = await prompt_text(
+                    TextInputRequest(
+                        header="Step 2 of 4: Base URL",
+                        question=q_text,
+                        placeholder="https://api.example.com/v1",
+                        resolve=lambda _v: None,
+                        reject=lambda _e: None,
                     )
                 )
-                return
+                if base_url and base_url.strip():
+                    break
+                url_hint = "cannot be empty"
 
             api_key = await prompt_text(
                 TextInputRequest(
-                    header="custom provider",
+                    header="Step 3 of 4: API key",
                     question="Enter API key (optional)",
                     placeholder="sk-...",
                     masked=True,
@@ -596,7 +588,7 @@ def open_provider_picker(
 
             model = await prompt_text(
                 TextInputRequest(
-                    header="custom provider",
+                    header="Step 4 of 4: Default model",
                     question="Enter default model (optional)",
                     placeholder="e.g. llama-3.3-70b",
                     resolve=lambda _v: None,
@@ -644,7 +636,7 @@ def open_provider_picker(
         try:
             name = await prompt_text(
                 TextInputRequest(
-                    header="edit provider",
+                    header="Step 1 of 4: Provider name",
                     question="Edit provider name",
                     placeholder="e.g. My Gateway",
                     initial_value=profile.name,
@@ -657,7 +649,7 @@ def open_provider_picker(
 
             base_url = await prompt_text(
                 TextInputRequest(
-                    header="edit provider",
+                    header="Step 2 of 4: Base URL",
                     question="Edit base URL",
                     placeholder="https://api.example.com/v1",
                     initial_value=profile.base_url,
@@ -670,7 +662,7 @@ def open_provider_picker(
 
             api_key = await prompt_text(
                 TextInputRequest(
-                    header="edit provider",
+                    header="Step 3 of 4: API key",
                     question="Edit API key",
                     placeholder="(leave blank to keep existing key)",
                     masked=True,
@@ -682,7 +674,7 @@ def open_provider_picker(
 
             model = await prompt_text(
                 TextInputRequest(
-                    header="edit provider",
+                    header="Step 4 of 4: Default model",
                     question="Edit default model",
                     placeholder="e.g. llama-3.3-70b",
                     initial_value=profile.default_model,

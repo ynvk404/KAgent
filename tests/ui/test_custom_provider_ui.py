@@ -28,7 +28,7 @@ from src.ui.widgets.provider_picker_modal import (
     SECTION_MANUAL,
     SECTION_OFFICIAL,
 )
-from src.ui.widgets.text_input_modal import TextInputRequest
+from src.ui.widgets.text_input_modal import TextInputModal, TextInputRequest
 
 
 # ==========================================================
@@ -101,7 +101,7 @@ def test_official_section_contents():
     assert "[ Official ]" in frame
     assert "Custom" in frame
     assert "Manual" in frame
-    assert "Groq (current)" in frame
+    assert "Groq   ● active" in frame
     assert "Kimi" in frame
     assert "Gemini" in frame
     assert "Claude" in frame
@@ -150,7 +150,7 @@ def test_custom_section_with_profiles_and_active_label():
     modal = ProviderPickerModal(req=req, adapter=adapter, initial_section=SECTION_CUSTOM)
 
     frame = "\n".join(modal.render())
-    assert "Token Harbor (current)" in frame
+    assert "Token Harbor   ● active" in frame
     assert "Local LM Studio" in frame
     assert "+ Add custom provider" in frame
     # Since first profile is selected by default:
@@ -170,7 +170,7 @@ def test_manual_section_contents():
     assert "Official" in frame
     assert "Custom" in frame
     assert "[ Manual ]" in frame
-    assert f"> {MANUAL_OAI_LABEL} (current)" in frame
+    assert f"> {MANUAL_OAI_LABEL}   ● active" in frame
     assert "←→ section · ↑↓ select · Enter pick · Esc cancel" in frame
 
 
@@ -497,8 +497,10 @@ async def test_add_custom_provider_flow():
 
     # Mock sequential inputs: name, base_url, api_key, model
     responses = iter(["Test Harbor", "https://api.test.harbor/v1", "secret-key", "my-model"])
+    add_reqs = []
 
-    async def prompt_text(_req: TextInputRequest):
+    async def prompt_text(req: TextInputRequest):
+        add_reqs.append(req)
         return next(responses)
 
     open_provider_picker(
@@ -515,6 +517,14 @@ async def test_add_custom_provider_flow():
     # Trigger Add flow callback
     req.on_add_provider()
     await asyncio.sleep(0.05)
+
+    # Verify Step 1/2/3/4 progression headers
+    assert [r.header for r in add_reqs] == [
+        "Step 1 of 4: Provider name",
+        "Step 2 of 4: Base URL",
+        "Step 3 of 4: API key",
+        "Step 4 of 4: Default model",
+    ]
 
     # Profile added to adapter
     profiles = adapter.list_custom_providers()
@@ -549,8 +559,10 @@ async def test_edit_custom_provider_flow():
 
     # Edit: new name, keep base_url (return empty), keep key (return empty), new model
     responses = iter(["New Name", "", "", "new-model"])
+    edit_reqs = []
 
-    async def prompt_text(_req: TextInputRequest):
+    async def prompt_text(req: TextInputRequest):
+        edit_reqs.append(req)
         return next(responses)
 
     open_provider_picker(
@@ -564,6 +576,14 @@ async def test_edit_custom_provider_flow():
     req = dispatched[0].req
     req.on_edit_provider(profile)
     await asyncio.sleep(0.05)
+
+    # Verify Step 1/2/3/4 progression headers in Edit flow
+    assert [r.header for r in edit_reqs] == [
+        "Step 1 of 4: Provider name",
+        "Step 2 of 4: Base URL",
+        "Step 3 of 4: API key",
+        "Step 4 of 4: Default model",
+    ]
 
     updated = adapter.list_custom_providers()[0]
     assert updated.name == "New Name"
@@ -591,8 +611,9 @@ def test_active_section_tab_styling():
 
     rendered_modal = _modal_text(modal)
     official_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
-    assert len(official_spans) == 1
+    assert len(official_spans) == 2
     assert rendered_modal.plain[official_spans[0].start:official_spans[0].end] == "[ Official ]"
+    assert rendered_modal.plain[official_spans[1].start:official_spans[1].end] == "> Kimi"
 
     # 2. Switch to Custom section
     modal.handle_key("right")
@@ -605,8 +626,9 @@ def test_active_section_tab_styling():
 
     rendered_modal = _modal_text(modal)
     custom_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
-    assert len(custom_spans) == 1
+    assert len(custom_spans) == 2
     assert rendered_modal.plain[custom_spans[0].start:custom_spans[0].end] == "[ Custom ]"
+    assert rendered_modal.plain[custom_spans[1].start:custom_spans[1].end] == "> + Add custom provider"
 
     # 3. Switch to Manual section
     modal.handle_key("right")
@@ -619,8 +641,9 @@ def test_active_section_tab_styling():
 
     rendered_modal = _modal_text(modal)
     manual_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
-    assert len(manual_spans) == 1
+    assert len(manual_spans) == 2
     assert rendered_modal.plain[manual_spans[0].start:manual_spans[0].end] == "[ Manual ]"
+    assert rendered_modal.plain[manual_spans[1].start:manual_spans[1].end] == "> OpenAI-compatible — one-off configuration"
 
 
 class _DummyWidget:
@@ -895,3 +918,99 @@ async def test_edit_custom_provider_consecutive_field_transitions():
     last_set_ask = [a for a in dispatched if isinstance(a, SetAsk)][-1]
     assert isinstance(last_set_ask.req, ProviderPickerRequest)
     assert last_set_ask.req.initial_section == SECTION_CUSTOM
+
+
+@pytest.mark.asyncio
+async def test_add_custom_provider_empty_name_validation_loop():
+    app = _make_test_kagent()
+    adapter = InMemoryCustomProviderAdapter()
+    dispatched = []
+
+    def dispatch(action: Any) -> None:
+        dispatched.append(action)
+        app.dispatch(action)
+
+    open_provider_picker(
+        dispatch=dispatch,
+        read_config=lambda: {
+            "backend": Backend.GROQ,
+            "model": "llama-test",
+            "base_url": "",
+            "api_key": "k",
+            "api_keys": {},
+        },
+        apply_provider=AsyncMock(),
+        prompt_text=app.prompt_text,
+        adapter=adapter,
+    )
+
+    req = dispatched[0].req
+    req.on_add_provider()
+    await asyncio.sleep(0)
+
+    # 1. Initial prompt
+    assert app.text_input is not None
+    assert app.text_input.question == "Enter provider name"
+
+    # 2. Enter empty name -> re-prompts inline with error hint
+    app.resolve_text_input("   ")
+    await asyncio.sleep(0)
+    assert app.text_input is not None
+    assert app.text_input.question == "Enter provider name (cannot be empty)"
+
+    # 3. Enter valid name -> moves to base URL
+    app.resolve_text_input("Gateway 1")
+    await asyncio.sleep(0)
+    assert app.text_input is not None
+    assert app.text_input.question == "Enter base URL"
+
+
+def test_active_delete_blocked_displays_inline_error():
+    adapter = InMemoryCustomProviderAdapter()
+    p = adapter.add_custom_provider("Active P", "http://active.test")
+    adapter.activate_custom_provider(p.id)
+
+    blocked_mock = Mock()
+    req = AskRequest(
+        question=Question(header="provider", question="Select provider"),
+        resolve=Mock(),
+        reject=Mock(),
+    )
+    modal = ProviderPickerModal(
+        req=req,
+        adapter=adapter,
+        on_active_delete_blocked=blocked_mock,
+        initial_section=SECTION_CUSTOM,
+    )
+
+    # Initially no error
+    assert modal.error_message is None
+    frame_initial = "\n".join(modal.render())
+    assert "error:" not in frame_initial
+
+    # Attempt to delete active provider
+    modal.handle_key("d")
+    blocked_mock.assert_called_once_with(p)
+    assert modal.error_message is not None
+    frame_with_error = "\n".join(modal.render())
+    assert "error: Cannot delete active custom provider" in frame_with_error
+
+    # Navigating away clears the error
+    modal.handle_key("up")
+    assert modal.error_message is None
+    frame_cleared = "\n".join(modal.render())
+    assert "error:" not in frame_cleared
+
+
+def test_text_input_modal_standardized_footer():
+    req = TextInputRequest(
+        header="test",
+        question="Enter something",
+        placeholder="",
+        resolve=Mock(),
+        reject=Mock(),
+    )
+    modal = TextInputModal(req)
+    frame = "\n".join(modal.render())
+    assert "Enter confirm · Esc cancel" in frame
+    assert "submit" not in frame

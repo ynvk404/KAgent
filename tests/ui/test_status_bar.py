@@ -265,6 +265,22 @@ class TestStatusBarBusyLine:
         assert "time 00:18" in frame
         assert "Ctrl-O expand output" not in frame
 
+    @pytest.mark.asyncio
+    async def test_narrow_status_drops_input_hints_while_preserving_target(self) -> None:
+        frame = await render_frame(
+            props(
+                model="gpt-4o",
+                target="http://juice.lab:3000/",
+                ctx_tokens=100,
+                request_tokens=200,
+                compact_threshold=4000,
+            ),
+            size=(75, 3),
+        )
+
+        assert "target: juice.lab:3000" in frame
+        assert "Enter send" not in frame
+
     def test_keeps_success_and_warning_semantics_distinct(self) -> None:
         from src.ui.widgets.status_bar import idle_line
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 from src.ui.bridges.ask_bridge import (
     AskRequest,
 )
+from src.ui.commands.menu_window import compute_menu_window
+
+ASK_MODAL_VISIBLE_CAP = 8
 
 
 class AskModal:
@@ -85,7 +88,21 @@ class AskModal:
 
         lines.append("")
 
-        for i, option in enumerate(q.options):
+        if not q.options:
+            lines.append("Esc cancel")
+            return lines
+
+        window = compute_menu_window(
+            len(q.options),
+            self.idx,
+            cap=ASK_MODAL_VISIBLE_CAP,
+        )
+
+        if window.hidden_above > 0:
+            lines.append(f"  ↑ {window.hidden_above} more")
+
+        for i in range(window.start, window.end):
+            option = q.options[i]
             selected = i == self.idx
 
             prefix = (
@@ -106,6 +123,9 @@ class AskModal:
                 )
 
             lines.append(line)
+
+        if window.hidden_below > 0:
+            lines.append(f"  ↓ {window.hidden_below} more")
 
         lines.append("")
         lines.append(

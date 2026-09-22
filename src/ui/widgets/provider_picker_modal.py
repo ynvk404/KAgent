@@ -80,6 +80,7 @@ class ProviderPickerModal:
         # If set, modal renders delete confirmation dialog
         self.confirming_delete: CustomProviderProfile | None = None
         self.confirm_idx: int = 0  # 0: Delete, 1: Cancel
+        self.error_message: str | None = None
 
     @property
     def idx(self) -> int:
@@ -100,7 +101,7 @@ class ProviderPickerModal:
                 self.current_backend == backend_id
                 or self.current_backend == label.lower()
             )
-            tag = " (current)" if is_current else ""
+            tag = "   ● active" if is_current else ""
             items.append(f"{label}{tag}")
 
         for act in MANAGEMENT_ACTIONS:
@@ -117,6 +118,7 @@ class ProviderPickerModal:
     def _get_manual_items(self) -> list[str]:
         is_current = self.current_backend in ("openai-compat", "openai-compatible")
         tag = " (current)" if is_current else ""
+        tag = "   ● active" if is_current else ""
         return [f"{MANUAL_OAI_LABEL}{tag}"]
 
     def _get_section_items(self, section: int) -> list[Any]:
@@ -147,6 +149,9 @@ class ProviderPickerModal:
             self._switch_section(1)
             return
 
+        if key != "d":
+            self.error_message = None
+
         items = self._get_section_items(self.section)
         total = len(items)
 
@@ -176,6 +181,7 @@ class ProviderPickerModal:
                 selected_item = self._get_current_item()
                 if isinstance(selected_item, CustomProviderProfile):
                     if self.adapter.is_active(selected_item.id):
+                        self.error_message = "Cannot delete active custom provider. Select another provider first."
                         if self.on_active_delete_blocked:
                             return self.on_active_delete_blocked(selected_item)
                         return
@@ -185,6 +191,7 @@ class ProviderPickerModal:
             return
 
     def _switch_section(self, delta: int) -> None:
+        self.error_message = None
         self.section = (self.section + delta) % 3
         # Ensure index in new section is bounded
         items = self._get_section_items(self.section)
@@ -370,7 +377,7 @@ class ProviderPickerModal:
                         or self.adapter.get_current_provider_id() == profile.id
                         or self.current_backend == profile.name
                     )
-                    tag = " (current)" if is_current else ""
+                    tag = "   ● active" if is_current else ""
                     lines.append(f"{prefix}{profile.name}{tag}")
 
                 lines.append("")
@@ -386,6 +393,10 @@ class ProviderPickerModal:
                 lines.append(f"{prefix}{item}")
 
         # 3. Footer
+        if self.error_message:
+            lines.append("")
+            lines.append(f"error: {self.error_message}")
+
         lines.append("")
         if self.section == SECTION_CUSTOM:
             cur_item = self._get_current_item()

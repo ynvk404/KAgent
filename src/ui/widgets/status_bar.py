@@ -215,6 +215,14 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
     if without_expand.cell_len <= width:
         return without_expand
 
+    without_input_hints = build(
+        include_input_hints=False,
+        include_extras=True,
+        include_expand=False,
+    )
+    if without_input_hints.cell_len <= width:
+        return without_input_hints
+
     without_extras = build(
         include_input_hints=True,
         include_extras=False,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -75,7 +76,6 @@ def test_render_skills():
     )
 
 
-    assert "[skills]" in frame
     assert "3/3 enabled" in frame
     assert "web_scan" in frame
     assert "nmap" in frame
@@ -217,5 +217,46 @@ def test_escape_close():
 
     modal.handle_key("escape")
 
+    close.assert_called_once()
 
     close.assert_called_once()
+
+def test_skills_modal_long_list_windowing():
+    class DummySkill:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.description = f"description for {name}"
+
+    skills_list = [DummySkill(f"skill_{i:02d}") for i in range(20)]
+
+    class DummySkills:
+        def list(self):
+            return skills_list
+
+        def is_disabled(self, name: str) -> bool:
+            return False
+
+    agent = SimpleNamespace(skills=DummySkills())
+    modal = SkillsModal(agent, Mock())
+
+    # 1. At start (idx=0): visible 0..7, 12 hidden below
+    frame = "\n".join(modal.render())
+    assert "↓ 12 more" in frame
+    assert "↑ " not in frame
+    assert "skill_00" in frame
+    assert "skill_07" in frame
+    assert "skill_08" not in frame
+
+    # 2. Navigate to item 10: visible 6..13, 6 hidden above, 6 hidden below
+    for _ in range(10):
+        modal.handle_key("down")
+    assert modal.idx == 10
+
+    frame = "\n".join(modal.render())
+    assert "↑ 6 more" in frame
+    assert "↓ 6 more" in frame
+    assert "skill_05" not in frame
+    assert "skill_06" in frame
+    assert "› [on]  skill_10" in frame
+    assert "skill_13" in frame
+    assert "skill_14" not in frame

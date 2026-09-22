@@ -52,6 +52,7 @@ from src.logger.session_debug import SessionDebugLog
 from src.skills.template import render_skill_template
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest 
+from src.ui.commands.menu_window import compute_menu_window
 from src.ui.commands.slash_items import SLASH_ITEMS, SlashItem, filter_slash
 from src.ui.commands.slash_handler import (
     handle_slash,
@@ -93,18 +94,20 @@ from src.ui.utils.text_field import (
     strip_paste_markers,
 )
 from src.ui.widgets.ask_modal import AskModal
+from src.ui.widgets.ask_modal import ASK_MODAL_VISIBLE_CAP, AskModal
 from src.ui.widgets.banner import Banner, BannerData
 from src.ui.widgets.input_box import DEFAULT_PROMPT, InputBox
 from src.ui.widgets.mention_menu import MentionMenu
 from src.ui.widgets.permission_modal import PermissionModal
 from src.ui.widgets.provider_picker_modal import ProviderPickerModal
 from src.ui.widgets.skills_modal import SkillsModal
+from src.ui.widgets.skills_modal import SKILLS_MODAL_VISIBLE_CAP, SkillsModal
 from src.ui.widgets.text_input_modal import TextInputModal, TextInputRequest
 from src.ui.widgets.slash_menu import SlashMenu
 from src.ui.widgets.status_bar import StatusBar, StatusProps
 from src.ui.widgets.transcript import Transcript, entry_view
 from src.ui.widgets.transcript_view import TranscriptView
-from src.ui.theme import ACCENT, MUTED, PRIMARY
+from src.ui.theme import ACCENT, BOLD_ERROR, MUTED, PRIMARY, SUCCESS
 
 
 MENTION_LIMIT = 12
@@ -239,13 +242,64 @@ def _modal_text(modal) -> RenderableType:
         if isinstance(modal, TextInputModal) and line.startswith(DEFAULT_PROMPT):
             text.append(DEFAULT_PROMPT, style=_input_style("prompt"))
             value = line[len(DEFAULT_PROMPT):]
-            if value.endswith("▌"):
-                text.append(value[:-1], style=_input_style("text"))
+            if "▌" in value:
+                before, after = value.split("▌", 1)
+                if before:
+                    text.append(before, style=_input_style("text"))
                 text.append("▌", style=_input_style("cursor"))
+                if after:
+                    text.append(after, style=_input_style("text"))
             else:
                 text.append(value, style=_input_style("text"))
         elif isinstance(modal, ProviderPickerModal) and i == 0 and modal.confirming_delete is None:
             text.append_text(modal.render_header_text())
+        elif isinstance(modal, ProviderPickerModal) and modal.confirming_delete is not None and ("> [ Delete ]" in line or "> [ Cancel ]" in line):
+            if "> [ Delete ]" in line:
+                text.append("> [ Delete ]", style=f"bold {ACCENT}")
+                text.append("   [ Cancel ]")
+            else:
+                text.append("  [ Delete ]   ")
+                text.append("> [ Cancel ]", style=f"bold {ACCENT}")
+        elif isinstance(modal, ProviderPickerModal) and line.startswith("> "):
+            if "● active" in line:
+                prefix_part, _, _ = line.partition("● active")
+                text.append(prefix_part, style=f"bold {ACCENT}")
+                text.append("● active", style=f"bold {SUCCESS}")
+            else:
+                text.append(line, style=f"bold {ACCENT}")
+        elif isinstance(modal, ProviderPickerModal) and "● active" in line:
+            prefix_part, _, _ = line.partition("● active")
+            text.append(prefix_part)
+            text.append("● active", style=f"bold {SUCCESS}")
+        elif isinstance(modal, AskModal) and line.startswith("› "):
+            if " — " in line:
+                head, desc = line.split(" — ", 1)
+                text.append(head, style=f"bold {ACCENT}")
+                text.append(" — ")
+                if "● active" in desc:
+                    d_head, _, _ = desc.partition("● active")
+                    if d_head:
+                        text.append(d_head)
+                    text.append("● active", style=f"bold {SUCCESS}")
+                else:
+                    text.append(desc)
+            else:
+                text.append(line, style=f"bold {ACCENT}")
+        elif isinstance(modal, AskModal) and "● active" in line:
+            head, _, _ = line.partition("● active")
+            text.append(head)
+            text.append("● active", style=f"bold {SUCCESS}")
+        elif isinstance(modal, SkillsModal) and line.startswith("› "):
+            if " — " in line:
+                head, desc = line.split(" — ", 1)
+                text.append(head, style=f"bold {ACCENT}")
+                text.append(" — " + desc)
+            else:
+                text.append(line, style=f"bold {ACCENT}")
+        elif line.strip().startswith("↑ ") or line.strip().startswith("↓ "):
+            text.append(line, style="dim")
+        elif line.startswith("error: "):
+            text.append(line, style=BOLD_ERROR)
         else:
             text.append(line)
     return text
@@ -835,31 +889,54 @@ class KAgent(App):
             if isinstance(modal, AskModal):
                 q = modal.req.question
                 start_y = 3 if q.header else 2
-                opt_idx = rel_y - start_y
-                if 0 <= opt_idx < len(q.options):
-                    modal.idx = opt_idx
-                    self._sync_overlay()
-                    event.stop()
-                    return
+                window = compute_menu_window(
+                    len(q.options),
+                    modal.idx,
+                    cap=ASK_MODAL_VISIBLE_CAP,
+                )
+                header_offset = 1 if window.hidden_above > 0 else 0
+                item_row = rel_y - start_y - header_offset
+                visible_count = window.end - window.start
+                if 0 <= item_row < visible_count:
+                    target_idx = window.start + item_row
+                    if 0 <= target_idx < len(q.options):
+                        modal.idx = target_idx
+                        self._sync_overlay()
+                        event.stop()
+                        return
 
             if isinstance(modal, SkillsModal):
                 skills = modal.skills()
-                skill_idx = rel_y - 3
-                if 0 <= skill_idx < len(skills):
-                    modal.idx = skill_idx
-                    asyncio.create_task(modal.toggle())
-                    self._sync_overlay()
-                    event.stop()
-                    return
+                window = compute_menu_window(
+                    len(skills),
+                    modal.idx,
+                    cap=SKILLS_MODAL_VISIBLE_CAP,
+                )
+                header_offset = 1 if window.hidden_above > 0 else 0
+                item_row = rel_y - 3 - header_offset
+                visible_count = window.end - window.start
+                if 0 <= item_row < visible_count:
+                    target_idx = window.start + item_row
+                    if 0 <= target_idx < len(skills):
+                        modal.idx = target_idx
+                        self._sync_overlay()
+                        event.stop()
+                        return
 
         elif self.slash_matches:
             region = self.overlay_text_static.region
             rel_y = event.y - region.y
-            if 0 <= rel_y < len(self.slash_matches):
-                self.slash_idx = rel_y
-                self._sync_overlay()
-                event.stop()
-                return
+            window = compute_menu_window(len(self.slash_matches), self.slash_idx)
+            header_offset = 1 if window.hidden_above > 0 else 0
+            visible_count = window.end - window.start
+            clicked_item_offset = rel_y - header_offset
+            if 0 <= clicked_item_offset < visible_count:
+                target_idx = window.start + clicked_item_offset
+                if 0 <= target_idx < len(self.slash_matches):
+                    self.slash_idx = target_idx
+                    self._sync_overlay()
+                    event.stop()
+                    return
 
     async def _process_key(self, event: events.Key) -> None:
         raw_input = event.character or ""

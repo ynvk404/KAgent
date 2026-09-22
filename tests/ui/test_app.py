@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -11,6 +12,7 @@ from textual.selection import Selection
 from textual.geometry import Offset
 
 from src.ui.bridges.ask_bridge import BridgedAskPrompter
+from src.ui.bridges.ask_bridge import AskRequest, BridgedAskPrompter
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest, BridgedPrompter
 from src.permission.permission import PermissionRequest
 from src.ask.ask import Option, Question
@@ -33,6 +35,10 @@ from src.ui.core.state import AgentEventAction, SetAsk, SetBusy, SetPerm
 from src.ui.widgets.banner import BannerData
 from src.ui.widgets.text_input_modal import TextInputRequest
 from src.ui.widgets.text_input_modal import TextInputModal
+from src.ui.widgets.ask_modal import AskModal
+from src.ui.widgets.skills_modal import SkillsModal
+from src.ui.commands.slash_items import SlashItem
+from src.ui.theme import ACCENT, SUCCESS
 
 
 def make_app() -> KAgent:
@@ -819,3 +825,230 @@ async def test_text_selected_ignores_stale_transcript_selection(
         app.on_text_selected(events.TextSelected())
 
         assert app._last_selected_text == ""
+
+
+def test_skills_modal_click_selects_row_without_toggling() -> None:
+    app = make_app()
+    toggled: list[tuple[str, bool]] = []
+
+    class DummySkills:
+        def list(self):
+            return [
+                SimpleNamespace(name="skill_a", description="Skill A", enabled=True),
+                SimpleNamespace(name="skill_b", description="Skill B", enabled=False),
+            ]
+
+        def is_disabled(self, name: str) -> bool:
+            return name == "skill_b"
+
+    dummy_agent = cast(
+        Any,
+        SimpleNamespace(
+            skills=DummySkills(),
+            set_skill_enabled=lambda name, val: toggled.append((name, val)),
+        ),
+    )
+    modal = SkillsModal(agent=dummy_agent, on_close=lambda: None)
+    app._skills_modal = modal
+    app.state = replace(app.state, pending_skills=True)
+
+    app.overlay_text_static = cast(
+        Any, SimpleNamespace(region=SimpleNamespace(x=0, y=0))
+    )
+
+    class ClickEvent:
+        button = 1
+        x = 5
+        y = 4  # skill_idx = rel_y - 3 = 4 - 3 = 1
+
+        def stop(self) -> None:
+            pass
+
+    app.on_click(cast(Any, ClickEvent()))
+
+    assert modal.idx == 1
+    assert toggled == []  # Crucial: click did NOT toggle the skill
+
+
+def test_scrolled_slash_menu_click_selects_correct_item() -> None:
+    app = make_app()
+    app.slash_matches = [
+        SlashItem(name=f"/cmd{i}", description=f"Description {i}")
+        for i in range(10)
+    ]
+    # Scrolled position: item 7 selected -> window start=5, hidden_above=5
+    app.slash_idx = 7
+    app.overlay_text_static = cast(
+        Any, SimpleNamespace(region=SimpleNamespace(x=0, y=10))
+    )
+
+    # In compute_menu_window(10, 7):
+    # hidden_above = 5, start = 5, end = 10, hidden_below = 0.
+    # Lines rendered:
+    # Line 0 (y=10): "  ↑ 5 more" (indicator)
+    # Line 1 (y=11): "/cmd5"
+    # Line 2 (y=12): "/cmd6"
+    # Line 3 (y=13): "/cmd7"
+    class ClickEvent:
+        button = 1
+        x = 5
+        y = 12  # rel_y = 12 - 10 = 2 -> clicked item index 6 (/cmd6)
+
+        def stop(self) -> None:
+            pass
+
+    app.on_click(cast(Any, ClickEvent()))
+    assert app.slash_idx == 6
+
+
+def test_ask_and_skills_modal_selected_row_styling() -> None:
+    # 1. AskModal
+    ask_req = AskRequest(
+        question=Question(
+            header="Pick",
+            question="Choose option",
+            options=[
+                Option(label="First", description="first option"),
+                Option(label="Second", description="second option"),
+            ],
+        ),
+        resolve=lambda _: None,
+        reject=lambda _: None,
+    )
+    ask_modal = AskModal(ask_req)
+    ask_modal.idx = 1
+    rendered = _modal_text(ask_modal)
+    assert isinstance(rendered, Text)
+    spans = [s for s in rendered.spans if str(s.style) == f"bold {ACCENT}"]
+    assert len(spans) == 1
+    assert rendered.plain[spans[0].start : spans[0].end] == "› Second"
+
+    # 2. SkillsModal
+    class DummySkills:
+        def list(self):
+            return [
+                SimpleNamespace(name="alpha", description="alpha skill"),
+                SimpleNamespace(name="beta", description="beta skill"),
+            ]
+
+        def is_disabled(self, name: str) -> bool:
+            return False
+
+    dummy_agent = cast(Any, SimpleNamespace(skills=DummySkills()))
+    skills_modal = SkillsModal(agent=dummy_agent, on_close=lambda: None)
+    skills_modal.idx = 0
+    rendered_skills = _modal_text(skills_modal)
+    assert isinstance(rendered_skills, Text)
+    skill_spans = [
+        s for s in rendered_skills.spans if str(s.style) == f"bold {ACCENT}"
+    ]
+    assert len(skill_spans) == 1
+    assert (
+        rendered_skills.plain[skill_spans[0].start : skill_spans[0].end]
+        == "› [on]  alpha"
+    )
+
+
+def test_ask_modal_long_list_windowing_and_jump() -> None:
+    options = [
+        Option(label=f"model-{i:02d}", description=f"desc-{i:02d}")
+        for i in range(20)
+    ]
+    req = AskRequest(
+        question=Question(header="model", question="Select model", options=options),
+        resolve=lambda _: None,
+        reject=lambda _: None,
+    )
+    modal = AskModal(req)
+
+    # 1. Start at 0: 0..7 visible, 12 hidden below
+    frame = "\n".join(modal.render())
+    assert "↓ 12 more" in frame
+    assert "↑ " not in frame
+    assert "model-00" in frame
+    assert "model-07" in frame
+    assert "model-08" not in frame
+
+    # 2. Number jump: press '9' -> idx 8
+    modal.handle_key("9")
+    assert modal.idx == 8
+    frame = "\n".join(modal.render())
+    assert "↑ 4 more" in frame
+    assert "↓ 8 more" in frame
+    assert "› model-08" in frame
+
+
+def test_ask_modal_scrolled_click() -> None:
+    app = make_app()
+    options = [Option(label=f"opt-{i:02d}") for i in range(20)]
+    req = AskRequest(
+        question=Question(header="pick", question="Choose", options=options),
+        resolve=lambda _: None,
+        reject=lambda _: None,
+    )
+    modal = AskModal(req)
+    modal.idx = 8  # Window: start=4, end=12, hidden_above=4
+    app._ask_modal = modal
+    app.state = replace(app.state, pending_ask=req)
+
+    app.overlay_text_static = cast(
+        Any, SimpleNamespace(region=SimpleNamespace(x=0, y=0))
+    )
+
+    # Lines:
+    # 0: [pick]
+    # 1: Choose
+    # 2: ""
+    # 3: "  ↑ 4 more" (indicator)
+    # 4: opt-04
+    # 5: opt-05
+    # 6: opt-06
+    class ClickEvent:
+        button = 1
+        x = 5
+        y = 5  # should be opt-05
+
+        def stop(self) -> None:
+            pass
+
+    app.on_click(cast(Any, ClickEvent()))
+    assert modal.idx == 5
+
+
+def test_distinct_selected_and_active_styling() -> None:
+    req = AskRequest(
+        question=Question(
+            header="model",
+            question="Select model",
+            options=[
+                Option(label="claude-3-haiku", description="● active"),
+                Option(label="claude-3-opus", description="powerful"),
+            ],
+        ),
+        resolve=lambda _: None,
+        reject=lambda _: None,
+    )
+    modal = AskModal(req)
+    # Select row 1 (claude-3-opus), while row 0 is active
+    modal.idx = 1
+    rendered = _modal_text(modal)
+    assert isinstance(rendered, Text)
+
+    accent_spans = [
+        s for s in rendered.spans if str(s.style) == f"bold {ACCENT}"
+    ]
+    success_spans = [
+        s for s in rendered.spans if str(s.style) == f"bold {SUCCESS}"
+    ]
+
+    assert len(accent_spans) == 1
+    assert (
+        rendered.plain[accent_spans[0].start : accent_spans[0].end]
+        == "› claude-3-opus"
+    )
+
+    assert len(success_spans) == 1
+    assert (
+        rendered.plain[success_spans[0].start : success_spans[0].end]
+        == "● active"
+    )
