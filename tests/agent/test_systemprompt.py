@@ -13,7 +13,7 @@ from src.agent.system_prompt import (
     render_workflow,
 )
 
-class Testbuild_system_prompt:
+class TestBuildSystemPrompt:
     def test_carried_session_memory_has_a_deterministic_hard_bound(self):
         memory = SessionMemory(
             compactions=2,

@@ -1,10 +1,9 @@
-import sys
-from pathlib import Path
-import pytest
 import json
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.browser.mcp_server import (
     parse_args,
@@ -56,7 +55,7 @@ def test_get_val_dictionary():
 def test_get_val_object():
     class DummyObj:
         requestCount = 99
-    
+
     obj = DummyObj()
     assert get_val(obj, "request_count", "requestCount") == 99
     assert get_val(obj, "missing_attr", default="N/A") == "N/A"
@@ -79,17 +78,19 @@ def test_to_dict():
     class RegularObj:
         def __init__(self):
             self.foo = "bar"
-    
+
     obj = RegularObj()
     assert to_dict(obj) == {"foo": "bar"}
 
 
 def test_format_iso():
     assert format_iso(None) is None
-    
+
     ts = 1700000000
     iso_str = format_iso(ts)
-    assert iso_str is not None and (iso_str.endswith("Z") or iso_str.endswith("+00:00"))
+    assert iso_str is not None and (
+        iso_str.endswith("Z") or iso_str.endswith("+00:00")
+    )
 
     dt = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     res_str = format_iso(dt)
@@ -129,7 +130,7 @@ def mock_store():
         "request_count": 10,
         "endpoint_count": 3,
         "snapshot_count": 1,
-        "last_activity_at": 1700000000
+        "last_activity_at": 1700000000,
     }
     store.list_requests.return_value = [
         {
@@ -137,14 +138,14 @@ def mock_store():
             "method": "POST",
             "url": "https://api.target.com/v1/login",
             "status": 200,
-            "received_at": 1700000000
+            "received_at": 1700000000,
         }
     ]
     store.get_request.return_value = {
         "id": "req_101",
         "method": "POST",
         "url": "https://api.target.com/v1/login",
-        "response_body": "A" * 5000
+        "response_body": "A" * 5000,
     }
     return store
 
@@ -153,12 +154,14 @@ def test_tool_browser_capture_status_output(mock_store):
     status_data = mock_store.status()
     result_json = {
         "ingestUrl": "http://127.0.0.1:9999/ingest",
-        "requests": get_val(status_data, 'request_count', 'requestCount', default=0),
-        "endpoints": get_val(status_data, 'endpoint_count', 'endpointCount', default=0),
-        "snapshots": get_val(status_data, 'snapshot_count', 'snapshotCount', default=0),
-        "lastActivityAt": format_iso(get_val(status_data, 'last_activity_at', 'lastActivityAt'))
+        "requests": get_val(status_data, "request_count", "requestCount", default=0),
+        "endpoints": get_val(status_data, "endpoint_count", "endpointCount", default=0),
+        "snapshots": get_val(status_data, "snapshot_count", "snapshotCount", default=0),
+        "lastActivityAt": format_iso(
+            get_val(status_data, "last_activity_at", "lastActivityAt")
+        ),
     }
-    
+
     assert result_json["requests"] == 10
     assert result_json["endpoints"] == 3
     assert result_json["snapshots"] == 1
@@ -168,8 +171,8 @@ def test_tool_browser_capture_get_truncation(mock_store):
     req = mock_store.get_request("req_101")
     cap = 4000
     resp_body = req["response_body"]
-    
+
     if len(resp_body) > cap:
         resp_body = f"{resp_body[:cap]}...<truncated {len(resp_body) - cap} chars>"
-    
+
     assert "...<truncated 1000 chars>" in resp_body

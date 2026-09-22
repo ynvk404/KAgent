@@ -1,10 +1,13 @@
 import asyncio
-import pytest
 from typing import cast
+
+import pytest
+
 from src.tools.mcp_integration import (
     MCPTool,
     MCPSession,
 )
+
 
 class FakeSession:
     def __init__(self, result):
@@ -17,6 +20,7 @@ class FakeSession:
 
 class DummyPrompter:
     pass
+
 
 @pytest.mark.asyncio
 async def test_formats_text_mcp_errors_without_raw_content_json():
@@ -51,12 +55,10 @@ async def test_formats_text_mcp_errors_without_raw_content_json():
             DummyPrompter(),
         )
 
-
     try:
         await tool.run({}, None, DummyPrompter())
-    except RuntimeError as e:
-        assert "isError" not in str(e)
-
+    except RuntimeError as err:
+        assert "isError" not in str(err)
 
 @pytest.mark.asyncio
 async def test_truncates_large_successful_mcp_results():
@@ -90,18 +92,14 @@ async def test_truncates_large_successful_mcp_results():
     assert "truncated" in out
     assert len(out) < 140_000
 
+
 @pytest.mark.asyncio
 async def test_bounds_deeply_nested_content():
 
-    deep = {
-        "leaf": "x"
-    }
+    deep = {"leaf": "x"}
 
     for _ in range(100):
-        deep = {
-            "nested": deep
-        }
-
+        deep = {"nested": deep}
 
     session = FakeSession(
         {
@@ -109,8 +107,6 @@ async def test_bounds_deeply_nested_content():
             "content": deep,
         }
     )
-
-
     tool = MCPTool(
         cast(MCPSession, session),
         "mcp_browser_deep",
@@ -118,13 +114,9 @@ async def test_bounds_deeply_nested_content():
         "Deep output",
         {"type": "object"},
     )
-
-
     out = await tool.run(
         {},
         None,
         DummyPrompter(),
     )
-
-
     assert "max depth exceeded" in out
