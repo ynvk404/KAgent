@@ -225,6 +225,8 @@ async def test_reports_tool_timeouts_instead_of_surfacing_abort_error():
         AlwaysAllow(),
     )
     assert "timeout after 1s" in out
+    assert out.status == "error"
+    assert out.error_kind == "timeout"
     assert "AbortError" not in out
 
 

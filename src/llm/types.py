@@ -53,6 +53,11 @@ class Message:
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
+    # Internal tool outcome; providers serialize only the established fields.
+    tool_status: str | None = None
+    tool_error_kind: str | None = None
+    tool_http_status: int | None = None
+    tool_truncated: bool = False
 
 # ============================================================================
 # Tool Definition

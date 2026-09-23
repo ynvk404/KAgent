@@ -93,30 +93,38 @@ async def run_plugin(
 
     abort_task: asyncio.Task[None] = asyncio.ensure_future(_watch_abort())
 
-    done, _pending = await asyncio.wait(
-        {communicate_task, abort_task},
-        timeout=PLUGIN_TIMEOUT_SECONDS,
-        return_when=asyncio.FIRST_COMPLETED,
-    )
+    async def stop_process() -> None:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        # communicate owns the pipe readers; let it drain the killed process.
+        await communicate_task
 
-    timed_out = not done
-    aborted = (not timed_out) and communicate_task not in done
+    try:
+        done, _pending = await asyncio.wait(
+            {communicate_task, abort_task},
+            timeout=PLUGIN_TIMEOUT_SECONDS,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
 
-    if timed_out or aborted:
-        communicate_task.cancel()
+        timed_out = not done
+        aborted = (not timed_out) and communicate_task not in done
+
+        if timed_out or aborted:
+            await stop_process()
+            if timed_out:
+                raise RuntimeError(
+                    f"plugin timed out after {PLUGIN_TIMEOUT_SECONDS}s"
+                )
+            raise asyncio.CancelledError()
+    except asyncio.CancelledError:
+        await stop_process()
+        raise
+    finally:
         abort_task.cancel()
-
-        proc.kill()
-        await proc.wait()
-
-        if timed_out:
-            raise RuntimeError(
-                f"plugin timed out after {PLUGIN_TIMEOUT_SECONDS}s"
-            )
-
-        raise asyncio.CancelledError()
-
-    abort_task.cancel()
+        await asyncio.gather(abort_task, return_exceptions=True)
 
     stdout, stderr = communicate_task.result()
 

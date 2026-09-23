@@ -14,6 +14,7 @@ from .types import (
     Tool,
     arg_string,
 )
+from .outcome import ToolOutput
 
 RESPONSE_BYTE_CAP = 64 * 1024 
 REQUEST_TIMEOUT = 60
@@ -228,28 +229,19 @@ class HTTPTool(Tool):
 
                 chunks = []
                 total = 0
+                truncated = False
 
                 async for chunk in response.aiter_bytes():
-
-                    remaining = (
-                        RESPONSE_BYTE_CAP
-                        - total
-                    )
-
-                    if remaining <= 0:
-                        break
-
-                    if len(chunk) > remaining:
-                        chunks.append(
-                            chunk[:remaining]
-                        )
+                    remaining = RESPONSE_BYTE_CAP + 1 - total
+                    if len(chunk) >= remaining:
+                        chunks.append(chunk[:remaining])
                         total += remaining
+                        truncated = total > RESPONSE_BYTE_CAP
                         break
-
                     chunks.append(chunk)
                     total += len(chunk)
 
-                content = b"".join(chunks)
+                content = b"".join(chunks)[:RESPONSE_BYTE_CAP]
 
                 output = (
                     f"HTTP/1.1 "
@@ -266,6 +258,8 @@ class HTTPTool(Tool):
                 output += content.decode(
                     errors="replace"
                 )
+                if truncated:
+                    output += f"\n[response body truncated at {RESPONSE_BYTE_CAP} bytes]"
 
         if private_reason:
             output = (
@@ -274,7 +268,10 @@ class HTTPTool(Tool):
                 + output
             )
 
-        return output
+        return ToolOutput(
+            output, status="observation", http_status=response.status_code,
+            truncated=truncated,
+        )
 
     def _require_scope(self, url: str) -> None:
         self.engagement.require_in_scope(url)

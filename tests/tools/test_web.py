@@ -4,6 +4,7 @@ from typing import Any, Awaitable, Callable
 from unittest.mock import AsyncMock
 
 import httpx
+import ssl
 import pytest
 
 from src.permission.permission import Decision, PermissionRequest, AlwaysAllow, AlwaysDeny
@@ -119,6 +120,20 @@ async def test_returns_readable_text_for_successful_fetches():
     assert "Hello" in out
     assert "<h1>" not in out
     assert "x()" not in out
+    assert out.status == "observation"
+    assert out.http_status == 200
+
+
+@pytest.mark.asyncio
+async def test_fetch_403_is_observation_even_when_cached():
+    set_handler(ok_handler("forbidden", status=403, reason="Forbidden"))
+    tool = scoped_fetch()
+    first = await tool.run({"url": "https://example.com"}, None, prompter)
+    second = await tool.run({"url": "https://example.com"}, None, prompter)
+    assert first.status == second.status == "observation"
+    assert first.http_status == second.http_status == 403
+    assert first.error_kind is None
+    assert FakeAsyncClient.call_count == 1
 
 @pytest.mark.asyncio
 async def test_explains_hackerone_platform_dns_failures_with_program_url_hint():
@@ -136,6 +151,33 @@ async def test_explains_hackerone_platform_dns_failures_with_program_url_hint():
     assert "Code: ENOTFOUND" in out
     assert "platform.hackerone.com is not a public HackerOne program host" in out
     assert "https://hackerone.com/hackerone" in out
+    assert out.status == "error"
+    assert out.error_kind == "network"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure,kind", [
+    (httpx.ReadTimeout("timed out"), "timeout"),
+    (httpx.ConnectError("TLS failed"), "network"),
+])
+async def test_fetch_failure_has_explicit_outcome(failure, kind):
+    set_handler(failing_handler(failure))
+    out = await scoped_fetch().run({"url": "https://example.com"}, None, prompter)
+    assert "ERROR: fetch failed" in out
+    assert out.status == "error"
+    assert out.error_kind == kind
+
+
+@pytest.mark.asyncio
+async def test_fetch_tls_cause_has_tls_outcome():
+    try:
+        raise ssl.SSLError("certificate failed")
+    except ssl.SSLError as cause:
+        failure = httpx.ConnectError("connection failed")
+        failure.__cause__ = cause
+    set_handler(failing_handler(failure))
+    out = await scoped_fetch().run({"url": "https://example.com"}, None, prompter)
+    assert out.error_kind == "tls"
 
 @pytest.mark.asyncio
 async def test_rethrows_when_caller_aborts_the_request():

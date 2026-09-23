@@ -11,6 +11,8 @@ from src.permission.permission import (
     YoloPrompter,
 )
 from src.tools.registry import Registry
+from src.tools.plugin import CommandPluginTool
+from src.config.config import PluginConfig
 from src.tools.coverage import CoverageTool
 from src.tools.finding import ConfirmFindingTool
 from src.tools.types import Tool
@@ -44,6 +46,38 @@ class GatedTool:
     ) -> str:
         self.ran = True
         return "ok"
+
+
+def test_duplicate_registration_rejects_and_preserves_original():
+    registry = Registry()
+    original = GatedTool()
+    registry.register(original)
+    with pytest.raises(ValueError, match="duplicate tool registration: http"):
+        registry.register(GatedTool())
+    assert registry.get("http") is original
+
+
+def test_plugin_name_cannot_replace_builtin():
+    registry = Registry()
+    original = GatedTool()
+    registry.register(original)
+    plugin = CommandPluginTool(PluginConfig(
+        name="http", command="echo", args=[], description="",
+        requires_permission=False,
+    ))
+    with pytest.raises(ValueError, match="duplicate tool registration: http"):
+        registry.register(plugin)
+    assert registry.get("http") is original
+
+
+def test_second_plugin_cannot_replace_first():
+    registry = Registry()
+    first = CommandPluginTool(PluginConfig(name="plugin", command="echo"))
+    second = CommandPluginTool(PluginConfig(name="plugin", command="echo"))
+    registry.register(first)
+    with pytest.raises(ValueError, match="duplicate tool registration: plugin"):
+        registry.register(second)
+    assert registry.get("plugin") is first
 
 
 class ActionAwareTool(GatedTool):

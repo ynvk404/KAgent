@@ -22,6 +22,10 @@ from .types import (
 )
 from src.llm.types import ToolSpec
 
+
+class InvalidToolArguments(ValueError):
+    """A tool's explicit pre-dispatch argument check rejected the call."""
+
 class Registry:
     def __init__(self) -> None:
         self.tools: dict[str, Tool] = {}
@@ -30,7 +34,10 @@ class Registry:
         self,
         tool: Tool,
     ) -> None:
-        self.tools[tool.name()] = tool
+        name = tool.name()
+        if name in self.tools:
+            raise ValueError(f"duplicate tool registration: {name}")
+        self.tools[name] = tool
 
     def get(
         self,
@@ -110,7 +117,10 @@ class Registry:
             )
 
         if isinstance(tool, ArgumentValidatingTool):
-            tool.validate_args(args)
+            try:
+                tool.validate_args(args)
+            except (TypeError, ValueError) as err:
+                raise InvalidToolArguments(str(err)) from err
 
         requires_permission = (
             tool.requires_permission_for(args)

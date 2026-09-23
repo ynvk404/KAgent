@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 from src.permission.permission import Decision, YoloPrompter
 from src.engagement.state import EngagementState, OutOfScopeError
 from src.target.target import Target
-from src.tools.http import HTTPTool
+from src.tools.http import HTTPTool, RESPONSE_BYTE_CAP
 from src.tools.registry import Registry
 
 
@@ -137,6 +137,36 @@ async def test_default_get_runtime():
 
         assert "HTTP/1.1 200 OK" in out
         assert "ok" in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [
+    RESPONSE_BYTE_CAP - 1, RESPONSE_BYTE_CAP,
+    RESPONSE_BYTE_CAP + 1, RESPONSE_BYTE_CAP * 3,
+])
+@pytest.mark.parametrize("status", [200, 403])
+async def test_http_body_cap_reports_only_actual_truncation(size, status):
+    response = FakeResponse(
+        text="x" * size, status=status,
+        status_text="OK" if status == 200 else "Forbidden",
+    )
+    stream_cm = AsyncMock()
+    stream_cm.__aenter__.return_value = response
+    stream_cm.__aexit__.return_value = None
+
+    with patch("src.tools.http.httpx.AsyncClient.stream", return_value=stream_cm):
+        out = await scoped_tool().run(
+            {"url": "http://example.test"}, None, FakePrompter(),
+        )
+
+    assert out.status == "observation"
+    assert out.error_kind is None
+    assert out.http_status == status
+    assert out.truncated is (size > RESPONSE_BYTE_CAP)
+    assert out.split("\n\n", 1)[1].split("\n[response body truncated", 1)[0] == (
+        "x" * min(size, RESPONSE_BYTE_CAP)
+    )
+    assert ("[response body truncated" in out) is (size > RESPONSE_BYTE_CAP)
 
 
 @pytest.mark.asyncio

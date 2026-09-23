@@ -12,6 +12,7 @@ from src.logger.logger import get_logger
 from src.permission.permission import Prompter
 from .file import decode_utf8_capped
 from .types import Tool, arg_string
+from .outcome import ToolOutput
 
 log = get_logger("tools.shell")
 
@@ -358,6 +359,17 @@ async def run_with_capture(
         except asyncio.TimeoutError:
             kill_process_group(proc.pid, signal.SIGKILL)
             await proc.wait()
+    except asyncio.CancelledError:
+        kill_process_group(proc.pid)
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=TERMINATE_GRACE_SECONDS)
+        except asyncio.TimeoutError:
+            kill_process_group(proc.pid, signal.SIGKILL)
+            await proc.wait()
+        stdout_task.cancel()
+        stderr_task.cancel()
+        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        raise
     finally:
         watch_task.cancel()
         try:
@@ -371,7 +383,10 @@ async def run_with_capture(
     stderr = stderr_buf.render()
 
     if timed_out:
-        return f"exit: timeout after {timeout_seconds}s\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        return ToolOutput(
+            f"exit: timeout after {timeout_seconds}s\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            status="error", error_kind="timeout",
+        )
 
     code = proc.returncode or 0
     exit_code = code if code >= 0 else 128 - code

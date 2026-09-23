@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import AsyncExitStack
 from typing import cast
 
 import pytest
@@ -6,7 +7,9 @@ import pytest
 from src.tools.mcp_integration import (
     MCPTool,
     MCPSession,
+    sanitize,
 )
+from src.tools.registry import Registry
 
 
 class FakeSession:
@@ -20,6 +23,39 @@ class FakeSession:
 
 class DummyPrompter:
     pass
+
+
+@pytest.mark.asyncio
+async def test_direct_mcp_cancellation_awaits_inner_call_cleanup():
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    class BlockingSession:
+        async def call_tool(self, name, arguments):
+            started.set()
+            try:
+                await asyncio.Future()
+            finally:
+                stopped.set()
+
+    session = MCPSession("test", BlockingSession(), AsyncExitStack())
+    task = asyncio.create_task(session.call_tool("wait", {}, asyncio.Event()))
+    await asyncio.wait_for(started.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 2)
+    assert stopped.is_set()
+
+
+def test_sanitized_mcp_name_collision_is_rejected():
+    registry = Registry()
+    session = FakeSession({"isError": False, "content": []})
+    first = MCPTool(session, f"mcp_{sanitize('a-b')}_scan", "scan", "", {})
+    second = MCPTool(session, f"mcp_{sanitize('a_b')}_scan", "scan", "", {})
+    registry.register(first)
+    with pytest.raises(ValueError, match="duplicate tool registration: mcp_a_b_scan"):
+        registry.register(second)
+    assert registry.get("mcp_a_b_scan") is first
 
 
 @pytest.mark.asyncio

@@ -52,6 +52,10 @@ class ToolResultEvent(BaseEvent):
     err: str = ""
 
     duration_ms: float = 0.0
+    status: str = "success"
+    error_kind: str | None = None
+    http_status: int | None = None
+    truncated: bool = False
 
     @property
     def durationMs(self) -> float:

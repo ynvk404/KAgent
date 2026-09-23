@@ -3,6 +3,8 @@ import asyncio
 import json
 import re
 import time
+import ssl
+import httpx
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -51,7 +53,7 @@ from src.memory.store import (
 )
 
 from src.permission.permission import Prompter, UserControlledRefusal
-from src.engagement.state import EngagementState
+from src.engagement.state import EngagementState, OutOfScopeError
 
 from src.session.store import (
     SessionMemory,
@@ -68,8 +70,9 @@ from src.target.target import Target
 from src.workflow.state import WorkflowState
 
 from src.tools.aliases import canonical_tool_name
-from src.tools.registry import Registry as ToolRegistry
+from src.tools.registry import InvalidToolArguments, Registry as ToolRegistry
 from src.tools.types import ActionPermissionTool
+from src.tools.outcome import ErrorKind, ToolOutput, ToolStatus
 
 from .decision_planner import PlannerContext, build_decision_plan
 
@@ -218,6 +221,10 @@ class ToolCallResult:
         err_str: str,
         duration_ms: int,
         terminal_user_controlled_refusal: bool = False,
+        status: ToolStatus = "success",
+        error_kind: ErrorKind | None = None,
+        http_status: int | None = None,
+        truncated: bool = False,
     ):
         self.result = result
         self.err_str = err_str
@@ -225,6 +232,29 @@ class ToolCallResult:
         self.terminal_user_controlled_refusal = (
             terminal_user_controlled_refusal
         )
+        self.status = status
+        self.error_kind = error_kind
+        self.http_status = http_status
+        self.truncated = truncated
+
+
+def tool_error_kind(err: Exception, *, invalid_args: bool = False) -> ErrorKind:
+    if invalid_args or isinstance(err, InvalidToolArguments):
+        return "invalid_args"
+    if isinstance(err, OutOfScopeError):
+        return "scope_denied"
+    if isinstance(err, UserControlledRefusal):
+        return "permission_denied"
+    if isinstance(err, (asyncio.TimeoutError, httpx.TimeoutException)):
+        return "timeout"
+    cause: BaseException | None = err
+    while cause is not None:
+        if isinstance(cause, ssl.SSLError):
+            return "tls"
+        cause = cause.__cause__ or cause.__context__
+    if isinstance(err, (httpx.NetworkError, ConnectionError)):
+        return "network"
+    return "tool_exception"
 
 
 def _weighted_window_lengths(total: int) -> list[int]:
@@ -2076,6 +2106,8 @@ class Agent:
                 result="ERROR: aborted",
                 err_str="aborted",
                 duration_ms=0,
+                status="cancelled",
+                error_kind="cancelled",
             )
 
         start = time.monotonic()
@@ -2119,12 +2151,22 @@ class Agent:
         )
 
         err_str = ""
+        status: ToolStatus = "success"
+        error_kind: ErrorKind | None = None
+        http_status: int | None = None
+        truncated = False
 
         if run_err is not None:
 
             err_str = str(run_err)
 
             result = f"ERROR: {err_str}"
+            status = "cancelled" if signal.aborted else "error"
+            error_kind = (
+                "cancelled" if signal.aborted else tool_error_kind(
+                    run_err, invalid_args=parsed.parse_err is not None,
+                )
+            )
 
             log_error(
                 "agent: tool failed",
@@ -2135,6 +2177,20 @@ class Agent:
                 },
             )
 
+        elif isinstance(result, ToolOutput):
+            status = result.status
+            error_kind = result.error_kind
+            http_status = result.http_status
+            truncated = result.truncated
+            if status == "error":
+                err_str = (
+                    "fetch failed"
+                    if tc.function.name in ("web_fetch", "web_search")
+                    else (error_kind or "tool failed")
+                )
+            elif status == "cancelled":
+                err_str = "cancelled"
+
         return ToolCallResult(
             result=result,
             err_str=err_str,
@@ -2143,6 +2199,10 @@ class Agent:
                 run_err,
                 UserControlledRefusal,
             ),
+            status=status,
+            error_kind=error_kind,
+            http_status=http_status,
+            truncated=truncated,
         )
 
     def record_tool_result(
@@ -2161,6 +2221,10 @@ class Agent:
                 "result": res.result,
                 "err": res.err_str,
                 "duration_ms": res.duration_ms,
+                "status": res.status,
+                "error_kind": res.error_kind,
+                "http_status": res.http_status,
+                "truncated": res.truncated,
             }
         )
 
@@ -2192,6 +2256,10 @@ class Agent:
             content=res.result,
             tool_call_id=tc.id,
             name=tc.function.name,
+            tool_status=res.status,
+            tool_error_kind=res.error_kind,
+            tool_http_status=res.http_status,
+            tool_truncated=res.truncated,
         )
 
         self.history.append(tool_msg)
@@ -2837,6 +2905,8 @@ def reconcile_tool_calls(messages: list[Message]) -> list[Message]:
                             if tool_call.function
                             else None
                         ),
+                        tool_status="cancelled",
+                        tool_error_kind="cancelled",
                     )
                 )
 
@@ -3261,13 +3331,20 @@ async def map_with_concurrency(
             )
 
     workers = [
-        worker()
+        asyncio.create_task(worker())
         for _ in range(
             min(limit, len(items))
         )
     ]
 
-    await asyncio.gather(*workers)
+    try:
+        await asyncio.gather(*workers)
+    except BaseException:
+        for task in workers:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+        raise
 
     return results
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import codecs
 import re
+import ssl
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from src.permission.permission import Prompter
 from src.target.target import Target
 from .private_host import gate_private_request, parse_http_url
 from .types import Tool, arg_string
+from .outcome import ToolOutput, ErrorKind
 
 FETCH_TIMEOUT_SECONDS = 30.0
 FETCH_BODY_CAP = 512 * 1024
@@ -145,6 +147,27 @@ def _map_httpx_error(err: Exception) -> tuple[str, str | None]:
         return message, "UNABLE_TO_VERIFY_LEAF_SIGNATURE"
     return message, None
 
+
+def _failure_kind(err: Exception) -> ErrorKind:
+    if isinstance(err, (httpx.TimeoutException, asyncio.TimeoutError)):
+        return "timeout"
+    cause: BaseException | None = err
+    while cause is not None:
+        if isinstance(cause, ssl.SSLError):
+            return "tls"
+        cause = cause.__cause__ or cause.__context__
+    return "network"
+
+
+def _fetch_failure_output(
+    url: str, message: str, timed_out: bool, code: str | None,
+    kind: ErrorKind,
+) -> ToolOutput:
+    return ToolOutput(
+        format_fetch_failure(url, message, timed_out, code),
+        status="error", error_kind=kind,
+    )
+
 async def _decode_capped(response: httpx.Response, cap: int) -> str:
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     parts: list[str] = []
@@ -218,10 +241,13 @@ class WebFetchTool(Tool):
         except _FetchAborted:
             raise
         except _FetchFailed as err:
-            return format_fetch_failure(url, err.message, err.timed_out, err.code)
+            return _fetch_failure_output(
+                url, err.message, err.timed_out, err.code,
+                "timeout" if err.timed_out else "network",
+            )
         except httpx.HTTPError as err:
             message, code = _map_httpx_error(err)
-            return format_fetch_failure(url, message, False, code)
+            return _fetch_failure_output(url, message, False, code, _failure_kind(err))
 
         async with resp:
             raw = await _decode_capped(resp, FETCH_BODY_CAP)
@@ -238,8 +264,9 @@ class WebFetchTool(Tool):
                 f"(reason: {private_reason})\n\n{result}"
             )
 
-        _cache_set(cache_key, result)
-        return result
+        observed = ToolOutput(result, status="observation", http_status=status)
+        _cache_set(cache_key, observed)
+        return observed
 
 async def _do_fetch(url: str) -> httpx.Response:
     client = httpx.AsyncClient(follow_redirects=False)
@@ -400,10 +427,13 @@ class WebSearchTool(Tool):
         except _FetchAborted:
             raise
         except _FetchFailed as err:
-            return format_fetch_failure(endpoint, err.message, err.timed_out, err.code)
+            return _fetch_failure_output(
+                endpoint, err.message, err.timed_out, err.code,
+                "timeout" if err.timed_out else "network",
+            )
         except httpx.HTTPError as err:
             message, code = _map_httpx_error(err)
-            return format_fetch_failure(endpoint, message, False, code)
+            return _fetch_failure_output(endpoint, message, False, code, _failure_kind(err))
 
         async with resp:
             body = await _decode_capped(resp, SEARCH_BODY_CAP)

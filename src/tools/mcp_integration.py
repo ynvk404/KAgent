@@ -176,15 +176,18 @@ class MCPSession:
                 return await call
             call_task = asyncio.ensure_future(call)
             cancel_task = asyncio.ensure_future(cancel_event.wait())
-            done, pending = await asyncio.wait(
-                {call_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED
-            )
-            for p in pending:
-                p.cancel()
-            if cancel_task in done and call_task not in done:
-                call_task.cancel()
-                raise asyncio.CancelledError("mcp call cancelled")
-            return call_task.result()
+            try:
+                done, _pending = await asyncio.wait(
+                    {call_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if cancel_task in done and call_task not in done:
+                    raise asyncio.CancelledError("mcp call cancelled")
+                return call_task.result()
+            finally:
+                for task in (call_task, cancel_task):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(call_task, cancel_task, return_exceptions=True)
 
         result = await asyncio.wait_for(cancellable_call(), timeout=MCP_CALL_TIMEOUT_S)
         return {

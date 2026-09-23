@@ -243,6 +243,20 @@ def _message_from_dict(data: Any) -> Message | None:
     if name is not None and not isinstance(name, str):
         name = None
 
+    tool_status = data.get("tool_status")
+    if tool_status not in ("success", "observation", "error", "cancelled"):
+        tool_status = None
+    tool_error_kind = data.get("tool_error_kind")
+    if tool_error_kind not in (
+        "permission_denied", "scope_denied", "timeout", "network", "tls",
+        "invalid_args", "cancelled", "tool_exception",
+    ):
+        tool_error_kind = None
+    tool_http_status = data.get("tool_http_status")
+    if isinstance(tool_http_status, bool) or not isinstance(tool_http_status, int):
+        tool_http_status = None
+    tool_truncated = data.get("tool_truncated") is True
+
     return Message(
         role=cast(Role, role),
         content=content,
@@ -250,6 +264,10 @@ def _message_from_dict(data: Any) -> Message | None:
         tool_calls=_tool_calls_from_list(data.get("tool_calls")),
         tool_call_id=tool_call_id,
         name=name,
+        tool_status=tool_status,
+        tool_error_kind=tool_error_kind,
+        tool_http_status=tool_http_status,
+        tool_truncated=tool_truncated,
     )
 
 
@@ -364,20 +382,28 @@ class Store:
 
         serialized_messages = []
         for msg in messages:
-            serialized_messages.append(
-                {
-                    "role": msg.role,
-                    "content": msg.content,
-                    "reasoning_content": msg.reasoning_content,
-                    "tool_calls": (
-                        [dataclasses.asdict(tc) for tc in msg.tool_calls]
-                        if msg.tool_calls
-                        else None
-                    ),
-                    "tool_call_id": msg.tool_call_id,
-                    "name": msg.name,
-                }
-            )
+            serialized: dict[str, Any] = {
+                "role": msg.role,
+                "content": msg.content,
+                "reasoning_content": msg.reasoning_content,
+                "tool_calls": (
+                    [dataclasses.asdict(tc) for tc in msg.tool_calls]
+                    if msg.tool_calls
+                    else None
+                ),
+                "tool_call_id": msg.tool_call_id,
+                "name": msg.name,
+            }
+            if msg.role == "tool":
+                if msg.tool_status is not None:
+                    serialized["tool_status"] = msg.tool_status
+                if msg.tool_error_kind is not None:
+                    serialized["tool_error_kind"] = msg.tool_error_kind
+                if msg.tool_http_status is not None:
+                    serialized["tool_http_status"] = msg.tool_http_status
+                if msg.tool_truncated:
+                    serialized["tool_truncated"] = True
+            serialized_messages.append(serialized)
 
         data = {
             "updated_at": datetime.now().isoformat(),
