@@ -32,6 +32,7 @@ from src.agent.agent import (
     bound_recent_tool_result,
     IneffectiveCompactionError,
     MaxStepsError,
+    InvalidResponseError,
     minimum_compactable_history_tokens,
 )
 from src.agent.system_prompt import PromptProfile
@@ -756,6 +757,7 @@ async def test_does_not_execute_returned_tool_calls_when_tools_are_disabled():
         in str(event["err"])
         for event in collector["events"]
     )
+    assert collector["events"][-1].stop_reason == "plan_only_blocked"
 
 
 @pytest.mark.asyncio
@@ -1199,6 +1201,7 @@ async def test_auto_compacts_before_next_turn_when_over_threshold():
             prompter=AlwaysAllow(),
             store=None,
             target=Target(),
+            max_steps=1,
             auto_compact_threshold=1,   # gần như luôn trigger
         )
     )
@@ -1248,6 +1251,8 @@ async def test_auto_compacts_before_next_turn_when_over_threshold():
     ) in triggered_summary
 
     assert "auto-compacted" in compact_events[-1]["summary"]
+    done = collector["events"][-1]
+    assert (done.agent_loop_llm_calls, done.compaction_llm_calls, done.total_llm_calls) == (1, 1, 2)
 
 
 async def run_auto_compact_trigger_probe(
@@ -2372,6 +2377,7 @@ async def test_emits_error_event_when_exception_escapes():
     )
 
     assert events[-1].type == "done"
+    assert events[-1].stop_reason == "client_error"
 
 @pytest.mark.asyncio
 async def test_renders_user_cancellation_without_leaking_backend_abort_text():
@@ -2436,6 +2442,36 @@ async def test_renders_user_cancellation_without_leaking_backend_abort_text():
     assert error_event.err.message == "turn cancelled"
 
     assert events[-1].type == "done"
+    assert events[-1].stop_reason == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_direct_agent_task_cancellation_propagates_and_emits_done():
+    started = asyncio.Event()
+
+    class WaitingClient(Client):
+        def name(self) -> str:
+            return "waiting"
+
+        def model(self) -> str:
+            return "m"
+
+        async def chat(self, request: ChatRequest, signal=None) -> ChatResponse:
+            started.set()
+            await asyncio.Future()
+
+    agent = Agent(AgentOptions(
+        client=WaitingClient(), tools=ToolRegistry(), skills=SkillRegistry(),
+        prompter=AlwaysAllow(), store=None, target=Target(),
+    ))
+    collector = collect()
+    task = asyncio.create_task(agent.run("go", FakeSignal(), collector["sink"]))
+    await asyncio.wait_for(started.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert agent.running is False
+    assert collector["events"][-1].stop_reason == "cancelled"
 
 # ==========================================================
 # Allowed-tools enforcement helpers
@@ -2570,6 +2606,7 @@ async def test_generic_permission_denial_ends_turn_without_synthesis():
     assert len(results) == 1
     assert results[0].err == "permission denied by user for denied"
     assert collector["events"][-1].type == "done"
+    assert collector["events"][-1].stop_reason == "all_tools_refused"
     assert agent.get_history()[-1].role == "tool"
     assert agent.get_history()[-1].content == "ERROR: permission denied by user for denied"
 
@@ -2618,6 +2655,7 @@ async def test_private_host_denial_ends_turn_without_synthesis():
     result = next(event for event in collector["events"] if event.type == "tool-result")
     assert "private/internal URL denied" in result.err
     assert collector["events"][-1].type == "done"
+    assert collector["events"][-1].stop_reason == "all_tools_refused"
 
 
 @pytest.mark.asyncio
@@ -2720,10 +2758,13 @@ async def test_save_resume_after_refusal_preserves_tool_pair(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_successful_final_step_tool_call_keeps_existing_max_step_behavior():
+async def test_final_step_tools_get_one_tool_free_synthesis_with_observations():
     agent, client = refusal_agent(
-        [tool_batch(tool_call("ok", "ok", {}))],
-        [PermissionTool("ok")],
+        [
+            tool_batch(tool_call("first", "first", {}), tool_call("second", "second", {})),
+            ChatResponse(message=Message(role="assistant", content="synthesized"), finish_reason="stop"),
+        ],
+        [PermissionTool("first"), PermissionTool("second")],
         AlwaysAllow(),
         max_steps=1,
     )
@@ -2731,8 +2772,124 @@ async def test_successful_final_step_tool_call_keeps_existing_max_step_behavior(
 
     await agent.run("go", FakeSignal(), collector["sink"])
 
+    assert len(client.requests) == 2
+    assert client.requests[1].tools is None
+    assert [m.content for m in client.requests[1].messages if m.role == "tool"] == [
+        "ran:first", "ran:second"
+    ]
+    assert [e.result for e in collector["events"] if e.type == "tool-result"] == [
+        "ran:first", "ran:second"
+    ]
+    assert agent.get_history()[-1].content == "synthesized"
+    assert not any(e.type == "error" and isinstance(e.err, MaxStepsError) for e in collector["events"])
+    done = collector["events"][-1]
+    assert done.stop_reason == "final_response"
+    assert (done.agent_loop_llm_calls, done.final_synthesis_llm_calls, done.total_llm_calls) == (1, 1, 2)
+
+
+@pytest.mark.asyncio
+async def test_final_synthesis_tool_calls_are_rejected_without_execution():
+    tool = PermissionTool("ok")
+    agent, client = refusal_agent(
+        [tool_batch(tool_call("first", "ok", {})), tool_batch(tool_call("second", "ok", {}))],
+        [tool], AlwaysAllow(), max_steps=1,
+    )
+    collector = collect()
+    await agent.run("go", FakeSignal(), collector["sink"])
+    assert len(client.requests) == 2
+    assert len([e for e in collector["events"] if e.type == "tool-result"]) == 1
+    assert isinstance(next(e.err for e in collector["events"] if e.type == "error"), InvalidResponseError)
+    assert collector["events"][-1].stop_reason == "invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_final_synthesis_empty_response_is_invalid_without_extra_retry():
+    agent, client = refusal_agent(
+        [
+            tool_batch(tool_call("first", "ok", {})),
+            ChatResponse(message=Message(role="assistant", content="<think>only</think>"), finish_reason="stop"),
+        ],
+        [PermissionTool("ok")], AlwaysAllow(), max_steps=1,
+    )
+    collector = collect()
+    await agent.run("go", FakeSignal(), collector["sink"])
+    assert len(client.requests) == 2
+    assert isinstance(next(e.err for e in collector["events"] if e.type == "error"), InvalidResponseError)
+    assert collector["events"][-1].stop_reason == "invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_final_synthesis_client_failure_is_explicit_client_error():
+    agent, client = refusal_agent(
+        [tool_batch(tool_call("first", "ok", {}))],
+        [PermissionTool("ok")], AlwaysAllow(), max_steps=1,
+    )
+    collector = collect()
+    await agent.run("go", FakeSignal(), collector["sink"])
+    assert len(client.requests) == 2
+    assert any(e.type == "error" for e in collector["events"])
+    assert collector["events"][-1].stop_reason == "client_error"
+    assert collector["events"][-1].total_llm_calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["", "   ", "\n\t", "<think>private reasoning</think>"])
+async def test_empty_visible_final_is_explicit_invalid_response(content):
+    agent, client = refusal_agent(
+        [ChatResponse(message=Message(role="assistant", content=content), finish_reason="stop")],
+        [], AlwaysAllow(), max_steps=1,
+    )
+    collector = collect()
+    await agent.run("go", FakeSignal(), collector["sink"])
     assert len(client.requests) == 1
-    assert any(event.type == "error" and isinstance(event.err, MaxStepsError) for event in collector["events"])
+    assert isinstance(next(e.err for e in collector["events"] if e.type == "error"), InvalidResponseError)
+    assert collector["events"][-1].stop_reason == "invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_final_is_invalid_but_visible_final_is_accepted():
+    agent, _ = refusal_agent(
+        [ChatResponse(message=Message(role="assistant", content="", reasoning_content="private"), finish_reason="stop")],
+        [], AlwaysAllow(), max_steps=1,
+    )
+    collector = collect()
+    await agent.run("go", FakeSignal(), collector["sink"])
+    assert collector["events"][-1].stop_reason == "invalid_response"
+
+    visible, client = refusal_agent(
+        [ChatResponse(message=Message(role="assistant", content="answer"), finish_reason="stop")],
+        [], AlwaysAllow(), max_steps=1,
+    )
+    events = collect()
+    await visible.run("go", FakeSignal(), events["sink"])
+    assert len(client.requests) == 1
+    assert events["events"][-1].stop_reason == "final_response"
+    assert events["events"][-1].total_llm_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_zero_iteration_defensive_limit_reports_max_steps():
+    agent, client = refusal_agent([], [], AlwaysAllow())
+    agent.max_steps = 0
+    collector = collect()
+    await agent.run("go", FakeSignal(), collector["sink"])
+    assert client.requests == []
+    assert isinstance(next(e.err for e in collector["events"] if e.type == "error"), MaxStepsError)
+    assert collector["events"][-1].stop_reason == "max_steps"
+
+
+@pytest.mark.asyncio
+async def test_unexpected_run_error_has_runtime_error_reason(monkeypatch):
+    agent, _ = refusal_agent([], [], AlwaysAllow())
+
+    async def fail(*_args):
+        raise ValueError("broken setup")
+
+    monkeypatch.setattr(agent, "run_inner", fail)
+    collector = collect()
+    await agent.run("go", FakeSignal(), collector["sink"])
+    assert isinstance(next(e.err for e in collector["events"] if e.type == "error"), ValueError)
+    assert collector["events"][-1].stop_reason == "runtime_error"
 
 
 class FakeLoadSkillTool(Tool):

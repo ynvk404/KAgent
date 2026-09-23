@@ -86,6 +86,7 @@ from src.agent.events import (
     SkillActiveEvent,
     CompactEvent,
     MaxStepsError,
+    InvalidResponseError,
 )
 
 from .sanitize import (
@@ -478,6 +479,11 @@ class Agent:
         self.memory_store = opts.memory_store
 
         self._background_tasks: set[asyncio.Task] = set()
+        self._llm_call_counts = {
+            "agent_loop_llm_calls": 0,
+            "compaction_llm_calls": 0,
+            "final_synthesis_llm_calls": 0,
+        }
 
         self.thinking = (
             opts.thinking_enabled
@@ -1395,6 +1401,21 @@ class Agent:
             ]
         )
 
+    def _reset_llm_call_counts(self) -> None:
+        for name in self._llm_call_counts:
+            self._llm_call_counts[name] = 0
+
+    def _count_llm_call(self, name: str) -> None:
+        self._llm_call_counts[name] += 1
+
+    def _done_event(self, stop_reason: str | None) -> dict[str, Any]:
+        return {
+            "type": "done",
+            "stop_reason": stop_reason,
+            **self._llm_call_counts,
+            "total_llm_calls": sum(self._llm_call_counts.values()),
+        }
+
     async def run(
         self,
         user_msg: str,
@@ -1405,17 +1426,24 @@ class Agent:
         safe_emit = make_safe_emit(signal, emit)
 
         self.running = True
+        self._reset_llm_call_counts()
+        self._turn_client_error = False
+        stop_reason = "runtime_error"
 
         try:
-            await self.run_inner(
+            stop_reason = await self.run_inner(
                 user_msg,
                 signal,
                 safe_emit,
                 opts,
             )
 
+        except asyncio.CancelledError:
+            stop_reason = "cancelled"
+            raise
         except Exception as err:
             if signal.aborted or is_abort_like_error(err):
+                stop_reason = "cancelled"
 
                 safe_emit(
                     {
@@ -1424,6 +1452,8 @@ class Agent:
                     }
                 )
                 return
+            if self._turn_client_error:
+                stop_reason = "client_error"
             traceback.print_exc()
 
             log_error(
@@ -1444,11 +1474,7 @@ class Agent:
 
             self.running = False
 
-            safe_emit(
-                {
-                    "type": "done",
-                }
-            )
+            safe_emit(self._done_event(stop_reason))
 
     async def run_inner(
         self,
@@ -1456,7 +1482,7 @@ class Agent:
         signal,
         emit,
         opts=None,
-    ) -> None:
+    ) -> str:
         if isinstance(opts, dict):
             opts = AgentRunOptions(**opts)
 
@@ -1626,14 +1652,13 @@ class Agent:
             if opts is None or getattr(opts, "tools", True):
                 req.tools = self.tools.as_llm_tools()
 
-            resp, streamed = await self.chat(
+            self._count_llm_call("agent_loop_llm_calls")
+            resp, streamed = await self._chat_for_turn(
                 req,
                 signal,
                 emit,
             )
-            resp.message.content = strip_thinking_tags(
-                resp.message.content
-            )
+            self._sanitize_response(resp)
 
             tool_calls = resp.message.tool_calls or []
 
@@ -1662,31 +1687,13 @@ class Agent:
                     }
                 )
 
-                return
+                return "plan_only_blocked"
 
-            self.history.append(resp.message)
+            if not has_tool_calls and not resp.message.content.strip():
+                emit({"type": "error", "err": InvalidResponseError()})
+                return "invalid_response"
 
-            working.append(resp.message)
-
-            try:
-                await self.save()
-            except Exception as err:
-                emit(
-                    {
-                        "type": "error",
-                        "err": Exception(
-                            f"save session: {err}"
-                        ),
-                    }
-                )
-
-            if resp.message.content and not streamed:
-                emit(
-                    {
-                        "type": "assistant-text",
-                        "text": resp.message.content,
-                    }
-                )
+            await self._record_assistant_response(resp, streamed, working, emit)
 
             if not has_tool_calls:
 
@@ -1701,7 +1708,7 @@ class Agent:
                         "learn_intelligence",
                     )
 
-                return
+                return "final_response"
 
             all_refused = await self.execute_tool_calls(
                 tool_calls,
@@ -1711,7 +1718,33 @@ class Agent:
             )
 
             if all_refused:
-                return
+                return "all_tools_refused"
+
+            if step == max_steps - 1:
+                if self.auto_compact_threshold > 0:
+                    self.guard_working_context(working, emit, opts)
+                synthesis_req = ChatRequest(
+                    model=self.client.model(),
+                    messages=working,
+                    thinking_enabled=self.thinking,
+                )
+                self._count_llm_call("final_synthesis_llm_calls")
+                synthesis, synthesis_streamed = await self._chat_for_turn(
+                    synthesis_req, signal, emit
+                )
+                self._sanitize_response(synthesis)
+                if synthesis.message.tool_calls or not synthesis.message.content.strip():
+                    emit({
+                        "type": "error",
+                        "err": InvalidResponseError(
+                            "final synthesis returned tools or no visible text"
+                        ),
+                    })
+                    return "invalid_response"
+                await self._record_assistant_response(
+                    synthesis, synthesis_streamed, working, emit
+                )
+                return "final_response"
 
         emit(
             {
@@ -1719,6 +1752,34 @@ class Agent:
                 "err": MaxStepsError(max_steps),
             }
         )
+        return "max_steps"
+
+    @staticmethod
+    def _sanitize_response(resp: ChatResponse) -> None:
+        resp.message.content = strip_thinking_tags(resp.message.content)
+
+    async def _record_assistant_response(
+        self,
+        resp: ChatResponse,
+        streamed: bool,
+        working: list[Message],
+        emit,
+    ) -> None:
+        self.history.append(resp.message)
+        working.append(resp.message)
+        try:
+            await self.save()
+        except Exception as err:
+            emit({"type": "error", "err": Exception(f"save session: {err}")})
+        if resp.message.content and not streamed:
+            emit({"type": "assistant-text", "text": resp.message.content})
+
+    async def _chat_for_turn(self, req, signal, emit) -> tuple[ChatResponse, bool]:
+        try:
+            return await self.chat(req, signal, emit)
+        except Exception:
+            self._turn_client_error = True
+            raise
 
     def guard_working_context(
         self,
@@ -2199,6 +2260,7 @@ class Agent:
         safe_emit = make_safe_emit(signal, emit)
 
         self.running = True
+        self._reset_llm_call_counts()
 
         try:
             history_snap = self.get_history()
@@ -2229,6 +2291,7 @@ class Agent:
                 ],
             )
 
+            self._count_llm_call("compaction_llm_calls")
             resp = await self.client.chat(req, signal)
             summary = strip_thinking_tags(
                 resp.message.content
@@ -2285,11 +2348,7 @@ class Agent:
 
             self.running = False
 
-            safe_emit(
-                {
-                    "type": "done",
-                }
-            )
+            safe_emit(self._done_event(None))
 
     async def auto_compact(
         self,
@@ -2410,6 +2469,7 @@ class Agent:
             ],
         )
 
+        self._count_llm_call("compaction_llm_calls")
         resp = await self.client.chat(
             req,
             signal,

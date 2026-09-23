@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import ssl
@@ -10,6 +11,29 @@ import pytest
 
 from src.llm import transport
 from src.llm.errors import ProviderControlError
+
+
+@pytest.mark.asyncio
+async def test_direct_parent_cancellation_cleans_up_child_request() -> None:
+    started = asyncio.Event()
+    child_cancelled = asyncio.Event()
+
+    async def request() -> None:
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            child_cancelled.set()
+
+    class Signal:
+        aborted = False
+
+    parent = asyncio.create_task(transport.run_cancellable(request(), Signal()))
+    await asyncio.wait_for(started.wait(), 1)
+    parent.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await parent
+    assert child_cancelled.is_set()
 
 
 PROXY_ENV_VARS = (

@@ -55,16 +55,23 @@ def aborted(signal: Any) -> bool:
 async def run_cancellable(coro: Awaitable[T], signal: Any = None) -> T:
     """Run `coro` as a task, polling `signal.aborted` so an in-flight request can be interrupted."""
     task: asyncio.Task[T] = asyncio.ensure_future(coro)
-    if signal is None:
-        return await task
-    while not task.done():
-        if aborted(signal):
+    try:
+        if signal is None:
+            return await task
+        while not task.done():
+            if aborted(signal):
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+                raise RuntimeError("aborted")
+            await asyncio.wait({task}, timeout=ABORT_POLL_INTERVAL_SEC)
+        return task.result()
+    except asyncio.CancelledError:
+        if not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-            raise RuntimeError("aborted")
-        await asyncio.wait({task}, timeout=ABORT_POLL_INTERVAL_SEC)
-    return task.result()
+        raise
 
 
 def attach_retry_after(err: BackendError, resp: httpx.Response) -> BackendError:

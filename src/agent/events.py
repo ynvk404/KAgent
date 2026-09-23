@@ -108,6 +108,11 @@ class MemoryRecallEvent(BaseEvent):
 @dataclass(slots=True)
 class DoneEvent(BaseEvent):
     type: Literal["done"] = "done"
+    stop_reason: str | None = None
+    agent_loop_llm_calls: int = 0
+    compaction_llm_calls: int = 0
+    final_synthesis_llm_calls: int = 0
+    total_llm_calls: int = 0
 
 
 AgentEvent: TypeAlias = (
@@ -131,6 +136,11 @@ class MaxStepsError(RuntimeError):
             f"hit max steps ({steps}) without finishing"
         )
         self.steps = steps
+
+
+class InvalidResponseError(RuntimeError):
+    def __init__(self, reason: str = "assistant response has no visible final text"):
+        super().__init__(reason)
 
 
 AssistantText = AssistantTextEvent
@@ -169,4 +179,5 @@ __all__ = [
     "Done",
 
     "MaxStepsError",
+    "InvalidResponseError",
 ]
