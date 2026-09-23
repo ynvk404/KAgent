@@ -9,10 +9,14 @@ import pytest
 from src.config import config
 from src.config.config import (
     Backend,
+    CustomProviderConfig,
     ToolingProfile,
     MCPServerConfig,
     PluginConfig,
+    add_custom_provider,
     default_config,
+    delete_custom_provider,
+    edit_custom_provider,
     load,
     save,
 )
@@ -59,6 +63,32 @@ def test_migrates_legacy_api_key(
 
     assert cfg.api_keys["groq"] == "old-key"
     assert cfg.api_key == "old-key"
+
+
+def test_old_config_without_custom_provider_fields_loads(
+    temp_config,
+):
+    temp_config.write_text(
+        json.dumps(
+            {
+                "backend": "openai-compat",
+                "model": "manual-model",
+                "base_url": "http://localhost:1234/v1",
+                "api_keys": {"openai-compat": "manual-key"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load()
+
+    assert cfg.backend == "openai-compat"
+    assert cfg.model == "manual-model"
+    assert cfg.base_url == "http://localhost:1234/v1"
+    assert cfg.api_keys == {"openai-compat": "manual-key"}
+    assert cfg.custom_providers == {}
+    assert cfg.custom_provider_api_keys == {}
+    assert cfg.active_custom_provider_id is None
 
 
 def test_api_key_tracks_backend_without_dropping_other_keys(
@@ -173,6 +203,232 @@ async def test_round_trips_multiple_provider_api_keys(
         "groq": "xxx",
         "kimi": "yyy",
     }
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_profile_round_trip_preserves_manual_config(
+    temp_config,
+):
+    cfg = default_config()
+    cfg.backend = Backend.OPENAI_COMPAT
+    cfg.model = "manual-model"
+    cfg.base_url = "http://localhost:1234/v1"
+    cfg.api_keys["openai-compat"] = "manual-key"
+
+    profile_id = add_custom_provider(
+        cfg,
+        name="Gateway One",
+        base_url="https://gateway.example/v1",
+        api_key="custom-key-one",
+        default_model="model-one",
+    )
+    cfg.active_custom_provider_id = profile_id
+
+    await save(cfg)
+    reloaded = load()
+
+    assert len(profile_id) == 32
+    assert reloaded.custom_providers == {
+        profile_id: CustomProviderConfig(
+            name="Gateway One",
+            protocol="openai-compatible",
+            base_url="https://gateway.example/v1",
+            default_model="model-one",
+        )
+    }
+    assert reloaded.custom_provider_api_keys == {profile_id: "custom-key-one"}
+    assert reloaded.active_custom_provider_id == profile_id
+    assert reloaded.backend == Backend.OPENAI_COMPAT
+    assert reloaded.model == "manual-model"
+    assert reloaded.base_url == "http://localhost:1234/v1"
+    assert reloaded.api_keys == {"openai-compat": "manual-key"}
+
+
+@pytest.mark.asyncio
+async def test_multiple_custom_profiles_keep_separate_keys_and_builtin_slots(
+    temp_config,
+):
+    cfg = default_config()
+    cfg.api_keys.update(
+        {
+            "groq": "groq-key",
+            "openai-compat": "manual-key",
+        }
+    )
+
+    first_id = add_custom_provider(
+        cfg,
+        "Gateway One",
+        "https://one.example/v1",
+        "custom-key-one",
+    )
+    second_id = add_custom_provider(
+        cfg,
+        "Gateway Two",
+        "https://two.example/v1",
+        "custom-key-two",
+    )
+
+    await save(cfg)
+    reloaded = load()
+
+    assert first_id != second_id
+    assert reloaded.custom_provider_api_keys == {
+        first_id: "custom-key-one",
+        second_id: "custom-key-two",
+    }
+    assert reloaded.api_keys == {
+        "groq": "groq-key",
+        "openai-compat": "manual-key",
+    }
+
+
+@pytest.mark.asyncio
+async def test_renaming_custom_profile_preserves_stable_id_and_key(temp_config):
+    cfg = default_config()
+    profile_id = add_custom_provider(
+        cfg,
+        "Gateway",
+        "https://gateway.example/v1",
+        "custom-secret",
+        "model-one",
+    )
+
+    updated = edit_custom_provider(
+        cfg,
+        profile_id,
+        name="Renamed Gateway",
+        base_url="https://gateway.example/v1",
+        default_model="model-two",
+    )
+
+    assert updated is not None
+    assert updated.name == "Renamed Gateway"
+    assert cfg.custom_providers[profile_id] is updated
+    assert cfg.custom_provider_api_keys == {profile_id: "custom-secret"}
+
+    await save(cfg)
+    reloaded = load()
+    assert profile_id in reloaded.custom_providers
+    assert reloaded.custom_providers[profile_id].name == "Renamed Gateway"
+    assert reloaded.custom_provider_api_keys == {profile_id: "custom-secret"}
+
+
+def test_duplicate_custom_provider_names_get_distinct_opaque_ids():
+    cfg = default_config()
+
+    first_id = add_custom_provider(
+        cfg,
+        "Same Name",
+        "https://one.example/v1",
+        "key-one",
+    )
+    second_id = add_custom_provider(
+        cfg,
+        "Same Name",
+        "https://two.example/v1",
+        "key-two",
+    )
+
+    assert first_id != second_id
+    assert cfg.custom_providers[first_id].name == cfg.custom_providers[second_id].name
+    assert cfg.custom_provider_api_keys == {
+        first_id: "key-one",
+        second_id: "key-two",
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"custom_providers": []}, "custom_providers"),
+        ({"custom_providers": {"not-a-uuid": {}}}, "UUID"),
+        (
+            {"custom_providers": {"0123456789abcdef0123456789abcdef": []}},
+            "must be an object",
+        ),
+        (
+            {
+                "custom_providers": {
+                    "0123456789abcdef0123456789abcdef": {
+                        "protocol": "openai-compatible",
+                        "base_url": "https://gateway.example/v1",
+                    }
+                }
+            },
+            "name is required",
+        ),
+        (
+            {
+                "custom_providers": {
+                    "0123456789abcdef0123456789abcdef": {
+                        "name": "Gateway",
+                        "protocol": "openai-compatible",
+                        "base_url": "https://gateway.example/v1",
+                        "default_model": 42,
+                    }
+                }
+            },
+            "default_model must be a string",
+        ),
+        (
+            {
+                "custom_providers": {
+                    "0123456789abcdef0123456789abcdef": {
+                        "name": "Gateway",
+                        "protocol": "anthropic",
+                        "base_url": "https://gateway.example/v1",
+                    }
+                }
+            },
+            "protocol",
+        ),
+        (
+            {"custom_provider_api_keys": {"0123456789abcdef0123456789abcdef": "key"}},
+            "without a saved profile",
+        ),
+        (
+            {"active_custom_provider_id": "0123456789abcdef0123456789abcdef"},
+            "active_custom_provider_id",
+        ),
+    ],
+)
+def test_rejects_malformed_custom_provider_config(payload, message):
+    with pytest.raises(ValueError, match=message):
+        config.config_from_dict(payload)
+
+
+@pytest.mark.asyncio
+async def test_delete_custom_provider_removes_key_and_active_id(temp_config):
+    cfg = default_config()
+    cfg.backend = Backend.OPENAI_COMPAT
+    cfg.model = "manual-model"
+    cfg.base_url = "http://localhost:1234/v1"
+    cfg.api_keys["openai-compat"] = "manual-key"
+    profile_id = add_custom_provider(
+        cfg,
+        "Gateway",
+        "https://gateway.example/v1",
+        "custom-key",
+    )
+    cfg.active_custom_provider_id = profile_id
+
+    assert delete_custom_provider(cfg, profile_id) is True
+    assert profile_id not in cfg.custom_providers
+    assert profile_id not in cfg.custom_provider_api_keys
+    assert cfg.active_custom_provider_id is None
+    assert cfg.backend == Backend.OPENAI_COMPAT
+    assert cfg.model == "manual-model"
+    assert cfg.base_url == "http://localhost:1234/v1"
+    assert cfg.api_keys["openai-compat"] == "manual-key"
+    assert delete_custom_provider(cfg, profile_id) is False
+
+    await save(cfg)
+    reloaded = load()
+    assert profile_id not in reloaded.custom_providers
+    assert profile_id not in reloaded.custom_provider_api_keys
+    assert reloaded.active_custom_provider_id is None
+    assert reloaded.api_keys["openai-compat"] == "manual-key"
 
 
 @pytest.mark.asyncio
@@ -358,6 +614,12 @@ async def test_saved_file_permissions(
     cfg = default_config()
 
     cfg.backend = Backend.GROQ
+    add_custom_provider(
+        cfg,
+        "Gateway",
+        "https://gateway.example/v1",
+        "custom-secret",
+    )
 
     await save(cfg)
 
@@ -377,6 +639,12 @@ async def test_temp_config_file_is_private_before_replace(
     cfg = default_config()
     cfg.backend = Backend.GROQ
     cfg.api_key = "secret"
+    add_custom_provider(
+        cfg,
+        "Gateway",
+        "https://gateway.example/v1",
+        "custom-secret",
+    )
 
     real_replace = config.os.replace
     temporary_modes: list[int] = []

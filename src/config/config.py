@@ -4,6 +4,7 @@ import json
 import os
 import random
 import string
+import uuid
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -50,6 +51,16 @@ class PluginConfig:
 
 
 @dataclass
+class CustomProviderConfig:
+    """Non-secret configuration for one OpenAI-compatible provider profile."""
+
+    name: str
+    protocol: str
+    base_url: str
+    default_model: str = ""
+
+
+@dataclass
 class Config:
     backend: Backend | str = Backend.EMPTY
     model: str = ""
@@ -68,6 +79,9 @@ class Config:
     max_tokens: int | None = None
     gemini_thinking_budget: int | None = None
     tooling_profile: ToolingProfile | None = None
+    custom_providers: dict[str, CustomProviderConfig] = field(default_factory=dict)
+    custom_provider_api_keys: dict[str, str] = field(default_factory=dict)
+    active_custom_provider_id: str | None = None
 
     @property
     def api_key(self) -> str:
@@ -156,11 +170,29 @@ def config_from_dict(
         if old_api_key and backend:
             normalized_api_keys[str(backend)] = str(old_api_key)
 
+    custom_providers = _custom_providers_field(data)
+    custom_provider_api_keys = _custom_provider_api_keys_field(data)
+    _validate_custom_provider_key_references(
+        custom_providers,
+        custom_provider_api_keys,
+    )
+    active_custom_provider_id = _active_custom_provider_id_field(data)
+    if (
+        active_custom_provider_id is not None
+        and active_custom_provider_id not in custom_providers
+    ):
+        raise ValueError(
+            "active_custom_provider_id must reference a saved custom provider"
+        )
+
     return Config(
         backend=backend,
         model=_string_field(data, "model", ""),
         base_url=_string_field(data, "base_url", ""),
         api_keys=normalized_api_keys,
+        custom_providers=custom_providers,
+        custom_provider_api_keys=custom_provider_api_keys,
+        active_custom_provider_id=active_custom_provider_id,
         skills_dirs=_string_list_field(data, "skills_dirs"),
         disabled_skills=_string_list_field(data, "disabled_skills"),
         mcp_servers=[_validate_mcp_server(x) for x in _list_field(data, "mcp_servers")],
@@ -260,6 +292,85 @@ def default_config() -> Config:
     return Config()
 
 
+def add_custom_provider(
+    cfg: Config,
+    name: str,
+    base_url: str,
+    api_key: str = "",
+    default_model: str = "",
+) -> str:
+    """Add a profile with an opaque stable ID and return that ID."""
+    normalized_name = name.strip()
+    normalized_base_url = base_url.strip()
+    if not normalized_name:
+        raise ValueError("custom provider name must not be empty")
+    if not normalized_base_url:
+        raise ValueError("custom provider base_url must not be empty")
+
+    profile_id = uuid.uuid4().hex
+    while profile_id in cfg.custom_providers:
+        profile_id = uuid.uuid4().hex
+
+    cfg.custom_providers[profile_id] = CustomProviderConfig(
+        name=normalized_name,
+        protocol="openai-compatible",
+        base_url=normalized_base_url,
+        default_model=default_model.strip(),
+    )
+    if api_key:
+        cfg.custom_provider_api_keys[profile_id] = api_key
+    return profile_id
+
+
+def edit_custom_provider(
+    cfg: Config,
+    profile_id: str,
+    *,
+    name: str,
+    base_url: str,
+    api_key: str | None = None,
+    default_model: str = "",
+) -> CustomProviderConfig | None:
+    """Edit profile metadata without changing its ID; ``None`` keeps its key."""
+    existing = cfg.custom_providers.get(profile_id)
+    if existing is None:
+        return None
+
+    normalized_name = name.strip()
+    normalized_base_url = base_url.strip()
+    if not normalized_name:
+        normalized_name = existing.name
+    if not normalized_base_url:
+        normalized_base_url = existing.base_url
+
+    updated = CustomProviderConfig(
+        name=normalized_name,
+        protocol=existing.protocol,
+        base_url=normalized_base_url,
+        default_model=default_model.strip(),
+    )
+    cfg.custom_providers[profile_id] = updated
+
+    if api_key is not None:
+        if api_key:
+            cfg.custom_provider_api_keys[profile_id] = api_key
+        else:
+            cfg.custom_provider_api_keys.pop(profile_id, None)
+    return updated
+
+
+def delete_custom_provider(cfg: Config, profile_id: str) -> bool:
+    """Delete a profile and its secret, clearing its active ID if necessary."""
+    if profile_id not in cfg.custom_providers:
+        return False
+
+    del cfg.custom_providers[profile_id]
+    cfg.custom_provider_api_keys.pop(profile_id, None)
+    if cfg.active_custom_provider_id == profile_id:
+        cfg.active_custom_provider_id = None
+    return True
+
+
 def _list_field(
     data: dict[str, Any],
     name: str,
@@ -347,6 +458,96 @@ def _tooling_profile_field(
         return ToolingProfile(value)
     except ValueError as e:
         raise ValueError(f"tooling_profile is invalid: {value!r}") from e
+
+
+def _custom_providers_field(
+    data: dict[str, Any],
+) -> dict[str, CustomProviderConfig]:
+    value = data.get("custom_providers", {})
+    if not isinstance(value, dict):
+        raise ValueError("custom_providers must be an object")
+
+    profiles: dict[str, CustomProviderConfig] = {}
+    for profile_id, raw_profile in value.items():
+        section = f"custom_providers[{profile_id!r}]"
+        _validate_custom_provider_id(profile_id, section)
+        if not isinstance(raw_profile, dict):
+            raise ValueError(f"{section} must be an object")
+
+        name = _required_string(raw_profile, section, "name")
+        protocol = _required_string(raw_profile, section, "protocol")
+        base_url = _required_string(raw_profile, section, "base_url")
+        default_model = _entry_string(
+            raw_profile,
+            section,
+            "default_model",
+            "",
+        )
+        if not name.strip():
+            raise ValueError(f"{section}.name must not be empty")
+        if protocol != "openai-compatible":
+            raise ValueError(
+                f"{section}.protocol must be 'openai-compatible'"
+            )
+        if not base_url.strip():
+            raise ValueError(f"{section}.base_url must not be empty")
+
+        profiles[profile_id] = CustomProviderConfig(
+            name=name,
+            protocol=protocol,
+            base_url=base_url,
+            default_model=default_model,
+        )
+    return profiles
+
+
+def _custom_provider_api_keys_field(
+    data: dict[str, Any],
+) -> dict[str, str]:
+    value = data.get("custom_provider_api_keys", {})
+    if not isinstance(value, dict) or not all(
+        isinstance(profile_id, str) and isinstance(api_key, str)
+        for profile_id, api_key in value.items()
+    ):
+        raise ValueError("custom_provider_api_keys must be a string map")
+    for profile_id in value:
+        _validate_custom_provider_id(
+            profile_id,
+            "custom_provider_api_keys",
+        )
+    return dict(value)
+
+
+def _validate_custom_provider_key_references(
+    profiles: dict[str, CustomProviderConfig],
+    api_keys: dict[str, str],
+) -> None:
+    orphaned = api_keys.keys() - profiles.keys()
+    if orphaned:
+        raise ValueError(
+            "custom_provider_api_keys contains an ID without a saved profile"
+        )
+
+
+def _active_custom_provider_id_field(
+    data: dict[str, Any],
+) -> str | None:
+    value = data.get("active_custom_provider_id")
+    if value is None:
+        return None
+    _validate_custom_provider_id(value, "active_custom_provider_id")
+    return value
+
+
+def _validate_custom_provider_id(value: Any, section: str) -> None:
+    if not isinstance(value, str):
+        raise ValueError(f"{section} ID must be a UUID hex string")
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError) as error:
+        raise ValueError(f"{section} ID must be a UUID hex string") from error
+    if parsed.hex != value:
+        raise ValueError(f"{section} ID must be a lowercase UUID hex string")
 
 
 def _validate_mcp_server(
