@@ -24,6 +24,8 @@ from src.llm.providers import (
     KIMI_DEFAULT_MODEL,
     OPENROUTER_DEFAULT_BASE_URL,
     OPENROUTER_DEFAULT_MODEL,
+    OPENAI_DEFAULT_BASE_URL,
+    OPENAI_DEFAULT_MODEL,
     validate_base_url,
 )
 
@@ -67,6 +69,21 @@ def new_from_config(
                 cfg.api_key,
                 cfg.model,
                 "openai-compat",
+                {},
+                gen,
+            )
+
+
+        case "openai":
+
+            if not cfg.api_key:
+                raise ValueError("openai backend requires api_key or OPENAI_API_KEY")
+
+            return OpenAIClient(
+                cfg.base_url or OPENAI_DEFAULT_BASE_URL,
+                cfg.api_key,
+                cfg.model or OPENAI_DEFAULT_MODEL,
+                "openai",
                 {},
                 gen,
             )

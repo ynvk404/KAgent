@@ -1,6 +1,7 @@
 import asyncio
 
 from src.ui.commands import model_picker
+from src.llm.errors import ProviderControlError
 from src.ui.core.app import ProviderChange
 from src.ui.core.state import Append, Clear, SetAsk
 
@@ -126,8 +127,9 @@ def test_fetch_and_pick_model_preserves_active_custom_provider_id(monkeypatch):
 
         assert seen_payloads[0].custom_provider_id == "opaque-profile-id"
         assert seen_payloads[0].model == "model-b"
-        assert seen_payloads[0].base_url == "https://gateway.example/v1"
-        assert seen_payloads[0].api_key == "custom-key"
+        # Runtime resolution reads the latest profile under the mutation lock.
+        assert seen_payloads[0].base_url is None
+        assert seen_payloads[0].api_key is None
 
     asyncio.run(run())
 
@@ -183,5 +185,84 @@ def test_fetch_and_pick_model_loading_cancellation(monkeypatch):
             isinstance(a, SetAsk) and a.req is not None and a.req.question.options != []
             for a in dispatched
         )
+
+    asyncio.run(run())
+
+
+def test_discovery_failure_offers_manual_model_id_and_uses_it(monkeypatch):
+    async def run() -> None:
+        dispatched: list[object] = []
+        prompts: list[str] = []
+        applied: list[ProviderChange] = []
+
+        def fake_list_models(*_args, **_kwargs):
+            raise ProviderControlError(
+                "unsupported-endpoint",
+                "provider does not support the models endpoint (HTTP 404)",
+            )
+
+        async def prompt(reason: str) -> str:
+            prompts.append(reason)
+            return "custom-model"
+
+        async def apply(change: ProviderChange) -> None:
+            applied.append(change)
+
+        monkeypatch.setattr(model_picker, "list_models", fake_list_models)
+        await model_picker.fetch_and_pick_model(
+            "openai-compat",
+            "https://provider.invalid/v1",
+            "secret",
+            dispatched.append,
+            apply,
+            manual_model_prompt=prompt,
+            custom_provider_id="profile-id",
+        )
+
+        assert prompts == ["provider does not support the models endpoint (HTTP 404)"]
+        picker_action = next(
+            action
+            for action in dispatched
+            if isinstance(action, SetAsk)
+            and action.req is not None
+            and action.req.question.options
+        )
+        assert picker_action.req is not None
+        assert picker_action.req.question.options[0].label == "custom-model"
+        picker_action.req.resolve("custom-model")
+        await asyncio.sleep(0)
+        assert applied[0].model == "custom-model"
+        assert applied[0].custom_provider_id == "profile-id"
+
+    asyncio.run(run())
+
+
+def test_discovery_auth_failure_does_not_offer_manual_fallback(monkeypatch):
+    async def run() -> None:
+        dispatched: list[object] = []
+        prompts: list[str] = []
+
+        def fake_list_models(*_args, **_kwargs):
+            raise ProviderControlError("authentication", "provider authentication failed (HTTP 401)")
+
+        async def prompt(reason: str) -> str:
+            prompts.append(reason)
+            return "custom-model"
+
+        monkeypatch.setattr(model_picker, "list_models", fake_list_models)
+        await model_picker.fetch_and_pick_model(
+            "openai-compat",
+            "https://provider.invalid/v1",
+            "secret",
+            dispatched.append,
+            lambda *_args: None,
+            manual_model_prompt=prompt,
+        )
+
+        assert prompts == []
+        error = next(action for action in dispatched if isinstance(action, Append))
+        assert error.entry.kind == "error"
+        assert "authentication failed" in error.entry.text
+        assert "secret" not in error.entry.text
 
     asyncio.run(run())

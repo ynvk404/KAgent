@@ -248,6 +248,7 @@ def test_rich_banner_panel_groups_all_header_content_at_narrow_width():
             endpoint="https://openrouter.ai",
             cwd="/workspace/project",
             status="Session abc123",
+            tool_support="yes",
         ),
         width=38,
     )
@@ -261,6 +262,7 @@ def test_rich_banner_panel_groups_all_header_content_at_narrow_width():
     assert "Welcome to KAgent" in rendered
     assert "Provider: openrouter" in rendered
     assert "Model: deepseek" in rendered
+    assert "tools ✓" not in rendered
     assert "Endpoint:" in rendered
     assert "Path: /workspace/project" in rendered
     assert "Status: Session abc123" in rendered

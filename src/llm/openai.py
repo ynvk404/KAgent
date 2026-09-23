@@ -363,6 +363,13 @@ class OpenAIClient(StreamingClient):
 
             body["tools"] = encoded_tools
 
+        if self.label == "openai" and self.model_id in {
+            "gpt-6-luna", "gpt-5.6-terra", "gpt-6-sol"
+        }:
+            # KAgent uses Chat Completions for function calls. GPT-6 Luna/Sol
+            # require none effort on this endpoint for function calling.
+            body["reasoning_effort"] = "none"
+
         if self.label == "kimi" and kimi_supports_thinking_toggle(self.model_id):
             body["thinking"] = {"type": "disabled"}
         elif self.label == "deepseek":
@@ -381,7 +388,7 @@ class OpenAIClient(StreamingClient):
             body["temperature"] = self.temperature
 
         if self.max_tokens is not None and self.max_tokens > 0:
-            if self.label == "kimi":
+            if self.label in {"kimi", "openai"}:
                 body["max_completion_tokens"] = self.max_tokens
             else:
                 body["max_tokens"] = self.max_tokens

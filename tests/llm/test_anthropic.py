@@ -41,7 +41,7 @@ class _MockHandler(BaseHTTPRequestHandler):
         captured.last_api_key_header = self.headers.get("x-api-key")
         captured.last_version_header = self.headers.get("anthropic-version")
         if self.path == "/v1/models":
-            self._send_json(200, {"models": []})
+            self._send_json(200, {"data": []})
             return
         self.send_response(404)
         self.end_headers()

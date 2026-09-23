@@ -106,7 +106,6 @@ class Banner:
     def _detail_lines(self) -> list[Text]:
         """Build the welcome metadata used by the framed TUI header."""
         data = self.data
-        pill = model_pill(data.tool_support)
         context = f" · ctx {data.context_window}" if data.context_window else ""
         provider = (
             f"{data.provider} ({data.state})" if data.state else data.provider
@@ -125,8 +124,6 @@ class Banner:
         for label, value in fields:
             line = Text(f"{label}: ", style=MUTED)
             line.append(value, style=PRIMARY)
-            if label == "Model" and pill:
-                line.append(f"  [{pill.text}]", style=pill.color)
             lines.append(line)
         return lines
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import asyncio
+import threading
 
 import pytest
 
@@ -17,6 +19,7 @@ from src.llm.provider_runtime import (
     switch_provider_transactionally,
 )
 from src.llm.factory import new_from_config
+from src.llm.providers import OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_MODEL
 
 
 class FakeAgent:
@@ -154,7 +157,7 @@ async def test_builtin_to_custom_builds_before_commit_and_preserves_builtin_and_
     persisted: list[Config] = []
 
     async def save(candidate: Config) -> None:
-        assert agent.client is not old_client
+        assert agent.client is old_client
         persisted.append(copy.deepcopy(candidate))
 
     switched = await switch_provider_transactionally(
@@ -306,7 +309,8 @@ async def test_failed_client_build_or_agent_switch_leaves_config_and_client_unch
         )
     assert agent.client is previous_client
     assert config_to_dict(cfg) == old_config
-    assert saved == []
+    assert len(saved) == 2
+    assert config_to_dict(saved[-1]) == old_config
 
     agent.fail_next_switch = True
     with pytest.raises(RuntimeError, match="switch rejected"):
@@ -320,7 +324,8 @@ async def test_failed_client_build_or_agent_switch_leaves_config_and_client_unch
         )
     assert agent.client is previous_client
     assert config_to_dict(cfg) == old_config
-    assert saved == []
+    assert len(saved) == 4
+    assert config_to_dict(saved[-1]) == old_config
 
 
 @pytest.mark.asyncio
@@ -395,3 +400,149 @@ async def test_failed_save_and_failed_rollback_before_replace_keep_disk_consiste
     assert agent.client is previous_client
     assert config_to_dict(cfg) == old_config
     assert config_path.read_bytes() == old_disk
+
+
+@pytest.mark.asyncio
+async def test_cancelled_thread_save_settles_before_rollback(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    monkeypatch.setenv("kagent_CONFIG", str(config_path))
+    cfg, profile_id, _ = _manual_config()
+    await config_module.save(cfg)
+    old_state = config_to_dict(cfg)
+    old_client = object()
+    agent = FakeAgent(old_client)
+    entered = threading.Event()
+    release = threading.Event()
+    real_save_sync = config_module._save_sync
+    writes = 0
+
+    def paused_save(candidate: Config) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == 1:
+            entered.set()
+            assert release.wait(5)
+        real_save_sync(candidate)
+
+    monkeypatch.setattr(config_module, "_save_sync", paused_save)
+    task = asyncio.create_task(switch_provider_transactionally(
+        cfg, agent, backend=Backend.OPENAI_COMPAT, model="model-a",
+        custom_provider_id=profile_id, save_config=config_module.save,
+    ))
+    assert await asyncio.to_thread(entered.wait, 5)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    assert agent.client is old_client
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert writes == 2
+    assert agent.client is old_client
+    assert config_to_dict(cfg) == old_state
+    assert config_to_dict(config_module.load()) == old_state
+    assert cfg.active_custom_provider_id is None
+    await asyncio.sleep(0.05)
+    assert config_to_dict(config_module.load()) == old_state
+
+
+@pytest.mark.asyncio
+async def test_official_openai_switch_preserves_manual_and_custom_state():
+    cfg, profile_a, profile_b = _manual_config()
+    cfg.api_keys["openai"] = "official-key"
+    cfg.api_keys["deepseek"] = "deepseek-key"
+    agent = FakeAgent(new_from_config(cfg))
+    disk = copy.deepcopy(cfg)
+
+    async def save(candidate: Config) -> None:
+        nonlocal disk
+        disk = copy.deepcopy(candidate)
+
+    await switch_provider_transactionally(
+        cfg, agent, backend=Backend.OPENAI, model=OPENAI_DEFAULT_MODEL,
+        save_config=save,
+    )
+    assert agent.client.name() == "openai"
+    assert agent.client.base_url == OPENAI_DEFAULT_BASE_URL
+    assert agent.client.api_key == "official-key"
+    assert cfg.api_keys["openai-compat"] == "manual-key"
+    assert cfg.manual_openai_compat_model == "manual-model"
+    assert cfg.manual_openai_compat_base_url == "http://localhost:1234/v1"
+    assert cfg.base_url == OPENAI_DEFAULT_BASE_URL
+    assert config_to_dict(disk) == config_to_dict(cfg)
+
+    restored = build_startup_runtime(config_module.config_from_dict(config_to_dict(disk)))
+    assert restored.client.name() == "openai"
+    assert restored.client.model() == OPENAI_DEFAULT_MODEL
+    assert restored.client.api_key == "official-key"
+
+    await switch_provider_transactionally(
+        cfg, agent, backend=Backend.DEEPSEEK, model="deepseek-flash",
+        base_url="https://api.deepseek.com", save_config=save,
+    )
+    assert agent.client.name() == "deepseek"
+    assert agent.client.api_key == "deepseek-key"
+    await switch_provider_transactionally(
+        cfg, agent, backend=Backend.OPENAI, model=OPENAI_DEFAULT_MODEL,
+        save_config=save,
+    )
+    assert agent.client.name() == "openai"
+    assert agent.client.base_url == OPENAI_DEFAULT_BASE_URL
+    assert agent.client.api_key == "official-key"
+
+    await switch_provider_transactionally(
+        cfg, agent, backend=Backend.OPENAI_COMPAT, model="model-a",
+        custom_provider_id=profile_a, save_config=save,
+    )
+    assert agent.client.api_key == "key-a"
+    assert cfg.active_custom_provider_id == profile_a
+    await switch_provider_transactionally(
+        cfg, agent, backend=Backend.OPENAI, model=OPENAI_DEFAULT_MODEL,
+        save_config=save,
+    )
+    assert cfg.active_custom_provider_id is None
+    assert cfg.custom_provider_api_keys[profile_a] == "key-a"
+    assert cfg.custom_provider_api_keys[profile_b] == "key-b"
+    await switch_provider_transactionally(
+        cfg, agent, backend=Backend.OPENAI_COMPAT, model="model-b",
+        custom_provider_id=profile_b, save_config=save,
+    )
+    assert agent.client.api_key == "key-b"
+
+    await switch_provider_transactionally(
+        cfg, agent, backend=Backend.OPENAI_COMPAT,
+        model=cfg.manual_openai_compat_model, save_config=save,
+    )
+    assert agent.client.name() == "openai-compat"
+    assert agent.client.api_key == "manual-key"
+    assert agent.client.base_url == "http://localhost:1234/v1"
+    _assert_manual_state(cfg)
+    assert cfg.active_custom_provider_id is None
+    assert config_to_dict(disk) == config_to_dict(cfg)
+
+
+@pytest.mark.asyncio
+async def test_failed_official_openai_switch_preserves_manual_state():
+    cfg, _profile_a, _profile_b = _manual_config()
+    cfg.api_keys["openai"] = "official-key"
+    before = config_to_dict(cfg)
+    agent = FakeAgent(new_from_config(cfg))
+    old_client = agent.client
+    disk = copy.deepcopy(cfg)
+    calls = 0
+
+    async def save(candidate: Config) -> None:
+        nonlocal disk, calls
+        calls += 1
+        disk = copy.deepcopy(candidate)
+        if calls == 1:
+            raise OSError("failed after replace")
+
+    with pytest.raises(OSError, match="failed after replace"):
+        await switch_provider_transactionally(
+            cfg, agent, backend=Backend.OPENAI, model=OPENAI_DEFAULT_MODEL,
+            save_config=save,
+        )
+    assert agent.client is old_client
+    assert config_to_dict(cfg) == before
+    assert config_to_dict(disk) == before

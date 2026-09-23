@@ -11,7 +11,28 @@ LOOPBACK_HOSTS: Final[frozenset[str]] = frozenset(
 
 def validate_base_url(base_url: str) -> str:
     """Reject provider base URLs that would leak the API key in cleartext."""
-    parsed = urlparse(base_url)
+    if not isinstance(base_url, str) or not base_url:
+        raise ValueError("base_url must be an absolute http(s) URL")
+    if any(char.isspace() for char in base_url):
+        raise ValueError("base_url must not contain whitespace")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in base_url):
+        raise ValueError("base_url contains an invalid control character")
+
+    try:
+        parsed = urlparse(base_url)
+        hostname = parsed.hostname
+        _port = parsed.port
+    except ValueError:
+        raise ValueError("base_url is malformed") from None
+
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname:
+        raise ValueError("base_url must be an absolute http(s) URL with a hostname")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("base_url must not contain username or password credentials")
+    if "?" in base_url or "#" in base_url or parsed.query or parsed.fragment:
+        raise ValueError("base_url must not contain a query or fragment")
+    if any(char.isspace() for char in hostname):
+        raise ValueError("base_url hostname is malformed")
 
     if parsed.scheme == "https":
         return base_url
@@ -21,12 +42,12 @@ def validate_base_url(base_url: str) -> str:
             f"base_url must use http or https, got {parsed.scheme or base_url!r}"
         )
 
-    if _is_loopback(parsed.hostname):
+    if _is_loopback(hostname):
         return base_url
 
     raise ValueError(
         "base_url must use https for non-loopback hosts; "
-        f"refusing to send credentials in cleartext to {parsed.hostname}"
+        "refusing to send credentials in cleartext to a remote provider"
     )
 
 
@@ -82,7 +103,13 @@ OPENAI_DEFAULT_BASE_URL: Final[str] = (
 )
 
 OPENAI_DEFAULT_MODEL: Final[str] = (
-    "gpt-4o-mini"
+    "gpt-6-luna"
+)
+
+OPENAI_RECOMMENDED_MODELS: Final[tuple[str, ...]] = (
+    "gpt-6-luna",
+    "gpt-5.6-terra",
+    "gpt-6-sol",
 )
 
 # Kimi / Moonshot

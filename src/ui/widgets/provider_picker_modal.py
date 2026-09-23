@@ -19,6 +19,7 @@ SECTION_MANUAL = 2
 SECTION_NAMES = ("Official", "Custom", "Manual")
 
 OFFICIAL_BACKENDS = (
+    ("openai", "OpenAI"),
     ("kimi", "Kimi"),
     ("groq", "Groq"),
     ("gemini", "Gemini"),

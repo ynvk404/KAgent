@@ -15,24 +15,20 @@ from src.ui.theme import ACCENT, BOLD_ACCENT, BOLD_ERROR, MUTED, SUCCESS
 StartupPhase = Literal[
     "identity",
     "workspace",
+    "session",
+    "target",
     "skills",
     "provider",
+    "integrations",
     "ready",
     "failed",
 ]
 
 _READINESS_PHASES: frozenset[StartupPhase] = frozenset(
-    {"workspace", "skills", "provider", "ready"}
+    {"workspace", "session", "target", "skills", "provider", "integrations", "ready"}
 )
 
-PHASE_CONFIG: dict[StartupPhase, tuple[int, str]] = {
-    "workspace": (25, "Workspace"),
-    "skills": (50, "Skills & tools"),
-    "provider": (75, "Provider"),
-    "ready": (100, "Ready"),
-}
-
-_ROWS: list[tuple[StartupPhase, str]] = [
+_DEFAULT_ROWS: list[tuple[StartupPhase, str]] = [
     ("workspace", "Workspace"),
     ("skills", "Skills & tools"),
     ("provider", "Provider"),
@@ -41,17 +37,23 @@ _ROWS: list[tuple[StartupPhase, str]] = [
 _BORDER_TITLES: dict[StartupPhase, str] = {
     "identity": "Startup",
     "workspace": "Initializing",
+    "session": "Initializing",
+    "target": "Initializing",
     "skills": "Initializing",
     "provider": "Initializing",
-    "ready": "Ready",
+    "integrations": "Initializing",
+    "ready": "Initializing",
     "failed": "Failed",
 }
 
 _FOOTER_STATUS: dict[StartupPhase, str] = {
     "identity": "Starting runtime environment…",
     "workspace": "Preparing interactive workspace…",
+    "session": "Restoring session…",
+    "target": "Restoring target and scope…",
     "skills": "Loading environment and runtime tools…",
     "provider": "Verifying provider connection and session…",
+    "integrations": "Preparing configured integrations…",
     "ready": "Ready to begin testing",
     "failed": "Initialization encountered an error",
 }
@@ -62,24 +64,12 @@ WORD = "KAGENT"
 SHINE_INTERVAL = 0.12
 
 _PANEL_MAX = 68
-_PANEL_MIN = 44
+_PANEL_MIN = 28
 
 _BAR_MAX = 38
-_BAR_MIN = 18
+_BAR_MIN = 12
 
 BAR_WIDTH = _BAR_MAX
-
-
-def _phase_order(phase: StartupPhase) -> int:
-    order = {
-        "identity": -1,
-        "workspace": 0,
-        "skills": 1,
-        "provider": 2,
-        "ready": 3,
-        "failed": 99,
-    }
-    return order.get(phase, -1)
 
 
 def render_kagent_word(shine_idx: int = 0, shine_done: bool = False) -> Text:
@@ -113,16 +103,13 @@ class SplashProps:
     tool_count: int | None = None
     resumed: bool = False
     resume_summary: str | None = None
+    has_target: bool = False
+    has_integrations: bool = False
     error: str | None = None
 
 
 class StartupSplash(Widget):
-    """Two-phase startup card: identity -> readiness.
-
-    Phase A (identity): KAGENT shine sweep + spinner — shown immediately.
-    Phase B (readiness): readiness rows + metadata + progress bar.
-    Phase B (readiness): readiness rows + 2-row metadata + progress bar + footer.
-    """
+    """Presentation of the runtime state already initialized by the CLI."""
 
     DEFAULT_CSS = """
     StartupSplash {
@@ -189,14 +176,32 @@ class StartupSplash(Widget):
         if error:
             self.error = error
 
+    def readiness_rows(self) -> list[tuple[StartupPhase, str]]:
+        rows = list(_DEFAULT_ROWS)
+        if self.props.resumed:
+            rows.insert(1, ("session", "Session"))
+        if self.props.has_target:
+            rows.insert(2 if self.props.resumed else 1, ("target", "Target & scope"))
+        if self.props.has_integrations:
+            rows.append(("integrations", "Integrations"))
+        return rows
+
+    def progress_percent(self) -> int:
+        if self.phase == "ready":
+            return 100
+        phases = [phase for phase, _ in self.readiness_rows()]
+        if self.phase not in phases:
+            return 0
+        return round(100 * (phases.index(self.phase) + 1) / (len(phases) + 1))
+
     def _panel_width(self) -> int:
         """Preferred panel content width, clamped to terminal size."""
         term_w = self.size.width if self.size.width > 0 else 80
-        available = max(_PANEL_MIN, term_w - 8)
+        available = max(_PANEL_MIN, term_w - 4)
         return min(_PANEL_MAX, available)
 
     def _bar_width(self, panel_w: int) -> int:
-        raw = panel_w - 10
+        raw = panel_w - 14
         return max(_BAR_MIN, min(_BAR_MAX, raw))
 
     def render(self) -> RenderableType:
@@ -207,7 +212,6 @@ class StartupSplash(Widget):
 
         # Identity block (always present)
         # 1. Main center heading + subtitle (always present)
-        parts.append(Text(""))
         heading = render_kagent_word(self.shine_idx, self.shine_done)
         parts.append(heading)
         subtitle = Text("AI-assisted Web Pentest Agent", style=MUTED, justify="center", no_wrap=True)
@@ -228,12 +232,13 @@ class StartupSplash(Widget):
             parts.append(Text(""))
 
         elif self.phase in _READINESS_PHASES:
-            current_order = _phase_order(self.phase)
+            rows = self.readiness_rows()
+            row_phases = [phase for phase, _ in rows]
+            current_order = len(rows) if self.phase == "ready" else row_phases.index(self.phase)
 
             # Readiness rows
             # 2. Phase list
-            for row_phase, row_label in _ROWS:
-                row_order = _phase_order(row_phase)
+            for row_order, (row_phase, row_label) in enumerate(rows):
                 if row_order < current_order:
                     row = Text()
                     row.append("  ✓  ", style=f"bold {SUCCESS}")
@@ -250,19 +255,14 @@ class StartupSplash(Widget):
 
             parts.append(Text(""))
 
-            # Compact metadata line
-            meta_parts: list[str] = []
-            # 3. Compact 2-row metadata area
+            # Provider and counts each appear once, on their own centered row.
             p = self.props
             r1 = Text(justify="center")
             if p.provider and p.model:
-                meta_parts.append(f"{p.provider} · {p.model}")
                 r1.append(f"{p.provider} · {p.model}", style=MUTED)
             elif p.provider:
-                meta_parts.append(p.provider)
                 r1.append(p.provider, style=MUTED)
             elif p.model:
-                meta_parts.append(p.model)
                 r1.append(p.model, style=MUTED)
 
             r2 = Text(justify="center")
@@ -271,21 +271,8 @@ class StartupSplash(Widget):
                 counts.append(f"{p.skill_count} skills")
             if p.tool_count is not None:
                 counts.append(f"{p.tool_count} tools")
-            if p.resumed:
-                summary = f" ({p.resume_summary})" if p.resume_summary else ""
-                counts.append(f"Resumed{summary}")
             if counts:
-                meta_parts.append("  ·  ".join(counts))
                 r2.append("  ·  ".join(counts), style=MUTED)
-
-            if p.resumed:
-                summary = f" · {p.resume_summary}" if p.resume_summary else ""
-                meta_parts.append(f"Session  Resumed{summary}")
-
-            if meta_parts:
-                meta_line = Text("  ", style=MUTED)
-                meta_line.append("  ·  ".join(meta_parts), style=MUTED)
-                parts.append(meta_line)
             if r1.plain or r2.plain:
                 if r1.plain:
                     parts.append(r1)
@@ -295,7 +282,7 @@ class StartupSplash(Widget):
 
             # Progress bar
             # 4. Progress bar
-            pct, _ = PHASE_CONFIG.get(self.phase, (0, ""))
+            pct = self.progress_percent()
             bar_w = self._bar_width(panel_w)
             parts.append(render_progress_bar(pct, width=bar_w))
             parts.append(Text(""))
@@ -310,7 +297,6 @@ class StartupSplash(Widget):
         footer_text = _FOOTER_STATUS.get(self.phase, "")
         if footer_text:
             parts.append(Text(footer_text, style=MUTED, justify="center"))
-            parts.append(Text(""))
 
         inner_padding = max(2, (panel_w - 32) // 2)
         inner_padding = min(inner_padding, 8)

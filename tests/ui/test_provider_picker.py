@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -50,7 +51,7 @@ def test_open_provider_picker_dispatches_state_actions():
     assert req.question.header == "provider"
     assert req.question.question == "Select LLM provider or manage provider settings"
 
-    assert len(req.question.options) == 10
+    assert len(req.question.options) == 11
 
     labels = [
         option.label
@@ -60,13 +61,14 @@ def test_open_provider_picker_dispatches_state_actions():
     assert labels[0] == "Change API key"
     assert labels[1] == "Test connection"
     assert labels[2] == "Show current config"
-    assert labels[3].startswith("Kimi")
-    assert labels[4].startswith("Groq")
-    assert labels[5].startswith("Gemini")
-    assert labels[6].startswith("Claude")
-    assert labels[7].startswith("OpenRouter")
-    assert labels[8].startswith("DeepSeek")
-    assert labels[9].startswith("OpenAI-compatible")
+    assert labels[3].startswith("OpenAI")
+    assert labels[4].startswith("Kimi")
+    assert labels[5].startswith("Groq")
+    assert labels[6].startswith("Gemini")
+    assert labels[7].startswith("Claude")
+    assert labels[8].startswith("OpenRouter")
+    assert labels[9].startswith("DeepSeek")
+    assert labels[10].startswith("OpenAI-compatible")
 
     assert "Ollama" not in labels
     assert "LM Studio" not in labels
@@ -137,6 +139,37 @@ async def test_provider_picker_reuses_saved_provider_key(monkeypatch):
     assert seen.get("prompted") is None
     assert seen["backend"] == "groq"
     assert seen["api_key"] == "groq-key"
+
+
+@pytest.mark.asyncio
+async def test_official_openai_picker_uses_own_key_and_endpoint(monkeypatch):
+    from src.llm.providers import OPENAI_DEFAULT_BASE_URL
+    from src.ui.commands import model_picker
+
+    actions = []
+    seen = {}
+
+    def read_config() -> ConfigSnapshot:
+        return {
+            "backend": Backend.OPENAI_COMPAT,
+            "model": "manual-model",
+            "base_url": "https://manual.example/v1",
+            "api_key": "manual-key",
+            "api_keys": {"openai": "official-key", "openai-compat": "manual-key"},
+        }
+
+    async def fake_fetch(backend, base_url, api_key, *_args, **_kwargs):
+        seen.update(backend=backend, base_url=base_url, api_key=api_key)
+
+    monkeypatch.setattr(model_picker, "fetch_and_pick_model", fake_fetch)
+    open_provider_picker(actions.append, read_config, AsyncMock(), AsyncMock())
+    actions[0].req.resolve("OpenAI")
+    await asyncio.sleep(0)
+    assert seen == {
+        "backend": "openai",
+        "base_url": OPENAI_DEFAULT_BASE_URL,
+        "api_key": "official-key",
+    }
 
 
 @pytest.mark.asyncio

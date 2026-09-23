@@ -89,6 +89,27 @@ def test_old_config_without_custom_provider_fields_loads(
     assert cfg.custom_providers == {}
     assert cfg.custom_provider_api_keys == {}
     assert cfg.active_custom_provider_id is None
+    assert cfg.manual_openai_compat_model == ""
+    assert cfg.manual_openai_compat_base_url == ""
+
+
+@pytest.mark.asyncio
+async def test_official_openai_config_roundtrip_keeps_distinct_key_and_manual_snapshot(temp_config):
+    cfg = default_config()
+    cfg.backend = Backend.OPENAI
+    cfg.model = "gpt-6-luna"
+    cfg.base_url = "https://api.openai.com/v1"
+    cfg.api_keys = {"openai": "official-key", "openai-compat": "manual-key"}
+    cfg.manual_openai_compat_model = "manual-model"
+    cfg.manual_openai_compat_base_url = "https://manual.example/v1"
+    await save(cfg)
+
+    reloaded = load()
+    assert reloaded.backend == Backend.OPENAI
+    assert reloaded.api_key == "official-key"
+    assert reloaded.api_keys["openai-compat"] == "manual-key"
+    assert reloaded.manual_openai_compat_model == "manual-model"
+    assert reloaded.manual_openai_compat_base_url == "https://manual.example/v1"
 
 
 def test_malformed_custom_profile_load_falls_back_without_losing_manual_state(

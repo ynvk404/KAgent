@@ -270,7 +270,7 @@ def test_keyboard_enter_activations():
 
     # 1. Enter on Official
     modal.handle_key("enter")
-    resolve_mock.assert_called_with("Kimi")
+    resolve_mock.assert_called_with("OpenAI")
 
     # 2. Enter on Custom profile
     modal.handle_key("right")
@@ -474,8 +474,7 @@ async def test_open_provider_picker_dispatches_provider_picker_request():
     req = dispatched[0].req
     assert isinstance(req, ProviderPickerRequest)
     assert isinstance(req, AskRequest)
-    # Options length preserved for backwards-compatibility
-    assert len(req.question.options) == 10
+    assert len(req.question.options) == 11
 
 
 @pytest.mark.asyncio
@@ -727,7 +726,10 @@ def test_stale_adapter_marker_does_not_block_delete_when_runtime_is_builtin():
 
 
 @pytest.mark.asyncio
-async def test_add_custom_provider_flow():
+async def test_add_custom_provider_flow(monkeypatch):
+    from src.ui.commands import provider_picker
+
+    monkeypatch.setattr(provider_picker, "list_models", lambda *_args: ["my-model"])
     dispatched = []
     adapter = InMemoryCustomProviderAdapter()
 
@@ -788,10 +790,13 @@ async def test_add_custom_provider_flow():
 
 
 @pytest.mark.asyncio
-async def test_edit_custom_provider_flow():
+async def test_edit_custom_provider_flow(monkeypatch):
+    from src.ui.core import custom_provider_adapter as adapter_module
+
+    monkeypatch.setattr(adapter_module, "list_models", lambda *_args: ["new-model"])
     dispatched = []
     adapter = InMemoryCustomProviderAdapter()
-    profile = adapter.add_custom_provider("Old Name", "http://old.url", api_key="old-key", default_model="old-model")
+    profile = adapter.add_custom_provider("Old Name", "https://old.url", api_key="old-key", default_model="old-model")
 
     def dispatch(action):
         dispatched.append(action)
@@ -835,7 +840,7 @@ async def test_edit_custom_provider_flow():
 
     updated = adapter.list_custom_providers()[0]
     assert updated.name == "New Name"
-    assert updated.base_url == "http://old.url"
+    assert updated.base_url == "https://old.url"
     assert updated.default_model == "new-model"
     assert updated.has_api_key is True  # Blank key kept existing key
 
@@ -861,7 +866,7 @@ def test_active_section_tab_styling():
     official_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
     assert len(official_spans) == 2
     assert rendered_modal.plain[official_spans[0].start:official_spans[0].end] == "[ Official ]"
-    assert rendered_modal.plain[official_spans[1].start:official_spans[1].end] == "> Kimi"
+    assert rendered_modal.plain[official_spans[1].start:official_spans[1].end] == "> OpenAI"
 
     # 2. Switch to Custom section
     modal.handle_key("right")
@@ -973,7 +978,10 @@ async def test_prompt_text_lifecycle_syncs_overlay_immediately():
 
 
 @pytest.mark.asyncio
-async def test_add_custom_provider_consecutive_field_transitions():
+async def test_add_custom_provider_consecutive_field_transitions(monkeypatch):
+    from src.ui.commands import provider_picker
+
+    monkeypatch.setattr(provider_picker, "list_models", lambda *_args: ["llama-3.3-70b"])
     app = _make_test_kagent()
     adapter = InMemoryCustomProviderAdapter()
     dispatched = []
@@ -1029,7 +1037,8 @@ async def test_add_custom_provider_consecutive_field_transitions():
     await asyncio.sleep(0)
 
     assert app.text_input is not None
-    assert app.text_input.question == "Enter default model (optional)"
+    assert "Available models: llama-3.3-70b" in app.text_input.question
+    assert "enter one manually" in app.text_input.question
     assert app.overlay_static.display is True
 
     # 5. Enter model -> Completed and provider picker restored
@@ -1092,10 +1101,13 @@ async def test_add_custom_provider_cancellation_restores_picker_immediately():
 
 
 @pytest.mark.asyncio
-async def test_edit_custom_provider_consecutive_field_transitions():
+async def test_edit_custom_provider_consecutive_field_transitions(monkeypatch):
+    from src.ui.core import custom_provider_adapter as adapter_module
+
+    monkeypatch.setattr(adapter_module, "list_models", lambda *_args: ["new-model"])
     app = _make_test_kagent()
     adapter = InMemoryCustomProviderAdapter()
-    profile = adapter.add_custom_provider("Old Name", "http://old.url", api_key="old-key", default_model="old-model")
+    profile = adapter.add_custom_provider("Old Name", "https://old.url", api_key="old-key", default_model="old-model")
     dispatched = []
 
     def dispatch(action: Any) -> None:
@@ -1132,7 +1144,7 @@ async def test_edit_custom_provider_consecutive_field_transitions():
 
     assert app.text_input is not None
     assert app.text_input.question == "Edit base URL"
-    assert app.text_input.initial_value == "http://old.url"
+    assert app.text_input.initial_value == "https://old.url"
     assert app.overlay_static.display is True
 
     # 3. Enter empty -> API key prompt appears immediately
@@ -1149,7 +1161,8 @@ async def test_edit_custom_provider_consecutive_field_transitions():
     await asyncio.sleep(0)
 
     assert app.text_input is not None
-    assert app.text_input.question == "Edit default model"
+    assert "Available models: new-model" in app.text_input.question
+    assert "enter one manually" in app.text_input.question
     assert app.text_input.initial_value == "old-model"
     assert app.overlay_static.display is True
 
@@ -1159,7 +1172,7 @@ async def test_edit_custom_provider_consecutive_field_transitions():
 
     updated = adapter.list_custom_providers()[0]
     assert updated.name == "New Name"
-    assert updated.base_url == "http://old.url"
+    assert updated.base_url == "https://old.url"
     assert updated.default_model == "new-model"
     assert updated.has_api_key is True
 

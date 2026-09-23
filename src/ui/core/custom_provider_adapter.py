@@ -1,7 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Protocol
+import copy
+import inspect
+import asyncio
+from dataclasses import dataclass, fields
+from typing import Any, Awaitable, Callable, Protocol
+
+from src.config.config import (
+    Config,
+    add_custom_provider,
+    delete_custom_provider,
+    edit_custom_provider,
+)
+from src.llm.providers import validate_base_url
+from src.llm.models import list_models
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,13 +41,22 @@ class CustomProviderAdapter(Protocol):
         """Return True if the specified custom provider is currently active."""
         ...
 
+    async def discover_custom_models(
+        self,
+        profile_id: str,
+        base_url: str | None = None,
+        api_key_override: str | None = None,
+    ) -> list[str]:
+        """Discover models without returning a stored key to the UI."""
+        ...
+
     def add_custom_provider(
         self,
         name: str,
         base_url: str,
         api_key: str = "",
         default_model: str = "",
-    ) -> CustomProviderProfile:
+    ) -> CustomProviderProfile | Awaitable[CustomProviderProfile]:
         """Add a new custom provider profile and return its profile object."""
         ...
 
@@ -46,14 +67,14 @@ class CustomProviderAdapter(Protocol):
         base_url: str,
         api_key: str | None = None,
         default_model: str = "",
-    ) -> CustomProviderProfile | None:
+    ) -> CustomProviderProfile | None | Awaitable[CustomProviderProfile | None]:
         """Update an existing custom provider profile.
 
         If api_key is None, existing key state is retained.
         """
         ...
 
-    def delete_custom_provider(self, profile_id: str) -> bool:
+    def delete_custom_provider(self, profile_id: str) -> bool | Awaitable[bool]:
         """Delete a saved custom provider profile by ID."""
         ...
 
@@ -88,6 +109,22 @@ class InMemoryCustomProviderAdapter:
 
     def is_active(self, profile_id: str) -> bool:
         return self._active_id == profile_id
+
+    async def discover_custom_models(
+        self,
+        profile_id: str,
+        base_url: str | None = None,
+        api_key_override: str | None = None,
+    ) -> list[str]:
+        profile = self._profiles.get(profile_id)
+        if profile is None:
+            raise ValueError("custom provider profile not found")
+        return await asyncio.to_thread(
+            list_models,
+            "openai-compat",
+            validate_base_url(base_url or profile.base_url),
+            api_key_override if api_key_override is not None else self._keys.get(profile_id, ""),
+        )
 
     def add_custom_provider(
         self,
@@ -167,6 +204,183 @@ class InMemoryCustomProviderAdapter:
             self._active_id = profile_id
             return True
         return False
+
+
+class ConfigBackedCustomProviderAdapter:
+    """Persistent adapter that exposes only non-secret Config metadata."""
+
+    def __init__(
+        self,
+        cfg: Config,
+        save_config: Callable[[Config], Any],
+        runtime_active_id: Callable[[], str | None],
+        active_edit: Callable[[Config, str], Awaitable[None]] | None = None,
+        mutation_lock: asyncio.Lock | None = None,
+    ) -> None:
+        self._cfg = cfg
+        self._save_config = save_config
+        self._runtime_active_id = runtime_active_id
+        self._active_edit = active_edit
+        self._mutation_lock = mutation_lock or asyncio.Lock()
+
+    def list_custom_providers(self) -> list[CustomProviderProfile]:
+        return [
+            CustomProviderProfile(
+                id=profile_id,
+                name=profile.name,
+                base_url=profile.base_url,
+                default_model=profile.default_model,
+                has_api_key=bool(self._cfg.custom_provider_api_keys.get(profile_id)),
+            )
+            for profile_id, profile in self._cfg.custom_providers.items()
+        ]
+
+    def get_current_provider_id(self) -> str | None:
+        return self._runtime_active_id()
+
+    def is_active(self, profile_id: str) -> bool:
+        return self._runtime_active_id() == profile_id
+
+    async def discover_custom_models(
+        self,
+        profile_id: str,
+        base_url: str | None = None,
+        api_key_override: str | None = None,
+    ) -> list[str]:
+        profile = self._cfg.custom_providers.get(profile_id)
+        if profile is None:
+            raise ValueError("custom provider profile not found")
+        effective_url = validate_base_url(base_url or profile.base_url)
+        effective_key = (
+            api_key_override
+            if api_key_override is not None
+            else self._cfg.custom_provider_api_keys.get(profile_id, "")
+        )
+        return await asyncio.to_thread(
+            list_models,
+            "openai-compat",
+            effective_url,
+            effective_key,
+        )
+
+    async def add_custom_provider(
+        self,
+        name: str,
+        base_url: str,
+        api_key: str = "",
+        default_model: str = "",
+    ) -> CustomProviderProfile:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("custom provider name must not be empty")
+        normalized_url = validate_base_url(base_url.strip())
+        async with self._mutation_lock:
+            candidate = copy.deepcopy(self._cfg)
+            profile_id = add_custom_provider(
+                candidate,
+                normalized_name,
+                normalized_url,
+                api_key,
+                default_model,
+            )
+            await self._save_candidate(candidate)
+            return self._profile(profile_id)
+
+    async def edit_custom_provider(
+        self,
+        profile_id: str,
+        name: str,
+        base_url: str,
+        api_key: str | None = None,
+        default_model: str = "",
+    ) -> CustomProviderProfile | None:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("custom provider name must not be empty")
+        normalized_url = validate_base_url(base_url.strip())
+        async with self._mutation_lock:
+            if profile_id not in self._cfg.custom_providers:
+                return None
+            candidate = copy.deepcopy(self._cfg)
+            edit_custom_provider(
+                candidate,
+                profile_id,
+                name=normalized_name,
+                base_url=normalized_url,
+                api_key=api_key,
+                default_model=default_model,
+            )
+
+            if self.is_active(profile_id):
+                if self._active_edit is None:
+                    raise RuntimeError("active Custom profile runtime is unavailable")
+                candidate.active_custom_provider_id = profile_id
+                await self._active_edit(candidate, profile_id)
+            else:
+                await self._save_candidate(candidate)
+            return self._profile(profile_id)
+
+    async def delete_custom_provider(self, profile_id: str) -> bool:
+        async with self._mutation_lock:
+            if self.is_active(profile_id) or profile_id not in self._cfg.custom_providers:
+                return False
+            candidate = copy.deepcopy(self._cfg)
+            if candidate.active_custom_provider_id == profile_id:
+                runtime_id = self._runtime_active_id()
+                candidate.active_custom_provider_id = (
+                    runtime_id if runtime_id in candidate.custom_providers else None
+                )
+            if not delete_custom_provider(candidate, profile_id):
+                return False
+            await self._save_candidate(candidate)
+            return True
+
+    def activate_custom_provider(self, profile_id: str | None) -> bool:
+        # Runtime switching owns active state; this adapter only reports it.
+        return self._runtime_active_id() == profile_id
+
+    def _profile(self, profile_id: str) -> CustomProviderProfile:
+        profile = self._cfg.custom_providers[profile_id]
+        return CustomProviderProfile(
+            id=profile_id,
+            name=profile.name,
+            base_url=profile.base_url,
+            default_model=profile.default_model,
+            has_api_key=bool(self._cfg.custom_provider_api_keys.get(profile_id)),
+        )
+
+    async def _save_candidate(self, candidate: Config) -> None:
+        try:
+            result = self._save_config(candidate)
+            if inspect.isawaitable(result):
+                await result
+        except BaseException:
+            # A cancelled save may already have replaced the file. Keep the
+            # mutation lock until its compensating write has settled.
+            async def restore() -> None:
+                result = self._save_config(copy.deepcopy(self._cfg))
+                if inspect.isawaitable(result):
+                    await result
+
+            rollback = asyncio.create_task(restore())
+            while not rollback.done():
+                try:
+                    await asyncio.shield(rollback)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                rollback.result()
+            except Exception:
+                pass
+            raise
+        for config_field in fields(Config):
+            setattr(
+                self._cfg,
+                config_field.name,
+                copy.deepcopy(getattr(candidate, config_field.name)),
+            )
 
 
 _global_adapter: CustomProviderAdapter = InMemoryCustomProviderAdapter()

@@ -150,6 +150,20 @@ class TestKagentShineSweep:
         assert "KAGENT" in rendered
         assert "Provider" in rendered
 
+    @pytest.mark.asyncio
+    async def test_40_column_layout_keeps_metadata_and_progress_readable(self) -> None:
+        splash = StartupSplash(props=SplashProps(
+            provider="OpenAI", model="gpt-6-luna", skill_count=10, tool_count=28,
+        ))
+        app = _SplashHarnessApp(splash)
+        async with app.run_test(size=(40, 30)):
+            splash.set_phase("ready")
+            rendered = _render_plain(splash, width=40)
+            assert "AI-assisted Web Pentest Agent" in rendered
+            assert "OpenAI · gpt-6-luna" in rendered
+            assert "10 skills  ·  28 tools" in rendered
+            assert "100%" in rendered
+
     def test_no_secret_metadata_appears(self) -> None:
         """12. no secret metadata appears."""
         splash = StartupSplash(
@@ -223,6 +237,44 @@ class TestIdentityPhase:
 
 
 class TestReadinessPhase:
+    def test_default_rows_are_compact(self) -> None:
+        splash = StartupSplash()
+        splash.set_phase("ready")
+        rendered = _render_plain(splash)
+        assert [label for _, label in splash.readiness_rows()] == [
+            "Workspace", "Skills & tools", "Provider",
+        ]
+        assert "Session" not in rendered
+        assert "Target & scope" not in rendered
+        assert "Integrations" not in rendered
+
+    def test_optional_rows_follow_actual_props(self) -> None:
+        splash = StartupSplash(props=SplashProps(
+            resumed=True, has_target=True, has_integrations=True,
+        ))
+        splash.set_phase("ready")
+        rendered = _render_plain(splash)
+        assert [label for _, label in splash.readiness_rows()] == [
+            "Workspace", "Session", "Target & scope", "Skills & tools",
+            "Provider", "Integrations",
+        ]
+        for label in ("Session", "Target & scope", "Integrations"):
+            assert label in rendered
+        assert "100%" in rendered
+
+    @pytest.mark.parametrize("prop,label", [
+        ("resumed", "Session"),
+        ("has_target", "Target & scope"),
+        ("has_integrations", "Integrations"),
+    ])
+    def test_each_optional_row_appears_only_when_enabled(self, prop: str, label: str) -> None:
+        splash = StartupSplash(props=SplashProps(**{prop: True}))
+        splash.set_phase("ready")
+        rendered = _render_plain(splash)
+        assert label in rendered
+        assert len(splash.readiness_rows()) == 4
+        assert "100%" in rendered
+
     def test_workspace_phase_shows_25_pct(self) -> None:
         splash = StartupSplash()
         splash.set_phase("workspace")
@@ -305,6 +357,8 @@ class TestMetadataAndFooter:
         assert "deepseek-chat" in rendered
         assert "deepseek · deepseek-chat" in rendered
         assert "10 skills  ·  28 tools" in rendered
+        assert rendered.count("deepseek · deepseek-chat") == 1
+        assert rendered.count("10 skills  ·  28 tools") == 1
 
     def test_skill_and_tool_counts_rendered(self) -> None:
         splash = StartupSplash(
@@ -339,7 +393,7 @@ class TestMetadataAndFooter:
         assert "Resumed" not in rendered
         assert "Session" not in rendered
 
-    def test_resumed_session_shows_summary(self) -> None:
+    def test_resumed_session_uses_row_without_recap(self) -> None:
         splash = StartupSplash(
             props=SplashProps(
                 resumed=True,
@@ -348,7 +402,8 @@ class TestMetadataAndFooter:
         )
         splash.set_phase("ready")
         rendered = _render_plain(splash)
-        assert "Resumed" in rendered
+        assert "Session" in rendered
+        assert "restored 5 messages" not in rendered
 
 
 class TestPanelLayout:
@@ -366,7 +421,7 @@ class TestPanelLayout:
             assert max_line < 100
 
     def test_status_oriented_border_title(self) -> None:
-        """Border title shows status label (Startup, Initializing, Ready) without duplicating KAgent."""
+        """Ready keeps the initializing title; errors use Failed."""
         splash = StartupSplash()
         rendered = _render_plain(splash)
         assert "KAGENT" in rendered
@@ -378,7 +433,11 @@ class TestPanelLayout:
 
         splash.set_phase("ready")
         rendered = _render_plain(splash)
-        assert "Ready" in rendered
+        assert "Initializing" in rendered
+        assert "✓  Ready" in rendered
+
+        splash.set_phase("failed", error="oops")
+        assert "Failed" in _render_plain(splash)
 
 
 class _SplashHarnessApp(App):

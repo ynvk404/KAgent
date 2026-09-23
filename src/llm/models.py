@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from typing import Any
 
 import requests
@@ -19,13 +20,22 @@ from .providers import (
     KIMI_MODELS,
     OPENROUTER_DEFAULT_BASE_URL,
     OPENROUTER_RECOMMENDED_MODELS,
+    OPENAI_DEFAULT_BASE_URL,
+    OPENAI_RECOMMENDED_MODELS,
     validate_base_url,
 )
-from .transport import new_provider_session
+from .errors import (
+    ProviderControlError,
+    exception_has_type_name,
+    provider_http_error,
+    provider_transport_error,
+)
+from .transport import new_provider_session, parse_openai_model_ids
 
 DEFAULT_TIMEOUT_S: float = 5.0
 
 DEFAULT_BASE_URL: dict[str, str] = {
+    "openai": OPENAI_DEFAULT_BASE_URL,
     "openai-compat": "",
     "kimi": KIMI_DEFAULT_BASE_URL,
     "groq": GROQ_DEFAULT_BASE_URL,
@@ -67,21 +77,47 @@ def list_models(
 
     # Model discovery is provider control-plane traffic, just like chat and
     # health probes.  Do not let pentest/Burp proxy variables capture it.
-    with new_provider_session() as session:
-        response = session.get(
-            f"{base}/models",
-            headers=headers,
-            timeout=timeout,
-            allow_redirects=False,
-        )
+    try:
+        with new_provider_session() as session:
+            response = session.get(
+                f"{base.rstrip('/')}/models",
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=False,
+            )
+    except requests.exceptions.SSLError as error:
+        raise provider_transport_error("tls-failure") from None
+    except requests.exceptions.Timeout:
+        raise provider_transport_error("timeout") from None
+    except requests.exceptions.ConnectionError as error:
+        if isinstance(error, socket.gaierror) or exception_has_type_name(
+            error, {"gaierror", "NameResolutionError"}
+        ):
+            raise provider_transport_error("dns-failure") from None
+        if exception_has_type_name(error, {"SSLError", "SSLCertVerificationError"}):
+            raise provider_transport_error("tls-failure") from None
+        raise provider_transport_error("connection-failure") from None
+    except requests.exceptions.RequestException:
+        raise provider_transport_error("connection-failure") from None
 
     if response.status_code != 200:
-        raise requests.HTTPError(f"{b} list-models returned {response.status_code}")
+        raise provider_http_error(response.status_code)
 
-    return _parse_models(b, response.json())
+    try:
+        body = response.json()
+    except ValueError:
+        raise ProviderControlError(
+            "malformed-json",
+            "provider returned invalid JSON from the models endpoint",
+        ) from None
+    if b in {"openai-compat", "lmstudio"}:
+        return parse_openai_model_ids(body)
+    return _parse_models(b, body)
 
 
 def _parse_models(backend: str, body: Any) -> list[str]:
+    if backend == "openai":
+        return _prefer_known_models(parse_openai_model_ids(body), OPENAI_RECOMMENDED_MODELS)
     if not isinstance(body, dict):
         return []
 

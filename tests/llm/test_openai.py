@@ -208,6 +208,22 @@ async def test_non_stream_chat():
     assert out.message.content == "hi"
 
 
+async def test_official_openai_luna_uses_chat_tool_compatible_parameters():
+    client = OpenAIClient(base_url, "official-key", "gpt-6-luna", "openai", gen_opts={"max_tokens": 200})
+    body = client.encode_request(ChatRequest(
+        model="gpt-6-luna", messages=[Message(role="user", content="hello")],
+        tools=[{"type": "function", "function": {"name": "noop", "parameters": {"type": "object"}}}],
+    ), stream=False)
+    assert body["reasoning_effort"] == "none"
+    assert body["max_completion_tokens"] == 200
+    assert "max_tokens" not in body
+    assert body["tools"][0]["function"]["name"] == "noop"
+    assert client.name() == "openai"
+
+    manual = OpenAIClient(base_url, "manual-key", "gpt-6-luna", "openai-compat")
+    assert "reasoning_effort" not in manual.encode_request(_req("gpt-6-luna"), False)
+
+
 async def test_ping_streaming_and_non_streaming_share_provider_transport(monkeypatch):
     calls = []
     real_factory = transport.new_provider_async_client

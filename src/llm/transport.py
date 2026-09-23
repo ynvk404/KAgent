@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import socket
+import ssl
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from typing import Any, TypeVar
@@ -11,7 +14,14 @@ from typing import Any, TypeVar
 import httpx
 import requests
 
-from .errors import BackendError, parse_retry_after
+from .errors import (
+    BackendError,
+    ProviderControlError,
+    exception_has_type_name,
+    parse_retry_after,
+    provider_http_error,
+    provider_transport_error,
+)
 
 T = TypeVar("T")
 
@@ -74,6 +84,43 @@ def resolve_max_tokens(gen_opts: Mapping[str, Any] | None) -> int | None:
     return gen_opts.get("max_tokens") if value is None else value
 
 
+def parse_openai_model_ids(body: Any) -> list[str]:
+    """Validate the OpenAI-compatible ``/models`` envelope and extract IDs."""
+    if not isinstance(body, dict) or not isinstance(body.get("data"), list):
+        raise ProviderControlError(
+            "malformed-response",
+            "provider returned an invalid OpenAI-compatible models response",
+        )
+    model_ids: list[str] = []
+    for item in body["data"]:
+        if not isinstance(item, dict):
+            raise ProviderControlError(
+                "malformed-response",
+                "provider returned an invalid OpenAI-compatible models response",
+            )
+        model_id = item.get("id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ProviderControlError(
+                "malformed-response",
+                "provider returned an invalid OpenAI-compatible models response",
+            )
+        model_ids.append(model_id)
+    return model_ids
+
+
+def classify_provider_transport_exception(error: BaseException) -> ProviderControlError:
+    """Map transport failures to safe, typed messages without exposing details."""
+    if exception_has_type_name(error, {"SSLError", "SSLCertVerificationError"}):
+        return provider_transport_error("tls-failure")
+    if isinstance(error, (httpx.TimeoutException, TimeoutError)):
+        return provider_transport_error("timeout")
+    if isinstance(error, socket.gaierror) or exception_has_type_name(
+        error, {"gaierror", "NameResolutionError"}
+    ):
+        return provider_transport_error("dns-failure")
+    return provider_transport_error("connection-failure")
+
+
 def new_call_id(hex_len: int | None = None) -> str:
     digest = uuid.uuid4().hex
     return f"call_{digest[:hex_len] if hex_len else digest}"
@@ -84,11 +131,47 @@ async def ping_models_endpoint(
     headers: Mapping[str, str],
     provider: str,
 ) -> None:
-    """GET `<base_url>/models` and treat any 5xx as the backend being unavailable."""
-    async with new_provider_async_client(PING_TIMEOUT_SEC) as client:
-        resp = await client.get(f"{base_url}/models", headers=dict(headers))
-        if resp.status_code >= 500:
-            raise RuntimeError(f"{provider} status {resp.status_code}")
+    """Check the provider models endpoint and its protocol response envelope."""
+    try:
+        async with new_provider_async_client(PING_TIMEOUT_SEC) as client:
+            resp = await client.get(
+                f"{base_url.rstrip('/')}/models",
+                headers=dict(headers),
+            )
+    except (httpx.TimeoutException, httpx.TransportError, ssl.SSLError) as error:
+        raise classify_provider_transport_exception(error) from None
+    if resp.status_code != 200:
+        raise provider_http_error(resp.status_code)
+    try:
+        body = resp.json()
+    except (ValueError, json.JSONDecodeError):
+        raise ProviderControlError(
+            "malformed-json",
+            "provider returned invalid JSON from the models endpoint",
+        ) from None
+    if provider == "gemini":
+        models = body.get("models") if isinstance(body, dict) else None
+        if not isinstance(models, list) or any(
+            not isinstance(item, dict) or not isinstance(item.get("name"), str)
+            for item in models
+        ):
+            raise ProviderControlError(
+                "malformed-response",
+                "Gemini returned an invalid models response",
+            )
+        return
+    if provider == "anthropic":
+        models = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(models, list) or any(
+            not isinstance(item, dict) or not isinstance(item.get("id"), str)
+            for item in models
+        ):
+            raise ProviderControlError(
+                "malformed-response",
+                "Anthropic returned an invalid models response",
+            )
+        return
+    parse_openai_model_ids(body)
 
 
 async def iter_sse_lines(resp: httpx.Response) -> AsyncIterator[str]:

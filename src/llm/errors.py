@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -12,6 +13,110 @@ ErrorCategory = Literal[
     "backend-down",
     "unknown",
 ]
+
+ProviderControlCategory = Literal[
+    "http-error",
+    "incompatible-request",
+    "authentication",
+    "authorization",
+    "unsupported-endpoint",
+    "timeout",
+    "rate-limited",
+    "server-error",
+    "dns-failure",
+    "connection-failure",
+    "tls-failure",
+    "malformed-json",
+    "malformed-response",
+]
+
+
+class ProviderControlError(Exception):
+    """Safe, typed failure from provider validation or model discovery."""
+
+    def __init__(
+        self,
+        category: ProviderControlCategory,
+        message: str,
+        status_code: int | None = None,
+    ) -> None:
+        self.category = category
+        self.status_code = status_code
+        super().__init__(message)
+
+
+def provider_http_error(status_code: int) -> ProviderControlError:
+    """Return a credential-safe error for a provider HTTP status."""
+    if status_code == 400:
+        category: ProviderControlCategory = "incompatible-request"
+        message = "provider rejected the OpenAI-compatible request (HTTP 400)"
+    elif status_code == 401:
+        category = "authentication"
+        message = "provider authentication failed (HTTP 401)"
+    elif status_code == 403:
+        category = "authorization"
+        message = "provider access was denied (HTTP 403)"
+    elif status_code == 404:
+        category = "unsupported-endpoint"
+        message = "provider does not support the models endpoint (HTTP 404)"
+    elif status_code == 408:
+        category = "timeout"
+        message = "provider request timed out (HTTP 408)"
+    elif status_code == 429:
+        category = "rate-limited"
+        message = "provider rate limit reached (HTTP 429)"
+    elif status_code >= 500:
+        category = "server-error"
+        message = f"provider server error (HTTP {status_code})"
+    else:
+        category = "http-error"
+        message = f"provider returned HTTP {status_code}"
+    return ProviderControlError(category, message, status_code)
+
+
+def provider_transport_error(
+    category: Literal[
+        "timeout",
+        "dns-failure",
+        "connection-failure",
+        "tls-failure",
+    ],
+) -> ProviderControlError:
+    messages = {
+        "timeout": "provider request timed out",
+        "dns-failure": "provider hostname could not be resolved",
+        "connection-failure": "could not connect to provider",
+        "tls-failure": "provider TLS certificate validation failed",
+    }
+    return ProviderControlError(category, messages[category])
+
+
+def exception_chain(error: BaseException) -> Iterator[BaseException]:
+    """Yield nested exception objects without inspecting potentially secret text."""
+    pending: list[BaseException] = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        yield current
+        for nested in (
+            current.__cause__,
+            current.__context__,
+            getattr(current, "reason", None),
+            *current.args,
+        ):
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+
+
+def exception_has_type_name(error: BaseException, names: set[str]) -> bool:
+    return any(
+        cls.__name__ in names
+        for nested in exception_chain(error)
+        for cls in type(nested).__mro__
+    )
 
 
 @dataclass(slots=True)

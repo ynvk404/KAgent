@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import shutil
 import asyncio
 import base64
@@ -11,7 +12,7 @@ import signal
 import sys
 import time
 from types import SimpleNamespace
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable, cast, TypedDict, Optional
 from watchdog.observers import Observer
@@ -42,6 +43,8 @@ from src.permission.permission import YoloPrompter
 from src.llm import factory as llm_factory
 from src.llm.provider_runtime import (
     build_startup_runtime,
+    edit_custom_provider_transactionally,
+    PreparedProviderSwitch,
     switch_provider_transactionally,
 )
 from src.llm.model_warnings import model_reliability_warning
@@ -125,6 +128,7 @@ from src.ui.core.app import (
     ConfigSnapshot,
     ProviderChange,
 )
+from src.ui.core.custom_provider_adapter import ConfigBackedCustomProviderAdapter
 
 from src.ui.widgets.banner import BannerData, ToolSupportPill
 
@@ -426,6 +430,19 @@ async def main() -> int:
     restore_custom_provider = bool(cfg.active_custom_provider_id) and not flags.backend
 
     if flags.backend:
+        if cfg.backend == Backend.OPENAI_COMPAT and flags.backend != Backend.OPENAI_COMPAT:
+            cfg.manual_openai_compat_model = cfg.model
+            cfg.manual_openai_compat_base_url = cfg.base_url
+        if flags.backend == Backend.OPENAI and cfg.backend != Backend.OPENAI:
+            if not flags.model:
+                cfg.model = OPENAI_DEFAULT_MODEL
+            if not flags.base_url:
+                cfg.base_url = OPENAI_DEFAULT_BASE_URL
+        if flags.backend == Backend.OPENAI_COMPAT and cfg.backend != Backend.OPENAI_COMPAT:
+            if not flags.model:
+                cfg.model = cfg.manual_openai_compat_model
+            if not flags.base_url:
+                cfg.base_url = cfg.manual_openai_compat_base_url
         cfg.backend = flags.backend
     if not restore_custom_provider:
         if flags.model:
@@ -449,6 +466,8 @@ async def main() -> int:
         cfg.api_key = os.environ.get("GEMINI_API_KEY") or ""
     if not restore_custom_provider and cfg.backend == "anthropic" and not cfg.api_key:
         cfg.api_key = os.environ.get("ANTHROPIC_API_KEY") or ""
+    if not restore_custom_provider and cfg.backend == "openai" and not cfg.api_key:
+        cfg.api_key = os.environ.get("OPENAI_API_KEY") or ""
 
     cfg.mcp_servers = [s for s in cfg.mcp_servers if s.name not in BROWSER_MCP_NAMES]
     session_servers = session_mcp_servers(cfg.mcp_servers, flags.browser)
@@ -964,25 +983,39 @@ async def main() -> int:
                 file=sys.stderr,
             )
 
-    async def persist_disabled_skills(names: list[str]) -> None:
-        cfg.disabled_skills = sorted(names)
-        await config.save(cfg)
+    config_mutation_lock = asyncio.Lock()
 
-    async def apply_provider(change: ProviderChange) -> None:
+    async def persist_config_change(change: Callable[[config.Config], None]) -> None:
+        async with config_mutation_lock:
+            candidate = copy.deepcopy(cfg)
+            change(candidate)
+            try:
+                await config.save(candidate)
+            except BaseException:
+                rollback = asyncio.create_task(config.save(copy.deepcopy(cfg)))
+                while not rollback.done():
+                    try:
+                        await asyncio.shield(rollback)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                try:
+                    rollback.result()
+                except Exception:
+                    pass
+                raise
+            for config_field in fields(config.Config):
+                setattr(cfg, config_field.name, copy.deepcopy(getattr(candidate, config_field.name)))
+
+    async def persist_disabled_skills(names: list[str]) -> None:
+        await persist_config_change(lambda candidate: setattr(candidate, "disabled_skills", sorted(names)))
+
+    def commit_runtime_state(prepared: PreparedProviderSwitch) -> None:
         nonlocal current_runtime_config
         nonlocal runtime_active_custom_id
         nonlocal current_provider_name
 
-        prepared = await switch_provider_transactionally(
-            cfg,
-            agent,
-            backend=change.backend,
-            model=change.model,
-            base_url=change.base_url,
-            api_key=change.api_key,
-            custom_provider_id=change.custom_provider_id,
-            save_config=config.save,
-        )
         current_runtime_config = prepared.config
         runtime_active_custom_id = prepared.active_custom_provider_id
         current_provider_name = (
@@ -1018,9 +1051,34 @@ async def main() -> int:
 
         _spawn_reporting(run_probes(root_ctl), "probe")
 
+    async def apply_provider(change: ProviderChange) -> None:
+        await switch_provider_transactionally(
+            cfg,
+            agent,
+            backend=change.backend,
+            model=change.model,
+            base_url=change.base_url,
+            api_key=change.api_key,
+            custom_provider_id=change.custom_provider_id,
+            save_config=config.save,
+            mutation_lock=config_mutation_lock,
+            on_commit=commit_runtime_state,
+        )
+
+    async def apply_active_custom_edit(candidate: config.Config, profile_id: str) -> None:
+        # The adapter holds config_mutation_lock from snapshot through this
+        # callback. The application owns every runtime-facing state update.
+        prepared = await edit_custom_provider_transactionally(
+            cfg,
+            candidate,
+            agent,
+            custom_provider_id=profile_id,
+            save_config=config.save,
+        )
+        commit_runtime_state(prepared)
+
     async def update_provider_api_key(provider: str, api_key: str) -> None:
-        cfg.api_keys[provider] = api_key
-        await config.save(cfg)
+        await persist_config_change(lambda candidate: candidate.api_keys.__setitem__(provider, api_key))
 
     async def test_connection() -> None:
         ping = getattr(agent.client, "ping", None)
@@ -1032,6 +1090,14 @@ async def main() -> int:
             await result
     
     _spawn_reporting(run_probes(root_ctl), "probe")
+
+    custom_provider_adapter = ConfigBackedCustomProviderAdapter(
+        cfg,
+        config.save,
+        lambda: runtime_active_custom_id,
+        active_edit=apply_active_custom_edit,
+        mutation_lock=config_mutation_lock,
+    )
 
     app = KAgent(
         AppProps(
@@ -1054,6 +1120,8 @@ async def main() -> int:
                 notice_holder.bind(publish),
 
             resume_summary=resume_summary,
+            splash_has_target=bool(target.base_url()),
+            splash_has_integrations=bool(mcp_sessions or ingest_handle or cfg.plugins),
 
             session_debug=session_debug,
 
@@ -1071,6 +1139,14 @@ async def main() -> int:
                 "api_key": cfg.api_key,
                 "api_keys": dict(cfg.api_keys),
                 "model": cfg.model,
+                "manual_model": (
+                    cfg.model if cfg.backend == Backend.OPENAI_COMPAT
+                    else cfg.manual_openai_compat_model
+                ),
+                "manual_base_url": (
+                    cfg.base_url if cfg.backend == Backend.OPENAI_COMPAT
+                    else cfg.manual_openai_compat_base_url
+                ),
                 "active_provider_name": current_provider_name,
                 "active_custom_provider_id": runtime_active_custom_id,
                 "active_custom_provider_base_url": (
@@ -1093,6 +1169,7 @@ async def main() -> int:
             persist_disabled_skills=persist_disabled_skills,
 
             apply_provider=apply_provider,
+            custom_provider_adapter=custom_provider_adapter,
             update_provider_api_key=update_provider_api_key,
             test_connection=test_connection,
 
@@ -1129,6 +1206,8 @@ def provider_label(backend: str) -> str:
             return "DeepSeek"
         case "openai-compat":
             return "OpenAI-compatible"
+        case "openai":
+            return "OpenAI"
         case "kimi":
             return "Kimi"
         case "groq":
@@ -1148,6 +1227,8 @@ def default_endpoint(backend: str) -> str:
             return DEEPSEEK_DEFAULT_BASE_URL
         case "kimi":
             return KIMI_DEFAULT_BASE_URL
+        case "openai":
+            return OPENAI_DEFAULT_BASE_URL
         case "groq":
             return GROQ_DEFAULT_BASE_URL
         case "openrouter":
@@ -1160,6 +1241,7 @@ def default_endpoint(backend: str) -> str:
 def locality_for(backend: str) -> str:
     if backend in (
         "openai-compat",
+        "openai",
         "kimi",
         "groq",
         "openrouter",
@@ -1310,7 +1392,7 @@ Usage:
   kagent [flags]
 
 Flags:
-  --backend |openai-compat|kimi|groq|openrouter|deepseek|gemini
+  --backend |openai|openai-compat|kimi|groq|openrouter|deepseek|gemini
   --model <id>
   --base-url <url>
   --api-key <key>

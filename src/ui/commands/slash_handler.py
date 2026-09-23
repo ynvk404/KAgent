@@ -11,6 +11,7 @@ from src.config.config import Backend
 from src.llm.models import list_models
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.state import Append, Clear, TranscriptEntry
+from src.ui.widgets.text_input_modal import TextInputRequest
 
 if TYPE_CHECKING:
     from src.agent.agent import Agent
@@ -500,6 +501,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             app.prompt_text,
             app.update_provider_api_key,
             app.test_connection,
+            adapter=getattr(app, "custom_provider_adapter", None),
         )
         return True
 
@@ -1032,6 +1034,18 @@ async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
             current_model=current_model or agent.client.model(),
             success_text=lambda picked: f"model set to {picked}",
             custom_provider_id=custom_provider_id,
+            manual_model_prompt=lambda reason: app.prompt_text(
+                TextInputRequest(
+                    header="Manual model ID",
+                    question=(
+                        f"Model discovery could not complete: {reason}. "
+                        "Enter a model ID manually."
+                    ),
+                    placeholder="model-id",
+                    resolve=lambda _value: None,
+                    reject=lambda _error: None,
+                )
+            ),
         )
         return
 
@@ -1072,8 +1086,10 @@ async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
             ProviderChange(
                 backend=model_backend,
                 model=m,
-                base_url=(model_base_url if custom_provider_id else None),
-                api_key=(model_api_key if custom_provider_id else None),
+                # Resolve the active profile again inside the config
+                # transaction; discovery may have overlapped a profile edit.
+                base_url=None,
+                api_key=None,
                 custom_provider_id=custom_provider_id,
             )
         )

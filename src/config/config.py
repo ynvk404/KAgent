@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import os
@@ -18,6 +19,7 @@ from src.paths import user_data_root
 class Backend(StrEnum):
     EMPTY = ""
     OPENAI_COMPAT = "openai-compat"
+    OPENAI = "openai"
     KIMI = "kimi"
     GROQ = "groq"
     OPENROUTER = "openrouter"
@@ -84,6 +86,8 @@ class Config:
     custom_providers: dict[str, CustomProviderConfig] = field(default_factory=dict)
     custom_provider_api_keys: dict[str, str] = field(default_factory=dict)
     active_custom_provider_id: str | None = None
+    manual_openai_compat_model: str = ""
+    manual_openai_compat_base_url: str = ""
 
     @property
     def api_key(self) -> str:
@@ -195,6 +199,8 @@ def config_from_dict(
         custom_providers=custom_providers,
         custom_provider_api_keys=custom_provider_api_keys,
         active_custom_provider_id=active_custom_provider_id,
+        manual_openai_compat_model=_string_field(data, "manual_openai_compat_model", ""),
+        manual_openai_compat_base_url=_string_field(data, "manual_openai_compat_base_url", ""),
         skills_dirs=_string_list_field(data, "skills_dirs"),
         disabled_skills=_string_list_field(data, "disabled_skills"),
         mcp_servers=[_validate_mcp_server(x) for x in _list_field(data, "mcp_servers")],
@@ -242,6 +248,27 @@ def load() -> Config:
 async def save(
     cfg: Config,
 ) -> None:
+    # Cancelling the waiter does not stop a running to_thread write. Wait for
+    # the worker to settle before allowing a transaction to roll back or a
+    # later write to start.
+    write = asyncio.create_task(asyncio.to_thread(_save_sync, copy.deepcopy(cfg)))
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(write)
+            break
+        except asyncio.CancelledError:
+            cancelled = True
+            if write.done():
+                break
+    if cancelled:
+        if write.done() and not write.cancelled():
+            write.exception()
+        raise asyncio.CancelledError
+    write.result()
+
+
+def _save_sync(cfg: Config) -> None:
     path = config_path()
     path.parent.mkdir(
         parents=True,

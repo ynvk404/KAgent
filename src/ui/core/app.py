@@ -52,6 +52,7 @@ from src.logger.session_debug import SessionDebugLog
 from src.skills.template import render_skill_template
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest 
+from src.ui.core.custom_provider_adapter import CustomProviderAdapter
 from src.ui.commands.menu_window import compute_menu_window
 from src.ui.commands.slash_items import SLASH_ITEMS, SlashItem, filter_slash
 from src.ui.commands.slash_handler import (
@@ -150,6 +151,8 @@ class ConfigSnapshot(TypedDict):
     api_key: str
     api_keys: dict[str, str]
     model: str
+    manual_model: str
+    manual_base_url: str
     active_provider_name: str
     active_custom_provider_id: str | None
     active_custom_provider_base_url: str
@@ -163,6 +166,7 @@ class AppProps:
     parent_signal: asyncio.Event
     read_config: Callable[[], ConfigSnapshot]
     apply_provider: ApplyProvider
+    custom_provider_adapter: CustomProviderAdapter | None = None
     update_provider_api_key: UpdateProviderApiKey | None = None
     test_connection: TestConnection | None = None
 
@@ -191,6 +195,8 @@ class AppProps:
         Callable[[], Awaitable[BurpBridgeResult]] | None
     ) = None
     resume_summary: str | None = None
+    splash_has_target: bool = False
+    splash_has_integrations: bool = False
     show_splash: bool = False
 
 @dataclass(slots=True)
@@ -485,6 +491,11 @@ class KAgent(App):
         height: auto;
     }}
 
+    #transcript-panel TranscriptView {{
+        width: 1fr;
+        margin-left: 1;
+    }}
+
     #input-box {{
         width: 100%;
         border: round {MUTED};
@@ -539,6 +550,7 @@ class KAgent(App):
 
         self.read_config = props.read_config
         self.apply_provider = props.apply_provider
+        self.custom_provider_adapter = props.custom_provider_adapter
         self.update_provider_api_key = props.update_provider_api_key
         self.test_connection = props.test_connection
 
@@ -555,6 +567,8 @@ class KAgent(App):
         self.close_burp_bridge = props.close_burp_bridge
         self.burp_bridge_status = props.burp_bridge_status
         self.resume_summary = props.resume_summary
+        self.splash_has_target = props.splash_has_target
+        self.splash_has_integrations = props.splash_has_integrations
         self.show_splash = props.show_splash
         self.startup_splash: StartupSplash | None = None
         self.startup_task: asyncio.Task | None = None
@@ -652,6 +666,8 @@ class KAgent(App):
                     tool_count=tool_cnt,
                     resumed=bool(self.resume_summary),
                     resume_summary=self.resume_summary,
+                    has_target=self.splash_has_target,
+                    has_integrations=self.splash_has_integrations,
                 ),
             )
             yield self.startup_splash
@@ -1826,16 +1842,17 @@ class KAgent(App):
 
     async def _run_startup_sequence(self) -> None:
         try:
-            self._advance_splash("identity")      # 0.0 s — immediate first frame
-            await asyncio.sleep(0.8)              # 0.8 s — shine sweep completes
-            self._advance_splash("workspace")     # 0.8 s → workspace (25%)
-            await asyncio.sleep(1.2)              # 2.0 s → skills (50%)
-            self._advance_splash("skills")
-            await asyncio.sleep(1.2)              # 3.2 s → provider (75%)
-            self._advance_splash("provider")
-            await asyncio.sleep(1.0)              # 4.2 s → ready (100%)
+            self._advance_splash("identity")
+            await asyncio.sleep(0.8)  # Keep the existing shine sweep.
+            rows = self.startup_splash.readiness_rows() if self.startup_splash else []
+            # This is a cosmetic sequence for work completed before Textual
+            # starts. Share the existing readiness dwell over visible rows.
+            dwell = 3.4 / len(rows) if rows else 0
+            for phase, _label in rows:
+                self._advance_splash(phase)
+                await asyncio.sleep(dwell)
             self._advance_splash("ready")
-            await asyncio.sleep(0.8)              # 5.0 s — brief Ready dwell
+            await asyncio.sleep(0.8)
         except asyncio.CancelledError:
             return
         except Exception as err:

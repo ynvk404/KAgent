@@ -5,6 +5,9 @@ import inspect
 from typing import Any, Awaitable, Callable
 from src.config.config import Backend
 from src.ui.core.app import ConfigSnapshot, ProviderChange
+from src.llm.errors import ProviderControlError
+from src.llm.models import list_models
+from src.llm.providers import validate_base_url
 from src.ask.ask import Question, Option
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.core.state import Action, Append, Clear, SetAsk, TranscriptEntry
@@ -16,6 +19,7 @@ from src.llm.providers import (
     OPENROUTER_DEFAULT_BASE_URL,
     DEEPSEEK_DEFAULT_BASE_URL,
     ANTHROPIC_DEFAULT_BASE_URL,
+    OPENAI_DEFAULT_BASE_URL,
 )
 
 from src.ui.core.custom_provider_adapter import (
@@ -31,6 +35,7 @@ from src.ui.widgets.provider_picker_modal import (
 )
 
 REMOTE_PROVIDERS: tuple[tuple[str, str, str], ...] = (
+    ("openai", "OpenAI", "sk-..."),
     ("kimi", "Kimi", "sk-..."),
     ("groq", "Groq", "gsk_..."),
     ("gemini", "Gemini", "AIza..."),
@@ -78,6 +83,82 @@ def mask_api_key(value: str) -> str:
     return f"{value[:4]}****{value[-5:]}"
 
 
+async def _prompt_custom_model(
+    prompt_text: Callable[[TextInputRequest], Awaitable[str | None]],
+    base_url: str,
+    api_key: str,
+    *,
+    current_model: str = "",
+    keep_current_on_blank: bool = False,
+    discover_models: Callable[[], Awaitable[list[str]]] | None = None,
+) -> str:
+    discovery_note = ""
+    while True:
+        try:
+            models = (
+                await discover_models()
+                if discover_models is not None
+                else await asyncio.to_thread(
+                    list_models,
+                    Backend.OPENAI_COMPAT,
+                    base_url,
+                    api_key,
+                )
+            )
+            if models:
+                preview = ", ".join(models[:20])
+                discovery_note = f"Available models: {preview}. "
+                if len(models) > 20:
+                    discovery_note += "Enter another ID to use an unlisted model. "
+            else:
+                discovery_note = (
+                    "The endpoint returned a valid but empty model list. "
+                    "Enter a model ID manually. "
+                )
+            break
+        except ProviderControlError as error:
+            if error.category in {"authentication", "authorization"}:
+                raise error
+            if error.category == "rate-limited":
+                retry = await prompt_text(
+                    TextInputRequest(
+                        header="Model discovery rate limited",
+                        question=f"{error}. Type retry to try again, or leave blank to cancel.",
+                        placeholder="retry",
+                        resolve=lambda _value: None,
+                        reject=lambda _error: None,
+                    )
+                )
+                if retry and retry.strip().lower() == "retry":
+                    continue
+                raise error
+            discovery_note = (
+                f"Discovery could not complete: {error}. Enter a model ID manually. "
+            )
+            break
+        except Exception:
+            discovery_note = (
+                "Model discovery failed. Enter a model ID manually. "
+            )
+            break
+
+    model = await prompt_text(
+        TextInputRequest(
+            header="Step 4 of 4: Default model",
+            question=discovery_note + "Choose a discovered model ID or enter one manually.",
+            placeholder="e.g. llama-3.3-70b",
+            initial_value=current_model,
+            resolve=lambda _value: None,
+            reject=lambda _error: None,
+        )
+    )
+    if not model or not model.strip():
+        if keep_current_on_blank and current_model:
+            return current_model
+        raise ValueError("default model ID cannot be empty")
+    return model.strip()
+
+
 def open_provider_picker(
     dispatch: Callable[[Action], None],
     read_config: Callable[[], ConfigSnapshot],
@@ -109,6 +190,9 @@ def open_provider_picker(
         "OpenAI-compatible (current)"
         if current_backend == "openai-compat"
         else "OpenAI-compatible"
+    )
+    label_official_openai = (
+        "OpenAI (current)" if current_backend == "openai" else "OpenAI"
     )
     label_kimi = (
         "Kimi (current)" if current_backend == "kimi" else "Kimi"
@@ -149,6 +233,7 @@ def open_provider_picker(
             "OpenRouter": "openrouter",
             "DeepSeek": "deepseek",
             "Claude": "anthropic",
+            "OpenAI": "openai",
         }
 
         backend = "openai-compat"
@@ -165,13 +250,22 @@ def open_provider_picker(
             await run_test_connection()
             return
 
-        for prefix, value in backend_map.items():
-            if picked.startswith(prefix):
-                backend = value
-                break
+        if not picked.startswith("OpenAI-compatible"):
+            for prefix, value in backend_map.items():
+                if picked.startswith(prefix):
+                    backend = value
+                    break
 
         config = read_config()
-        config_base_url = config.get("base_url") or ""
+        config_base_url = (
+            (
+                config.get("base_url")
+                if config.get("backend") == "openai-compat"
+                else config.get("manual_base_url")
+            ) or ""
+            if backend == "openai-compat"
+            else config.get("base_url") or ""
+        )
         config_api_keys = config.get("api_keys", {}) or {}
         config_api_key = (
             config_api_keys.get(backend, "")
@@ -262,6 +356,18 @@ def open_provider_picker(
                                 )
                             )
                         },
+                        manual_model_prompt=lambda reason: prompt_text(
+                            TextInputRequest(
+                                header="Manual model ID",
+                                question=(
+                                    f"Model discovery could not complete: {reason}. "
+                                    "Enter a model ID manually."
+                                ),
+                                placeholder="model-id",
+                                resolve=lambda _value: None,
+                                reject=lambda _error: None,
+                            )
+                        ),
                     )
                 except Exception:
                     dispatch(
@@ -276,6 +382,16 @@ def open_provider_picker(
                 return True
 
             return False
+
+        if await _handle_remote_setup(
+            "openai",
+            OPENAI_DEFAULT_BASE_URL,
+            "OpenAI API",
+            "Enter OpenAI API key (OPENAI_API_KEY)",
+            "sk-...",
+            "OpenAI",
+        ):
+            return
 
         if await _handle_remote_setup(
             "kimi",
@@ -338,6 +454,7 @@ def open_provider_picker(
             return
 
         default_urls = {
+            "openai": OPENAI_DEFAULT_BASE_URL,
             "kimi": KIMI_DEFAULT_BASE_URL,
             "groq": GROQ_DEFAULT_BASE_URL,
             "gemini": GEMINI_DEFAULT_BASE_URL,
@@ -374,6 +491,18 @@ def open_provider_picker(
             api_key,
             dispatch,
             apply_provider_and_sync,
+            manual_model_prompt=lambda reason: prompt_text(
+                TextInputRequest(
+                    header="Manual model ID",
+                    question=(
+                        f"Model discovery could not complete: {reason}. "
+                        "Enter a model ID manually."
+                    ),
+                    placeholder="model-id",
+                    resolve=lambda _value: None,
+                    reject=lambda _error: None,
+                )
+            ),
         )
 
     async def change_api_key(
@@ -441,7 +570,7 @@ def open_provider_picker(
     def open_change_api_key_picker() -> None:
         def on_change_resolve(picked_provider: str) -> None:
             for provider, label, placeholder in REMOTE_PROVIDERS:
-                if picked_provider.startswith(label):
+                if picked_provider == label:
                     asyncio.ensure_future(
                         change_api_key(provider, label, placeholder)
                     )
@@ -587,6 +716,11 @@ def open_provider_picker(
                     )
                 )
                 if base_url and base_url.strip():
+                    try:
+                        base_url = validate_base_url(base_url.strip())
+                    except ValueError as err:
+                        url_hint = str(err)
+                        continue
                     break
                 url_hint = "cannot be empty"
 
@@ -601,22 +735,19 @@ def open_provider_picker(
                 )
             )
 
-            model = await prompt_text(
-                TextInputRequest(
-                    header="Step 4 of 4: Default model",
-                    question="Enter default model (optional)",
-                    placeholder="e.g. llama-3.3-70b",
-                    resolve=lambda _v: None,
-                    reject=lambda _e: None,
-                )
+            model = await _prompt_custom_model(
+                prompt_text,
+                base_url,
+                api_key or "",
             )
 
-            profile = active_adapter.add_custom_provider(
+            add_result = active_adapter.add_custom_provider(
                 name=name.strip(),
-                base_url=base_url.strip(),
+                base_url=base_url,
                 api_key=api_key or "",
-                default_model=model.strip() if model else "",
+                default_model=model,
             )
+            profile = await add_result if inspect.isawaitable(add_result) else add_result
             dispatch(
                 Append(
                     entry=TranscriptEntry(
@@ -625,12 +756,26 @@ def open_provider_picker(
                     )
                 )
             )
-        except Exception:
+        except (ProviderControlError, ValueError) as err:
             dispatch(
                 Append(
                     entry=TranscriptEntry(
-                        kind="system",
-                        text="Custom provider setup cancelled.",
+                        kind="error",
+                        text=f"Custom provider setup failed: {err}",
+                    )
+                )
+            )
+        except Exception as err:
+            was_cancelled = str(err).lower() == "cancelled"
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system" if was_cancelled else "error",
+                        text=(
+                            "Custom provider setup cancelled."
+                            if was_cancelled
+                            else "Custom provider setup failed; no profile was saved."
+                        ),
                     )
                 )
             )
@@ -674,6 +819,7 @@ def open_provider_picker(
             )
             if not base_url or not base_url.strip():
                 base_url = profile.base_url
+            base_url = validate_base_url(base_url.strip())
 
             api_key = await prompt_text(
                 TextInputRequest(
@@ -687,23 +833,30 @@ def open_provider_picker(
                 )
             )
 
-            model = await prompt_text(
-                TextInputRequest(
-                    header="Step 4 of 4: Default model",
-                    question="Edit default model",
-                    placeholder="e.g. llama-3.3-70b",
-                    initial_value=profile.default_model,
-                    resolve=lambda _v: None,
-                    reject=lambda _e: None,
-                )
+            model = await _prompt_custom_model(
+                prompt_text,
+                base_url,
+                api_key if api_key else "",
+                current_model=profile.default_model,
+                keep_current_on_blank=True,
+                discover_models=lambda: active_adapter.discover_custom_models(
+                    profile.id,
+                    base_url,
+                    api_key if api_key else None,
+                ),
             )
 
-            updated = active_adapter.edit_custom_provider(
+            update_result = active_adapter.edit_custom_provider(
                 profile_id=profile.id,
                 name=name.strip(),
-                base_url=base_url.strip(),
+                base_url=base_url,
                 api_key=api_key if api_key else None,
-                default_model=model.strip() if model else "",
+                default_model=model,
+            )
+            updated = (
+                await update_result
+                if inspect.isawaitable(update_result)
+                else update_result
             )
             name_shown = updated.name if updated else profile.name
             dispatch(
@@ -714,12 +867,26 @@ def open_provider_picker(
                     )
                 )
             )
-        except Exception:
+        except (ProviderControlError, ValueError) as err:
             dispatch(
                 Append(
                     entry=TranscriptEntry(
-                        kind="system",
-                        text="Provider edit cancelled.",
+                        kind="error",
+                        text=f"Custom provider edit failed: {err}",
+                    )
+                )
+            )
+        except Exception as err:
+            was_cancelled = str(err).lower() == "cancelled"
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system" if was_cancelled else "error",
+                        text=(
+                            "Provider edit cancelled."
+                            if was_cancelled
+                            else "Custom provider edit failed; prior profile/runtime state was retained."
+                        ),
                     )
                 )
             )
@@ -742,25 +909,42 @@ def open_provider_picker(
         asyncio.ensure_future(_edit_custom_provider_flow(p))
 
     def on_delete_cb(p: CustomProviderProfile) -> None:
-        active_adapter.delete_custom_provider(p.id)
-        dispatch(
-            Append(
-                entry=TranscriptEntry(
-                    kind="system",
-                    text=f"Custom provider '{p.name}' deleted.",
+        async def delete() -> None:
+            try:
+                result = active_adapter.delete_custom_provider(p.id)
+                deleted = await result if inspect.isawaitable(result) else result
+                if not deleted:
+                    raise ValueError("profile could not be deleted because it is active or missing")
+            except Exception as err:
+                dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="error",
+                            text=f"provider delete failed: {err}",
+                        )
+                    )
+                )
+                return
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text=f"Custom provider '{p.name}' deleted.",
+                    )
                 )
             )
-        )
-        open_provider_picker(
-            dispatch,
-            read_config,
-            apply_provider,
-            prompt_text,
-            update_provider_api_key,
-            test_connection,
-            adapter=active_adapter,
-            initial_section=SECTION_CUSTOM,
-        )
+            open_provider_picker(
+                dispatch,
+                read_config,
+                apply_provider,
+                prompt_text,
+                update_provider_api_key,
+                test_connection,
+                adapter=active_adapter,
+                initial_section=SECTION_CUSTOM,
+            )
+
+        asyncio.ensure_future(delete())
 
     def on_activate_cb(p: CustomProviderProfile) -> None:
         dispatch(SetAsk(req=None))
@@ -824,6 +1008,7 @@ def open_provider_picker(
                 Option(label="Change API key", description="update a saved provider key"),
                 Option(label="Test connection", description="ping the current provider"),
                 Option(label="Show current config", description="display current provider settings"),
+                Option(label=label_official_openai, description="remote — api.openai.com official OpenAI API"),
                 Option(label=label_kimi, description="remote — api.moonshot.ai OpenAI-compatible API"),
                 Option(label=label_groq, description="remote — api.groq.com OpenAI-compatible Chat API"),
                 Option(label=label_gemini, description="remote — Gemini API with native tool calls"),

@@ -7,6 +7,7 @@ from typing import Any, Callable, cast
 from src.ask.ask import Option, Question
 from src.config.config import Backend
 from src.llm.models import list_models
+from src.llm.errors import ProviderControlError
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.core.state import Action, Append, Clear, SetAsk, TranscriptEntry
 from src.llm.providers import (
@@ -26,6 +27,7 @@ def backend_label(backend: Backend | str) -> str:
 
     labels = {
         "openai-compat": "OpenAI-compatible",
+        "openai": "OpenAI",
         "kimi": "Kimi",
         "groq": "Groq",
         "openrouter": "OpenRouter",
@@ -87,6 +89,8 @@ async def fetch_and_pick_model(
     success_text: Callable[[str], str] | dict[str, Any] | None = None,
     options: dict[str, Any] | None = None,
     custom_provider_id: str | None = None,
+    manual_model_prompt: Callable[[str], Any] | None = None,
+    _retry_count: int = 0,
 ) -> None:
     if options is None and isinstance(current_model, dict):
         options = current_model
@@ -113,6 +117,7 @@ async def fetch_and_pick_model(
     )
     dispatch(SetAsk(req=loading_req))
 
+    discovery_error: Exception | None = None
     try:
         models = await asyncio.to_thread(
             list_models,
@@ -121,17 +126,75 @@ async def fetch_and_pick_model(
             api_key,
         )
     except Exception as err:
+        discovery_error = err
         dispatch(SetAsk(req=None))
-        if not loading_cancelled:
+        if loading_cancelled:
+            return
+
+        if (
+            isinstance(err, ProviderControlError)
+            and err.category == "rate-limited"
+        ):
+            def on_retry_resolve(picked: str) -> None:
+                if picked != "Retry now":
+                    dispatch(SetAsk(req=None))
+                    return
+                asyncio.create_task(
+                    fetch_and_pick_model(
+                        backend,
+                        base_url,
+                        api_key,
+                        dispatch,
+                        apply_provider,
+                        current_model=current_model,
+                        success_text=success_text,
+                        options=options,
+                        custom_provider_id=custom_provider_id,
+                        manual_model_prompt=manual_model_prompt,
+                        _retry_count=_retry_count + 1,
+                    )
+                )
+
+            retry_req = AskRequest(
+                question=Question(
+                    header="model discovery",
+                    question="Provider rate limit reached. Retry the model request?",
+                    options=[Option(label="Retry now"), Option(label="Cancel")],
+                ),
+                resolve=on_retry_resolve,
+                reject=lambda _: dispatch(SetAsk(req=None)),
+            )
+            dispatch(SetAsk(req=retry_req))
+            return
+
+        manual_fallback_allowed = not (
+            isinstance(err, ProviderControlError)
+            and err.category in {"authentication", "authorization"}
+        )
+        if manual_fallback_allowed and manual_model_prompt is not None:
+            try:
+                picked_model = await manual_model_prompt(str(err))
+            except Exception:
+                return
+            if picked_model and picked_model.strip():
+                models = [picked_model.strip()]
+            else:
+                return
+        else:
+            safe_message = (
+                str(err)
+                if isinstance(err, ProviderControlError)
+                else "model discovery failed; enter a model ID with /model <id>"
+            )
             dispatch(
                 Append(
                     entry=TranscriptEntry(
                         kind="error",
-                        text=f"{backend_label(backend).lower()} list-models failed: {err}",
+                        text=f"{backend_label(backend).lower()} list-models failed: {safe_message}",
                     )
                 )
             )
-        return
+            return
 
     if loading_cancelled:
         return
@@ -163,6 +226,16 @@ async def fetch_and_pick_model(
         if current_model_value and current_model_value not in model_list
         else model_list
     )
+
+    if not all_models and manual_model_prompt is not None and discovery_error is None:
+        try:
+            picked_model = await manual_model_prompt(
+                f"{backend_label(backend)} returned an empty model list"
+            )
+        except Exception:
+            return
+        if picked_model and picked_model.strip():
+            all_models = [picked_model.strip()]
 
     if not all_models:
         dispatch(SetAsk(req=None))
@@ -217,8 +290,8 @@ async def fetch_and_pick_model(
                 ProviderChange(
                     backend=cast(Backend, backend),
                     model=picked,
-                    base_url=base_url,
-                    api_key=api_key,
+                    base_url=None if custom_provider_id else base_url,
+                    api_key=None if custom_provider_id else api_key,
                     custom_provider_id=custom_provider_id,
                 )
             )
