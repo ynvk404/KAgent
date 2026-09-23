@@ -124,6 +124,10 @@ class Banner:
         for label, value in fields:
             line = Text(f"{label}: ", style=MUTED)
             line.append(value, style=PRIMARY)
+            if label == "Model" and self.width >= 52:
+                pill = model_pill(data.tool_support)
+                if pill is not None:
+                    line.append(f" [{pill.text}]", style=pill.color)
             lines.append(line)
         return lines
 
