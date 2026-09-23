@@ -50,6 +50,7 @@ from src.llm.types import (
 from src.permission.permission import AlwaysAllow, AlwaysDeny, Decision
 from src.engagement.state import EngagementState
 from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
+from src.skills.load_skill import LoadSkillTool
 from src.target.target import Target
 from src.tools.registry import Registry as ToolRegistry
 from src.tools.http import HTTPTool
@@ -827,6 +828,97 @@ async def test_injects_decision_guidance_before_user_message_for_normal_turn():
         messages[-2].content
         == "enumerate subdomains for example.com"
     )
+
+
+@pytest.mark.asyncio
+async def test_planner_guidance_does_not_activate_skill_or_force_model_choice():
+    skills = SkillRegistry()
+    for name, trigger in (("alpha", "inspect xml"), ("beta", "inspect json")):
+        skills.add(
+            Skill(
+                name=name,
+                description=f"{name} playbook",
+                tools=[],
+                disable_model_invocation=False,
+                path=f"/tmp/{name}/SKILL.md",
+                body=f"# {name} playbook",
+                triggers=SkillTriggers(strong=[trigger]),
+            )
+        )
+
+    def tool_call(call_id: str, name: str, args: dict[str, str]) -> ChatResponse:
+        return ChatResponse(
+            message=Message(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id=call_id,
+                        type="function",
+                        function=FunctionCall(name=name, arguments=json.dumps(args)),
+                    )
+                ],
+            ),
+            finish_reason="tool_calls",
+        )
+
+    class ObservingClient(FakeClient):
+        def __init__(self, scripted: list[ChatResponse]):
+            super().__init__(scripted)
+            self.agent: Agent | None = None
+            self.active_at_request: list[frozenset[str]] = []
+
+        async def chat(self, request: ChatRequest, signal=None) -> ChatResponse:
+            assert self.agent is not None
+            self.active_at_request.append(frozenset(self.agent.active_skills))
+            return await super().chat(request, signal)
+
+    client = ObservingClient(
+        [
+            tool_call("echo_call", "echo", {"msg": "continue"}),
+            tool_call("skill_call", "load_skill", {"name": "beta"}),
+            ChatResponse(
+                message=Message(role="assistant", content="done"),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    tools = ToolRegistry()
+    echo = EchoTool()
+    tools.register(echo)
+    tools.register(LoadSkillTool(skills))
+    agent = Agent(
+        AgentOptions(
+            client=client,
+            tools=tools,
+            skills=skills,
+            prompter=AlwaysAllow(),
+            store=None,
+            target=Target(),
+        )
+    )
+    client.agent = agent
+    collector = collect()
+
+    await agent.run("inspect xml", FakeSignal(), collector["sink"])
+
+    assert any(
+        event["type"] == "decision" and "Planner · alpha" in event["summary"]
+        for event in collector["events"]
+    )
+    assert any(
+        "Recommended skill: alpha" in message.content
+        for message in client.requests[0].messages
+        if message.role == "system"
+    )
+    assert client.active_at_request == [frozenset(), frozenset(), frozenset({"beta"})]
+    assert echo.calls == 1
+    assert agent.active_skills == {"beta"}
+    assert any(
+        event["type"] == "skill-active" and event["name"] == "beta"
+        for event in collector["events"]
+    )
+
 
 @pytest.mark.asyncio
 async def test_injects_local_intelligence_guidance_for_sqli_context():

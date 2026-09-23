@@ -8,6 +8,7 @@ from src.agent.decision_planner import (
     PlannerContext,
     build_decision_plan,
     contains_keyword,
+    detect_intent,
     has_host_like_text,
     is_purely_informational,
     normalize,
@@ -239,6 +240,44 @@ def test_meaningful_tie_returns_no_recommendation_regardless_of_order():
     assert planned_skill("check shared signal", [beta, alpha]) is None
 
 
+def test_stage_name_adds_one_point_to_an_existing_strong_signal():
+    alpha = metadata_skill("alpha", strong=["inspect xml"])
+    beta = metadata_skill("beta", strong=["inspect xml"])
+    alpha.stage = "analysis"
+
+    scores = {
+        score["skill_name"]: score
+        for score in detect_intent(normalize("inspect xml analysis"), [beta, alpha])
+    }
+
+    assert scores["alpha"]["score"] == 6
+    assert scores["beta"]["score"] == 5
+    assert scores["alpha"]["strong_count"] == scores["beta"]["strong_count"] == 1
+    assert planned_skill("inspect xml analysis", [beta, alpha]) == "alpha"
+
+
+def test_unequal_scores_select_same_skill_in_either_input_order():
+    stronger = metadata_skill("stronger", strong=["inspect xml", "xml parser"])
+    weaker = metadata_skill("weaker", strong=["inspect xml"])
+
+    assert planned_skill("inspect xml with xml parser", [stronger, weaker]) == "stronger"
+    assert planned_skill("inspect xml with xml parser", [weaker, stronger]) == "stronger"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Enumerate parameters and test SQLi", "sql-injection"),
+        (
+            "Enumerate the application and check the login form for XSS",
+            "cross-site-scripting",
+        ),
+    ],
+)
+def test_explicit_vulnerability_outscores_mixed_discovery_wording(text, expected):
+    assert planned_skill(text) == expected
+
+
 def test_unavailable_skill_is_not_recommended():
     assert planned_skill(
         "test for sql injection",
@@ -318,6 +357,34 @@ allowed-tools:
         "Test POST /upload XML body for an XML external entity issue",
         registry.list_enabled(),
     ) == "xxe"
+
+
+def test_parseable_invalid_metadata_is_reported_but_still_eligible(tmp_path):
+    skill_dir = tmp_path / "skills" / "xml-check"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: xml-check\n"
+        "description: XML check\n"
+        "triggers:\n"
+        "  strong:\n"
+        "    - xml probe\n"
+        "requires:\n"
+        "  - missing-prerequisite\n"
+        "allowed-tools:\n"
+        "  - http\n"
+        "---\n"
+        "# XML check\n",
+        encoding="utf-8",
+    )
+    registry = Registry()
+    registry.load_dir(tmp_path / "skills")
+
+    assert any(
+        "missing-prerequisite" in error
+        for error in registry.validation_errors(known_tools={"http"})["xml-check"]
+    )
+    assert planned_skill("test xml probe", registry.list_enabled()) == "xml-check"
 
 
 def test_satisfied_prerequisite_increases_ranking_without_becoming_a_lock():
