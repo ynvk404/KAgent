@@ -25,8 +25,8 @@ CLASSIFICATION: dict[str, VulnClassification] = {
         owasp=["A03:2021 Injection"],
     ),
     "access-control": VulnClassification(
-        type="Insecure Direct Object Reference (IDOR)",
-        cwe=["CWE-639"],
+        type="Broken Access Control",
+        cwe=[],
         owasp=["A01:2021 Broken Access Control"],
     ),
     "ssrf": VulnClassification(

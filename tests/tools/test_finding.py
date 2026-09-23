@@ -178,15 +178,36 @@ def test_metadata(tmp_path):
         ("sql-injection", "SQL Injection"),
         (" xSs ", "Cross-Site Scripting (XSS)"),
         ("cross-site-scripting", "Cross-Site Scripting (XSS)"),
-        ("idor", "Insecure Direct Object Reference (IDOR)"),
-        ("access-control", "Insecure Direct Object Reference (IDOR)"),
+        ("idor", "Broken Access Control"),
+        ("bola", "Broken Access Control"),
+        ("access-control", "Broken Access Control"),
         ("unknown", None),
         ("", None),
     ],
 )
 def test_classify_normalizes_and_returns_none_for_unknown(value, expected):
     classification = classify(value)
-    assert classification is None or classification.type == expected
+    assert (classification.type if classification else None) == expected
+
+
+@pytest.mark.parametrize(
+    "vuln_class,expected_type,expected_cwe,expected_owasp",
+    [
+        ("sqli", "SQL Injection", ["CWE-89"], ["A03:2021 Injection"]),
+        ("xss", "Cross-Site Scripting (XSS)", ["CWE-79"], ["A03:2021 Injection"]),
+        ("ssrf", "Server-Side Request Forgery (SSRF)", ["CWE-918"], ["A10:2021 Server-Side Request Forgery"]),
+        ("access-control", "Broken Access Control", [], ["A01:2021 Broken Access Control"]),
+        ("idor", "Broken Access Control", [], ["A01:2021 Broken Access Control"]),
+        ("bola", "Broken Access Control", [], ["A01:2021 Broken Access Control"]),
+    ],
+)
+def test_classification_metadata(vuln_class, expected_type, expected_cwe, expected_owasp):
+    classification = classify(vuln_class)
+
+    assert classification is not None
+    assert classification.type == expected_type
+    assert classification.cwe == expected_cwe
+    assert classification.owasp == expected_owasp
 
 
 def test_is_severity():
@@ -342,6 +363,70 @@ async def test_run_enriches_finding_from_vuln_class(tmp_path, vuln_class):
     assert seen[0].vulnerabilityType == "SQL Injection"
     assert seen[0].cwe == ["CWE-89"]
     assert seen[0].owasp == ["A03:2021 Injection"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vuln_class", ["access-control", "idor", "bola"])
+async def test_access_control_report_is_broad_and_retains_candidate_id(
+    tmp_path, vuln_class
+):
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(
+        Candidate(candidate_class="access-control", endpoint="/orders/1")
+    )
+    workflow.add_validation_result(
+        ValidationResult(candidate.id, "access-control", "confirmed")
+    )
+    tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
+
+    await tool.run(
+        {
+            "candidate_id": candidate.id,
+            "vuln_class": vuln_class,
+            "title": "Order access through another account",
+            "severity": "high",
+            "url": "https://target.test/orders/1",
+            "impact": "Another account's order was readable",
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    report = next((tmp_path / "findings").glob("*.md")).read_text(encoding="utf-8")
+    assert f"- **Candidate ID:** {candidate.id}" in report
+    assert "- **Vulnerability Type:** Broken Access Control" in report
+    assert "- **CWE:**" not in report
+    assert "- **OWASP:** A01:2021 Broken Access Control" in report
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "vuln_class,title,expected_type,expected_cwe",
+    [
+        ("sql-injection", "Login bypass through crafted email input", "SQL Injection", "CWE-89"),
+        ("cross-site-scripting", "SQL error text reflected in search results", "Cross-Site Scripting (XSS)", "CWE-79"),
+    ],
+)
+async def test_structured_class_beats_misleading_title(
+    tmp_path, vuln_class, title, expected_type, expected_cwe
+):
+    tool, _ = _tool(tmp_path)
+
+    await tool.run(
+        {
+            "vuln_class": vuln_class,
+            "title": title,
+            "severity": "medium",
+            "url": "https://target.test/search",
+            "impact": "Reproduced impact",
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    report = next((tmp_path / "findings").glob("*.md")).read_text(encoding="utf-8")
+    assert f"- **Vulnerability Type:** {expected_type}" in report
+    assert f"- **CWE:** {expected_cwe}" in report
 
 
 @pytest.mark.asyncio
