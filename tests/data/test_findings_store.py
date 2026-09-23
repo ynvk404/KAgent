@@ -36,6 +36,7 @@ def make_finding(
     vulnerabilityType: str | None = None,
     cwe: list[str] | None = None,
     owasp: list[str] | None = None,
+    candidate_id: str | None = None,
 ) -> Finding:
     return Finding(
         title=title,
@@ -53,6 +54,7 @@ def make_finding(
         vulnerabilityType=vulnerabilityType,
         cwe=cwe,
         owasp=owasp,
+        candidate_id=candidate_id,
     )
 
 @pytest.mark.asyncio
@@ -195,6 +197,13 @@ def test_render_omits_optional_sections_when_absent():
     assert "## Remediation" not in content
     assert "- **Method:**" not in content
     assert "- **Parameter:**" not in content
+    assert "Candidate ID" not in content
+
+
+def test_render_includes_optional_candidate_metadata():
+    content = render(make_finding(candidate_id="cand_0123456789abcdef0123"))
+
+    assert "- **Candidate ID:** cand_0123456789abcdef0123" in content
 
 
 def test_render_includes_classification_after_severity():

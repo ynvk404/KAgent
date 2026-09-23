@@ -181,12 +181,13 @@ class ConfirmFindingTool:
             )
 
         classification = classify(arg_string(args, "vuln_class"))
+        redacted_title = redact(title)
 
         finding = Finding(
             # Finding reports are durable evidence artifacts.  Preserve the
             # minimum useful reproduction details, but never write credentials
             # or session material supplied in tool arguments verbatim.
-            title=redact(title),
+            title=redacted_title,
             severity=severity,
             url=redact(url),
             impact=redact(impact),
@@ -200,7 +201,8 @@ class ConfirmFindingTool:
             cwe=(classification.cwe if classification else None),
             owasp=(classification.owasp if classification else None),
             createdAt=datetime.now(UTC).isoformat(),
-            slug=slugify(title) or f"finding-{int(datetime.now(UTC).timestamp())}",
+            slug=slugify(redacted_title) or f"finding-{int(datetime.now(UTC).timestamp())}",
+            candidate_id=candidate_id or None,
         )
 
         path = await self.store.save(finding)

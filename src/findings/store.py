@@ -38,6 +38,7 @@ class Finding:
 
     createdAt: str = ""
     slug: str = ""
+    candidate_id: str | None = None
 
 
 class Store:
@@ -158,6 +159,9 @@ def render(
     lines.append("")
 
     lines.append(f"- **Severity:** {f.severity}")
+
+    if f.candidate_id:
+        lines.append(f"- **Candidate ID:** {_inline(f.candidate_id)}")
 
     if f.vulnerabilityType:
         lines.append(f"- **Vulnerability Type:** {f.vulnerabilityType}")

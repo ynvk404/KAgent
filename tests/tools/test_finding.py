@@ -4,9 +4,10 @@ import json
 
 import pytest
 
-from src.findings.store import Finding, Store
+from src.findings.store import Finding, Store, slugify
 from src.findings.classification import classify
 from src.permission.permission import AlwaysAllow
+from src.redact.redact import apply as redact
 from src.tools.finding import (
     SEVERITIES,
     ConfirmFindingTool,
@@ -91,6 +92,67 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
         AlwaysAllow(),
     )
     assert "written to" in result
+    report = next((tmp_path / "findings").glob("*.md")).read_text(encoding="utf-8")
+    assert f"- **Candidate ID:** {candidate.id}" in report
+
+
+@pytest.mark.asyncio
+async def test_unknown_or_resultless_candidate_cannot_create_finding(tmp_path):
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(
+        Candidate(candidate_class="xss", endpoint="/search", parameter="q")
+    )
+    tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
+
+    for candidate_id in ("cand_unknown", candidate.id):
+        with pytest.raises(Exception, match="latest ValidationResult"):
+            await tool.run(
+                {
+                    "candidate_id": candidate_id,
+                    "title": "Ineligible",
+                    "severity": "medium",
+                    "url": "https://target.test/search",
+                    "impact": "No proven impact",
+                },
+                None,
+                AlwaysAllow(),
+            )
+    assert not (tmp_path / "findings").exists()
+
+
+@pytest.mark.asyncio
+async def test_same_candidate_creates_append_only_reports(tmp_path):
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(
+        Candidate(candidate_class="sqli", endpoint="/product", parameter="id")
+    )
+    workflow.add_validation_result(
+        ValidationResult(candidate.id, "sql-injection", "confirmed")
+    )
+    tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
+    args = {
+        "candidate_id": candidate.id,
+        "title": "SQL injection in product",
+        "severity": "high",
+        "url": "https://target.test/product",
+        "impact": "Query manipulation",
+    }
+
+    await tool.run(args, None, AlwaysAllow())
+    first = tmp_path / "findings" / "sql-injection-in-product.md"
+    original = first.read_bytes()
+    await tool.run(args, None, AlwaysAllow())
+    second = tmp_path / "findings" / "sql-injection-in-product-2.md"
+    assert second.exists()
+    assert first.read_bytes() == original
+
+    await tool.run({**args, "title": "SQL injection in catalog"}, None, AlwaysAllow())
+    third = tmp_path / "findings" / "sql-injection-in-catalog.md"
+    assert third.exists()
+    assert first.read_bytes() == original
+    assert len(list((tmp_path / "findings").glob("*.md"))) == 3
+    for report in (first, second, third):
+        assert f"- **Candidate ID:** {candidate.id}" in report.read_text(encoding="utf-8")
 
 
 def test_metadata(tmp_path):
@@ -170,10 +232,12 @@ async def test_run_persists_finding_and_notifies(tmp_path):
     body = written[0].read_text(encoding="utf-8")
     assert "# Reflected XSS in search" in body
     assert "- **Severity:** high" in body  # severity lowercased
+    assert "Candidate ID" not in body
 
     assert len(seen) == 1
     finding, path = seen[0]
     assert finding.severity == "high"
+    assert finding.candidate_id is None
     assert finding.slug == "reflected-xss-in-search"
     assert path.endswith(".md")
     assert path in result
@@ -202,6 +266,33 @@ async def test_run_redacts_session_material_from_persisted_evidence(tmp_path):
     assert jwt not in report
     assert password not in report
     assert "[REDACTED" in report
+
+
+@pytest.mark.asyncio
+async def test_run_uses_redacted_title_for_report_and_slug(tmp_path):
+    tool, _ = _tool(tmp_path)
+    secret = "correct-horse-battery-staple"
+    title = f"Password leak password={secret} in login"
+
+    await tool.run(
+        {
+            "title": title,
+            "severity": "medium",
+            "url": "https://target.test/login",
+            "impact": f"password={secret}",
+            "payload": f"password={secret}",
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    report = next((tmp_path / "findings").glob("*.md"))
+    assert report.stem == slugify(redact(title))
+    assert secret not in report.name
+    body = report.read_text(encoding="utf-8")
+    assert body.startswith(f"# {redact(title)}\n")
+    assert secret not in body
+    assert "[REDACTED" in body
 
 
 @pytest.mark.asyncio

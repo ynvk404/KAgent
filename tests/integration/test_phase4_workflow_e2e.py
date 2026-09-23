@@ -231,6 +231,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     assert result["created"] is True
     assert result["eligible_for_confirm_finding"] is True
     assert state.relevant_candidate_classes() == frozenset()
+    assert not (tmp_path / "findings").exists()
 
     finding = ConfirmFindingTool(
         FindingsStore(str(tmp_path / "findings")), workflow=state
@@ -253,6 +254,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     reports = list((tmp_path / "findings").glob("*.md"))
     assert len(reports) == 1
     report = reports[0].read_text(encoding="utf-8")
+    assert f"- **Candidate ID:** {candidate_id}" in report
     assert "SQL Injection" in report
     assert "CWE-89" in report
     assert "eyJhbGciOiJIUzI1NiJ9" not in report
