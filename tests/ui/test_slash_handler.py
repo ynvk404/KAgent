@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import cast
 import pytest
 from src.agent.agent import Agent
+from src.config.config import Backend, Config, add_custom_provider, resolve_custom_provider
+from src.llm.factory import new_from_config
+from src.llm.provider_runtime import build_startup_runtime, switch_provider_transactionally
 from src.ui.core.app import KAgent, RunAgentOptions
-from src.ui.commands.slash_handler import build_help_text, handle_slash
+from src.ui.commands.slash_handler import build_help_text, handle_slash, _handle_model
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.app import KAgent
 from src.ui.core.state import Append, Clear
@@ -254,6 +259,114 @@ def test_help_groups_commands_and_keeps_runtime_summary_compact():
     assert "coverage(action=" not in text
     for item in SLASH_ITEMS:
         assert item.name in text
+
+
+def _custom_model_app(*, fail_model: str | None = None):
+    cfg = Config(
+        backend=Backend.OPENAI_COMPAT,
+        model="manual-model",
+        base_url="http://localhost:1234/v1",
+        api_keys={"openai-compat": "manual-key"},
+    )
+    profile_id = add_custom_provider(
+        cfg,
+        "Gateway",
+        "https://gateway.example/v1",
+        "custom-key",
+        "old-model",
+    )
+    cfg.active_custom_provider_id = profile_id
+    runtime, _ = resolve_custom_provider(cfg, profile_id)
+    agent = SimpleNamespace(client=new_from_config(runtime))
+    agent.set_client = lambda client: setattr(agent, "client", client)
+    dispatches: list[object] = []
+    saved: list[Config] = []
+
+    def read_config():
+        resolved, _profile = resolve_custom_provider(cfg, profile_id)
+        return {
+            "backend": cfg.backend,
+            "model": cfg.model,
+            "base_url": cfg.base_url,
+            "api_key": cfg.api_key,
+            "active_custom_provider_id": profile_id,
+            "active_custom_provider_base_url": resolved.base_url,
+            "active_custom_provider_api_key": resolved.api_key,
+            "active_custom_provider_model": resolved.model,
+        }
+
+    async def save(candidate: Config) -> None:
+        saved.append(copy.deepcopy(candidate))
+
+    def client_factory(candidate: Config):
+        if candidate.model == fail_model:
+            raise RuntimeError("client switch failed")
+        return new_from_config(candidate)
+
+    async def apply_provider(change) -> None:
+        await switch_provider_transactionally(
+            cfg,
+            agent,
+            backend=change.backend,
+            model=change.model,
+            base_url=change.base_url,
+            api_key=change.api_key,
+            custom_provider_id=change.custom_provider_id,
+            save_config=save,
+            client_factory=client_factory,
+        )
+
+    app = SimpleNamespace(
+        agent=agent,
+        read_config=read_config,
+        apply_provider=apply_provider,
+    )
+    return app, cfg, profile_id, dispatches, saved
+
+
+@pytest.mark.asyncio
+async def test_model_command_updates_active_custom_profile_and_restart_uses_new_model(
+    monkeypatch,
+):
+    from src.ui.commands import slash_handler
+
+    monkeypatch.setattr(slash_handler, "list_models", lambda *_args: ["new-model"])
+    app, cfg, profile_id, dispatches, saved = _custom_model_app()
+
+    await _handle_model(cast(KAgent, app), ["new-model"], dispatches.append)
+
+    assert app.agent.client.model() == "new-model", dispatches
+    assert cfg.custom_providers[profile_id].default_model == "new-model"
+    assert cfg.model == "manual-model"
+    assert cfg.active_custom_provider_id == profile_id
+    assert saved[-1].custom_providers[profile_id].default_model == "new-model"
+    assert saved[-1].active_custom_provider_id == profile_id
+
+    restarted = build_startup_runtime(cfg, custom_provider_id=profile_id)
+    assert restarted.client.model() == "new-model"
+    assert restarted.active_custom_provider_id == profile_id
+    assert cfg.model == "manual-model"
+
+
+@pytest.mark.asyncio
+async def test_model_command_switch_failure_preserves_custom_runtime_and_config(
+    monkeypatch,
+):
+    from src.ui.commands import slash_handler
+
+    monkeypatch.setattr(slash_handler, "list_models", lambda *_args: ["new-model"])
+    app, cfg, profile_id, dispatches, saved = _custom_model_app(fail_model="new-model")
+    old_client = app.agent.client
+    old_cfg = copy.deepcopy(cfg)
+
+    await _handle_model(cast(KAgent, app), ["new-model"], dispatches.append)
+
+    assert app.agent.client is old_client
+    assert cfg.custom_providers[profile_id].default_model == "old-model"
+    assert cfg.active_custom_provider_id == profile_id
+    assert cfg.model == "manual-model"
+    assert saved == []
+    assert last_text(SimpleNamespace(actions=dispatches)) == "model: client switch failed"
 
 
 def test_maxsteps_without_argument_shows_current_value():

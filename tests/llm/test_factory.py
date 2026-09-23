@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import pytest
 
-from src.config.config import Backend, Config
+from src.config.config import (
+    Backend,
+    Config,
+    add_custom_provider,
+    resolve_custom_provider,
+)
 from src.llm.anthropic import AnthropicClient
 from src.llm.client import is_streaming
 from src.llm.factory import new_from_config
 from src.llm.gemini import GeminiClient
 from src.llm.openai import OpenAIClient
+from src.llm.types import ChatRequest, Message
 from src.llm.providers import (
     ANTHROPIC_DEFAULT_BASE_URL,
     ANTHROPIC_DEFAULT_MODEL,
@@ -68,6 +74,112 @@ def test_openai_compat_builds_client():
     assert client.temperature == 0.3
     assert client.max_tokens == 123
     assert is_streaming(client)
+
+
+def test_custom_provider_resolves_to_existing_openai_client_without_mutating_manual_state():
+    cfg = _cfg(
+        Backend.OPENAI_COMPAT,
+        base_url="http://localhost:1234/v1",
+        model="manual-model",
+        api_key="manual-key",
+    )
+    profile_id = add_custom_provider(
+        cfg,
+        "Token Harbor",
+        "https://gateway.example/v1",
+        "custom-key",
+        "custom-model",
+    )
+
+    effective, profile = resolve_custom_provider(cfg, profile_id)
+    client = new_from_config(effective)
+
+    assert isinstance(client, OpenAIClient)
+    assert client.base_url == "https://gateway.example/v1"
+    assert client.model_id == "custom-model"
+    assert client.api_key == "custom-key"
+    assert client.name() == "openai-compat"
+    assert effective.backend == Backend.OPENAI_COMPAT
+    assert cfg.backend == Backend.OPENAI_COMPAT
+    assert cfg.base_url == "http://localhost:1234/v1"
+    assert cfg.model == "manual-model"
+    assert cfg.api_keys["openai-compat"] == "manual-key"
+
+
+def test_custom_provider_missing_key_does_not_fall_back_to_manual_key():
+    cfg = _cfg(
+        Backend.OPENAI_COMPAT,
+        base_url="http://localhost:1234/v1",
+        model="manual-model",
+        api_key="manual-key",
+    )
+    profile_id = add_custom_provider(
+        cfg,
+        "Local Gateway",
+        "http://localhost:9000/v1",
+        default_model="local-model",
+    )
+
+    effective, profile = resolve_custom_provider(cfg, profile_id)
+    client = new_from_config(effective)
+
+    assert isinstance(client, OpenAIClient)
+    assert client.api_key == ""
+    assert cfg.api_keys["openai-compat"] == "manual-key"
+
+
+@pytest.mark.parametrize("display_name", ["deepseek", "kimi"])
+def test_custom_display_name_does_not_change_openai_request_encoding(display_name):
+    cfg = Config(
+        backend=Backend.OPENAI_COMPAT,
+        base_url="https://gateway.example/v1",
+        model="generic-model",
+        temperature=0.2,
+        max_tokens=123,
+    )
+    profile_id = add_custom_provider(
+        cfg,
+        display_name,
+        "https://gateway.example/v1",
+        "custom-key",
+        "generic-model",
+    )
+
+    effective, _profile = resolve_custom_provider(cfg, profile_id)
+    client = new_from_config(effective)
+    body = client.encode_request(
+        ChatRequest(
+            model="generic-model",
+            messages=[
+                Message(
+                    role="assistant",
+                    content="reasoning",
+                    reasoning_content="provider-specific state",
+                ),
+                Message(role="user", content="hello"),
+            ],
+            thinking_enabled=True,
+        ),
+        False,
+    )
+
+    assert isinstance(client, OpenAIClient)
+    assert client.name() == "openai-compat"
+    assert body["max_tokens"] == 123
+    assert body["temperature"] == 0.2
+    assert "max_completion_tokens" not in body
+    assert "thinking" not in body
+    assert "reasoning_content" not in body["messages"][0]
+
+
+def test_custom_provider_resolution_rejects_missing_or_malformed_profile():
+    cfg = Config()
+    with pytest.raises(ValueError, match="profile not found"):
+        resolve_custom_provider(cfg, "missing")
+
+    cfg.custom_providers["broken"] = object()  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="malformed"):
+        resolve_custom_provider(cfg, "broken")
 
 
 @pytest.mark.parametrize(

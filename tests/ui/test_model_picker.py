@@ -95,6 +95,43 @@ def test_fetch_and_pick_model_dispatches_model_picker(monkeypatch):
     asyncio.run(run())
 
 
+def test_fetch_and_pick_model_preserves_active_custom_provider_id(monkeypatch):
+    async def run() -> None:
+        dispatched: list[object] = []
+        seen_payloads: list[ProviderChange] = []
+
+        def dispatch(action: object) -> None:
+            dispatched.append(action)
+
+        def fake_list_models(*_args, **_kwargs):
+            return ["model-a", "model-b"]
+
+        async def fake_apply_provider(payload: ProviderChange) -> None:
+            seen_payloads.append(payload)
+
+        monkeypatch.setattr(model_picker, "list_models", fake_list_models)
+
+        await model_picker.fetch_and_pick_model(
+            "openai-compat",
+            "https://gateway.example/v1",
+            "custom-key",
+            dispatch,
+            fake_apply_provider,
+            current_model="model-a",
+            custom_provider_id="opaque-profile-id",
+        )
+        request = dispatched[1].req
+        request.resolve("model-b")
+        await asyncio.sleep(0.01)
+
+        assert seen_payloads[0].custom_provider_id == "opaque-profile-id"
+        assert seen_payloads[0].model == "model-b"
+        assert seen_payloads[0].base_url == "https://gateway.example/v1"
+        assert seen_payloads[0].api_key == "custom-key"
+
+    asyncio.run(run())
+
+
 def test_fetch_and_pick_model_loading_cancellation(monkeypatch):
     import threading
 

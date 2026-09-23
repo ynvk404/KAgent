@@ -86,6 +86,7 @@ async def fetch_and_pick_model(
     current_model: str | dict[str, Any] | None = None,
     success_text: Callable[[str], str] | dict[str, Any] | None = None,
     options: dict[str, Any] | None = None,
+    custom_provider_id: str | None = None,
 ) -> None:
     if options is None and isinstance(current_model, dict):
         options = current_model
@@ -218,6 +219,7 @@ async def fetch_and_pick_model(
                     model=picked,
                     base_url=base_url,
                     api_key=api_key,
+                    custom_provider_id=custom_provider_id,
                 )
             )
             if inspect.isawaitable(result):

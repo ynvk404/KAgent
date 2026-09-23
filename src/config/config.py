@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import random
 import string
 import uuid
+import warnings
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -229,7 +231,12 @@ def load() -> Config:
     if not isinstance(raw, dict):
         raise RuntimeError(f"config: {path}: invalid json")
 
-    return config_from_dict(raw)
+    try:
+        return config_from_dict(raw)
+    except ValueError as error:
+        if "custom_provider" not in str(error):
+            raise
+        return config_from_dict(_sanitize_custom_provider_data(raw))
 
 
 async def save(
@@ -270,16 +277,14 @@ async def save(
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(body)
             f.flush()
+            # Apply final permissions and sync them while the file is still
+            # temporary; atomic replacement is the final commit operation.
+            os.chmod(tmp, 0o600)
             os.fsync(f.fileno())
 
         os.replace(
             tmp,
             path,
-        )
-
-        os.chmod(
-            path,
-            0o600,
         )
 
     except Exception as e:
@@ -360,15 +365,64 @@ def edit_custom_provider(
 
 
 def delete_custom_provider(cfg: Config, profile_id: str) -> bool:
-    """Delete a profile and its secret, clearing its active ID if necessary."""
+    """Delete an inactive profile and its associated secret."""
     if profile_id not in cfg.custom_providers:
+        return False
+    if cfg.active_custom_provider_id == profile_id:
         return False
 
     del cfg.custom_providers[profile_id]
     cfg.custom_provider_api_keys.pop(profile_id, None)
-    if cfg.active_custom_provider_id == profile_id:
-        cfg.active_custom_provider_id = None
     return True
+
+
+def resolve_custom_provider(
+    cfg: Config,
+    profile_id: str,
+    *,
+    model_override: str | None = None,
+    base_url_override: str | None = None,
+    api_key_override: str | None = None,
+) -> tuple[Config, CustomProviderConfig]:
+    """Return an effective OpenAI-compatible config without mutating ``cfg``.
+
+    A missing profile key resolves to an empty key. It never falls back to the
+    Manual ``api_keys["openai-compat"]`` slot.
+    """
+    profile = cfg.custom_providers.get(profile_id)
+    if profile is None:
+        raise ValueError(f"custom provider profile not found: {profile_id}")
+    if not isinstance(profile, CustomProviderConfig):
+        raise ValueError(f"custom provider profile is malformed: {profile_id}")
+    if (
+        not isinstance(profile.name, str)
+        or not isinstance(profile.protocol, str)
+        or not isinstance(profile.base_url, str)
+        or not isinstance(profile.default_model, str)
+    ):
+        raise ValueError(f"custom provider profile is malformed: {profile_id}")
+    if profile.protocol != "openai-compatible":
+        raise ValueError(f"custom provider protocol is unsupported: {profile_id}")
+    if not profile.name.strip() or not profile.base_url.strip():
+        raise ValueError(f"custom provider profile is malformed: {profile_id}")
+
+    profile_key = cfg.custom_provider_api_keys.get(profile_id, "")
+    if not isinstance(profile_key, str):
+        raise ValueError(f"custom provider API key is malformed: {profile_id}")
+
+    effective = copy.deepcopy(cfg)
+    effective.backend = Backend.OPENAI_COMPAT
+    effective.model = (
+        model_override if model_override is not None else profile.default_model
+    )
+    effective.base_url = (
+        base_url_override if base_url_override is not None else profile.base_url
+    )
+    effective.api_keys[Backend.OPENAI_COMPAT.value] = (
+        api_key_override if api_key_override is not None else profile_key
+    )
+    effective.active_custom_provider_id = profile_id
+    return effective, profile
 
 
 def _list_field(
@@ -499,6 +553,103 @@ def _custom_providers_field(
             default_model=default_model,
         )
     return profiles
+
+
+def _sanitize_custom_provider_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Drop malformed Custom entries individually while retaining good data.
+
+    ``config_from_dict`` remains strict. This recovery path is used by ``load``
+    only after strict parsing has identified invalid Custom provider data.
+    """
+    recovered = dict(data)
+    raw_profiles = data.get("custom_providers", {})
+    profiles: dict[str, CustomProviderConfig] = {}
+    if not isinstance(raw_profiles, dict):
+        warnings.warn(
+            "config: malformed custom_providers collection was ignored",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    else:
+        for profile_id, raw_profile in raw_profiles.items():
+            try:
+                parsed = _custom_providers_field(
+                    {"custom_providers": {profile_id: raw_profile}}
+                )
+            except ValueError as error:
+                warnings.warn(
+                    f"config: malformed Custom profile was ignored ({error})",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
+            profiles.update(parsed)
+
+    raw_keys = data.get("custom_provider_api_keys", {})
+    keys: dict[str, str] = {}
+    if not isinstance(raw_keys, dict):
+        warnings.warn(
+            "config: malformed custom provider keys were ignored",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    else:
+        for profile_id, api_key in raw_keys.items():
+            try:
+                _validate_custom_provider_id(profile_id, "custom_provider_api_keys")
+            except ValueError as error:
+                warnings.warn(
+                    f"config: malformed custom provider key entry was ignored ({error})",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
+            if profile_id not in profiles:
+                warnings.warn(
+                    "config: custom provider key without a valid profile was ignored",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
+            if not isinstance(api_key, str):
+                warnings.warn(
+                    "config: malformed custom provider key value was ignored",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
+            keys[profile_id] = api_key
+
+    active_id: str | None = None
+    if data.get("active_custom_provider_id") is not None:
+        try:
+            active_id = _active_custom_provider_id_field(data)
+        except ValueError as error:
+            warnings.warn(
+                f"config: malformed active custom provider ID was cleared ({error})",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if active_id is not None and active_id not in profiles:
+            warnings.warn(
+                "config: active custom provider without a valid profile was cleared",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            active_id = None
+
+    recovered["custom_providers"] = {
+        profile_id: {
+            "name": profile.name,
+            "protocol": profile.protocol,
+            "base_url": profile.base_url,
+            "default_model": profile.default_model,
+        }
+        for profile_id, profile in profiles.items()
+    }
+    recovered["custom_provider_api_keys"] = keys
+    recovered["active_custom_provider_id"] = active_id
+    return recovered
 
 
 def _custom_provider_api_keys_field(

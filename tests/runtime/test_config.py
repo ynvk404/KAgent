@@ -91,6 +91,85 @@ def test_old_config_without_custom_provider_fields_loads(
     assert cfg.active_custom_provider_id is None
 
 
+def test_malformed_custom_profile_load_falls_back_without_losing_manual_state(
+    temp_config,
+):
+    temp_config.write_text(
+        json.dumps(
+            {
+                "backend": "openai-compat",
+                "model": "manual-model",
+                "base_url": "http://localhost:1234/v1",
+                "api_keys": {"openai-compat": "manual-key"},
+                "custom_providers": {"bad-id": {"name": "Broken"}},
+                "custom_provider_api_keys": {"bad-id": "custom-key"},
+                "active_custom_provider_id": "bad-id",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.warns(RuntimeWarning, match="malformed Custom profile was ignored"):
+        cfg = load()
+
+    assert cfg.backend == "openai-compat"
+    assert cfg.model == "manual-model"
+    assert cfg.base_url == "http://localhost:1234/v1"
+    assert cfg.api_keys == {"openai-compat": "manual-key"}
+    assert cfg.custom_providers == {}
+    assert cfg.custom_provider_api_keys == {}
+    assert cfg.active_custom_provider_id is None
+
+
+@pytest.mark.asyncio
+async def test_load_skips_malformed_profile_and_preserves_valid_profile_and_key(
+    temp_config,
+):
+    profile_a = "0123456789abcdef0123456789abcdef"
+    profile_b = "1123456789abcdef0123456789abcdef"
+    orphan = "2123456789abcdef0123456789abcdef"
+    temp_config.write_text(
+        json.dumps(
+            {
+                "backend": "openai-compat",
+                "model": "manual-model",
+                "base_url": "http://localhost:1234/v1",
+                "api_keys": {"openai-compat": "manual-key"},
+                "custom_providers": {
+                    profile_a: {
+                        "name": "Gateway A",
+                        "protocol": "openai-compatible",
+                        "base_url": "https://a.example/v1",
+                        "default_model": "model-a",
+                    },
+                    profile_b: {"name": "malformed"},
+                },
+                "custom_provider_api_keys": {
+                    profile_a: "key-a",
+                    profile_b: "key-b",
+                    orphan: "orphan-key",
+                    "bad-id": "bad-id-key",
+                },
+                "active_custom_provider_id": profile_a,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.warns(RuntimeWarning):
+        cfg = load()
+
+    assert set(cfg.custom_providers) == {profile_a}
+    assert cfg.custom_provider_api_keys == {profile_a: "key-a"}
+    assert cfg.active_custom_provider_id == profile_a
+
+    await save(cfg)
+    reloaded = load()
+    assert set(reloaded.custom_providers) == {profile_a}
+    assert reloaded.custom_provider_api_keys == {profile_a: "key-a"}
+    assert reloaded.active_custom_provider_id == profile_a
+
+
 def test_api_key_tracks_backend_without_dropping_other_keys(
     temp_config,
 ):
@@ -399,7 +478,7 @@ def test_rejects_malformed_custom_provider_config(payload, message):
 
 
 @pytest.mark.asyncio
-async def test_delete_custom_provider_removes_key_and_active_id(temp_config):
+async def test_delete_custom_provider_blocks_active_profile(temp_config):
     cfg = default_config()
     cfg.backend = Backend.OPENAI_COMPAT
     cfg.model = "manual-model"
@@ -413,15 +492,19 @@ async def test_delete_custom_provider_removes_key_and_active_id(temp_config):
     )
     cfg.active_custom_provider_id = profile_id
 
-    assert delete_custom_provider(cfg, profile_id) is True
-    assert profile_id not in cfg.custom_providers
-    assert profile_id not in cfg.custom_provider_api_keys
-    assert cfg.active_custom_provider_id is None
+    assert delete_custom_provider(cfg, profile_id) is False
+    assert profile_id in cfg.custom_providers
+    assert cfg.custom_provider_api_keys[profile_id] == "custom-key"
+    assert cfg.active_custom_provider_id == profile_id
     assert cfg.backend == Backend.OPENAI_COMPAT
     assert cfg.model == "manual-model"
     assert cfg.base_url == "http://localhost:1234/v1"
     assert cfg.api_keys["openai-compat"] == "manual-key"
-    assert delete_custom_provider(cfg, profile_id) is False
+
+    cfg.active_custom_provider_id = None
+    assert delete_custom_provider(cfg, profile_id) is True
+    assert profile_id not in cfg.custom_providers
+    assert profile_id not in cfg.custom_provider_api_keys
 
     await save(cfg)
     reloaded = load()
@@ -664,6 +747,53 @@ async def test_temp_config_file_is_private_before_replace(
     await save(cfg)
 
     assert temporary_modes == [0o600]
+
+
+@pytest.mark.asyncio
+async def test_chmod_failure_before_replace_keeps_old_config(temp_config, monkeypatch):
+    old_cfg = default_config()
+    old_cfg.backend = Backend.GROQ
+    old_cfg.model = "old-model"
+    await save(old_cfg)
+    old_contents = temp_config.read_bytes()
+
+    def fail_chmod(_path, _mode):
+        raise OSError("temporary chmod failed")
+
+    monkeypatch.setattr(config.os, "chmod", fail_chmod)
+    new_cfg = default_config()
+    new_cfg.backend = Backend.DEEPSEEK
+    new_cfg.model = "new-model"
+
+    with pytest.raises(RuntimeError, match="temporary chmod failed"):
+        await save(new_cfg)
+
+    assert temp_config.read_bytes() == old_contents
+    assert not list(temp_config.parent.glob(".kagent.cfg.tmp.*"))
+
+
+@pytest.mark.asyncio
+async def test_replace_failure_after_temp_preparation_keeps_old_config(
+    temp_config,
+    monkeypatch,
+):
+    old_cfg = default_config()
+    old_cfg.backend = Backend.GROQ
+    await save(old_cfg)
+    old_contents = temp_config.read_bytes()
+    prepared_modes: list[int] = []
+
+    def fail_replace(source, _destination):
+        prepared_modes.append(Path(source).stat().st_mode & 0o777)
+        raise OSError("replace failed before commit")
+
+    monkeypatch.setattr(config.os, "replace", fail_replace)
+    with pytest.raises(RuntimeError, match="replace failed before commit"):
+        await save(default_config())
+
+    assert prepared_modes == [0o600]
+    assert temp_config.read_bytes() == old_contents
+    assert not list(temp_config.parent.glob(".kagent.cfg.tmp.*"))
 
 
 @pytest.mark.asyncio

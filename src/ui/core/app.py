@@ -135,6 +135,7 @@ class ProviderChange:
     model: str
     base_url: str | None = None
     api_key: str | None = None
+    custom_provider_id: str | None = None
 
 
 ApplyProvider = Callable[[ProviderChange], Awaitable[None]]
@@ -149,6 +150,11 @@ class ConfigSnapshot(TypedDict):
     api_key: str
     api_keys: dict[str, str]
     model: str
+    active_provider_name: str
+    active_custom_provider_id: str | None
+    active_custom_provider_base_url: str
+    active_custom_provider_api_key: str
+    active_custom_provider_model: str
 
 @dataclass(slots=True)
 class AppProps:

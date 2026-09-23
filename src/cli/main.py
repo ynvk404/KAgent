@@ -40,6 +40,10 @@ from src.permission.permission import AlwaysAllow
 from src.permission.permission import YoloPrompter
 
 from src.llm import factory as llm_factory
+from src.llm.provider_runtime import (
+    build_startup_runtime,
+    switch_provider_transactionally,
+)
 from src.llm.model_warnings import model_reliability_warning
 from src.llm.probe import probe_tool_support
 from src.llm.providers import *
@@ -419,28 +423,31 @@ async def main() -> int:
             sys.stderr.write(f"warning: config was invalid: {err}\n")
         cfg = config.default_config()
 
+    restore_custom_provider = bool(cfg.active_custom_provider_id) and not flags.backend
+
     if flags.backend:
         cfg.backend = flags.backend
-    if flags.model:
-        cfg.model = flags.model
-    if flags.base_url:
-        cfg.base_url = flags.base_url
-    if flags.api_key:
-        cfg.api_key = flags.api_key
+    if not restore_custom_provider:
+        if flags.model:
+            cfg.model = flags.model
+        if flags.base_url:
+            cfg.base_url = flags.base_url
+        if flags.api_key:
+            cfg.api_key = flags.api_key
     if flags.skills_dirs:
         cfg.skills_dirs = [*cfg.skills_dirs, *flags.skills_dirs]
 
-    if cfg.backend == "kimi" and not cfg.api_key:
+    if not restore_custom_provider and cfg.backend == "kimi" and not cfg.api_key:
         cfg.api_key = os.environ.get("MOONSHOT_API_KEY") or os.environ.get("KIMI_API_KEY") or ""
-    if cfg.backend == "groq" and not cfg.api_key:
+    if not restore_custom_provider and cfg.backend == "groq" and not cfg.api_key:
         cfg.api_key = os.environ.get("GROQ_API_KEY") or ""
-    if cfg.backend == "openrouter" and not cfg.api_key:
+    if not restore_custom_provider and cfg.backend == "openrouter" and not cfg.api_key:
         cfg.api_key = os.environ.get("OPENROUTER_API_KEY") or ""
-    if cfg.backend == "deepseek" and not cfg.api_key:
+    if not restore_custom_provider and cfg.backend == "deepseek" and not cfg.api_key:
         cfg.api_key = os.environ.get("DEEPSEEK_API_KEY") or ""
-    if cfg.backend == "gemini" and not cfg.api_key:
+    if not restore_custom_provider and cfg.backend == "gemini" and not cfg.api_key:
         cfg.api_key = os.environ.get("GEMINI_API_KEY") or ""
-    if cfg.backend == "anthropic" and not cfg.api_key:
+    if not restore_custom_provider and cfg.backend == "anthropic" and not cfg.api_key:
         cfg.api_key = os.environ.get("ANTHROPIC_API_KEY") or ""
 
     cfg.mcp_servers = [s for s in cfg.mcp_servers if s.name not in BROWSER_MCP_NAMES]
@@ -449,10 +456,42 @@ async def main() -> int:
         logger.info("browser MCP enabled for this session", {"source": "--browser"})
 
     try:
-        client = llm_factory.new_from_config(cfg)
+        startup_runtime = build_startup_runtime(
+            cfg,
+            custom_provider_id=(
+                cfg.active_custom_provider_id if restore_custom_provider else None
+            ),
+            model_override=flags.model or None,
+            base_url_override=flags.base_url or None,
+            api_key_override=flags.api_key or None,
+        )
     except Exception as err:
-        sys.stderr.write(f"{err}\n")
-        return 1
+        if not restore_custom_provider:
+            sys.stderr.write(f"{err}\n")
+            return 1
+        sys.stderr.write(
+            "warning: saved custom provider could not be restored; "
+            f"using the configured provider instead: {err}\n"
+        )
+        try:
+            startup_runtime = build_startup_runtime(
+                cfg,
+                model_override=flags.model or None,
+                base_url_override=flags.base_url or None,
+                api_key_override=flags.api_key or None,
+            )
+        except Exception as fallback_err:
+            sys.stderr.write(f"{fallback_err}\n")
+            return 1
+
+    client = startup_runtime.client
+    current_runtime_config = startup_runtime.config
+    runtime_active_custom_id = startup_runtime.active_custom_provider_id
+    current_provider_name = (
+        startup_runtime.display_name
+        if runtime_active_custom_id
+        else provider_label(str(cfg.backend))
+    )
     skills = SkillRegistry()
     all_skill_dirs = skill_search_dirs(cfg.skills_dirs)
     for d in all_skill_dirs:
@@ -780,14 +819,14 @@ async def main() -> int:
             if cfg.max_steps > 0
             else 20
         ),
-        auto_compact_threshold=effective_auto_compact_threshold(cfg),
+        auto_compact_threshold=effective_auto_compact_threshold(current_runtime_config),
         tooling_profile=cast(
             PromptToolingProfile,
             cfg.tooling_profile.value
             if cfg.tooling_profile is not None
             else None,
         ),
-        prompt_profile=effective_prompt_profile(cfg),
+        prompt_profile=effective_prompt_profile(current_runtime_config),
         intelligence=intelligence_store,
         memory_store=memory_store,
         engagement=engagement,
@@ -876,10 +915,13 @@ async def main() -> int:
         trigger_reload()
 
     banner_data = BannerData(
-        provider=provider_label(cfg.backend),
-        model=client.model() or cfg.model or "(unset)",
-        endpoint=cfg.base_url or default_endpoint(cfg.backend),
-        state=locality_for(cfg.backend),
+        provider=current_provider_name,
+        model=client.model() or current_runtime_config.model or "(unset)",
+        endpoint=(
+            current_runtime_config.base_url
+            or default_endpoint(str(current_runtime_config.backend))
+        ),
+        state=locality_for(str(current_runtime_config.backend)),
         status=f"Session {session_id[:8]} — type /help to begin",
         cwd=pretty_cwd(),
         tool_support="probing",
@@ -892,7 +934,12 @@ async def main() -> int:
                     "context_window": None,
                 }
             )
-        backend = cfg.backend if isinstance(cfg.backend, Backend) else Backend(cfg.backend)
+        runtime_backend = current_runtime_config.backend
+        backend = (
+            runtime_backend
+            if isinstance(runtime_backend, Backend)
+            else Backend(runtime_backend)
+        )
         warning = model_reliability_warning(backend, agent.client.model())
 
         if warning:
@@ -922,43 +969,50 @@ async def main() -> int:
         await config.save(cfg)
 
     async def apply_provider(change: ProviderChange) -> None:
-        cfg.backend = change.backend
-        cfg.model = change.model
+        nonlocal current_runtime_config
+        nonlocal runtime_active_custom_id
+        nonlocal current_provider_name
 
-        if change.base_url is not None:
-            cfg.base_url = change.base_url
-
-        if change.api_key is not None:
-            cfg.api_key = change.api_key
-
-        next_client = llm_factory.new_from_config(cfg)
-
-        agent.set_client(next_client)
+        prepared = await switch_provider_transactionally(
+            cfg,
+            agent,
+            backend=change.backend,
+            model=change.model,
+            base_url=change.base_url,
+            api_key=change.api_key,
+            custom_provider_id=change.custom_provider_id,
+            save_config=config.save,
+        )
+        current_runtime_config = prepared.config
+        runtime_active_custom_id = prepared.active_custom_provider_id
+        current_provider_name = (
+            prepared.display_name
+            if runtime_active_custom_id
+            else provider_label(str(cfg.backend))
+        )
 
         agent.set_auto_compact_threshold(
-            effective_auto_compact_threshold(cfg)
+            effective_auto_compact_threshold(current_runtime_config)
         )
 
         agent.set_prompt_profile(
-            effective_prompt_profile(cfg)
+            effective_prompt_profile(current_runtime_config)
         )
-
-        await config.save(cfg)
 
         if banner_holder.publish is not None:
             banner_holder.publish(
                 {
-                    "provider": provider_label(cfg.backend),
+                    "provider": current_provider_name,
                     "model": (
-                        next_client.model()
-                        or cfg.model
+                        agent.client.model()
+                        or current_runtime_config.model
                         or "(unset)"
                     ),
                     "endpoint": (
-                        cfg.base_url
-                        or default_endpoint(cfg.backend)
+                        current_runtime_config.base_url
+                        or default_endpoint(str(current_runtime_config.backend))
                     ),
-                    "state": locality_for(cfg.backend),
+                    "state": locality_for(str(current_runtime_config.backend)),
                 }
             )
 
@@ -1017,6 +1071,23 @@ async def main() -> int:
                 "api_key": cfg.api_key,
                 "api_keys": dict(cfg.api_keys),
                 "model": cfg.model,
+                "active_provider_name": current_provider_name,
+                "active_custom_provider_id": runtime_active_custom_id,
+                "active_custom_provider_base_url": (
+                    current_runtime_config.base_url
+                    if runtime_active_custom_id
+                    else ""
+                ),
+                "active_custom_provider_api_key": (
+                    current_runtime_config.api_key
+                    if runtime_active_custom_id
+                    else ""
+                ),
+                "active_custom_provider_model": (
+                    current_runtime_config.model
+                    if runtime_active_custom_id
+                    else ""
+                ),
             },
 
             persist_disabled_skills=persist_disabled_skills,

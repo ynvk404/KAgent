@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Any, Awaitable, Callable
-from src.ui.core.app import ConfigSnapshot
+from src.config.config import Backend
+from src.ui.core.app import ConfigSnapshot, ProviderChange
 from src.ask.ask import Question, Option
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.core.state import Action, Append, Clear, SetAsk, TranscriptEntry
@@ -47,6 +49,7 @@ class ProviderPickerRequest(AskRequest):
         reject: Callable[[Exception], None],
         adapter: CustomProviderAdapter,
         current_backend: str,
+        current_custom_provider_id: str | None,
         on_add_provider: Callable[[], Any],
         on_edit_provider: Callable[[CustomProviderProfile], Any],
         on_delete_provider: Callable[[CustomProviderProfile], Any],
@@ -57,6 +60,7 @@ class ProviderPickerRequest(AskRequest):
         super().__init__(question=question, resolve=resolve, reject=reject)
         self.adapter = adapter
         self.current_backend = current_backend
+        self.current_custom_provider_id = current_custom_provider_id
         self.on_add_provider = on_add_provider
         self.on_edit_provider = on_edit_provider
         self.on_delete_provider = on_delete_provider
@@ -94,7 +98,12 @@ def open_provider_picker(
     initial_section: int = SECTION_OFFICIAL,
 ) -> None:
     cur = read_config()
-    current_backend = cur.get("backend", "")
+    current_backend = (
+        ""
+        if cur.get("active_custom_provider_id")
+        else cur.get("backend", "")
+    ) or ""
+    current_custom_provider_id = cur.get("active_custom_provider_id")
 
     label_oai = (
         "OpenAI-compatible (current)"
@@ -245,7 +254,7 @@ def open_provider_picker(
                         base_url,
                         api_key,
                         dispatch,
-                        apply_provider,
+                        apply_provider_and_sync,
                         {
                             "successText": (
                                 lambda picked: (
@@ -364,7 +373,7 @@ def open_provider_picker(
             base_url,
             api_key,
             dispatch,
-            apply_provider,
+            apply_provider_and_sync,
         )
 
     async def change_api_key(
@@ -539,6 +548,12 @@ def open_provider_picker(
         )
 
     active_adapter = adapter or get_custom_provider_adapter()
+
+    async def apply_provider_and_sync(change: ProviderChange) -> None:
+        result = apply_provider(change)
+        if inspect.isawaitable(result):
+            await result
+        active_adapter.activate_custom_provider(change.custom_provider_id)
 
     async def _add_custom_provider_flow() -> None:
         dispatch(SetAsk(req=None))
@@ -749,16 +764,38 @@ def open_provider_picker(
 
     def on_activate_cb(p: CustomProviderProfile) -> None:
         dispatch(SetAsk(req=None))
-        active_adapter.activate_custom_provider(p.id)
-        dispatch(Clear())
-        dispatch(
-            Append(
-                entry=TranscriptEntry(
-                    kind="system",
-                    text=f"provider set to {p.name} · custom provider active",
+        async def activate() -> None:
+            try:
+                result = apply_provider_and_sync(
+                    ProviderChange(
+                        backend=Backend.OPENAI_COMPAT,
+                        model=p.default_model,
+                        custom_provider_id=p.id,
+                    )
+                )
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as err:
+                dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="error",
+                            text=f"provider switch failed: {err}",
+                        )
+                    )
+                )
+                return
+            dispatch(Clear())
+            dispatch(
+                Append(
+                    entry=TranscriptEntry(
+                        kind="system",
+                        text=f"provider set to {p.name} · custom provider active",
+                    )
                 )
             )
-        )
+
+        asyncio.ensure_future(activate())
 
     def on_delete_blocked_cb(p: CustomProviderProfile) -> None:
         dispatch(
@@ -803,6 +840,7 @@ def open_provider_picker(
         reject=reject,
         adapter=active_adapter,
         current_backend=current_backend,
+        current_custom_provider_id=current_custom_provider_id,
         on_add_provider=on_add_cb,
         on_edit_provider=on_edit_cb,
         on_delete_provider=on_delete_cb,

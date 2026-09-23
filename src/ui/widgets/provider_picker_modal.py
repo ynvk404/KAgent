@@ -51,6 +51,7 @@ class ProviderPickerModal:
         req: AskRequest,
         adapter: CustomProviderAdapter | None = None,
         current_backend: str = "",
+        current_custom_provider_id: str | None = None,
         on_add_provider: Callable[[], Any] | None = None,
         on_edit_provider: Callable[[CustomProviderProfile], Any] | None = None,
         on_delete_provider: Callable[[CustomProviderProfile], Any] | None = None,
@@ -61,6 +62,12 @@ class ProviderPickerModal:
         self.req = req
         self.adapter = adapter or getattr(req, "adapter", None) or get_custom_provider_adapter()
         self.current_backend = current_backend or getattr(req, "current_backend", "")
+        self._has_runtime_custom_id = hasattr(req, "current_custom_provider_id")
+        self.current_custom_provider_id = (
+            current_custom_provider_id
+            if current_custom_provider_id is not None
+            else getattr(req, "current_custom_provider_id", None)
+        )
 
         self.on_add_provider = on_add_provider or getattr(req, "on_add_provider", None)
         self.on_edit_provider = on_edit_provider or getattr(req, "on_edit_provider", None)
@@ -114,6 +121,14 @@ class ProviderPickerModal:
         items: list[CustomProviderProfile | str] = list(profiles)
         items.append(ADD_CUSTOM_LABEL)
         return items
+
+    def _custom_provider_is_active(self, profile_id: str) -> bool:
+        if self._has_runtime_custom_id:
+            return self.current_custom_provider_id == profile_id
+        return (
+            self.adapter.is_active(profile_id)
+            or self.adapter.get_current_provider_id() == profile_id
+        )
 
     def _get_manual_items(self) -> list[str]:
         is_current = self.current_backend in ("openai-compat", "openai-compatible")
@@ -180,7 +195,7 @@ class ProviderPickerModal:
             if self.section == SECTION_CUSTOM:
                 selected_item = self._get_current_item()
                 if isinstance(selected_item, CustomProviderProfile):
-                    if self.adapter.is_active(selected_item.id):
+                    if self._custom_provider_is_active(selected_item.id):
                         self.error_message = "Cannot delete active custom provider. Select another provider first."
                         if self.on_active_delete_blocked:
                             return self.on_active_delete_blocked(selected_item)
@@ -373,9 +388,7 @@ class ProviderPickerModal:
                     is_selected = i == self.idx
                     prefix = "> " if is_selected else "  "
                     is_current = (
-                        self.adapter.is_active(profile.id)
-                        or self.adapter.get_current_provider_id() == profile.id
-                        or self.current_backend == profile.name
+                        self._custom_provider_is_active(profile.id)
                     )
                     tag = "   ● active" if is_current else ""
                     lines.append(f"{prefix}{profile.name}{tag}")

@@ -12,7 +12,7 @@ from src.ui.commands.provider_picker import (
     ProviderPickerRequest,
     open_provider_picker,
 )
-from src.ui.core.app import AppProps, ConfigSnapshot, KAgent, _modal_text
+from src.ui.core.app import AppProps, ConfigSnapshot, KAgent, ProviderChange, _modal_text
 from src.ui.theme import ACCENT
 from src.ui.widgets.banner import BannerData
 from src.ui.core.custom_provider_adapter import (
@@ -476,6 +476,254 @@ async def test_open_provider_picker_dispatches_provider_picker_request():
     assert isinstance(req, AskRequest)
     # Options length preserved for backwards-compatibility
     assert len(req.question.options) == 10
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_activation_switches_runtime_before_marking_adapter_active():
+    dispatched = []
+    adapter = InMemoryCustomProviderAdapter()
+    profile = adapter.add_custom_provider(
+        "Token Harbor",
+        "https://gateway.example/v1",
+        default_model="model-a",
+    )
+    applied: list[ProviderChange] = []
+
+    async def apply_provider(change: ProviderChange) -> None:
+        applied.append(change)
+
+    def dispatch(action):
+        dispatched.append(action)
+
+    def read_config() -> ConfigSnapshot:
+        return {
+            "backend": Backend.GROQ,
+            "model": "groq-model",
+            "base_url": "",
+            "api_key": "groq-key",
+            "api_keys": {},
+            "active_provider_name": "groq",
+            "active_custom_provider_id": None,
+            "active_custom_provider_base_url": "",
+            "active_custom_provider_api_key": "",
+            "active_custom_provider_model": "",
+        }
+
+    open_provider_picker(
+        dispatch=dispatch,
+        read_config=read_config,
+        apply_provider=apply_provider,
+        prompt_text=AsyncMock(),
+        adapter=adapter,
+    )
+
+    req = dispatched[0].req
+    assert isinstance(req, ProviderPickerRequest)
+    req.on_activate_provider(profile)
+    await asyncio.sleep(0)
+
+    assert applied == [
+        ProviderChange(
+            backend=Backend.OPENAI_COMPAT,
+            model="model-a",
+            custom_provider_id=profile.id,
+        )
+    ]
+    assert adapter.is_active(profile.id)
+
+
+@pytest.mark.asyncio
+async def test_failed_custom_activation_does_not_mark_adapter_active():
+    dispatched = []
+    adapter = InMemoryCustomProviderAdapter()
+    active_profile = adapter.add_custom_provider(
+        "Existing Active",
+        "https://active.example/v1",
+    )
+    adapter.activate_custom_provider(active_profile.id)
+    profile = adapter.add_custom_provider("Token Harbor", "https://gateway.example/v1")
+
+    async def fail_switch(_change: ProviderChange) -> None:
+        raise RuntimeError("invalid persisted profile")
+
+    def dispatch(action):
+        dispatched.append(action)
+
+    def read_config() -> ConfigSnapshot:
+        return {
+            "backend": Backend.GROQ,
+            "model": "groq-model",
+            "base_url": "",
+            "api_key": "groq-key",
+            "api_keys": {},
+            "active_provider_name": "groq",
+            "active_custom_provider_id": None,
+            "active_custom_provider_base_url": "",
+            "active_custom_provider_api_key": "",
+            "active_custom_provider_model": "",
+        }
+
+    open_provider_picker(
+        dispatch=dispatch,
+        read_config=read_config,
+        apply_provider=fail_switch,
+        prompt_text=AsyncMock(),
+        adapter=adapter,
+    )
+
+    req = dispatched[0].req
+    assert isinstance(req, ProviderPickerRequest)
+    req.on_activate_provider(profile)
+    await asyncio.sleep(0)
+
+    assert adapter.get_current_provider_id() == active_profile.id
+    assert not adapter.is_active(profile.id)
+    assert any(
+        isinstance(action, Append) and "provider switch failed" in action.entry.text
+        for action in dispatched
+    )
+
+
+@pytest.mark.parametrize(
+    ("picked", "expected_backend"),
+    [
+        ("Groq", Backend.GROQ),
+        ("OpenAI-compatible", Backend.OPENAI_COMPAT),
+    ],
+)
+@pytest.mark.asyncio
+async def test_switching_away_clears_custom_adapter_marker(
+    picked,
+    expected_backend,
+    monkeypatch,
+):
+    from src.ui.commands import model_picker
+
+    adapter = InMemoryCustomProviderAdapter()
+    profile = adapter.add_custom_provider("Token Harbor", "https://gateway.example/v1")
+    adapter.activate_custom_provider(profile.id)
+    snapshot = {
+        "backend": Backend.OPENAI_COMPAT,
+        "model": "manual-model",
+        "base_url": "https://manual.example/v1",
+        "api_key": "manual-key",
+        "api_keys": {"openai-compat": "manual-key", "groq": "groq-key"},
+        "active_provider_name": profile.name,
+        "active_custom_provider_id": profile.id,
+        "active_custom_provider_base_url": "https://gateway.example/v1",
+        "active_custom_provider_api_key": "custom-key",
+        "active_custom_provider_model": "custom-model",
+    }
+    dispatched = []
+    switched = asyncio.Event()
+
+    async def apply_provider(change: ProviderChange) -> None:
+        assert change.backend == expected_backend
+        snapshot["active_custom_provider_id"] = change.custom_provider_id
+        snapshot["active_provider_name"] = "groq" if change.custom_provider_id is None else profile.name
+
+    async def fake_fetch(_backend, base_url, api_key, _dispatch, apply, *_args, **_kwargs):
+        await apply(
+            ProviderChange(
+                backend=expected_backend,
+                model="selected-model",
+                base_url=base_url,
+                api_key=api_key,
+            )
+        )
+        switched.set()
+
+    monkeypatch.setattr(model_picker, "fetch_and_pick_model", fake_fetch)
+
+    def dispatch(action):
+        dispatched.append(action)
+
+    open_provider_picker(
+        dispatch=dispatch,
+        read_config=lambda: snapshot,
+        apply_provider=apply_provider,
+        prompt_text=AsyncMock(),
+        adapter=adapter,
+    )
+
+    req = dispatched[0].req
+    assert isinstance(req, ProviderPickerRequest)
+    req.resolve(picked)
+    await switched.wait()
+
+    assert adapter.get_current_provider_id() is None
+    assert not adapter.is_active(profile.id)
+
+
+@pytest.mark.parametrize("display_name", ["groq", "deepseek"])
+def test_custom_display_name_does_not_mark_builtin_provider_current(display_name):
+    adapter = InMemoryCustomProviderAdapter()
+    profile = adapter.add_custom_provider(display_name, "https://gateway.example/v1")
+    adapter.activate_custom_provider(profile.id)
+    dispatched = []
+
+    snapshot = {
+        "backend": Backend.OPENAI_COMPAT,
+        "model": "manual-model",
+        "base_url": "https://manual.example/v1",
+        "api_key": "manual-key",
+        "api_keys": {"openai-compat": "manual-key"},
+        "active_provider_name": display_name,
+        "active_custom_provider_id": profile.id,
+        "active_custom_provider_base_url": profile.base_url,
+        "active_custom_provider_api_key": "",
+        "active_custom_provider_model": "",
+    }
+
+    open_provider_picker(
+        dispatch=dispatched.append,
+        read_config=lambda: snapshot,
+        apply_provider=AsyncMock(),
+        prompt_text=AsyncMock(),
+        adapter=adapter,
+    )
+
+    req = dispatched[0].req
+    assert isinstance(req, ProviderPickerRequest)
+    labels = [option.label for option in req.question.options]
+    assert "Groq" in labels
+    assert "Groq (current)" not in labels
+    assert "DeepSeek" in labels
+    assert "DeepSeek (current)" not in labels
+
+
+def test_stale_adapter_marker_does_not_block_delete_when_runtime_is_builtin():
+    adapter = InMemoryCustomProviderAdapter()
+    profile = adapter.add_custom_provider("Previously Active", "https://gateway.example/v1")
+    adapter.activate_custom_provider(profile.id)
+    dispatched = []
+    snapshot = {
+        "backend": Backend.GROQ,
+        "model": "groq-model",
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key": "groq-key",
+        "api_keys": {"groq": "groq-key"},
+        "active_provider_name": "groq",
+        "active_custom_provider_id": None,
+        "active_custom_provider_base_url": "",
+        "active_custom_provider_api_key": "",
+        "active_custom_provider_model": "",
+    }
+
+    open_provider_picker(
+        dispatch=dispatched.append,
+        read_config=lambda: snapshot,
+        apply_provider=AsyncMock(),
+        prompt_text=AsyncMock(),
+        adapter=adapter,
+    )
+    req = dispatched[0].req
+    assert isinstance(req, ProviderPickerRequest)
+    modal = ProviderPickerModal(req=req, initial_section=SECTION_CUSTOM)
+    modal.handle_key("d")
+
+    assert modal.confirming_delete == profile
+    assert modal.error_message is None
 
 
 @pytest.mark.asyncio

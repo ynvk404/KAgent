@@ -57,8 +57,8 @@ class CustomProviderAdapter(Protocol):
         """Delete a saved custom provider profile by ID."""
         ...
 
-    def activate_custom_provider(self, profile_id: str) -> bool:
-        """Set the specified custom provider as active in memory."""
+    def activate_custom_provider(self, profile_id: str | None) -> bool:
+        """Set the active profile, or clear it after switching away."""
         ...
 
 
@@ -159,7 +159,10 @@ class InMemoryCustomProviderAdapter:
             return True
         return False
 
-    def activate_custom_provider(self, profile_id: str) -> bool:
+    def activate_custom_provider(self, profile_id: str | None) -> bool:
+        if profile_id is None:
+            self._active_id = None
+            return True
         if profile_id in self._profiles:
             self._active_id = profile_id
             return True
@@ -178,4 +181,3 @@ def set_custom_provider_adapter(adapter: CustomProviderAdapter) -> None:
     """Set the CustomProviderAdapter to use."""
     global _global_adapter
     _global_adapter = adapter
-

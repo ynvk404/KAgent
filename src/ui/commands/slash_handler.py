@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from src.agent.agent import DEFAULT_MAX_STEPS, AgentRunOptions, ensure_system_prompt
+from src.config.config import Backend
 from src.llm.models import list_models
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.state import Append, Clear, TranscriptEntry
@@ -980,12 +981,17 @@ async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
 
     if not m:
         cur = app.read_config()
+        current_model = (
+            cur.get("active_custom_provider_model")
+            if cur.get("active_custom_provider_id")
+            else cur.get("model")
+        )
         dispatch(
             Append(
                 entry=TranscriptEntry(
                     kind="system",
                     text=(
-                        f"current model: {cur.get('model') or '(unset)'}\n"
+                        f"current model: {current_model or '(unset)'}\n"
                         "usage: /model <id>  ·  /model list  ·  or run /provider "
                         "for an interactive picker"
                     ),
@@ -995,17 +1001,37 @@ async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
         return
 
     cur = app.read_config()
+    custom_provider_id = cur.get("active_custom_provider_id")
+    model_backend = (
+        Backend.OPENAI_COMPAT if custom_provider_id else cur["backend"]
+    )
+    model_base_url = (
+        cur.get("active_custom_provider_base_url", "")
+        if custom_provider_id
+        else cur["base_url"]
+    )
+    model_api_key = (
+        cur.get("active_custom_provider_api_key", "")
+        if custom_provider_id
+        else cur["api_key"]
+    )
+    current_model = (
+        cur.get("active_custom_provider_model", "")
+        if custom_provider_id
+        else cur.get("model")
+    )
 
     if m.lower() in ("list", "ls"):
         from src.ui.commands.model_picker import fetch_and_pick_model
         await fetch_and_pick_model(
-            cur["backend"],
-            cur["base_url"],
-            cur["api_key"],
+            model_backend,
+            model_base_url,
+            model_api_key,
             dispatch,
             app.apply_provider,
-            current_model=cur.get("model") or agent.client.model(),
+            current_model=current_model or agent.client.model(),
             success_text=lambda picked: f"model set to {picked}",
+            custom_provider_id=custom_provider_id,
         )
         return
 
@@ -1013,9 +1039,9 @@ async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
     try:
         known = await asyncio.to_thread(
             list_models,
-            cur["backend"],
-            cur["base_url"],
-            cur["api_key"],
+            model_backend,
+            model_base_url,
+            model_api_key,
         )
     except Exception as err:
         dispatch(
@@ -1042,7 +1068,15 @@ async def _handle_model(app: "KAgent", rest: list[str], dispatch) -> None:
         return
 
     try:
-        await app.apply_provider(ProviderChange(backend=cur["backend"], model=m))
+        await app.apply_provider(
+            ProviderChange(
+                backend=model_backend,
+                model=m,
+                base_url=(model_base_url if custom_provider_id else None),
+                api_key=(model_api_key if custom_provider_id else None),
+                custom_provider_id=custom_provider_id,
+            )
+        )
         # The banner contains the active model, so refresh it along with the
         # successful switch while preserving the confirmation message.
         dispatch(Clear())
