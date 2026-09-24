@@ -27,6 +27,7 @@ allowed-tools:
   - shell
   - http
   - file_write
+  - workflow
 ---
 
 # Recon playbook
@@ -271,6 +272,13 @@ brute-forcing, or parameter enumeration. Those tasks belong to
 Write a concise summary to:
 
 `recon/<target>/summary.md`
+
+After writing it, call `workflow(action="complete_skill", skill_name="recon",
+artifact_ref="recon/<target>/summary.md", current_phase="enumeration")` when
+a reachable web target can be enumerated. If reachability failed, set
+`current_phase="blocked"` and record the failure in the summary instead.
+Completion records that this bounded reconnaissance pass ended; it does not
+force the next skill or prevent targeted recon later.
 
 The summary should contain:
 

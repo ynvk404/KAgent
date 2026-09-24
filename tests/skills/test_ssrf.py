@@ -374,13 +374,15 @@ def test_reporting_section_does_not_contain_angle_bracket_placeholders(skill):
     assert "<role>" not in section
 
 
-def test_filename_pattern_is_sanitized_placeholder(skill):
+def test_validation_artifact_is_separate_from_official_finding(skill):
     body = skill["body"]
 
-    assert "findings/ssrf-{sanitized-parameter-or-path}.md" in body
+    assert "ssrf/<target>/results.md" in body
+    assert "`confirm_finding` alone creates the report under `findings/`" in body
+    assert "findings/ssrf-{sanitized-parameter-or-path}.md" not in body
 
 
-def test_documents_sanitization_rule(skill):
+def test_documents_evidence_redaction(skill):
     body = skill["body_flat"].lower()
 
-    assert "sanitized for filesystem safety" in body
+    assert "redacted supporting evidence" in body

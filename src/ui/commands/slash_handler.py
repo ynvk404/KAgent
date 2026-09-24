@@ -210,9 +210,10 @@ Rules:
 - Do not call tools, run commands, fetch URLs, scan targets, or modify files.
 - Use the coverage state before suggesting any test.
 - Prioritize endpoint/parameter/vulnerability-class combinations that are not already covered.
-- Treat passed, failed, skipped, waf-blocked, and tried entries as already covered unless retesting is explicitly justified.
-- If there are no candidates in coverage, tell the user what candidate inventory is missing and how to collect it.
-- Output 5 to 10 concrete next tests with endpoint, parameter, vuln class, why it is next, and the exact coverage mark to record after testing.
+- Do not repeat passed or failed validation without a reason. Revisit blocked or deferred candidates only when the blocker has changed.
+- Use structured workflow candidates and their latest outcomes before proposing new tests.
+- If no actionable candidate exists, suggest targeted discovery or explain why testing should stop.
+- Output up to 10 concrete next tests with endpoint, parameter, vuln class, why it is next, and the exact coverage mark to record after testing.
 - Keep it concise and actionable."""
 
 

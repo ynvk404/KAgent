@@ -34,6 +34,7 @@ allowed-tools:
   - shell
   - http
   - file_write
+  - workflow
 ---
 
 # Web enumeration playbook
@@ -328,6 +329,12 @@ Write the inventory to:
 
 using the same target identifier defined in `recon/SKILL.md`.
 Record one endpoint or route per entry. Prefer a consistent Markdown format:
+
+After writing the inventory, call `workflow(action="complete_skill",
+skill_name="web-enumeration",
+artifact_ref="web-enumeration/<target>/inventory.md",
+current_phase="analysis")`. This marks the bounded inventory pass complete;
+newly discovered routes may still justify another focused pass.
 
 ### GET /search
 

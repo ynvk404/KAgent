@@ -82,7 +82,7 @@ from src.tools.registry import InvalidToolArguments, Registry as ToolRegistry
 from src.tools.types import ActionPermissionTool
 from src.tools.outcome import ErrorKind, ToolOutput, ToolStatus
 
-from .decision_planner import PlannerContext, build_decision_plan
+from .decision_planner import PlannerCandidate, PlannerContext, build_decision_plan
 
 from src.agent.events import (
     AgentEvent,
@@ -1449,6 +1449,22 @@ class Agent:
                 "Coverage entries:",
                 str(entries),
                 "",
+                "Workflow candidates:",
+                *[
+                    (
+                        f"- {candidate.id} {candidate.candidate_class} "
+                        f"{candidate.status} {candidate.method or ''} "
+                        f"{candidate.endpoint or ''}; latest="
+                        f"{(result.outcome if result else 'none')}; "
+                        f"reason={(result.deferred_reason if result else None) or 'none'}; "
+                        f"coverage_sync={(result.coverage_synced if result else None)}"
+                    )
+                    for candidate in sorted(
+                        self.workflow.candidates.values(), key=lambda item: item.id
+                    )[:25]
+                    for result in [self.workflow.latest_result(candidate.id)]
+                ],
+                "",
                 (
                     "Coverage collection results are paginated. "
                     "complete=false means the displayed page is not the full "
@@ -1458,8 +1474,8 @@ class Agent:
                     "Use this coverage state to choose next tests. "
                     "Prefer untested endpoint/parameter/vulnerability-class "
                     "combinations. Do not repeat entries already marked "
-                    "passed, failed, skipped, waf-blocked, or tried unless "
-                    "the objective explicitly asks for retesting."
+                    "passed or failed unless the objective explicitly asks for retesting. "
+                    "A blocked/deferred candidate may be revisited only when its blocker changes."
                 ),
             ]
         )
@@ -1634,6 +1650,23 @@ class Agent:
                     active_skills=frozenset(self.active_skills),
                     candidate_classes=self.workflow.relevant_candidate_classes(),
                     completed_skills=frozenset(self.workflow.completed_skills),
+                    candidates=tuple(
+                        PlannerCandidate(
+                            id=candidate.id,
+                            candidate_class=candidate.candidate_class,
+                            status=candidate.status,
+                            endpoint=candidate.endpoint,
+                            priority=candidate.priority,
+                            latest_outcome=(result.outcome if result else None),
+                            deferred_reason=(result.deferred_reason if result else None),
+                            evidence_count=(len(result.evidence_refs) if result else 0),
+                            coverage_synced=(result.coverage_synced if result else None),
+                        )
+                        for candidate in sorted(
+                            self.workflow.candidates.values(), key=lambda item: item.id
+                        )
+                        for result in [self.workflow.latest_result(candidate.id)]
+                    ),
                 ),
             )
 

@@ -5,9 +5,9 @@ description: >
   are worth testing and for what likely vulnerability class, using context and
   passive evidence first, with minimal non-destructive behavioral signals only
   when context is insufficient — not exploitation. Produces a prioritized
-  candidate list that hands off to sql-injection, cross-site-scripting, or
-  access-control. Use after `web-enumeration` has produced an inventory and
-  before any vulnerability-specific testing.
+  candidate list for enabled validation skills or an explicit unsupported
+  class. Use when an endpoint inventory is available; a direct concrete
+  validation request may bypass this analysis step.
 stage: analysis
 triggers:
   strong:
@@ -196,15 +196,21 @@ For each candidate, form a reasoned suspicion, not a conclusion:
 | Query/filter param + syntax-sensitive response (error/size/timing shift) | `sql-injection` |
 | Object identifier + no visible ownership check | `access-control` |
 | State-changing action referencing another user/object's ID | `access-control` |
-| Redirect/URL-like param, unvalidated | out of scope — no active skill yet (SSRF/open-redirect family); record and defer |
-| File/path-like param | out of scope — no active skill yet (path traversal / SSTI family); record and defer |
-| Structural/serialization-heavy (GraphQL, file upload, XML body) | out of scope as a category for the 3 active skills; if a specific field within it independently matches another row above (e.g. a GraphQL argument that is itself an object identifier), classify that field using that row instead — otherwise record and defer |
+| URL-fetch, image-import, webhook, or callback parameter with server-side fetch evidence | `ssrf`; an ordinary browser redirect alone is not SSRF |
+| Reflected template expression evaluated by the server | `ssti` |
+| Login, reset, MFA, logout, or session-lifecycle property | `authentication` |
+| State-changing request using ambient browser credentials with a suspected missing defense | `csrf` |
+| Redirect-only behavior without server-side fetching | unsupported open-redirect class; record and defer |
+| File/path-like parameter without template evaluation | unsupported path/file-access class; record and defer |
+| Structural/serialization-heavy (GraphQL, file upload, XML body) | classify a specific field when its signal matches a supported class; otherwise record and defer |
 
-Only `sql-injection`, `cross-site-scripting`, and `access-control` have
-active skills right now. For anything else, still record the candidate and
-your reasoning — don't discard the signal — but mark it clearly as deferred
-rather than routing it anywhere. Do not invent a workflow for a vulnerability
-class that doesn't have a skill yet.
+These are signal examples, not a frozen list of available validators. The
+loaded skill registry is the source of truth: `workflow(record_candidate)`
+returns `supported` and `recommended_skills` from enabled validation skill
+metadata. If no validator handles a suspected class, retain the observation
+with `status: deferred` and explain the missing capability. Do not call a
+validator from this analysis skill. Do not invent a workflow for a
+vulnerability class that doesn't have a skill yet.
 
 A candidate can map to more than one suspected class; list all of them with
 independent confidence.
@@ -232,7 +238,10 @@ available. Store references, not raw request/response bodies. The returned
 Candidate ID is the handoff key for the validation skill. The workflow tool
 deduplicates the same semantic target/method/endpoint/input/class tuple, so do
 not manufacture alternate IDs. Weak/noisy observations that do not meet the
-candidate-list bar must not be recorded.
+candidate-list bar must not be recorded. Inspect `supported` and
+`recommended_skills` in the tool result before naming the next skill. For
+multiple independent suspected classes, record one Candidate per class and
+retain each returned ID; do not collapse them into one result.
 
 Write `web-input-analysis/<target>/candidates.md`, using the same target
 identifier as `recon` and `web-enumeration`. One entry per candidate:
@@ -265,9 +274,9 @@ identifier as `recon` and `web-enumeration`. One entry per candidate:
   location: query
   context: redirect/URL-like
   signal: not probed
-  suspected_class: deferred (open-redirect/SSRF family)
+  suspected_class: open-redirect
   confidence: n/a
-  rationale: no active skill covers this class yet
+  rationale: no enabled validator handles redirect-only behavior
   recommended_next_skill: none — flag for user decision
 ```
 
@@ -281,8 +290,8 @@ Summarize at the top of the candidate file:
 - total candidates, grouped by suspected class;
 - how many are high/medium/low confidence;
 - how many were deferred (no active skill);
-- recommended order to hand off to `sql-injection`, `cross-site-scripting`,
-  `access-control`.
+- recommended order to hand off supported candidates by their returned
+  `recommended_skills`; list unsupported candidates separately.
 
 Hand off only the candidates relevant to each skill — don't hand a whole
 inventory back to a vulnerability skill and let it re-triage from scratch.
@@ -296,11 +305,13 @@ Stop analysis when:
 - every inventory entry has been triaged (classified or explicitly dropped);
 - candidates worth testing have context and, where useful, one light signal;
 - no probe has escalated into an actual exploit or proof;
-- the candidate list is prioritized and ready to route to the three active
-  vulnerability skills, with deferred classes clearly flagged.
+- the candidate list is prioritized and ready to route to the enabled
+  matching validators, with unsupported classes clearly flagged.
 
 Then call `workflow(action="complete_skill",
-skill_name="web-input-analysis", current_phase="validation")`. This records
+skill_name="web-input-analysis",
+artifact_ref="web-input-analysis/<target>/candidates.md",
+current_phase="validation")`. This records
 workflow progress independently of the conversational summary.
 
 Do not turn signal-gathering into confirmation. Do not chain probes into a

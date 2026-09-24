@@ -662,7 +662,9 @@ async def main() -> int:
     tools.register(ReadPayloadsTool(skills))
     tools.register(ReadSkillFileTool(skills))
     tools.register(CoverageTool(coverage_store))
-    tools.register(WorkflowTool(workflow, target))
+    tools.register(WorkflowTool(
+        workflow, target, coverage_store, skills, session_id=session_id,
+    ))
 
     for plugin in cfg.plugins:
         tools.register(CommandPluginTool(plugin))

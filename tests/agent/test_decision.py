@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from src.agent.decision_planner import (
+    PlannerCandidate,
     PlannerContext,
     build_decision_plan,
     contains_keyword,
@@ -211,6 +212,55 @@ def test_multiple_structured_candidate_classes_remain_ambiguous():
 
     assert plan is not None
     assert plan.recommended_skill is None
+
+
+def test_candidate_guidance_ranks_status_priority_and_stable_ties():
+    context = PlannerContext(candidates=(
+        PlannerCandidate("cand_z", "sql-injection", "queued", "/low", "low"),
+        PlannerCandidate("cand_b", "sql-injection", "queued", "/high", "high"),
+        PlannerCandidate("cand_a", "sql-injection", "queued", "/high-2", "high"),
+        PlannerCandidate("cand_done", "sql-injection", "validated", "/done", "high"),
+    ))
+    plan = build_decision_plan("next validation", shipped_skills(), Target(), context)
+    assert plan is not None
+    assert plan.candidate_id == "cand_a"
+    assert plan.recommended_skill == "sql-injection"
+    assert "guidance, not dispatch" in plan.guidance
+
+
+def test_user_selected_candidate_overrides_queue_order_and_can_retest():
+    context = PlannerContext(candidates=(
+        PlannerCandidate("cand_high", "sql-injection", "queued", "/a", "high"),
+        PlannerCandidate("cand_selected", "cross-site-scripting", "validated", "/b", "low"),
+    ))
+    plan = build_decision_plan(
+        "retest cand_selected", shipped_skills(), Target(), context,
+    )
+    assert plan is not None
+    assert plan.candidate_id == "cand_selected"
+    assert plan.recommended_skill == "cross-site-scripting"
+
+
+def test_blocked_candidate_is_a_conditional_fallback_not_negative():
+    context = PlannerContext(candidates=(
+        PlannerCandidate(
+            "cand_blocked", "ssrf", "deferred", "/fetch", "high",
+            latest_outcome="authorization-required",
+            deferred_reason="internal destination not approved",
+        ),
+    ))
+    plan = build_decision_plan("next", shipped_skills(), Target(), context)
+    assert plan is not None
+    assert plan.candidate_id is None
+    assert "internal destination not approved" in plan.guidance
+    assert "only if a blocker changes" in plan.guidance
+
+
+def test_no_candidate_guides_targeted_discovery_without_forcing_recon():
+    plan = build_decision_plan("next", shipped_skills(), Target())
+    assert plan is not None
+    assert plan.candidate_id is None
+    assert "targeted inventory" in plan.guidance
 
 
 @pytest.mark.parametrize(

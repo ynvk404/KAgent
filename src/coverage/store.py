@@ -211,6 +211,30 @@ class CoverageStore:
 
         return merged
 
+    async def ensure_validation_mark(
+        self, *, endpoint: str, param: str, vulnClass: str,
+        status: CoverageStatus, notes: str,
+    ) -> CoverageEntry:
+        """Persist one validation outcome without inflating retry counts."""
+        await self.load()
+        key = _key_of(
+            _normalize_endpoint(endpoint), param.strip(),
+            normalize_candidate_class(vulnClass),
+        )
+        existing = self.entries.get(key)
+        if existing and existing.status == status and existing.notes == notes:
+            if self.last_save_error is not None:
+                self._queue_save()
+        else:
+            existing = await self.mark(
+                endpoint=endpoint, param=param, vulnClass=vulnClass,
+                status=status, notes=notes,
+            )
+        await self.flush()
+        if self.last_save_error is not None:
+            raise OSError("coverage store could not be persisted") from self.last_save_error
+        return existing
+
     async def list(
         self,
         *,

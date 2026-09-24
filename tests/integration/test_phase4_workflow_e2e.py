@@ -25,6 +25,16 @@ def shipped_skills() -> Registry:
     return registry
 
 
+async def register_proof(workflow, candidate_id, tmp_path, name):
+    path = tmp_path / name
+    path.write_text("Observed request and response differential", encoding="utf-8")
+    response = json.loads(await workflow.run({
+        "action": "record_evidence", "candidate_id": candidate_id,
+        "evidence_path": name,
+    }, None, AlwaysAllow()))
+    return response["evidence"]["id"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("user_text", "skill_name", "candidate_class", "endpoint", "parameter"),
@@ -39,6 +49,7 @@ async def test_offline_request_to_confirmed_workflow_handoff(
     candidate_class,
     endpoint,
     parameter,
+    tmp_path,
 ):
     skills = shipped_skills()
     plan = build_decision_plan(user_text, skills.list_enabled(), Target())
@@ -48,7 +59,7 @@ async def test_offline_request_to_confirmed_workflow_handoff(
     assert f"# Skill: {skill_name}" in body
 
     state = WorkflowState()
-    workflow = WorkflowTool(state, Target("https://target.test"))
+    workflow = WorkflowTool(state, Target("https://target.test"), evidence_root=tmp_path)
     candidate_args = {
         "action": "record_candidate",
         "candidate_class": candidate_class,
@@ -76,6 +87,9 @@ async def test_offline_request_to_confirmed_workflow_handoff(
         None,
         AlwaysAllow(),
     )
+    evidence_id = await register_proof(
+        workflow, candidate_id, tmp_path, f"{skill_name}-proof.txt",
+    )
     result = json.loads(
         await workflow.run(
             {
@@ -83,7 +97,7 @@ async def test_offline_request_to_confirmed_workflow_handoff(
                 "candidate_id": candidate_id,
                 "skill_name": skill_name,
                 "outcome": "confirmed",
-                "evidence_refs": [f"captures/{skill_name}-1.json"],
+                "evidence_refs": [evidence_id],
                 "repeatable": True,
             },
             None,
@@ -101,7 +115,7 @@ async def test_offline_request_to_confirmed_workflow_handoff(
                 "candidate_id": candidate_id,
                 "skill_name": skill_name,
                 "outcome": "confirmed",
-                "evidence_refs": [f"captures/{skill_name}-1.json"],
+                "evidence_refs": [evidence_id],
                 "repeatable": True,
                 "notes": "same result, different prose",
             },
@@ -116,7 +130,7 @@ async def test_offline_request_to_confirmed_workflow_handoff(
                 "candidate_id": candidate_id,
                 "skill_name": skill_name,
                 "outcome": "confirmed",
-                "evidence_refs": [f"captures/{skill_name}-1.json"],
+                "evidence_refs": [evidence_id],
                 "repeatable": True,
                 "force": True,
             },
@@ -186,7 +200,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     assert plan is not None and plan.recommended_skill == "sql-injection"
 
     state = WorkflowState()
-    workflow = WorkflowTool(state, target)
+    workflow = WorkflowTool(state, target, evidence_root=tmp_path)
     recorded = json.loads(
         await workflow.run(
             {
@@ -213,6 +227,10 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     )
     assert started["candidate"]["status"] == "validating"
 
+    evidence_id = await register_proof(
+        workflow, candidate_id, tmp_path, "login-sqli-confirmation.txt",
+    )
+
     result = json.loads(
         await workflow.run(
             {
@@ -220,7 +238,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
                 "candidate_id": candidate_id,
                 "skill_name": "sql-injection",
                 "outcome": "confirmed",
-                "evidence_refs": ["captures/login-sqli-confirmation"],
+                "evidence_refs": [evidence_id],
                 "techniques": ["boolean differential"],
                 "repeatable": True,
             },

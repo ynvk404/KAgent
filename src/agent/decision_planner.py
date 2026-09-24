@@ -18,6 +18,20 @@ class DecisionPlan:
     risk: str
     checklist: List[str]
     guidance: str
+    candidate_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class PlannerCandidate:
+    id: str
+    candidate_class: str
+    status: str
+    endpoint: str | None = None
+    priority: str | None = None
+    latest_outcome: str | None = None
+    deferred_reason: str | None = None
+    evidence_count: int = 0
+    coverage_synced: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -25,6 +39,7 @@ class PlannerContext:
     active_skills: frozenset[str] = frozenset()
     candidate_classes: frozenset[str] = frozenset()
     completed_skills: frozenset[str] = frozenset()
+    candidates: tuple[PlannerCandidate, ...] = ()
 
 
 class SkillRecommendation(TypedDict):
@@ -114,6 +129,7 @@ HIGH_RISK_TERMS = [
 ]
 
 WORKFLOW_TERMS = [
+    "next",
     "test",
     "scan",
     "recon",
@@ -166,8 +182,29 @@ def build_decision_plan(
         return None
 
     normalized = normalize(text)
+    if is_purely_informational(normalized):
+        return None
 
     recommended = recommend_skill(normalized, skills, context)
+    recommended_skill = next(
+        (skill for skill in skills if recommended and skill.name == recommended["name"]),
+        None,
+    )
+    selected = select_candidate(
+        text, context.candidates if context else (), recommended,
+        frozenset(recommended_skill.candidate_classes) if recommended_skill else frozenset(),
+    )
+    if selected is not None and recommended is None:
+        matching = [
+            skill for skill in skills
+            if not skill.disable_model_invocation
+            and selected.candidate_class in skill.candidate_classes
+        ]
+        if len(matching) == 1:
+            recommended = {
+                "name": matching[0].name,
+                "reason": f"candidate {selected.id} has class {selected.candidate_class}",
+            }
 
     risk = (
         "high"
@@ -206,6 +243,42 @@ def build_decision_plan(
             reason,
             risk,
             checklist,
+            selected,
+            context.candidates if context else (),
+        ),
+        candidate_id=selected.id if selected else None,
+    )
+
+
+def select_candidate(
+    user_text: str,
+    candidates: tuple[PlannerCandidate, ...],
+    recommended: SkillRecommendation | None,
+    recommended_classes: frozenset[str] = frozenset(),
+) -> PlannerCandidate | None:
+    if not candidates:
+        return None
+    explicitly_named = [item for item in candidates if item.id in user_text]
+    if explicitly_named:
+        return sorted(explicitly_named, key=lambda item: item.id)[0]
+    actionable = [item for item in candidates if item.status in {"new", "queued", "validating"}]
+    if recommended:
+        matched = [item for item in actionable if item.candidate_class in recommended_classes]
+        if matched:
+            actionable = matched
+        else:
+            return None
+    if not actionable:
+        return None
+    status_order = {"validating": 0, "queued": 1, "new": 2}
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    return min(
+        actionable,
+        key=lambda item: (
+            status_order.get(item.status, 3),
+            priority_order.get(item.priority or "", 3),
+            -item.evidence_count,
+            item.id,
         ),
     )
 
@@ -539,6 +612,8 @@ def render_guidance(
     reason: str,
     risk: str,
     checklist: List[str],
+    candidate: PlannerCandidate | None = None,
+    candidates: tuple[PlannerCandidate, ...] = (),
 ) -> str:
     if skill_name:
         skill_line = (
@@ -559,6 +634,33 @@ def render_guidance(
         "- Do not call confirm_finding for suspected behavior; require reproduced request/response evidence first.",
         "- Checklist:",
     ]
+
+    if candidate is not None:
+        lines.insert(1, (
+            f"- Candidate to consider: {candidate.id}, class={candidate.candidate_class}, "
+            f"status={candidate.status}, priority={candidate.priority or 'unspecified'}, "
+            f"endpoint={candidate.endpoint or 'unspecified'}, "
+            f"latest={candidate.latest_outcome or 'none'}, "
+            f"blocker={candidate.deferred_reason or 'none'}, "
+            f"evidence_refs={candidate.evidence_count}, "
+            f"coverage_sync={candidate.coverage_synced}. "
+            "This is guidance, not dispatch."
+        ))
+        if skill_name is None:
+            lines.insert(2, "- No enabled validator matches this candidate; keep it deferred or choose a justified manual path.")
+    elif candidates:
+        blocked = [item for item in candidates if item.status == "deferred"]
+        if blocked:
+            reasons = "; ".join(
+                f"{item.id}: {item.latest_outcome or 'deferred'}"
+                f" ({item.deferred_reason or 'condition not recorded'})"
+                for item in sorted(blocked, key=lambda item: item.id)[:3]
+            )
+            lines.insert(1, f"- No actionable candidate; revisit only if a blocker changes: {reasons}.")
+        else:
+            lines.insert(1, "- No actionable candidate; gather a targeted endpoint/input inventory or stop if scope is complete.")
+    else:
+        lines.insert(1, "- No structured candidate is available; use a concrete direct request or gather a targeted inventory.")
 
     lines.extend(
         f"  - {item}"

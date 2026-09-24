@@ -9,6 +9,7 @@ from src.workflow.state import (
     WorkflowState,
     candidate_fingerprint,
 )
+from src.workflow.evidence import EvidenceArtifact
 
 
 def make_candidate(**changes) -> Candidate:
@@ -78,6 +79,47 @@ def test_candidate_dedup_merges_compact_signals():
     assert second.signals == ["syntax-sensitive response", "reflected error"]
 
 
+def test_candidate_subcases_preserve_old_ids_and_remain_distinct():
+    baseline = make_candidate()
+    horizontal = make_candidate(test_case="horizontal owner boundary")
+    vertical = make_candidate(test_case="vertical admin boundary")
+    assert baseline.id == candidate_fingerprint(
+        target=baseline.target, method=baseline.method, endpoint=baseline.endpoint,
+        parameter=baseline.parameter, location=baseline.location,
+        candidate_class=baseline.candidate_class,
+    )
+    assert len({baseline.id, horizontal.id, vertical.id}) == 3
+    state = WorkflowState()
+    for item in (baseline, horizontal, vertical):
+        state.add_candidate(item)
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert set(restored.candidates) == {baseline.id, horizontal.id, vertical.id}
+    old_payload = baseline.to_dict()
+    old_payload.pop("test_case")
+    restored_legacy = Candidate.from_dict(old_payload)
+    assert restored_legacy is not None and restored_legacy.id == baseline.id
+
+
+def test_registered_evidence_survives_workflow_serialization(tmp_path):
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(make_candidate())
+    (tmp_path / "proof.txt").write_text("Safe proof", encoding="utf-8")
+    artifact = EvidenceArtifact.capture(candidate.id, "proof.txt", tmp_path)
+    state.add_evidence(artifact)
+    state.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "confirmed", evidence_refs=[artifact.id],
+    ))
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert restored.eligible_for_finding(candidate.id)
+    assert restored.evidence[artifact.id].is_resolvable(tmp_path)
+    old_payload = state.to_dict()
+    old_payload["version"] = 1
+    old_payload.pop("evidence")
+    migrated = WorkflowState.from_dict(old_payload)
+    assert migrated.version == 2
+    assert not migrated.eligible_for_finding(candidate.id)
+
+
 def test_workflow_records_redact_secret_bearing_observation_text():
     token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.signature"
     state = WorkflowState()
@@ -100,14 +142,17 @@ def test_workflow_records_redact_secret_bearing_observation_text():
 
 
 @pytest.mark.parametrize("outcome", sorted(VALIDATION_OUTCOMES))
-def test_validation_result_outcomes_round_trip_and_link(outcome):
+def test_validation_result_outcomes_round_trip_and_link(outcome, tmp_path):
     state = WorkflowState()
     candidate, _ = state.add_candidate(make_candidate())
+    (tmp_path / "proof.txt").write_text("Observed request and response", encoding="utf-8")
+    artifact = EvidenceArtifact.capture(candidate.id, "proof.txt", tmp_path)
+    state.add_evidence(artifact)
     result = ValidationResult(
         candidate_id=candidate.id,
         skill_name="sql_injection",
         outcome=outcome,
-        evidence_refs=["evidence/request-1", "evidence/response-1"],
+        evidence_refs=[artifact.id],
         techniques=["boolean differential"],
         repeatable=True,
     )
@@ -149,9 +194,35 @@ def test_result_duplicate_suppression_and_explicit_retest():
     assert state.validation_results[0].notes == "second wording"
     assert state.validation_results[0].cleanup_status == "not applicable"
     assert state.add_validation_result(different_evidence) is True
+    # A later attempt can return to an earlier outcome after an intervening result.
+    assert state.add_validation_result(result) is True
+    assert state.latest_result(candidate.id) is result
     assert state.add_validation_result(result, force=True) is True
-    assert len(state.validation_results) == 3
-    assert len(WorkflowState.from_dict(state.to_dict()).validation_results) == 3
+    assert len(state.validation_results) == 4
+    assert len(WorkflowState.from_dict(state.to_dict()).validation_results) == 4
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_requeued_candidate_status_survives_result_replay(version):
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(make_candidate())
+    state.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "deferred",
+        deferred_reason="browser unavailable",
+    ))
+    assert candidate.status == "deferred"
+    state.set_candidate_status(candidate.id, "queued")
+    saved = state.to_dict()
+    saved["version"] = version
+
+    restored = WorkflowState.from_dict(saved)
+
+    assert restored.candidates[candidate.id].status == "queued"
+    assert candidate.id in restored.active_candidate_ids
+    latest = restored.latest_result(candidate.id)
+    assert latest is not None
+    assert latest.outcome == "deferred"
+    assert len(restored.validation_results) == 1
 
 
 def test_validation_result_does_not_implicitly_complete_whole_skill():

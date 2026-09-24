@@ -37,6 +37,12 @@ allowed-tools:
 
 ## Structured workflow contract
 
+Before recording a `confirmed` result, save a minimal redacted request/response
+or callback proof artifact, call `workflow(action="record_evidence",
+candidate_id="...", evidence_path="...")`, and use its returned `ev_...`
+ID in `evidence_refs`. If coverage sync is `pending`, retry
+`workflow(action="sync_coverage", candidate_id="...")` before finding creation.
+
 Consume a matching Candidate with `workflow(action="start_validation",
 candidate_id="...")`. A concrete direct request may be validated immediately;
 record its supplied details for result linkage without requiring prior stages. Finish a
@@ -153,10 +159,10 @@ even if it looks like "just one more step."
 
 ## Reporting
 
-Write a report to `findings/ssrf-{sanitized-parameter-or-path}.md`. The
-filename must be derived from the actual target/parameter and sanitized
-for filesystem safety (lowercase, non-alphanumeric characters replaced
-with `-`). Never write a literal placeholder as the filename.
+Write validation details and redacted supporting evidence to
+`ssrf/<target>/results.md` (using the target identifier convention from
+`recon`). This is a validation artifact, not an official finding.
+`confirm_finding` alone creates the report under `findings/`.
 
 Include: the exact request(s), the exact response(s) or canary evidence,
 the SSRF level reached (1–4), and — if applicable — a one-line note that

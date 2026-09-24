@@ -19,6 +19,7 @@ from src.session.store import (
     new_id,
 )
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
+from src.workflow.evidence import EvidenceArtifact
 from src.engagement.state import EngagementState
 
 
@@ -62,6 +63,29 @@ class TestEngagementPersistence:
 
 class TestWorkflowPersistence:
     @pytest.mark.asyncio
+    async def test_requeued_candidate_survives_session_save_and_resume(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "requeued-workflow")
+        workflow = WorkflowState()
+        candidate, _ = workflow.add_candidate(Candidate(
+            candidate_class="xss", target="https://target.test", endpoint="/search",
+        ))
+        workflow.add_validation_result(ValidationResult(
+            candidate.id, "cross-site-scripting", "deferred",
+            deferred_reason="browser unavailable",
+        ))
+        workflow.set_candidate_status(candidate.id, "queued")
+
+        await store.save([Message(role="user", content="resume validation")],
+                         workflow=workflow)
+        resumed = store.load().workflow
+
+        assert resumed.candidates[candidate.id].status == "queued"
+        assert candidate.id in resumed.active_candidate_ids
+        latest = resumed.latest_result(candidate.id)
+        assert latest is not None
+        assert latest.outcome == "deferred"
+
+    @pytest.mark.asyncio
     async def test_candidate_and_result_survive_round_trip(self, tmp_path):
         store = Store.new_with_id(tmp_path, "workflow-round-trip")
         workflow = WorkflowState(current_phase="validation")
@@ -74,12 +98,17 @@ class TestWorkflowPersistence:
                 source_skill="web-input-analysis",
             )
         )
+        (tmp_path / "request-7.txt").write_text(
+            "Observed request and response", encoding="utf-8",
+        )
+        artifact = EvidenceArtifact.capture(candidate.id, "request-7.txt", tmp_path)
+        workflow.add_evidence(artifact)
         workflow.add_validation_result(
             ValidationResult(
                 candidate.id,
                 "sql-injection",
                 "confirmed",
-                evidence_refs=["captures/request-7"],
+                evidence_refs=[artifact.id],
             )
         )
 

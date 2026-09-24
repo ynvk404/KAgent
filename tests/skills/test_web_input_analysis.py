@@ -147,13 +147,14 @@ def test_skill_is_analysis_not_exploitation(
 
 def test_skill_requires_enumeration_inventory(
     skill_text: str,
+    flat_lower: str,
 ) -> None:
     lower = skill_text.lower()
 
     assert "web-enumeration" in lower
     assert "inventory" in lower
     assert "inventory.md" in lower
-    assert "before any vulnerability-specific testing" in lower
+    assert "a direct concrete validation request may bypass this analysis step" in flat_lower
 
 
 def test_skill_has_explicit_preconditions(
@@ -290,23 +291,18 @@ def test_active_class_mappings(
     assert suspected_class in skill_text
 
 
-def test_only_three_active_vulnerability_skills(
+def test_handoff_uses_enabled_skill_metadata(
     flat_lower: str,
 ) -> None:
-    assert "sql-injection" in flat_lower
-    assert "cross-site-scripting" in flat_lower
-    assert "access-control" in flat_lower
-
-    assert (
-        "only `sql-injection`, `cross-site-scripting`, and `access-control` "
-        "have active skills right now"
-    ) in flat_lower
+    assert "loaded skill registry is the source of truth" in flat_lower
+    assert "recommended_skills" in flat_lower
+    assert "only `sql-injection`, `cross-site-scripting`, and `access-control`" not in flat_lower
 
 
 @pytest.mark.parametrize(
     "deferred_context",
     [
-        "redirect/URL-like",
+        "Redirect-only behavior",
         "File/path-like",
         "Structural/serialization-heavy",
     ],
@@ -319,7 +315,7 @@ def test_unsupported_classes_are_deferred(
 
     lower = skill_text.lower()
     assert "deferred" in lower
-    assert "no active skill yet" in lower
+    assert "no validator handles a suspected class" in lower
 
 
 def test_no_workflow_is_invented_for_inactive_classes(

@@ -39,6 +39,7 @@ class Finding:
     createdAt: str = ""
     slug: str = ""
     candidate_id: str | None = None
+    evidence_refs: list[str] | None = None
 
 
 class Store:
@@ -49,6 +50,7 @@ class Store:
     ) -> None:
 
         self.dir = Path(directory).resolve()
+        self._save_lock = asyncio.Lock()
 
 
     async def save(
@@ -63,11 +65,26 @@ class Store:
 
         content = render(finding)
 
-        return await asyncio.to_thread(
-            self._write,
-            finding.slug,
-            content,
-        )
+        async with self._save_lock:
+            return await asyncio.to_thread(
+                self._write_once_for_candidate,
+                finding.candidate_id,
+                finding.slug,
+                content,
+            )
+
+    def _write_once_for_candidate(
+        self, candidate_id: str | None, slug: str, content: str,
+    ) -> str:
+        if candidate_id and self.dir.exists():
+            marker = f"- **Candidate ID:** {candidate_id}"
+            for path in sorted(self.dir.glob("*.md")):
+                try:
+                    if marker in path.read_text(encoding="utf-8").splitlines():
+                        return str(path)
+                except OSError:
+                    continue
+        return self._write(slug, content)
 
 
     def _write(
@@ -162,6 +179,9 @@ def render(
 
     if f.candidate_id:
         lines.append(f"- **Candidate ID:** {_inline(f.candidate_id)}")
+    if f.evidence_refs:
+        for ref in f.evidence_refs:
+            lines.append(f"- **Evidence:** {_inline(ref)}")
 
     if f.vulnerabilityType:
         lines.append(f"- **Vulnerability Type:** {f.vulnerabilityType}")

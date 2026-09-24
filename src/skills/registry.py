@@ -103,6 +103,16 @@ class Registry:
             if skill.name not in self.disabled
         ]
 
+    def validators_for_class(self, candidate_class: str) -> list[Skill]:
+        """Return enabled validation playbooks that explicitly handle a class."""
+        canonical = normalize_candidate_class(candidate_class)
+        return [
+            skill for skill in self.list_enabled()
+            if skill.stage == "validation"
+            and not skill.disable_model_invocation
+            and canonical in skill.candidate_classes
+        ]
+
     def set_disabled_names(self, names: Iterable[str]):
         self.disabled = set(names)
 

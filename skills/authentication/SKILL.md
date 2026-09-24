@@ -53,6 +53,13 @@ allowed-tools:
 
 ## Structured workflow contract
 
+Before recording a `confirmed` result, save a minimal redacted proof artifact,
+call `workflow(action="record_evidence", candidate_id="...",
+evidence_path="...")`, and use its returned `ev_...` ID in `evidence_refs`.
+Keep credentials and session tokens out of the artifact. If coverage sync is
+`pending`, retry `workflow(action="sync_coverage", candidate_id="...")`
+before `confirm_finding`.
+
 Consume a matching Candidate with `workflow(action="start_validation",
 candidate_id="...")`. A concrete direct request may be validated immediately;
 record its details for result linkage without requiring prior analysis. Record

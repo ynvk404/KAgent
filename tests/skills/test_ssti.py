@@ -670,17 +670,18 @@ def test_reporting_section_exists(skill):
     assert "## Reporting" in skill["body"]
 
 
-def test_reporting_filename_is_sanitized(skill):
+def test_reporting_artifact_is_separate_from_official_finding(skill):
     body = skill["body"]
 
-    assert "findings/ssti-{sanitized-parameter-or-path}.md" in body
-    assert "sanitized for filesystem safety" in body
+    assert "ssti/<target>/results.md" in body
+    assert "`confirm_finding` alone creates the report under `findings/`" in body
+    assert "findings/ssti-{sanitized-parameter-or-path}.md" not in body
 
 
-def test_reporting_forbids_literal_placeholders(skill):
+def test_reporting_forbids_literal_finding_placeholders(skill):
     body = skill["body"]
 
-    assert "never write a literal placeholder as the filename" in body
+    assert "not an official finding" in body
     assert "findings/ssti-<endpoint>.md" not in body
 
 

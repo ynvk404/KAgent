@@ -75,7 +75,7 @@ def test_web_enumeration_frontmatter_contract():
     assert frontmatter["name"] == "web-enumeration", path
     assert isinstance(frontmatter.get("description"), str)
     assert frontmatter["description"].strip()
-    assert frontmatter["allowed-tools"] == ["shell", "http", "file_write"]
+    assert frontmatter["allowed-tools"] == ["shell", "http", "file_write", "workflow"]
 
 
 def test_web_enumeration_body_has_all_phase_boundaries():
@@ -164,7 +164,7 @@ def test_web_enumeration_only_allows_low_noise_tools():
     frontmatter, body, _ = read_skill()
 
     allowed = set(frontmatter["allowed-tools"])
-    assert allowed == {"shell", "http", "file_write"}
+    assert allowed == {"shell", "http", "file_write", "workflow"}
 
     # Same shape as recon's tool-boundary test: specialized scanners may be
     # *mentioned* as the explicitly-gated exception, but must not be the

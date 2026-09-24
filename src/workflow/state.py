@@ -7,6 +7,7 @@ from typing import Any, Literal, TypeGuard
 
 from src.skills.registry import normalize_candidate_class, normalize_metadata_name
 from src.redact.redact import apply as redact
+from .evidence import EvidenceArtifact
 
 
 CandidateStatus = Literal[
@@ -17,6 +18,7 @@ CandidateStatus = Literal[
     "deferred",
     "dismissed",
 ]
+CandidatePriority = Literal["high", "medium", "low"]
 
 ValidationOutcome = Literal[
     "confirmed",
@@ -92,8 +94,9 @@ def _identity_payload(
     parameter: str | None,
     location: str | None,
     candidate_class: str,
+    test_case: str | None = None,
 ) -> dict[str, str]:
-    return {
+    payload = {
         "target": normalize_candidate_target(target) or "",
         "method": (method or "").strip().upper(),
         "endpoint": (endpoint or "").strip(),
@@ -101,6 +104,10 @@ def _identity_payload(
         "location": (location or "").strip().lower(),
         "candidate_class": normalize_candidate_class(candidate_class),
     }
+    # Preserve IDs from older sessions when no distinct test case was recorded.
+    if test_case:
+        payload["test_case"] = test_case.strip().lower()
+    return payload
 
 
 def candidate_fingerprint(
@@ -111,6 +118,7 @@ def candidate_fingerprint(
     parameter: str | None = None,
     location: str | None = None,
     candidate_class: str,
+    test_case: str | None = None,
 ) -> str:
     payload = _identity_payload(
         target=target,
@@ -119,6 +127,7 @@ def candidate_fingerprint(
         parameter=parameter,
         location=location,
         candidate_class=candidate_class,
+        test_case=test_case,
     )
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -135,6 +144,8 @@ class Candidate:
     method: str | None = None
     parameter: str | None = None
     location: str | None = None
+    test_case: str | None = None
+    priority: CandidatePriority | None = None
     signals: list[str] = field(default_factory=list)
     baseline_request_ref: str | None = None
     auth_context_ref: str | None = None
@@ -150,6 +161,9 @@ class Candidate:
         self.method = _method(self.method)
         self.parameter = _text(self.parameter)
         self.location = _text(self.location, limit=80)
+        self.test_case = _text(self.test_case, limit=120)
+        if self.priority is not None and self.priority not in {"high", "medium", "low"}:
+            raise ValueError("priority must be high, medium, or low")
         self.signals = _strings(self.signals, maximum=_MAX_SIGNALS)
         self.baseline_request_ref = _text(self.baseline_request_ref)
         self.auth_context_ref = _text(self.auth_context_ref)
@@ -166,6 +180,7 @@ class Candidate:
             parameter=self.parameter,
             location=self.location,
             candidate_class=self.candidate_class,
+            test_case=self.test_case,
         )
         if self.id and self.id != stable_id:
             raise ValueError("candidate id does not match its semantic fingerprint")
@@ -180,6 +195,8 @@ class Candidate:
             "method": self.method,
             "parameter": self.parameter,
             "location": self.location,
+            "test_case": self.test_case,
+            "priority": self.priority,
             "signals": list(self.signals),
             "baseline_request_ref": self.baseline_request_ref,
             "auth_context_ref": self.auth_context_ref,
@@ -200,6 +217,8 @@ class Candidate:
                 method=value.get("method"),
                 parameter=value.get("parameter"),
                 location=value.get("location"),
+                test_case=value.get("test_case"),
+                priority=value.get("priority"),
                 signals=value.get("signals", []),
                 baseline_request_ref=value.get("baseline_request_ref"),
                 auth_context_ref=value.get("auth_context_ref"),
@@ -222,6 +241,9 @@ class ValidationResult:
     cleanup_status: str | None = None
     deferred_reason: str | None = None
     notes: str | None = None
+    coverage_synced: bool | None = None
+    recorded_at: str | None = None
+    session_id: str | None = None
 
     def __post_init__(self) -> None:
         self.candidate_id = _text(self.candidate_id, limit=80) or ""
@@ -236,9 +258,13 @@ class ValidationResult:
             raise ValueError("repeatable must be a boolean or null")
         if not isinstance(self.mutation_performed, bool):
             raise ValueError("mutation_performed must be a boolean")
+        if self.coverage_synced is not None and not isinstance(self.coverage_synced, bool):
+            raise ValueError("coverage_synced must be a boolean or null")
         self.cleanup_status = _text(self.cleanup_status)
         self.deferred_reason = _text(self.deferred_reason)
         self.notes = _text(self.notes, limit=_MAX_NOTES_LENGTH)
+        self.recorded_at = _text(self.recorded_at, limit=80)
+        self.session_id = _text(self.session_id, limit=120)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -252,6 +278,9 @@ class ValidationResult:
             "cleanup_status": self.cleanup_status,
             "deferred_reason": self.deferred_reason,
             "notes": self.notes,
+            "coverage_synced": self.coverage_synced,
+            "recorded_at": self.recorded_at,
+            "session_id": self.session_id,
         }
 
     @classmethod
@@ -279,6 +308,9 @@ class ValidationResult:
                 cleanup_status=value.get("cleanup_status"),
                 deferred_reason=value.get("deferred_reason"),
                 notes=value.get("notes"),
+                coverage_synced=value.get("coverage_synced"),
+                recorded_at=value.get("recorded_at"),
+                session_id=value.get("session_id"),
             )
         except (TypeError, ValueError):
             return None
@@ -300,11 +332,13 @@ def validation_result_fingerprint(result: ValidationResult) -> str:
 
 @dataclass(slots=True)
 class WorkflowState:
-    version: int = 1
+    version: int = 2
     candidates: dict[str, Candidate] = field(default_factory=dict)
     validation_results: list[ValidationResult] = field(default_factory=list)
+    evidence: dict[str, EvidenceArtifact] = field(default_factory=dict)
     active_candidate_ids: set[str] = field(default_factory=set)
     completed_skills: set[str] = field(default_factory=set)
+    completed_artifacts: dict[str, str] = field(default_factory=dict)
     current_phase: str | None = None
 
     def add_candidate(self, candidate: Candidate) -> tuple[Candidate, bool]:
@@ -317,6 +351,7 @@ class WorkflowState:
                 "baseline_request_ref",
                 "auth_context_ref",
                 "source_skill",
+                "priority",
             ):
                 if getattr(existing, field_name) is None:
                     setattr(existing, field_name, getattr(candidate, field_name))
@@ -348,25 +383,41 @@ class WorkflowState:
     ) -> bool:
         if result.candidate_id not in self.candidates:
             raise ValueError(f"unknown candidate: {result.candidate_id}")
+        terminal_status: CandidateStatus = (
+            "deferred"
+            if result.outcome
+            in {
+                "blocked", "insufficient-evidence", "deferred",
+                "browser-required", "authorization-required",
+            }
+            else "validated"
+        )
         fingerprint = validation_result_fingerprint(result)
         if not force:
-            for existing in self.validation_results:
-                if validation_result_fingerprint(existing) != fingerprint:
-                    continue
+            existing = self.latest_result(result.candidate_id)
+            if existing and validation_result_fingerprint(existing) == fingerprint:
                 for field_name in ("cleanup_status", "deferred_reason", "notes"):
                     value = getattr(result, field_name)
                     if value is not None:
                         setattr(existing, field_name, value)
+                if self.candidates[result.candidate_id].status == "validating":
+                    self.set_candidate_status(result.candidate_id, terminal_status)
                 return False
         self.validation_results.append(result)
-        terminal_status: CandidateStatus = (
-            "deferred"
-            if result.outcome
-            in {"deferred", "browser-required", "authorization-required"}
-            else "validated"
-        )
         self.set_candidate_status(result.candidate_id, terminal_status)
         return True
+
+    def add_evidence(self, artifact: EvidenceArtifact) -> None:
+        if artifact.candidate_id not in self.candidates:
+            raise ValueError(f"unknown candidate: {artifact.candidate_id}")
+        self.evidence[artifact.id] = artifact
+
+    def evidence_matches(self, candidate_id: str, refs: list[str]) -> bool:
+        return bool(refs) and all(
+            (artifact := self.evidence.get(ref)) is not None
+            and artifact.candidate_id == candidate_id
+            for ref in refs
+        )
 
     def relevant_candidate_classes(self) -> frozenset[str]:
         return frozenset(
@@ -388,21 +439,30 @@ class WorkflowState:
 
     def eligible_for_finding(self, candidate_id: str) -> bool:
         result = self.latest_result(candidate_id)
-        return result is not None and result.outcome == "confirmed"
+        return (
+            result is not None
+            and result.outcome == "confirmed"
+            and result.coverage_synced is not False
+            and self.evidence_matches(candidate_id, result.evidence_refs)
+        )
 
     def clear(self) -> None:
         self.candidates.clear()
         self.validation_results.clear()
+        self.evidence.clear()
         self.active_candidate_ids.clear()
         self.completed_skills.clear()
+        self.completed_artifacts.clear()
         self.current_phase = None
 
     def replace_from(self, other: WorkflowState) -> None:
         self.version = other.version
         self.candidates = dict(other.candidates)
         self.validation_results = list(other.validation_results)
+        self.evidence = dict(other.evidence)
         self.active_candidate_ids = set(other.active_candidate_ids)
         self.completed_skills = set(other.completed_skills)
+        self.completed_artifacts = dict(other.completed_artifacts)
         self.current_phase = other.current_phase
 
     def to_dict(self) -> dict[str, Any]:
@@ -410,8 +470,10 @@ class WorkflowState:
             "version": self.version,
             "candidates": [self.candidates[key].to_dict() for key in sorted(self.candidates)],
             "validation_results": [result.to_dict() for result in self.validation_results],
+            "evidence": [self.evidence[key].to_dict() for key in sorted(self.evidence)],
             "active_candidate_ids": sorted(self.active_candidate_ids),
             "completed_skills": sorted(self.completed_skills),
+            "completed_artifacts": dict(sorted(self.completed_artifacts.items())),
             "current_phase": self.current_phase,
         }
 
@@ -422,18 +484,30 @@ class WorkflowState:
             return state
         version = value.get("version", 1)
         if isinstance(version, int) and not isinstance(version, bool) and version > 0:
-            state.version = version
+            # Version 1 had no registered evidence or independent subcases.
+            # Its candidates/results still load, but legacy free-text evidence
+            # references do not become finding-eligible without a new proof.
+            state.version = max(2, version)
 
         raw_candidates = value.get("candidates", [])
         if isinstance(raw_candidates, dict):
             raw_candidates = list(raw_candidates.values())
+        saved_statuses: dict[str, CandidateStatus] = {}
         if isinstance(raw_candidates, list):
             for raw in raw_candidates:
                 candidate = Candidate.from_dict(raw)
                 if candidate is not None:
                     state.add_candidate(candidate)
+                    if isinstance(raw, dict) and "status" in raw:
+                        saved_statuses[candidate.id] = candidate.status
 
         raw_results = value.get("validation_results", [])
+        raw_evidence = value.get("evidence", [])
+        if isinstance(raw_evidence, list):
+            for raw in raw_evidence:
+                artifact = EvidenceArtifact.from_dict(raw)
+                if artifact is not None and artifact.candidate_id in state.candidates:
+                    state.add_evidence(artifact)
         if isinstance(raw_results, list):
             for raw in raw_results:
                 result = ValidationResult.from_dict(raw)
@@ -441,6 +515,11 @@ class WorkflowState:
                     # Persistence may contain an intentional forced retest
                     # whose compact result is identical to an earlier attempt.
                     state.add_validation_result(result, force=True)
+
+        # Replaying results rebuilds history, but the serialized Candidate
+        # status may reflect a later requeue or validation start.
+        for candidate_id, status in saved_statuses.items():
+            state.set_candidate_status(candidate_id, status)
 
         active = value.get("active_candidate_ids")
         if isinstance(active, list) and all(isinstance(item, str) for item in active):
@@ -455,6 +534,15 @@ class WorkflowState:
             state.completed_skills.update(
                 normalize_metadata_name(item) for item in completed if item.strip()
             )
+        artifacts = value.get("completed_artifacts")
+        if isinstance(artifacts, dict):
+            for name, path in artifacts.items():
+                if isinstance(name, str) and isinstance(path, str):
+                    canonical = normalize_metadata_name(name)
+                    if canonical in state.completed_skills:
+                        safe_path = _text(path)
+                        if safe_path:
+                            state.completed_artifacts[canonical] = safe_path
         phase = value.get("current_phase")
         if isinstance(phase, str):
             state.current_phase = _text(phase, limit=80)

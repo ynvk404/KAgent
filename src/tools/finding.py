@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, UTC
 from typing import Callable, TypeGuard, Any
+from urllib.parse import urlparse
 
 from src.findings.store import (
     Finding,
@@ -15,6 +17,8 @@ from src.permission.permission import Prompter
 from src.redact.redact import apply as redact
 from src.logger.logger import get_logger
 from src.workflow.state import WorkflowState
+from src.skills.registry import normalize_candidate_class
+from src.target.origin import HTTPOrigin
 from .types import Tool, arg_string
 
 SEVERITIES: tuple[Severity, ...] = (
@@ -164,6 +168,9 @@ class ConfirmFindingTool:
         if not impact:
             raise Exception("impact is required")
 
+        if candidate_id and self.workflow is None:
+            raise ValueError("candidate ID requires workflow state")
+
         if (
             candidate_id
             and self.workflow is not None
@@ -171,8 +178,40 @@ class ConfirmFindingTool:
         ):
             raise Exception(
                 "candidate is not eligible for confirm_finding: its latest "
-                "ValidationResult must have outcome=confirmed"
+                "ValidationResult must have outcome=confirmed and registered evidence"
             )
+
+        evidence_refs: list[str] | None = None
+        if candidate_id and self.workflow is not None:
+            candidate = self.workflow.candidates[candidate_id]
+            latest = self.workflow.latest_result(candidate_id)
+            assert latest is not None
+            root = self.store.dir.parent
+            if not all(
+                self.workflow.evidence[ref].is_resolvable(root)
+                for ref in latest.evidence_refs
+            ):
+                raise ValueError("candidate evidence artifact changed or is unavailable")
+            requested_class = arg_string(args, "vuln_class")
+            if requested_class and normalize_candidate_class(requested_class) != candidate.candidate_class:
+                raise ValueError("finding class does not match candidate class")
+            if candidate.target:
+                try:
+                    if HTTPOrigin.from_url(url) != HTTPOrigin.from_url(candidate.target):
+                        raise ValueError("finding target does not match candidate target")
+                except ValueError as exc:
+                    raise ValueError("finding target does not match candidate target") from exc
+            if candidate.endpoint:
+                expected_path = urlparse(candidate.endpoint).path
+                actual_path = urlparse(url).path
+                template = re.escape(expected_path).replace(r"\{", "{").replace(r"\}", "}")
+                template = re.sub(r"\{[^{}]+\}", r"[^/]+", template)
+                if not re.fullmatch(template, actual_path):
+                    raise ValueError("finding endpoint does not match candidate endpoint")
+            requested_method = arg_string(args, "method")
+            if candidate.method and requested_method and requested_method.upper() != candidate.method:
+                raise ValueError("finding method does not match candidate method")
+            evidence_refs = list(latest.evidence_refs)
 
         if not is_severity(severity):
             raise Exception(
@@ -180,7 +219,13 @@ class ConfirmFindingTool:
                 + ", ".join(SEVERITIES)
             )
 
-        classification = classify(arg_string(args, "vuln_class"))
+        classification = classify(
+            arg_string(args, "vuln_class")
+            or (
+                self.workflow.candidates[candidate_id].candidate_class
+                if candidate_id and self.workflow is not None else ""
+            )
+        )
         redacted_title = redact(title)
 
         finding = Finding(
@@ -203,6 +248,7 @@ class ConfirmFindingTool:
             createdAt=datetime.now(UTC).isoformat(),
             slug=slugify(redacted_title) or f"finding-{int(datetime.now(UTC).timestamp())}",
             candidate_id=candidate_id or None,
+            evidence_refs=evidence_refs,
         )
 
         path = await self.store.save(finding)

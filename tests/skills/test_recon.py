@@ -72,7 +72,7 @@ def test_recon_frontmatter_contract():
     assert frontmatter["name"] == "recon", path
     assert isinstance(frontmatter.get("description"), str)
     assert frontmatter["description"].strip()
-    assert frontmatter["allowed-tools"] == ["shell", "http", "file_write"]
+    assert frontmatter["allowed-tools"] == ["shell", "http", "file_write", "workflow"]
 
 
 def test_recon_body_has_all_phase_boundaries():
@@ -117,7 +117,7 @@ def test_recon_only_allows_low_noise_tools():
     frontmatter, body, _ = read_skill()
 
     allowed = set(frontmatter["allowed-tools"])
-    assert allowed == {"shell", "http", "file_write"}
+    assert allowed == {"shell", "http", "file_write", "workflow"}
 
     # The body may mention specialized scanners as things that are forbidden,
     # but they must not appear in the actual allow-list or be promoted as the

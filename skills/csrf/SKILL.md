@@ -35,6 +35,12 @@ allowed-tools:
 
 ## Structured workflow contract
 
+Before recording a `confirmed` result, save a minimal redacted proof artifact,
+call `workflow(action="record_evidence", candidate_id="...",
+evidence_path="...")`, and use its returned `ev_...` ID in `evidence_refs`.
+If coverage sync is `pending`, retry `workflow(action="sync_coverage",
+candidate_id="...")` before `confirm_finding`.
+
 Consume a matching Candidate with `workflow(action="start_validation",
 candidate_id="...")`. A concrete direct request may be validated immediately;
 record its supplied details for result linkage without requiring prior stages. Record a
@@ -229,14 +235,10 @@ workflow.
 
 ## Reporting
 
-Write a report to:
-
-`findings/csrf-{sanitized-parameter-or-path}.md`
-
-The filename must be derived from the actual endpoint/parameter and
-sanitized for filesystem safety: lowercase, with non-alphanumeric
-characters replaced by `-`. Never write a literal placeholder as the
-filename.
+Write validation details and redacted supporting evidence to
+`csrf/<target>/results.md` (using the target identifier convention from
+`recon`). This is a validation artifact, not an official finding.
+`confirm_finding` alone creates the report under `findings/`.
 
 Include:
 

@@ -21,7 +21,7 @@ skills/
 | `triggers` | no | `strong` and `weak` phrase lists used by the deterministic planner. Keep generic words out of `strong`. |
 | `candidate-classes` | no | Canonical lowercase-kebab vulnerability classes handled by the skill. Common aliases such as `sqli`, `xss`, `idor`, and `bola` are normalized. |
 | `requires` | no | Other skill names that provide useful prior context. These are soft ranking signals, not mandatory dependencies. |
-| `allowed-tools` | no | List restricting which tools the skill may call (e.g. `http`, `shell`, `file_write`). Omit for no restriction. Legacy alias: `tools`. |
+| `allowed-tools` | yes | Declared capability list for permission-requiring tools (e.g. `http`, `shell`, `file_write`). An empty list is unrestricted. Legacy alias: `tools`. |
 | `disable-model-invocation` | no | `true` = user-only: hidden from the model, invoked only via the `/<name>` slash command. |
 
 Everything after the frontmatter is the playbook body, delivered to the
@@ -32,6 +32,34 @@ Automatic selection is metadata-driven: discovery parses and registers the
 fields above, then the planner ranks enabled/model-invokable skills using
 explicit names, candidate classes, triggers, stage, and available prerequisite
 context. Detailed testing methodology remains in the Markdown body.
+
+At runtime, `allowed-tools` is checked only for tools that require permission.
+When no skill is active, it does not restrict tools. Multiple active skills
+combine their declared capabilities. Read-only and workflow meta tools remain
+available independently; the Tool Registry still applies each tool's own
+argument-aware permission checks. This is a capability hint and gate for
+permission-requiring tools, not a sandbox for arbitrary shell commands.
+
+For HTTP requests, prefer the built-in `http` tool when it can express the
+request: it validates the allowed origin and private-host rules before
+execution. `shell`/`curl` remains available for workflows that need it, but
+its permission gate reviews the command rather than enforcing HTTP origins
+inside a general shell command. Do not treat permission for one curl command
+as scope for a different destination.
+
+## Validation evidence and findings
+
+For a confirmed result, first save a small redacted proof artifact in the
+project. Call `workflow(record_evidence)` with its Candidate ID and path, then
+use the returned `ev_...` ID in `workflow(record_result).evidence_refs`.
+The workflow records the artifact's digest and checks that it still exists
+when a linked finding is created. A result with `coverage_sync: pending` needs
+`workflow(sync_coverage)` before it is finding-eligible. Only
+`confirm_finding` writes an official report under `findings/`; skill
+`results.md` files remain supporting validation artifacts.
+
+These are structural checks. The validator playbook and model still judge
+whether the observed proof is sufficient for its vulnerability class.
 
 ## Where skills load from
 

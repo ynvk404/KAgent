@@ -14,11 +14,20 @@ from src.tools.finding import (
     is_severity,
 )
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
+from src.workflow.evidence import EvidenceArtifact
 
 
 def _tool(tmp_path, notifier=None):
     store = Store(str(tmp_path / "findings"))
     return ConfirmFindingTool(store, notifier=notifier), store
+
+
+def _linked_proof(workflow, candidate, tmp_path):
+    path = tmp_path / f"proof-{candidate.id}.txt"
+    path.write_text("Observed request and response proof", encoding="utf-8")
+    artifact = EvidenceArtifact.capture(candidate.id, path.name, tmp_path)
+    workflow.add_evidence(artifact)
+    return artifact.id
 
 
 @pytest.mark.asyncio
@@ -67,12 +76,13 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
     candidate, _ = workflow.add_candidate(
         Candidate(candidate_class="sqli", endpoint="/product", parameter="id")
     )
+    proof = _linked_proof(workflow, candidate, tmp_path)
     workflow.add_validation_result(
         ValidationResult(
             candidate.id,
             "sql-injection",
             "confirmed",
-            evidence_refs=["captures/sql-proof"],
+            evidence_refs=[proof],
         )
     )
     tool = ConfirmFindingTool(
@@ -94,6 +104,58 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
     assert "written to" in result
     report = next((tmp_path / "findings").glob("*.md")).read_text(encoding="utf-8")
     assert f"- **Candidate ID:** {candidate.id}" in report
+    assert f"- **Evidence:** {proof}" in report
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override,error",
+    [
+        ({"vuln_class": "xss"}, "class does not match"),
+        ({"url": "https://other.test/product"}, "target does not match"),
+        ({"url": "https://target.test/other"}, "endpoint does not match"),
+        ({"method": "POST"}, "method does not match"),
+    ],
+)
+async def test_finding_rejects_candidate_identity_mismatch(tmp_path, override, error):
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test",
+        method="GET", endpoint="/product", parameter="id",
+    ))
+    proof = _linked_proof(workflow, candidate, tmp_path)
+    workflow.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "confirmed", evidence_refs=[proof],
+    ))
+    tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
+    args = {
+        "candidate_id": candidate.id, "title": "SQL injection in product",
+        "severity": "high", "url": "https://target.test/product",
+        "method": "GET", "impact": "Query manipulation",
+    }
+    with pytest.raises(ValueError, match=error):
+        await tool.run({**args, **override}, None, AlwaysAllow())
+    assert not (tmp_path / "findings").exists()
+
+
+@pytest.mark.asyncio
+async def test_finding_rechecks_evidence_artifact_before_writing(tmp_path):
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(Candidate(
+        candidate_class="xss", endpoint="/search",
+    ))
+    proof = _linked_proof(workflow, candidate, tmp_path)
+    workflow.add_validation_result(ValidationResult(
+        candidate.id, "cross-site-scripting", "confirmed", evidence_refs=[proof],
+    ))
+    (tmp_path / f"proof-{candidate.id}.txt").unlink()
+    tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
+    with pytest.raises(ValueError, match="changed or is unavailable"):
+        await tool.run({
+            "candidate_id": candidate.id, "title": "XSS", "severity": "medium",
+            "url": "https://target.test/search", "impact": "Script execution",
+        }, None, AlwaysAllow())
+    assert not (tmp_path / "findings").exists()
 
 
 @pytest.mark.asyncio
@@ -121,13 +183,14 @@ async def test_unknown_or_resultless_candidate_cannot_create_finding(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_same_candidate_creates_append_only_reports(tmp_path):
+async def test_same_candidate_creates_one_official_report(tmp_path):
     workflow = WorkflowState()
     candidate, _ = workflow.add_candidate(
         Candidate(candidate_class="sqli", endpoint="/product", parameter="id")
     )
+    proof = _linked_proof(workflow, candidate, tmp_path)
     workflow.add_validation_result(
-        ValidationResult(candidate.id, "sql-injection", "confirmed")
+        ValidationResult(candidate.id, "sql-injection", "confirmed", evidence_refs=[proof])
     )
     tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
     args = {
@@ -143,16 +206,16 @@ async def test_same_candidate_creates_append_only_reports(tmp_path):
     original = first.read_bytes()
     await tool.run(args, None, AlwaysAllow())
     second = tmp_path / "findings" / "sql-injection-in-product-2.md"
-    assert second.exists()
+    assert not second.exists()
     assert first.read_bytes() == original
 
     await tool.run({**args, "title": "SQL injection in catalog"}, None, AlwaysAllow())
     third = tmp_path / "findings" / "sql-injection-in-catalog.md"
-    assert third.exists()
+    assert not third.exists()
     assert first.read_bytes() == original
-    assert len(list((tmp_path / "findings").glob("*.md"))) == 3
-    for report in (first, second, third):
-        assert f"- **Candidate ID:** {candidate.id}" in report.read_text(encoding="utf-8")
+    assert len(list((tmp_path / "findings").glob("*.md"))) == 1
+    assert f"- **Candidate ID:** {candidate.id}" in first.read_text(encoding="utf-8")
+    assert f"- **Evidence:** {proof}" in first.read_text(encoding="utf-8")
 
 
 def test_metadata(tmp_path):
@@ -374,8 +437,9 @@ async def test_access_control_report_is_broad_and_retains_candidate_id(
     candidate, _ = workflow.add_candidate(
         Candidate(candidate_class="access-control", endpoint="/orders/1")
     )
+    proof = _linked_proof(workflow, candidate, tmp_path)
     workflow.add_validation_result(
-        ValidationResult(candidate.id, "access-control", "confirmed")
+        ValidationResult(candidate.id, "access-control", "confirmed", evidence_refs=[proof])
     )
     tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
 
