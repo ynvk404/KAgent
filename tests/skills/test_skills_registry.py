@@ -472,6 +472,9 @@ def test_parse_completion_artifact_metadata(tmp_path):
         ("candidate-classes: xxe", "`candidate-classes` must be a list"),
         ("requires: web-input-analysis", "`requires` must be a list"),
         ("completion-artifact: ../results.md", "invalid `completion-artifact`"),
+        ("completion-artifact: '   '", "invalid `completion-artifact`"),
+        ("completion-artifact: 'results/{foo}.md'", "invalid `completion-artifact`"),
+        ("completion-artifact: [results.md]", "`completion-artifact` must be a string"),
     ],
 )
 def test_malformed_selection_metadata_is_rejected(tmp_path, metadata, message):

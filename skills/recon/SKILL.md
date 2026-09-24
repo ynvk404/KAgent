@@ -22,6 +22,7 @@ triggers:
     - reachable service
     - apex domain
 candidate-classes: []
+completion-artifact: artifacts/recon/{target}/summary.md
 requires: []
 allowed-tools:
   - shell
@@ -274,8 +275,10 @@ Write a concise summary to:
 `artifacts/recon/<target>/summary.md`
 
 After writing it, call `workflow(action="complete_skill", skill_name="recon",
-artifact_ref="artifacts/recon/<target>/summary.md", current_phase="enumeration")` when
-a reachable web target can be enumerated. If reachability failed, set
+artifact_ref="artifacts/recon/<target>/summary.md", current_phase="enumeration")`;
+runtime rejects completion when the canonical artifact is absent, empty, or a
+different path is supplied. When a reachable web target can be enumerated,
+proceed with `enumeration`. If reachability failed, set
 `current_phase="blocked"` and record the failure in the summary instead.
 Completion records that this bounded reconnaissance pass ended; it does not
 force the next skill or prevent targeted recon later.

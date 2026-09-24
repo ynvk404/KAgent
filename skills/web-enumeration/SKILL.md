@@ -28,6 +28,7 @@ triggers:
     - static resources
     - javascript resources
 candidate-classes: []
+completion-artifact: artifacts/web-enumeration/{target}/inventory.md
 requires:
   - recon
 allowed-tools:
@@ -333,8 +334,10 @@ Record one endpoint or route per entry. Prefer a consistent Markdown format:
 After writing the inventory, call `workflow(action="complete_skill",
 skill_name="web-enumeration",
 artifact_ref="artifacts/web-enumeration/<target>/inventory.md",
-current_phase="analysis")`. This marks the bounded inventory pass complete;
-newly discovered routes may still justify another focused pass.
+current_phase="analysis")`; runtime rejects completion when the canonical
+artifact is absent, empty, or a different path is supplied. This marks the
+bounded inventory pass complete; newly discovered routes may still justify
+another focused pass.
 
 ### GET /search
 

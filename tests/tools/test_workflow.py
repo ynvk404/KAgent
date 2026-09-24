@@ -507,6 +507,88 @@ async def test_sqli_completion_requires_and_reuses_canonical_artifact(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_recon_and_web_enumeration_completion_artifacts(tmp_path):
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    state = WorkflowState()
+    target = Target("http://juice.lab:3000")
+    tool = WorkflowTool(state, target, skills=skills, evidence_root=tmp_path)
+
+    missing_recon = await tool.run(
+        {"action": "complete_skill", "skill_name": "recon"},
+        None,
+        AlwaysAllow(),
+    )
+    assert "requires artifacts/recon/juice-lab-3000/summary.md" in missing_recon
+
+    recon_path = tmp_path / "artifacts/recon/juice-lab-3000/summary.md"
+    recon_path.parent.mkdir(parents=True, exist_ok=True)
+    recon_path.write_text("", encoding="utf-8")
+    empty_recon = await tool.run(
+        {"action": "complete_skill", "skill_name": "recon"},
+        None,
+        AlwaysAllow(),
+    )
+    assert "requires artifacts/recon/juice-lab-3000/summary.md" in empty_recon
+
+    recon_path.write_text("# Recon Summary\nReconnaissance done.", encoding="utf-8")
+    wrong_recon = await tool.run(
+        {
+            "action": "complete_skill",
+            "skill_name": "recon",
+            "artifact_ref": "artifacts/recon/wrong/summary.md",
+        },
+        None,
+        AlwaysAllow(),
+    )
+    assert "requires artifacts/recon/juice-lab-3000/summary.md" in wrong_recon
+
+    completed_recon = json.loads(await tool.run(
+        {"action": "complete_skill", "skill_name": "recon"},
+        None,
+        AlwaysAllow(),
+    ))
+    expected_recon = "artifacts/recon/juice-lab-3000/summary.md"
+    assert completed_recon["artifact_ref"] == expected_recon
+    assert "recon" in state.completed_skills
+    assert state.completed_artifacts["recon"] == expected_recon
+
+    missing_enum = await tool.run(
+        {"action": "complete_skill", "skill_name": "web-enumeration"},
+        None,
+        AlwaysAllow(),
+    )
+    assert "requires artifacts/web-enumeration/juice-lab-3000/inventory.md" in missing_enum
+
+    enum_path = tmp_path / "artifacts/web-enumeration/juice-lab-3000/inventory.md"
+    enum_path.parent.mkdir(parents=True, exist_ok=True)
+    enum_path.write_text("", encoding="utf-8")
+    empty_enum = await tool.run(
+        {"action": "complete_skill", "skill_name": "web-enumeration"},
+        None,
+        AlwaysAllow(),
+    )
+    assert "requires artifacts/web-enumeration/juice-lab-3000/inventory.md" in empty_enum
+
+    enum_path.write_text("# Inventory\nEndpoints found.", encoding="utf-8")
+    completed_enum = json.loads(await tool.run(
+        {"action": "complete_skill", "skill_name": "web-enumeration"},
+        None,
+        AlwaysAllow(),
+    ))
+    expected_enum = "artifacts/web-enumeration/juice-lab-3000/inventory.md"
+    assert completed_enum["artifact_ref"] == expected_enum
+    assert "web-enumeration" in state.completed_skills
+    assert state.completed_artifacts["web-enumeration"] == expected_enum
+
+    resumed = WorkflowState.from_dict(state.to_dict())
+    assert resumed.completed_artifacts == {
+        "recon": expected_recon,
+        "web-enumeration": expected_enum,
+    }
+
+
+@pytest.mark.asyncio
 async def test_skill_without_completion_artifact_is_unchanged(tmp_path):
     skills = SkillRegistry()
     skills.load_dir(Path(__file__).resolve().parents[2] / "skills")

@@ -23,6 +23,12 @@ def test_completion_artifact_path_renders_canonical_relative_path():
     assert completion_artifact_path(
         "artifacts/sql-injection/{target}/results.md", "https://App.Example:8443/"
     ) == "artifacts/sql-injection/app-example-8443/results.md"
+    assert completion_artifact_path(
+        "artifacts/recon/{target}/summary.md", "http://juice.lab:3000"
+    ) == "artifacts/recon/juice-lab-3000/summary.md"
+    assert completion_artifact_path(
+        "artifacts/web-enumeration/{target}/inventory.md", "http://127.0.0.1:8080"
+    ) == "artifacts/web-enumeration/127-0-0-1-8080/inventory.md"
 
 
 def test_completion_artifact_rejects_escape_and_unknown_fields(tmp_path: Path):

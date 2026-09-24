@@ -76,6 +76,9 @@ def test_web_enumeration_frontmatter_contract():
     assert isinstance(frontmatter.get("description"), str)
     assert frontmatter["description"].strip()
     assert frontmatter["allowed-tools"] == ["shell", "http", "file_write", "workflow"]
+    assert frontmatter.get("completion-artifact") == (
+        "artifacts/web-enumeration/{target}/inventory.md"
+    )
 
 
 def test_web_enumeration_body_has_all_phase_boundaries():
