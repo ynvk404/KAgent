@@ -712,6 +712,175 @@ async def test_run_completes_turn_with_single_assistant_text_response():
     )
 
 
+MALFORMED_TOOL_CALL_TEXT = (
+    '<｜｜DSML｜｜ calls> '
+    '<｜｜DSML｜｜ invoke name="echo"> '
+    '<｜｜DSML｜｜ parameter name="msg" string="true">retry me'
+    '</｜｜DSML｜｜ parameter> '
+    '</｜｜DSML｜｜ invoke> '
+    '</｜｜DSML｜｜ calls>'
+)
+
+
+@pytest.mark.asyncio
+async def test_malformed_tool_call_text_emits_error_and_retries_once():
+    result = make_agent_with_client(
+        [
+            ChatResponse(
+                message=Message(
+                    role="assistant",
+                    content=MALFORMED_TOOL_CALL_TEXT,
+                ),
+                finish_reason="stop",
+            ),
+            ChatResponse(
+                message=Message(role="assistant", content="No further tool action needed."),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    agent = result["agent"]
+    client = result["client"]
+    collector = collect()
+
+    await agent.run("Persist the confirmed finding.", FakeSignal(), collector["sink"])
+
+    assert len(client.requests) == 2
+    retry_message = client.requests[1].messages[-2]
+    assert retry_message.role == "user"
+    assert "structured function calling only" in retry_message.content
+    assert any(
+        event["type"] == "error"
+        and "malformed tool-call text" in str(event["err"])
+        for event in collector["events"]
+    )
+    assert collector["events"][-1].stop_reason == "final_response"
+
+
+@pytest.mark.asyncio
+async def test_structured_tool_call_on_malformed_response_retry_executes_normally():
+    result = make_agent_with_client(
+        [
+            ChatResponse(
+                message=Message(role="assistant", content=MALFORMED_TOOL_CALL_TEXT),
+                finish_reason="stop",
+            ),
+            tool_batch(tool_call("retry_call", "echo", {"msg": "retry me"})),
+            ChatResponse(
+                message=Message(role="assistant", content="Tool executed."),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    agent = result["agent"]
+    client = result["client"]
+    tool = result["tool"]
+    collector = collect()
+
+    await agent.run("Run the requested tool.", FakeSignal(), collector["sink"])
+
+    assert len(client.requests) == 3
+    assert tool.calls == 1
+    assert any(
+        event["type"] == "tool-call" and event["name"] == "echo"
+        for event in collector["events"]
+    )
+    assert any(
+        event["type"] == "tool-result" and event["result"] == "echoed: retry me"
+        for event in collector["events"]
+    )
+    assert collector["events"][-1].stop_reason == "final_response"
+
+
+@pytest.mark.parametrize(
+    "retry_content",
+    [
+        MALFORMED_TOOL_CALL_TEXT,
+        "I could not produce a structured tool call.",
+    ],
+)
+@pytest.mark.asyncio
+async def test_retry_without_structured_tool_call_emits_final_warning(retry_content):
+    result = make_agent_with_client(
+        [
+            ChatResponse(
+                message=Message(role="assistant", content=MALFORMED_TOOL_CALL_TEXT),
+                finish_reason="stop",
+            ),
+            ChatResponse(
+                message=Message(role="assistant", content=retry_content),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    agent = result["agent"]
+    client = result["client"]
+    collector = collect()
+
+    await agent.run("Call the requested tool.", FakeSignal(), collector["sink"])
+
+    assert len(client.requests) == 2
+    warning = "the intended action was not executed"
+    assert any(
+        event["type"] == "error" and warning in str(event["err"])
+        for event in collector["events"]
+    )
+    assert any(
+        event["type"] == "assistant-text" and warning in event["text"]
+        for event in collector["events"]
+    )
+    assert collector["events"][-1].stop_reason == "final_response"
+
+
+@pytest.mark.asyncio
+async def test_normal_final_text_does_not_retry_or_emit_tool_warning():
+    result = make_agent_with_client(
+        [
+            ChatResponse(
+                message=Message(role="assistant", content="The finding is saved."),
+                finish_reason="stop",
+            )
+        ]
+    )
+    agent = result["agent"]
+    client = result["client"]
+    collector = collect()
+
+    await agent.run("Summarize the finding.", FakeSignal(), collector["sink"])
+
+    assert len(client.requests) == 1
+    assert collector["events"][-1].stop_reason == "final_response"
+    assert not any(event["type"] == "error" for event in collector["events"])
+
+
+@pytest.mark.asyncio
+async def test_initial_structured_tool_call_does_not_trigger_malformed_retry():
+    result = make_agent_with_client(
+        [
+            tool_batch(tool_call("normal_call", "echo", {"msg": "direct"})),
+            ChatResponse(
+                message=Message(role="assistant", content="Tool executed."),
+                finish_reason="stop",
+            ),
+        ]
+    )
+    agent = result["agent"]
+    client = result["client"]
+    tool = result["tool"]
+    collector = collect()
+
+    await agent.run("Call echo once.", FakeSignal(), collector["sink"])
+
+    assert len(client.requests) == 2
+    assert tool.calls == 1
+    assert not any(
+        event["type"] == "error"
+        and "malformed tool-call" in str(event["err"])
+        for event in collector["events"]
+    )
+    assert collector["events"][-1].stop_reason == "final_response"
+
+
 @pytest.mark.asyncio
 async def test_does_not_execute_returned_tool_calls_when_tools_are_disabled():
 

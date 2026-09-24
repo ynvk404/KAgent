@@ -177,6 +177,46 @@ WORKFLOW_HISTORY_MARKER = (
     "[workflow tool result elided; current structured state is in the system prompt]"
 )
 
+_MALFORMED_TOOL_CALL_TAG_RE = re.compile(
+    r"<\s*/?\s*(?:[^\w\s<>]*DSML[^\w\s<>]*\s*)?"
+    r"(?P<name>tool_calls?|function_calls?|tool_use|calls|invoke|parameter|arguments)"
+    r"\b[^>]*>",
+    re.IGNORECASE,
+)
+_NAMED_TOOL_INVOCATION_RE = re.compile(
+    r"<[^>]*\b(?:invoke|tool_calls?|function_calls?)\b[^>]*\bname\s*=",
+    re.IGNORECASE,
+)
+_TOOL_CALL_CONTAINER_TAGS = frozenset(
+    {
+        "tool_call",
+        "tool_calls",
+        "function_call",
+        "function_calls",
+        "tool_use",
+        "calls",
+    }
+)
+_TOOL_CALL_DETAIL_TAGS = frozenset({"invoke", "parameter", "arguments"})
+
+
+def _looks_like_malformed_tool_call(content: str) -> bool:
+    """Identify tool-call markup leaked as text instead of structured calls.
+
+    This is a safety net for malformed provider/model output. It deliberately
+    requires multiple tool-protocol tags and a named invocation to avoid
+    treating ordinary prose or a single markup example as an attempted call.
+    """
+    tags = [
+        match.group("name").lower()
+        for match in _MALFORMED_TOOL_CALL_TAG_RE.finditer(content)
+    ]
+    return bool(
+        _TOOL_CALL_CONTAINER_TAGS.intersection(tags)
+        and _TOOL_CALL_DETAIL_TAGS.intersection(tags)
+        and _NAMED_TOOL_INVOCATION_RE.search(content)
+    )
+
 COMPACTION_SYSTEM_PROMPT = (
     "Create a compact continuation memory for the same "
     "pentesting/coding session. Use concise Markdown with "
@@ -1815,6 +1855,75 @@ class Agent:
                 return "invalid_response"
 
             await self._record_assistant_response(resp, streamed, working, emit)
+
+            if (
+                not has_tool_calls
+                and tools_enabled
+                and _looks_like_malformed_tool_call(resp.message.content)
+            ):
+                emit({
+                    "type": "error",
+                    "err": RuntimeError(
+                        "model emitted malformed tool-call text instead of a "
+                        "structured tool call; the intended action was not executed. "
+                        "Retrying once with structured tool calling."
+                    ),
+                })
+                retry_instruction = Message(
+                    role="user",
+                    content=(
+                        "The previous assistant message contained text that looks "
+                        "like a tool invocation, but it was not returned as a "
+                        "structured tool call and no tool was executed. If that "
+                        "action is still needed, call the appropriate available "
+                        "tool using structured function calling only; do not print "
+                        "tool-call syntax as text. Otherwise, explain that no tool "
+                        "action is needed."
+                    ),
+                )
+                working.append(retry_instruction)
+                self.history.append(retry_instruction)
+                try:
+                    await self.save()
+                except Exception as err:
+                    emit({"type": "error", "err": Exception(f"save session: {err}")})
+
+                if self.auto_compact_threshold > 0:
+                    self.guard_working_context(working, emit, opts)
+                retry_req = ChatRequest(
+                    model=self.client.model(),
+                    messages=working,
+                    thinking_enabled=turn_request_thinking,
+                    reasoning_level=turn_reasoning_level,
+                    requested_reasoning_level=turn_requested_level,
+                )
+                if opts is None or getattr(opts, "tools", True):
+                    retry_req.tools = self.tools.as_llm_tools()
+                self._count_llm_call("agent_loop_llm_calls")
+                resp, streamed = await self._chat_for_turn(
+                    retry_req,
+                    signal,
+                    emit,
+                )
+                self._sanitize_response(resp)
+                tool_calls = resp.message.tool_calls or []
+                has_tool_calls = len(tool_calls) > 0
+
+                if not has_tool_calls:
+                    warning = (
+                        "Warning: the model did not return a structured tool call "
+                        "after one retry; the intended action was not executed."
+                    )
+                    emit({"type": "error", "err": RuntimeError(warning)})
+                    resp.message.content = (
+                        f"{resp.message.content.rstrip()}\n\n{warning}"
+                        if resp.message.content.strip()
+                        else warning
+                    )
+                    if streamed:
+                        emit({"type": "assistant-text", "text": warning})
+
+                await self._record_assistant_response(resp, streamed, working, emit)
 
             if not has_tool_calls:
 
