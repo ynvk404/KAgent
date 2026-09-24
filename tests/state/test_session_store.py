@@ -42,6 +42,29 @@ class TestEngagementPersistence:
         assert loaded.engagement_state.is_in_scope("https://api.example:8443/other")
         assert loaded.engagement_state.revision == 2
 
+
+    @pytest.mark.asyncio
+    async def test_save_reports_blocking_stage_to_hang_diagnostics(self, tmp_path):
+        class Diagnostics:
+            stage = "idle"
+            seen: list[str] = []
+
+            def set_stage(self, stage: str) -> None:
+                self.stage = stage
+                self.seen.append(stage)
+
+        diagnostics = Diagnostics()
+        store = Store.new_with_id(tmp_path, "diagnostic-stages")
+        store.diagnostics = diagnostics  # type: ignore[assignment]
+
+        await store.save([Message(role="user", content="hello")])
+
+        assert "session.save.json_dumps" in diagnostics.seen
+        assert "session.save.write" in diagnostics.seen
+        assert "session.save.fsync" in diagnostics.seen
+        assert "session.save.replace" in diagnostics.seen
+        assert diagnostics.stage == "idle"
+
     def test_legacy_session_derives_scope_from_saved_target(self, tmp_path):
         store = Store.new_with_id(tmp_path, "legacy-target")
         store.path.write_text(

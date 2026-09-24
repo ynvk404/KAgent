@@ -430,6 +430,82 @@ async def test_skill_completion_is_explicit():
 
 
 @pytest.mark.asyncio
+async def test_sqli_completion_requires_and_reuses_canonical_artifact(tmp_path):
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    state = WorkflowState()
+    tool = WorkflowTool(
+        state,
+        Target("http://juice.lab:3000"),
+        skills=skills,
+        evidence_root=tmp_path,
+    )
+
+    missing = await tool.run(
+        {"action": "complete_skill", "skill_name": "sql-injection"},
+        None,
+        AlwaysAllow(),
+    )
+    assert "sql-injection/juice-lab-3000/results.md" in missing
+    assert "sql-injection" not in state.completed_skills
+
+    result_path = tmp_path / "sql-injection/juice-lab-3000/results.md"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text("confirmed SQLi result", encoding="utf-8")
+    wrong = await tool.run(
+        {
+            "action": "complete_skill",
+            "skill_name": "sql-injection",
+            "artifact_ref": "sql-injection/juice-lab/results.md",
+        },
+        None,
+        AlwaysAllow(),
+    )
+    assert "requires sql-injection/juice-lab-3000/results.md" in wrong
+
+    completed = json.loads(await tool.run(
+        {"action": "complete_skill", "skill_name": "sql-injection"},
+        None,
+        AlwaysAllow(),
+    ))
+    resumed = WorkflowState.from_dict(state.to_dict())
+    repeated = json.loads(await WorkflowTool(
+        resumed,
+        Target("http://juice.lab:3000"),
+        skills=skills,
+        evidence_root=tmp_path,
+    ).run(
+        {"action": "complete_skill", "skill_name": "sql-injection"},
+        None,
+        AlwaysAllow(),
+    ))
+
+    expected = "sql-injection/juice-lab-3000/results.md"
+    assert completed["artifact_ref"] == expected
+    assert repeated["artifact_ref"] == expected
+    assert resumed.completed_artifacts == {"sql-injection": expected}
+    assert list(result_path.parent.iterdir()) == [result_path]
+
+
+@pytest.mark.asyncio
+async def test_skill_without_completion_artifact_is_unchanged(tmp_path):
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    state = WorkflowState()
+
+    output = json.loads(await WorkflowTool(
+        state, Target("https://target.test"), skills=skills, evidence_root=tmp_path,
+    ).run(
+        {"action": "complete_skill", "skill_name": "web-input-analysis"},
+        None,
+        AlwaysAllow(),
+    ))
+
+    assert output["ok"] is True
+    assert state.completed_skills == {"web-input-analysis"}
+
+
+@pytest.mark.asyncio
 async def test_workflow_tool_rejects_result_without_candidate():
     output = await WorkflowTool(WorkflowState()).run(
         {

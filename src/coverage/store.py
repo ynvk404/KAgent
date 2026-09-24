@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from src.logger.logger import get_logger
+from src.logger.hang_diagnostics import HangDiagnostics
 from src.skills.registry import normalize_candidate_class
 
 log = get_logger("coverage.store")
@@ -48,8 +49,15 @@ class CoverageSummary:
 
 
 class CoverageStore:
-    def __init__(self, path: str):
+    def __init__(
+        self,
+        path: str,
+        diagnostics: HangDiagnostics | None = None,
+        legacy_path: str | None = None,
+    ):
         self.path = Path(path).resolve()
+        self.legacy_path = Path(legacy_path).resolve() if legacy_path else None
+        self.diagnostics = diagnostics
 
         self.entries: dict[str, CoverageEntry] = {}
 
@@ -73,22 +81,35 @@ class CoverageStore:
         await self.load_task
 
     async def _do_load(self) -> None:
-        if self.path.exists():
+        source = self.path
+        if (
+            not source.exists()
+            and self.legacy_path is not None
+            and self.legacy_path.exists()
+        ):
+            source = self.legacy_path
+        if source.exists():
             try:
                 self.entries = self._parse(
-                    self.path.read_text(
+                    source.read_text(
                         encoding="utf8"
                     )
                 )
 
             except Exception:
+                action = (
+                    "quarantining it and starting from an empty store"
+                    if source == self.path
+                    else "ignoring legacy fallback and starting from an empty store"
+                )
                 log.warning(
-                    "coverage: unreadable store %s; quarantining it and "
-                    "starting from an empty store",
-                    self.path,
+                    "coverage: unreadable store %s; %s",
+                    source,
+                    action,
                     exc_info=True,
                 )
-                self._quarantine()
+                if source == self.path:
+                    self._quarantine()
 
         self.loaded = True
 
@@ -364,9 +385,13 @@ class CoverageStore:
 
 
     async def flush(self):
-
-        while self.saving:
-            await self.saving
+        while self.saving is not None:
+            saving = self.saving
+            await saving
+            # A cancelled/failed save loop may exit before clearing its own
+            # reference. Never spin synchronously on an already-finished task.
+            if self.saving is saving:
+                self.saving = None
 
 
     def _evict_if_needed(self):
@@ -388,12 +413,21 @@ class CoverageStore:
 
         self.dirty = True
 
-        if self.saving:
-            return
+        if self.saving is not None:
+            if not self.saving.done():
+                return
+            self.saving = None
 
-        self.saving = asyncio.create_task(
+        saving = asyncio.create_task(
             self._run_save_loop()
         )
+        self.saving = saving
+        # Textual installs asyncio.eager_task_factory on supported Python
+        # versions. The coroutine can therefore finish, clear self.saving,
+        # and return from create_task() before this assignment occurs. Avoid
+        # retaining that completed task, which would make flush() busy-loop.
+        if saving.done():
+            self.saving = None
 
     async def _run_save_loop(self):
 
@@ -416,28 +450,33 @@ class CoverageStore:
         self.saving = None
 
     async def _persist(self):
-
-        self.path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-            mode=STORE_DIR_MODE,
-        )
-
-        payload = {
-            "version": 1,
-            "entries": [
-                asdict(e)
-                for e in self.entries.values()
-            ],
-        }
-
-        tmp = self.path.with_suffix(
-            self.path.suffix
-            + f".tmp.{secrets.token_hex(3)}"
-        )
+        operation = "coverage.save"
+        tmp: Path | None = None
         created_tmp = False
-
         try:
+            self._stage(f"{operation}.mkdir")
+            self.path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=STORE_DIR_MODE,
+            )
+
+            self._stage(f"{operation}.serialize")
+            payload = {
+                "version": 1,
+                "entries": [
+                    asdict(e)
+                    for e in self.entries.values()
+                ],
+            }
+            body = json.dumps(payload, indent=2) + "\n"
+
+            tmp = self.path.with_suffix(
+                self.path.suffix
+                + f".tmp.{secrets.token_hex(3)}"
+            )
+
+            self._stage(f"{operation}.open_temp")
             fd = os.open(
                 tmp,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -445,20 +484,26 @@ class CoverageStore:
             )
             created_tmp = True
             with os.fdopen(fd, "w", encoding="utf8") as f:
-                f.write(
-                    json.dumps(
-                        payload,
-                        indent=2,
-                    )
-                    + "\n"
-                )
+                self._stage(f"{operation}.write")
+                f.write(body)
 
+            self._stage(f"{operation}.replace")
             tmp.replace(self.path)
 
         except Exception:
-            if created_tmp:
+            if created_tmp and tmp is not None:
                 tmp.unlink(missing_ok=True)
             raise
+        finally:
+            self._clear_stage(operation)
+
+    def _stage(self, stage: str) -> None:
+        if self.diagnostics is not None:
+            self.diagnostics.set_stage(stage)
+
+    def _clear_stage(self, operation: str) -> None:
+        if self.diagnostics is not None and self.diagnostics.stage.startswith(operation):
+            self.diagnostics.set_stage("idle")
 
 
 def _key_of(

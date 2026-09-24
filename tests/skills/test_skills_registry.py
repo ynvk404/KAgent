@@ -345,6 +345,7 @@ def make_skill(
     triggers: SkillTriggers | None = None,
     candidate_classes: list[str] | None = None,
     requires: list[str] | None = None,
+    completion_artifact: str | None = None,
 ) -> Skill:
     return Skill(
         name=name,
@@ -357,6 +358,7 @@ def make_skill(
         triggers=triggers or SkillTriggers(),
         candidate_classes=candidate_classes or [],
         requires=requires or [],
+        completion_artifact=completion_artifact,
     )
 
 def test_validate_skill_valid_case():
@@ -444,6 +446,20 @@ def test_absent_optional_selection_metadata_has_safe_defaults(tmp_path):
     assert skill.triggers == SkillTriggers()
     assert skill.candidate_classes == []
     assert skill.requires == []
+    assert skill.completion_artifact is None
+
+
+def test_parse_completion_artifact_metadata(tmp_path):
+    skill_file = write_skill(
+        tmp_path,
+        "validator",
+        "---\nname: validator\ndescription: Validator\nallowed-tools: []\n"
+        "completion-artifact: validator/{target}/results.md\n---\nBody\n",
+    )
+
+    assert parse_skill(skill_file).completion_artifact == (
+        "validator/{target}/results.md"
+    )
 
 
 @pytest.mark.parametrize(
@@ -455,6 +471,7 @@ def test_absent_optional_selection_metadata_has_safe_defaults(tmp_path):
         ("triggers:\n  other: [xxe]", "unknown keys"),
         ("candidate-classes: xxe", "`candidate-classes` must be a list"),
         ("requires: web-input-analysis", "`requires` must be a list"),
+        ("completion-artifact: ../results.md", "invalid `completion-artifact`"),
     ],
 )
 def test_malformed_selection_metadata_is_rejected(tmp_path, metadata, message):

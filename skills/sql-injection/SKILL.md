@@ -30,6 +30,7 @@ triggers:
     - syntax sensitive
 candidate-classes:
   - sql-injection
+completion-artifact: sql-injection/{target}/results.md
 requires:
   - web-input-analysis
 allowed-tools:
@@ -46,9 +47,12 @@ allowed-tools:
 
 ## Structured workflow contract
 
-Before recording a `confirmed` result, save a minimal redacted proof artifact,
-call `workflow(action="record_evidence", candidate_id="...",
-evidence_path="...")`, and use the returned `ev_...` ID in `evidence_refs`.
+Before recording a `confirmed` result, write or update the candidate entry in
+the canonical `sql-injection/<target>/results.md`. When that entry contains the
+minimal redacted proof, register this same file with
+`workflow(action="record_evidence", candidate_id="...", evidence_path="...")`
+instead of creating a duplicate evidence Markdown file, and use the returned
+`ev_...` ID in `evidence_refs`.
 The artifact must remain available through finding creation and session resume.
 If coverage sync is `pending`, call `workflow(action="sync_coverage",
 candidate_id="...")` before `confirm_finding`.
@@ -659,7 +663,10 @@ Stop working a candidate when it has reached one of the five outcomes in
 Recording the result and been written to `results.md`.
 
 Stop the skill entirely when every `sql-injection` candidate provided for
-this run has been worked to an outcome and `results.md` is complete.
+this run has been worked to an outcome and `results.md` is complete. Then call
+`workflow(action="complete_skill", skill_name="sql-injection",
+artifact_ref="sql-injection/<target>/results.md")`; runtime rejects completion
+when the canonical artifact is absent or a different path is supplied.
 
 Do not: scan for new candidates, run automated SQLi tools by default,
 extract real data or credentials, chain into other vulnerability classes,

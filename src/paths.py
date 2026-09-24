@@ -50,6 +50,20 @@ def project_data_root(start: str | Path | None = None) -> Path:
     return project_root(start) / APP_DIR_NAME
 
 
+def project_coverage_path(
+    session_id: str, start: str | Path | None = None,
+) -> Path:
+    """Return the canonical project-local coverage file for a session."""
+    return project_data_root(start) / "coverage" / f"{session_id}.json"
+
+
+def legacy_coverage_path(
+    session_id: str, start: str | Path | None = None,
+) -> Path:
+    """Return the former findings-adjacent coverage path for read fallback."""
+    return project_root(start) / "findings" / f"coverage-{session_id}.json"
+
+
 def legacy_project_data_root(start: str | Path | None = None) -> Path | None:
     """Return the old CWD-relative root when it differs from the project root.
 

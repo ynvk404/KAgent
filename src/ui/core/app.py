@@ -49,6 +49,7 @@ from src.llm.providers import (
 )
 from src.browser.server import BurpBridgeResult, BurpBridgeState
 from src.logger.session_debug import SessionDebugLog
+from src.logger.hang_diagnostics import HangDiagnostics
 from src.skills.template import render_skill_template
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest 
@@ -184,6 +185,7 @@ class AppProps:
     ) = None
     persist_disabled_skills: PersistDisabledSkills | None = None
     session_debug: SessionDebugLog | None = None
+    hang_diagnostics: HangDiagnostics | None = None
     on_skill_created: Callable[[str], None] | None = None
     bind_notice_publisher: Callable[[Callable[[str], None]], None] | None = None
     start_burp_bridge: (
@@ -567,6 +569,7 @@ class KAgent(App):
 
         self.persist_disabled_skills = props.persist_disabled_skills
         self.session_debug = props.session_debug
+        self.hang_diagnostics = props.hang_diagnostics
 
         self.on_skill_created = props.on_skill_created
         self.bind_notice_publisher = props.bind_notice_publisher
@@ -1766,6 +1769,9 @@ class KAgent(App):
 
     def on_mount(self) -> None:
 
+        if self.hang_diagnostics is not None:
+            self.hang_diagnostics.start()
+
         if self.bind_perm_publisher is not None:
             self.bind_perm_publisher(
                 lambda req: self.dispatch(SetPerm(req=req))
@@ -1829,6 +1835,9 @@ class KAgent(App):
             )
 
     async def on_unmount(self) -> None:
+        if self.hang_diagnostics is not None:
+            await self.hang_diagnostics.stop()
+
         if self.startup_task is not None and not self.startup_task.done():
             self.startup_task.cancel()
 

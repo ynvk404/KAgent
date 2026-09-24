@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
+from src.logger.hang_diagnostics import HangDiagnostics
+
 from src.llm.types import (
     FunctionCall,
     GeminiProvider,
@@ -309,10 +311,16 @@ def _restrict_directory_permissions(path: Path) -> None:
 
 
 class Store:
-    def __init__(self, path, session_id: str = ""):
+    def __init__(
+        self,
+        path,
+        session_id: str = "",
+        diagnostics: HangDiagnostics | None = None,
+    ):
         self.path = Path(path)
         self.id = session_id
         self.save_count = 0
+        self.diagnostics = diagnostics
 
     @staticmethod
     def new_with_id(directory, session_id):
@@ -399,79 +407,104 @@ class Store:
         if not self.path or str(self.path) in ("", "."):
             return
 
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        _restrict_directory_permissions(self.path.parent)
-
-        serialized_messages = []
-        from src.llm.gemini import safe_replay_part
-        for msg in messages:
-            serialized: dict[str, Any] = {
-                "role": msg.role,
-                "content": msg.content,
-                "reasoning_content": msg.reasoning_content,
-                "provider_state_provider": msg.provider_state_provider,
-                "provider_state_model": msg.provider_state_model,
-                "gemini_parts": (
-                    [part for raw in msg.gemini_parts if (part := safe_replay_part(raw))]
-                    if msg.provider_state_provider == "gemini" and msg.gemini_parts
-                    else None
-                ),
-                "tool_calls": (
-                    [dataclasses.asdict(tc) for tc in msg.tool_calls]
-                    if msg.tool_calls
-                    else None
-                ),
-                "tool_call_id": msg.tool_call_id,
-                "name": msg.name,
-            }
-            if msg.role == "tool":
-                if msg.tool_status is not None:
-                    serialized["tool_status"] = msg.tool_status
-                if msg.tool_error_kind is not None:
-                    serialized["tool_error_kind"] = msg.tool_error_kind
-                if msg.tool_http_status is not None:
-                    serialized["tool_http_status"] = msg.tool_http_status
-                if msg.tool_truncated:
-                    serialized["tool_truncated"] = True
-            serialized_messages.append(serialized)
-
-        data = {
-            "updated_at": datetime.now().isoformat(),
-            "id": self.id if self.id else None,
-            "target": target.to_dict() if target and not target.is_empty() else None,
-            "memory": dataclasses.asdict(memory) if memory else None,
-            "workflow": workflow.to_dict() if workflow else None,
-            "engagement_state": (
-                engagement_state.to_dict() if engagement_state else None
-            ),
-            "messages": serialized_messages,
-        }
-
-        body = json.dumps(data, ensure_ascii=False) + "\n"
-
-        self.save_count += 1
-        need_fsync = self.save_count == 1 or self.save_count % FSYNC_EVERY == 0
-
-        tmp = Path(str(self.path) + ".tmp." + random_tmp_id())
+        operation = "session.save"
+        tmp: Path | None = None
         created_tmp = False
-
         try:
+            self._stage(f"{operation}.mkdir")
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _restrict_directory_permissions(self.path.parent)
+
+            self._stage(f"{operation}.serialize_messages")
+            serialized_messages = []
+            from src.llm.gemini import safe_replay_part
+            for msg in messages:
+                serialized: dict[str, Any] = {
+                    "role": msg.role,
+                    "content": msg.content,
+                    "reasoning_content": msg.reasoning_content,
+                    "provider_state_provider": msg.provider_state_provider,
+                    "provider_state_model": msg.provider_state_model,
+                    "gemini_parts": (
+                        [
+                            part
+                            for raw in msg.gemini_parts
+                            if (part := safe_replay_part(raw))
+                        ]
+                        if msg.provider_state_provider == "gemini" and msg.gemini_parts
+                        else None
+                    ),
+                    "tool_calls": (
+                        [dataclasses.asdict(tc) for tc in msg.tool_calls]
+                        if msg.tool_calls
+                        else None
+                    ),
+                    "tool_call_id": msg.tool_call_id,
+                    "name": msg.name,
+                }
+                if msg.role == "tool":
+                    if msg.tool_status is not None:
+                        serialized["tool_status"] = msg.tool_status
+                    if msg.tool_error_kind is not None:
+                        serialized["tool_error_kind"] = msg.tool_error_kind
+                    if msg.tool_http_status is not None:
+                        serialized["tool_http_status"] = msg.tool_http_status
+                    if msg.tool_truncated:
+                        serialized["tool_truncated"] = True
+                serialized_messages.append(serialized)
+
+            data = {
+                "updated_at": datetime.now().isoformat(),
+                "id": self.id if self.id else None,
+                "target": target.to_dict() if target and not target.is_empty() else None,
+                "memory": dataclasses.asdict(memory) if memory else None,
+                "workflow": workflow.to_dict() if workflow else None,
+                "engagement_state": (
+                    engagement_state.to_dict() if engagement_state else None
+                ),
+                "messages": serialized_messages,
+            }
+
+            self._stage(f"{operation}.json_dumps")
+            body = json.dumps(data, ensure_ascii=False) + "\n"
+
+            self.save_count += 1
+            need_fsync = self.save_count == 1 or self.save_count % FSYNC_EVERY == 0
+
+            tmp = Path(str(self.path) + ".tmp." + random_tmp_id())
+
+            self._stage(f"{operation}.open_temp")
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             created_tmp = True
             with os.fdopen(fd, "w", encoding="utf8") as f:
+                self._stage(f"{operation}.write")
                 f.write(body)
+                self._stage(f"{operation}.flush")
                 f.flush()
                 if need_fsync:
+                    self._stage(f"{operation}.fsync")
                     os.fsync(f.fileno())
 
+            self._stage(f"{operation}.replace")
             os.replace(tmp, self.path)
 
+            self._stage(f"{operation}.chmod")
             _restrict_permissions(self.path)
 
         except Exception:
-            if created_tmp:
+            if created_tmp and tmp is not None:
                 tmp.unlink(missing_ok=True)
             raise
+        finally:
+            self._clear_stage(operation)
+
+    def _stage(self, stage: str) -> None:
+        if self.diagnostics is not None:
+            self.diagnostics.set_stage(stage)
+
+    def _clear_stage(self, operation: str) -> None:
+        if self.diagnostics is not None and self.diagnostics.stage.startswith(operation):
+            self.diagnostics.set_stage("idle")
 
     async def clear(self) -> None:
         if not self.path or str(self.path) in ("", "."):

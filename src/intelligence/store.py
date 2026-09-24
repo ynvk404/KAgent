@@ -1137,7 +1137,7 @@ def clamp_confidence(v: Any) -> float:
 def score_scenario(
     s: IntelligenceScenario, tokens: list[str]
 ) -> tuple[float, list[str]]:
-    fields = [
+    raw_fields = [
         (s.title.lower(), 7, "title"),
         (s.category.lower(), 5, "category"),
         (" ".join(s.triggers).lower(), 8, "triggers"),
@@ -1146,14 +1146,24 @@ def score_scenario(
         (" ".join(s.avoid_missing).lower(), 4, "avoidMissing"),
         (s.lesson.lower(), 2, "lesson"),
     ]
+    # Search used to run a regular expression for every query-token/field
+    # pair. A resumed session can contribute hundreds of query tokens across
+    # hundreds of scenarios, blocking Textual's event loop for seconds. These
+    # segments implement the same boundary rule with constant-time lookup.
+    fields = [
+        (text, frozenset(re.findall(r"[a-z0-9_.-]+", text)), weight, label)
+        for text, weight, label in raw_fields
+    ]
 
     score = 0.0
     matched: list[str] = []
     matched_seen: set[str] = set()
 
     for token in tokens:
-        for text, weight, label in fields:
-            if token_matches_lower(text, token):
+        for text, terms, weight, label in fields:
+            if token in terms or (
+                "." in token and dotted_phrase_matches_lower(text, token)
+            ):
                 score += weight
                 tag = f"{label}:{token}"
                 if tag not in matched_seen:
@@ -1166,18 +1176,22 @@ def score_scenario(
     return score, matched
 
 
+def dotted_phrase_matches_lower(text: str, token: str) -> bool:
+    phrase = token.replace(".", " ")
+    return bool(
+        re.search(
+            r"(?<![a-z0-9_.-])" + re.escape(phrase) + r"(?![a-z0-9_.-])",
+            text,
+        )
+    )
+
+
 def token_matches_lower(text: str, token: str) -> bool:
     boundary = r"(?<![a-z0-9_.-])" + re.escape(token) + r"(?![a-z0-9_.-])"
     if re.search(boundary, text):
         return True
     if "." in token:
-        phrase = token.replace(".", " ")
-        return bool(
-            re.search(
-                r"(?<![a-z0-9_.-])" + re.escape(phrase) + r"(?![a-z0-9_.-])",
-                text,
-            )
-        )
+        return dotted_phrase_matches_lower(text, token)
     return False
 
 

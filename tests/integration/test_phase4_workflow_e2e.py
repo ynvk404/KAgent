@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from src.agent.decision_planner import build_decision_plan
+from src.coverage.store import CoverageStore
 from src.findings.store import Store as FindingsStore
 from src.llm.types import Message
 from src.permission.permission import AlwaysAllow
@@ -190,8 +191,9 @@ async def test_offline_resume_preserves_existing_candidate_and_result(tmp_path):
 @pytest.mark.asyncio
 async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp_path):
     """Exercise the real handoff without a network, LLM, or browser."""
-    skills = shipped_skills().list_enabled()
-    target = Target("https://target.test")
+    registry = shipped_skills()
+    skills = registry.list_enabled()
+    target = Target("https://target.test:8443")
     plan = build_decision_plan(
         "Validate the login id database error candidate for SQL injection",
         skills,
@@ -200,7 +202,15 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     assert plan is not None and plan.recommended_skill == "sql-injection"
 
     state = WorkflowState()
-    workflow = WorkflowTool(state, target, evidence_root=tmp_path)
+    coverage_path = tmp_path / ".kagent/coverage/e2e-session.json"
+    workflow = WorkflowTool(
+        state,
+        target,
+        coverage=CoverageStore(str(coverage_path)),
+        skills=registry,
+        evidence_root=tmp_path,
+        session_id="e2e-session",
+    )
     recorded = json.loads(
         await workflow.run(
             {
@@ -227,9 +237,28 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     )
     assert started["candidate"]["status"] == "validating"
 
-    evidence_id = await register_proof(
-        workflow, candidate_id, tmp_path, "login-sqli-confirmation.txt",
+    result_path = tmp_path / "sql-injection/target-test-8443/results.md"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        "Confirmed repeatable boolean differential for POST /login id.\n",
+        encoding="utf-8",
     )
+    evidence_id = await register_proof(
+        workflow,
+        candidate_id,
+        tmp_path,
+        "sql-injection/target-test-8443/results.md",
+    )
+    repeated_evidence_id = json.loads(await workflow.run(
+        {
+            "action": "record_evidence",
+            "candidate_id": candidate_id,
+            "evidence_path": "sql-injection/target-test-8443/results.md",
+        },
+        None,
+        AlwaysAllow(),
+    ))["evidence"]["id"]
+    assert repeated_evidence_id == evidence_id
 
     result = json.loads(
         await workflow.run(
@@ -247,6 +276,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
         )
     )
     assert result["created"] is True
+    assert result["coverage_sync"] == "synced"
     assert result["eligible_for_confirm_finding"] is True
     assert state.relevant_candidate_classes() == frozenset()
     assert not (tmp_path / "findings").exists()
@@ -259,7 +289,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
             "candidate_id": candidate_id,
             "title": "SQL injection in login",
             "severity": "high",
-            "url": "https://target.test/login",
+            "url": "https://target.test:8443/login",
             "parameter": "id",
             "impact": "Database query manipulation only; no account takeover proven.",
             "response_excerpt": "authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYWRtaW4ifQ.signature",
@@ -278,3 +308,25 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     assert "eyJhbGciOiJIUzI1NiJ9" not in report
     assert "[REDACTED" in report
     assert len(state.validation_results) == 1
+    completed = json.loads(await workflow.run(
+        {"action": "complete_skill", "skill_name": "sql-injection"},
+        None,
+        AlwaysAllow(),
+    ))
+    assert completed["artifact_ref"] == (
+        "sql-injection/target-test-8443/results.md"
+    )
+    assert not (tmp_path / "findings/evidence").exists()
+    assert coverage_path.exists()
+
+    session = Store.new_with_id(tmp_path / "sessions", "e2e-session")
+    await session.save(
+        [Message(role="user", content="resume SQLi workflow")],
+        target=target,
+        workflow=state,
+    )
+    resumed = session.load().workflow
+    assert resumed.evidence[evidence_id].is_resolvable(tmp_path)
+    assert resumed.completed_artifacts["sql-injection"] == completed["artifact_ref"]
+    resumed_coverage = CoverageStore(str(coverage_path))
+    assert len(await resumed_coverage.list()) == 1

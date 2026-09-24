@@ -6,7 +6,9 @@ from src.engagement.store import EngagementStore
 from src.intelligence.store import IntelligenceScenario, IntelligenceStore
 from src.memory.store import AddMemoryInput, MemoryStore
 from src.paths import (
+    legacy_coverage_path,
     legacy_project_data_root,
+    project_coverage_path,
     project_data_root,
     project_root,
     user_data_root,
@@ -31,6 +33,12 @@ def test_project_paths_are_stable_from_nested_working_directories(
         monkeypatch.chdir(working_dir)
         assert project_root() == root
         assert project_data_root() == root / ".kagent"
+        assert project_coverage_path("session-1") == (
+            root / ".kagent" / "coverage" / "session-1.json"
+        )
+        assert legacy_coverage_path("session-1") == (
+            root / "findings" / "coverage-session-1.json"
+        )
 
 
 def test_markerless_directory_is_its_own_project_root(

@@ -8,6 +8,7 @@ from typing import Iterable, Literal
 import yaml
 
 from src.logger.logger import get_logger
+from src.skills.artifacts import validate_completion_artifact_template
 
 log = get_logger("skills.registry")
 
@@ -73,6 +74,7 @@ class Skill:
     triggers: SkillTriggers = field(default_factory=SkillTriggers)
     candidate_classes: list[str] = field(default_factory=list)
     requires: list[str] = field(default_factory=list)
+    completion_artifact: str | None = None
 
 
 class Registry:
@@ -263,6 +265,17 @@ def parse_skill(path: str | Path) -> Skill:
         "requires",
         normalize_metadata_name,
     )
+    completion_artifact_value = metadata.get("completion-artifact")
+    completion_artifact: str | None = None
+    if completion_artifact_value is not None:
+        if not isinstance(completion_artifact_value, str):
+            raise SkillMetadataError("`completion-artifact` must be a string")
+        try:
+            completion_artifact = validate_completion_artifact_template(
+                completion_artifact_value
+            )
+        except ValueError as exc:
+            raise SkillMetadataError(f"invalid `completion-artifact`: {exc}") from exc
 
     tool_keys = ("allowed-tools", "allowedTools", "tools")
     if not any(key in metadata for key in tool_keys):
@@ -299,6 +312,7 @@ def parse_skill(path: str | Path) -> Skill:
         triggers=triggers,
         candidate_classes=candidate_classes,
         requires=requires,
+        completion_artifact=completion_artifact,
     )
 
 

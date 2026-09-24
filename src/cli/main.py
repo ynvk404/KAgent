@@ -31,6 +31,8 @@ from src.logger.session_debug import (
     create_session_debug_log,
     SessionDebugOptions,
 )
+from src.logger.hang_diagnostics import HangDiagnostics
+from src.paths import legacy_coverage_path, project_coverage_path
 
 from src.target.target import new_target
 from src.engagement.state import EngagementState
@@ -588,7 +590,14 @@ async def main() -> int:
             session_id=session_id,
         )
     )
+    hang_diagnostics = (
+        HangDiagnostics.beside_debug_log(session_debug.path)
+        if session_debug.enabled
+        else None
+    )
+    session_store_instance.diagnostics = hang_diagnostics
     if session_debug.enabled:
+        assert hang_diagnostics is not None
         session_debug.write(
             "session_start",
             {
@@ -601,8 +610,20 @@ async def main() -> int:
                 "base_url": cfg.base_url,
             },
         )
+        session_debug.write(
+            "hang_watchdog_enabled",
+            {
+                "stall_seconds": hang_diagnostics.stall_seconds,
+                "stack_path": str(hang_diagnostics.path),
+            },
+        )
+        sys.stderr.write(f"hang stack dump: {hang_diagnostics.path}\n")
     sys.stderr.write(f"debug session log: {session_debug.path}\n")
-    coverage_store = CoverageStore(f"findings/coverage-{session_id}.json")
+    coverage_store = CoverageStore(
+        str(project_coverage_path(session_id)),
+        diagnostics=hang_diagnostics,
+        legacy_path=str(legacy_coverage_path(session_id)),
+    )
     intelligence_store = IntelligenceStore()
     memory_store = MemoryStore()
     engagement = EngagementStore().load()
@@ -1161,6 +1182,7 @@ async def main() -> int:
             splash_has_integrations=bool(mcp_sessions or ingest_handle or cfg.plugins),
 
             session_debug=session_debug,
+            hang_diagnostics=hang_diagnostics,
 
             set_yolo=(
                 lambda on: prompter.set_yolo(on)

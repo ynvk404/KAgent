@@ -94,6 +94,11 @@ class TestFrontmatter:
         assert skill_frontmatter.get("name") == "sql-injection"
         assert skill_frontmatter.get("description")
 
+    def test_canonical_completion_artifact_declared(self, skill_frontmatter: dict):
+        assert skill_frontmatter.get("completion-artifact") == (
+            "sql-injection/{target}/results.md"
+        )
+
     def test_allowed_tools_present(self, skill_frontmatter: dict):
         tools = skill_frontmatter.get("allowed-tools")
         assert isinstance(tools, list) and tools, "allowed-tools must be a non-empty list"
@@ -354,6 +359,11 @@ class TestFindingContract:
     def test_proof_scope_remains_in_durable_evidence(self, skill_text: str):
         assert "proof scope" in skill_text
         assert "results.md" in skill_text
+
+    def test_results_artifact_is_reused_as_evidence(self, skill_text: str):
+        normalized = _norm(skill_text)
+        assert "register this same file" in normalized
+        assert "instead of creating a duplicate evidence Markdown file" in normalized
 
 
 # ---------------------------------------------------------------------------

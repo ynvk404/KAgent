@@ -19,6 +19,7 @@ from src.workflow.state import (
 )
 from src.workflow.evidence import EvidenceArtifact
 from src.skills.registry import Registry as SkillRegistry, normalize_candidate_class, normalize_metadata_name
+from src.skills.artifacts import completion_artifact_path, resolve_project_artifact
 
 from .types import Tool, arg_bool, arg_number, arg_string
 
@@ -362,9 +363,33 @@ class WorkflowTool(Tool):
         skill_name = arg_string(args, "skill_name")
         if not skill_name:
             return "error: complete_skill requires skill_name"
-        self.state.completed_skills.add(normalize_metadata_name(skill_name)[:80])
         canonical = normalize_metadata_name(skill_name)[:80]
         artifact_ref = arg_string(args, "artifact_ref")
+        skill = self.skills.get(canonical) if self.skills else None
+        if skill and skill.completion_artifact:
+            target = self._active_target()
+            try:
+                expected = completion_artifact_path(skill.completion_artifact, target)
+                artifact = resolve_project_artifact(self.evidence_root, expected)
+            except ValueError as err:
+                return f"error: {err}"
+            if artifact_ref:
+                try:
+                    supplied = resolve_project_artifact(
+                        self.evidence_root, artifact_ref
+                    )
+                except ValueError as err:
+                    return f"error: {err}"
+                if supplied != artifact:
+                    return f"error: {canonical} completion requires {expected}"
+            try:
+                artifact_ready = artifact.is_file() and artifact.stat().st_size > 0
+            except OSError:
+                artifact_ready = False
+            if not artifact_ready:
+                return f"error: {canonical} completion requires {expected}"
+            artifact_ref = expected
+        self.state.completed_skills.add(canonical)
         if artifact_ref:
             self.state.completed_artifacts[canonical] = redact(artifact_ref)[:500]
         phase = arg_string(args, "current_phase")

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
+import time
 import pytest
 import stat
 from threading import Event, Thread
@@ -318,6 +319,42 @@ class TestIntelligenceSearch:
         results = store.search("id", limit=50)
 
         assert all(result["scenario"].id != "hidden" for result in results)
+
+    def test_search_matches_dotted_token_as_exact_or_spaced_phrase(
+        self, store: IntelligenceStore
+    ):
+        exact = IntelligenceScenario(id="exact", title="Express.js middleware")
+        phrase = IntelligenceScenario(id="phrase", title="Express js middleware")
+        unrelated = IntelligenceScenario(id="unrelated", title="Express JSON parser")
+        store.append_batch([exact, phrase, unrelated], scope="project")
+
+        ids = {result["scenario"].id for result in store.search("express.js", limit=50)}
+
+        assert {"exact", "phrase"}.issubset(ids)
+        assert "unrelated" not in ids
+
+    def test_large_search_completes_without_multi_second_ui_stall(
+        self, store: IntelligenceStore
+    ):
+        store.append_batch(
+            [
+                IntelligenceScenario(
+                    id=f"bulk-{index}",
+                    title=f"SQL injection scenario {index}",
+                    lesson="validate inputs with repeatable evidence " * 4,
+                )
+                for index in range(400)
+            ],
+            scope="project",
+        )
+        query = " ".join(f"term{index}" for index in range(250)) + " sql injection"
+
+        started = time.perf_counter()
+        results = store.search(query, limit=5)
+        elapsed = time.perf_counter() - started
+
+        assert len(results) == 5
+        assert elapsed < 1.0
 
 class TestContinuousLearning:
     @pytest.mark.parametrize(

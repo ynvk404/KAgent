@@ -168,6 +168,36 @@ async def test_persistence_round_trips_entries_through_json_file():
 
 
 @pytest.mark.asyncio
+async def test_persist_reports_blocking_stage_to_hang_diagnostics(tmp_path):
+    class Diagnostics:
+        stage = "idle"
+        seen: list[str] = []
+
+        def set_stage(self, stage: str) -> None:
+            self.stage = stage
+            self.seen.append(stage)
+
+    diagnostics = Diagnostics()
+    store = CoverageStore(
+        str(tmp_path / "coverage.json"),
+        diagnostics=diagnostics,  # type: ignore[arg-type]
+    )
+
+    await store.mark(
+        endpoint="GET /items",
+        param="id",
+        vulnClass="idor",
+        status="tried",
+    )
+    await store.flush()
+
+    assert "coverage.save.serialize" in diagnostics.seen
+    assert "coverage.save.write" in diagnostics.seen
+    assert "coverage.save.replace" in diagnostics.seen
+    assert diagnostics.stage == "idle"
+
+
+@pytest.mark.asyncio
 async def test_persistence_survives_corrupted_file_gracefully():
     _, path = make_store()
 
@@ -178,7 +208,66 @@ async def test_persistence_survives_corrupted_file_gracefully():
     entries = await fresh.list()
 
     assert len(entries) == 0
-    assert str(path.parent) 
+    assert str(path.parent)
+
+
+@pytest.mark.asyncio
+async def test_legacy_fallback_reads_old_state_then_writes_only_canonical(tmp_path):
+    canonical = tmp_path / ".kagent" / "coverage" / "session.json"
+    legacy = tmp_path / "findings" / "coverage-session.json"
+    legacy.parent.mkdir(parents=True)
+    legacy_payload = {
+        "version": 1,
+        "entries": [{
+            "endpoint": "GET /old",
+            "param": "id",
+            "vulnClass": "idor",
+            "status": "tried",
+            "count": 1,
+            "firstSeen": 1,
+            "lastSeen": 1,
+            "notes": None,
+        }],
+    }
+    legacy.write_text(json.dumps(legacy_payload), encoding="utf8")
+
+    store = CoverageStore(str(canonical), legacy_path=str(legacy))
+    assert [entry.endpoint for entry in await store.list()] == ["GET /old"]
+    assert not canonical.exists()
+
+    await store.mark(
+        endpoint="GET /new", param="q", vulnClass="sqli", status="failed",
+    )
+    await store.flush()
+
+    assert canonical.exists()
+    assert json.loads(legacy.read_text(encoding="utf8")) == legacy_payload
+    resumed = CoverageStore(str(canonical), legacy_path=str(legacy))
+    assert {entry.endpoint for entry in await resumed.list()} == {
+        "GET /old", "GET /new",
+    }
+
+
+@pytest.mark.asyncio
+async def test_canonical_coverage_wins_when_legacy_also_exists(tmp_path):
+    canonical = tmp_path / "canonical.json"
+    legacy = tmp_path / "legacy.json"
+    canonical.write_text('{"version": 1, "entries": []}', encoding="utf8")
+    legacy.write_text(
+        json.dumps({
+            "version": 1,
+            "entries": [{
+                "endpoint": "GET /legacy", "param": "id",
+                "vulnClass": "idor", "status": "tried", "count": 1,
+                "firstSeen": 1, "lastSeen": 1, "notes": None,
+            }],
+        }),
+        encoding="utf8",
+    )
+
+    store = CoverageStore(str(canonical), legacy_path=str(legacy))
+
+    assert await store.list() == []
 
 
 @pytest.mark.asyncio
@@ -231,6 +320,34 @@ async def test_persistence_coalesces_burst_of_marks_into_single_snapshot():
     entries = await reread.list()
 
     assert len(entries) == 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not hasattr(asyncio, "eager_task_factory"),
+    reason="asyncio eager task factory is unavailable",
+)
+async def test_flush_does_not_spin_on_eagerly_completed_save(tmp_path):
+    loop = asyncio.get_running_loop()
+    previous_factory = loop.get_task_factory()
+    store = CoverageStore(str(tmp_path / "coverage.json"))
+
+    try:
+        loop.set_task_factory(asyncio.eager_task_factory)
+        await store.mark(
+            endpoint="GET /items",
+            param="id",
+            vulnClass="idor",
+            status="tried",
+        )
+        await asyncio.wait_for(store.flush(), timeout=0.5)
+    finally:
+        loop.set_task_factory(previous_factory)
+
+    assert store.saving is None
+    assert json.loads(store.path.read_text(encoding="utf8"))["entries"][0][
+        "endpoint"
+    ] == "GET /items"
 
 @pytest.mark.asyncio
 async def test_corrupt_file_is_quarantined_instead_of_overwritten():
