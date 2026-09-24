@@ -27,6 +27,16 @@ logs/
 sessions/
 findings/
 recon/
+# Skill artifacts and validation evidence (project root)
+/web-enumeration/
+/web-input-analysis/
+/sql-injection/
+/cross-site-scripting/
+/access-control/
+/authentication/
+/csrf/
+/ssrf/
+/ssti/
 !src/findings/
 src/findings/*
 !src/findings/classification.py
