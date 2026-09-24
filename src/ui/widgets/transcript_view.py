@@ -8,27 +8,28 @@ from textual.strip import Strip
 from textual.widgets import RichLog
 
 from src.ui.core.state import TranscriptEntry
+from src.ui.theme import ACCENT, MUTED
 from src.ui.widgets.transcript import entry_view
 
 
 class TranscriptView(RichLog):
 
-    DEFAULT_CSS = """
-    TranscriptView {
+    DEFAULT_CSS = f"""
+    TranscriptView {{
         width: 100%;
         height: 1fr;
         overflow-y: scroll;
         overflow-x: hidden;
         scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 0;
-        scrollbar-color: #7E8A9A;
-        scrollbar-color-hover: #38BDF8;
-        scrollbar-color-active: #38BDF8;
+        scrollbar-color: {MUTED};
+        scrollbar-color-hover: {ACCENT};
+        scrollbar-color-active: {ACCENT};
         scrollbar-background: transparent;
         scrollbar-background-hover: transparent;
         scrollbar-background-active: transparent;
         scrollbar-gutter: auto;
-    }
+    }}
     """
 
     def __init__(self, **kwargs) -> None:

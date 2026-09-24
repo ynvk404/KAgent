@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from src.ui.commands.menu_window import compute_menu_window
+from src.ui.theme import ACCENT
 
 
 @dataclass(slots=True)
@@ -93,7 +94,7 @@ class MentionMenu:
                     text=f"  {icon} {candidate.display}",
                     selected=is_selected,
                     dim=not is_selected,
-                    icon_color="cyan" if candidate.is_dir else None,
+                    icon_color=ACCENT if candidate.is_dir else None,
                 )
             )
 

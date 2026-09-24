@@ -154,6 +154,58 @@ class TestTmpFilePermissionRace:
         )
 
 
+class TestDirectoryPermissions:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", [0o755, 0o777])
+    async def test_save_tightens_existing_session_directory(self, tmp_path, mode):
+        if os.name != "posix":
+            pytest.skip("POSIX directory modes are required")
+        directory = tmp_path / "sessions"
+        directory.mkdir()
+        directory.chmod(mode)
+        if stat.S_IMODE(directory.stat().st_mode) != mode:
+            pytest.skip("filesystem does not honor POSIX directory modes")
+
+        await Store.new_with_id(directory, "session").save(
+            [Message(role="user", content="private")]
+        )
+
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+
+    @pytest.mark.asyncio
+    async def test_snapshot_tightens_existing_context_directory(self, tmp_path):
+        if os.name != "posix":
+            pytest.skip("POSIX directory modes are required")
+        directory = tmp_path / "context"
+        directory.mkdir()
+        directory.chmod(0o755)
+        if stat.S_IMODE(directory.stat().st_mode) != 0o755:
+            pytest.skip("filesystem does not honor POSIX directory modes")
+
+        store = Store.new_with_id(tmp_path / "sessions", "session")
+        await store.save_context_snapshot("private context")
+
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+        assert store.context_snapshot_path().read_text() == "private context\n"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", [OSError, NotImplementedError])
+    async def test_unsupported_directory_chmod_does_not_fail_save_or_snapshot(
+        self, tmp_path, monkeypatch, failure
+    ):
+        def fail_chmod(_path, _mode):
+            raise failure("chmod unavailable")
+
+        monkeypatch.setattr(Path, "chmod", fail_chmod)
+        store = Store.new_with_id(tmp_path / "sessions", "session")
+
+        await store.save([Message(role="user", content="still saved")])
+        await store.save_context_snapshot("still captured")
+
+        assert store.load().messages[0].content == "still saved"
+        assert store.context_snapshot_path().read_text() == "still captured\n"
+
+
 class TestTempCollisionOwnership:
     @pytest.mark.asyncio
     async def test_save_preserves_temp_file_it_did_not_create(

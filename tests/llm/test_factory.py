@@ -147,6 +147,7 @@ def test_custom_display_name_does_not_change_openai_request_encoding(display_nam
 
     effective, _profile = resolve_custom_provider(cfg, profile_id)
     client = new_from_config(effective)
+    assert isinstance(client, OpenAIClient)
     body = client.encode_request(
         ChatRequest(
             model="generic-model",

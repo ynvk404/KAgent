@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.helpers.ui_fakes import make_test_config_snapshot
 
 import asyncio
 from dataclasses import replace
@@ -17,7 +18,7 @@ from src.ui.bridges.perm_bridge import BridgedPermissionRequest, BridgedPrompter
 from src.permission.permission import PermissionRequest
 from src.ask.ask import Option, Question
 from src.agent.agent import Agent
-from src.agent.events import DoneEvent
+from src.agent.events import DoneEvent, SkillActiveEvent
 from src.config.config import Backend
 from src.ui.core.app import (
     AbortEvent,
@@ -31,7 +32,9 @@ from src.ui.core.app import (
     _input_selection_text,
     _modal_text,
 )
-from src.ui.core.state import AgentEventAction, SetAsk, SetBusy, SetPerm
+from unittest.mock import AsyncMock
+from src.ui.core.state import AgentEventAction, SetActiveSkill, SetAsk, SetBusy, SetPerm
+from src.ui.commands.slash_handler import handle_slash
 from src.ui.widgets.banner import BannerData
 from src.ui.widgets.text_input_modal import TextInputRequest
 from src.ui.widgets.text_input_modal import TextInputModal
@@ -46,13 +49,10 @@ def make_app() -> KAgent:
         pass
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": cast(Backend, "openai"),
-            "base_url": "",
-            "api_key": "",
-            "api_keys": {},
-            "model": "test",
-        }
+        return make_test_config_snapshot(
+            backend=cast(Backend, "openai"),
+            model="test",
+        )
 
     app = KAgent(
         AppProps(
@@ -1052,3 +1052,62 @@ def test_distinct_selected_and_active_styling() -> None:
         rendered.plain[success_spans[0].start : success_spans[0].end]
         == "● active"
     )
+
+
+@pytest.mark.asyncio
+async def test_slash_skill_promoted_updates_active_skill_in_ui():
+    app, _, _ = timer_app()
+
+    async def mock_run(msg: str, signal: Any, emit: Any, opts: Any = None) -> None:
+        emit(SkillActiveEvent(name="cross-site-scripting"))
+
+    app.agent = cast(
+        Any,
+        SimpleNamespace(
+            is_running=lambda: False,
+            run=mock_run,
+        ),
+    )
+
+    assert app.state.active_skill is None
+
+    # Run agent turn (user submits prompt after slash command)
+    await app.run_agent_turn("find xss")
+
+    assert app.state.active_skill == "cross-site-scripting"
+
+    # Next turn without skill resets active_skill
+    async def mock_run_no_skill(msg: str, signal: Any, emit: Any, opts: Any = None) -> None:
+        pass
+
+    app.agent.run = mock_run_no_skill
+    await app.run_agent_turn("next turn without skill")
+
+    assert app.state.active_skill is None
+
+
+@pytest.mark.asyncio
+async def test_reset_slash_clears_active_skill_in_ui():
+    app, _, _ = timer_app()
+    app.agent.reset = AsyncMock()
+
+    app.dispatch(SetActiveSkill("sql-injection"))
+    assert app.state.active_skill == "sql-injection"
+
+    assert handle_slash(app, "/reset")
+    await asyncio.sleep(0)
+
+    assert app.state.active_skill is None
+    app.agent.reset.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_clear_slash_preserves_active_skill_in_ui():
+    app, _, _ = timer_app()
+
+    app.dispatch(SetActiveSkill("sql-injection"))
+    assert app.state.active_skill == "sql-injection"
+
+    assert handle_slash(app, "/clear")
+
+    assert app.state.active_skill == "sql-injection"

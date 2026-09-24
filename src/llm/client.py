@@ -6,8 +6,15 @@ from collections.abc import Callable
 from typing import TypeGuard
 
 from .types import ChatRequest, ChatResponse
+from .reasoning import ReasoningCapabilities
 
 class Client(ABC):
+
+    def reasoning_capabilities(
+        self, *, has_tools: bool = False
+    ) -> ReasoningCapabilities | None:
+        """Unknown clients retain their existing provider request behavior."""
+        return None
 
     @abstractmethod
     def name(self) -> str:

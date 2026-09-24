@@ -166,7 +166,7 @@ class HTTPTool(Tool):
         args: dict,
         signal,
         prompter: Prompter,
-    ) -> str:
+    ) -> ToolOutput:
 
         method = (
             arg_string(args, "method")

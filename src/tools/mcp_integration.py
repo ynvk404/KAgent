@@ -57,8 +57,8 @@ class Tool(Protocol):
     async def run(
         self,
         args: dict[str, Any],
-        cancel_event: Optional[asyncio.Event],
-        prompter: Prompter,
+        signal: Any,
+        prompter: Any,
     ) -> str:
         ...
 
@@ -218,11 +218,22 @@ class MCPSession:
             warn("mcp: close deadline exceeded; abandoning child", server=self.server_name)
 
 
+class MCPToolSession(Protocol):
+    server_name: str
+
+    async def call_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        cancel_event: Optional[asyncio.Event] = None,
+    ) -> dict[str, Any]: ...
+
+
 class MCPTool:
 
     def __init__(
         self,
-        session: MCPSession,
+        session: MCPToolSession,
         tool_name: str,
         remote_name: str,
         desc: str,
@@ -260,10 +271,13 @@ class MCPTool:
     async def run(
         self,
         args: dict[str, Any],
-        cancel_event: Optional[asyncio.Event],
-        _p: Prompter,
+        signal: Any = None,
+        prompter: Any = None,
+        cancel_event: Optional[asyncio.Event] = None,
+        _p: Any = None,
     ) -> str:
-        result = await self._session.call_tool(self._remote_name, args, cancel_event)
+        evt = cancel_event if cancel_event is not None else (signal if isinstance(signal, asyncio.Event) else None)
+        result = await self._session.call_tool(self._remote_name, args, evt)
         if result["isError"]:
             raise RuntimeError(
                 format_mcp_error(self._tool_name, self._remote_name, result["content"])

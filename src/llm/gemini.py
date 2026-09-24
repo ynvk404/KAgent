@@ -6,6 +6,9 @@ from src.logger.logger import get_logger
 from .client import Client, Pinger, StreamingClient
 from .errors import classify_backend
 from .retry import RetryOptions, with_retry
+from .providers import GEMINI_RECOMMENDED_MODELS
+from .reasoning import ReasoningCapabilities, ReasoningLevel, resolve_level
+from .metrics import gemini_usage
 from .transport import (
     aborted,
     attach_retry_after,
@@ -28,6 +31,17 @@ from .types import (
 )
 
 logger = get_logger("llm.gemini")
+
+
+def gemini_reasoning_capabilities(model: str) -> ReasoningCapabilities | None:
+    if with_models_prefix(model) not in GEMINI_RECOMMENDED_MODELS:
+        return None
+    # Gemini 3.x supports thinkingLevel low/medium/high. None of these
+    # recommended models guarantees a fully disabled thinking mode.
+    return ReasoningCapabilities(
+        frozenset({ReasoningLevel.LOW, ReasoningLevel.MEDIUM, ReasoningLevel.HIGH}),
+        fallbacks={ReasoningLevel.OFF: ReasoningLevel.LOW},
+    )
 
 
 def _emit_delta(on_delta: Callable[[str], None], text: str) -> None:
@@ -90,6 +104,11 @@ class GeminiClient(StreamingClient, Pinger):
     def model(self) -> str:
         return self.model_id
 
+    def reasoning_capabilities(
+        self, *, has_tools: bool = False
+    ) -> ReasoningCapabilities | None:
+        return gemini_reasoning_capabilities(self.model_id)
+
     async def ping(self, signal: Optional[Any] = None) -> None:
         await ping_models_endpoint(
             self.base_url,
@@ -98,10 +117,21 @@ class GeminiClient(StreamingClient, Pinger):
         )
 
     async def chat(self, request: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
-        return await with_retry(
+        retry_count = 0
+        retry_wait_ms = 0.0
+
+        def on_retry(info: Any) -> None:
+            nonlocal retry_count, retry_wait_ms
+            retry_count += 1
+            retry_wait_ms += info["delay_ms"]
+
+        response = await with_retry(
             lambda: self._chat_once(request, signal),
-            RetryOptions(signal=signal),
+            RetryOptions(signal=signal, on_retry=on_retry),
         )
+        response.retry_count = retry_count
+        response.retry_wait_ms = round(retry_wait_ms, 2)
+        return response
 
     async def _chat_once(self, req: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
         body = encode_request(req, self._gen_opts())
@@ -149,11 +179,19 @@ class GeminiClient(StreamingClient, Pinger):
             text = "".join(text_parts)
 
             calls = [p for p in parts if p.get("functionCall", {}).get("name")]
-            msg = Message(role="assistant", content=text)
+            msg = Message(
+                role="assistant", content=text,
+                provider_state_provider="gemini",
+                provider_state_model=self.model_id,
+                gemini_parts=[p for part in parts if (p := safe_replay_part(part))],
+            )
             if calls:
                 msg.tool_calls = [part_to_tool_call(p) for p in calls]
 
-            return ChatResponse(message=msg, finish_reason=choice.get("finishReason", ""))
+            return ChatResponse(
+                message=msg, finish_reason=choice.get("finishReason", ""),
+                usage=gemini_usage(out.get("usageMetadata")),
+            )
 
     async def chat_stream(
         self,
@@ -161,17 +199,27 @@ class GeminiClient(StreamingClient, Pinger):
         on_delta: Callable[[str], None],
         signal: Optional[Any] = None,
     ) -> ChatResponse:
+        retry_count = 0
+        retry_wait_ms = 0.0
+
+        def on_retry(info: Any) -> None:
+            nonlocal retry_count, retry_wait_ms
+            retry_count += 1
+            retry_wait_ms += info["delay_ms"]
+
         client, resp = await with_retry(
             lambda: self._open_stream(request, signal),
-            RetryOptions(signal=signal),
+            RetryOptions(signal=signal, on_retry=on_retry),
         )
         
         chunks: List[str] = []
         calls: List[Dict[str, Any]] = []
+        replay_parts: list[dict[str, Any]] = []
         finish = ""
+        usage = None
 
         async def consume() -> None:
-            nonlocal finish
+            nonlocal finish, usage
             async for line in iter_sse_lines(resp):
                 if not line.startswith('data:'):
                     continue
@@ -182,6 +230,10 @@ class GeminiClient(StreamingClient, Pinger):
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
                     continue
+
+                parsed_usage = gemini_usage(chunk.get("usageMetadata"))
+                if parsed_usage is not None:
+                    usage = parsed_usage
 
                 if chunk.get("error", {}).get("message"):
                     raise classify_backend('gemini', None, 200, chunk["error"]["message"])
@@ -195,15 +247,17 @@ class GeminiClient(StreamingClient, Pinger):
                     finish = choice["finishReason"]
 
                 for part in choice.get("content", {}).get("parts", []):
+                    replay_part = safe_replay_part(part)
+                    if replay_part:
+                        replay_parts.append(replay_part)
                     if part.get("functionCall", {}).get("name"):
                         calls.append(part)
                         continue
-                    if not part.get("text"):
+                    if part.get("thought") or not part.get("text"):
                         continue
 
                     _emit_delta(on_delta, part["text"])
-                    if not part.get("thought"):
-                        chunks.append(part["text"])
+                    chunks.append(part["text"])
 
         try:
             await run_cancellable(consume(), signal)
@@ -211,11 +265,20 @@ class GeminiClient(StreamingClient, Pinger):
             await resp.aclose()
             await client.aclose()
 
-        msg = Message(role="assistant", content="".join(chunks))
+        msg = Message(
+            role="assistant", content="".join(chunks),
+            provider_state_provider="gemini",
+            provider_state_model=self.model_id,
+            gemini_parts=replay_parts,
+        )
         if calls:
             msg.tool_calls = [part_to_tool_call(p) for p in calls]
 
-        return ChatResponse(message=msg, finish_reason=finish)
+        return ChatResponse(
+            message=msg, finish_reason=finish, usage=usage,
+            retry_count=retry_count,
+            retry_wait_ms=round(retry_wait_ms, 2),
+        )
 
     async def _open_stream(self, req: ChatRequest, signal: Optional[Any] = None):
  
@@ -269,6 +332,29 @@ def part_to_tool_call(part: Dict[str, Any]) -> ToolCall:
     return tc
 
 
+def safe_replay_part(part: Any) -> dict[str, Any] | None:
+    """Retain signed provider parts exactly; discard unsigned thought text."""
+    if not isinstance(part, dict):
+        return None
+    result: dict[str, Any] = {}
+    call = part.get("functionCall")
+    if isinstance(call, dict) and isinstance(call.get("name"), str):
+        result["functionCall"] = {
+            "name": call["name"],
+            "args": call.get("args") if isinstance(call.get("args"), dict) else {},
+        }
+    signature = part.get("thoughtSignature") or part.get("thought_signature")
+    signed = isinstance(signature, str)
+    if "functionCall" not in result and isinstance(part.get("text"), str):
+        if not part.get("thought") or signed:
+            result["text"] = part["text"]
+            if part.get("thought"):
+                result["thought"] = True
+    if signed and result:
+        result["thoughtSignature"] = signature
+    return result or None
+
+
 def encode_request(
     req: ChatRequest,
     gen_opts: Optional[Dict[str, Any]] = None,
@@ -281,9 +367,15 @@ def encode_request(
     )
     
     contents = []
+    previous_was_tool = False
     for m in req.messages:
         if m.role != 'system':
-            contents.extend(encode_message(m))
+            encoded = encode_message(m, req.model)
+            if m.role == "tool" and previous_was_tool and contents and encoded:
+                contents[-1]["parts"].extend(encoded[0]["parts"])
+            else:
+                contents.extend(encoded)
+            previous_was_tool = m.role == "tool"
 
     body: Dict[str, Any] = {"contents": contents}
 
@@ -301,7 +393,20 @@ def encode_request(
         generation_config["maxOutputTokens"] = max_tokens
 
     thinking_budget = gen_opts.get("thinkingBudget")
-    if thinking_budget is not None and thinking_budget >= 0:
+    resolution = (
+        resolve_level(req.reasoning_level, gemini_reasoning_capabilities(req.model))
+        if req.reasoning_level is not None
+        else None
+    )
+    effective = resolution.effective if resolution is not None else None
+    if effective is not None:
+        # Explicit turn policy takes precedence over the legacy numeric budget.
+        # Direct callers without a generic level retain their old budget.
+        thinking_config: Dict[str, Any] = {"thinkingLevel": effective.value}
+        if thinking_budget is not None and thinking_budget > 0:
+            thinking_config["includeThoughts"] = True
+        generation_config["thinkingConfig"] = thinking_config
+    elif thinking_budget is not None and thinking_budget >= 0:
         if thinking_budget == 0:
             generation_config["thinkingConfig"] = {"thinkingBudget": 0}
         else:
@@ -322,7 +427,7 @@ def with_models_prefix(model_id: str) -> str:
     return f"models/{model_id}"
 
 
-def encode_message(m: Message) -> List[Dict[str, Any]]:
+def encode_message(m: Message, model: str | None = None) -> List[Dict[str, Any]]:
     if m.role == 'tool':
         return [{
             "role": "user",
@@ -335,6 +440,18 @@ def encode_message(m: Message) -> List[Dict[str, Any]]:
         }]
         
     if m.role == 'assistant':
+        if (
+            m.gemini_parts is not None
+            and m.provider_state_provider == "gemini"
+            and model is not None and m.provider_state_model is not None
+            and with_models_prefix(model) == with_models_prefix(m.provider_state_model)
+        ):
+            replay_parts: list[dict[str, Any]] = []
+            for raw in m.gemini_parts:
+                replay_part = safe_replay_part(raw)
+                if replay_part is not None:
+                    replay_parts.append(replay_part)
+            return [{"role": "model", "parts": replay_parts}] if replay_parts else []
         parts: List[Dict[str, Any]] = []
         if m.content:
             parts.append({"text": m.content})
@@ -361,7 +478,9 @@ def encode_message(m: Message) -> List[Dict[str, Any]]:
                 gemini_provider = tc_provider.get("gemini") or {}
                 thought_sig = gemini_provider.get("thoughtSignature")
 
-            if thought_sig:
+            if (thought_sig and m.provider_state_provider == "gemini"
+                    and model is not None and m.provider_state_model is not None
+                    and with_models_prefix(model) == with_models_prefix(m.provider_state_model)):
                 part["thoughtSignature"] = thought_sig
                 
             parts.append(part)

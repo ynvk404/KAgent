@@ -1,4 +1,18 @@
 {
-  "include": ["src", "tests"],
-  "pythonVersion": "3.11"
+  "include": [
+    "src",
+    "tests"
+  ],
+  "exclude": [
+    "**/Burp-integration/**",
+    "**/venv-linux/**",
+    "**/venv/**",
+    "**/.venv/**",
+    "**/__pycache__/**",
+    "**/.pytest_cache/**"
+  ],
+  "venvPath": ".",
+  "venv": "venv-linux",
+  "pythonVersion": "3.14",
+  "typeCheckingMode": "basic"
 }

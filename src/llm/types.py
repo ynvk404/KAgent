@@ -4,6 +4,9 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from .reasoning import ReasoningLevel
+from .metrics import TokenUsage
+
 Role = Literal[
     "system",
     "user",
@@ -58,6 +61,12 @@ class Message:
     tool_error_kind: str | None = None
     tool_http_status: int | None = None
     tool_truncated: bool = False
+    # Internal provenance prevents provider-private state from crossing adapters.
+    provider_state_provider: str | None = None
+    provider_state_model: str | None = None
+    # Gemini REST parts in original order. Signed thought parts are retained
+    # only for exact provider replay and must never enter rendered artifacts.
+    gemini_parts: list[dict[str, Any]] | None = None
 
 # ============================================================================
 # Tool Definition
@@ -87,6 +96,16 @@ class ChatRequest:
     # None leaves provider defaults intact; otherwise this is the user's
     # explicit thinking-mode preference for providers that support it.
     thinking_enabled: bool | None = None
+    # Generic level: callers may request a level, or pass the level selected
+    # for an entire Agent turn. Adapters re-check model support before encoding.
+    reasoning_level: ReasoningLevel | None = None
+    requested_reasoning_level: ReasoningLevel | None = None
+
+    def __post_init__(self) -> None:
+        if self.reasoning_level is None or self.thinking_enabled is None:
+            return
+        if (self.reasoning_level is ReasoningLevel.OFF) != (not self.thinking_enabled):
+            raise ValueError("reasoning_level conflicts with thinking_enabled")
 
 FinishReason = Literal[
     "stop",
@@ -98,6 +117,9 @@ FinishReason = Literal[
 class ChatResponse:
     message: Message
     finish_reason: FinishReason
+    usage: TokenUsage | None = None
+    retry_count: int | None = None
+    retry_wait_ms: float | None = None
 
 # ============================================================================
 # Helpers

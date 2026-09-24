@@ -1,4 +1,6 @@
 from __future__ import annotations
+from tests.helpers.ui_fakes import make_test_config_snapshot
+from rich.text import Text
 
 import asyncio
 from typing import Any, cast
@@ -453,13 +455,11 @@ async def test_open_provider_picker_dispatches_provider_picker_request():
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.GROQ,
-            "model": "llama-test",
-            "base_url": "",
-            "api_key": "k",
-            "api_keys": {},
-        }
+        return make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="llama-test",
+            api_key="k",
+        )
 
     open_provider_picker(
         dispatch=dispatch,
@@ -495,18 +495,12 @@ async def test_custom_provider_activation_switches_runtime_before_marking_adapte
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.GROQ,
-            "model": "groq-model",
-            "base_url": "",
-            "api_key": "groq-key",
-            "api_keys": {},
-            "active_provider_name": "groq",
-            "active_custom_provider_id": None,
-            "active_custom_provider_base_url": "",
-            "active_custom_provider_api_key": "",
-            "active_custom_provider_model": "",
-        }
+        return make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="groq-model",
+            api_key="groq-key",
+            active_provider_name="groq",
+        )
 
     open_provider_picker(
         dispatch=dispatch,
@@ -549,18 +543,12 @@ async def test_failed_custom_activation_does_not_mark_adapter_active():
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.GROQ,
-            "model": "groq-model",
-            "base_url": "",
-            "api_key": "groq-key",
-            "api_keys": {},
-            "active_provider_name": "groq",
-            "active_custom_provider_id": None,
-            "active_custom_provider_base_url": "",
-            "active_custom_provider_api_key": "",
-            "active_custom_provider_model": "",
-        }
+        return make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="groq-model",
+            api_key="groq-key",
+            active_provider_name="groq",
+        )
 
     open_provider_picker(
         dispatch=dispatch,
@@ -601,18 +589,18 @@ async def test_switching_away_clears_custom_adapter_marker(
     adapter = InMemoryCustomProviderAdapter()
     profile = adapter.add_custom_provider("Token Harbor", "https://gateway.example/v1")
     adapter.activate_custom_provider(profile.id)
-    snapshot = {
-        "backend": Backend.OPENAI_COMPAT,
-        "model": "manual-model",
-        "base_url": "https://manual.example/v1",
-        "api_key": "manual-key",
-        "api_keys": {"openai-compat": "manual-key", "groq": "groq-key"},
-        "active_provider_name": profile.name,
-        "active_custom_provider_id": profile.id,
-        "active_custom_provider_base_url": "https://gateway.example/v1",
-        "active_custom_provider_api_key": "custom-key",
-        "active_custom_provider_model": "custom-model",
-    }
+    snapshot = make_test_config_snapshot(
+        backend=Backend.OPENAI_COMPAT,
+        model="manual-model",
+        base_url="https://manual.example/v1",
+        api_key="manual-key",
+        api_keys={"openai-compat": "manual-key", "groq": "groq-key"},
+        active_provider_name=profile.name,
+        active_custom_provider_id=profile.id,
+        active_custom_provider_base_url="https://gateway.example/v1",
+        active_custom_provider_api_key="custom-key",
+        active_custom_provider_model="custom-model",
+    )
     dispatched = []
     switched = asyncio.Event()
 
@@ -661,18 +649,16 @@ def test_custom_display_name_does_not_mark_builtin_provider_current(display_name
     adapter.activate_custom_provider(profile.id)
     dispatched = []
 
-    snapshot = {
-        "backend": Backend.OPENAI_COMPAT,
-        "model": "manual-model",
-        "base_url": "https://manual.example/v1",
-        "api_key": "manual-key",
-        "api_keys": {"openai-compat": "manual-key"},
-        "active_provider_name": display_name,
-        "active_custom_provider_id": profile.id,
-        "active_custom_provider_base_url": profile.base_url,
-        "active_custom_provider_api_key": "",
-        "active_custom_provider_model": "",
-    }
+    snapshot = make_test_config_snapshot(
+        backend=Backend.OPENAI_COMPAT,
+        model="manual-model",
+        base_url="https://manual.example/v1",
+        api_key="manual-key",
+        api_keys={"openai-compat": "manual-key"},
+        active_provider_name=display_name,
+        active_custom_provider_id=profile.id,
+        active_custom_provider_base_url=profile.base_url,
+    )
 
     open_provider_picker(
         dispatch=dispatched.append,
@@ -696,18 +682,14 @@ def test_stale_adapter_marker_does_not_block_delete_when_runtime_is_builtin():
     profile = adapter.add_custom_provider("Previously Active", "https://gateway.example/v1")
     adapter.activate_custom_provider(profile.id)
     dispatched = []
-    snapshot = {
-        "backend": Backend.GROQ,
-        "model": "groq-model",
-        "base_url": "https://api.groq.com/openai/v1",
-        "api_key": "groq-key",
-        "api_keys": {"groq": "groq-key"},
-        "active_provider_name": "groq",
-        "active_custom_provider_id": None,
-        "active_custom_provider_base_url": "",
-        "active_custom_provider_api_key": "",
-        "active_custom_provider_model": "",
-    }
+    snapshot = make_test_config_snapshot(
+        backend=Backend.GROQ,
+        model="groq-model",
+        base_url="https://api.groq.com/openai/v1",
+        api_key="groq-key",
+        api_keys={"groq": "groq-key"},
+        active_provider_name="groq",
+    )
 
     open_provider_picker(
         dispatch=dispatched.append,
@@ -737,13 +719,11 @@ async def test_add_custom_provider_flow(monkeypatch):
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.GROQ,
-            "model": "llama-test",
-            "base_url": "",
-            "api_key": "k",
-            "api_keys": {},
-        }
+        return make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="llama-test",
+            api_key="k",
+        )
 
     # Mock sequential inputs: name, base_url, api_key, model
     responses = iter(["Test Harbor", "https://api.test.harbor/v1", "secret-key", "my-model"])
@@ -802,13 +782,11 @@ async def test_edit_custom_provider_flow(monkeypatch):
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.GROQ,
-            "model": "llama-test",
-            "base_url": "",
-            "api_key": "k",
-            "api_keys": {},
-        }
+        return make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="llama-test",
+            api_key="k",
+        )
 
     # Edit: new name, keep base_url (return empty), keep key (return empty), new model
     responses = iter(["New Name", "", "", "new-model"])
@@ -863,6 +841,7 @@ def test_active_section_tab_styling():
     assert str(h_text.spans[0].style) == f"bold {ACCENT}"
 
     rendered_modal = _modal_text(modal)
+    assert isinstance(rendered_modal, Text)
     official_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
     assert len(official_spans) == 2
     assert rendered_modal.plain[official_spans[0].start:official_spans[0].end] == "[ Official ]"
@@ -878,6 +857,7 @@ def test_active_section_tab_styling():
     assert str(h_text.spans[0].style) == f"bold {ACCENT}"
 
     rendered_modal = _modal_text(modal)
+    assert isinstance(rendered_modal, Text)
     custom_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
     assert len(custom_spans) == 2
     assert rendered_modal.plain[custom_spans[0].start:custom_spans[0].end] == "[ Custom ]"
@@ -893,6 +873,7 @@ def test_active_section_tab_styling():
     assert str(h_text.spans[0].style) == f"bold {ACCENT}"
 
     rendered_modal = _modal_text(modal)
+    assert isinstance(rendered_modal, Text)
     manual_spans = [s for s in rendered_modal.spans if str(s.style) == f"bold {ACCENT}"]
     assert len(manual_spans) == 2
     assert rendered_modal.plain[manual_spans[0].start:manual_spans[0].end] == "[ Manual ]"
@@ -928,13 +909,11 @@ def _make_test_kagent() -> KAgent:
             ),
             banner_data=BannerData(provider="test", model="test", cwd="."),
             parent_signal=asyncio.Event(),
-            read_config=lambda: {
-                "backend": Backend.GROQ,
-                "model": "llama-test",
-                "base_url": "",
-                "api_key": "k",
-                "api_keys": {},
-            },
+            read_config=lambda: make_test_config_snapshot(
+                backend=Backend.GROQ,
+                model="llama-test",
+                api_key="k",
+            ),
             apply_provider=AsyncMock(),
         )
     )
@@ -992,13 +971,11 @@ async def test_add_custom_provider_consecutive_field_transitions(monkeypatch):
 
     open_provider_picker(
         dispatch=dispatch,
-        read_config=lambda: {
-            "backend": Backend.GROQ,
-            "model": "llama-test",
-            "base_url": "",
-            "api_key": "k",
-            "api_keys": {},
-        },
+        read_config=lambda: make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="llama-test",
+            api_key="k",
+        ),
         apply_provider=AsyncMock(),
         prompt_text=app.prompt_text,
         adapter=adapter,
@@ -1070,13 +1047,11 @@ async def test_add_custom_provider_cancellation_restores_picker_immediately():
 
     open_provider_picker(
         dispatch=dispatch,
-        read_config=lambda: {
-            "backend": Backend.GROQ,
-            "model": "llama-test",
-            "base_url": "",
-            "api_key": "k",
-            "api_keys": {},
-        },
+        read_config=lambda: make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="llama-test",
+            api_key="k",
+        ),
         apply_provider=AsyncMock(),
         prompt_text=app.prompt_text,
         adapter=adapter,
@@ -1116,13 +1091,11 @@ async def test_edit_custom_provider_consecutive_field_transitions(monkeypatch):
 
     open_provider_picker(
         dispatch=dispatch,
-        read_config=lambda: {
-            "backend": Backend.GROQ,
-            "model": "llama-test",
-            "base_url": "",
-            "api_key": "k",
-            "api_keys": {},
-        },
+        read_config=lambda: make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="llama-test",
+            api_key="k",
+        ),
         apply_provider=AsyncMock(),
         prompt_text=app.prompt_text,
         adapter=adapter,
@@ -1193,13 +1166,11 @@ async def test_add_custom_provider_empty_name_validation_loop():
 
     open_provider_picker(
         dispatch=dispatch,
-        read_config=lambda: {
-            "backend": Backend.GROQ,
-            "model": "llama-test",
-            "base_url": "",
-            "api_key": "k",
-            "api_keys": {},
-        },
+        read_config=lambda: make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="llama-test",
+            api_key="k",
+        ),
         apply_provider=AsyncMock(),
         prompt_text=app.prompt_text,
         adapter=adapter,

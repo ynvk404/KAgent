@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from rich import box
+from rich.align import Align
 from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.text import Text
@@ -19,13 +20,14 @@ StartupPhase = Literal[
     "target",
     "skills",
     "provider",
+    "model",
     "integrations",
     "ready",
     "failed",
 ]
 
 _READINESS_PHASES: frozenset[StartupPhase] = frozenset(
-    {"workspace", "session", "target", "skills", "provider", "integrations", "ready"}
+    {"workspace", "session", "target", "skills", "provider", "model", "integrations", "ready"}
 )
 
 _DEFAULT_ROWS: list[tuple[StartupPhase, str]] = [
@@ -41,6 +43,7 @@ _BORDER_TITLES: dict[StartupPhase, str] = {
     "target": "Initializing",
     "skills": "Initializing",
     "provider": "Initializing",
+    "model": "Initializing",
     "integrations": "Initializing",
     "ready": "Initializing",
     "failed": "Failed",
@@ -53,6 +56,7 @@ _FOOTER_STATUS: dict[StartupPhase, str] = {
     "target": "Restoring target and scope…",
     "skills": "Loading environment and runtime tools…",
     "provider": "Verifying provider connection and session…",
+    "model": "Using the selected model…",
     "integrations": "Preparing configured integrations…",
     "ready": "Ready to begin testing",
     "failed": "Initialization encountered an error",
@@ -66,12 +70,6 @@ SHINE_INTERVAL = 0.12
 _PANEL_MAX = 68
 _PANEL_MIN = 28
 
-_BAR_MAX = 38
-_BAR_MIN = 12
-
-BAR_WIDTH = _BAR_MAX
-
-
 def render_kagent_word(shine_idx: int = 0, shine_done: bool = False) -> Text:
     """Render 'KAGENT' with a moving shine sweep across already-visible letters."""
     heading = Text(justify="center", no_wrap=True)
@@ -83,18 +81,6 @@ def render_kagent_word(shine_idx: int = 0, shine_done: bool = False) -> Text:
     return heading
 
 
-def render_progress_bar(pct: int, width: int = BAR_WIDTH) -> Text:
-    """Deterministic progress bar: [████░░░░░░]  75%  — always uses ACCENT."""
-    filled = max(0, min(width, round((pct / 100) * width)))
-    empty = width - filled
-    bar = Text()
-    bar.append("  ", style=MUTED)
-    bar.append("█" * filled, style=ACCENT)
-    bar.append("░" * empty, style=MUTED)
-    bar.append(f"  {pct}%", style=ACCENT)
-    return bar
-
-
 @dataclass(slots=True)
 class SplashProps:
     provider: str | None = None
@@ -104,6 +90,7 @@ class SplashProps:
     resumed: bool = False
     resume_summary: str | None = None
     has_target: bool = False
+    has_model_override: bool = False
     has_integrations: bool = False
     error: str | None = None
 
@@ -114,7 +101,7 @@ class StartupSplash(Widget):
     DEFAULT_CSS = """
     StartupSplash {
         width: 100%;
-        height: 1fr;
+        height: auto;
         content-align: center middle;
         align: center middle;
     }
@@ -175,6 +162,7 @@ class StartupSplash(Widget):
         self.phase = phase
         if error:
             self.error = error
+        self.refresh(layout=True)
 
     def readiness_rows(self) -> list[tuple[StartupPhase, str]]:
         rows = list(_DEFAULT_ROWS)
@@ -182,17 +170,11 @@ class StartupSplash(Widget):
             rows.insert(1, ("session", "Session"))
         if self.props.has_target:
             rows.insert(2 if self.props.resumed else 1, ("target", "Target & scope"))
+        if self.props.has_model_override:
+            rows.append(("model", "Model override"))
         if self.props.has_integrations:
             rows.append(("integrations", "Integrations"))
         return rows
-
-    def progress_percent(self) -> int:
-        if self.phase == "ready":
-            return 100
-        phases = [phase for phase, _ in self.readiness_rows()]
-        if self.phase not in phases:
-            return 0
-        return round(100 * (phases.index(self.phase) + 1) / (len(phases) + 1))
 
     def _panel_width(self) -> int:
         """Preferred panel content width, clamped to terminal size."""
@@ -200,18 +182,14 @@ class StartupSplash(Widget):
         available = max(_PANEL_MIN, term_w - 4)
         return min(_PANEL_MAX, available)
 
-    def _bar_width(self, panel_w: int) -> int:
-        raw = panel_w - 14
-        return max(_BAR_MIN, min(_BAR_MAX, raw))
-
     def render(self) -> RenderableType:
         panel_w = self._panel_width()
+        inner_padding = min(max(2, (panel_w - 32) // 2), 8)
         spinner_char = _SPINNER[self._spinner_idx % len(_SPINNER)]
 
         parts: list[RenderableType] = []
 
         # Identity block (always present)
-        # 1. Main center heading + subtitle (always present)
         heading = render_kagent_word(self.shine_idx, self.shine_done)
         parts.append(heading)
         subtitle = Text("AI-assisted Web Pentest Agent", style=MUTED, justify="center", no_wrap=True)
@@ -237,69 +215,41 @@ class StartupSplash(Widget):
             current_order = len(rows) if self.phase == "ready" else row_phases.index(self.phase)
 
             # Readiness rows
-            # 2. Phase list
+            readiness_lines: list[Text] = []
             for row_order, (row_phase, row_label) in enumerate(rows):
                 if row_order < current_order:
                     row = Text()
-                    row.append("  ✓  ", style=f"bold {SUCCESS}")
+                    row.append("✓  ", style=f"bold {SUCCESS}")
                     row.append(row_label, style=MUTED)
                 elif row_order == current_order:
                     row = Text()
-                    row.append(f"  {spinner_char}  ", style=ACCENT)
+                    row.append(f"{spinner_char}  ", style=ACCENT)
                     row.append(row_label, style=BOLD_ACCENT)
                 else:
                     row = Text()
-                    row.append("  ·  ", style=MUTED)
+                    row.append("·  ", style=MUTED)
                     row.append(row_label, style=MUTED)
-                parts.append(row)
+                readiness_lines.append(row)
+
+            parts.append(Align.center(Group(*readiness_lines)))
 
             parts.append(Text(""))
-
-            # Provider and counts each appear once, on their own centered row.
-            p = self.props
-            r1 = Text(justify="center")
-            if p.provider and p.model:
-                r1.append(f"{p.provider} · {p.model}", style=MUTED)
-            elif p.provider:
-                r1.append(p.provider, style=MUTED)
-            elif p.model:
-                r1.append(p.model, style=MUTED)
-
-            r2 = Text(justify="center")
-            counts: list[str] = []
-            if p.skill_count is not None:
-                counts.append(f"{p.skill_count} skills")
-            if p.tool_count is not None:
-                counts.append(f"{p.tool_count} tools")
-            if counts:
-                r2.append("  ·  ".join(counts), style=MUTED)
-            if r1.plain or r2.plain:
-                if r1.plain:
-                    parts.append(r1)
-                if r2.plain:
-                    parts.append(r2)
-                parts.append(Text(""))
-
-            # Progress bar
-            # 4. Progress bar
-            pct = self.progress_percent()
-            bar_w = self._bar_width(panel_w)
-            parts.append(render_progress_bar(pct, width=bar_w))
-            parts.append(Text(""))
-
-            # Ready label
-            # 5. Ready label
             if self.phase == "ready":
-                parts.append(Text("  ✓  Ready", style=BOLD_ACCENT, justify="center"))
+                # Center the label itself; the check sits just to its left.
+                label = "Complete"
+                content_w = panel_w - 2 - 2 * inner_padding
+                label_start = (content_w - len(label)) // 2
+                completion_line = Text(no_wrap=True)
+                completion_line.append(" " * max(0, label_start - 3))
+                completion_line.append("✓  ", style=f"bold {SUCCESS}")
+                completion_line.append(label, style=BOLD_ACCENT)
+                parts.append(completion_line)
                 parts.append(Text(""))
 
-        # 6. Subtle footer status line
+        # Subtle footer status line
         footer_text = _FOOTER_STATUS.get(self.phase, "")
         if footer_text:
             parts.append(Text(footer_text, style=MUTED, justify="center"))
-
-        inner_padding = max(2, (panel_w - 32) // 2)
-        inner_padding = min(inner_padding, 8)
 
         content = Group(*parts)
         border_title = _BORDER_TITLES.get(self.phase, "Initializing")
@@ -308,6 +258,7 @@ class StartupSplash(Widget):
             title=f"[bold {ACCENT}]{border_title}[/]",
             border_style=MUTED,
             box=box.ROUNDED,
-            padding=(0, inner_padding),
-            expand=False,
+            padding=(1, inner_padding),
+            expand=True,
+            width=panel_w,
         )

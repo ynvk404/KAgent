@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import asyncio
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -26,10 +26,10 @@ from src.ui.core.custom_provider_adapter import ConfigBackedCustomProviderAdapte
 
 
 class FakeAgent:
-    def __init__(self, client: object) -> None:
+    def __init__(self, client: Any) -> None:
         self.client = client
 
-    def set_client(self, client: object) -> None:
+    def set_client(self, client: Any) -> None:
         self.client = client
 
 

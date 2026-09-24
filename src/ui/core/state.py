@@ -280,6 +280,11 @@ def reducer(state: AppState, action: Action) -> AppState:
                 transcript=(),
                 clear_gen=state.clear_gen + 1,
                 clear_message=message,
+                active_skill=(
+                    None
+                    if message == "conversation reset"
+                    else state.active_skill
+                ),
             )
 
         case AgentEventAction(event=event):

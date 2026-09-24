@@ -72,6 +72,7 @@ from src.ui.core.state import (
     MergeBannerData,
     SetApiReady,
     SetAsk,
+    SetActiveSkill,
     SetBusy,
     SetPerm,
     SetSkillsPicker,
@@ -196,6 +197,7 @@ class AppProps:
     ) = None
     resume_summary: str | None = None
     splash_has_target: bool = False
+    splash_has_model_override: bool = False
     splash_has_integrations: bool = False
     show_splash: bool = False
 
@@ -318,7 +320,7 @@ def _modal_text(modal) -> RenderableType:
             else:
                 text.append(line, style=f"bold {ACCENT}")
         elif line.strip().startswith("↑ ") or line.strip().startswith("↓ "):
-            text.append(line, style="dim")
+            text.append(line, style=MUTED)
         elif line.startswith("error: "):
             text.append(line, style=BOLD_ERROR)
         else:
@@ -474,7 +476,7 @@ class KAgent(App):
 
     CSS = f"""
     Screen > .screen--selection {{
-        background: #38BDF8 30%;
+        background: {ACCENT} 30%;
         color: transparent;
     }}
 
@@ -522,18 +524,24 @@ class KAgent(App):
         overflow-y: auto;
         scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 0;
-        scrollbar-color: #7E8A9A;
-        scrollbar-color-hover: #38BDF8;
-        scrollbar-color-active: #38BDF8;
+        scrollbar-color: {MUTED};
+        scrollbar-color-hover: {ACCENT};
+        scrollbar-color-active: {ACCENT};
         scrollbar-background: transparent;
         scrollbar-background-hover: transparent;
         scrollbar-background-active: transparent;
         scrollbar-gutter: auto;
     }}
 
-    #startup-splash {{
+    #splash-container {{
         width: 100%;
         height: 1fr;
+        align: center middle;
+    }}
+
+    #startup-splash {{
+        width: 100%;
+        height: auto;
         content-align: center middle;
         align: center middle;
     }}
@@ -568,9 +576,11 @@ class KAgent(App):
         self.burp_bridge_status = props.burp_bridge_status
         self.resume_summary = props.resume_summary
         self.splash_has_target = props.splash_has_target
+        self.splash_has_model_override = props.splash_has_model_override
         self.splash_has_integrations = props.splash_has_integrations
         self.show_splash = props.show_splash
         self.startup_splash: StartupSplash | None = None
+        self.splash_container: Vertical | None = None
         self.startup_task: asyncio.Task | None = None
         self.state = initial_state(
             "",
@@ -667,10 +677,13 @@ class KAgent(App):
                     resumed=bool(self.resume_summary),
                     resume_summary=self.resume_summary,
                     has_target=self.splash_has_target,
+                    has_model_override=self.splash_has_model_override,
                     has_integrations=self.splash_has_integrations,
                 ),
             )
-            yield self.startup_splash
+            self.splash_container = Vertical(id="splash-container")
+            with self.splash_container:
+                yield self.startup_splash
 
         self.transcript_panel = Vertical(id="transcript-panel")
         self.transcript_panel.border_title = "Transcript"
@@ -1386,7 +1399,7 @@ class KAgent(App):
             style = (
                 f"bold {ACCENT}"
                 if getattr(ln, "selected", False)
-                else ("dim" if getattr(ln, "dim", False) else "")
+                else (MUTED if getattr(ln, "dim", False) else "")
             )
             text.append(ln.text, style=style)
         return text
@@ -1510,6 +1523,11 @@ class KAgent(App):
         self.dispatch(
             SetBusy(
                 busy=True,
+            )
+        )
+        self.dispatch(
+            SetActiveSkill(
+                name=None,
             )
         )
 
@@ -1831,6 +1849,8 @@ class KAgent(App):
     def _finish_splash(self) -> None:
         if self.startup_splash is not None and self.startup_splash.display:
             self.startup_splash.display = False
+            if self.splash_container is not None:
+                self.splash_container.display = False
             self.transcript_panel.display = True
             self.input_static.display = True
             self.status_bar.display = True

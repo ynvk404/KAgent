@@ -187,7 +187,7 @@ class ShellTool(Tool):
         args: dict[str, Any],
         signal: Any,
         prompter: Prompter,
-    ) -> str:
+    ) -> ToolOutput:
         original_cmd = arg_string(args, "command") or ""
         cmd_str = rewrite_portable_command(original_cmd)
 
@@ -299,7 +299,7 @@ async def run_with_capture(
     argv: list[str],
     timeout_seconds: float,
     signal: Any,
-) -> str:
+) -> ToolOutput:
     if _is_aborted(signal):
         raise RuntimeError("aborted")
 
@@ -394,7 +394,7 @@ async def run_with_capture(
     result = f"exit: {exit_code}\nstdout:\n{stdout}"
     if stderr:
         result += f"\nstderr:\n{stderr}"
-    return result
+    return ToolOutput(result, status="success")
 
 def _is_aborted(signal: Any) -> bool:
     return signal is not None and getattr(signal, "aborted", False)

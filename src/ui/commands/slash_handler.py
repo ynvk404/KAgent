@@ -80,10 +80,16 @@ def build_help_text(agent: "Agent", read_config) -> str:
     out.append(f"  provider   {provider}")
     out.append(f"  model      {model}")
     out.append(f"  target     {target}")
+    status_fn = getattr(agent, "reasoning_status", None)
+    status_value = status_fn() if callable(status_fn) else None
+    thinking_status = (
+        status_value if isinstance(status_value, str)
+        else f"thinking {'on' if agent.thinking_is_enabled() else 'off'}"
+    )
     out.append(
         f"  limits     max-steps {agent.get_max_steps()}"
         f"  ·  auto-compact {agent.get_auto_compact_threshold()} tok"
-        f"  ·  thinking {'on' if agent.thinking_is_enabled() else 'off'}"
+        f"  ·  {thinking_status}"
     )
     out.append(f"  skills     {enabled}/{total} enabled")
     out.append(
@@ -768,11 +774,17 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
     if cmd == "/thinking":
         if not rest:
             current = "on" if agent.thinking_is_enabled() else "off"
+            status_fn = getattr(agent, "reasoning_status", None)
+            status_value = status_fn() if callable(status_fn) else None
+            text = (
+                status_value if isinstance(status_value, str)
+                else f"thinking currently {current}"
+            )
             dispatch(
                 Append(
                     entry=TranscriptEntry(
                         kind="system",
-                        text=f"thinking currently {current}",
+                        text=text,
                     )
                 )
             )
@@ -801,6 +813,11 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             text = "thinking reset to default (off)"
         else:
             text = "thinking enabled" if enabled else "thinking disabled"
+        status_fn = getattr(agent, "reasoning_status", None)
+        if callable(status_fn):
+            status_value = status_fn(enabled)
+            if isinstance(status_value, str):
+                text = status_value
 
         dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
         return True

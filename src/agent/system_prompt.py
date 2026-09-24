@@ -356,11 +356,11 @@ def build_system_prompt(opts: BuildOptions) -> str:
     # Thêm cấu hình reasoning
     if opts.thinking_enabled:
         sb += (
-            "\n# Reasoning effort\n- Thinking is enabled. Reason internally as needed, but never expose hidden chain-of-thought or <think> blocks. Provide only the final useful answer and concise rationale.\n"
+            "\n# Reasoning effort\n- The user enabled reasoning where supported. Reason internally as needed, but never expose hidden chain-of-thought or <think> blocks. Provide only the final useful answer and concise rationale.\n"
         )
     else:
         sb += (
-            "\n# Reasoning effort\n- Thinking is disabled. Do not emit <think> blocks or hidden reasoning. Answer directly and keep responses concise.\n"
+            "\n# Reasoning effort\n- The user requested reasoning off. Do not emit <think> blocks or hidden reasoning. Answer directly and keep responses concise.\n"
         )
 
     # Nếu có target thì thêm thông tin target vào prompt

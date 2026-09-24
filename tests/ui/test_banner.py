@@ -163,7 +163,8 @@ def test_banner_tool_support():
     )
 
 
-    assert "[tools ✓]" in text
+    assert "Model: qwen3.5" in text
+    assert "[tools ✓]" not in text
 
 
 
@@ -211,8 +212,8 @@ def test_banner_keeps_logo_and_text_on_same_rows():
 
     assert len(lines) == 6
     assert all(line.strip() not in LOGO for line in text_lines)
-    assert "Model: openai/gpt-oss-120b [tools ✓]" in text_lines[2]
-    assert "[tools ✓]" not in text_lines[1]
+    assert "Model: openai/gpt-oss-120b" in text_lines[2]
+    assert "[tools ✓]" not in "\n".join(text_lines)
 
 
 
@@ -267,3 +268,16 @@ def test_rich_banner_panel_groups_all_header_content_at_narrow_width():
     assert "Path: /workspace/project" in rendered
     assert "Status: Session abc123" in rendered
     assert max(len(line) for line in rendered.splitlines()) <= 38
+
+
+def test_rich_banner_panel_omits_tool_support_at_wide_width():
+    banner = Banner(
+        BannerData(provider="DeepSeek", model="deepseek-flash", cwd="/workspace",
+                   tool_support="yes"),
+        width=80,
+    )
+    output = StringIO()
+    Console(file=output, width=80, color_system=None).print(banner.render_panel())
+
+    assert "Model: deepseek-flash" in output.getvalue()
+    assert "[tools ✓]" not in output.getvalue()

@@ -9,7 +9,14 @@ from src.logger.logger import get_logger
 
 from .client import StreamingClient
 from .errors import classify_backend
-from .providers import kimi_locks_temperature, kimi_supports_thinking_toggle
+from .providers import (
+    DEEPSEEK_MODELS,
+    OPENAI_RECOMMENDED_MODELS,
+    kimi_locks_temperature,
+    kimi_supports_thinking_toggle,
+)
+from .reasoning import ReasoningCapabilities, ReasoningLevel, resolve_level
+from .metrics import TokenUsage, openai_chat_usage
 from .retry import RetryInfo, RetryOptions, with_retry
 from .transport import (
     attach_retry_after,
@@ -23,6 +30,9 @@ from .types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 
 logger = get_logger("llm.openai")
 
+_GROQ_GPT_OSS_MODELS = frozenset({"openai/gpt-oss-20b", "openai/gpt-oss-120b"})
+_KIMI_REASONING_MODELS = frozenset({"kimi-k2.6", "kimi-k2.7-code"})
+
 
 def _emit_delta(on_delta: Callable[[str], None], text: str) -> None:
     """Keep a display callback failure from aborting a provider response."""
@@ -30,6 +40,12 @@ def _emit_delta(on_delta: Callable[[str], None], text: str) -> None:
         on_delta(text)
     except Exception:
         logger.debug("LLM stream delta callback failed", exc_info=True)
+
+
+def _kimi_thinking_requested(req: ChatRequest) -> bool:
+    if req.thinking_enabled is not None:
+        return req.thinking_enabled
+    return req.reasoning_level is not None and req.reasoning_level is not ReasoningLevel.OFF
 
 
 class OpenAIClient(StreamingClient):
@@ -59,6 +75,35 @@ class OpenAIClient(StreamingClient):
 
     def model(self) -> str:
         return self.model_id
+
+    def reasoning_capabilities(
+        self, *, has_tools: bool = False
+    ) -> ReasoningCapabilities | None:
+        if self.label == "deepseek" and self.model_id in DEEPSEEK_MODELS:
+            return ReasoningCapabilities(
+                frozenset({ReasoningLevel.OFF, ReasoningLevel.LOW, ReasoningLevel.HIGH}),
+                aliases={ReasoningLevel.MEDIUM: ReasoningLevel.HIGH},
+            )
+        if self.label == "openai" and self.model_id in OPENAI_RECOMMENDED_MODELS:
+            if has_tools:
+                # Preserve the existing Chat Completions function-call setting.
+                return ReasoningCapabilities(
+                    frozenset({ReasoningLevel.OFF}),
+                    fallbacks={
+                        level: ReasoningLevel.OFF
+                        for level in (ReasoningLevel.LOW, ReasoningLevel.MEDIUM, ReasoningLevel.HIGH)
+                    },
+                )
+            return ReasoningCapabilities(frozenset(ReasoningLevel))
+        if self.label == "groq" and self.model_id in _GROQ_GPT_OSS_MODELS:
+            # Groq accepts low/medium/high for these models, but not none.
+            return ReasoningCapabilities(frozenset({
+                ReasoningLevel.LOW, ReasoningLevel.MEDIUM, ReasoningLevel.HIGH,
+            }))
+        if self.label == "kimi" and self.model_id == "kimi-k2.6":
+            # The native switch proves OFF. Native enabled has no LOW effort.
+            return ReasoningCapabilities(frozenset({ReasoningLevel.OFF}))
+        return None
 
     def headers(self) -> dict[str, str]:
         headers = {**self.extra_headers, "Content-Type": "application/json"}
@@ -91,6 +136,14 @@ class OpenAIClient(StreamingClient):
         signal: Any = None,
     ) -> ChatResponse:
         body = self.encode_request(request, False)
+        retry_count = 0
+        retry_wait_ms = 0.0
+
+        def on_retry(info: RetryInfo) -> None:
+            nonlocal retry_count, retry_wait_ms
+            retry_count += 1
+            retry_wait_ms += info["delay_ms"]
+            self._on_retry(info)
 
         async def do_request() -> dict[str, Any]:
             async with new_provider_async_client() as client:
@@ -125,7 +178,7 @@ class OpenAIClient(StreamingClient):
 
         data = await with_retry(
             attempt,
-            RetryOptions(signal=signal, on_retry=self._on_retry),
+            RetryOptions(signal=signal, on_retry=on_retry),
         )
 
         if data.get("error"):
@@ -138,13 +191,19 @@ class OpenAIClient(StreamingClient):
         choice = choices[0]
         message = choice.get("message", {})
 
-        # reasoning_content is provider state, not a fallback answer.  DeepSeek
-        # requires it to be included again when tools are present in a later
-        # request, so retain it separately from the visible final content.
+        # DeepSeek and Kimi need private reasoning state for tool continuation.
+        # Keep it separate from the visible final content.
         msg = Message(
             role="assistant",
             content=message.get("content") or "",
-            reasoning_content=message.get("reasoning_content"),
+            reasoning_content=(
+                message.get("reasoning_content")
+                if self.label == "deepseek"
+                or (self.label == "kimi" and self.model_id in _KIMI_REASONING_MODELS)
+                else None
+            ),
+            provider_state_provider=self.label,
+            provider_state_model=self.model_id,
         )
 
         if message.get("tool_calls"):
@@ -159,7 +218,11 @@ class OpenAIClient(StreamingClient):
                 for tc in message["tool_calls"]
             ]
 
-        return ChatResponse(message=msg, finish_reason=choice.get("finish_reason", ""))
+        return ChatResponse(
+            message=msg, finish_reason=choice.get("finish_reason", ""),
+            usage=openai_chat_usage(data.get("usage")), retry_count=retry_count,
+            retry_wait_ms=round(retry_wait_ms, 2),
+        )
 
     async def chat_stream(
         self,
@@ -168,6 +231,14 @@ class OpenAIClient(StreamingClient):
         signal: Any = None,
     ) -> ChatResponse:
         body = self.encode_request(request, True)
+        retry_count = 0
+        retry_wait_ms = 0.0
+
+        def on_retry(info: RetryInfo) -> None:
+            nonlocal retry_count, retry_wait_ms
+            retry_count += 1
+            retry_wait_ms += info["delay_ms"]
+            self._on_retry(info)
 
         async def open_stream() -> tuple[httpx.AsyncClient, httpx.Response]:
             client = new_provider_async_client()
@@ -201,7 +272,7 @@ class OpenAIClient(StreamingClient):
 
         client, resp = await with_retry(
             attempt,
-            RetryOptions(signal=signal, on_retry=self._on_retry),
+            RetryOptions(signal=signal, on_retry=on_retry),
         )
 
         chunks: list[str] = []
@@ -209,9 +280,10 @@ class OpenAIClient(StreamingClient):
         finish = ""
         tool_parts: dict[int, dict[str, str]] = {}
         fallback_index = -1
+        usage: TokenUsage | None = None
 
         async def consume() -> None:
-            nonlocal finish, fallback_index
+            nonlocal finish, fallback_index, usage
 
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data:"):
@@ -226,6 +298,10 @@ class OpenAIClient(StreamingClient):
                 except Exception:
                     continue
 
+                parsed_usage = openai_chat_usage(chunk.get("usage"))
+                if parsed_usage is not None:
+                    usage = parsed_usage
+
                 choices = chunk.get("choices", [])
                 if not choices:
                     continue
@@ -239,11 +315,14 @@ class OpenAIClient(StreamingClient):
 
                 if delta.get("reasoning_content"):
                     reasoning = delta["reasoning_content"]
-                    reasoning_chunks.append(reasoning)
+                    if self.label == "deepseek" or (
+                        self.label == "kimi" and self.model_id in _KIMI_REASONING_MODELS
+                    ):
+                        reasoning_chunks.append(reasoning)
                     # DeepSeek's structured CoT is not transcript text.  Do
                     # not leak it to the UI, while preserving it for replay.
-                    if self.label != "deepseek":
-                        _emit_delta(on_delta, reasoning)
+                    # Structured reasoning is never user-visible, regardless
+                    # of which compatible endpoint returned it.
 
                 if delta.get("content"):
                     text = delta["content"]
@@ -285,6 +364,8 @@ class OpenAIClient(StreamingClient):
             role="assistant",
             content="".join(chunks),
             reasoning_content="".join(reasoning_chunks) or None,
+            provider_state_provider=self.label,
+            provider_state_model=self.model_id,
         )
 
         if tool_parts:
@@ -299,7 +380,11 @@ class OpenAIClient(StreamingClient):
                 for value in tool_parts.values()
             ]
 
-        return ChatResponse(message=msg, finish_reason=finish)
+        return ChatResponse(
+            message=msg, finish_reason=finish, usage=usage,
+            retry_count=retry_count,
+            retry_wait_ms=round(retry_wait_ms, 2),
+        )
 
     def encode_request(self, req: ChatRequest, stream: bool) -> dict[str, Any]:
         messages: list[dict[str, Any]] = []
@@ -313,13 +398,19 @@ class OpenAIClient(StreamingClient):
             if m.name:
                 msg["name"] = m.name
 
-            # DeepSeek requires the CoT of every prior assistant turn in a
-            # tool-enabled request.  Other OpenAI-compatible endpoints often
-            # reject unknown fields, so serialize it only for DeepSeek.
+            # Replay private state only to the same verified provider/model.
+            # Other compatible endpoints often reject this nonstandard field.
             if (
-                self.label == "deepseek"
+                self.label in {"deepseek", "kimi"}
                 and m.role == "assistant"
                 and m.reasoning_content is not None
+                and m.provider_state_provider == self.label
+                and m.provider_state_model == self.model_id
+                and (
+                    self.label == "deepseek"
+                    or self.model_id == "kimi-k2.7-code"
+                    or (self.model_id == "kimi-k2.6" and _kimi_thinking_requested(req))
+                )
             ):
                 msg["reasoning_content"] = m.reasoning_content
 
@@ -343,6 +434,8 @@ class OpenAIClient(StreamingClient):
             "stream": stream,
             "messages": messages,
         }
+        if stream and self.label == "openai":
+            body["stream_options"] = {"include_usage": True}
 
         if req.tools:
             encoded_tools = []
@@ -363,28 +456,67 @@ class OpenAIClient(StreamingClient):
 
             body["tools"] = encoded_tools
 
-        if self.label == "openai" and self.model_id in {
-            "gpt-6-luna", "gpt-5.6-terra", "gpt-6-sol"
-        }:
+        resolution = (
+            resolve_level(
+                req.reasoning_level,
+                self.reasoning_capabilities(has_tools=bool(req.tools)),
+            )
+            if req.reasoning_level is not None
+            else None
+        )
+        effective = resolution.effective if resolution is not None else None
+
+        if self.label == "openai" and self.model_id in OPENAI_RECOMMENDED_MODELS:
             # KAgent uses Chat Completions for function calls. GPT-6 Luna/Sol
             # require none effort on this endpoint for function calling.
-            body["reasoning_effort"] = "none"
+            body["reasoning_effort"] = (
+                "none" if effective is ReasoningLevel.OFF or effective is None
+                else effective.value
+            )
 
-        if self.label == "kimi" and kimi_supports_thinking_toggle(self.model_id):
+        if self.label == "groq" and self.model_id in _GROQ_GPT_OSS_MODELS:
+            # Groq's default reasoning format may include visible <think> text.
+            body["reasoning_format"] = "hidden"
+            if effective is not None and effective is not ReasoningLevel.OFF:
+                body["reasoning_effort"] = effective.value
+
+        if self.label == "kimi" and self.model_id == "kimi-k2.6":
+            body["thinking"] = {
+                "type": "enabled" if _kimi_thinking_requested(req) else "disabled"
+            }
+        elif self.label == "kimi" and kimi_supports_thinking_toggle(self.model_id):
             body["thinking"] = {"type": "disabled"}
         elif self.label == "deepseek":
             # The API defaults to enabled.  Always send KAgent's explicit
             # setting so /thinking controls provider behavior as well as the
             # prompt.  Requests constructed outside the agent retain the API
             # default when no preference is supplied.
-            if req.thinking_enabled is not None:
+            if effective is not None:
+                body["thinking"] = {
+                    "type": "disabled" if effective is ReasoningLevel.OFF else "enabled"
+                }
+                if effective is not ReasoningLevel.OFF:
+                    body["reasoning_effort"] = effective.value
+            elif req.thinking_enabled is not None:
                 body["thinking"] = {
                     "type": "enabled" if req.thinking_enabled else "disabled"
                 }
 
+        openai_reasoning = (
+            self.label == "openai"
+            and effective is not None
+            and effective is not ReasoningLevel.OFF
+        )
+        deepseek_thinking = (
+            self.label == "deepseek"
+            and (
+                (effective is not None and effective is not ReasoningLevel.OFF)
+                or (effective is None and bool(req.thinking_enabled))
+            )
+        )
         if self.temperature is not None and not (
             self.label == "kimi" and kimi_locks_temperature(self.model_id)
-        ) and not (self.label == "deepseek" and req.thinking_enabled):
+        ) and not openai_reasoning and not deepseek_thinking:
             body["temperature"] = self.temperature
 
         if self.max_tokens is not None and self.max_tokens > 0:

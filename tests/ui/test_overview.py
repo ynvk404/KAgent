@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.helpers.ui_fakes import make_test_config_snapshot
 
 import asyncio
 from typing import Any, cast
@@ -39,13 +40,10 @@ def _make_app(cols: int = 80, lines: int = 24) -> KAgent:
             banner_data=banner,
             parent_signal=asyncio.Event(),
             show_splash=False,
-            read_config=lambda: {
-                "backend": cast(Backend, "openai"),
-                "base_url": "",
-                "api_key": "",
-                "api_keys": {},
-                "model": "deepseek-chat",
-            },
+            read_config=lambda: make_test_config_snapshot(
+                backend=cast(Backend, "openai"),
+                model="deepseek-chat",
+            ),
             apply_provider=_dummy_apply_provider,
         )
     )

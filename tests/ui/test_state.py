@@ -14,6 +14,7 @@ from src.ui.core.state import (
     SetAsk,
     SetPerm,
     Clear,
+    SetActiveSkill,
     CycleTranscriptFilter,
     ExpandToolOutput,
 )
@@ -342,6 +343,27 @@ def test_clear():
 
     assert len(s.transcript) == 0
     assert s.clear_gen == 1
+
+
+def test_clear_preserves_active_skill():
+    s0 = reducer(seed(), SetActiveSkill("sql-injection"))
+    assert s0.active_skill == "sql-injection"
+
+    s1 = reducer(s0, Clear())
+    assert len(s1.transcript) == 0
+    assert s1.clear_gen == 1
+    assert s1.active_skill == "sql-injection"
+
+
+def test_clear_with_reset_message_clears_active_skill():
+    s0 = reducer(seed(), SetActiveSkill("sql-injection"))
+    assert s0.active_skill == "sql-injection"
+
+    s1 = reducer(s0, Clear(message="conversation reset"))
+    assert len(s1.transcript) == 0
+    assert s1.clear_gen == 1
+    assert s1.clear_message == "conversation reset"
+    assert s1.active_skill is None
 
 
 def test_ask_user_result_is_human_readable_without_mutating_event():

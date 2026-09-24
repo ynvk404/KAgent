@@ -10,7 +10,7 @@ from src.llm import openai as openai_module
 from src.llm import transport
 from src.browser.store import CaptureStore
 from src.llm.openai import OpenAIClient
-from src.llm.types import ChatRequest, Message
+from src.llm.types import ChatRequest, Message, ToolFunction, ToolSpec
 from src.tools.browser_capture import BrowserCaptureClearTool
 from src.tools.ask import AskUserTool
 from src.ask.ask import FirstOptionPrompter
@@ -61,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
             def send(obj):
                 self.wfile.write(("data: " + json.dumps(obj) + "\n\n").encode())
 
-            if model in {"reasoning-stream", "deepseek-reasoning-stream"}:
+            if model in {"reasoning-stream", "deepseek-reasoning-stream", "kimi-k2.6"}:
                 send({
                     "choices": [{
                         "delta": {"reasoning_content": "Let me think..."}
@@ -121,6 +121,14 @@ class Handler(BaseHTTPRequestHandler):
                     "finish_reason": "tool_calls",
                 }]
             })
+            send({
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 100, "completion_tokens": 30, "total_tokens": 130,
+                    "prompt_tokens_details": {"cached_tokens": 20},
+                    "completion_tokens_details": {"reasoning_tokens": 10},
+                },
+            })
             self.wfile.write(b"data: [DONE]\n\n")
             return
 
@@ -142,7 +150,7 @@ class Handler(BaseHTTPRequestHandler):
                         "finish_reason": "stop",
                     }]
                 }
-        elif model == "deepseek-reasoning":
+        elif model in {"deepseek-reasoning", "kimi-k2.6"}:
             response = {
                 "choices": [{
                     "message": {
@@ -212,7 +220,7 @@ async def test_official_openai_luna_uses_chat_tool_compatible_parameters():
     client = OpenAIClient(base_url, "official-key", "gpt-6-luna", "openai", gen_opts={"max_tokens": 200})
     body = client.encode_request(ChatRequest(
         model="gpt-6-luna", messages=[Message(role="user", content="hello")],
-        tools=[{"type": "function", "function": {"name": "noop", "parameters": {"type": "object"}}}],
+        tools=[ToolSpec(function=ToolFunction(name="noop", description="", parameters={"type": "object"}))],
     ), stream=False)
     assert body["reasoning_effort"] == "none"
     assert body["max_completion_tokens"] == 200
@@ -293,8 +301,10 @@ async def test_stream_reasoning_content():
     deltas = []
     out = await c.chat_stream(_req("reasoning-stream", "go"), lambda x: deltas.append(x))
 
-    assert "Let me think..." in "".join(deltas)
+    assert "Let me think..." not in "".join(deltas)
     assert out.message.content == "The answer is 42."
+    assert out.message.reasoning_content is None
+    assert out.usage is not None and out.usage.reasoning_tokens == 10
 
 async def test_deepseek_keeps_reasoning_separate_and_does_not_stream_it():
     c = OpenAIClient(base_url, "", "deepseek-reasoning-stream", "deepseek")
@@ -306,6 +316,7 @@ async def test_deepseek_keeps_reasoning_separate_and_does_not_stream_it():
     assert "Let me think..." not in "".join(deltas)
     assert out.message.content == "The answer is 42."
     assert out.message.reasoning_content == "Let me think..."
+    assert out.usage is not None and out.usage.cached_input_tokens == 20
 
 async def test_deepseek_non_stream_keeps_reasoning_separate():
     c = OpenAIClient(base_url, "", "deepseek-reasoning", "deepseek")
@@ -313,6 +324,23 @@ async def test_deepseek_non_stream_keeps_reasoning_separate():
 
     assert out.message.content == "final answer"
     assert out.message.reasoning_content == "private reasoning"
+
+
+async def test_kimi_stream_and_non_stream_keep_reasoning_private():
+    client = OpenAIClient(base_url, "", "kimi-k2.6", "kimi")
+    request = ChatRequest(model="kimi-k2.6", messages=[Message(role="user", content="go")],
+                          thinking_enabled=True)
+    deltas = []
+    streamed = await client.chat_stream(request, deltas.append)
+    assert streamed.message.content == "The answer is 42."
+    assert streamed.message.reasoning_content == "Let me think..."
+    assert "Let me think..." not in "".join(deltas)
+    assert streamed.message.provider_state_provider == "kimi"
+
+    plain = await client.chat(request)
+    assert plain.message.content == "final answer"
+    assert plain.message.reasoning_content == "private reasoning"
+    assert plain.message.provider_state_model == "kimi-k2.6"
 
 async def test_deepseek_replays_reasoning_and_honors_thinking_toggle():
     c = OpenAIClient(base_url, "", "deepseek-flash", "deepseek", gen_opts={"temperature": 0.3})
@@ -324,6 +352,8 @@ async def test_deepseek_replays_reasoning_and_honors_thinking_toggle():
                 role="assistant",
                 content="I'll look it up.",
                 reasoning_content="Need to call search.",
+                provider_state_provider="deepseek",
+                provider_state_model="deepseek-flash",
             ),
             Message(role="tool", content="result", tool_call_id="call_1"),
         ],

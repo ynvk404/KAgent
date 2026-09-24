@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import re
 
+from rich import box
 from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.text import Text
+
+from src.ui.theme import MUTED, WARNING
 
 from src.tools.tool_display import display_tool_name
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest
@@ -142,6 +145,8 @@ class PermissionModal:
                     Text(truncate(action_text, COMMAND_DETAIL_CAP)),
                     title=title,
                     title_align="left",
+                    border_style=MUTED,
+                    box=box.ROUNDED,
                     expand=False,
                     padding=(0, 1),
                 )
@@ -155,7 +160,7 @@ class PermissionModal:
         parts.append(Text(""))
 
         if req.no_session_cache:
-            parts.append(Text("Session trust unavailable for this sensitive action"))
+            parts.append(Text("Session trust unavailable for this sensitive action", style=WARNING))
         else:
             parts.append(Text(
                 "Session trust: "
@@ -166,7 +171,8 @@ class PermissionModal:
             "y allow once · "
             "a trust for session · "
             "n deny · "
-            "Esc cancel"
+            "Esc cancel",
+            style=MUTED,
         )))
 
         return Group(*parts)

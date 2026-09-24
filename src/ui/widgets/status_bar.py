@@ -161,9 +161,9 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
 
     def build(
         *,
-        include_input_hints: bool,
-        include_extras: bool,
-        include_expand: bool,
+        include_extras: bool = True,
+        include_expand: bool = True,
+        include_input_hints: bool = False,
     ) -> Text:
         line = Text()
         if p.api_ready:
@@ -177,11 +177,10 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
         if pill:
             text, color = pill
             line.append(f" [{text}]", style=color)
+        if include_extras and p.active_skill:
+            line.append(f" · skill: {p.active_skill}", style=MUTED)
         if p.target and include_extras:
             line.append(f" · target: {compact_target(p.target)}", style=MUTED)
-
-        if include_input_hints:
-            line.append(" · Enter send · / commands", style=MUTED)
 
         if context_hint:
             style = WARNING if ctx_percent >= 90 else MUTED
@@ -191,16 +190,11 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
 
         if include_extras and p.transcript_filter != "all":
             line.append(f" · filter: {p.transcript_filter}", style=ACCENT)
-        if include_extras and p.active_skill:
-            line.append(f" · skill: {p.active_skill}", style=MUTED)
-        if include_extras and p.memory_items > 0:
-            line.append(f" · mem: {p.memory_items}", style=MUTED)
         if include_expand and p.expand_hint:
             line.append(" · Ctrl-O expand output", style=ACCENT)
         return line
 
     full = build(
-        include_input_hints=True,
         include_extras=True,
         include_expand=True,
     )
@@ -208,31 +202,13 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
         return full
 
     without_expand = build(
-        include_input_hints=True,
         include_extras=True,
         include_expand=False,
     )
     if without_expand.cell_len <= width:
         return without_expand
 
-    without_input_hints = build(
-        include_input_hints=False,
-        include_extras=True,
-        include_expand=False,
-    )
-    if without_input_hints.cell_len <= width:
-        return without_input_hints
-
-    without_extras = build(
-        include_input_hints=True,
-        include_extras=False,
-        include_expand=False,
-    )
-    if without_extras.cell_len <= width:
-        return without_extras
-
     return build(
-        include_input_hints=False,
         include_extras=False,
         include_expand=False,
     )
@@ -240,13 +216,13 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
 class StatusBar(Widget):
     """Right-aligned AutoApprove badge + left-aligned status content."""
 
-    DEFAULT_CSS = """
-    StatusBar {
+    DEFAULT_CSS = f"""
+    StatusBar {{
         width: 100%;
         height: 1;
         padding: 0 1;
-        background: #7E8A9A 12%;
-    }
+        background: {MUTED} 12%;
+    }}
     """
 
     busy: reactive[bool] = reactive(False)

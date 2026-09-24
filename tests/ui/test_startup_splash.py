@@ -1,6 +1,8 @@
 from __future__ import annotations
+from tests.helpers.ui_fakes import make_test_config_snapshot
 
 import asyncio
+from html import unescape
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -17,15 +19,13 @@ from src.ui.core.app import (
     KAgent,
     ProviderChange,
 )
-from src.ui.theme import ACCENT, BOLD_ACCENT, MUTED, SUCCESS
+from src.ui.theme import ACCENT, BOLD_ACCENT
 from src.ui.widgets.banner import BannerData
 from src.ui.widgets.startup_splash import (
-    BAR_WIDTH,
     SplashProps,
     StartupSplash,
     WORD,
     render_kagent_word,
-    render_progress_bar,
 )
 
 
@@ -128,19 +128,19 @@ class TestKagentShineSweep:
         rendered = _render_plain(splash)
         assert "KAGENT" in rendered
         assert "Workspace" in rendered
-        assert "25%" in rendered
 
-    def test_ready_still_only_appears_at_true_final_phase(self) -> None:
-        """10. Ready still only appears at true final phase."""
+    def test_completion_only_appears_at_true_final_phase(self) -> None:
+        """10. Completion state only appears at the true final phase."""
         splash = StartupSplash()
         for phase in ("identity", "workspace", "skills", "provider"):
             splash.set_phase(phase)  # type: ignore
             assert "Ready" not in _render_plain(splash)
-            assert "✓  Ready" not in _render_plain(splash)
+            assert "✓  Complete" not in _render_plain(splash)
 
         splash.set_phase("ready")
-        assert "Ready" in _render_plain(splash)
-        assert "✓  Ready" in _render_plain(splash)
+        assert "Ready to begin testing" in _render_plain(splash)
+        assert "✓  Complete" in _render_plain(splash)
+        assert "✓  Ready" not in _render_plain(splash)
 
     def test_narrow_layout_remains_valid(self) -> None:
         """11. narrow layout remains valid."""
@@ -151,7 +151,7 @@ class TestKagentShineSweep:
         assert "Provider" in rendered
 
     @pytest.mark.asyncio
-    async def test_40_column_layout_keeps_metadata_and_progress_readable(self) -> None:
+    async def test_40_column_layout_keeps_subtitle_and_rows_readable(self) -> None:
         splash = StartupSplash(props=SplashProps(
             provider="OpenAI", model="gpt-6-luna", skill_count=10, tool_count=28,
         ))
@@ -160,9 +160,9 @@ class TestKagentShineSweep:
             splash.set_phase("ready")
             rendered = _render_plain(splash, width=40)
             assert "AI-assisted Web Pentest Agent" in rendered
-            assert "OpenAI · gpt-6-luna" in rendered
-            assert "10 skills  ·  28 tools" in rendered
-            assert "100%" in rendered
+            assert "Provider" in rendered
+            assert "OpenAI · gpt-6-luna" not in rendered
+            assert "10 skills  ·  28 tools" not in rendered
 
     def test_no_secret_metadata_appears(self) -> None:
         """12. no secret metadata appears."""
@@ -179,34 +179,6 @@ class TestKagentShineSweep:
         assert "sk-" not in rendered
         assert "api_key" not in rendered.lower()
         assert "secret" not in rendered.lower()
-
-
-class TestProgressBar:
-    def test_milestone_percentages(self) -> None:
-        for pct in (25, 50, 75, 100):
-            bar = render_progress_bar(pct, width=18)
-            assert f"{pct}%" in bar.plain, f"Expected {pct}% in bar text"
-            assert "█" in bar.plain
-
-    def test_no_empty_cells_at_100pct(self) -> None:
-        bar = render_progress_bar(100, width=18)
-        assert "░" not in bar.plain
-
-    def test_empty_cells_at_partial(self) -> None:
-        bar = render_progress_bar(25, width=20)
-        assert "░" in bar.plain
-
-    def test_always_uses_accent_style(self) -> None:
-        for pct in (25, 50, 75, 100):
-            bar = render_progress_bar(pct, width=18)
-            styles = [span.style for span in bar.spans]
-            assert any(s == ACCENT for s in styles)
-            assert not any(s == f"bold {SUCCESS}" for s in styles)
-
-    def test_width_parameter_respected(self) -> None:
-        bar_narrow = render_progress_bar(50, width=10)
-        bar_wide = render_progress_bar(50, width=40)
-        assert len(bar_narrow.plain) < len(bar_wide.plain)
 
 
 class TestIdentityPhase:
@@ -244,60 +216,45 @@ class TestReadinessPhase:
         assert [label for _, label in splash.readiness_rows()] == [
             "Workspace", "Skills & tools", "Provider",
         ]
+        assert "Model override" not in rendered
         assert "Session" not in rendered
         assert "Target & scope" not in rendered
         assert "Integrations" not in rendered
 
     def test_optional_rows_follow_actual_props(self) -> None:
         splash = StartupSplash(props=SplashProps(
-            resumed=True, has_target=True, has_integrations=True,
+            resumed=True, has_target=True, has_model_override=True, has_integrations=True,
         ))
         splash.set_phase("ready")
         rendered = _render_plain(splash)
         assert [label for _, label in splash.readiness_rows()] == [
             "Workspace", "Session", "Target & scope", "Skills & tools",
-            "Provider", "Integrations",
+            "Provider", "Model override", "Integrations",
         ]
-        for label in ("Session", "Target & scope", "Integrations"):
+        for label in ("Session", "Target & scope", "Model override", "Integrations"):
             assert label in rendered
-        assert "100%" in rendered
 
     @pytest.mark.parametrize("prop,label", [
         ("resumed", "Session"),
         ("has_target", "Target & scope"),
+        ("has_model_override", "Model override"),
         ("has_integrations", "Integrations"),
     ])
     def test_each_optional_row_appears_only_when_enabled(self, prop: str, label: str) -> None:
-        splash = StartupSplash(props=SplashProps(**{prop: True}))
+        props_kwargs: dict[str, Any] = {prop: True}
+        splash = StartupSplash(props=SplashProps(**props_kwargs))
         splash.set_phase("ready")
         rendered = _render_plain(splash)
         assert label in rendered
         assert len(splash.readiness_rows()) == 4
-        assert "100%" in rendered
 
-    def test_workspace_phase_shows_25_pct(self) -> None:
+    @pytest.mark.parametrize("phase", ["workspace", "skills", "provider", "ready"])
+    def test_readiness_phase_has_no_progress_bar(self, phase: str) -> None:
         splash = StartupSplash()
-        splash.set_phase("workspace")
+        splash.set_phase(phase)  # type: ignore[arg-type]
         rendered = _render_plain(splash)
-        assert "25%" in rendered
-
-    def test_skills_phase_shows_50_pct(self) -> None:
-        splash = StartupSplash()
-        splash.set_phase("skills")
-        rendered = _render_plain(splash)
-        assert "50%" in rendered
-
-    def test_provider_phase_shows_75_pct(self) -> None:
-        splash = StartupSplash()
-        splash.set_phase("provider")
-        rendered = _render_plain(splash)
-        assert "75%" in rendered
-
-    def test_ready_phase_shows_100_pct(self) -> None:
-        splash = StartupSplash()
-        splash.set_phase("ready")
-        rendered = _render_plain(splash)
-        assert "100%" in rendered
+        assert "%" not in rendered
+        assert "█" not in rendered
 
     def test_completed_rows_show_checkmark(self) -> None:
         splash = StartupSplash()
@@ -306,17 +263,11 @@ class TestReadinessPhase:
         assert "✓" in rendered
         assert "Workspace" in rendered
 
-    def test_ready_shows_ready_label(self) -> None:
+    def test_ready_shows_completion_label(self) -> None:
         splash = StartupSplash()
         splash.set_phase("ready")
         rendered = _render_plain(splash)
-        assert "Ready" in rendered
-
-    def test_identity_no_progress_readiness_has_progress(self) -> None:
-        splash = StartupSplash()
-        assert "%" not in _render_plain(splash)
-        splash.set_phase("workspace")
-        assert "%" in _render_plain(splash)
+        assert "✓  Complete" in rendered
 
 
 class TestFailurePhase:
@@ -342,32 +293,25 @@ class TestFailurePhase:
 
 
 class TestMetadataAndFooter:
-    def test_two_row_metadata_rendered(self) -> None:
-        splash = StartupSplash(
-            props=SplashProps(
-                provider="deepseek",
-                model="deepseek-chat",
-                skill_count=10,
-                tool_count=28,
-            )
-        )
-        splash.set_phase("provider")
+    @pytest.mark.parametrize("phase", ["identity", "provider", "ready"])
+    def test_splash_omits_provider_model_and_counts(self, phase: str) -> None:
+        splash = StartupSplash(props=SplashProps(
+            provider="deepseek", model="deepseek-chat", skill_count=10, tool_count=28,
+        ))
+        splash.set_phase(phase)  # type: ignore[arg-type]
         rendered = _render_plain(splash)
-        assert "deepseek" in rendered
-        assert "deepseek-chat" in rendered
-        assert "deepseek · deepseek-chat" in rendered
-        assert "10 skills  ·  28 tools" in rendered
-        assert rendered.count("deepseek · deepseek-chat") == 1
-        assert rendered.count("10 skills  ·  28 tools") == 1
+        assert "deepseek · deepseek-chat" not in rendered
+        assert "10 skills  ·  28 tools" not in rendered
 
-    def test_skill_and_tool_counts_rendered(self) -> None:
-        splash = StartupSplash(
-            props=SplashProps(skill_count=8, tool_count=16)
-        )
-        splash.set_phase("skills")
+    def test_explicit_model_override_shows_label_without_model_id(self) -> None:
+        splash = StartupSplash(props=SplashProps(
+            model="deepseek-chat", has_model_override=True,
+        ))
+        splash.set_phase("model")
         rendered = _render_plain(splash)
-        assert "8 skills" in rendered
-        assert "16 tools" in rendered
+        assert "Model override" in rendered
+        assert "deepseek-chat" not in rendered
+        assert "Using the selected model" in rendered
 
     def test_subtle_footer_status_line(self) -> None:
         splash = StartupSplash()
@@ -407,10 +351,46 @@ class TestMetadataAndFooter:
 
 
 class TestPanelLayout:
-    def test_panel_does_not_use_expand_true(self) -> None:
+    def test_heading_has_space_below_border(self) -> None:
+        splash = StartupSplash()
+        lines = _render_plain(splash).splitlines()
+        assert lines[1].strip("│ ") == ""
+        assert "KAGENT" in lines[2]
+
+    def test_readiness_rows_are_centered(self) -> None:
+        splash = StartupSplash()
+        splash.set_phase("workspace")
+        lines = _render_plain(splash).splitlines()
+        center = (len(lines[0]) - 1) / 2
+        workspace = next(line for line in lines if "Workspace" in line)
+        skills = next(line for line in lines if "Skills & tools" in line)
+        provider = next(line for line in lines if "·  Provider" in line)
+        marker_column = workspace.index("⠋")
+        assert skills.index("·") == provider.index("·") == marker_column
+        group_center = (marker_column + skills.index("Skills & tools") + len("Skills & tools") - 1) / 2
+        assert abs(group_center - center) <= 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("width", [40, 80])
+    async def test_completion_label_is_centered_below_readiness_rows(self, width: int) -> None:
+        splash = StartupSplash()
+        app = _SplashHarnessApp(splash)
+        async with app.run_test(size=(width, 24)):
+            splash.set_phase("ready")
+            lines = _render_plain(splash, width=width).splitlines()
+            workspace = next(line for line in lines if "✓  Workspace" in line)
+            completion = next(line for line in lines if "✓  Complete" in line)
+            panel_center = (len(lines[0]) - 1) / 2
+            completion_center = completion.index("Complete") + (len("Complete") - 1) / 2
+            assert abs(completion_center - panel_center) <= 0.5
+            assert completion.index("✓") == completion.index("Complete") - 3
+            assert completion.index("✓") != workspace.index("✓")
+
+    def test_panel_uses_fixed_width(self) -> None:
         splash = StartupSplash()
         panel = cast(Panel, splash.render())
-        assert panel.expand is False
+        assert panel.expand is True
+        assert panel.width == 68
 
     def test_wide_terminal_does_not_fill_full_width(self) -> None:
         splash = StartupSplash()
@@ -419,6 +399,15 @@ class TestPanelLayout:
         if lines:
             max_line = max(len(l) for l in lines)
             assert max_line < 100
+
+    @pytest.mark.parametrize("width", [40, 80, 120])
+    def test_panel_width_stays_stable_across_phases(self, width: int) -> None:
+        splash = StartupSplash()
+        widths = []
+        for phase in ("identity", "workspace", "ready", "failed"):
+            splash.set_phase(phase, error="oops" if phase == "failed" else None)  # type: ignore[arg-type]
+            widths.append(len(_render_plain(splash, width=width).splitlines()[0]))
+        assert len(set(widths)) == 1
 
     def test_status_oriented_border_title(self) -> None:
         """Ready keeps the initializing title; errors use Failed."""
@@ -434,7 +423,7 @@ class TestPanelLayout:
         splash.set_phase("ready")
         rendered = _render_plain(splash)
         assert "Initializing" in rendered
-        assert "✓  Ready" in rendered
+        assert "✓  Complete" in rendered
 
         splash.set_phase("failed", error="oops")
         assert "Failed" in _render_plain(splash)
@@ -482,13 +471,10 @@ def _make_test_kagent(show_splash: bool = False) -> KAgent:
         pass
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": cast(Backend, "openai"),
-            "base_url": "",
-            "api_key": "",
-            "api_keys": {},
-            "model": "test-model",
-        }
+        return make_test_config_snapshot(
+            backend=cast(Backend, "openai"),
+            model="test-model",
+        )
 
     agent_mock = MagicMock()
     agent_mock.client = None
@@ -528,6 +514,79 @@ class TestAppSplashIntegration:
         app = _make_test_kagent(show_splash=False)
         assert app.show_splash is False
         assert app.startup_splash is None
+
+    @pytest.mark.asyncio
+    async def test_resumed_target_splash_shows_all_rows_and_footer(self) -> None:
+        app = _make_test_kagent(show_splash=True)
+        app.resume_summary = "restored session"
+        app.splash_has_target = True
+
+        async def mock_startup() -> None:
+            await asyncio.sleep(100)
+
+        app._run_startup_sequence = mock_startup  # type: ignore
+
+        async with app.run_test(size=(100, 30)) as pilot:
+            assert app.startup_splash is not None
+            identity_height = app.startup_splash.region.height
+            app.startup_splash.set_phase("provider")
+            await pilot.pause()
+
+            screenshot = unescape(app.export_screenshot()).replace("\xa0", " ")
+            assert app.startup_splash.region.height > identity_height
+            assert "Session" in screenshot
+            assert "Target" in screenshot
+            assert "2 tools" not in screenshot
+            assert "Verifying provider connection" in screenshot
+            assert "test-provider · test-model" not in screenshot
+
+    @pytest.mark.asyncio
+    async def test_model_override_adds_optional_startup_row(self) -> None:
+        app = _make_test_kagent(show_splash=True)
+        app.splash_has_model_override = True
+
+        async def mock_startup() -> None:
+            await asyncio.sleep(100)
+
+        app._run_startup_sequence = mock_startup  # type: ignore
+
+        async with app.run_test(size=(100, 30)) as pilot:
+            assert app.startup_splash is not None
+            assert ("model", "Model override") in app.startup_splash.readiness_rows()
+            app.startup_splash.set_phase("model")
+            await pilot.pause()
+            screenshot = unescape(app.export_screenshot()).replace("\xa0", " ")
+            assert "Model override" in screenshot
+            assert "Using the selected model" in screenshot
+            assert "test-model" not in screenshot
+
+    @pytest.mark.asyncio
+    async def test_splash_frame_fits_content_and_stays_centered(self) -> None:
+        app = _make_test_kagent(show_splash=True)
+
+        async def mock_startup() -> None:
+            await asyncio.sleep(100)
+
+        app._run_startup_sequence = mock_startup  # type: ignore
+
+        async with app.run_test(size=(100, 30)) as pilot:
+            assert app.startup_splash is not None
+            for phase in ("identity", "workspace", "ready"):
+                app.startup_splash.set_phase(phase)  # type: ignore[arg-type]
+                await pilot.pause()
+                region = app.startup_splash.region
+                assert region.height < app.screen.size.height
+                assert abs(2 * region.y + region.height - app.screen.size.height) <= 1
+
+            app.startup_splash.set_phase("workspace")
+            await pilot.pause()
+            base_height = app.startup_splash.region.height
+            app.startup_splash.props.has_target = True
+            app.startup_splash.refresh(layout=True)
+            await pilot.pause()
+            assert app.startup_splash.region.height > base_height
+            region = app.startup_splash.region
+            assert abs(2 * region.y + region.height - app.screen.size.height) <= 1
 
     @pytest.mark.asyncio
     async def test_splash_initial_display_and_finish(self) -> None:

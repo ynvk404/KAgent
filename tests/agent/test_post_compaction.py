@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from src.agent.agent import Agent, AgentOptions
+from src.agent.agent import (
+    Agent, AgentOptions, COMPACTION_RECENT_MESSAGE_CHAR_LIMIT, recent_useful_turn,
+)
 from tests.helpers.agent_fakes import EchoTool, FakeClient, FakeSignal, collect
 from src.llm.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import AlwaysAllow
@@ -19,6 +21,28 @@ from src.workflow.state import Candidate, WorkflowState
 SKILLS_ROOT = Path(__file__).resolve().parents[2] / "skills"
 FINAL_RESPONSE = "Post-compaction continuation succeeded."
 TOOL_RESULT = "echoed: deterministic tool result"
+
+
+@pytest.mark.parametrize("private_state", ["deepseek", "gemini"])
+def test_compaction_omits_clipped_answer_with_provider_continuation_state(private_state):
+    answer = Message(
+        role="assistant", content="x" * (COMPACTION_RECENT_MESSAGE_CHAR_LIMIT + 1),
+        provider_state_provider=private_state, provider_state_model="model",
+        reasoning_content="private" if private_state == "deepseek" else None,
+        gemini_parts=[{"text": "signed", "thoughtSignature": "sig"}]
+        if private_state == "gemini" else None,
+    )
+    recent = recent_useful_turn([Message(role="user", content="request"), answer])
+    assert [message.role for message in recent] == ["user"]
+
+
+def test_compaction_preserves_short_answer_with_provider_continuation_state():
+    answer = Message(
+        role="assistant", content="answer", reasoning_content="private",
+        provider_state_provider="deepseek", provider_state_model="model",
+    )
+    recent = recent_useful_turn([Message(role="user", content="request"), answer])
+    assert recent[-1].reasoning_content == "private"
 
 
 def _topic_turn(topic: str, detail: str) -> list[Message]:
@@ -125,6 +149,13 @@ async def test_complete_post_compaction_planner_and_tool_continuation(tmp_path) 
     compact_events = collect()
 
     await agent.compact(FakeSignal(), compact_events["sink"])
+
+    compact_metric = agent.request_metrics.records[-1]
+    assert compact_metric.purpose == "compaction"
+    assert compact_metric.requested_reasoning_level == "off"
+    assert compact_metric.effective_reasoning_level is None  # fake provider has no verified capability
+    assert compact_metric.compact_total_duration_ms is not None
+    assert compact_metric.compact_total_duration_ms >= compact_metric.duration_ms
 
     after_history = agent.get_history()
     assert len(after_history) < len(before_history)

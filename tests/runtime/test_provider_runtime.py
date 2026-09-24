@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import asyncio
 import threading
+from typing import Any
 
 import pytest
 
@@ -23,12 +24,12 @@ from src.llm.providers import OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_MODEL
 
 
 class FakeAgent:
-    def __init__(self, client: object) -> None:
+    def __init__(self, client: Any) -> None:
         self.client = client
         self.fail_next_switch = False
         self.fail_after_mutating = False
 
-    def set_client(self, client: object) -> None:
+    def set_client(self, client: Any) -> None:
         self.client = client
         if self.fail_after_mutating:
             self.fail_after_mutating = False
@@ -472,6 +473,7 @@ async def test_official_openai_switch_preserves_manual_and_custom_state():
     assert config_to_dict(disk) == config_to_dict(cfg)
 
     restored = build_startup_runtime(config_module.config_from_dict(config_to_dict(disk)))
+    assert isinstance(restored.client, OpenAIClient)
     assert restored.client.name() == "openai"
     assert restored.client.model() == OPENAI_DEFAULT_MODEL
     assert restored.client.api_key == "official-key"

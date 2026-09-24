@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import time
+import uuid
 import ssl
 import httpx
 from copy import deepcopy
@@ -37,8 +38,15 @@ from src.llm.types import (
     ToolCall,
     parsed_args,
 )
+from src.llm.reasoning import (
+    ReasoningLevel,
+    ReasoningPurpose,
+    requested_level,
+    resolve_level,
+)
+from src.llm.metrics import MetricsCollector, RequestMetrics
 
-from src.logger.logger import error as log_error
+from src.logger.logger import debug as log_debug, error as log_error
 
 from src.intelligence.store import (
     IntelligenceStore,
@@ -110,6 +118,7 @@ R = TypeVar("R")
 EventSink = Callable[[AgentEvent], None]
 
 DEFAULT_MAX_STEPS = 20
+REASONING_POLICY_ID = "reasoning-baseline-v1"
 
 _EVENT_FACTORIES = {
     "assistant-text": AssistantTextEvent,
@@ -509,6 +518,7 @@ class Agent:
         self.memory_store = opts.memory_store
 
         self._background_tasks: set[asyncio.Task] = set()
+        self.request_metrics = MetricsCollector()
         self._llm_call_counts = {
             "agent_loop_llm_calls": 0,
             "compaction_llm_calls": 0,
@@ -662,6 +672,29 @@ class Agent:
 
     def thinking_is_enabled(self) -> bool:
         return self.thinking
+
+    def reasoning_status(self, enabled: bool | None = None) -> str:
+        preference = self.thinking if enabled is None else enabled
+        requested = requested_level(ReasoningPurpose.AGENT_TURN, preference)
+        has_tools = bool(self.tools.as_llm_tools())
+        resolution = resolve_level(
+            requested,
+            self.client.reasoning_capabilities(has_tools=has_tools),
+        )
+        if resolution.effective is None:
+            return (
+                f"thinking {'on' if preference else 'off'} requested; provider behavior unverified. "
+                "System prompt guidance follows this setting."
+            )
+        if resolution.effective is not requested:
+            status = (
+                f"thinking {'on' if preference else 'off'} requested; "
+                f"model uses {resolution.effective.value} ({resolution.relation})"
+            )
+            if resolution.relation == "fallback":
+                return f"{status}. System prompt guidance follows this setting."
+            return status
+        return f"thinking {'on' if preference else 'off'}; model uses {resolution.effective.value}"
 
     async def set_thinking_enabled(self, enabled: bool) -> None:
         self.thinking = enabled
@@ -1517,11 +1550,34 @@ class Agent:
             opts = AgentRunOptions(**opts)
 
         tools_enabled = opts is None or getattr(opts, "tools", True)
+        turn_thinking = self.thinking
+        turn_requested_level = requested_level(
+            ReasoningPurpose.AGENT_TURN, turn_thinking
+        )
+        turn_resolution = resolve_level(
+            turn_requested_level,
+            self.client.reasoning_capabilities(
+                has_tools=tools_enabled and bool(self.tools.as_llm_tools())
+            ),
+        )
+        turn_reasoning_level = turn_resolution.effective or turn_requested_level
+        turn_request_thinking = (
+            turn_reasoning_level is not ReasoningLevel.OFF
+            if turn_resolution.effective is not None
+            else turn_thinking
+        )
         if tools_enabled:
             self.initialize_target_from_user_request(user_msg)
 
         self.active_skills = set(self.pending_skills)
         self.pending_skills.clear()
+        for name in sorted(self.active_skills):
+            emit(
+                {
+                    "type": "skill-active",
+                    "name": name,
+                }
+            )
 
         self.turn_executed_tool = False
 
@@ -1676,7 +1732,9 @@ class Agent:
             req = ChatRequest(
                 model=self.client.model(),
                 messages=working,
-                thinking_enabled=self.thinking,
+                thinking_enabled=turn_request_thinking,
+                reasoning_level=turn_reasoning_level,
+                requested_reasoning_level=turn_requested_level,
             )
 
             if opts is None or getattr(opts, "tools", True):
@@ -1756,11 +1814,13 @@ class Agent:
                 synthesis_req = ChatRequest(
                     model=self.client.model(),
                     messages=working,
-                    thinking_enabled=self.thinking,
+                    thinking_enabled=turn_request_thinking,
+                    reasoning_level=turn_reasoning_level,
+                    requested_reasoning_level=turn_requested_level,
                 )
                 self._count_llm_call("final_synthesis_llm_calls")
                 synthesis, synthesis_streamed = await self._chat_for_turn(
-                    synthesis_req, signal, emit
+                    synthesis_req, signal, emit, purpose="final_synthesis"
                 )
                 self._sanitize_response(synthesis)
                 if synthesis.message.tool_calls or not synthesis.message.content.strip():
@@ -1804,12 +1864,62 @@ class Agent:
         if resp.message.content and not streamed:
             emit({"type": "assistant-text", "text": resp.message.content})
 
-    async def _chat_for_turn(self, req, signal, emit) -> tuple[ChatResponse, bool]:
+    async def _chat_for_turn(
+        self, req, signal, emit, purpose: str = "agent_turn"
+    ) -> tuple[ChatResponse, bool]:
+        started = time.perf_counter()
+        started_at = datetime.now(timezone.utc).isoformat()
+        response: ChatResponse | None = None
+        status: Literal["success", "error", "cancelled"] = "success"
         try:
-            return await self.chat(req, signal, emit)
-        except Exception:
+            response, streamed = await self.chat(req, signal, emit)
+            return response, streamed
+        except BaseException as err:
+            status = "cancelled" if isinstance(err, asyncio.CancelledError) or getattr(signal, "aborted", False) else "error"
             self._turn_client_error = True
             raise
+        finally:
+            self._record_request_metrics(req, purpose, started_at, started, status, response)
+
+    def _record_request_metrics(
+        self, req: ChatRequest, purpose: str, started_at: str,
+        started: float, status: Literal["success", "error", "cancelled"],
+        response: ChatResponse | None,
+    ) -> None:
+        self.request_metrics.add(RequestMetrics(
+            request_id=uuid.uuid4().hex,
+            started_at=started_at,
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            provider=self.client.name(), model=self.client.model(),
+            purpose=purpose, policy_id=REASONING_POLICY_ID,
+            requested_reasoning_level=(
+                req.requested_reasoning_level.value
+                if req.requested_reasoning_level is not None else None
+            ),
+            effective_reasoning_level=self._known_effective_reasoning_level(req),
+            status=status,
+            usage=response.usage if response else None,
+            tool_call_count=len(response.message.tool_calls or []) if response else None,
+            retry_count=response.retry_count if response else None,
+            retry_wait_ms=response.retry_wait_ms if response else None,
+        ))
+
+    def _known_effective_reasoning_level(self, req: ChatRequest) -> str | None:
+        if req.reasoning_level is None:
+            return None
+        resolution = resolve_level(
+            req.reasoning_level,
+            self.client.reasoning_capabilities(has_tools=bool(req.tools)),
+        )
+        return resolution.effective.value if resolution.effective is not None else None
+
+    def _compaction_reasoning_settings(self) -> tuple[ReasoningLevel, bool]:
+        requested = requested_level(ReasoningPurpose.COMPACTION, self.thinking)
+        resolution = resolve_level(
+            requested, self.client.reasoning_capabilities(has_tools=False)
+        )
+        level = resolution.effective or requested
+        return level, level is not ReasoningLevel.OFF if resolution.effective else False
 
     def guard_working_context(
         self,
@@ -2297,6 +2407,8 @@ class Agent:
                     tools=req.tools,
                     stream=True,
                     thinking_enabled=req.thinking_enabled,
+                    reasoning_level=req.reasoning_level,
+                    requested_reasoning_level=req.requested_reasoning_level,
                 ),
                 on_delta,
                 signal,
@@ -2326,6 +2438,11 @@ class Agent:
         emit,
     ) -> None:
         safe_emit = make_safe_emit(signal, emit)
+        compact_started = time.monotonic()
+        previous_request_id = (
+            self.request_metrics.records[-1].request_id
+            if self.request_metrics.records else None
+        )
 
         self.running = True
         self._reset_llm_call_counts()
@@ -2343,6 +2460,7 @@ class Agent:
                 )
                 return
 
+            compact_level, compact_thinking = self._compaction_reasoning_settings()
             req = ChatRequest(
                 model=self.client.model(),
                 messages=[
@@ -2357,10 +2475,13 @@ class Agent:
                         ),
                     ),
                 ],
+                thinking_enabled=compact_thinking,
+                reasoning_level=compact_level,
+                requested_reasoning_level=ReasoningLevel.OFF,
             )
 
             self._count_llm_call("compaction_llm_calls")
-            resp = await self.client.chat(req, signal)
+            resp = await self._chat_for_compaction(req, signal, "manual")
             summary = strip_thinking_tags(
                 resp.message.content
             )
@@ -2413,6 +2534,17 @@ class Agent:
             )
 
         finally:
+            self.request_metrics.set_latest_compaction_total(
+                (time.monotonic() - compact_started) * 1000,
+                after_request_id=previous_request_id,
+            )
+            log_debug(
+                "agent: compaction total timing",
+                {
+                    "kind": "manual",
+                    "duration_ms": round((time.monotonic() - compact_started) * 1000, 2),
+                },
+            )
 
             self.running = False
 
@@ -2427,6 +2559,11 @@ class Agent:
         incoming_tokens: int = 0,
         tools_tokens: int = 0,
     ) -> None:
+        compact_started = time.monotonic()
+        previous_request_id = (
+            self.request_metrics.records[-1].request_id
+            if self.request_metrics.records else None
+        )
         tokens_before = self.approx_tokens()
         displayed_tokens = trigger_tokens if trigger_tokens is not None else tokens_before
         displayed_history_tokens = (
@@ -2511,6 +2648,44 @@ class Agent:
                 }
             )
 
+        self.request_metrics.set_latest_compaction_total(
+            (time.monotonic() - compact_started) * 1000,
+            after_request_id=previous_request_id,
+        )
+        log_debug(
+            "agent: compaction total timing",
+            {
+                "kind": "auto",
+                "duration_ms": round((time.monotonic() - compact_started) * 1000, 2),
+            },
+        )
+
+    async def _chat_for_compaction(
+        self,
+        req: ChatRequest,
+        signal,
+        kind: str,
+    ) -> ChatResponse:
+        llm_started = time.perf_counter()
+        started_at = datetime.now(timezone.utc).isoformat()
+        response: ChatResponse | None = None
+        status: Literal["success", "error", "cancelled"] = "success"
+        try:
+            response = await self.client.chat(req, signal)
+            return response
+        except BaseException as err:
+            status = "cancelled" if isinstance(err, asyncio.CancelledError) or getattr(signal, "aborted", False) else "error"
+            raise
+        finally:
+            self._record_request_metrics(req, "compaction", started_at, llm_started, status, response)
+            log_debug(
+                "agent: compaction LLM timing",
+                {
+                    "kind": kind,
+                    "duration_ms": round((time.perf_counter() - llm_started) * 1000, 2),
+                },
+            )
+
     async def compact_in_place(
         self,
         signal,
@@ -2521,6 +2696,7 @@ class Agent:
         if len(history_snap) <= 1:
             return False
 
+        compact_level, compact_thinking = self._compaction_reasoning_settings()
         req = ChatRequest(
             model=self.client.model(),
             messages=[
@@ -2535,13 +2711,13 @@ class Agent:
                     ),
                 ),
             ],
+            thinking_enabled=compact_thinking,
+            reasoning_level=compact_level,
+            requested_reasoning_level=ReasoningLevel.OFF,
         )
 
         self._count_llm_call("compaction_llm_calls")
-        resp = await self.client.chat(
-            req,
-            signal,
-        )
+        resp = await self._chat_for_compaction(req, signal, "auto")
 
         summary = strip_thinking_tags(
             resp.message.content
@@ -2707,7 +2883,16 @@ def recent_useful_turn(messages: list[Message]) -> list[Message]:
         None,
     )
     if final_answer is not None:
-        recent.append(compact_recent_message(final_answer))
+        # A clipped assistant answer cannot safely replay its original
+        # provider-private continuation state. The summary already carries
+        # the answer; omit this history step rather than send altered content
+        # without the state required by DeepSeek or Gemini.
+        has_provider_state = (
+            final_answer.reasoning_content is not None
+            or final_answer.gemini_parts is not None
+        )
+        if not (has_provider_state and len(final_answer.content) > COMPACTION_RECENT_MESSAGE_CHAR_LIMIT):
+            recent.append(compact_recent_message(final_answer))
     return recent
 
 
@@ -2731,7 +2916,10 @@ def compact_recent_message(message: Message) -> Message:
         + marker
         + content[-tail:]
     )
-    return replace(message, content=bounded, reasoning_content=None, tool_calls=None)
+    return replace(
+        message, content=bounded, reasoning_content=None, tool_calls=None,
+        gemini_parts=None, provider_state_provider=None, provider_state_model=None,
+    )
 
 
 def remove_workflow_duplicates(

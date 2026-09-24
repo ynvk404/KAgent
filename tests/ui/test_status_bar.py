@@ -215,8 +215,6 @@ class TestStatusBarBusyLine:
         fields = [
             "ready · idle",
             "openai/gpt-oss-20b [tools ✓]",
-            "Enter send",
-            "/ commands",
             "hist ~2.4k · req ~5.4k/6k 90%",
             "time 00:01",
             "Ctrl-O expand output",
@@ -225,6 +223,67 @@ class TestStatusBarBusyLine:
         assert positions == sorted(positions)
         assert line.endswith("Ctrl-O expand output")
         assert "turn 00:01" not in line
+
+    @pytest.mark.asyncio
+    async def test_wide_idle_status_with_active_skill_order(self) -> None:
+        frame = await render_frame(
+            props(
+                model="deepseek-flash",
+                tool_support="yes",
+                active_skill="sql-injection",
+                ctx_tokens=18300,
+                request_tokens=23500,
+                compact_threshold=16000,
+                elapsed_seconds=13,
+                expand_hint=True,
+            ),
+            size=(160, 3),
+        )
+        line = next(line for line in frame.splitlines() if "ready" in line)
+
+        fields = [
+            "ready · idle",
+            "deepseek-flash [tools ✓]",
+            "skill: sql-injection",
+            "hist ~18.3k · req ~23.5k/16k 147%",
+            "time 00:13",
+            "Ctrl-O expand output",
+        ]
+        positions = [line.index(field) for field in fields]
+        assert positions == sorted(positions)
+        assert line.endswith("Ctrl-O expand output")
+
+    @pytest.mark.asyncio
+    async def test_wide_idle_status_without_active_skill_flows_directly_into_hist(self) -> None:
+        frame = await render_frame(
+            props(
+                model="deepseek-flash",
+                tool_support="yes",
+                active_skill=None,
+                ctx_tokens=11600,
+                request_tokens=16800,
+                compact_threshold=16000,
+                elapsed_seconds=18,
+                expand_hint=True,
+            ),
+            size=(140, 3),
+        )
+        line = next(line for line in frame.splitlines() if "ready" in line)
+        assert "[tools ✓] · hist ~11.6k · req ~16.8k/16k 105% · time 00:18 · Ctrl-O expand output" in line
+        assert "skill:" not in line
+        assert "mem:" not in line
+
+    @pytest.mark.asyncio
+    async def test_status_bar_does_not_render_memory_items(self) -> None:
+        frame = await render_frame(
+            props(
+                memory_items=60,
+                expand_hint=True,
+            ),
+            size=(140, 3),
+        )
+        assert "mem:" not in frame
+        assert "mem: 60" not in frame
 
     @pytest.mark.asyncio
     async def test_medium_width_drops_only_expand_before_hints_and_metrics(self) -> None:
@@ -238,10 +297,9 @@ class TestStatusBarBusyLine:
                 elapsed_seconds=1,
                 expand_hint=True,
             ),
-            size=(120, 3),
+            size=(100, 3),
         )
 
-        assert "Enter send · / commands" in frame
         assert "hist ~2.4k · req ~5.4k/6k 90%" in frame
         assert "time 00:01" in frame
         assert "Ctrl-O expand output" not in frame

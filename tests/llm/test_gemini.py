@@ -58,7 +58,14 @@ class _MockHandler(BaseHTTPRequestHandler):
                     {"candidates": [{"content": {"parts": [{"text": "pondering", "thought": True}]}}]}
                 )
             )
-            self.wfile.write(_sse_event({"candidates": [{"content": {"parts": [{"text": "wor"}]}}]}))
+            self.wfile.write(
+                _sse_event(
+                    {"candidates": [{"content": {"parts": [
+                        {"text": "private analysis", "thought": True},
+                        {"text": "wor"},
+                    ]}}]}
+                )
+            )
             self.wfile.write(_sse_event({"candidates": [{"content": {"parts": [{"text": "king"}]}}]}))
             self.wfile.write(
                 _sse_event(
@@ -82,6 +89,12 @@ class _MockHandler(BaseHTTPRequestHandler):
                     }
                 )
             )
+            self.wfile.write(_sse_event({
+                "usageMetadata": {
+                    "promptTokenCount": 100, "candidatesTokenCount": 20,
+                    "thoughtsTokenCount": 10, "totalTokenCount": 130,
+                }
+            }))
             self.wfile.flush()
             return
 
@@ -104,7 +117,11 @@ class _MockHandler(BaseHTTPRequestHandler):
                         },
                         "finishReason": "STOP",
                     }
-                ]
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 100, "candidatesTokenCount": 20,
+                    "thoughtsTokenCount": 10, "totalTokenCount": 130,
+                },
             },
         )
 
@@ -150,6 +167,8 @@ async def test_encodes_messages_and_tools_and_parses_function_calls(base_url):
                         provider={"gemini": {"thoughtSignature": "sig-grep"}},  # type: ignore[arg-type]
                     )
                 ],
+                provider_state_provider="gemini",
+                provider_state_model="models/gemini-test",
             ),
             Message(role="tool", name="grep", tool_call_id="call_1", content="matched"),
         ],
@@ -172,6 +191,7 @@ async def test_encodes_messages_and_tools_and_parses_function_calls(base_url):
 
     assert captured.last_api_key_header == "test-key"
     assert out.message.content == "working"
+    assert out.usage is not None and out.usage.reasoning_tokens == 10
 
     assert out.message.tool_calls is not None
     tool_call = cast(dict, out.message.tool_calls[0])
@@ -233,7 +253,7 @@ async def test_caps_thinking_and_requests_thought_summaries_for_positive_budget(
     }
 
 @pytest.mark.asyncio
-async def test_streams_answer_deltas_surfaces_thoughts_and_parses_tool_calls(base_url):
+async def test_streams_visible_deltas_hides_thoughts_and_parses_tool_calls(base_url):
     c = GeminiClient(base_url, "test-key", "models/gemini-test")
     deltas: list[str] = []
 
@@ -246,9 +266,10 @@ async def test_streams_answer_deltas_surfaces_thoughts_and_parses_tool_calls(bas
         lambda d: deltas.append(d),
     )
 
-    assert deltas == ["pondering", "wor", "king"]
+    assert deltas == ["wor", "king"]
     assert out.message.content == "working"
     assert out.finish_reason == "STOP"
+    assert out.usage is not None and out.usage.cached_input_tokens is None
 
     assert out.message.tool_calls is not None
     tool_call = cast(dict, out.message.tool_calls[0])
@@ -271,6 +292,47 @@ async def test_stream_preserves_response_when_delta_callback_raises(base_url):
     assert out.message.content == "working"
     assert out.message.tool_calls is not None
     assert out.message.tool_calls[0].function.name == "http"
+
+
+@pytest.mark.asyncio
+async def test_stream_filters_thoughts_without_network(monkeypatch):
+    class _Closable:
+        async def aclose(self):
+            pass
+
+    async def fake_open_stream(*_args):
+        return _Closable(), _Closable()
+
+    async def fake_sse_lines(_response):
+        yield "data: " + json.dumps({
+            "candidates": [{"content": {"parts": [
+                {"text": "hidden thought", "thought": True},
+                {"text": "visible "},
+                {"text": "more hidden thought", "thought": True},
+                {"text": "answer"},
+                {"functionCall": {"name": "http", "args": {"url": "https://example.com"}},
+                 "thoughtSignature": "sig-http"},
+            ]}, "finishReason": "STOP"}]
+        })
+
+    client = GeminiClient("https://example.com/v1beta", "", "models/gemini-test")
+    monkeypatch.setattr(client, "_open_stream", fake_open_stream)
+    monkeypatch.setattr("src.llm.gemini.iter_sse_lines", fake_sse_lines)
+    deltas = []
+
+    out = await client.chat_stream(
+        ChatRequest(model="models/gemini-test", messages=[Message(role="user", content="hi")]),
+        deltas.append,
+    )
+
+    assert deltas == ["visible ", "answer"]
+    assert out.message.content == "visible answer"
+    assert out.finish_reason == "STOP"
+    assert out.message.tool_calls is not None
+    provider = out.message.tool_calls[0].provider
+    assert provider is not None and provider.gemini is not None
+    assert provider.gemini.thought_signature == "sig-http"
+    assert "hidden thought" not in "".join(deltas) + out.message.content
 
 @pytest.mark.asyncio
 async def test_pings_the_model_list_endpoint(base_url):

@@ -234,6 +234,17 @@ def _message_from_dict(data: Any) -> Message | None:
     reasoning_content = data.get("reasoning_content")
     if reasoning_content is not None and not isinstance(reasoning_content, str):
         reasoning_content = None
+    provider_state_provider = data.get("provider_state_provider")
+    if not isinstance(provider_state_provider, str):
+        provider_state_provider = None
+    provider_state_model = data.get("provider_state_model")
+    if not isinstance(provider_state_model, str):
+        provider_state_model = None
+    raw_parts = data.get("gemini_parts")
+    gemini_parts = None
+    if provider_state_provider == "gemini" and isinstance(raw_parts, list):
+        from src.llm.gemini import safe_replay_part
+        gemini_parts = [part for raw in raw_parts if (part := safe_replay_part(raw))]
 
     tool_call_id = data.get("tool_call_id")
     if tool_call_id is not None and not isinstance(tool_call_id, str):
@@ -261,6 +272,9 @@ def _message_from_dict(data: Any) -> Message | None:
         role=cast(Role, role),
         content=content,
         reasoning_content=reasoning_content,
+        provider_state_provider=provider_state_provider,
+        provider_state_model=provider_state_model,
+        gemini_parts=gemini_parts,
         tool_calls=_tool_calls_from_list(data.get("tool_calls")),
         tool_call_id=tool_call_id,
         name=name,
@@ -285,6 +299,13 @@ def _restrict_permissions(path: Path) -> None:
             path,
             exc_info=True,
         )
+
+
+def _restrict_directory_permissions(path: Path) -> None:
+    try:
+        path.chmod(0o700)
+    except (OSError, NotImplementedError):
+        log.warning("session: could not restrict directory permissions on %s", path, exc_info=True)
 
 
 class Store:
@@ -379,13 +400,22 @@ class Store:
             return
 
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _restrict_directory_permissions(self.path.parent)
 
         serialized_messages = []
+        from src.llm.gemini import safe_replay_part
         for msg in messages:
             serialized: dict[str, Any] = {
                 "role": msg.role,
                 "content": msg.content,
                 "reasoning_content": msg.reasoning_content,
+                "provider_state_provider": msg.provider_state_provider,
+                "provider_state_model": msg.provider_state_model,
+                "gemini_parts": (
+                    [part for raw in msg.gemini_parts if (part := safe_replay_part(raw))]
+                    if msg.provider_state_provider == "gemini" and msg.gemini_parts
+                    else None
+                ),
                 "tool_calls": (
                     [dataclasses.asdict(tc) for tc in msg.tool_calls]
                     if msg.tool_calls
@@ -454,6 +484,7 @@ class Store:
 
         out = self.context_snapshot_path()
         out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _restrict_directory_permissions(out.parent)
 
         if not markdown.endswith("\n"):
             markdown += "\n"

@@ -40,6 +40,7 @@ from src.coverage.store import CoverageEntry, CoverageStore
 from src.findings.store import Store as FindingsStore
 from src.intelligence.store import IntelligenceScenario, IntelligenceStore
 from src.llm.client import Client
+from src.llm.openai import OpenAIClient
 from src.llm.types import (
     ChatRequest,
     ChatResponse,
@@ -1347,6 +1348,92 @@ async def test_auto_compacts_before_next_turn_when_over_threshold():
     assert (done.agent_loop_llm_calls, done.compaction_llm_calls, done.total_llm_calls) == (1, 1, 2)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thinking_enabled", [False, True])
+async def test_auto_compact_overrides_thinking_for_one_request_only(
+    thinking_enabled, monkeypatch
+):
+    response = ChatResponse(Message(role="assistant", content="done"), "stop")
+    summary = ChatResponse(
+        Message(role="assistant", content="## Current objective\n- Continue testing"),
+        "stop",
+    )
+    result = make_agent_with_client([response, summary, response])
+    agent, client = result["agent"], result["client"]
+    await agent.set_thinking_enabled(thinking_enabled)
+    agent.set_auto_compact_threshold(0)
+    await agent.run("first", FakeSignal(), collect()["sink"])
+    seed_compactable_history(agent)
+    agent.set_auto_compact_threshold(1)
+
+    timings = []
+    monkeypatch.setattr(
+        "src.agent.agent.log_debug",
+        lambda message, data: timings.append((message, data)),
+    )
+    await agent.run("second", FakeSignal(), collect()["sink"])
+
+    assert [req.thinking_enabled for req in client.requests] == [
+        thinking_enabled, False, thinking_enabled
+    ]
+    assert agent.thinking_is_enabled() is thinking_enabled
+    deepseek = OpenAIClient("https://api.deepseek.com", "", "deepseek-flash", "deepseek")
+    assert deepseek.encode_request(client.requests[1], stream=False)["thinking"] == {
+        "type": "disabled"
+    }
+    generic = OpenAIClient("https://example.com/v1", "", "model", "openai-compat")
+    assert "thinking" not in generic.encode_request(client.requests[1], stream=False)
+    durations = {
+        message: data["duration_ms"]
+        for message, data in timings
+        if data["kind"] == "auto"
+    }
+    assert durations["agent: compaction LLM timing"] >= 0
+    assert durations["agent: compaction total timing"] >= durations[
+        "agent: compaction LLM timing"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thinking_enabled", [False, True])
+async def test_manual_compact_overrides_thinking_for_one_request_only(
+    thinking_enabled, monkeypatch
+):
+    response = ChatResponse(Message(role="assistant", content="done"), "stop")
+    summary = ChatResponse(
+        Message(role="assistant", content="## Current objective\n- Continue testing"),
+        "stop",
+    )
+    result = make_agent_with_client([response, summary, response])
+    agent, client = result["agent"], result["client"]
+    await agent.set_thinking_enabled(thinking_enabled)
+    agent.set_auto_compact_threshold(0)
+    await agent.run("first", FakeSignal(), collect()["sink"])
+    seed_compactable_history(agent)
+
+    timings = []
+    monkeypatch.setattr(
+        "src.agent.agent.log_debug",
+        lambda message, data: timings.append((message, data)),
+    )
+    await agent.compact(FakeSignal(), collect()["sink"])
+    await agent.run("second", FakeSignal(), collect()["sink"])
+
+    assert [req.thinking_enabled for req in client.requests] == [
+        thinking_enabled, False, thinking_enabled
+    ]
+    assert agent.thinking_is_enabled() is thinking_enabled
+    durations = {
+        message: data["duration_ms"]
+        for message, data in timings
+        if data["kind"] == "manual"
+    }
+    assert durations["agent: compaction LLM timing"] >= 0
+    assert durations["agent: compaction total timing"] >= durations[
+        "agent: compaction LLM timing"
+    ]
+
+
 async def run_auto_compact_trigger_probe(
     monkeypatch,
     *,
@@ -2551,6 +2638,7 @@ async def test_direct_agent_task_cancellation_propagates_and_emits_done():
         async def chat(self, request: ChatRequest, signal=None) -> ChatResponse:
             started.set()
             await asyncio.Future()
+            raise asyncio.CancelledError()
 
     agent = Agent(AgentOptions(
         client=WaitingClient(), tools=ToolRegistry(), skills=SkillRegistry(),
@@ -5307,3 +5395,27 @@ class TestErrorReporting:
 
         assert agent._background_tasks == set()
         assert any("background boom" in str(r.err) for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_pending_skill_promoted_to_active_and_emits_skill_active():
+    agent = make_agent(
+        [
+            ChatResponse(
+                message=Message(role="assistant", content="done"),
+                finish_reason="stop",
+            )
+        ]
+    )
+    agent.pending_skills.add("cross-site-scripting")
+    assert agent.active_skills == set()
+
+    collector = collect()
+    await agent.run("test", FakeSignal(), collector["sink"])
+
+    assert agent.active_skills == {"cross-site-scripting"}
+    assert agent.pending_skills == set()
+    assert any(
+        event["type"] == "skill-active" and event["name"] == "cross-site-scripting"
+        for event in collector["events"]
+    )

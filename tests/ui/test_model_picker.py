@@ -121,7 +121,10 @@ def test_fetch_and_pick_model_preserves_active_custom_provider_id(monkeypatch):
             current_model="model-a",
             custom_provider_id="opaque-profile-id",
         )
-        request = dispatched[1].req
+        ask_action = dispatched[1]
+        assert isinstance(ask_action, SetAsk)
+        assert ask_action.req is not None
+        request = ask_action.req
         request.resolve("model-b")
         await asyncio.sleep(0.01)
 

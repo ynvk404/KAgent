@@ -1,8 +1,10 @@
 import asyncio
 from contextlib import AsyncExitStack
-from typing import cast
+from typing import Any
+from unittest.mock import create_autospec
 
 import pytest
+from mcp import ClientSession
 
 from src.tools.mcp_integration import (
     MCPTool,
@@ -13,11 +15,14 @@ from src.tools.registry import Registry
 
 
 class FakeSession:
-    def __init__(self, result):
+    def __init__(self, result: dict[str, Any]) -> None:
         self.server_name = "browser"
         self.result = result
 
-    async def call_tool(self, name, args, cancel_event=None):
+    async def call_tool(
+        self, name: str, args: dict[str, Any],
+        cancel_event: asyncio.Event | None = None,
+    ) -> dict[str, Any]:
         return self.result
 
 
@@ -30,15 +35,16 @@ async def test_direct_mcp_cancellation_awaits_inner_call_cleanup():
     started = asyncio.Event()
     stopped = asyncio.Event()
 
-    class BlockingSession:
-        async def call_tool(self, name, arguments):
-            started.set()
-            try:
-                await asyncio.Future()
-            finally:
-                stopped.set()
+    async def blocking_call(name: str, arguments: dict[str, Any]) -> None:
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            stopped.set()
 
-    session = MCPSession("test", BlockingSession(), AsyncExitStack())
+    client_session = create_autospec(ClientSession, instance=True)
+    client_session.call_tool.side_effect = blocking_call
+    session = MCPSession("test", client_session, AsyncExitStack())
     task = asyncio.create_task(session.call_tool("wait", {}, asyncio.Event()))
     await asyncio.wait_for(started.wait(), 2)
     task.cancel()
@@ -74,7 +80,7 @@ async def test_formats_text_mcp_errors_without_raw_content_json():
     )
 
     tool = MCPTool(
-        cast(MCPSession, session),
+        session,
         "mcp_browser_browser_click",
         "browser_click",
         "Click in browser",
@@ -112,7 +118,7 @@ async def test_truncates_large_successful_mcp_results():
     )
 
     tool = MCPTool(
-        cast(MCPSession, session),
+        session,
         "mcp_browser_big",
         "big",
         "Big output",
@@ -144,7 +150,7 @@ async def test_bounds_deeply_nested_content():
         }
     )
     tool = MCPTool(
-        cast(MCPSession, session),
+        session,
         "mcp_browser_deep",
         "deep",
         "Deep output",

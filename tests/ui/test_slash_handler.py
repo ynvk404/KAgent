@@ -198,7 +198,7 @@ class DummyApp:
         self.turns.append((value, opts))
 
 
-def last_text(app: DummyApp) -> str:
+def last_text(app: DummyApp | SimpleNamespace) -> str:
     action = app.actions[-1]
     assert isinstance(action, Append)
     return action.entry.text
@@ -439,6 +439,27 @@ def test_thinking_off_disables_reasoning_mode():
 
         assert not app.agent.thinking_is_enabled()
         assert last_text(app) == "thinking disabled"
+
+    asyncio.run(run())
+
+
+def test_thinking_status_reports_model_fallback_when_off_is_unavailable():
+    class FallbackAgent(DummyAgent):
+        def reasoning_status(self, enabled=None):
+            preference = self.thinking if enabled is None else enabled
+            return (
+                "thinking on; model uses low" if preference
+                else "thinking off requested; model uses low (fallback)"
+            )
+
+    async def run() -> None:
+        app = DummyApp()
+        app.agent = FallbackAgent()
+        assert handle_slash(cast(KAgent, app), "/thinking off")
+        await asyncio.sleep(0)
+        assert last_text(app) == "thinking off requested; model uses low (fallback)"
+        assert handle_slash(cast(KAgent, app), "/thinking")
+        assert last_text(app) == "thinking off requested; model uses low (fallback)"
 
     asyncio.run(run())
 

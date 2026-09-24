@@ -1,3 +1,4 @@
+from tests.helpers.ui_fakes import make_test_config_snapshot
 import asyncio
 from unittest.mock import AsyncMock
 
@@ -18,13 +19,10 @@ def test_open_provider_picker_dispatches_state_actions():
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.OPENAI_COMPAT,
-            "model": "test-model",
-            "base_url": "",
-            "api_key": "",
-            "api_keys": {},
-        }
+        return make_test_config_snapshot(
+            backend=Backend.OPENAI_COMPAT,
+            model="test-model",
+        )
 
     async def apply_provider(payload):
         return None
@@ -86,16 +84,12 @@ async def test_provider_picker_reuses_saved_provider_key(monkeypatch):
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.KIMI,
-            "model": "kimi-model",
-            "base_url": "",
-            "api_key": "kimi-key",
-            "api_keys": {
-                "kimi": "kimi-key",
-                "groq": "groq-key",
-            },
-        }
+        return make_test_config_snapshot(
+            backend=Backend.KIMI,
+            model="kimi-model",
+            api_key="kimi-key",
+            api_keys={"kimi": "kimi-key", "groq": "groq-key"},
+        )
 
     async def apply_provider(payload):
         seen["payload"] = payload
@@ -150,13 +144,13 @@ async def test_official_openai_picker_uses_own_key_and_endpoint(monkeypatch):
     seen = {}
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.OPENAI_COMPAT,
-            "model": "manual-model",
-            "base_url": "https://manual.example/v1",
-            "api_key": "manual-key",
-            "api_keys": {"openai": "official-key", "openai-compat": "manual-key"},
-        }
+        return make_test_config_snapshot(
+            backend=Backend.OPENAI_COMPAT,
+            model="manual-model",
+            base_url="https://manual.example/v1",
+            api_key="manual-key",
+            api_keys={"openai": "official-key", "openai-compat": "manual-key"},
+        )
 
     async def fake_fetch(backend, base_url, api_key, *_args, **_kwargs):
         seen.update(backend=backend, base_url=base_url, api_key=api_key)
@@ -184,13 +178,12 @@ async def test_provider_picker_change_api_key_preserves_other_keys():
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.GEMINI,
-            "model": "gemini-model",
-            "base_url": "",
-            "api_key": api_keys["gemini"],
-            "api_keys": dict(api_keys),
-        }
+        return make_test_config_snapshot(
+            backend=Backend.GEMINI,
+            model="gemini-model",
+            api_key=api_keys["gemini"],
+            api_keys=dict(api_keys),
+        )
 
     async def apply_provider(_payload):
         raise AssertionError("provider should not change")
@@ -230,16 +223,13 @@ async def test_provider_picker_show_current_config_masks_keys():
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.GROQ,
-            "model": "llama-test",
-            "base_url": "https://api.groq.test",
-            "api_key": "gsk_123456WGdyL",
-            "api_keys": {
-                "groq": "gsk_123456WGdyL",
-                "gemini": "AQ.A123456H8xyQ",
-            },
-        }
+        return make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="llama-test",
+            base_url="https://api.groq.test",
+            api_key="gsk_123456WGdyL",
+            api_keys={"groq": "gsk_123456WGdyL", "gemini": "AQ.A123456H8xyQ"},
+        )
 
     async def apply_provider(_payload):
         return None
@@ -284,13 +274,12 @@ async def test_provider_picker_test_connection_success():
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.GROQ,
-            "model": "llama-test",
-            "base_url": "",
-            "api_key": "groq-key",
-            "api_keys": {"groq": "groq-key"},
-        }
+        return make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="llama-test",
+            api_key="groq-key",
+            api_keys={"groq": "groq-key"},
+        )
 
     async def apply_provider(_payload):
         return None
@@ -332,13 +321,12 @@ async def test_provider_picker_test_connection_failure():
         dispatched.append(action)
 
     def read_config() -> ConfigSnapshot:
-        return {
-            "backend": Backend.GROQ,
-            "model": "llama-test",
-            "base_url": "",
-            "api_key": "groq-key",
-            "api_keys": {"groq": "groq-key"},
-        }
+        return make_test_config_snapshot(
+            backend=Backend.GROQ,
+            model="llama-test",
+            api_key="groq-key",
+            api_keys={"groq": "groq-key"},
+        )
 
     async def apply_provider(_payload):
         return None

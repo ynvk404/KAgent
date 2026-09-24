@@ -129,6 +129,7 @@ from src.ui.core.app import (
     ProviderChange,
 )
 from src.ui.core.custom_provider_adapter import ConfigBackedCustomProviderAdapter
+from src.ui.commands.slash_handler import normalize_target_url
 
 from src.ui.widgets.banner import BannerData, ToolSupportPill
 
@@ -205,6 +206,7 @@ class ParsedFlags:
     backend: str = ""
     model: str = ""
     base_url: str = ""
+    target_url: str = ""
     api_key: str = ""
     skills_dirs: list[str] = field(default_factory=list)
     resume_id: str = ""
@@ -265,6 +267,14 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
             out.model = next_arg(a)
         elif a == "--base-url":
             out.base_url = next_arg(a)
+        elif a == "--target":
+            raw_target = next_arg(a)
+            try:
+                out.target_url = normalize_target_url(raw_target) or ""
+            except ValueError:
+                out.target_url = ""
+            if not out.target_url:
+                raise FlagParseError("--target requires a valid HTTP(S) URL")
         elif a == "--api-key":
             out.api_key = next_arg(a)
         elif a == "--skills":
@@ -316,6 +326,20 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
     return out
 
 
+def apply_startup_target(agent: Agent, target_url: str) -> None:
+    """Apply an explicit CLI target using the same scope transition as /target."""
+    if target_url:
+        agent.apply_target_base_url(target_url)
+
+
+def require_existing_resume_session(session_id: str) -> session_store.Store:
+    """Reject an explicit resume before startup can present an empty session."""
+    store = session_store.Store.new_with_id(session_store.dir_from_path(""), session_id)
+    if not store.path.is_file():
+        raise FileNotFoundError(f"session not found: {session_id}")
+    return store
+
+
 def redacted_argv(argv: list[str]) -> list[str]:
     out: list[str] = []
     redact_next = False
@@ -324,11 +348,13 @@ def redacted_argv(argv: list[str]) -> list[str]:
         if redact_next:
             out.append("<redacted>")
             redact_next = False
-        elif arg == "--api-key":
+        elif arg in {"--api-key", "--target"}:
             out.append(arg)
             redact_next = True
         elif arg.startswith("--api-key="):
             out.append("--api-key=<redacted>")
+        elif arg.startswith("--target="):
+            out.append("--target=<redacted>")
         else:
             out.append(arg)
 
@@ -396,6 +422,13 @@ async def main() -> int:
     if flags.show_help:
         print_help()
         return 0
+    resume_store: session_store.Store | None = None
+    if flags.resume_id:
+        try:
+            resume_store = require_existing_resume_session(flags.resume_id)
+        except FileNotFoundError as err:
+            sys.stderr.write(f"kagent: {err}\n")
+            return 1
     logger.init(flags.log_path)
     if (log_err := logger.init_error()) is not None:
         print(f"⚠ file logging disabled: {log_err}", file=sys.stderr)
@@ -545,9 +578,8 @@ async def main() -> int:
     else:
         session_store.validate_id(session_id)
         resuming = True
-    session_store_instance = session_store.Store.new_with_id(
-        session_dir,
-        session_id
+    session_store_instance = resume_store or session_store.Store.new_with_id(
+        session_dir, session_id
     )
     session_debug = create_session_debug_log(
         SessionDebugOptions(
@@ -887,6 +919,8 @@ async def main() -> int:
             )
             return 1
 
+    apply_startup_target(agent, flags.target_url)
+
     skill_dirs_to_watch = [d for d in all_skill_dirs if os.path.exists(d)]
     watchers: list[Any] = []
     reload_timer: asyncio.TimerHandle | None = None
@@ -1121,6 +1155,7 @@ async def main() -> int:
 
             resume_summary=resume_summary,
             splash_has_target=bool(target.base_url()),
+            splash_has_model_override=bool(flags.model),
             splash_has_integrations=bool(mcp_sessions or ingest_handle or cfg.plugins),
 
             session_debug=session_debug,
@@ -1395,6 +1430,7 @@ Flags:
   --backend |openai|openai-compat|kimi|groq|openrouter|deepseek|gemini
   --model <id>
   --base-url <url>
+  --target <url>            active target; scopes to its origin by default
   --api-key <key>
   --skills <dirs>            comma-separated extra skill directories
   --resume <session-id>

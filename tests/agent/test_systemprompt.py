@@ -94,11 +94,11 @@ class TestBuildSystemPrompt:
         on = build_system_prompt(
             BuildOptions(skills=Registry(), thinking_enabled=True, target=None)
         )
-        assert "Thinking is enabled" in on
+        assert "The user enabled reasoning where supported" in on
         off = build_system_prompt(
             BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
         )
-        assert "Thinking is disabled" in off
+        assert "The user requested reasoning off" in off
 
     def test_injects_active_engagement_section_when_target_is_set(self):
         t = Target()

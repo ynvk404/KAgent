@@ -54,6 +54,10 @@ After installation, start the Textual interface with:
 kagent
 ```
 
+To declare an authorized target at startup, pass `--target <url>`. Its exact
+origin is the default scope; use `/scope add <origin>` in the TUI only when an
+additional origin is authorized.
+
 Use `kagent --help` to see supported flags, including provider configuration,
 extra skill directories, session resume, and local browser/Burp integration.
 The module entry point is also available for a checkout-based run:

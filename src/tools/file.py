@@ -156,7 +156,7 @@ class FileReadTool(Tool):
         args,
         signal,
         prompter,
-    ):
+    ) -> str:
         path = arg_string(
             args,
             "path"
@@ -277,7 +277,7 @@ class FileWriteTool(Tool):
         args,
         signal,
         prompter,
-    ):
+    ) -> str:
         path = arg_string(
             args,
             "path"
@@ -413,7 +413,7 @@ class FileEditTool(Tool):
         args,
         signal,
         prompter,
-    ):
+    ) -> str:
         path = arg_string(
             args,
             "path"

@@ -32,12 +32,12 @@ ABORT_POLL_SECONDS = 0.05
 
 @dataclass
 class _CacheEntry:
-    value: str
+    value: str | ToolOutput
     expires: float
 
 _result_cache: "OrderedDict[str, _CacheEntry]" = OrderedDict()
 
-def _cache_get(key: str) -> str | None:
+def _cache_get(key: str) -> str | ToolOutput | None:
     entry = _result_cache.get(key)
     if entry is None:
         return None
@@ -47,7 +47,7 @@ def _cache_get(key: str) -> str | None:
     _result_cache.move_to_end(key)
     return entry.value
 
-def _cache_set(key: str, value: str) -> None:
+def _cache_set(key: str, value: str | ToolOutput) -> None:
     _result_cache.pop(key, None)
     _result_cache[key] = _CacheEntry(value=value, expires=time.monotonic() + CACHE_TTL_SECONDS)
     while len(_result_cache) > CACHE_MAX_ENTRIES:
@@ -220,7 +220,7 @@ class WebFetchTool(Tool):
     def requires_permission(self) -> bool:
         return False
 
-    async def run(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> str:
+    async def run(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> ToolOutput:
         url = arg_string(args, "url")
         if not url:
             raise ValueError("url is required")
@@ -234,7 +234,7 @@ class WebFetchTool(Tool):
         cache_key = f"fetch:{parsed}"
         cached = _cache_get(cache_key)
         if cached is not None:
-            return cached
+            return cached if isinstance(cached, ToolOutput) else ToolOutput(cached)
 
         try:
             resp = await _run_cancelable(_do_fetch(url), FETCH_TIMEOUT_SECONDS, signal)
@@ -410,7 +410,7 @@ class WebSearchTool(Tool):
     def requires_permission(self) -> bool:
         return False
 
-    async def run(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> str:
+    async def run(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> str | ToolOutput:
         query = arg_string(args, "query")
         if not query:
             raise ValueError("query is required")

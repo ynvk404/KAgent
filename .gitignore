@@ -26,6 +26,7 @@ logs/
 .kagent/
 sessions/
 findings/
+recon/
 !src/findings/
 src/findings/*
 !src/findings/classification.py

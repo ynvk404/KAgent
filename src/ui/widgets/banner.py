@@ -124,10 +124,6 @@ class Banner:
         for label, value in fields:
             line = Text(f"{label}: ", style=MUTED)
             line.append(value, style=PRIMARY)
-            if label == "Model" and self.width >= 52:
-                pill = model_pill(data.tool_support)
-                if pill is not None:
-                    line.append(f" [{pill.text}]", style=pill.color)
             lines.append(line)
         return lines
 
@@ -158,11 +154,6 @@ class Banner:
     def render(self) -> list[BannerLine]:
 
         data = self.data
-
-
-        pill = model_pill(
-            data.tool_support
-        )
 
 
         ctx = (
@@ -294,11 +285,6 @@ class Banner:
                     f"{label}: {value}"
                 )
 
-
-                if pill and label == "Model":
-                    text += (
-                        f" [{pill.text}]"
-                    )
 
                 color = PRIMARY
 

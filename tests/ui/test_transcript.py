@@ -48,17 +48,9 @@ def _rendered_overview(data: BannerData) -> str:
     return output.getvalue()
 
 
-@pytest.mark.parametrize(
-    ("final_state", "expected"),
-    [
-        ("yes", "tools ✓"),
-        ("no", "NO TOOLS"),
-        ("unknown", "tools ?"),
-    ],
-)
+@pytest.mark.parametrize("final_state", ["yes", "no", "unknown"])
 def test_banner_refresh_replaces_overview_without_clearing_transcript(
     final_state: str,
-    expected: str,
 ) -> None:
     output = _RichLogOutput()
     overview = _Overview()
@@ -90,7 +82,9 @@ def test_banner_refresh_replaces_overview_without_clearing_transcript(
     assert output.clear_calls == 1
     assert output.lines == ["↳ existing tool output", ""]
     assert "probing…" not in _rendered_overview(final)
-    assert expected in _rendered_overview(final)
+    assert "Model: test-model" in _rendered_overview(final)
+    assert "[tools" not in _rendered_overview(final)
+    assert "NO TOOLS" not in _rendered_overview(final)
 
 
 def test_banner_updates_and_new_generations_keep_one_current_overview() -> None:
@@ -120,7 +114,8 @@ def test_banner_updates_and_new_generations_keep_one_current_overview() -> None:
     assert overview.updates == 3
     assert output.clear_calls == 2
     assert output.lines == ["· conversation reset", ""]
-    assert "tools ?" in _rendered_overview(unknown)
+    assert "Model: test-model" in _rendered_overview(unknown)
+    assert "tools ?" not in _rendered_overview(unknown)
 
 
 def test_new_generation_replaces_richlog_content_with_a_fresh_banner() -> None:

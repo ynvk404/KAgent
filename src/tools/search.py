@@ -160,7 +160,7 @@ class GrepTool(Tool):
         args,
         signal,
         prompter,
-    ):
+    ) -> str:
         raw_pattern = arg_string(
             args,
             "pattern"
