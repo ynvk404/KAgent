@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 APP_DIR_NAME = ".kagent"
+ARTIFACT_DIR_NAME = "artifacts"
 PROJECT_MARKERS = (".git", "pyproject.toml")
 
 
@@ -48,6 +49,11 @@ def project_root(start: str | Path | None = None) -> Path:
 
 def project_data_root(start: str | Path | None = None) -> Path:
     return project_root(start) / APP_DIR_NAME
+
+
+def project_artifact_root(start: str | Path | None = None) -> Path:
+    """Return the project-local root for human-readable generated output."""
+    return project_root(start) / ARTIFACT_DIR_NAME
 
 
 def project_coverage_path(

@@ -257,9 +257,9 @@ the user separately authorizes that as its own step.
 ## Reporting
 
 Write validation details and redacted supporting evidence to
-`ssti/<target>/results.md` (using the target identifier convention from
+`artifacts/ssti/<target>/results.md` (using the target identifier convention from
 `recon`). This is a validation artifact, not an official finding.
-`confirm_finding` alone creates the report under `findings/`.
+`confirm_finding` alone creates the report under `artifacts/findings/`.
 
 Include:
 

@@ -65,6 +65,27 @@ async def test_saved_finding_file_has_owner_only_permissions(temp_dir: str):
     mode = stat.S_IMODE(Path(path).stat().st_mode)
     assert mode == 0o600
 
+
+@pytest.mark.asyncio
+async def test_legacy_finding_is_read_for_candidate_dedup_without_copy(tmp_path: Path):
+    legacy_store = Store(tmp_path / "findings", project_directory=tmp_path)
+    legacy = await legacy_store.save(make_finding(
+        slug="old-finding", candidate_id="cand_existing"
+    ))
+    canonical_store = Store(project_directory=tmp_path)
+
+    repeated = await canonical_store.save(make_finding(
+        slug="new-name", candidate_id="cand_existing"
+    ))
+    assert repeated == legacy
+    assert not (tmp_path / "artifacts/findings").exists()
+
+    fresh = await canonical_store.save(make_finding(
+        slug="fresh-finding", candidate_id="cand_new"
+    ))
+    assert Path(fresh) == tmp_path / "artifacts/findings/fresh-finding.md"
+    assert Path(legacy).exists()
+
 @pytest.mark.asyncio
 async def test_save_rejects_path_traversal_slug(temp_dir: str):
     store = Store(temp_dir)

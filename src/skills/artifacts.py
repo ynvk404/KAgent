@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path, PurePosixPath
 
+from src.paths import project_artifact_root
+
 
 _SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
 _UNSAFE_IDENTIFIER_RE = re.compile(r"[^a-z0-9]+")
@@ -48,4 +50,14 @@ def resolve_project_artifact(root: Path, relative_path: str) -> Path:
         artifact.relative_to(base)
     except ValueError as exc:
         raise ValueError("artifact path must stay inside the project") from exc
+    return artifact
+
+
+def resolve_canonical_artifact(root: Path, relative_path: str) -> Path:
+    """Resolve a new generated artifact under the dedicated artifact root."""
+    artifact = resolve_project_artifact(root, relative_path)
+    try:
+        artifact.relative_to(project_artifact_root(root))
+    except ValueError as exc:
+        raise ValueError("new artifact must be under artifacts/") from exc
     return artifact

@@ -53,7 +53,7 @@ class ConfirmFindingTool:
             "end-to-end with a real request and observed a "
             "response that proves it.\n\n"
             "Writes a markdown report under "
-            "./findings/<slug>.md and surfaces a banner in the "
+            "./artifacts/findings/<slug>.md and surfaces a banner in the "
             "TUI. Do not call for theoretical findings, scanner "
             "hits you haven't manually verified, or "
             "'suspected' behavior."
@@ -186,9 +186,9 @@ class ConfirmFindingTool:
             candidate = self.workflow.candidates[candidate_id]
             latest = self.workflow.latest_result(candidate_id)
             assert latest is not None
-            root = self.store.dir.parent
+            root = self.store.project_dir
             if not all(
-                self.workflow.evidence[ref].is_resolvable(root)
+                self.workflow.evidence[ref].is_resolvable_for_resume(root)
                 for ref in latest.evidence_refs
             ):
                 raise ValueError("candidate evidence artifact changed or is unavailable")

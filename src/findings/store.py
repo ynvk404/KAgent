@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from src.paths import project_artifact_root, project_root
+
 Severity = Literal[
     "critical",
     "high",
@@ -46,10 +48,22 @@ class Store:
 
     def __init__(
         self,
-        directory: str = "findings",
+        directory: str | Path | None = None,
+        *,
+        project_directory: str | Path | None = None,
     ) -> None:
-
-        self.dir = Path(directory).resolve()
+        # Explicit directories are supported for embedded callers and tests.
+        # Production passes the project directory, so evidence resolution does
+        # not depend on where reports happen to be stored.
+        self.project_dir = project_root(
+            project_directory if project_directory is not None else
+            (Path(directory).resolve().parent if directory is not None else None)
+        )
+        self.dir = (
+            Path(directory).resolve()
+            if directory is not None
+            else project_artifact_root(self.project_dir) / "findings"
+        )
         self._save_lock = asyncio.Lock()
 
 
@@ -76,14 +90,19 @@ class Store:
     def _write_once_for_candidate(
         self, candidate_id: str | None, slug: str, content: str,
     ) -> str:
-        if candidate_id and self.dir.exists():
+        if candidate_id:
             marker = f"- **Candidate ID:** {candidate_id}"
-            for path in sorted(self.dir.glob("*.md")):
-                try:
-                    if marker in path.read_text(encoding="utf-8").splitlines():
-                        return str(path)
-                except OSError:
+            # Canonical reports win. Legacy reports remain readable for
+            # idempotent session resume, but no new report is written there.
+            for directory in (self.dir, self.project_dir / "findings"):
+                if not directory.exists():
                     continue
+                for path in sorted(directory.glob("*.md")):
+                    try:
+                        if marker in path.read_text(encoding="utf-8").splitlines():
+                            return str(path)
+                    except OSError:
+                        continue
         return self._write(slug, content)
 
 

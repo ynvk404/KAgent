@@ -82,7 +82,7 @@ repeat full reconnaissance or technology fingerprinting here.
 
 ## 1. Build the target baseline
 
-Reuse `recon/<target>/summary.md` when it exists — do not repeat
+Reuse `artifacts/recon/<target>/summary.md` when it exists — do not repeat
 reachability or fingerprinting work `recon` already did. Before re-probing
 anything, check whether `recon`'s summary already recorded a definitive
 result for it (e.g. `/robots.txt` status, `/graphql` presence); only
@@ -108,7 +108,7 @@ observation only determines which enumeration steps are relevant.
 
 Prefer routes the application already exposes before guessing paths.
 Check high-signal discovery files first — skip any of these already recorded
-with a definitive result in `recon/<target>/summary.md`:
+with a definitive result in `artifacts/recon/<target>/summary.md`:
 
 ```sh
 TARGET="http://localhost:3000"  # replace with the real target
@@ -325,14 +325,14 @@ next phase.
 
 Write the inventory to:
 
-`web-enumeration/<target>/inventory.md`
+`artifacts/web-enumeration/<target>/inventory.md`
 
 using the same target identifier defined in `recon/SKILL.md`.
 Record one endpoint or route per entry. Prefer a consistent Markdown format:
 
 After writing the inventory, call `workflow(action="complete_skill",
 skill_name="web-enumeration",
-artifact_ref="web-enumeration/<target>/inventory.md",
+artifact_ref="artifacts/web-enumeration/<target>/inventory.md",
 current_phase="analysis")`. This marks the bounded inventory pass complete;
 newly discovered routes may still justify another focused pass.
 

@@ -46,6 +46,20 @@ class EvidenceArtifact:
             return False
         return current == self
 
+    def is_resolvable_for_resume(self, project_root: Path) -> bool:
+        """Read old CWD-relative proof when resuming from that same CWD."""
+        if self.is_resolvable(project_root):
+            return True
+        parts = Path(self.path).parts
+        if parts and parts[0] == "artifacts":
+            return False
+        old_root = Path.cwd().resolve()
+        try:
+            old_root.relative_to(project_root.resolve())
+        except ValueError:
+            return False
+        return old_root != project_root.resolve() and self.is_resolvable(old_root)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,

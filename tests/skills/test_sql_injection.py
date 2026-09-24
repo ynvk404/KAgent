@@ -96,7 +96,7 @@ class TestFrontmatter:
 
     def test_canonical_completion_artifact_declared(self, skill_frontmatter: dict):
         assert skill_frontmatter.get("completion-artifact") == (
-            "sql-injection/{target}/results.md"
+            "artifacts/sql-injection/{target}/results.md"
         )
 
     def test_allowed_tools_present(self, skill_frontmatter: dict):

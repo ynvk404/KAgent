@@ -30,7 +30,7 @@ triggers:
     - syntax sensitive
 candidate-classes:
   - sql-injection
-completion-artifact: sql-injection/{target}/results.md
+completion-artifact: artifacts/sql-injection/{target}/results.md
 requires:
   - web-input-analysis
 allowed-tools:
@@ -48,7 +48,7 @@ allowed-tools:
 ## Structured workflow contract
 
 Before recording a `confirmed` result, write or update the candidate entry in
-the canonical `sql-injection/<target>/results.md`. When that entry contains the
+the canonical `artifacts/sql-injection/<target>/results.md`. When that entry contains the
 minimal redacted proof, register this same file with
 `workflow(action="record_evidence", candidate_id="...", evidence_path="...")`
 instead of creating a duplicate evidence Markdown file, and use the returned
@@ -74,7 +74,7 @@ Only an outcome of `confirmed` is eligible for `confirm_finding`; pass the
 Candidate ID to that tool. All other outcomes stop without confirming.
 
 You have one or more concrete candidates, usually from
-`web-input-analysis/<target>/candidates.md` with
+`artifacts/web-input-analysis/<target>/candidates.md` with
 `suspected_class: sql-injection`, or directly specified by the user with an
 endpoint, method, and input location. This skill answers "is this candidate
 actually SQL-injectable, and if so, what's the minimum evidence that proves
@@ -175,7 +175,7 @@ identifier exactly.
 
 Before starting, you should have:
 
-- `web-input-analysis/<target>/candidates.md` containing at least one entry with `suspected_class: sql-injection`;
+- `artifacts/web-input-analysis/<target>/candidates.md` containing at least one entry with `suspected_class: sql-injection`;
 - confirmation the target is still in scope.
 
 If no candidate file exists, or the candidate you're being asked about isn't
@@ -577,7 +577,7 @@ Every candidate gets exactly one outcome:
 
 ### Standard result entry template
 
-Write every candidate's result to `sql-injection/<target>/results.md`
+Write every candidate's result to `artifacts/sql-injection/<target>/results.md`
 using this exact template, one entry per candidate, appended in the order
 tested:
 
@@ -665,7 +665,7 @@ Recording the result and been written to `results.md`.
 Stop the skill entirely when every `sql-injection` candidate provided for
 this run has been worked to an outcome and `results.md` is complete. Then call
 `workflow(action="complete_skill", skill_name="sql-injection",
-artifact_ref="sql-injection/<target>/results.md")`; runtime rejects completion
+artifact_ref="artifacts/sql-injection/<target>/results.md")`; runtime rejects completion
 when the canonical artifact is absent or a different path is supplied.
 
 Do not: scan for new candidates, run automated SQLi tools by default,

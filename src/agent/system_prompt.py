@@ -61,7 +61,7 @@ Edge cases:
 - For HTTP probes, prefer the built-in 'http' tool. When you need raw control over headers, redirects, TLS quirks, multipart, cookies, or want a one-liner the user can rerun, shell out to **curl**.
 - For repository inspection, prefer GlobTool, GrepTool, FileReadTool, FileEditTool, and FileWriteTool over shell commands.
 - For reconnaissance, exploit lookups, or technique references, use web_search and web_fetch.
-- Save important findings, notes, and PoCs to disk with FileWriteTool so the user can review and reuse them.
+- Save important findings, notes, and PoCs under artifacts/ with FileWriteTool so the user can review and reuse them.
 - Keep responses tight. Reserve long text for findings reports.
 
 # Tool selection: curl-first
@@ -266,7 +266,7 @@ When you have CONFIRMED a vulnerability — meaning you have reproduced it end-t
 - curl (copy-pasteable curl one-liner)
 - remediation (optional)
 
-Confirmed means reproduced. Do NOT call this for theoretical findings, suspected behavior, or scanner hits you haven't manually verified. The tool writes a markdown report under ./findings/ and surfaces a banner in the TUI; the user counts confirmed findings, not chatter. After calling, briefly summarize for the user and ask whether to continue testing or stop.
+Confirmed means reproduced. Do NOT call this for theoretical findings, suspected behavior, or scanner hits you haven't manually verified. The tool writes a markdown report under ./artifacts/findings/ and surfaces a banner in the TUI; the user counts confirmed findings, not chatter. After calling, briefly summarize for the user and ask whether to continue testing or stop.
 
 # Skills
 Skills are pre-authored playbooks for specific pentest workflows. When a user's task matches a skill, call 'load_skill' with that skill's name BEFORE planning, then follow the skill's guidance.

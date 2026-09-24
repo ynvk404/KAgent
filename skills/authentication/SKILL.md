@@ -123,7 +123,7 @@ for this skill specifically:
 
 ## Scope
 
-Only test concrete candidates from `web-input-analysis/<target>/candidates.md`
+Only test concrete candidates from `artifacts/web-input-analysis/<target>/candidates.md`
 with `suspected_class: authentication` (or a class list that includes it), or
 candidates directly supplied by the user with equivalent flow/property
 details. Do
@@ -171,7 +171,7 @@ identifier exactly.
 
 Before starting, you should have:
 
-- `web-input-analysis/<target>/candidates.md` containing at least one
+- `artifacts/web-input-analysis/<target>/candidates.md` containing at least one
   candidate with `suspected_class: authentication`;
 - confirmation the target is still in scope.
 
@@ -577,11 +577,11 @@ For every candidate, regardless of outcome, capture:
 
 Write every candidate's result to:
 
-`authentication/<target>/results.md`
+`artifacts/authentication/<target>/results.md`
 
 using the same target identifier as `recon`, `web-enumeration`, and
 `web-input-analysis`. One entry per candidate, in the same style as
-`web-input-analysis/candidates.md`.
+`artifacts/web-input-analysis/<target>/candidates.md`.
 
 ## 6. Confirm an evidence-backed finding
 

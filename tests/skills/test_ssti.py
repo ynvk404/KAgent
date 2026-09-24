@@ -673,8 +673,8 @@ def test_reporting_section_exists(skill):
 def test_reporting_artifact_is_separate_from_official_finding(skill):
     body = skill["body"]
 
-    assert "ssti/<target>/results.md" in body
-    assert "`confirm_finding` alone creates the report under `findings/`" in body
+    assert "artifacts/ssti/<target>/results.md" in body
+    assert "`confirm_finding` alone creates the report under `artifacts/findings/`" in body
     assert "findings/ssti-{sanitized-parameter-or-path}.md" not in body
 
 

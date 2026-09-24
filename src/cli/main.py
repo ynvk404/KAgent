@@ -32,7 +32,7 @@ from src.logger.session_debug import (
     SessionDebugOptions,
 )
 from src.logger.hang_diagnostics import HangDiagnostics
-from src.paths import legacy_coverage_path, project_coverage_path
+from src.paths import legacy_coverage_path, project_coverage_path, project_root
 
 from src.target.target import new_target
 from src.engagement.state import EngagementState
@@ -569,7 +569,7 @@ async def main() -> int:
         bridged_perm,
         flags.yolo
     )
-    findings_store = FindingsStore("findings")
+    findings_store = FindingsStore(project_directory=project_root())
     capture_store = CaptureStore(max_entries=5000)
     session_dir = session_store.dir_from_path("")
     session_store.cleanup_stale_temps(session_dir, 60_000)
@@ -684,7 +684,8 @@ async def main() -> int:
     tools.register(ReadSkillFileTool(skills))
     tools.register(CoverageTool(coverage_store))
     tools.register(WorkflowTool(
-        workflow, target, coverage_store, skills, session_id=session_id,
+        workflow, target, coverage_store, skills,
+        evidence_root=project_root(), session_id=session_id,
     ))
 
     for plugin in cfg.plugins:

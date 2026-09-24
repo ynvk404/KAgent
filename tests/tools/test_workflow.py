@@ -446,22 +446,41 @@ async def test_sqli_completion_requires_and_reuses_canonical_artifact(tmp_path):
         None,
         AlwaysAllow(),
     )
-    assert "sql-injection/juice-lab-3000/results.md" in missing
+    assert "artifacts/sql-injection/juice-lab-3000/results.md" in missing
     assert "sql-injection" not in state.completed_skills
 
-    result_path = tmp_path / "sql-injection/juice-lab-3000/results.md"
+    legacy_path = tmp_path / "sql-injection/juice-lab-3000/results.md"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text("legacy result", encoding="utf-8")
+    legacy_only = await tool.run(
+        {"action": "complete_skill", "skill_name": "sql-injection"},
+        None,
+        AlwaysAllow(),
+    )
+    assert "requires artifacts/sql-injection/juice-lab-3000/results.md" in legacy_only
+    assert "sql-injection" not in state.completed_skills
+
+    result_path = tmp_path / "artifacts/sql-injection/juice-lab-3000/results.md"
     result_path.parent.mkdir(parents=True)
+    result_path.touch()
+    empty = await tool.run(
+        {"action": "complete_skill", "skill_name": "sql-injection"},
+        None,
+        AlwaysAllow(),
+    )
+    assert "requires artifacts/sql-injection/juice-lab-3000/results.md" in empty
+    assert "sql-injection" not in state.completed_skills
     result_path.write_text("confirmed SQLi result", encoding="utf-8")
     wrong = await tool.run(
         {
             "action": "complete_skill",
             "skill_name": "sql-injection",
-            "artifact_ref": "sql-injection/juice-lab/results.md",
+            "artifact_ref": "artifacts/sql-injection/juice-lab/results.md",
         },
         None,
         AlwaysAllow(),
     )
-    assert "requires sql-injection/juice-lab-3000/results.md" in wrong
+    assert "requires artifacts/sql-injection/juice-lab-3000/results.md" in wrong
 
     completed = json.loads(await tool.run(
         {"action": "complete_skill", "skill_name": "sql-injection"},
@@ -480,7 +499,7 @@ async def test_sqli_completion_requires_and_reuses_canonical_artifact(tmp_path):
         AlwaysAllow(),
     ))
 
-    expected = "sql-injection/juice-lab-3000/results.md"
+    expected = "artifacts/sql-injection/juice-lab-3000/results.md"
     assert completed["artifact_ref"] == expected
     assert repeated["artifact_ref"] == expected
     assert resumed.completed_artifacts == {"sql-injection": expected}

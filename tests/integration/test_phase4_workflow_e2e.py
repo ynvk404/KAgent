@@ -237,7 +237,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     )
     assert started["candidate"]["status"] == "validating"
 
-    result_path = tmp_path / "sql-injection/target-test-8443/results.md"
+    result_path = tmp_path / "artifacts/sql-injection/target-test-8443/results.md"
     result_path.parent.mkdir(parents=True)
     result_path.write_text(
         "Confirmed repeatable boolean differential for POST /login id.\n",
@@ -247,18 +247,23 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
         workflow,
         candidate_id,
         tmp_path,
-        "sql-injection/target-test-8443/results.md",
+        "artifacts/sql-injection/target-test-8443/results.md",
     )
     repeated_evidence_id = json.loads(await workflow.run(
         {
             "action": "record_evidence",
             "candidate_id": candidate_id,
-            "evidence_path": "sql-injection/target-test-8443/results.md",
+            "evidence_path": "artifacts/sql-injection/target-test-8443/results.md",
         },
         None,
         AlwaysAllow(),
     ))["evidence"]["id"]
     assert repeated_evidence_id == evidence_id
+    assert state.evidence[evidence_id].path == (
+        "artifacts/sql-injection/target-test-8443/results.md"
+    )
+    assert state.evidence[evidence_id].size == result_path.stat().st_size
+    assert state.evidence[evidence_id].is_resolvable(tmp_path)
 
     result = json.loads(
         await workflow.run(
@@ -279,10 +284,10 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     assert result["coverage_sync"] == "synced"
     assert result["eligible_for_confirm_finding"] is True
     assert state.relevant_candidate_classes() == frozenset()
-    assert not (tmp_path / "findings").exists()
+    assert not (tmp_path / "artifacts/findings").exists()
 
     finding = ConfirmFindingTool(
-        FindingsStore(str(tmp_path / "findings")), workflow=state
+        FindingsStore(project_directory=tmp_path), workflow=state
     )
     await finding.run(
         {
@@ -299,7 +304,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
         AlwaysAllow(),
     )
 
-    reports = list((tmp_path / "findings").glob("*.md"))
+    reports = list((tmp_path / "artifacts/findings").glob("*.md"))
     assert len(reports) == 1
     report = reports[0].read_text(encoding="utf-8")
     assert f"- **Candidate ID:** {candidate_id}" in report
@@ -314,9 +319,10 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
         AlwaysAllow(),
     ))
     assert completed["artifact_ref"] == (
-        "sql-injection/target-test-8443/results.md"
+        "artifacts/sql-injection/target-test-8443/results.md"
     )
     assert not (tmp_path / "findings/evidence").exists()
+    assert not (tmp_path / "artifacts/findings/evidence").exists()
     assert coverage_path.exists()
 
     session = Store.new_with_id(tmp_path / "sessions", "e2e-session")

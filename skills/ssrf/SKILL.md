@@ -160,9 +160,9 @@ even if it looks like "just one more step."
 ## Reporting
 
 Write validation details and redacted supporting evidence to
-`ssrf/<target>/results.md` (using the target identifier convention from
+`artifacts/ssrf/<target>/results.md` (using the target identifier convention from
 `recon`). This is a validation artifact, not an official finding.
-`confirm_finding` alone creates the report under `findings/`.
+`confirm_finding` alone creates the report under `artifacts/findings/`.
 
 Include: the exact request(s), the exact response(s) or canary evidence,
 the SSRF level reached (1–4), and — if applicable — a one-line note that

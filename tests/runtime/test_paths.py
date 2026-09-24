@@ -3,11 +3,13 @@ from pathlib import Path
 import pytest
 
 from src.engagement.store import EngagementStore
+from src.findings.store import Store as FindingsStore
 from src.intelligence.store import IntelligenceScenario, IntelligenceStore
 from src.memory.store import AddMemoryInput, MemoryStore
 from src.paths import (
     legacy_coverage_path,
     legacy_project_data_root,
+    project_artifact_root,
     project_coverage_path,
     project_data_root,
     project_root,
@@ -33,6 +35,8 @@ def test_project_paths_are_stable_from_nested_working_directories(
         monkeypatch.chdir(working_dir)
         assert project_root() == root
         assert project_data_root() == root / ".kagent"
+        assert project_artifact_root() == root / "artifacts"
+        assert FindingsStore().dir == root / "artifacts" / "findings"
         assert project_coverage_path("session-1") == (
             root / ".kagent" / "coverage" / "session-1.json"
         )

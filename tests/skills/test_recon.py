@@ -195,7 +195,7 @@ def test_recon_crtsh_handling_is_resilient():
         "retry with backoff",
         'type == "array"',
         "[ -s subs.txt ]",
-        "recon/<target>/subs.txt",
+        "artifacts/recon/<target>/subs.txt",
     ]:
         assert phrase in text, f"Missing passive subdomain robustness rule: {phrase}"
 
@@ -236,7 +236,7 @@ def test_recon_requires_summary_without_creating_findings():
 
     text = collapse_ws(body).lower()
 
-    assert "recon/<target>/summary.md" in text
+    assert "artifacts/recon/<target>/summary.md" in text
     assert "target and target type" in text
     assert "reachable service and observed status" in text
     assert "observed technologies" in text

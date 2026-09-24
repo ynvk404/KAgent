@@ -13,6 +13,7 @@ from src.tools.finding import (
     ConfirmFindingTool,
     is_severity,
 )
+from src.tools.workflow import WorkflowTool
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
 from src.workflow.evidence import EvidenceArtifact
 
@@ -105,6 +106,83 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
     report = next((tmp_path / "findings").glob("*.md")).read_text(encoding="utf-8")
     assert f"- **Candidate ID:** {candidate.id}" in report
     assert f"- **Evidence:** {proof}" in report
+
+
+@pytest.mark.asyncio
+async def test_canonical_finding_resolves_legacy_evidence_from_project_root(tmp_path):
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(
+        Candidate(candidate_class="sqli", endpoint="/product", parameter="id")
+    )
+    legacy = tmp_path / "sql-injection/target/results.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("Redacted SQL injection proof", encoding="utf-8")
+    artifact = EvidenceArtifact.capture(
+        candidate.id, "sql-injection/target/results.md", tmp_path
+    )
+    workflow.add_evidence(artifact)
+    workflow.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "confirmed", evidence_refs=[artifact.id],
+    ))
+    restored = WorkflowState.from_dict(workflow.to_dict())
+    store = Store(project_directory=tmp_path)
+    await ConfirmFindingTool(store, workflow=restored).run({
+        "candidate_id": candidate.id,
+        "title": "SQL injection in product",
+        "severity": "high",
+        "url": "https://target.test/product",
+        "impact": "Database query manipulation",
+    }, None, AlwaysAllow())
+
+    reports = list((tmp_path / "artifacts/findings").glob("*.md"))
+    assert len(reports) == 1
+    assert f"- **Evidence:** {artifact.id}" in reports[0].read_text(encoding="utf-8")
+    assert restored.evidence[artifact.id].path == "sql-injection/target/results.md"
+    assert restored.evidence[artifact.id].is_resolvable(tmp_path)
+    assert legacy.exists()
+    assert not (tmp_path / "artifacts/sql-injection").exists()
+    assert not (tmp_path / "artifacts/findings/evidence").exists()
+
+
+@pytest.mark.asyncio
+async def test_legacy_nested_cwd_evidence_resumes_without_rewriting(
+    tmp_path, monkeypatch,
+):
+    old_cwd = tmp_path / "nested"
+    old_proof = old_cwd / "sql-injection/target/results.md"
+    old_proof.parent.mkdir(parents=True)
+    old_proof.write_text("Redacted proof", encoding="utf-8")
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(
+        Candidate(candidate_class="sqli", endpoint="/product", parameter="id")
+    )
+    artifact = EvidenceArtifact.capture(
+        candidate.id, "sql-injection/target/results.md", old_cwd
+    )
+    workflow.add_evidence(artifact)
+    restored = WorkflowState.from_dict(workflow.to_dict())
+    monkeypatch.chdir(old_cwd)
+
+    result = json.loads(await WorkflowTool(
+        restored, evidence_root=tmp_path
+    ).run({
+        "action": "record_result", "candidate_id": candidate.id,
+        "skill_name": "sql-injection", "outcome": "confirmed",
+        "evidence_refs": [artifact.id], "repeatable": True,
+    }, None, AlwaysAllow()))
+    assert result["eligible_for_confirm_finding"] is True
+    await ConfirmFindingTool(
+        Store(project_directory=tmp_path), workflow=restored
+    ).run({
+        "candidate_id": candidate.id,
+        "title": "SQL injection in product",
+        "severity": "high",
+        "url": "https://target.test/product",
+        "impact": "Database query manipulation",
+    }, None, AlwaysAllow())
+    assert old_proof.exists()
+    assert restored.evidence[artifact.id].path == "sql-injection/target/results.md"
+    assert len(list((tmp_path / "artifacts/findings").glob("*.md"))) == 1
 
 
 @pytest.mark.asyncio

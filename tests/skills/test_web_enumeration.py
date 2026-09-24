@@ -148,7 +148,7 @@ def test_web_enumeration_reuses_recon_summary_before_reprobing():
     text = collapse_ws(body)
 
     for phrase in [
-        "recon/<target>/summary.md",
+        "artifacts/recon/<target>/summary.md",
         "do not repeat reachability or fingerprinting work `recon` "
         "already did",
         "only re-probe if that result was inconclusive or missing",
@@ -339,7 +339,7 @@ def test_web_enumeration_inventory_excludes_vulnerability_fields():
     ]
     text = collapse_ws(inventory_section)
 
-    assert "web-enumeration/<target>/inventory.md" in text
+    assert "artifacts/web-enumeration/<target>/inventory.md" in text
     assert "### GET /search" in inventory_section
     assert "### POST /api/orders" in inventory_section
 

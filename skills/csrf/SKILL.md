@@ -236,9 +236,9 @@ workflow.
 ## Reporting
 
 Write validation details and redacted supporting evidence to
-`csrf/<target>/results.md` (using the target identifier convention from
+`artifacts/csrf/<target>/results.md` (using the target identifier convention from
 `recon`). This is a validation artifact, not an official finding.
-`confirm_finding` alone creates the report under `findings/`.
+`confirm_finding` alone creates the report under `artifacts/findings/`.
 
 Include:
 

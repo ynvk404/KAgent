@@ -64,7 +64,7 @@ identifier exactly — do not re-derive it differently here.
 
 Before starting, you should have:
 
-- `web-enumeration/<target>/inventory.md` (same target identifier as `recon`
+- `artifacts/web-enumeration/<target>/inventory.md` (same target identifier as `recon`
   and `web-enumeration`);
 - confirmation the target is still in scope.
 
@@ -243,7 +243,7 @@ candidate-list bar must not be recorded. Inspect `supported` and
 multiple independent suspected classes, record one Candidate per class and
 retain each returned ID; do not collapse them into one result.
 
-Write `web-input-analysis/<target>/candidates.md`, using the same target
+Write `artifacts/web-input-analysis/<target>/candidates.md`, using the same target
 identifier as `recon` and `web-enumeration`. One entry per candidate:
 
 ```
@@ -310,7 +310,7 @@ Stop analysis when:
 
 Then call `workflow(action="complete_skill",
 skill_name="web-input-analysis",
-artifact_ref="web-input-analysis/<target>/candidates.md",
+artifact_ref="artifacts/web-input-analysis/<target>/candidates.md",
 current_phase="validation")`. This records
 workflow progress independently of the conversational summary.
 

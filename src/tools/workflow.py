@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from src.paths import project_root
 from src.permission.permission import Prompter
 from src.redact.redact import apply as redact
 from src.coverage.store import CoverageStore, CoverageStatus
@@ -19,7 +20,7 @@ from src.workflow.state import (
 )
 from src.workflow.evidence import EvidenceArtifact
 from src.skills.registry import Registry as SkillRegistry, normalize_candidate_class, normalize_metadata_name
-from src.skills.artifacts import completion_artifact_path, resolve_project_artifact
+from src.skills.artifacts import completion_artifact_path, resolve_canonical_artifact
 
 from .types import Tool, arg_bool, arg_number, arg_string
 
@@ -56,7 +57,7 @@ class WorkflowTool(Tool):
         self.target = target
         self.coverage = coverage
         self.skills = skills
-        self.evidence_root = evidence_root or Path.cwd()
+        self.evidence_root = evidence_root or project_root()
         self.session_id = session_id
 
     def name(self) -> str:
@@ -272,7 +273,7 @@ class WorkflowTool(Tool):
             if result.evidence_refs and not self.state.evidence_matches(result.candidate_id, result.evidence_refs):
                 raise ValueError("evidence references must resolve to this candidate")
             if result.evidence_refs and not all(
-                self.state.evidence[ref].is_resolvable(self.evidence_root)
+                self.state.evidence[ref].is_resolvable_for_resume(self.evidence_root)
                 for ref in result.evidence_refs
             ):
                 raise ValueError("evidence artifact changed or is unavailable")
@@ -370,12 +371,12 @@ class WorkflowTool(Tool):
             target = self._active_target()
             try:
                 expected = completion_artifact_path(skill.completion_artifact, target)
-                artifact = resolve_project_artifact(self.evidence_root, expected)
+                artifact = resolve_canonical_artifact(self.evidence_root, expected)
             except ValueError as err:
                 return f"error: {err}"
             if artifact_ref:
                 try:
-                    supplied = resolve_project_artifact(
+                    supplied = resolve_canonical_artifact(
                         self.evidence_root, artifact_ref
                     )
                 except ValueError as err:

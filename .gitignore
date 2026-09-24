@@ -23,11 +23,14 @@ htmlcov/
 logs/
 
 # Runtime data
-.kagent/
-sessions/
-findings/
-recon/
-# Skill artifacts and validation evidence (project root)
+/.kagent/
+/artifacts/
+
+# Legacy project-root runtime output; retained for old sessions and evidence
+/sessions/
+/findings/
+/recon/
+/captures/
 /web-enumeration/
 /web-input-analysis/
 /sql-injection/
@@ -37,10 +40,6 @@ recon/
 /csrf/
 /ssrf/
 /ssti/
-!src/findings/
-src/findings/*
-!src/findings/classification.py
-captures/
 
 # Temporary files
 *.tmp

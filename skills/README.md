@@ -55,7 +55,7 @@ use the returned `ev_...` ID in `workflow(record_result).evidence_refs`.
 The workflow records the artifact's digest and checks that it still exists
 when a linked finding is created. A result with `coverage_sync: pending` needs
 `workflow(sync_coverage)` before it is finding-eligible. Only
-`confirm_finding` writes an official report under `findings/`; skill
+`confirm_finding` writes an official report under `artifacts/findings/`; skill
 `results.md` files remain supporting validation artifacts.
 
 These are structural checks. The validator playbook and model still judge

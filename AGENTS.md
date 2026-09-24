@@ -69,7 +69,7 @@ but contributors must still preserve scope in tool and workflow changes.
   stated gates and the runtime permission model.
 
 - A finding is confirmed only with reproducible evidence. `confirm_finding`
-  writes a Markdown report under `findings/`; when a candidate ID is supplied,
+  writes a Markdown report under `artifacts/findings/`; when a candidate ID is supplied,
   its latest workflow result must be `confirmed`. Do not overclaim severity or
   impact beyond the observed request/response evidence. Do not invent times,
   session IDs, runtime metadata, or unverified implementation details.

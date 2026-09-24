@@ -135,7 +135,7 @@ done
 
 Save the deduplicated list with `file_write` to:
 
-`recon/<target>/subs.txt`
+`artifacts/recon/<target>/subs.txt`
 
 (using the identifier derived above for the apex, not the raw `$APEX` string).
 
@@ -271,10 +271,10 @@ brute-forcing, or parameter enumeration. Those tasks belong to
 
 Write a concise summary to:
 
-`recon/<target>/summary.md`
+`artifacts/recon/<target>/summary.md`
 
 After writing it, call `workflow(action="complete_skill", skill_name="recon",
-artifact_ref="recon/<target>/summary.md", current_phase="enumeration")` when
+artifact_ref="artifacts/recon/<target>/summary.md", current_phase="enumeration")` when
 a reachable web target can be enumerated. If reachability failed, set
 `current_phase="blocked"` and record the failure in the summary instead.
 Completion records that this bounded reconnaissance pass ended; it does not

@@ -158,7 +158,7 @@ identifier exactly — do not re-derive it differently here.
 
 ## Scope
 
-Only test concrete candidates from `web-input-analysis/<target>/candidates.md`
+Only test concrete candidates from `artifacts/web-input-analysis/<target>/candidates.md`
 with `suspected_class: cross-site-scripting` (or a class list that includes
 it), or candidates directly supplied by the user with equivalent endpoint,
 input, and context details.
@@ -399,7 +399,7 @@ Every candidate gets exactly one outcome:
 Write every candidate's result — confirmed, not confirmed, blocked, or
 requires-browser-confirmation — to:
 
-`cross-site-scripting/<target>/results.md`
+`artifacts/cross-site-scripting/<target>/results.md`
 
 using the same target identifier as `recon`, `web-enumeration`, and
 `web-input-analysis`, and this exact template, one entry per candidate,

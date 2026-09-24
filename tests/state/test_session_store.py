@@ -121,10 +121,14 @@ class TestWorkflowPersistence:
                 source_skill="web-input-analysis",
             )
         )
-        (tmp_path / "request-7.txt").write_text(
+        legacy_proof = tmp_path / "sql-injection/target/request-7.txt"
+        legacy_proof.parent.mkdir(parents=True)
+        legacy_proof.write_text(
             "Observed request and response", encoding="utf-8",
         )
-        artifact = EvidenceArtifact.capture(candidate.id, "request-7.txt", tmp_path)
+        artifact = EvidenceArtifact.capture(
+            candidate.id, "sql-injection/target/request-7.txt", tmp_path
+        )
         workflow.add_evidence(artifact)
         workflow.add_validation_result(
             ValidationResult(
@@ -144,6 +148,9 @@ class TestWorkflowPersistence:
         assert loaded.to_dict() == workflow.to_dict()
         assert loaded.latest_result(candidate.id) is not None
         assert loaded.eligible_for_finding(candidate.id) is True
+        assert loaded.evidence[artifact.id].is_resolvable(tmp_path)
+        assert legacy_proof.exists()
+        assert not (tmp_path / "artifacts/sql-injection").exists()
 
     def test_old_session_without_workflow_loads_empty_state(self, tmp_path):
         store = Store.new_with_id(tmp_path, "old")

@@ -185,7 +185,7 @@ class TestSkillFileStructure:
             )
 
     def test_declares_correct_results_path(self, body):
-        assert "access-control/<target>/results.md" in body
+        assert "artifacts/access-control/<target>/results.md" in body
 
     def test_curl_identity_examples_show_explicit_cookie_header(self, body):
         """

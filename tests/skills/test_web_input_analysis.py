@@ -363,7 +363,7 @@ def test_priority_levels_are_defined(
 def test_candidate_output_path(
     skill_text: str,
 ) -> None:
-    assert "web-input-analysis/<target>/candidates.md" in skill_text
+    assert "artifacts/web-input-analysis/<target>/candidates.md" in skill_text
 
 
 @pytest.mark.parametrize(

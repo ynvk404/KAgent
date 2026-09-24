@@ -205,7 +205,7 @@ class TestSkillFileStructure:
             )
 
     def test_declares_correct_results_path(self, body):
-        assert "authentication/<target>/results.md" in body
+        assert "artifacts/authentication/<target>/results.md" in body
 
     def test_curl_post_auth_examples_use_explicit_cookie_jar(self, body):
         """
