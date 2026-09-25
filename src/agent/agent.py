@@ -75,7 +75,7 @@ from src.skills.registry import (
 
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
-from src.workflow.state import WorkflowObjective, WorkflowState
+from src.workflow.state import WorkflowObjective, WorkflowState, candidate_origin
 
 from src.tools.aliases import canonical_tool_name
 from src.tools.registry import InvalidToolArguments, Registry as ToolRegistry
@@ -179,6 +179,19 @@ _PENTEST_REQUEST_INTENT = re.compile(r"\b(?:pentest|penetration test)\b", re.IGN
 _NEW_OBJECTIVE_INTENT = re.compile(
     r"\b(?:new (?:task|assessment|objective)|start over|different task|"
     r"instead,? (?:test|check|validate)|stop testing|stop the assessment)\b",
+    re.IGNORECASE,
+)
+_OBJECTIVE_CONTINUATION_INTENT = re.compile(
+    r"^\s*(?:please\s+)?(?:continue|resume|retry|try again|pick up|keep going|go on)\b",
+    re.IGNORECASE,
+)
+_OBJECTIVE_DEPENDENCY_REPLY = re.compile(
+    r"\b(?:auth(?:orization)?|credentials?|browser|evidence)\b",
+    re.IGNORECASE,
+)
+_OBJECTIVE_DEPENDENCY_PROVIDED = re.compile(
+    r"\b(?:granted|provided|available|ready|attached|uploaded|provide|"
+    r"here\s+(?:is|are))\b",
     re.IGNORECASE,
 )
 _CANDIDATE_VALIDATION_INTENT = re.compile(
@@ -1402,8 +1415,6 @@ class Agent:
             clear()
 
     def initialize_target_from_user_request(self, user_msg: str) -> bool:
-        if not self.target.empty() or self.engagement_state.allowed_origins:
-            return False
         if not _OPERATIONAL_TARGET_TERMS.search(user_msg):
             return False
 
@@ -1416,6 +1427,12 @@ class Agent:
                 continue
 
         if len(origins) != 1:
+            return False
+
+        current_origin = self.target.origin()
+        if current_origin == origins[0]:
+            return False
+        if current_origin is None and self.target.empty() and self.engagement_state.allowed_origins:
             return False
 
         self.apply_target_base_url(origins[0].as_url())
@@ -1485,11 +1502,15 @@ class Agent:
             )
         )
 
-        if current is not None and current.mode == "whole_target" and not whole_request:
-            status, _, _ = self._whole_target_state()
-            if status != "completed" and not _NEW_OBJECTIVE_INTENT.search(user_msg):
-                # Keep the same objective while the user resolves a blocker or
-                # provides a follow-up needed to finish the assessment.
+        if current is not None and not _NEW_OBJECTIVE_INTENT.search(user_msg):
+            different_candidate = (
+                current.mode == "candidate_validation"
+                and candidate_request
+                and candidate_id != current.candidate_id
+            )
+            if not different_candidate and self._is_objective_continuation(
+                user_msg, current
+            ):
                 return
 
         if whole_request and origin:
@@ -1507,6 +1528,66 @@ class Agent:
             target_origin=origin,
             candidate_id=selected_candidate,
         )
+
+    def _is_objective_continuation(self, user_msg: str, current: WorkflowObjective) -> bool:
+        if current.mode == "whole_target":
+            status, _, _ = self._whole_target_state()
+            if status == "completed":
+                return False
+        elif current.mode == "candidate_validation":
+            candidate = self.workflow.candidates.get(current.candidate_id or "")
+            if candidate is None:
+                return False
+            candidate_target = candidate_origin(candidate.target)
+            active_target = self.target.origin()
+            active_origin = active_target.as_url() if active_target is not None else None
+            if (
+                current.target_origin is not None
+                and candidate_target != current.target_origin
+            ) or (active_origin is not None and candidate_target != active_origin):
+                return False
+
+        if _OBJECTIVE_CONTINUATION_INTENT.search(user_msg):
+            return True
+        if is_purely_informational(normalize(user_msg)):
+            return False
+        if self._previous_turn_asked_user():
+            return True
+        dependency_reply = _OBJECTIVE_DEPENDENCY_REPLY.search(user_msg)
+        dependency_provided = _OBJECTIVE_DEPENDENCY_PROVIDED.search(user_msg)
+        return bool(
+            dependency_reply
+            and (self._objective_has_blocker(current) or dependency_provided)
+        )
+
+    def _previous_turn_asked_user(self) -> bool:
+        for message in reversed(self.history):
+            if message.role != "assistant":
+                continue
+            return bool(
+                message.tool_calls
+                and any(call.function.name == "ask_user" for call in message.tool_calls)
+            )
+        return False
+
+    def _objective_has_blocker(self, objective: WorkflowObjective) -> bool:
+        if objective.mode == "whole_target":
+            _, _, blockers = self._whole_target_state()
+            return bool(blockers)
+        if objective.mode == "candidate_validation" and objective.candidate_id:
+            candidate = self.workflow.candidates.get(objective.candidate_id)
+            result = self.workflow.latest_result(objective.candidate_id)
+            return bool(
+                (candidate is not None and candidate.status == "deferred")
+                or (
+                    result is not None
+                    and result.outcome in {
+                        "blocked", "insufficient-evidence", "deferred",
+                        "browser-required", "authorization-required",
+                    }
+                )
+            )
+        return False
 
     def _planner_context(self) -> PlannerContext:
         objective = self.workflow.objective

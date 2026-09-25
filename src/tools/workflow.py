@@ -549,6 +549,25 @@ class WorkflowTool(Tool):
                 or candidate_origin(candidate.target) != objective.target_origin
             ):
                 raise ValueError("candidate does not belong to the active whole-target objective")
+        elif objective is not None and objective.mode == "candidate_validation":
+            if candidate_id != objective.candidate_id:
+                raise ValueError(
+                    "candidate does not match the active candidate-validation objective"
+                )
+            candidate = self.state.candidates.get(candidate_id)
+            if candidate is None:
+                raise ValueError(
+                    "active candidate-validation objective references an unknown candidate"
+                )
+            candidate_target = candidate_origin(candidate.target)
+            active_target = candidate_origin(self._active_target())
+            if (
+                objective.target_origin is not None
+                and candidate_target != objective.target_origin
+            ) or (active_target is not None and candidate_target != active_target):
+                raise ValueError(
+                    "candidate target does not match the active candidate-validation objective"
+                )
 
     @staticmethod
     def _phase_for_skill(canonical: str, skill) -> WorkflowPhase | None:

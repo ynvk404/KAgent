@@ -200,7 +200,7 @@ async def test_clean_operational_turn_initializes_target_and_scope(user_request)
 
 
 @pytest.mark.asyncio
-async def test_natural_target_initialization_does_not_guess_or_switch():
+async def test_natural_target_initialization_requires_single_origin_and_switches_explicitly():
     agent = Agent(
         AgentOptions(
             client=FakeClient(
@@ -237,8 +237,9 @@ async def test_natural_target_initialization_does_not_guess_or_switch():
         FakeSignal(),
         collect()["sink"],
     )
-    assert agent.target.base_url() == "http://active.test"
-    assert not agent.engagement_state.is_in_scope("http://other.test")
+    assert agent.target.base_url() == "http://other.test"
+    assert agent.engagement_state.is_in_scope("http://other.test")
+    assert not agent.engagement_state.is_in_scope("http://active.test")
 
 
 @pytest.mark.asyncio
@@ -3229,6 +3230,69 @@ def test_authorization_followup_keeps_candidate_blocker_in_same_objective():
     assert agent.workflow.objective is not None
     assert agent.workflow.objective.id == "whole-objective"
     assert agent.workflow.objective.mode == "whole_target"
+
+
+def test_whole_target_objective_lifecycle_restarts_for_new_work():
+    agent, _ = whole_target_agent([], [])
+    agent._initialize_request_objective("Perform a whole-target assessment", True)
+    first = agent.workflow.objective
+    assert first is not None
+
+    agent._initialize_request_objective("continue", True)
+    assert agent.workflow.objective is first
+
+    agent._initialize_request_objective("Start a new whole-target assessment", True)
+    second = agent.workflow.objective
+    assert second is not None and second.id != first.id
+    assert second.mode == "whole_target"
+
+    agent._initialize_request_objective("Explain the difference between SQL injection and XSS.", True)
+    third = agent.workflow.objective
+    assert third is not None and third.id != second.id
+    assert third.mode == "direct"
+
+
+def test_explicit_new_target_switches_target_and_objective():
+    agent, _ = whole_target_agent([], [])
+    agent._initialize_request_objective("Perform a whole-target assessment", True)
+    first = agent.workflow.objective
+    assert first is not None
+
+    assert agent.initialize_target_from_user_request(
+        "Perform a whole-target assessment of https://target-b.test"
+    )
+    agent._initialize_request_objective(
+        "Perform a whole-target assessment of https://target-b.test", True
+    )
+
+    second = agent.workflow.objective
+    assert second is not None and second.id != first.id
+    assert second.mode == "whole_target"
+    assert second.target_origin == "https://target-b.test"
+    assert agent.target.base_url() == "https://target-b.test"
+
+
+def test_candidate_validation_lifecycle_keeps_or_replaces_candidate():
+    agent, _ = whole_target_agent([], [])
+    candidate_a, _ = agent.workflow.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test", endpoint="/a",
+    ))
+    candidate_b, _ = agent.workflow.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test", endpoint="/b",
+    ))
+    agent._initialize_request_objective(f"Validate candidate {candidate_a.id}", True)
+    first = agent.workflow.objective
+    assert first is not None and first.mode == "candidate_validation"
+    assert first.candidate_id == candidate_a.id
+
+    agent._initialize_request_objective("Authorization granted, continue", True)
+    assert agent.workflow.objective is first
+
+    agent._initialize_request_objective(f"Validate candidate {candidate_b.id}", True)
+    second = agent.workflow.objective
+    assert second is not None and second.id != first.id
+    assert second.mode == "candidate_validation"
+    assert second.candidate_id == candidate_b.id
 
 
 @pytest.mark.asyncio

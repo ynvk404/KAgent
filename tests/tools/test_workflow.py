@@ -10,7 +10,13 @@ from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
 from src.tools.workflow import DEFAULT_LIST_LIMIT, WorkflowTool
-from src.workflow.state import AttackSurfaceInput, Candidate, WorkflowObjective, WorkflowState
+from src.workflow.state import (
+    AttackSurfaceInput,
+    Candidate,
+    ValidationResult,
+    WorkflowObjective,
+    WorkflowState,
+)
 
 
 @pytest.mark.asyncio
@@ -745,3 +751,80 @@ async def test_whole_target_cannot_mark_unavailable_phase_complete():
     }, None, AlwaysAllow())
     assert "unavailable for whole-target phase completion" in output
     assert state.completed_phases() == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_candidate_validation_objective_scopes_validation_mutations(tmp_path):
+    state = WorkflowState()
+    candidate_a, _ = state.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test", endpoint="/a",
+    ))
+    candidate_b, _ = state.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test", endpoint="/b",
+    ))
+    state.objective = WorkflowObjective(
+        id="objective-candidate-a", mode="candidate_validation",
+        target_origin="https://target.test", candidate_id=candidate_a.id,
+    )
+    coverage = CoverageStore(str(tmp_path / "coverage.json"))
+    tool = WorkflowTool(
+        state, Target("https://target.test"), coverage=coverage,
+        evidence_root=tmp_path,
+    )
+
+    started = json.loads(await tool.run({
+        "action": "start_validation", "candidate_id": candidate_a.id,
+    }, None, AlwaysAllow()))
+    assert started["ok"] is True
+    assert "candidate does not match the active candidate-validation objective" in await tool.run({
+        "action": "start_validation", "candidate_id": candidate_b.id,
+    }, None, AlwaysAllow())
+
+    (tmp_path / "proof.txt").write_text("Observed request and response", encoding="utf-8")
+    evidence = json.loads(await tool.run({
+        "action": "record_evidence", "candidate_id": candidate_a.id,
+        "evidence_path": "proof.txt",
+    }, None, AlwaysAllow()))
+    assert evidence["ok"] is True
+    assert "candidate does not match the active candidate-validation objective" in await tool.run({
+        "action": "record_evidence", "candidate_id": candidate_b.id,
+        "evidence_path": "proof.txt",
+    }, None, AlwaysAllow())
+
+    result = json.loads(await tool.run({
+        "action": "record_result", "candidate_id": candidate_a.id,
+        "skill_name": "sql-injection", "outcome": "not-confirmed",
+    }, None, AlwaysAllow()))
+    assert result["ok"] is True
+    assert "candidate does not match the active candidate-validation objective" in await tool.run({
+        "action": "record_result", "candidate_id": candidate_b.id,
+        "skill_name": "sql-injection", "outcome": "not-confirmed",
+    }, None, AlwaysAllow())
+
+    state.add_validation_result(ValidationResult(
+        candidate_a.id, "sql-injection", "not-confirmed", coverage_synced=False,
+    ), force=True)
+    synced = json.loads(await tool.run({
+        "action": "sync_coverage", "candidate_id": candidate_a.id,
+    }, None, AlwaysAllow()))
+    assert synced["coverage_sync"] == "synced"
+    state.add_validation_result(ValidationResult(
+        candidate_b.id, "sql-injection", "not-confirmed", coverage_synced=False,
+    ))
+    assert "candidate does not match the active candidate-validation objective" in await tool.run({
+        "action": "sync_coverage", "candidate_id": candidate_b.id,
+    }, None, AlwaysAllow())
+
+
+@pytest.mark.asyncio
+async def test_candidate_validation_objective_rejects_missing_candidate(tmp_path):
+    state = WorkflowState(objective=WorkflowObjective(
+        id="objective-missing", mode="candidate_validation",
+        target_origin="https://target.test", candidate_id="candidate-missing",
+    ))
+    output = await WorkflowTool(
+        state, Target("https://target.test"), evidence_root=tmp_path,
+    ).run({
+        "action": "start_validation", "candidate_id": "candidate-missing",
+    }, None, AlwaysAllow())
+    assert "active candidate-validation objective references an unknown candidate" in output
