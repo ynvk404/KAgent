@@ -12,10 +12,15 @@ from src.coverage.store import CoverageStore, CoverageStatus
 from src.target.target import Target
 from src.workflow.state import (
     CANDIDATE_STATUSES,
+    INPUT_DISPOSITIONS,
     VALIDATION_OUTCOMES,
     Candidate,
+    AttackSurfaceInput,
+    WorkflowPhase,
     ValidationResult,
     WorkflowState,
+    candidate_origin,
+    normalize_target_origin,
     validation_result_fingerprint,
 )
 from src.workflow.evidence import EvidenceArtifact
@@ -26,6 +31,9 @@ from .types import Tool, arg_bool, arg_number, arg_string
 
 
 ACTIONS = (
+    "record_input",
+    "set_input_disposition",
+    "link_input_candidate",
     "record_candidate",
     "record_evidence",
     "start_validation",
@@ -65,13 +73,13 @@ class WorkflowTool(Tool):
 
     def description(self) -> str:
         return (
-            "Record candidates, evidence, results, and completion. "
-            "Use compact references, never full traffic. "
-            "record_candidate needs candidate_class and a target (explicit or "
-            "active); record_evidence needs candidate_id and evidence_path; "
-            "start_validation needs candidate_id; record_result needs "
-            "candidate_id, skill_name, and outcome; sync_coverage retries a "
-            "pending write; complete_skill needs skill_name."
+            "Record compact inputs, candidates, evidence, validation results, and completion. "
+            "Whole-target only: record_input, set_input_disposition, link_input_candidate. "
+            "record_candidate needs candidate_class and target (explicit or active); "
+            "record_evidence needs candidate_id and evidence_path; start_validation "
+            "needs candidate_id; record_result needs candidate_id, skill_name and "
+            "outcome; sync_coverage retries pending writes; complete_skill needs "
+            "skill_name. Use compact references; never include raw traffic."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -84,6 +92,10 @@ class WorkflowTool(Tool):
                     "type": "string",
                     "description": "Required for record_evidence, start_validation, and record_result.",
                 },
+                "input_id": optional_string,
+                "input_type": optional_string,
+                "disposition": {"type": "string", "enum": sorted(INPUT_DISPOSITIONS)},
+                "disposition_reason": optional_string,
                 "candidate_class": {
                     "type": "string",
                     "description": "Required for record_candidate.",
@@ -162,6 +174,12 @@ class WorkflowTool(Tool):
         prompter: Prompter,
     ) -> str:
         action = arg_string(args, "action")
+        if action == "record_input":
+            return self._record_input(args)
+        if action == "set_input_disposition":
+            return self._set_input_disposition(args)
+        if action == "link_input_candidate":
+            return self._link_input_candidate(args)
         if action == "record_candidate":
             return self._record_candidate(args)
         if action == "record_evidence":
@@ -179,12 +197,31 @@ class WorkflowTool(Tool):
         return f"error: action must be one of: {', '.join(ACTIONS)}"
 
     def _record_candidate(self, args: dict[str, Any]) -> str:
+        if "objective_id" in args:
+            return "error: objective_id is assigned by the runtime"
         candidate_class = arg_string(args, "candidate_class")
         if not candidate_class:
             return "error: record_candidate requires candidate_class"
         candidate_target = arg_string(args, "target") or self._active_target()
         if not candidate_target:
             return "error: record_candidate requires target or an active Agent target"
+        objective = self.state.objective
+        objective_id: str | None = None
+        requested_input_id = arg_string(args, "input_id")
+        if requested_input_id and (objective is None or objective.mode != "whole_target"):
+            return "error: input_id requires an active whole-target objective"
+        if objective is not None and objective.mode == "whole_target":
+            if candidate_origin(candidate_target) != objective.target_origin:
+                return "error: candidate target must match the active whole-target origin"
+            objective_id = objective.id
+            if requested_input_id:
+                input_item = self.state.attack_surface_inputs.get(requested_input_id)
+                if (
+                    input_item is None
+                    or input_item.objective_id != objective.id
+                    or input_item.target_origin != objective.target_origin
+                ):
+                    return "error: input does not belong to the active whole-target objective"
         validators = (
             self.skills.validators_for_class(candidate_class) if self.skills else []
         )
@@ -203,9 +240,13 @@ class WorkflowTool(Tool):
                 baseline_request_ref=args.get("baseline_request_ref"),
                 auth_context_ref=args.get("auth_context_ref"),
                 source_skill=args.get("source_skill"),
+                objective_id=objective_id,
                 status=("deferred" if supported is False else args.get("status", "queued")),
             )
             stored, created = self.state.add_candidate(candidate)
+            input_id = arg_string(args, "input_id")
+            if input_id:
+                self.state.link_input_candidate(input_id, stored.id)
             if not created and self.skills and self.state.latest_result(stored.id) is None:
                 if supported is False and stored.status in {"new", "queued"}:
                     stored = self.state.set_candidate_status(stored.id, "deferred")
@@ -227,9 +268,56 @@ class WorkflowTool(Tool):
             indent=2,
         )
 
+    def _record_input(self, args: dict[str, Any]) -> str:
+        objective = self.state.objective
+        if objective is None or objective.mode != "whole_target":
+            return "error: record_input requires an active whole-target objective"
+        if "objective_id" in args or "target_origin" in args or "target" in args:
+            return "error: objective and target origin are assigned by the runtime"
+        if self.target is None or self.target.empty():
+            return "error: record_input requires an active target"
+        target_origin = normalize_target_origin(self.target.base_url())
+        if target_origin != objective.target_origin:
+            return "error: active target does not match the whole-target objective"
+        try:
+            item = AttackSurfaceInput(
+                objective_id=objective.id,
+                target_origin=target_origin or "",
+                method=args.get("method"),
+                endpoint=args.get("endpoint"),
+                parameter=args.get("parameter"),
+                location=args.get("location"),
+                input_type=args.get("input_type"),
+            )
+            stored, created = self.state.add_attack_surface_input(item)
+        except (TypeError, ValueError) as err:
+            return f"error: {err}"
+        return json.dumps({"ok": True, "created": created, "input": stored.to_dict()}, indent=2)
+
+    def _set_input_disposition(self, args: dict[str, Any]) -> str:
+        try:
+            item = self.state.set_input_disposition(
+                arg_string(args, "input_id"),
+                arg_string(args, "disposition"),  # type: ignore[arg-type]
+                reason=arg_string(args, "disposition_reason") or None,
+            )
+        except (TypeError, ValueError) as err:
+            return f"error: {err}"
+        return json.dumps({"ok": True, "input": item.to_dict()}, indent=2)
+
+    def _link_input_candidate(self, args: dict[str, Any]) -> str:
+        try:
+            item = self.state.link_input_candidate(
+                arg_string(args, "input_id"), arg_string(args, "candidate_id")
+            )
+        except ValueError as err:
+            return f"error: {err}"
+        return json.dumps({"ok": True, "input": item.to_dict()}, indent=2)
+
     def _start_validation(self, args: dict[str, Any]) -> str:
         candidate_id = arg_string(args, "candidate_id")
         try:
+            self._validate_current_objective_candidate(candidate_id)
             candidate = self.state.set_candidate_status(candidate_id, "validating")
         except ValueError as err:
             return f"error: {err}"
@@ -239,6 +327,10 @@ class WorkflowTool(Tool):
         candidate_id = arg_string(args, "candidate_id")
         if candidate_id not in self.state.candidates:
             return f"error: unknown candidate: {candidate_id}"
+        try:
+            self._validate_current_objective_candidate(candidate_id)
+        except ValueError as err:
+            return f"error: {err}"
         path = arg_string(args, "evidence_path")
         if not path:
             return "error: record_evidence requires evidence_path"
@@ -268,6 +360,7 @@ class WorkflowTool(Tool):
             candidate = self.state.candidates.get(result.candidate_id)
             if candidate is None:
                 raise ValueError(f"unknown candidate: {result.candidate_id}")
+            self._validate_current_objective_candidate(result.candidate_id)
             if result.outcome == "confirmed" and not result.evidence_refs:
                 raise ValueError("confirmed result requires an evidence reference")
             if result.evidence_refs and not self.state.evidence_matches(result.candidate_id, result.evidence_refs):
@@ -352,6 +445,10 @@ class WorkflowTool(Tool):
         result = self.state.latest_result(candidate_id)
         if candidate is None or result is None:
             return f"error: no validation result for candidate: {candidate_id}"
+        try:
+            self._validate_current_objective_candidate(candidate_id)
+        except ValueError as err:
+            return f"error: {err}"
         if result.coverage_synced is not False:
             return json.dumps({"ok": True, "coverage_sync": "not-pending"})
         try:
@@ -390,16 +487,78 @@ class WorkflowTool(Tool):
             if not artifact_ready:
                 return f"error: {canonical} completion requires {expected}"
             artifact_ref = expected
+        objective = self.state.objective
+        workflow_phase = None
+        if objective is not None and objective.mode == "whole_target":
+            workflow_phase = self._phase_for_skill(canonical, skill)
+            if workflow_phase is not None:
+                if (
+                    skill is None
+                    or skill.disable_model_invocation
+                    or self.skills is None
+                    or self.skills.is_disabled(canonical)
+                ):
+                    return f"error: {canonical} is unavailable for whole-target phase completion"
+                if not skill.completion_artifact:
+                    return f"error: {canonical} has no canonical phase artifact"
+                phases = self.state.completed_phases(objective)
+                if workflow_phase == "enumeration" and "recon" not in phases:
+                    return "error: recon must complete before enumeration"
+                if workflow_phase == "input_analysis":
+                    if "enumeration" not in phases:
+                        return "error: enumeration must complete before input analysis"
+                    unresolved = [
+                        item for item in self.state.objective_inputs()
+                        if item.disposition in {"pending", "blocked"}
+                    ]
+                    if unresolved:
+                        return (
+                            "error: input analysis cannot complete while an input "
+                            "is pending or blocked"
+                        )
+                if not artifact_ref:
+                    return f"error: {canonical} requires an artifact_ref for phase completion"
+                try:
+                    self.state.record_phase_completion(
+                        workflow_phase,
+                        objective_id=objective.id,
+                        target_origin=objective.target_origin or "",
+                        artifact_ref=artifact_ref,
+                    )
+                except ValueError as err:
+                    return f"error: {err}"
         self.state.completed_skills.add(canonical)
         if artifact_ref:
             self.state.completed_artifacts[canonical] = redact(artifact_ref)[:500]
-        phase = arg_string(args, "current_phase")
-        if phase:
-            self.state.current_phase = phase[:80]
+        display_phase = arg_string(args, "current_phase")
+        if display_phase:
+            self.state.current_phase = display_phase[:80]
         return json.dumps({
             "ok": True, "skill_name": canonical,
+            "phase": workflow_phase,
             "artifact_ref": self.state.completed_artifacts.get(canonical),
         }, indent=2)
+
+    def _validate_current_objective_candidate(self, candidate_id: str) -> None:
+        objective = self.state.objective
+        if objective is not None and objective.mode == "whole_target":
+            candidate = self.state.candidates.get(candidate_id)
+            if (
+                candidate is None
+                or candidate.objective_id != objective.id
+                or candidate_origin(candidate.target) != objective.target_origin
+            ):
+                raise ValueError("candidate does not belong to the active whole-target objective")
+
+    @staticmethod
+    def _phase_for_skill(canonical: str, skill) -> WorkflowPhase | None:
+        if canonical == "recon":
+            return "recon"
+        if canonical == "web-enumeration":
+            return "enumeration"
+        if canonical == "web-input-analysis":
+            return "input_analysis"
+        return None
 
     def _active_target(self) -> str:
         if self.target is None:
@@ -422,6 +581,9 @@ class WorkflowTool(Tool):
         )
 
         candidates = list(self.state.candidates.values())
+        objective = self.state.objective
+        if objective is not None and objective.mode == "whole_target" and not candidate_id:
+            candidates = list(self.state.objective_candidates())
         if candidate_id:
             candidate = self.state.candidates.get(candidate_id)
             if candidate is None:
@@ -453,6 +615,11 @@ class WorkflowTool(Tool):
                 "returned": len(selected),
                 "truncated": total > len(selected),
                 "current_phase": self.state.current_phase,
+                "objective": objective.to_dict() if objective else None,
+                "completed_phases": sorted(self.state.completed_phases()),
+                "attack_surface_inputs": [
+                    item.to_dict() for item in self.state.objective_inputs()
+                ],
                 "completed_skills_total": len(self.state.completed_skills),
                 "completed_skills": sorted(self.state.completed_skills)[
                     :MAX_LIST_COMPLETED_SKILLS
@@ -489,6 +656,7 @@ class WorkflowTool(Tool):
             ),
             "auth_context_ref": WorkflowTool._brief(candidate.auth_context_ref),
             "source_skill": candidate.source_skill,
+            "objective_id": candidate.objective_id,
         }
 
     @staticmethod

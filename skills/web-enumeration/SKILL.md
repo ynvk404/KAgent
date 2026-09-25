@@ -339,6 +339,14 @@ artifact is absent, empty, or a different path is supplied. This marks the
 bounded inventory pass complete; newly discovered routes may still justify
 another focused pass.
 
+For a whole-target objective, also record every discovered request input
+surface with `workflow(action="record_input", method=..., endpoint=...,
+parameter=..., location=..., input_type=...)`. Use one compact record per
+method/endpoint/parameter/location/type combination; do not include request or
+response bodies, cookies, tokens, or other secrets. Record query, body, path,
+header, and cookie inputs that were actually observed. The runtime assigns the
+active objective and target origin and deduplicates semantic duplicates.
+
 ### GET /search
 
 - parameter: `q`

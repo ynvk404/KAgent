@@ -3,7 +3,13 @@ from src.skills.registry import Registry
 from src.session.store import SessionMemory
 from src.target.target import Target
 from src.engagement.state import EngagementState
-from src.workflow.state import Candidate, ValidationResult, WorkflowState
+from src.workflow.state import (
+    AttackSurfaceInput,
+    Candidate,
+    ValidationResult,
+    WorkflowObjective,
+    WorkflowState,
+)
 from src.agent.system_prompt import (
     BuildOptions,
     SESSION_MEMORY_CONTEXT_CHAR_LIMIT,
@@ -89,6 +95,35 @@ class TestBuildSystemPrompt:
         assert queued.id in rendered
         assert rendered.index(validating.id) < rendered.index(queued.id)
         assert new_candidates[-1].id not in rendered
+
+    def test_whole_target_prompt_shows_scoped_objective_phases_and_inputs(self):
+        workflow = WorkflowState(objective=WorkflowObjective(
+            id="objective-active", mode="whole_target", target_origin="https://target.test",
+        ))
+        old, _ = workflow.add_candidate(Candidate(
+            candidate_class="xss", target="https://target.test", endpoint="/old",
+            objective_id="objective-old", status="queued",
+        ))
+        current, _ = workflow.add_candidate(Candidate(
+            candidate_class="xss", target="https://target.test", endpoint="/search",
+            objective_id="objective-active", status="queued",
+        ))
+        workflow.add_attack_surface_input(AttackSurfaceInput(
+            "objective-active", "https://target.test", method="GET",
+            endpoint="/search", parameter="q", location="query",
+        ))
+        workflow.record_phase_completion(
+            "recon", objective_id="objective-active",
+            target_origin="https://target.test", artifact_ref="artifacts/recon.md",
+        )
+
+        rendered = render_workflow(workflow)
+
+        assert "Objective: objective-active mode=whole_target" in rendered
+        assert "Completed phases: recon" in rendered
+        assert "disposition=pending" in rendered
+        assert current.id in rendered
+        assert old.id not in rendered
 
     def test_thinking_toggle_injects_the_right_directive(self):
         on = build_system_prompt(

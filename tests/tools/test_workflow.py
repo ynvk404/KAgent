@@ -10,7 +10,7 @@ from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
 from src.tools.workflow import DEFAULT_LIST_LIMIT, WorkflowTool
-from src.workflow.state import Candidate, WorkflowState
+from src.workflow.state import AttackSurfaceInput, Candidate, WorkflowObjective, WorkflowState
 
 
 @pytest.mark.asyncio
@@ -247,7 +247,7 @@ def test_schema_describes_action_specific_required_fields():
     schema = tool.schema()
 
     assert schema["required"] == ["action"]
-    assert "record_result needs candidate_id, skill_name, and outcome" in (
+    assert "record_result needs candidate_id, skill_name and outcome" in (
         tool.description()
     )
     assert "Required for record_evidence, start_validation, and record_result" in (
@@ -589,21 +589,32 @@ async def test_recon_and_web_enumeration_completion_artifacts(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_skill_without_completion_artifact_is_unchanged(tmp_path):
+async def test_web_input_analysis_completion_requires_canonical_artifact(tmp_path):
     skills = SkillRegistry()
     skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
     state = WorkflowState()
+    missing = await WorkflowTool(
+        state, Target("https://target.test"), skills=skills, evidence_root=tmp_path,
+    ).run({"action": "complete_skill", "skill_name": "web-input-analysis"}, None, AlwaysAllow())
+    assert "requires artifacts/web-input-analysis/target-test/candidates.md" in missing
+    artifact = tmp_path / "artifacts/web-input-analysis/target-test/candidates.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("No candidates", encoding="utf-8")
 
     output = json.loads(await WorkflowTool(
         state, Target("https://target.test"), skills=skills, evidence_root=tmp_path,
     ).run(
-        {"action": "complete_skill", "skill_name": "web-input-analysis"},
+        {
+            "action": "complete_skill", "skill_name": "web-input-analysis",
+            "artifact_ref": "artifacts/web-input-analysis/target-test/candidates.md",
+        },
         None,
         AlwaysAllow(),
     ))
 
     assert output["ok"] is True
     assert state.completed_skills == {"web-input-analysis"}
+    assert output["artifact_ref"] == "artifacts/web-input-analysis/target-test/candidates.md"
 
 
 @pytest.mark.asyncio
@@ -619,3 +630,118 @@ async def test_workflow_tool_rejects_result_without_candidate():
         AlwaysAllow(),
     )
     assert output.startswith("error: unknown candidate")
+
+
+def whole_target_tool_state() -> WorkflowState:
+    state = WorkflowState()
+    state.objective = WorkflowObjective(
+        id="objective-active",
+        mode="whole_target",
+        target_origin="https://target.test",
+    )
+    return state
+
+
+@pytest.mark.asyncio
+async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_path):
+    state = whole_target_tool_state()
+    target = Target("https://target.test")
+    tool = WorkflowTool(state, target, evidence_root=tmp_path)
+    input_args = {
+        "action": "record_input", "method": "GET", "endpoint": "/search",
+        "parameter": "q", "location": "query", "input_type": "text",
+    }
+    first = json.loads(await tool.run(input_args, None, AlwaysAllow()))
+    duplicate = json.loads(await tool.run(input_args, None, AlwaysAllow()))
+    assert first["created"] is True and duplicate["created"] is False
+    input_id = first["input"]["id"]
+
+    candidate = json.loads(await tool.run({
+        "action": "record_candidate", "candidate_class": "xss",
+        "method": "GET", "endpoint": "/search", "parameter": "q",
+        "target": "https://TARGET.test:443/any-path", "input_id": input_id,
+    }, None, AlwaysAllow()))
+    candidate_id = candidate["candidate"]["id"]
+    assert candidate["candidate"]["objective_id"] == "objective-active"
+    assert state.attack_surface_inputs[input_id].candidate_ids == [candidate_id]
+    assert "objective_id is assigned" in await tool.run({
+        "action": "record_candidate", "candidate_class": "xss",
+        "objective_id": "some-other-objective",
+    }, None, AlwaysAllow())
+    assert "must match the active whole-target origin" in await tool.run({
+        "action": "record_candidate", "candidate_class": "xss",
+        "target": "https://other.test",
+    }, None, AlwaysAllow())
+    assert "assigned by the runtime" in await tool.run({
+        **input_args, "objective_id": "some-other-objective",
+    }, None, AlwaysAllow())
+    old_candidate, _ = state.add_candidate(Candidate(
+        candidate_class="xss", target="https://target.test", endpoint="/old",
+        objective_id="objective-old",
+    ))
+    assert "active objective" in await tool.run({
+        "action": "link_input_candidate", "input_id": input_id,
+        "candidate_id": old_candidate.id,
+    }, None, AlwaysAllow())
+
+
+@pytest.mark.asyncio
+async def test_whole_target_phase_completion_checks_order_and_inventory(tmp_path):
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    state = whole_target_tool_state()
+    target = Target("https://target.test")
+    tool = WorkflowTool(state, target, skills=skills, evidence_root=tmp_path)
+
+    def create_artifact(relative: str) -> None:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("bounded work completed", encoding="utf-8")
+
+    enum_ref = "artifacts/web-enumeration/target-test/inventory.md"
+    create_artifact(enum_ref)
+    assert "recon must complete" in await tool.run({
+        "action": "complete_skill", "skill_name": "web-enumeration",
+    }, None, AlwaysAllow())
+
+    recon_ref = "artifacts/recon/target-test/summary.md"
+    create_artifact(recon_ref)
+    recon = json.loads(await tool.run({
+        "action": "complete_skill", "skill_name": "recon",
+    }, None, AlwaysAllow()))
+    assert recon["phase"] == "recon"
+    enumeration = json.loads(await tool.run({
+        "action": "complete_skill", "skill_name": "web-enumeration",
+    }, None, AlwaysAllow()))
+    assert enumeration["phase"] == "enumeration"
+
+    input_result = json.loads(await tool.run({
+        "action": "record_input", "method": "GET", "endpoint": "/search",
+        "parameter": "q", "location": "query",
+    }, None, AlwaysAllow()))
+    analysis_ref = "artifacts/web-input-analysis/target-test/candidates.md"
+    create_artifact(analysis_ref)
+    assert "pending or blocked" in await tool.run({
+        "action": "complete_skill", "skill_name": "web-input-analysis",
+    }, None, AlwaysAllow())
+    disposition = await tool.run({
+        "action": "set_input_disposition", "input_id": input_result["input"]["id"],
+        "disposition": "analyzed",
+    }, None, AlwaysAllow())
+    assert json.loads(disposition)["input"]["disposition"] == "analyzed"
+    analysis = json.loads(await tool.run({
+        "action": "complete_skill", "skill_name": "web-input-analysis",
+    }, None, AlwaysAllow()))
+    assert analysis["phase"] == "input_analysis"
+    assert state.completed_phases() == frozenset({"recon", "enumeration", "input_analysis"})
+
+
+@pytest.mark.asyncio
+async def test_whole_target_cannot_mark_unavailable_phase_complete():
+    state = whole_target_tool_state()
+    output = await WorkflowTool(state, Target("https://target.test")).run({
+        "action": "complete_skill", "skill_name": "recon",
+        "artifact_ref": "artifacts/recon/target-test/summary.md",
+    }, None, AlwaysAllow())
+    assert "unavailable for whole-target phase completion" in output
+    assert state.completed_phases() == frozenset()

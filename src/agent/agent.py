@@ -75,14 +75,20 @@ from src.skills.registry import (
 
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
-from src.workflow.state import WorkflowState
+from src.workflow.state import WorkflowObjective, WorkflowState
 
 from src.tools.aliases import canonical_tool_name
 from src.tools.registry import InvalidToolArguments, Registry as ToolRegistry
 from src.tools.types import ActionPermissionTool
 from src.tools.outcome import ErrorKind, ToolOutput, ToolStatus
 
-from .decision_planner import PlannerCandidate, PlannerContext, build_decision_plan
+from .decision_planner import (
+    PlannerCandidate,
+    PlannerContext,
+    build_decision_plan,
+    is_purely_informational,
+    normalize,
+)
 
 from src.agent.events import (
     AgentEvent,
@@ -118,6 +124,7 @@ R = TypeVar("R")
 EventSink = Callable[[AgentEvent], None]
 
 DEFAULT_MAX_STEPS = 20
+MAX_CONSECUTIVE_NO_PROGRESS = 4
 REASONING_POLICY_ID = "reasoning-baseline-v1"
 
 _EVENT_FACTORIES = {
@@ -153,8 +160,29 @@ MAX_PARALLEL_TOOL_CALLS = 4
 
 _EXPLICIT_HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _OPERATIONAL_TARGET_TERMS = re.compile(
-    r"\b(?:assess|audit|check|enumerate|exploit|inspect|investigate|probe|"
-    r"recon|reconnaissance|scan|test|validate|verify)\b",
+    r"\b(?:assess|assessment|audit|check|enumerate|exploit|inspect|investigate|"
+    r"pentest|penetration test|probe|recon|reconnaissance|scan|test|validate|verify)\b",
+    re.IGNORECASE,
+)
+_WHOLE_TARGET_INTENT = re.compile(
+    r"\b(?:whole[- ]target|entire target|full target|full[- ]scope assessment|"
+    r"full security assessment|security assessment of (?:the )?(?:target|application|website|site)|"
+    r"comprehensive (?:pentest|penetration test|assessment)|"
+    r"assess the entire|test the entire target|test (?:all|every) endpoints|"
+    r"map (?:the )?entire application|end[- ]to[- ]end (?:pentest|assessment)|"
+    r"complete penetration test|(?:run|perform|conduct) (?:a )?(?:pentest|penetration test)|"
+    r"pentest (?:the )?(?:target|application|website|site)|"
+    r"penetration test (?:the )?(?:target|application|website|site))\b",
+    re.IGNORECASE,
+)
+_PENTEST_REQUEST_INTENT = re.compile(r"\b(?:pentest|penetration test)\b", re.IGNORECASE)
+_NEW_OBJECTIVE_INTENT = re.compile(
+    r"\b(?:new (?:task|assessment|objective)|start over|different task|"
+    r"instead,? (?:test|check|validate)|stop testing|stop the assessment)\b",
+    re.IGNORECASE,
+)
+_CANDIDATE_VALIDATION_INTENT = re.compile(
+    r"\b(?:validate|verify|test|retest)\b",
     re.IGNORECASE,
 )
 
@@ -1393,6 +1421,173 @@ class Agent:
         self.apply_target_base_url(origins[0].as_url())
         return True
 
+    def _available_workflow_phases(self) -> frozenset[str]:
+        enabled = {
+            skill.name for skill in self.skills.list_enabled()
+            if not skill.disable_model_invocation
+        }
+        phases = set()
+        if "recon" in enabled:
+            phases.add("recon")
+        if "web-enumeration" in enabled:
+            phases.add("enumeration")
+        if "web-input-analysis" in enabled:
+            phases.add("input_analysis")
+        return frozenset(phases)
+
+    def _workflow_validator_classes(self) -> frozenset[str]:
+        return frozenset(
+            candidate_class
+            for skill in self.skills.list_enabled()
+            if skill.stage == "validation" and not skill.disable_model_invocation
+            for candidate_class in skill.candidate_classes
+        )
+
+    def _whole_target_state(self) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+        objective = self.workflow.objective
+        if objective is None or objective.mode != "whole_target":
+            return "not_applicable", (), ()
+        target_origin = self.target.origin()
+        origin = target_origin.as_url() if target_origin is not None else None
+        workflow_tool = self.tools.get("workflow")
+        coverage_sync_available = bool(
+            workflow_tool is not None
+            and getattr(workflow_tool, "coverage", None) is not None
+        )
+        return self.workflow.whole_target_status(
+            target_origin=origin,
+            available_phases=self._available_workflow_phases(),
+            validator_classes=self._workflow_validator_classes(),
+            coverage_sync_available=coverage_sync_available,
+        )
+
+    def _initialize_request_objective(self, user_msg: str, tools_enabled: bool) -> None:
+        if not tools_enabled:
+            return
+        target_origin = self.target.origin()
+        origin = target_origin.as_url() if target_origin is not None else None
+        current = self.workflow.objective
+        candidate_id = next(
+            (item_id for item_id in sorted(self.workflow.candidates) if item_id in user_msg),
+            None,
+        )
+        candidate_request = bool(
+            candidate_id and _CANDIDATE_VALIDATION_INTENT.search(user_msg)
+        )
+        whole_request = bool(
+            not is_purely_informational(normalize(user_msg))
+            and (
+                _WHOLE_TARGET_INTENT.search(user_msg)
+                or (
+                    _PENTEST_REQUEST_INTENT.search(user_msg)
+                    and not candidate_request
+                )
+            )
+        )
+
+        if current is not None and current.mode == "whole_target" and not whole_request:
+            status, _, _ = self._whole_target_state()
+            if status != "completed" and not _NEW_OBJECTIVE_INTENT.search(user_msg):
+                # Keep the same objective while the user resolves a blocker or
+                # provides a follow-up needed to finish the assessment.
+                return
+
+        if whole_request and origin:
+            mode = "whole_target"
+            selected_candidate = None
+        elif candidate_request:
+            mode = "candidate_validation"
+            selected_candidate = candidate_id
+        else:
+            mode = "direct"
+            selected_candidate = None
+        self.workflow.objective = WorkflowObjective(
+            id=uuid.uuid4().hex,
+            mode=mode,  # type: ignore[arg-type]
+            target_origin=origin,
+            candidate_id=selected_candidate,
+        )
+
+    def _planner_context(self) -> PlannerContext:
+        objective = self.workflow.objective
+        whole_target = objective is not None and objective.mode == "whole_target"
+        status, actionable_work, blockers = (
+            self._whole_target_state()
+            if whole_target else ("not_applicable", (), ())
+        )
+        candidates = (
+            self.workflow.objective_candidates()
+            if whole_target
+            else tuple(sorted(self.workflow.candidates.values(), key=lambda item: item.id))
+        )
+        pending_inputs = sum(
+            item.disposition == "pending" for item in self.workflow.objective_inputs()
+        ) if whole_target else 0
+        blocked_inputs = sum(
+            item.disposition == "blocked" for item in self.workflow.objective_inputs()
+        ) if whole_target else 0
+        sync_candidates = tuple(
+            candidate.id
+            for candidate in candidates
+            if (result := self.workflow.latest_result(candidate.id)) is not None
+            and result.coverage_synced is False
+            and f"coverage-sync:{candidate.id}" in actionable_work
+        ) if whole_target else ()
+        return PlannerContext(
+            active_skills=frozenset(self.active_skills),
+            candidate_classes=(
+                frozenset(item.candidate_class for item in candidates if item.status in {"new", "queued", "validating"})
+                if whole_target else self.workflow.relevant_candidate_classes()
+            ),
+            completed_skills=frozenset(self.workflow.completed_skills),
+            candidates=tuple(
+                PlannerCandidate(
+                    id=candidate.id,
+                    candidate_class=candidate.candidate_class,
+                    status=candidate.status,
+                    endpoint=candidate.endpoint,
+                    priority=candidate.priority,
+                    latest_outcome=(result.outcome if result else None),
+                    deferred_reason=(result.deferred_reason if result else None),
+                    evidence_count=(len(result.evidence_refs) if result else 0),
+                    coverage_synced=(result.coverage_synced if result else None),
+                )
+                for candidate in candidates
+                for result in [self.workflow.latest_result(candidate.id)]
+            ),
+            objective_mode=objective.mode if objective else None,
+            objective_id=objective.id if objective else None,
+            target_origin=objective.target_origin if objective else None,
+            completed_phases=(
+                self.workflow.completed_phases(objective) if whole_target else frozenset()
+            ),
+            pending_input_count=pending_inputs,
+            blocked_input_count=blocked_inputs,
+            coverage_sync_candidate_ids=sync_candidates,
+            workflow_status=status,
+            workflow_blockers=blockers,
+        )
+
+    def _refresh_whole_target_guidance(self, working: list[Message], user_msg: str) -> None:
+        objective = self.workflow.objective
+        if objective is None or objective.mode != "whole_target":
+            return
+        working[:] = [
+            message for message in working
+            if not (
+                message.role == "system"
+                and message.content.startswith("Decision planner guidance for this turn:")
+            )
+        ]
+        decision = build_decision_plan(
+            user_msg,
+            self.skills.list_enabled(),
+            self.target,
+            self._planner_context(),
+        )
+        if decision is not None:
+            working.append(Message(role="system", content=decision.guidance))
+
     def add_scope_origin(self, url: str) -> tuple[HTTPOrigin, bool]:
         if self.target.empty():
             raise ValueError("no active engagement")
@@ -1624,6 +1819,7 @@ class Agent:
         )
         if tools_enabled:
             self.initialize_target_from_user_request(user_msg)
+            self._initialize_request_objective(user_msg, tools_enabled)
 
         self.active_skills = set(self.pending_skills)
         self.pending_skills.clear()
@@ -1686,28 +1882,7 @@ class Agent:
                 user_msg,
                 self.skills.list_enabled(),
                 self.target,
-                PlannerContext(
-                    active_skills=frozenset(self.active_skills),
-                    candidate_classes=self.workflow.relevant_candidate_classes(),
-                    completed_skills=frozenset(self.workflow.completed_skills),
-                    candidates=tuple(
-                        PlannerCandidate(
-                            id=candidate.id,
-                            candidate_class=candidate.candidate_class,
-                            status=candidate.status,
-                            endpoint=candidate.endpoint,
-                            priority=candidate.priority,
-                            latest_outcome=(result.outcome if result else None),
-                            deferred_reason=(result.deferred_reason if result else None),
-                            evidence_count=(len(result.evidence_refs) if result else 0),
-                            coverage_synced=(result.coverage_synced if result else None),
-                        )
-                        for candidate in sorted(
-                            self.workflow.candidates.values(), key=lambda item: item.id
-                        )
-                        for result in [self.workflow.latest_result(candidate.id)]
-                    ),
-                ),
+                self._planner_context(),
             )
 
         if decision and decision.recommended_skill:
@@ -1789,6 +1964,11 @@ class Agent:
             last.content = expanded_user_msg
 
         max_steps = self.max_steps
+        objective = self.workflow.objective
+        whole_target = bool(
+            tools_enabled and objective is not None and objective.mode == "whole_target"
+        )
+        consecutive_no_progress = 0
 
         for step in range(max_steps):
 
@@ -1802,6 +1982,11 @@ class Agent:
                     opts,
                 )
 
+            if whole_target:
+                self._refresh_whole_target_guidance(working, expanded_user_msg)
+            before_facts = self.workflow.progress_facts() if whole_target else frozenset()
+            response_chunks: list[str] | None = [] if whole_target else None
+
             req = ChatRequest(
                 model=self.client.model(),
                 messages=working,
@@ -1814,12 +1999,15 @@ class Agent:
                 req.tools = self.tools.as_llm_tools()
 
             self._count_llm_call("agent_loop_llm_calls")
-            resp, streamed = await self._chat_for_turn(
-                req,
-                signal,
-                emit,
-            )
+            if response_chunks is None:
+                resp, streamed = await self._chat_for_turn(req, signal, emit)
+            else:
+                resp, streamed = await self._chat_for_turn(
+                    req, signal, emit, stream_buffer=response_chunks
+                )
             self._sanitize_response(resp)
+            if streamed and response_chunks and not resp.message.content:
+                resp.message.content = "".join(response_chunks)
 
             tool_calls = resp.message.tool_calls or []
 
@@ -1854,13 +2042,17 @@ class Agent:
                 emit({"type": "error", "err": InvalidResponseError()})
                 return "invalid_response"
 
-            await self._record_assistant_response(resp, streamed, working, emit)
-
-            if (
+            malformed_tool_text = (
                 not has_tool_calls
                 and tools_enabled
                 and _looks_like_malformed_tool_call(resp.message.content)
-            ):
+            )
+            if not malformed_tool_text:
+                await self._record_assistant_response(
+                    resp, streamed, working, emit, emit_text=not whole_target
+                )
+
+            if malformed_tool_text:
                 emit({
                     "type": "error",
                     "err": RuntimeError(
@@ -1900,12 +2092,16 @@ class Agent:
                 if opts is None or getattr(opts, "tools", True):
                     retry_req.tools = self.tools.as_llm_tools()
                 self._count_llm_call("agent_loop_llm_calls")
-                resp, streamed = await self._chat_for_turn(
-                    retry_req,
-                    signal,
-                    emit,
-                )
+                retry_chunks: list[str] | None = [] if whole_target else None
+                if retry_chunks is None:
+                    resp, streamed = await self._chat_for_turn(retry_req, signal, emit)
+                else:
+                    resp, streamed = await self._chat_for_turn(
+                        retry_req, signal, emit, stream_buffer=retry_chunks
+                    )
                 self._sanitize_response(resp)
+                if streamed and retry_chunks and not resp.message.content:
+                    resp.message.content = "".join(retry_chunks)
                 tool_calls = resp.message.tool_calls or []
                 has_tool_calls = len(tool_calls) > 0
 
@@ -1920,12 +2116,91 @@ class Agent:
                         if resp.message.content.strip()
                         else warning
                     )
-                    if streamed:
+                    if streamed and not whole_target:
                         emit({"type": "assistant-text", "text": warning})
 
-                await self._record_assistant_response(resp, streamed, working, emit)
+                await self._record_assistant_response(
+                    resp, streamed, working, emit, emit_text=not whole_target
+                )
+                response_chunks = retry_chunks
 
             if not has_tool_calls:
+
+                if whole_target:
+                    status, actionable, blockers = self._whole_target_state()
+                    after_facts = self.workflow.progress_facts()
+                    if after_facts - before_facts:
+                        consecutive_no_progress = 0
+                    else:
+                        consecutive_no_progress += 1
+                    if status == "completed":
+                        return await self._whole_target_synthesis(
+                            working, signal, emit,
+                            thinking_enabled=turn_request_thinking,
+                            reasoning_level=turn_reasoning_level,
+                            requested_reasoning_level=turn_requested_level,
+                            stop_reason="workflow_completed",
+                            instruction=(
+                                "The runtime completion contract is satisfied for the current whole-target "
+                                "objective. Give a concise final assessment based on recorded evidence, "
+                                "including confirmed and not-confirmed results, and do not overstate coverage."
+                            ),
+                            max_steps=max_steps,
+                        )
+                    if not actionable and blockers:
+                        return await self._whole_target_synthesis(
+                            working, signal, emit,
+                            thinking_enabled=turn_request_thinking,
+                            reasoning_level=turn_reasoning_level,
+                            requested_reasoning_level=turn_requested_level,
+                            stop_reason="workflow_blocked",
+                            instruction=(
+                                "The whole-target objective is blocked by structured runtime state. "
+                                "Give a concise status summary, state that assessment is incomplete, "
+                                "and explain these blockers without claiming completion: "
+                                + "; ".join(blockers)
+                            ),
+                            max_steps=max_steps,
+                        )
+                    if consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
+                        return await self._whole_target_synthesis(
+                            working, signal, emit,
+                            thinking_enabled=turn_request_thinking,
+                            reasoning_level=turn_reasoning_level,
+                            requested_reasoning_level=turn_requested_level,
+                            stop_reason="workflow_stalled",
+                            instruction=(
+                                "The whole-target workflow has made no new structured progress for "
+                                f"{MAX_CONSECUTIVE_NO_PROGRESS} consecutive iterations. The objective "
+                                "is incomplete. Summarize what was established and identify the "
+                                "remaining structured work: " + "; ".join(actionable)
+                            ),
+                            max_steps=max_steps,
+                        )
+                    if step == max_steps - 1:
+                        return await self._whole_target_synthesis(
+                            working, signal, emit,
+                            thinking_enabled=turn_request_thinking,
+                            reasoning_level=turn_reasoning_level,
+                            requested_reasoning_level=turn_requested_level,
+                            stop_reason="max_steps",
+                            instruction=(
+                                f"The hard limit of {max_steps} outer agent iterations was reached. "
+                                "The whole-target objective is incomplete. Summarize the evidence "
+                                "recorded so far and identify remaining work: "
+                                + "; ".join(actionable)
+                            ),
+                            max_steps=max_steps,
+                        )
+                    working.append(Message(
+                        role="system",
+                        content=(
+                            "The preceding assistant text is an intermediate response. Do not end "
+                            "the whole-target objective while runtime-known actionable work remains. "
+                            "Continue from the current structured state and follow the latest planner guidance."
+                        ),
+                    ))
+                    continue
 
                 if self.turn_executed_tool:
                     self._spawn_background(
@@ -1940,6 +2215,14 @@ class Agent:
 
                 return "final_response"
 
+            if whole_target:
+                # Tool-call responses are known to be intermediate once the
+                # complete provider response has been parsed, so flush their
+                # buffered text before executing the calls.
+                self._emit_buffered_response_text(
+                    resp, streamed, response_chunks or [], emit
+                )
+
             all_refused = await self.execute_tool_calls(
                 tool_calls,
                 signal,
@@ -1949,6 +2232,72 @@ class Agent:
 
             if all_refused:
                 return "all_tools_refused"
+
+            if whole_target:
+                status, actionable, blockers = self._whole_target_state()
+                after_facts = self.workflow.progress_facts()
+                if after_facts - before_facts:
+                    consecutive_no_progress = 0
+                else:
+                    consecutive_no_progress += 1
+                if status == "completed":
+                    return await self._whole_target_synthesis(
+                        working, signal, emit,
+                        thinking_enabled=turn_request_thinking,
+                        reasoning_level=turn_reasoning_level,
+                        requested_reasoning_level=turn_requested_level,
+                        stop_reason="workflow_completed",
+                        instruction=(
+                            "The runtime completion contract is satisfied for the current whole-target "
+                            "objective. Give a concise final assessment based on recorded evidence, "
+                            "including confirmed and not-confirmed results, and do not overstate coverage."
+                        ),
+                        max_steps=max_steps,
+                    )
+                if not actionable and blockers:
+                    return await self._whole_target_synthesis(
+                        working, signal, emit,
+                        thinking_enabled=turn_request_thinking,
+                        reasoning_level=turn_reasoning_level,
+                        requested_reasoning_level=turn_requested_level,
+                        stop_reason="workflow_blocked",
+                        instruction=(
+                            "The whole-target objective is blocked by structured runtime state. "
+                            "Give a concise status summary, say the assessment is incomplete, "
+                            "and explain these blockers without claiming completion: "
+                            + "; ".join(blockers)
+                        ),
+                        max_steps=max_steps,
+                    )
+                if consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
+                    return await self._whole_target_synthesis(
+                        working, signal, emit,
+                        thinking_enabled=turn_request_thinking,
+                        reasoning_level=turn_reasoning_level,
+                        requested_reasoning_level=turn_requested_level,
+                        stop_reason="workflow_stalled",
+                        instruction=(
+                            "The whole-target workflow has made no new structured progress for "
+                            f"{MAX_CONSECUTIVE_NO_PROGRESS} consecutive iterations. The objective "
+                            "is incomplete. Summarize current evidence and remaining work: "
+                            + "; ".join(actionable)
+                        ),
+                        max_steps=max_steps,
+                    )
+                if step == max_steps - 1:
+                    return await self._whole_target_synthesis(
+                        working, signal, emit,
+                        thinking_enabled=turn_request_thinking,
+                        reasoning_level=turn_reasoning_level,
+                        requested_reasoning_level=turn_requested_level,
+                        stop_reason="max_steps",
+                        instruction=(
+                            f"The hard limit of {max_steps} outer agent iterations was reached. "
+                            "The whole-target objective is incomplete. Summarize the evidence "
+                            "recorded so far and remaining work: " + "; ".join(actionable)
+                        ),
+                        max_steps=max_steps,
+                    )
 
             if step == max_steps - 1:
                 if self.auto_compact_threshold > 0:
@@ -1996,6 +2345,8 @@ class Agent:
         streamed: bool,
         working: list[Message],
         emit,
+        *,
+        emit_text: bool = True,
     ) -> None:
         self.history.append(resp.message)
         working.append(resp.message)
@@ -2003,18 +2354,83 @@ class Agent:
             await self.save()
         except Exception as err:
             emit({"type": "error", "err": Exception(f"save session: {err}")})
-        if resp.message.content and not streamed:
+        if emit_text and resp.message.content and not streamed:
             emit({"type": "assistant-text", "text": resp.message.content})
 
+    @staticmethod
+    def _emit_buffered_response_text(
+        resp: ChatResponse, streamed: bool, chunks: list[str], emit
+    ) -> None:
+        if streamed and chunks:
+            for chunk in chunks:
+                emit({"type": "assistant-delta", "text": chunk})
+        elif resp.message.content:
+            emit({"type": "assistant-text", "text": resp.message.content})
+
+    async def _whole_target_synthesis(
+        self,
+        working: list[Message],
+        signal,
+        emit,
+        *,
+        thinking_enabled: bool,
+        reasoning_level: ReasoningLevel,
+        requested_reasoning_level: ReasoningLevel,
+        stop_reason: Literal[
+            "workflow_completed", "workflow_blocked", "workflow_stalled", "max_steps"
+        ],
+        instruction: str,
+        max_steps: int,
+    ) -> str:
+        working.append(Message(role="system", content=instruction))
+        if self.auto_compact_threshold > 0:
+            self.guard_working_context(working, emit, None)
+        request = ChatRequest(
+            model=self.client.model(),
+            messages=working,
+            thinking_enabled=thinking_enabled,
+            reasoning_level=reasoning_level,
+            requested_reasoning_level=requested_reasoning_level,
+        )
+        self._count_llm_call("final_synthesis_llm_calls")
+        chunks: list[str] = []
+        response, streamed = await self._chat_for_turn(
+            request, signal, emit, purpose="final_synthesis", stream_buffer=chunks
+        )
+        self._sanitize_response(response)
+        if streamed and chunks and not response.message.content:
+            response.message.content = "".join(chunks)
+        if response.message.tool_calls or not response.message.content.strip():
+            emit({
+                "type": "error",
+                "err": InvalidResponseError(
+                    "whole-target synthesis returned tools or no visible text"
+                ),
+            })
+            return "invalid_response"
+        await self._record_assistant_response(
+            response, streamed, working, emit, emit_text=False
+        )
+        self._emit_buffered_response_text(response, streamed, chunks, emit)
+        if stop_reason == "max_steps":
+            emit({"type": "error", "err": MaxStepsError(max_steps)})
+        return stop_reason
+
     async def _chat_for_turn(
-        self, req, signal, emit, purpose: str = "agent_turn"
+        self, req, signal, emit, purpose: str = "agent_turn",
+        stream_buffer: list[str] | None = None,
     ) -> tuple[ChatResponse, bool]:
         started = time.perf_counter()
         started_at = datetime.now(timezone.utc).isoformat()
         response: ChatResponse | None = None
         status: Literal["success", "error", "cancelled"] = "success"
         try:
-            response, streamed = await self.chat(req, signal, emit)
+            if stream_buffer is None:
+                response, streamed = await self.chat(req, signal, emit)
+            else:
+                response, streamed = await self.chat(
+                    req, signal, emit, stream_buffer=stream_buffer
+                )
             return response, streamed
         except BaseException as err:
             status = "cancelled" if isinstance(err, asyncio.CancelledError) or getattr(signal, "aborted", False) else "error"
@@ -2522,6 +2938,7 @@ class Agent:
         req: ChatRequest,
         signal,
         emit,
+        stream_buffer: list[str] | None = None,
     ) -> tuple[ChatResponse, bool]:
         if (
             self.streaming_enabled
@@ -2536,12 +2953,10 @@ class Agent:
             def on_delta(delta: str):
                 visible = filter.push(delta)
                 if visible:
-                    emit(
-                        {
-                            "type": "assistant-delta",
-                            "text": visible,
-                        }
-                    )
+                    if stream_buffer is not None:
+                        stream_buffer.append(visible)
+                    else:
+                        emit({"type": "assistant-delta", "text": visible})
             resp = await c.chat_stream(
                 ChatRequest(
                     model=req.model,
@@ -2558,12 +2973,10 @@ class Agent:
 
             tail = filter.flush()
             if tail:
-                emit(
-                    {
-                        "type": "assistant-delta",
-                        "text": tail,
-                    }
-                )
+                if stream_buffer is not None:
+                    stream_buffer.append(tail)
+                else:
+                    emit({"type": "assistant-delta", "text": tail})
 
             return resp, True
 

@@ -290,8 +290,8 @@ async def test_serializes_ask_user_with_optional_options():
     function = body["tools"][0]["function"]
     question = function["parameters"]["properties"]["questions"]["items"]
 
-    assert "continue in the same turn" in function["description"]
-    assert "does not replace a runtime permission prompt" in function["description"]
+    assert "blocks same-turn work" in function["description"]
+    assert "does not approve actions or replace a runtime permission prompt" in function["description"]
     assert question["required"] == ["question"]
     assert question["properties"]["options"]["minItems"] == 2
     assert "arbitrary user-supplied values" in question["properties"]["options"]["description"]

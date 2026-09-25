@@ -4,8 +4,10 @@ import pytest
 
 from src.workflow.state import (
     VALIDATION_OUTCOMES,
+    AttackSurfaceInput,
     Candidate,
     ValidationResult,
+    WorkflowObjective,
     WorkflowState,
     candidate_fingerprint,
 )
@@ -116,7 +118,7 @@ def test_registered_evidence_survives_workflow_serialization(tmp_path):
     old_payload["version"] = 1
     old_payload.pop("evidence")
     migrated = WorkflowState.from_dict(old_payload)
-    assert migrated.version == 2
+    assert migrated.version == 3
     assert not migrated.eligible_for_finding(candidate.id)
 
 
@@ -236,6 +238,253 @@ def test_validation_result_does_not_implicitly_complete_whole_skill():
 
     assert state.completed_skills == set()
     assert state.relevant_candidate_classes() == frozenset({"sql-injection"})
+
+
+def whole_target_state(objective_id: str = "objective-current") -> WorkflowState:
+    state = WorkflowState()
+    state.objective = WorkflowObjective(
+        id=objective_id,
+        mode="whole_target",
+        target_origin="https://target.test",
+    )
+    return state
+
+
+def complete_required_phases(state: WorkflowState) -> None:
+    objective = state.objective
+    assert objective is not None
+    for phase in ("recon", "enumeration", "input_analysis"):
+        state.record_phase_completion(
+            phase,  # type: ignore[arg-type]
+            objective_id=objective.id,
+            target_origin=objective.target_origin or "",
+            artifact_ref=f"artifacts/{phase}.md",
+        )
+
+
+def test_workflow_objective_round_trip_and_legacy_state_without_objective():
+    state = whole_target_state()
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert restored.objective == state.objective
+    assert WorkflowState.from_dict({"version": 2}).objective is None
+
+
+def test_candidate_objective_scoping_preserves_legacy_fingerprint():
+    legacy = make_candidate()
+    first = make_candidate(objective_id="objective-a")
+    second = make_candidate(objective_id="objective-b")
+    assert legacy.id == candidate_fingerprint(
+        target=legacy.target,
+        method=legacy.method,
+        endpoint=legacy.endpoint,
+        parameter=legacy.parameter,
+        location=legacy.location,
+        candidate_class=legacy.candidate_class,
+    )
+    assert first.id != second.id
+    assert Candidate.from_dict(legacy.to_dict()) == legacy
+
+
+def test_attack_surface_identity_deduplicates_and_dispositions_are_structured():
+    state = whole_target_state()
+    objective = state.objective
+    assert objective is not None
+    item = AttackSurfaceInput(
+        objective.id,
+        "https://TARGET.test:443/path",
+        method="get",
+        endpoint="/search",
+        parameter="q",
+        location="QUERY",
+        input_type="text",
+    )
+    duplicate = AttackSurfaceInput(
+        objective.id,
+        "https://target.test",
+        method="GET",
+        endpoint="/search",
+        parameter="q",
+        location="query",
+        input_type="TEXT",
+    )
+    stored, created = state.add_attack_surface_input(item)
+    same, duplicate_created = state.add_attack_surface_input(duplicate)
+    assert created is True and duplicate_created is False and same is stored
+    assert len(state.attack_surface_inputs) == 1
+    state.set_input_disposition(stored.id, "blocked", reason="authorization required")
+    state.set_input_disposition(stored.id, "pending")
+    state.set_input_disposition(stored.id, "analyzed")
+    assert stored.disposition == "analyzed"
+    assert "blocked>pending" in stored.disposition_transitions
+    with pytest.raises(ValueError, match="terminal"):
+        state.set_input_disposition(stored.id, "pending")
+
+
+def test_input_candidate_link_requires_same_objective():
+    state = whole_target_state()
+    objective = state.objective
+    assert objective is not None
+    item, _ = state.add_attack_surface_input(AttackSurfaceInput(
+        objective.id, objective.target_origin or "", endpoint="/search", parameter="q",
+    ))
+    current, _ = state.add_candidate(make_candidate(
+        objective_id=objective.id,
+        target=objective.target_origin,
+        endpoint="/search",
+        parameter="q",
+    ))
+    old, _ = state.add_candidate(make_candidate(
+        objective_id="objective-old",
+        target=objective.target_origin,
+        endpoint="/search",
+        parameter="q",
+    ))
+    state.link_input_candidate(item.id, current.id)
+    with pytest.raises(ValueError, match="active objective"):
+        state.link_input_candidate(item.id, old.id)
+    assert item.candidate_ids == [current.id]
+
+
+def test_old_objective_candidate_does_not_affect_current_whole_target_completion():
+    state = whole_target_state()
+    old, _ = state.add_candidate(make_candidate(
+        objective_id="objective-old", target="https://target.test", endpoint="/old",
+    ))
+    complete_required_phases(state)
+    status, actionable, blockers = state.whole_target_status(
+        target_origin="https://target.test",
+        available_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        validator_classes=frozenset({"sql-injection"}),
+        coverage_sync_available=True,
+    )
+    assert old.id in state.candidates
+    assert status == "completed"
+    assert actionable == () and blockers == ()
+
+
+def test_completion_and_blocker_contract_and_append_only_result_history():
+    state = whole_target_state()
+    complete_required_phases(state)
+    item, _ = state.add_attack_surface_input(AttackSurfaceInput(
+        "objective-current", "https://target.test", endpoint="/search", parameter="q",
+    ))
+    state.set_input_disposition(item.id, "blocked", reason="authorization required")
+    available = frozenset({"recon", "enumeration", "input_analysis"})
+    status, actionable, blockers = state.whole_target_status(
+        target_origin="https://target.test", available_phases=available,
+        validator_classes=frozenset({"sql-injection"}), coverage_sync_available=True,
+    )
+    assert status == "blocked" and actionable == () and blockers
+    state.set_input_disposition(item.id, "pending")
+    state.set_input_disposition(item.id, "analyzed")
+    candidate, _ = state.add_candidate(make_candidate(
+        objective_id="objective-current", target="https://target.test",
+    ))
+    first = ValidationResult(candidate.id, "sql-injection", "authorization-required")
+    second = ValidationResult(candidate.id, "sql-injection", "not-confirmed")
+    state.add_validation_result(first)
+    state.set_candidate_status(candidate.id, "validating")
+    state.add_validation_result(second)
+    assert state.validation_results == [first, second]
+    status, actionable, blockers = state.whole_target_status(
+        target_origin="https://target.test", available_phases=available,
+        validator_classes=frozenset({"sql-injection"}), coverage_sync_available=True,
+    )
+    assert status == "completed" and actionable == () and blockers == ()
+
+
+def test_confirmed_candidate_without_registered_evidence_cannot_complete_objective():
+    state = whole_target_state()
+    complete_required_phases(state)
+    candidate, _ = state.add_candidate(make_candidate(
+        objective_id="objective-current", target="https://target.test",
+    ))
+    state.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "confirmed", evidence_refs=["ev_missing"],
+    ))
+    status, actionable, blockers = state.whole_target_status(
+        target_origin="https://target.test",
+        available_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        validator_classes=frozenset({"sql-injection"}),
+        coverage_sync_available=True,
+    )
+    assert status == "blocked"
+    assert actionable == ()
+    assert any("lacks linked evidence" in blocker for blocker in blockers)
+
+
+def test_blocker_does_not_stop_objective_while_another_candidate_is_actionable():
+    state = whole_target_state()
+    complete_required_phases(state)
+    item, _ = state.add_attack_surface_input(AttackSurfaceInput(
+        "objective-current", "https://target.test", endpoint="/blocked", parameter="id",
+        disposition="blocked", disposition_reason="browser required",
+    ))
+    candidate, _ = state.add_candidate(make_candidate(
+        objective_id="objective-current", target="https://target.test", endpoint="/ready",
+    ))
+    status, actionable, blockers = state.whole_target_status(
+        target_origin="https://target.test",
+        available_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        validator_classes=frozenset({"sql-injection"}),
+        coverage_sync_available=True,
+    )
+    assert item.disposition == "blocked"
+    assert status == "actionable"
+    assert f"candidate:{candidate.id}" in actionable
+    assert blockers
+
+
+def test_dismissed_candidate_with_terminal_result_is_a_valid_disposition():
+    state = whole_target_state()
+    complete_required_phases(state)
+    candidate, _ = state.add_candidate(make_candidate(
+        objective_id="objective-current", target="https://target.test",
+    ))
+    state.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "not-confirmed",
+    ))
+    state.set_candidate_status(candidate.id, "dismissed")
+    status, actionable, blockers = state.whole_target_status(
+        target_origin="https://target.test",
+        available_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        validator_classes=frozenset({"sql-injection"}),
+        coverage_sync_available=True,
+    )
+    assert status == "completed" and actionable == () and blockers == ()
+
+
+def test_progress_facts_ignore_prose_timestamps_and_candidate_status_oscillation():
+    state = whole_target_state()
+    objective = state.objective
+    assert objective is not None
+    candidate, _ = state.add_candidate(make_candidate(
+        objective_id=objective.id, target=objective.target_origin,
+    ))
+    result = ValidationResult(
+        candidate.id, "sql-injection", "not-confirmed", notes="first", recorded_at="t1",
+    )
+    state.add_validation_result(result)
+    facts = state.progress_facts()
+    state.set_candidate_status(candidate.id, "queued")
+    state.set_candidate_status(candidate.id, "validating")
+    result.notes = "edited prose"
+    result.recorded_at = "t2"
+    assert state.progress_facts() == facts
+    retest = ValidationResult(
+        candidate.id, "sql-injection", "confirmed", evidence_refs=["ev-new"],
+    )
+    state.add_validation_result(retest, force=True)
+    after_result = state.progress_facts()
+    assert after_result - facts
+    retest.notes = "different prose"
+    retest.recorded_at = "t3"
+    assert state.progress_facts() == after_result
+    retest.coverage_synced = False
+    pending_sync = state.progress_facts()
+    retest.coverage_synced = True
+    synced = state.progress_facts()
+    assert synced - pending_sync
 
 
 def test_result_requires_known_candidate_and_valid_values():

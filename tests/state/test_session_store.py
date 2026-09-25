@@ -18,7 +18,13 @@ from src.session.store import (
     list_dir,
     new_id,
 )
-from src.workflow.state import Candidate, ValidationResult, WorkflowState
+from src.workflow.state import (
+    AttackSurfaceInput,
+    Candidate,
+    ValidationResult,
+    WorkflowObjective,
+    WorkflowState,
+)
 from src.workflow.evidence import EvidenceArtifact
 from src.engagement.state import EngagementState
 
@@ -85,6 +91,35 @@ class TestEngagementPersistence:
 
 
 class TestWorkflowPersistence:
+    @pytest.mark.asyncio
+    async def test_whole_target_objective_inventory_and_phase_survive_session_round_trip(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "whole-target-round-trip")
+        workflow = WorkflowState(objective=WorkflowObjective(
+            id="objective-a", mode="whole_target", target_origin="https://target.test",
+        ))
+        item, _ = workflow.add_attack_surface_input(AttackSurfaceInput(
+            "objective-a", "https://target.test", method="POST", endpoint="/search",
+            parameter="q", location="body", input_type="text",
+            disposition="blocked", disposition_reason="authorization required",
+        ))
+        workflow.record_phase_completion(
+            "recon", objective_id="objective-a", target_origin="https://target.test",
+            artifact_ref="artifacts/recon/target-test/summary.md",
+        )
+        candidate, _ = workflow.add_candidate(Candidate(
+            candidate_class="sql-injection", target="https://target.test",
+            endpoint="/search", parameter="q", objective_id="objective-a",
+        ))
+        workflow.link_input_candidate(item.id, candidate.id)
+
+        await store.save([Message(role="user", content="continue assessment")], workflow=workflow)
+        loaded = store.load().workflow
+
+        assert loaded.to_dict() == workflow.to_dict()
+        assert loaded.objective == workflow.objective
+        assert loaded.objective_inputs()[0].disposition == "blocked"
+        assert loaded.completed_phases() == frozenset({"recon"})
+
     @pytest.mark.asyncio
     async def test_requeued_candidate_survives_session_save_and_resume(self, tmp_path):
         store = Store.new_with_id(tmp_path, "requeued-workflow")

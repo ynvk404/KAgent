@@ -38,7 +38,7 @@ def test_schema_advertises_options_for_each_question():
     assert question["required"] == ["question"]
     assert question["properties"]["options"]["minItems"] == 2
     assert "choices" not in question["properties"]
-    assert "finite" in options_description
+    assert "finite choices" in options_description
     assert "arbitrary user-supplied values" in options_description
     assert "free text" in options_description
 
@@ -52,22 +52,20 @@ def test_ask_user_preserves_user_control_answers_in_working_context():
 def test_description_explains_when_to_omit_or_use_options():
     description = AskUserTool(CaptureAskPrompter()).description()
 
-    assert "Omit options" in description
-    assert "arbitrary user-supplied value" in description
-    assert "finite set of known choices" in description
-    assert "materially changes the next step" in description
-    assert "every choice merely leads to a free-text question" in description
+    assert "Omit options for arbitrary user-supplied values" in description
+    assert "finite known choices" in description
+    assert "materially change the next step" in description
+    assert "choices that all lead to free text" in description
 
 
 def test_description_distinguishes_blocking_tool_questions_from_conversation():
     description = AskUserTool(CaptureAskPrompter()).description()
 
-    assert "blocks a concrete workflow" in description
-    assert "continue in the same turn" in description
-    assert "target URL" in description
-    assert "credential/session/token/OTP" in description
+    assert "blocks same-turn work" in description
+    assert "target, endpoint/method" in description
+    assert "credentials/session/token/OTP" in description
     assert "normal assistant text" in description
-    assert "does not replace a runtime permission prompt" in description
+    assert "does not approve actions or replace a runtime permission prompt" in description
 
 
 @pytest.mark.asyncio

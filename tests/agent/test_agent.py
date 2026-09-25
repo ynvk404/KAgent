@@ -39,7 +39,7 @@ from src.agent.system_prompt import PromptProfile
 from src.coverage.store import CoverageEntry, CoverageStore
 from src.findings.store import Store as FindingsStore
 from src.intelligence.store import IntelligenceScenario, IntelligenceStore
-from src.llm.client import Client
+from src.llm.client import Client, StreamingClient
 from src.llm.openai import OpenAIClient
 from src.llm.types import (
     ChatRequest,
@@ -58,7 +58,13 @@ from src.tools.http import HTTPTool
 from src.tools.coverage import CoverageTool
 from src.tools.finding import ConfirmFindingTool
 from src.tools.workflow import WorkflowTool
-from src.workflow.state import Candidate, ValidationResult, WorkflowState
+from src.workflow.state import (
+    AttackSurfaceInput,
+    Candidate,
+    ValidationResult,
+    WorkflowObjective,
+    WorkflowState,
+)
 from src.workflow.evidence import EvidenceArtifact
 
 from src.session.store import SessionMemory, Store, new_id
@@ -2938,6 +2944,291 @@ def tool_batch(*calls: ToolCall) -> ChatResponse:
         message=Message(role="assistant", content="", tool_calls=list(calls)),
         finish_reason="tool_calls",
     )
+
+
+def whole_target_agent(
+    scripted: list[ChatResponse], tools: list[Tool], *, max_steps: int = 20,
+    workflow: WorkflowState | None = None,
+) -> tuple[Agent, FakeClient]:
+    registry = ToolRegistry()
+    for tool in tools:
+        registry.register(tool)
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    client = FakeClient(scripted)
+    agent = Agent(AgentOptions(
+        client=client,
+        tools=registry,
+        skills=skills,
+        prompter=AlwaysAllow(),
+        store=None,
+        target=Target("https://target.test"),
+        max_steps=max_steps,
+        workflow=workflow,
+    ))
+    return agent, client
+
+
+def agent_tool_call(call_id: str, name: str, args: dict[str, Any] | None = None) -> ToolCall:
+    return ToolCall(
+        id=call_id,
+        function=FunctionCall(name=name, arguments=json.dumps(args or {})),
+    )
+
+
+@pytest.mark.asyncio
+async def test_whole_target_early_final_is_buffered_and_continues_to_runtime_completion():
+    class CompletePhasesTool(Tool):
+        def __init__(self):
+            self.state: WorkflowState | None = None
+
+        def name(self) -> str:
+            return "complete_phases"
+
+        def description(self) -> str:
+            return "test helper"
+
+        def schema(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        def requires_permission(self) -> bool:
+            return False
+
+        async def run(self, args, signal, prompter) -> str:
+            assert self.state is not None and self.state.objective is not None
+            objective = self.state.objective
+            for phase in ("recon", "enumeration", "input_analysis"):
+                self.state.record_phase_completion(
+                    phase,
+                    objective_id=objective.id,
+                    target_origin=objective.target_origin or "",
+                    artifact_ref=f"artifacts/{phase}.md",
+                )
+            return "phases recorded"
+
+    mutate = CompletePhasesTool()
+    agent, client = whole_target_agent([
+        ChatResponse(message=Message(role="assistant", content="I am finished."), finish_reason="stop"),
+        tool_batch(agent_tool_call("complete", "complete_phases")),
+        ChatResponse(message=Message(role="assistant", content="Assessment summary."), finish_reason="stop"),
+    ], [mutate])
+    mutate.state = agent.workflow
+    collector = collect()
+    await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
+
+    visible = [event.text for event in collector["events"] if event.type == "assistant-text"]
+    visible += [event.text for event in collector["events"] if event.type == "assistant-delta"]
+    assert visible == ["Assessment summary."]
+    assert collector["events"][-1].stop_reason == "workflow_completed"
+    assert len(client.requests) == 3
+    assert agent.workflow.objective is not None
+    assert len([
+        message for message in client.requests[1].messages
+        if message.role == "system" and "intermediate response" in message.content
+    ]) == 1
+
+
+@pytest.mark.asyncio
+async def test_whole_target_stalls_after_four_iterations_without_semantic_progress():
+    responses = [tool_batch(agent_tool_call(f"noop-{i}", "echo", {"msg": "same"})) for i in range(4)]
+    responses.append(ChatResponse(
+        message=Message(role="assistant", content="The assessment is stalled."),
+        finish_reason="stop",
+    ))
+    agent, client = whole_target_agent(responses, [EchoTool()], max_steps=10)
+    collector = collect()
+    await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
+    assert collector["events"][-1].stop_reason == "workflow_stalled"
+    assert len(client.requests) == 5
+    assert client.requests[-1].tools is None
+    assert any(event.type == "assistant-text" and event.text == "The assessment is stalled." for event in collector["events"])
+
+
+@pytest.mark.asyncio
+async def test_whole_target_streaming_does_not_emit_rejected_final_text():
+    class ScriptedStreamingClient(StreamingClient):
+        def __init__(self, scripted, deltas):
+            self.scripted = scripted
+            self.deltas = deltas
+            self.idx = 0
+            self.requests = []
+
+        def name(self) -> str:
+            return "streaming-test"
+
+        def model(self) -> str:
+            return "streaming-test-model"
+
+        async def chat(self, request, signal=None):
+            raise AssertionError("streaming client should use chat_stream")
+
+        async def chat_stream(self, request, on_delta, signal=None):
+            self.requests.append(request)
+            for chunk in self.deltas[self.idx]:
+                on_delta(chunk)
+            response = self.scripted[self.idx]
+            self.idx += 1
+            return response
+
+    scripted = [
+        ChatResponse(message=Message(role="assistant", content="I am done."), finish_reason="stop"),
+        *[
+            tool_batch(agent_tool_call(f"echo-{i}", "echo", {"msg": "same"}))
+            for i in range(3)
+        ],
+        ChatResponse(message=Message(role="assistant", content="The workflow stalled."), finish_reason="stop"),
+    ]
+    deltas = [["I am ", "done."]] + [[] for _ in range(3)] + [["The ", "workflow ", "stalled."]]
+    client = ScriptedStreamingClient(scripted, deltas)
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    agent = Agent(AgentOptions(
+        client=client, tools=registry, skills=skills, prompter=AlwaysAllow(), store=None,
+        target=Target("https://target.test"), max_steps=10, streaming_enabled=True,
+    ))
+    collector = collect()
+    await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
+    emitted_deltas = [event.text for event in collector["events"] if event.type == "assistant-delta"]
+    assert emitted_deltas == ["The ", "workflow ", "stalled."], [
+        (event.type, getattr(event, "text", None), getattr(event, "stop_reason", None))
+        for event in collector["events"]
+    ]
+    assert not any(event.type == "assistant-text" and "I am done" in event.text for event in collector["events"])
+    assert collector["events"][-1].stop_reason == "workflow_stalled"
+
+
+@pytest.mark.asyncio
+async def test_whole_target_meaningful_progress_resets_stall_counter():
+    class OneFactTool(EchoTool):
+        def __init__(self):
+            super().__init__()
+            self.state: WorkflowState | None = None
+
+        async def run(self, args, signal, prompter) -> str:
+            self.calls += 1
+            if self.calls == 3:
+                assert self.state is not None and self.state.objective is not None
+                objective = self.state.objective
+                self.state.record_phase_completion(
+                    "recon", objective_id=objective.id,
+                    target_origin=objective.target_origin or "",
+                    artifact_ref="artifacts/recon.md",
+                )
+            return "unchanged"
+
+    progress_tool = OneFactTool()
+    responses = [tool_batch(agent_tool_call(f"call-{i}", "echo", {"msg": "same"})) for i in range(4)]
+    responses.append(ChatResponse(
+        message=Message(role="assistant", content="Hard cap summary."), finish_reason="stop",
+    ))
+    agent, client = whole_target_agent(responses, [progress_tool], max_steps=4)
+    progress_tool.state = agent.workflow
+    collector = collect()
+    await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
+    assert collector["events"][-1].stop_reason == "max_steps"
+    assert len(client.requests) == 5
+
+
+@pytest.mark.asyncio
+async def test_malformed_tool_call_retry_counts_as_one_outer_no_progress_iteration():
+    malformed = ChatResponse(
+        message=Message(
+            role="assistant",
+            content=MALFORMED_TOOL_CALL_TEXT,
+        ),
+        finish_reason="stop",
+    )
+    responses = [malformed, ChatResponse(
+        message=Message(role="assistant", content="No structured call was made."),
+        finish_reason="stop",
+    )]
+    responses.extend(
+        tool_batch(agent_tool_call(f"noop-{i}", "echo", {"msg": "same"}))
+        for i in range(3)
+    )
+    responses.append(ChatResponse(
+        message=Message(role="assistant", content="The workflow stalled."),
+        finish_reason="stop",
+    ))
+    agent, client = whole_target_agent(responses, [EchoTool()], max_steps=10)
+    collector = collect()
+    await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
+    assert collector["events"][-1].stop_reason == "workflow_stalled"
+    assert len(client.requests) == 6
+    assert client.requests[-1].tools is None
+
+
+@pytest.mark.asyncio
+async def test_whole_target_blocker_uses_blocked_stop_reason():
+    state = WorkflowState(objective=WorkflowObjective(
+        id="objective-blocked", mode="whole_target", target_origin="https://target.test",
+    ))
+    for phase in ("recon", "enumeration"):
+        state.record_phase_completion(
+            phase, objective_id="objective-blocked", target_origin="https://target.test",
+            artifact_ref=f"artifacts/{phase}.md",
+        )
+    item, _ = state.add_attack_surface_input(AttackSurfaceInput(
+        "objective-blocked", "https://target.test", endpoint="/search", parameter="q",
+        disposition="blocked", disposition_reason="authorization required",
+    ))
+    agent, client = whole_target_agent([
+        ChatResponse(message=Message(role="assistant", content="This is done."), finish_reason="stop"),
+        ChatResponse(message=Message(role="assistant", content="Authorization is required."), finish_reason="stop"),
+    ], [], workflow=state)
+    collector = collect()
+    await agent.run("Continue the assessment", FakeSignal(), collector["sink"])
+    assert collector["events"][-1].stop_reason == "workflow_blocked"
+    assert len(client.requests) == 2
+    assert client.requests[-1].tools is None
+    assert item.disposition == "blocked"
+    assert agent.workflow.objective is not None
+    assert agent.workflow.objective.id == "objective-blocked"
+    assert not any(event.type == "assistant-text" and event.text == "This is done." for event in collector["events"])
+
+
+def test_request_boundary_structures_whole_target_and_candidate_validation_modes():
+    agent, _ = whole_target_agent([], [])
+    agent._initialize_request_objective("Perform a whole-target assessment", True)
+    assert agent.workflow.objective is not None
+    assert agent.workflow.objective.mode == "whole_target"
+
+    candidate, _ = agent.workflow.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test", endpoint="/search",
+    ))
+    agent.workflow.objective = None
+    agent._initialize_request_objective(f"Validate candidate {candidate.id}", True)
+    assert agent.workflow.objective is not None
+    assert agent.workflow.objective.mode == "candidate_validation"
+    assert agent.workflow.objective.candidate_id == candidate.id
+
+
+def test_authorization_followup_keeps_candidate_blocker_in_same_objective():
+    state = WorkflowState(objective=WorkflowObjective(
+        id="whole-objective", mode="whole_target", target_origin="https://target.test",
+    ))
+    for phase in ("recon", "enumeration", "input_analysis"):
+        state.record_phase_completion(
+            phase, objective_id="whole-objective", target_origin="https://target.test",
+            artifact_ref=f"artifacts/{phase}.md",
+        )
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test",
+        endpoint="/search", objective_id="whole-objective",
+    ))
+    state.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "authorization-required",
+        deferred_reason="operator approval required",
+    ))
+    agent, _ = whole_target_agent([], [], workflow=state)
+    agent._initialize_request_objective(
+        f"Authorization is granted; validate candidate {candidate.id}", True
+    )
+    assert agent.workflow.objective is not None
+    assert agent.workflow.objective.id == "whole-objective"
+    assert agent.workflow.objective.mode == "whole_target"
 
 
 @pytest.mark.asyncio

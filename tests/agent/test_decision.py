@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -503,3 +504,77 @@ def test_file_names_and_versions_do_not_count_as_targets(text):
 )
 def test_hosts_and_urls_count_as_targets(text):
     assert has_host_like_text(text) is True
+
+
+def whole_context(**changes: Any) -> PlannerContext:
+    values: dict[str, Any] = {
+        "objective_mode": "whole_target",
+        "objective_id": "objective-1",
+        "target_origin": "https://target.test",
+        "workflow_status": "actionable",
+    }
+    values.update(changes)
+    return PlannerContext(**values)
+
+
+def test_whole_target_planner_orders_required_phases():
+    skills = shipped_skills()
+    recon = build_decision_plan("anything", skills, Target(), whole_context())
+    assert recon is not None and recon.recommended_skill == "recon"
+    enumeration = build_decision_plan(
+        "anything", skills, Target(), whole_context(completed_phases=frozenset({"recon"}))
+    )
+    assert enumeration is not None
+    assert enumeration.recommended_skill == "web-enumeration"
+    input_analysis = build_decision_plan(
+        "anything", skills, Target(),
+        whole_context(completed_phases=frozenset({"recon", "enumeration"})),
+    )
+    assert input_analysis is not None
+    assert input_analysis.recommended_skill == "web-input-analysis"
+
+
+def test_whole_target_planner_handles_pending_inputs_coverage_and_validator():
+    skills = shipped_skills()
+    complete_phases = frozenset({"recon", "enumeration", "input_analysis"})
+    pending = build_decision_plan(
+        "anything", skills, Target(),
+        whole_context(completed_phases=complete_phases, pending_input_count=1),
+    )
+    assert pending is not None and pending.recommended_skill == "web-input-analysis"
+    coverage = build_decision_plan(
+        "anything", skills, Target(),
+        whole_context(completed_phases=complete_phases, coverage_sync_candidate_ids=("cand_a",)),
+    )
+    assert coverage is not None and coverage.recommended_skill is None
+    assert "sync_coverage" in coverage.guidance
+    candidate = build_decision_plan(
+        "anything", skills, Target(),
+        whole_context(
+            completed_phases=complete_phases,
+            candidates=(PlannerCandidate("cand_sqli", "sql-injection", "queued"),),
+        ),
+    )
+    assert candidate is not None
+    assert candidate.recommended_skill == "sql-injection"
+    assert candidate.candidate_id == "cand_sqli"
+
+
+@pytest.mark.parametrize("status", ["completed", "blocked"])
+def test_terminal_whole_target_planner_does_not_recommend_extra_work(status):
+    assert build_decision_plan(
+        "anything", shipped_skills(), Target(), whole_context(workflow_status=status)
+    ) is None
+
+
+def test_direct_candidate_validation_keeps_existing_planner_route():
+    plan = build_decision_plan(
+        "continue validation",
+        shipped_skills(),
+        Target(),
+        PlannerContext(
+            objective_mode="candidate_validation",
+            candidates=(PlannerCandidate("cand_direct", "sql-injection", "queued"),),
+        ),
+    )
+    assert plan is not None and plan.recommended_skill == "sql-injection"

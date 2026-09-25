@@ -43,12 +43,10 @@ class CoverageTool(Tool):
 
     def description(self) -> str:
         return (
-            "Track tested (endpoint, parameter, vulnerability-class) tuples "
-            "across resumes. Mark each meaningful test; query untested tuples "
-            "before choosing more work. Candidate-class aliases are normalized. "
-            "list/untested are paginated: complete=true only when one response "
-            "contains the full matching set; use has_more and next_cursor to "
-            "continue."
+            "Track tested endpoint/parameter/class tuples across resumes. Mark "
+            "meaningful tests and query untested tuples before more work. "
+            "Class aliases normalize. list/untested paginate: reuse filters with next_cursor; complete=true "
+            "means the full set fit in one response."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -59,34 +57,32 @@ class CoverageTool(Tool):
                     "type": "string",
                     "enum": list(ACTIONS),
                     "description": (
-                        "mark, list, untested, or summary; clear "
-                        "removes session coverage after permission."
+                        "mark, list, untested, summary; clear erases coverage after permission."
                     ),
                 },
                 "endpoint": {
                     "type": "string",
                     "description": (
-                        "For mark/list: endpoint such as 'GET /api/users/{id}'. "
-                        "Query strings are stripped."
+                        "For mark/list, e.g. GET /api/users/{id}; query strings are stripped."
                     ),
                 },
                 "param": {
                     "type": "string",
                     "description": (
-                        "Parameter name for mark or exact list filter."
+                        "Parameter for mark or exact list filter."
                     ),
                 },
                 "vuln_class": {
                     "type": "string",
                     "description": (
-                        "Canonical candidate/vulnerability class or alias."
+                        "Canonical vulnerability class or alias."
                     ),
                 },
                 "status": {
                     "type": "string",
                     "enum": list(STATUSES),
                     "description": (
-                        "Test result: tried, passed, failed, waf-blocked, or skipped."
+                        "Result: tried, passed, failed, waf-blocked, or skipped."
                     ),
                 },
                 "notes": {
@@ -96,7 +92,7 @@ class CoverageTool(Tool):
                 "candidates": {
                     "type": "array",
                     "description": (
-                        "For untested: {endpoint, param} pairs crossed with vuln_classes."
+                        "For untested: endpoint/param pairs crossed with vuln_classes."
                     ),
                     "items": {
                         "type": "object",
@@ -110,7 +106,7 @@ class CoverageTool(Tool):
                 "vuln_classes": {
                     "type": "array",
                     "description": (
-                        "For untested: classes to check for every candidate."
+                        "For untested, classes checked for every candidate."
                     ),
                     "items": {"type": "string"},
                 },
@@ -124,9 +120,8 @@ class CoverageTool(Tool):
                 "cursor": {
                     "type": "string",
                     "description": (
-                        "For list/untested: continuation offset returned as "
-                        "next_cursor. Omit for the first page and reuse the "
-                        "same filters/candidates on continuation calls."
+                        "For list/untested: next_cursor offset. Omit initially; "
+                        "reuse the same filters/candidates to continue."
                     ),
                 },
             },

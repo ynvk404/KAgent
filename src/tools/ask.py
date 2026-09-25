@@ -27,23 +27,15 @@ class AskUserTool(Tool):
 
     def description(self) -> str:
         return (
-            "Ask the user a question, optionally with multiple-choice options, "
-            "to disambiguate or get a decision. Prefer this tool when missing "
-            "user-supplied information blocks a concrete workflow and execution "
-            "should continue in the same turn, such as a target URL, endpoint, "
-            "HTTP method, target identity, finite selection, workflow branch, "
-            "required credential/session/token/OTP, or explicit scope or "
-            "authorization checkpoint. Use normal assistant text for open-ended "
-            "discussion or clarification that does not need same-turn continuation. "
-            "This tool collects user intent, context, or inputs; it does not replace "
-            "a runtime permission prompt for a proposed tool action. Omit options "
-            "when collecting "
-            "an arbitrary user-supplied value that cannot be enumerated in "
-            "advance. Use options only for a genuinely finite set of known "
-            "choices that materially changes the next step; do not add an "
-            "option question when every choice merely leads to a free-text "
-            "question. When the requested action or object is ambiguous, ask "
-            "neutrally about the missing object or scope; do not invent one."
+            "Ask up to four questions when missing input blocks same-turn work "
+            "(target, endpoint/method, identity, workflow branch, "
+            "credentials/session/token/OTP, or scope/authorization). Use normal "
+            "assistant text for open-ended discussion. This gathers user input; "
+            "it does not approve actions or replace a runtime permission prompt. "
+            "Omit options for arbitrary user-supplied values. Use 2–4 finite "
+            "known choices only when they materially change the next step; do not "
+            "offer choices that all lead to free text. Ask neutrally about a "
+            "missing object or scope; do not invent one."
         )
 
     def schema(self) -> dict:
@@ -70,11 +62,9 @@ class AskUserTool(Tool):
                                 "minItems": 2,
                                 "maxItems": 4,
                                 "description": (
-                                    "Two to four finite, known choices that "
-                                    "materially change the next step. Omit "
-                                    "options for arbitrary user-supplied "
-                                    "values; ask for those directly as free "
-                                    "text. Use this field, not choices."
+                                    "Use options, not choices: 2–4 finite choices "
+                                    "that change the next step. Omit for arbitrary "
+                                    "user-supplied values; ask in free text."
                                 ),
                                 "items": {
                                     "type": "object",

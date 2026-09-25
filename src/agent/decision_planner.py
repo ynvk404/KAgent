@@ -40,6 +40,15 @@ class PlannerContext:
     candidate_classes: frozenset[str] = frozenset()
     completed_skills: frozenset[str] = frozenset()
     candidates: tuple[PlannerCandidate, ...] = ()
+    objective_mode: str | None = None
+    objective_id: str | None = None
+    target_origin: str | None = None
+    completed_phases: frozenset[str] = frozenset()
+    pending_input_count: int = 0
+    blocked_input_count: int = 0
+    coverage_sync_candidate_ids: tuple[str, ...] = ()
+    workflow_status: str | None = None
+    workflow_blockers: tuple[str, ...] = ()
 
 
 class SkillRecommendation(TypedDict):
@@ -181,6 +190,9 @@ def build_decision_plan(
     if not text:
         return None
 
+    if context is not None and context.objective_mode == "whole_target":
+        return build_whole_target_plan(skills, context)
+
     normalized = normalize(text)
     if is_purely_informational(normalized):
         return None
@@ -248,6 +260,145 @@ def build_decision_plan(
         ),
         candidate_id=selected.id if selected else None,
     )
+
+
+def build_whole_target_plan(
+    skills: List[Skill], context: PlannerContext
+) -> DecisionPlan | None:
+    """Recommend one bounded next step from current structured workflow state."""
+    if context.workflow_status in {"completed", "blocked", "not_applicable"}:
+        return None
+
+    phase_skills = (
+        ("recon", "recon"),
+        ("enumeration", "web-enumeration"),
+        ("input_analysis", "web-input-analysis"),
+    )
+    for phase, skill_name in phase_skills:
+        if phase in context.completed_phases:
+            continue
+        skill = next(
+            (
+                item for item in skills
+                if item.name == skill_name and not item.disable_model_invocation
+            ),
+            None,
+        )
+        if skill is None:
+            return None
+        reason = f"whole-target objective {context.objective_id} requires {phase}"
+        return DecisionPlan(
+            recommended_skill=skill.name,
+            reason=reason,
+            risk="normal",
+            checklist=[
+                "Stay within the current target origin.",
+                "Use the phase playbook and commit its bounded result with workflow.",
+            ],
+            guidance=(
+                "Decision planner guidance for this turn:\n"
+                f"Active objective: whole-target assessment {context.objective_id} "
+                f"for {context.target_origin}.\n"
+                f"Next bounded phase: {skill.name} ({phase}).\n"
+                "Follow the skill playbook. Runtime structured state controls "
+                "completion; this recommendation is guidance."
+            ),
+        )
+
+    if context.pending_input_count > 0:
+        skill = next(
+            (
+                item for item in skills
+                if item.name == "web-input-analysis"
+                and not item.disable_model_invocation
+            ),
+            None,
+        )
+        if skill is not None:
+            return DecisionPlan(
+                recommended_skill=skill.name,
+                reason=f"{context.pending_input_count} discovered inputs remain pending analysis",
+                risk="normal",
+                checklist=["Close each discovered input with a structured disposition."],
+                guidance=(
+                    "Decision planner guidance for this turn:\n"
+                    f"Active objective: whole-target assessment {context.objective_id}.\n"
+                    f"Next bounded phase: {skill.name}; "
+                    f"{context.pending_input_count} inputs remain pending.\n"
+                    "Record candidates and input dispositions through workflow."
+                ),
+            )
+
+    if context.coverage_sync_candidate_ids:
+        candidate_id = context.coverage_sync_candidate_ids[0]
+        return DecisionPlan(
+            recommended_skill=None,
+            reason=f"coverage sync is pending for {candidate_id}",
+            risk="normal",
+            checklist=["Retry the structured coverage sync before continuing validation."],
+            guidance=(
+                "Decision planner guidance for this turn:\n"
+                f"Active objective: whole-target assessment {context.objective_id}.\n"
+                f"Next action: call workflow(action=sync_coverage, candidate_id={candidate_id})."
+            ),
+            candidate_id=candidate_id,
+        )
+
+    actionable = [
+        candidate for candidate in context.candidates
+        if candidate.status in {"new", "queued", "validating"}
+    ]
+    actionable.sort(
+        key=lambda item: (
+            {"validating": 0, "queued": 1, "new": 2}.get(item.status, 3),
+            {"high": 0, "medium": 1, "low": 2}.get(item.priority or "", 3),
+            item.id,
+        )
+    )
+    for candidate in actionable:
+        validator = next(
+            (
+                skill for skill in skills
+                if skill.stage == "validation"
+                and not skill.disable_model_invocation
+                and candidate.candidate_class in skill.candidate_classes
+            ),
+            None,
+        )
+        if validator is None:
+            continue
+        return DecisionPlan(
+            recommended_skill=validator.name,
+            reason=f"candidate {candidate.id} remains actionable in this objective",
+            risk="normal",
+            checklist=[
+                "Validate only this scoped candidate using its skill contract.",
+                "Record the result and required evidence through workflow.",
+            ],
+            guidance=(
+                "Decision planner guidance for this turn:\n"
+                f"Active objective: whole-target assessment {context.objective_id}.\n"
+                f"Next candidate: {candidate.id} ({candidate.candidate_class}) via "
+                f"{validator.name}.\n"
+                "Respect the validator's authorization and evidence gates."
+            ),
+            candidate_id=candidate.id,
+        )
+
+    if context.workflow_status == "actionable":
+        return DecisionPlan(
+            recommended_skill=None,
+            reason="runtime reports actionable work without a specialized recommendation",
+            risk="normal",
+            checklist=[],
+            guidance=(
+                "Decision planner guidance for this turn:\n"
+                f"Active objective: whole-target assessment {context.objective_id}.\n"
+                "Use workflow list and current structured state to select remaining "
+                "runtime-known work. Runtime gates remain authoritative."
+            ),
+        )
+    return None
 
 
 def select_candidate(

@@ -48,16 +48,12 @@ class ConfirmFindingTool:
 
     def description(self) -> str:
         return (
-            "Persist a CONFIRMED vulnerability finding. "
-            "candidate_id is required: its latest workflow validation must be "
-            "confirmed with registered, integrity-checked evidence. Keep "
-            "observed_impact limited to what that evidence demonstrates and "
-            "describe untested consequences conditionally in potential_impact.\n\n"
-            "Writes a markdown report under "
-            "./artifacts/findings/<slug>.md and surfaces a banner in the "
-            "TUI. Do not call for theoretical findings, scanner "
-            "hits you haven't manually verified, or "
-            "'suspected' behavior."
+            "Write ./artifacts/findings/<slug>.md and show a TUI banner only for "
+            "reproducible confirmed vulnerabilities. Requires a candidate_id "
+            "whose latest result is confirmed and registered evidence passes "
+            "integrity checks. Limit observed_impact to that evidence; state "
+            "untested consequences conditionally in potential_impact. Never "
+            "report theoretical or unverified scanner hits."
         )
 
     def schema(self) -> dict:
@@ -72,9 +68,8 @@ class ConfirmFindingTool:
                     "type": "string",
                     "minLength": 1,
                     "description": (
-                        "Required structured Candidate ID from workflow. Its "
-                        "latest ValidationResult must be confirmed and its "
-                        "registered evidence must still pass integrity checks."
+                        "Candidate ID; latest result must be confirmed and "
+                        "registered evidence must pass integrity checks."
                     ),
                 },
                 "severity": {
@@ -87,11 +82,11 @@ class ConfirmFindingTool:
                 },
                 "url": {
                     "type": "string",
-                    "description": "Exact affected endpoint URL; its origin and path must match the Candidate.",
+                    "description": "Exact endpoint URL; origin and path must match Candidate.",
                 },
                 "parameter": {
                     "type": "string",
-                    "description": "Parameter injected/abused; when the Candidate records one, it must match.",
+                    "description": "Must match Candidate's parameter when recorded.",
                 },
                 "payload": {
                     "type": "string",
@@ -99,7 +94,7 @@ class ConfirmFindingTool:
                 },
                 "method": {
                     "type": "string",
-                    "description": "HTTP method; when the Candidate records one, it must match.",
+                    "description": "HTTP method; must match Candidate when recorded.",
                 },
                 "response_excerpt": {
                     "type": "string",
@@ -108,17 +103,15 @@ class ConfirmFindingTool:
                 "observed_impact": {
                     "type": "string",
                     "description": (
-                        "What the linked validation evidence actually demonstrates. "
-                        "Do not state untested consequences as facts."
+                        "Impact demonstrated by linked validation evidence; do not "
+                        "state untested consequences as facts."
                     ),
                 },
                 "potential_impact": {
                     "type": "string",
                     "description": (
-                        "Possible consequences that were not demonstrated by the "
-                        "linked validation. Keep them explicitly conditional; use "
-                        "a short statement such as 'No additional impact assessed.' "
-                        "when none is identified."
+                        "State untested consequences conditionally. If none, say "
+                        "'No additional impact assessed.'"
                     ),
                 },
                 "curl": {
@@ -132,10 +125,8 @@ class ConfirmFindingTool:
                 "vuln_class": {
                     "type": "string",
                     "description": (
-                        "Canonical class used by Workflow/Coverage; when supplied "
-                        "it must match the Candidate, such as "
-                        "sql-injection, cross-site-scripting, access-control, "
-                        "or ssrf. Classification supplies CWE/OWASP values."
+                        "Canonical Workflow/Coverage class; must match Candidate. "
+                        "CWE/OWASP values are assigned automatically."
                     ),
                 },
             },

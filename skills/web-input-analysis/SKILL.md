@@ -24,6 +24,7 @@ triggers:
     - object identifier
     - which parameter
 candidate-classes: []
+completion-artifact: artifacts/web-input-analysis/{target}/candidates.md
 requires:
   - web-enumeration
 allowed-tools:
@@ -230,6 +231,14 @@ enough for the next skill to decide where to spend effort.
 
 ## 6. Build the candidate list
 
+In a whole-target objective, account for every structured input discovered by
+enumeration. For each input call `workflow(action="set_input_disposition",
+input_id=..., disposition=...)`: use `analyzed` after triage, `dropped` with a
+short reason when it is out of scope for this analysis, or `blocked` with the
+current dependency when analysis cannot proceed. A blocked input remains an
+objective blocker and must not be reported as complete. If a blocker is later
+resolved, set the same input back to `pending` and analyze it in this objective.
+
 For every candidate strong enough to include in the list, also call
 `workflow(action="record_candidate", source_skill="web-input-analysis", ...)`
 with its canonical `candidate_class`, method, endpoint, parameter/location,
@@ -237,8 +246,9 @@ short signals, and references to the baseline request or auth context when
 available. Store references, not raw request/response bodies. The returned
 Candidate ID is the handoff key for the validation skill. The workflow tool
 deduplicates the same semantic target/method/endpoint/input/class tuple, so do
-not manufacture alternate IDs. Weak/noisy observations that do not meet the
-candidate-list bar must not be recorded. Inspect `supported` and
+not manufacture alternate IDs. When an input record exists, pass its
+`input_id` to link the candidate to that input. Weak/noisy observations that do
+not meet the candidate-list bar must not be recorded. Inspect `supported` and
 `recommended_skills` in the tool result before naming the next skill. For
 multiple independent suspected classes, record one Candidate per class and
 retain each returned ID; do not collapse them into one result.
@@ -313,6 +323,10 @@ skill_name="web-input-analysis",
 artifact_ref="artifacts/web-input-analysis/<target>/candidates.md",
 current_phase="validation")`. This records
 workflow progress independently of the conversational summary.
+
+If a whole-target input remains `blocked`, leave the phase incomplete, explain
+the dependency, and let the runtime report the objective as blocked. Resume the
+same input in the same objective after the dependency is resolved.
 
 Do not turn signal-gathering into confirmation. Do not chain probes into a
 working payload. Do not decide a finding exists here — that determination,
