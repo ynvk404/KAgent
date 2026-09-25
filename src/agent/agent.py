@@ -1,7 +1,11 @@
 import traceback
 import asyncio
+import hashlib
 import json
+import os
+import posixpath
 import re
+import shlex
 import time
 import uuid
 import ssl
@@ -20,6 +24,7 @@ from typing import (
     TypeVar,
     cast,
 )
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from .mentions import expand_file_mentions
 
@@ -71,6 +76,7 @@ from src.session.store import (
 from src.skills.registry import (
     Registry as SkillRegistry,
     materialize_skill_body,
+    normalize_metadata_name,
 )
 
 from src.target.origin import HTTPOrigin
@@ -124,7 +130,9 @@ R = TypeVar("R")
 EventSink = Callable[[AgentEvent], None]
 
 DEFAULT_MAX_STEPS = 20
+DEFAULT_WHOLE_TARGET_MAX_STEPS = 40
 MAX_CONSECUTIVE_NO_PROGRESS = 4
+MAX_PHASE_EXPLORATION_STEPS = 8
 REASONING_POLICY_ID = "reasoning-baseline-v1"
 
 _EVENT_FACTORIES = {
@@ -157,6 +165,7 @@ SCOPE_CONTEXT_MARKER = "# Current engagement scope (authoritative)"
 COMPACTION_MIN_HISTORY_TOKENS = 2_048
 COMPACTION_MIN_HISTORY_RATIO = 1 / 3
 MAX_PARALLEL_TOOL_CALLS = 4
+AGENT_TRACE_ENV = "KAgent_TRACE_AGENT"
 
 _EXPLICIT_HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _OPERATIONAL_TARGET_TERMS = re.compile(
@@ -347,6 +356,368 @@ def tool_error_kind(err: Exception, *, invalid_args: bool = False) -> ErrorKind:
     return "tool_exception"
 
 
+@dataclass(frozen=True)
+class ExecutedToolCall:
+    name: str
+    args: dict[str, Any]
+    parsed: bool
+    result: ToolCallResult
+
+
+@dataclass(frozen=True)
+class ToolExecutionBatch:
+    all_refused: bool
+    calls: list[ExecutedToolCall]
+
+
+def _stable_activity_fingerprint(tool_name: str, value: Any) -> str:
+    canonical = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        default=str,
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"{tool_name}:{digest}"
+
+
+_VOLATILE_HTTP_HEADERS = frozenset({
+    "accept",
+    "accept-encoding",
+    "accept-language",
+    "connection",
+    "content-length",
+    "host",
+    "user-agent",
+    "x-correlation-id",
+    "x-request-id",
+    "x-trace-id",
+})
+
+
+def _normalize_activity_url(value: str, target_base_url: str | None = None) -> str:
+    raw = value.strip()
+    if target_base_url and not re.match(r"^https?://", raw, re.IGNORECASE):
+        base = target_base_url.rstrip("/")
+        raw = base + (raw if raw.startswith("/") else f"/{raw}")
+
+    try:
+        parsed = urlsplit(raw)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return raw
+        scheme = parsed.scheme.lower()
+        host = parsed.hostname.lower()
+        port = parsed.port
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        if port is not None and not (
+            (scheme == "http" and port == 80)
+            or (scheme == "https" and port == 443)
+        ):
+            host = f"{host}:{port}"
+        if parsed.username is not None:
+            credentials = parsed.username
+            if parsed.password is not None:
+                credentials += f":{parsed.password}"
+            host = f"{credentials}@{host}"
+        query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=True)), doseq=True)
+        return urlunsplit((scheme, host, parsed.path or "/", query, ""))
+    except ValueError:
+        return raw
+
+
+def _normalized_http_shape(args: dict[str, Any], target_base_url: str | None) -> dict[str, Any]:
+    method = args.get("method", "GET")
+    method = method.strip().upper() if isinstance(method, str) else "GET"
+    raw_url = args.get("url", "")
+    url = _normalize_activity_url(
+        raw_url if isinstance(raw_url, str) else "", target_base_url,
+    )
+    raw_headers = args.get("headers", {})
+    headers: list[tuple[str, str]] = []
+    if isinstance(raw_headers, dict):
+        headers = sorted(
+            (str(name).strip().lower(), str(value).strip())
+            for name, value in raw_headers.items()
+            if str(name).strip().lower() not in _VOLATILE_HTTP_HEADERS
+        )
+    body = args.get("body", "")
+    body_text = body if isinstance(body, str) else ""
+    if body_text:
+        is_json = any(
+            name == "content-type" and "json" in value.lower()
+            for name, value in headers
+        ) or body_text.strip().startswith(("{", "["))
+        if is_json:
+            try:
+                body_text = json.dumps(
+                    json.loads(body_text), ensure_ascii=False, sort_keys=True,
+                    separators=(",", ":"),
+                )
+            except (TypeError, ValueError):
+                pass
+    return {"method": method, "url": url, "headers": headers, "body": body_text}
+
+
+_CURL_VALUE_OPTIONS = {
+    "-X": "method", "--request": "method",
+    "-H": "header", "--header": "header",
+    "-d": "data", "--data": "data", "--data-raw": "data",
+    "--data-binary": "data", "--json": "json",
+    "--url": "url", "-u": "user", "--user": "user",
+    "-b": "cookie", "--cookie": "cookie",
+}
+_CURL_OUTPUT_OPTIONS = {
+    "-o", "--output", "-w", "--write-out", "-m", "--max-time",
+    "--connect-timeout",
+}
+_CURL_IGNORED_OPTIONS = {
+    "-s", "-S", "--silent", "--show-error",
+    "-f", "--fail", "--fail-with-body",
+    "-k", "--insecure",
+    "-L", "--location",
+    "--compressed",
+    "-i", "--include",
+    "-v", "--verbose",
+    "--no-progress-meter",
+}
+_CURL_SEMANTIC_FLAGS = {
+    "--path-as-is",
+    "--globoff",
+}
+_PIPELINE_OR_REDIRECT_OPS = {
+    "|", ">", ">>", "<", "2>&1", "2>", "1>&2", "2>>",
+}
+_COMPLEX_SHELL_OPS = {
+    "&&", "||", ";", "&",
+}
+
+
+def _normalized_curl_command(
+    tokens: list[str], target_base_url: str | None,
+) -> dict[str, Any] | None:
+    if not tokens or posixpath.basename(tokens[0]).lower() not in {"curl", "curl.exe"}:
+        return None
+    if any(token in _COMPLEX_SHELL_OPS for token in tokens):
+        return None
+
+    curl_tokens = tokens
+    for i, token in enumerate(tokens):
+        if token in _PIPELINE_OR_REDIRECT_OPS or (
+            len(token) > 1 and (token.startswith(">") or token.startswith("<") or token.startswith("2>"))
+        ):
+            curl_tokens = tokens[:i]
+            break
+
+    if not curl_tokens or posixpath.basename(curl_tokens[0]).lower() not in {"curl", "curl.exe"}:
+        return None
+
+    method: str | None = None
+    headers: list[tuple[str, str]] = []
+    bodies: list[tuple[str, str]] = []
+    users: list[str] = []
+    cookies: list[str] = []
+    urls: list[str] = []
+    flags: set[str] = set()
+    head_flag = False
+    get_flag = False
+
+    index = 1
+    while index < len(curl_tokens):
+        token = curl_tokens[index]
+        option, value = token, None
+        if token.startswith("--") and "=" in token:
+            option, value = token.split("=", 1)
+        elif token.startswith("-") and not token.startswith("--") and len(token) > 2:
+            short_option = token[:2]
+            if short_option in _CURL_VALUE_OPTIONS:
+                option, value = short_option, token[2:]
+            elif short_option in _CURL_OUTPUT_OPTIONS:
+                index += 1
+                continue
+            elif set(token[1:]).issubset(set("sSfkLviIG")):
+                for flag in token[1:]:
+                    if flag == "I":
+                        head_flag = True
+                    elif flag == "G":
+                        get_flag = True
+                index += 1
+                continue
+            else:
+                return None
+
+        if option in _CURL_VALUE_OPTIONS:
+            if value is None:
+                index += 1
+                if index >= len(curl_tokens):
+                    return None
+                value = curl_tokens[index]
+            kind = _CURL_VALUE_OPTIONS[option]
+            if kind == "method":
+                method = value.upper()
+            elif kind == "header":
+                name, separator, content = value.partition(":")
+                header_name = name.strip().lower()
+                if header_name not in _VOLATILE_HTTP_HEADERS:
+                    headers.append((header_name, content.strip() if separator else ""))
+            elif kind in {"data", "json"}:
+                body_val = value
+                if kind == "json" or body_val.strip().startswith(("{", "[")):
+                    try:
+                        parsed_json = json.loads(body_val)
+                        body_val = json.dumps(
+                            parsed_json,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                bodies.append((kind, body_val))
+            elif kind == "user":
+                users.append(value)
+            elif kind == "cookie":
+                cookies.append(value)
+            elif kind == "url":
+                urls.append(value)
+            index += 1
+            continue
+
+        if option in _CURL_OUTPUT_OPTIONS:
+            if value is None:
+                index += 1
+                if index >= len(curl_tokens):
+                    return None
+            index += 1
+            continue
+
+        if option in _CURL_IGNORED_OPTIONS:
+            index += 1
+            continue
+
+        if option in {"-I", "--head"}:
+            head_flag = True
+            index += 1
+            continue
+
+        if option in {"-G", "--get"}:
+            get_flag = True
+            index += 1
+            continue
+
+        if option in _CURL_SEMANTIC_FLAGS:
+            flags.add(option)
+            index += 1
+            continue
+
+        if token.startswith("-"):
+            return None
+        urls.append(token)
+        index += 1
+
+    if not urls:
+        return None
+    if method is None:
+        method = "HEAD" if head_flag else ("GET" if get_flag else ("POST" if bodies else "GET"))
+
+    return {
+        "method": method,
+        "urls": sorted(_normalize_activity_url(url, target_base_url) for url in urls),
+        "headers": sorted(headers),
+        "bodies": bodies,
+        "users": users,
+        "cookies": cookies,
+        "flags": sorted(flags),
+    }
+
+
+def _exploration_fingerprint(
+    execution: ExecutedToolCall,
+    target_base_url: str | None,
+) -> str | None:
+    result = execution.result
+    if (
+        not execution.parsed
+        or result.terminal_user_controlled_refusal
+        or result.err_str
+        or result.status not in {"success", "observation"}
+        or result.error_kind is not None
+    ):
+        return None
+
+    tool_name = canonical_tool_name(execution.name)
+    args = execution.args
+    if tool_name == "load_skill":
+        name = args.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return None
+        material: Any = normalize_metadata_name(name.strip())
+    elif tool_name == "http":
+        material = _normalized_http_shape(args, target_base_url)
+    elif tool_name == "web_fetch":
+        url = args.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return None
+        material = _normalize_activity_url(url, target_base_url)
+    elif tool_name == "shell":
+        command = args.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return None
+        try:
+            tokens = shlex.split(command, posix=True)
+            curl_shape = _normalized_curl_command(tokens, target_base_url)
+            material = curl_shape if curl_shape is not None else shlex.join(tokens)
+        except ValueError:
+            material = re.sub(r"\s+", " ", command.strip())
+    elif tool_name in {"file_write", "file_edit"}:
+        path = args.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return None
+        material = posixpath.normpath(path.strip().replace("\\", "/"))
+    else:
+        return None
+    return _stable_activity_fingerprint(tool_name, material)
+
+
+
+class WholeTargetStallTracker:
+    """Transient per-phase exploration allowance; structured facts remain authoritative."""
+
+    def __init__(self, exploration_cap: int = MAX_PHASE_EXPLORATION_STEPS) -> None:
+        self.exploration_cap = exploration_cap
+        self.consecutive_no_progress = 0
+        self.phase_exploration_steps = 0
+        self.phase: str | None = None
+        self.seen_fingerprints: set[str] = set()
+
+    def set_phase(self, phase: str | None) -> None:
+        if phase == self.phase:
+            return
+        self.phase = phase
+        self.phase_exploration_steps = 0
+        self.seen_fingerprints.clear()
+
+    def record_iteration(
+        self,
+        *,
+        new_facts: frozenset[str],
+        activity_fingerprints: list[str],
+    ) -> str:
+        if new_facts:
+            self.consecutive_no_progress = 0
+            self.phase_exploration_steps = 0
+            self.seen_fingerprints.clear()
+            return "structured_progress"
+
+        novel_fingerprints = set(activity_fingerprints) - self.seen_fingerprints
+        self.seen_fingerprints.update(activity_fingerprints)
+        if novel_fingerprints and self.phase_exploration_steps < self.exploration_cap:
+            self.phase_exploration_steps += 1
+            self.consecutive_no_progress = 0
+            return "novel_exploration"
+
+        self.consecutive_no_progress += 1
+        return "no_progress"
+
+
 def _weighted_window_lengths(total: int) -> list[int]:
     """Split a source budget deterministically across the five windows."""
     lengths = [total * weight // 100 for weight in MIDTURN_WINDOW_WEIGHTS]
@@ -526,8 +897,10 @@ class AgentRunOptions:
     def __init__(
         self,
         tools: bool = True,
+        max_steps: Optional[int] = None,
     ):
         self.tools = tools
+        self.max_steps = max_steps
 
 
 class AgentOptions:
@@ -540,7 +913,7 @@ class AgentOptions:
         store: Optional[Store],
         target: Target,
         thinking_enabled: bool = False,
-        max_steps: int = DEFAULT_MAX_STEPS,
+        max_steps: Optional[int] = None,
         auto_compact_threshold: int = 16000,
         tooling_profile: Optional[PromptToolingProfile] = None,
         prompt_profile: Optional[PromptProfile] = None,
@@ -612,9 +985,14 @@ class Agent:
             else False
         )
 
-        self.max_steps = (
+        self._explicit_max_steps: int | None = (
             opts.max_steps
-            if opts.max_steps > 0
+            if opts.max_steps is not None
+            else None
+        )
+        self._max_steps: int = (
+            self._explicit_max_steps
+            if self._explicit_max_steps is not None
             else DEFAULT_MAX_STEPS
         )
 
@@ -664,6 +1042,8 @@ class Agent:
         self.tools_tokens_key: tuple[str, ...] | None = None
 
         self.turn_executed_tool = False
+        self._trace_enabled = False
+        self._trace_run_id = ""
 
         self.sys_prompt = build_system_prompt(
             BuildOptions(
@@ -716,12 +1096,32 @@ class Agent:
     def get_history(self) -> list[Message]:
         return [replace(m) for m in self.history]
 
+    @property
+    def max_steps(self) -> int:
+        return self._max_steps
+
+    @max_steps.setter
+    def max_steps(self, val: int) -> None:
+        self._max_steps = val
+        self._explicit_max_steps = val
+
     def get_max_steps(self) -> int:
-        return self.max_steps
+        return self._max_steps
 
     def set_max_steps(self, n: int) -> None:
         if n >= 1:
-            self.max_steps = n
+            self._max_steps = n
+            self._explicit_max_steps = n
+
+    def reset_max_steps(self) -> None:
+        self._explicit_max_steps = None
+        self._max_steps = DEFAULT_MAX_STEPS
+
+    def has_explicit_max_steps(self) -> bool:
+        return self._explicit_max_steps is not None
+
+    def get_max_steps_override(self) -> int | None:
+        return self._explicit_max_steps
 
     def get_auto_compact_threshold(self) -> int:
         return self.auto_compact_threshold
@@ -1478,6 +1878,20 @@ class Agent:
             coverage_sync_available=coverage_sync_available,
         )
 
+    def _whole_target_exploration_phase(self) -> str | None:
+        _, actionable, _ = self._whole_target_state()
+        for item in actionable:
+            if item.startswith("phase:"):
+                return item.partition(":")[2]
+        for item in actionable:
+            if item.startswith("input:"):
+                return "input_analysis"
+            if item.startswith("candidate:"):
+                return "validation"
+            if item.startswith("coverage-sync:"):
+                return "coverage_sync"
+        return None
+
     def _initialize_request_objective(self, user_msg: str, tools_enabled: bool) -> None:
         if not tools_enabled:
             return
@@ -1811,6 +2225,121 @@ class Agent:
             "total_llm_calls": sum(self._llm_call_counts.values()),
         }
 
+    def _trace(self, event: str, **fields: Any) -> None:
+        if not self._trace_enabled:
+            return
+        try:
+            log_debug(
+                f"[TRACE] {event}",
+                {"trace_run_id": self._trace_run_id, **fields},
+            )
+        except Exception:
+            # Optional diagnostics must never change the agent's control flow.
+            pass
+
+    def _trace_context_estimate(
+        self,
+        messages: list[Message],
+        tools: list[Any] | None,
+        *,
+        phase: str,
+        step: int | None,
+    ) -> None:
+        if not self._trace_enabled:
+            return
+        try:
+            tool_tokens = (
+                len(json.dumps(tools, ensure_ascii=False)) // 4
+                if tools else 0
+            )
+            estimate = approximate_message_tokens(messages) + tool_tokens
+        except Exception as err:
+            self._trace(
+                "request_context_estimate_failed",
+                phase=phase,
+                step=step,
+                exception_type=type(err).__name__,
+            )
+            return
+        threshold = self.auto_compact_threshold
+        if threshold > 0:
+            safety_tokens = max(
+                MIDTURN_MIN_SAFETY_TOKENS,
+                round(threshold * MIDTURN_SAFETY_RATIO),
+            )
+            target_tokens = max(0, threshold - safety_tokens)
+            unresolved_pressure = max(0, estimate - target_tokens)
+            over_threshold = max(0, estimate - threshold)
+        else:
+            safety_tokens = None
+            target_tokens = None
+            unresolved_pressure = None
+            over_threshold = None
+        self._trace(
+            "request_context",
+            phase=phase,
+            step=step,
+            request_estimate_tokens=estimate,
+            tool_schema_estimate_tokens=tool_tokens,
+            threshold_tokens=threshold,
+            safety_tokens=safety_tokens,
+            guard_target_tokens=target_tokens,
+            unresolved_context_pressure_tokens=unresolved_pressure,
+            over_threshold_tokens=over_threshold,
+        )
+
+    def _trace_response(
+        self,
+        response: ChatResponse,
+        *,
+        phase: str,
+        step: int | None,
+        streamed: bool,
+        malformed_tool_text: bool,
+        retry_triggered: bool = False,
+    ) -> None:
+        self._trace(
+            "response_received",
+            phase=phase,
+            step=step,
+            streamed=streamed,
+            tool_call_count=len(response.message.tool_calls or []),
+            has_tool_calls=bool(response.message.tool_calls),
+            malformed_tool_text=malformed_tool_text,
+            retry_triggered=retry_triggered,
+            finish_reason=response.finish_reason,
+            content_chars=len(response.message.content),
+            reasoning_content_present=bool(response.message.reasoning_content),
+        )
+
+    def _trace_workflow_gate(
+        self,
+        *,
+        step: int,
+        status: str,
+        actionable: tuple[str, ...],
+        blockers: tuple[str, ...],
+        before_facts: frozenset[str],
+        after_facts: frozenset[str],
+        consecutive_no_progress: int,
+        progress_kind: str,
+        phase_exploration_steps: int,
+    ) -> None:
+        self._trace(
+            "whole_target_gate",
+            step=step,
+            workflow_status=status,
+            actionable=list(actionable),
+            blockers=list(blockers),
+            before_facts_count=len(before_facts),
+            after_facts_count=len(after_facts),
+            new_facts_count=len(after_facts - before_facts),
+            consecutive_no_progress=consecutive_no_progress,
+            progress_kind=progress_kind,
+            phase_exploration_steps=phase_exploration_steps,
+            phase_exploration_cap=MAX_PHASE_EXPLORATION_STEPS,
+        )
+
     async def run(
         self,
         user_msg: str,
@@ -1820,6 +2349,9 @@ class Agent:
     ) -> None:
         safe_emit = make_safe_emit(signal, emit)
 
+        self._trace_enabled = os.getenv(AGENT_TRACE_ENV) == "1"
+        self._trace_run_id = uuid.uuid4().hex[:12] if self._trace_enabled else ""
+        self._trace("run_started")
         self.running = True
         self._reset_llm_call_counts()
         self._turn_client_error = False
@@ -1833,10 +2365,22 @@ class Agent:
                 opts,
             )
 
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as err:
             stop_reason = "cancelled"
+            self._trace(
+                "exception",
+                exception_type=type(err).__name__,
+                message=redact(err_message(err))[:500],
+            )
             raise
         except Exception as err:
+            self._trace(
+                "exception",
+                exception_type=type(err).__name__,
+                category=getattr(err, "category", None),
+                status_code=getattr(err, "status_code", None),
+                message=redact(err_message(err))[:500],
+            )
             if signal.aborted or is_abort_like_error(err):
                 stop_reason = "cancelled"
 
@@ -1869,6 +2413,7 @@ class Agent:
 
             self.running = False
 
+            self._trace("terminal", stop_reason=stop_reason)
             safe_emit(self._done_event(stop_reason))
 
     async def run_inner(
@@ -2044,12 +2589,29 @@ class Agent:
         if last:
             last.content = expanded_user_msg
 
-        max_steps = self.max_steps
         objective = self.workflow.objective
         whole_target = bool(
             tools_enabled and objective is not None and objective.mode == "whole_target"
         )
-        consecutive_no_progress = 0
+        run_max_steps = (
+            opts.max_steps
+            if opts is not None and getattr(opts, "max_steps", None) is not None
+            else None
+        )
+        explicit_max_steps = (
+            run_max_steps
+            if run_max_steps is not None
+            else self._explicit_max_steps
+        )
+
+        if explicit_max_steps is not None:
+            max_steps = explicit_max_steps
+        elif whole_target:
+            max_steps = DEFAULT_WHOLE_TARGET_MAX_STEPS
+        else:
+            max_steps = self._max_steps
+
+        stall_tracker = WholeTargetStallTracker()
 
         for step in range(max_steps):
 
@@ -2065,6 +2627,7 @@ class Agent:
 
             if whole_target:
                 self._refresh_whole_target_guidance(working, expanded_user_msg)
+                stall_tracker.set_phase(self._whole_target_exploration_phase())
             before_facts = self.workflow.progress_facts() if whole_target else frozenset()
             response_chunks: list[str] | None = [] if whole_target else None
 
@@ -2081,10 +2644,16 @@ class Agent:
 
             self._count_llm_call("agent_loop_llm_calls")
             if response_chunks is None:
-                resp, streamed = await self._chat_for_turn(req, signal, emit)
+                resp, streamed = await self._chat_for_turn(
+                    req, signal, emit,
+                    trace_phase="agent_response",
+                    trace_step=step,
+                )
             else:
                 resp, streamed = await self._chat_for_turn(
-                    req, signal, emit, stream_buffer=response_chunks
+                    req, signal, emit, stream_buffer=response_chunks,
+                    trace_phase="agent_response",
+                    trace_step=step,
                 )
             self._sanitize_response(resp)
             if streamed and response_chunks and not resp.message.content:
@@ -2093,6 +2662,18 @@ class Agent:
             tool_calls = resp.message.tool_calls or []
 
             has_tool_calls = len(tool_calls) > 0
+            malformed_tool_text = (
+                not has_tool_calls
+                and tools_enabled
+                and _looks_like_malformed_tool_call(resp.message.content)
+            )
+            self._trace_response(
+                resp,
+                phase="agent_response",
+                step=step,
+                streamed=streamed,
+                malformed_tool_text=malformed_tool_text,
+            )
 
             if (
                 opts is not None
@@ -2123,17 +2704,17 @@ class Agent:
                 emit({"type": "error", "err": InvalidResponseError()})
                 return "invalid_response"
 
-            malformed_tool_text = (
-                not has_tool_calls
-                and tools_enabled
-                and _looks_like_malformed_tool_call(resp.message.content)
-            )
             if not malformed_tool_text:
                 await self._record_assistant_response(
                     resp, streamed, working, emit, emit_text=not whole_target
                 )
 
             if malformed_tool_text:
+                self._trace(
+                    "malformed_retry_triggered",
+                    phase="malformed_retry",
+                    step=step,
+                )
                 emit({
                     "type": "error",
                     "err": RuntimeError(
@@ -2175,16 +2756,35 @@ class Agent:
                 self._count_llm_call("agent_loop_llm_calls")
                 retry_chunks: list[str] | None = [] if whole_target else None
                 if retry_chunks is None:
-                    resp, streamed = await self._chat_for_turn(retry_req, signal, emit)
+                    resp, streamed = await self._chat_for_turn(
+                        retry_req, signal, emit,
+                        trace_phase="malformed_retry",
+                        trace_step=step,
+                    )
                 else:
                     resp, streamed = await self._chat_for_turn(
-                        retry_req, signal, emit, stream_buffer=retry_chunks
+                        retry_req, signal, emit, stream_buffer=retry_chunks,
+                        trace_phase="malformed_retry",
+                        trace_step=step,
                     )
                 self._sanitize_response(resp)
                 if streamed and retry_chunks and not resp.message.content:
                     resp.message.content = "".join(retry_chunks)
                 tool_calls = resp.message.tool_calls or []
                 has_tool_calls = len(tool_calls) > 0
+                retry_malformed_text = (
+                    not has_tool_calls
+                    and tools_enabled
+                    and _looks_like_malformed_tool_call(resp.message.content)
+                )
+                self._trace_response(
+                    resp,
+                    phase="malformed_retry",
+                    step=step,
+                    streamed=streamed,
+                    malformed_tool_text=retry_malformed_text,
+                    retry_triggered=True,
+                )
 
                 if not has_tool_calls:
                     warning = (
@@ -2210,10 +2810,21 @@ class Agent:
                 if whole_target:
                     status, actionable, blockers = self._whole_target_state()
                     after_facts = self.workflow.progress_facts()
-                    if after_facts - before_facts:
-                        consecutive_no_progress = 0
-                    else:
-                        consecutive_no_progress += 1
+                    progress_kind = stall_tracker.record_iteration(
+                        new_facts=after_facts - before_facts,
+                        activity_fingerprints=[],
+                    )
+                    self._trace_workflow_gate(
+                        step=step,
+                        status=status,
+                        actionable=actionable,
+                        blockers=blockers,
+                        before_facts=before_facts,
+                        after_facts=after_facts,
+                        consecutive_no_progress=stall_tracker.consecutive_no_progress,
+                        progress_kind=progress_kind,
+                        phase_exploration_steps=stall_tracker.phase_exploration_steps,
+                    )
                     if status == "completed":
                         return await self._whole_target_synthesis(
                             working, signal, emit,
@@ -2243,7 +2854,7 @@ class Agent:
                             ),
                             max_steps=max_steps,
                         )
-                    if consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
+                    if stall_tracker.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
                         return await self._whole_target_synthesis(
                             working, signal, emit,
                             thinking_enabled=turn_request_thinking,
@@ -2304,23 +2915,44 @@ class Agent:
                     resp, streamed, response_chunks or [], emit
                 )
 
-            all_refused = await self.execute_tool_calls(
+            execution_batch = await self.execute_tool_calls(
                 tool_calls,
                 signal,
                 emit,
                 working,
             )
 
-            if all_refused:
+            if execution_batch.all_refused:
                 return "all_tools_refused"
 
             if whole_target:
                 status, actionable, blockers = self._whole_target_state()
                 after_facts = self.workflow.progress_facts()
-                if after_facts - before_facts:
-                    consecutive_no_progress = 0
-                else:
-                    consecutive_no_progress += 1
+                activity_fingerprints = [
+                    fingerprint
+                    for execution in execution_batch.calls
+                    if (
+                        fingerprint := _exploration_fingerprint(
+                            execution,
+                            self.target.base_url() if self.target else None,
+                        )
+                    ) is not None
+                ]
+                progress_kind = stall_tracker.record_iteration(
+                    new_facts=after_facts - before_facts,
+                    activity_fingerprints=activity_fingerprints,
+                )
+                self._trace_workflow_gate(
+                    step=step,
+                    status=status,
+                    actionable=actionable,
+                    blockers=blockers,
+                    before_facts=before_facts,
+                    after_facts=after_facts,
+                    consecutive_no_progress=stall_tracker.consecutive_no_progress,
+                    progress_kind=progress_kind,
+                    phase_exploration_steps=stall_tracker.phase_exploration_steps,
+                )
                 if status == "completed":
                     return await self._whole_target_synthesis(
                         working, signal, emit,
@@ -2350,7 +2982,7 @@ class Agent:
                         ),
                         max_steps=max_steps,
                     )
-                if consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
+                if stall_tracker.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
                     return await self._whole_target_synthesis(
                         working, signal, emit,
                         thinking_enabled=turn_request_thinking,
@@ -2395,6 +3027,13 @@ class Agent:
                     synthesis_req, signal, emit, purpose="final_synthesis"
                 )
                 self._sanitize_response(synthesis)
+                self._trace_response(
+                    synthesis,
+                    phase="final_synthesis",
+                    step=step,
+                    streamed=synthesis_streamed,
+                    malformed_tool_text=False,
+                )
                 if synthesis.message.tool_calls or not synthesis.message.content.strip():
                     emit({
                         "type": "error",
@@ -2481,6 +3120,13 @@ class Agent:
         self._sanitize_response(response)
         if streamed and chunks and not response.message.content:
             response.message.content = "".join(chunks)
+        self._trace_response(
+            response,
+            phase="whole_target_synthesis",
+            step=None,
+            streamed=streamed,
+            malformed_tool_text=False,
+        )
         if response.message.tool_calls or not response.message.content.strip():
             emit({
                 "type": "error",
@@ -2500,11 +3146,19 @@ class Agent:
     async def _chat_for_turn(
         self, req, signal, emit, purpose: str = "agent_turn",
         stream_buffer: list[str] | None = None,
+        trace_phase: str | None = None,
+        trace_step: int | None = None,
     ) -> tuple[ChatResponse, bool]:
         started = time.perf_counter()
         started_at = datetime.now(timezone.utc).isoformat()
         response: ChatResponse | None = None
         status: Literal["success", "error", "cancelled"] = "success"
+        self._trace_context_estimate(
+            req.messages,
+            req.tools,
+            phase=trace_phase or purpose,
+            step=trace_step,
+        )
         try:
             if stream_buffer is None:
                 response, streamed = await self.chat(req, signal, emit)
@@ -2516,6 +3170,27 @@ class Agent:
         except BaseException as err:
             status = "cancelled" if isinstance(err, asyncio.CancelledError) or getattr(signal, "aborted", False) else "error"
             self._turn_client_error = True
+            try:
+                self._trace(
+                    "llm_request_exception",
+                    phase=trace_phase or purpose,
+                    step=trace_step,
+                    purpose=purpose,
+                    exception_type=type(err).__name__,
+                    category=getattr(err, "category", None),
+                    status_code=getattr(err, "status_code", None),
+                    request_status=status,
+                    message=redact(err_message(err))[:500],
+                )
+            except Exception:
+                self._trace(
+                    "llm_request_exception",
+                    phase=trace_phase or purpose,
+                    step=trace_step,
+                    purpose=purpose,
+                    exception_type=type(err).__name__,
+                    request_status=status,
+                )
             raise
         finally:
             self._record_request_metrics(req, purpose, started_at, started, status, response)
@@ -2706,7 +3381,7 @@ class Agent:
         signal,
         emit,
         working: list[Message],
-    ) -> bool:
+    ) -> ToolExecutionBatch:
         sequential = (
             len(tool_calls) <= 1
             or any(
@@ -2718,6 +3393,7 @@ class Agent:
         if sequential:
 
             results: list[ToolCallResult] = []
+            executions: list[ExecutedToolCall] = []
 
             for tc in tool_calls:
 
@@ -2748,6 +3424,12 @@ class Agent:
                     working,
                 )
                 results.append(result)
+                executions.append(ExecutedToolCall(
+                    name=tc.function.name,
+                    args=parsed.args,
+                    parsed=parsed.parse_err is None,
+                    result=result,
+                ))
 
             try:
                 await self.save()
@@ -2761,9 +3443,12 @@ class Agent:
                     }
                 )
 
-            return all(
-                result.terminal_user_controlled_refusal
-                for result in results
+            return ToolExecutionBatch(
+                all_refused=all(
+                    result.terminal_user_controlled_refusal
+                    for result in results
+                ),
+                calls=executions,
             )
         parsed_all = [
             self.parse_tool_call(tc)
@@ -2792,6 +3477,7 @@ class Agent:
             ),
         )
 
+        executions = []
         for tc, parsed, result in zip(
             tool_calls,
             parsed_all,
@@ -2805,6 +3491,12 @@ class Agent:
                 emit,
                 working,
             )
+            executions.append(ExecutedToolCall(
+                name=tc.function.name,
+                args=parsed.args,
+                parsed=parsed.parse_err is None,
+                result=result,
+            ))
 
         try:
             await self.save()
@@ -2821,9 +3513,12 @@ class Agent:
         if signal.aborted:
             raise Exception("aborted")
 
-        return all(
-            result.terminal_user_controlled_refusal
-            for result in results
+        return ToolExecutionBatch(
+            all_refused=all(
+                result.terminal_user_controlled_refusal
+                for result in results
+            ),
+            calls=executions,
         )
 
     def parse_tool_call(

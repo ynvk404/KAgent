@@ -222,6 +222,7 @@ class ParsedFlags:
     debug_session_path: str = ""
     list_skills: bool = False
     list_tools: bool = False
+    max_steps: int = 0
 
 
 class FlagParseError(ValueError):
@@ -318,6 +319,14 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
             out.list_skills = True
         elif a == "--list-tools":
             out.list_tools = True
+        elif a == "--max-steps":
+            try:
+                val = int(next_arg(a))
+                if val <= 0:
+                    raise ValueError
+                out.max_steps = val
+            except ValueError:
+                raise FlagParseError("--max-steps requires a positive integer")
         elif a.startswith("-"):
             raise FlagParseError(
                 f"unknown option: {redacted_argv([a])[0]}"
@@ -891,9 +900,13 @@ async def main() -> int:
         target=target,
         thinking_enabled=cfg.thinking_enabled,
         max_steps=(
-            cfg.max_steps
-            if cfg.max_steps > 0
-            else 20
+            flags.max_steps
+            if flags.max_steps > 0
+            else (
+                cfg.max_steps
+                if cfg.max_steps > 0
+                else None
+            )
         ),
         auto_compact_threshold=effective_auto_compact_threshold(current_runtime_config),
         tooling_profile=cast(

@@ -249,3 +249,17 @@ def test_normal_shutdown_closes_runtime_resources():
 
     assert root_ctl.is_set()
     assert calls == ["stop", ("join", 1), "session", "bridge"]
+
+
+def test_parse_flags_handles_max_steps_option():
+    flags = parse_flags(["--max-steps", "35"])
+    assert flags.max_steps == 35
+
+    with pytest.raises(FlagParseError, match="--max-steps requires a positive integer"):
+        parse_flags(["--max-steps", "0"])
+
+    with pytest.raises(FlagParseError, match="--max-steps requires a positive integer"):
+        parse_flags(["--max-steps", "-5"])
+
+    with pytest.raises(FlagParseError, match="--max-steps requires a positive integer"):
+        parse_flags(["--max-steps", "abc"])
