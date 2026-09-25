@@ -44,6 +44,7 @@ ${SKILL_DIR}/scripts/check.sh https://TARGET
 
 ## Reporting
 
-What proves the bug, the concrete impact in one sentence, and remediation.
-When you have a reproduced finding with a real request/response, call
-`confirm_finding`.
+Describe what the evidence demonstrates in `observed_impact`; state untested
+consequences conditionally in `potential_impact`. Call `confirm_finding` only
+for a workflow Candidate whose latest validation is confirmed and whose
+registered evidence is valid.

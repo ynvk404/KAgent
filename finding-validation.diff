@@ -1,0 +1,1516 @@
+diff --git a/skills/_template/SKILL.md b/skills/_template/SKILL.md
+index b44116c..07e0038 100644
+--- a/skills/_template/SKILL.md
++++ b/skills/_template/SKILL.md
+@@ -44,6 +44,7 @@ ${SKILL_DIR}/scripts/check.sh https://TARGET
+ 
+ ## Reporting
+ 
+-What proves the bug, the concrete impact in one sentence, and remediation.
+-When you have a reproduced finding with a real request/response, call
+-`confirm_finding`.
++Describe what the evidence demonstrates in `observed_impact`; state untested
++consequences conditionally in `potential_impact`. Call `confirm_finding` only
++for a workflow Candidate whose latest validation is confirmed and whose
++registered evidence is valid.
+diff --git a/skills/access-control/SKILL.md b/skills/access-control/SKILL.md
+index 6703f90..2b8e55b 100644
+--- a/skills/access-control/SKILL.md
++++ b/skills/access-control/SKILL.md
+@@ -430,19 +430,21 @@ finding:
+ access-control → results.md → confirm_finding → final finding
+ ```
+ 
+-Populate the tool call from the recorded evidence. Supply `title`,
+-`severity`, exact `url`, `parameter` when applicable, `method`, a short
+-proving `response_excerpt`, concrete `impact`, a copy-pasteable `curl`,
+-remediation, and the matching coverage class in `vuln_class` (for example,
+-`idor` for an IDOR), including:
++Populate the tool call from the recorded evidence. Supply the required
++`candidate_id` of the confirmed Candidate, `title`, `severity`, exact `url`,
++`parameter` when applicable, `method`, a short proving `response_excerpt`,
++`observed_impact`, `potential_impact`, a copy-pasteable `curl`, remediation,
++and the matching coverage class in `vuln_class` (for example, `idor` for an
++IDOR). The latest result and its registered evidence must be valid. Include:
+ 
+ - affected endpoint/method/object;
+ - which authorization boundary failed (missing auth / horizontal /
+   vertical / tamperable role or ownership field);
+ - the exact request(s) and comparison evidence;
+-- concrete impact in one or two sentences (what an attacker with only the
+-  lower-privilege identity could actually do) — not a hypothetical worst
+-  case;
++- `observed_impact`: what the lower-privilege identity was actually able to do
++  in the linked evidence;
++- `potential_impact`: other consequences stated conditionally when they were
++  not demonstrated;
+ - suggested remediation direction: enforce ownership/role checks
+   server-side on every request (never trust client-supplied role/user
+   fields), scoped by the authenticated session — not a rewritten
+diff --git a/skills/authentication/SKILL.md b/skills/authentication/SKILL.md
+index df75db7..9919747 100644
+--- a/skills/authentication/SKILL.md
++++ b/skills/authentication/SKILL.md
+@@ -593,24 +593,24 @@ finding:
+ authentication → results.md → confirm_finding → final finding
+ ```
+ 
+-Populate the tool call from the recorded evidence. Supply `title`,
+-`severity`, exact `url`, `parameter` when applicable, `method`, a short
+-proving `response_excerpt`, concrete `impact`, a copy-pasteable `curl`,
+-remediation, and the same canonical `vuln_class` used when recording
+-coverage, including:
++Populate the tool call from the recorded evidence. Supply the required
++`candidate_id` of the confirmed Candidate, `title`, `severity`, exact `url`,
++`parameter` when applicable, `method`, a short proving `response_excerpt`,
++`observed_impact`, `potential_impact`, a copy-pasteable `curl`, remediation,
++and the same canonical `vuln_class` used when recording coverage. The latest
++result and its registered evidence must be valid. Include:
+ 
+ - affected endpoint(s)/flow and mechanism;
+ - which property failed (fixation / invalidation / MFA bypass / reset-flow
+   binding-or-reuse / missing throttling);
+ - the exact request(s) and comparison evidence;
+-- concrete impact in one or two sentences. Impact must be limited to what
+-  the authentication evidence actually supports: when direct impact
+-  (e.g. full account takeover) was not itself safely demonstrated — which
+-  it should not be, per step 4 — describe it as a reasoned consequence of
+-  the confirmed weakness, not as an action that was actually executed
+-  (e.g. "an attacker who obtains or intercepts the pre-auth session
+-  identifier could gain authenticated access without credentials" rather
+-  than "account takeover was demonstrated");
++- `observed_impact`: only what the authentication evidence demonstrates. Do
++  not describe an action such as full account takeover as observed unless the
++  linked evidence actually demonstrates it;
++- `potential_impact`: possible consequences of the confirmed weakness that
++  were not safely demonstrated, stated conditionally (for example, an attacker
++  who obtains a pre-authentication session identifier could gain authenticated
++  access without credentials);
+ - suggested remediation direction: regenerate session identifiers on
+   privilege change (login/logout), invalidate sessions server-side on
+   logout, enforce MFA completion before issuing an authorized session, and
+diff --git a/skills/cross-site-scripting/SKILL.md b/skills/cross-site-scripting/SKILL.md
+index 40f6f98..3e9b727 100644
+--- a/skills/cross-site-scripting/SKILL.md
++++ b/skills/cross-site-scripting/SKILL.md
+@@ -444,16 +444,20 @@ canonical finding:
+ cross-site-scripting → results.md → confirm_finding → final finding
+ ```
+ 
+-Populate the tool call from the recorded evidence. Supply `title`,
+-`severity`, exact `url`, `parameter`, `payload`, `method`, a short proving
+-`response_excerpt`, concrete `impact`, a copy-pasteable `curl`, remediation,
+-and `vuln_class: xss`, including:
++Populate the tool call from the recorded evidence. Supply the required
++`candidate_id` of the confirmed Candidate, `title`, `severity`, exact `url`,
++`parameter`, `payload`, `method`, a short proving `response_excerpt`,
++`observed_impact`, `potential_impact`, a copy-pasteable `curl`, remediation,
++and `vuln_class: xss`. The latest result and its registered evidence must be
++valid. Include:
+ 
+ - affected endpoint/parameter/method;
+ - reflection type and authentication context;
+ - the exact request and payload that triggers execution, and the response
+   or source/sink evidence;
+-- concrete impact in one or two sentences — not a hypothetical worst case;
++- `observed_impact`: only what the execution and linked evidence demonstrate;
++- `potential_impact`: untested consequences stated as conditional possibilities,
++  never as facts;
+ - suggested remediation direction: context-appropriate output encoding, a
+   templating engine that auto-escapes by default, and/or a
+   Content-Security-Policy as defense-in-depth. Do not recommend
+diff --git a/skills/csrf/SKILL.md b/skills/csrf/SKILL.md
+index 3ee632f..17fe755 100644
+--- a/skills/csrf/SKILL.md
++++ b/skills/csrf/SKILL.md
+@@ -257,7 +257,11 @@ Include:
+ ## Confirm an evidence-backed finding
+ 
+ After recording a `confirmed` ValidationResult, call `confirm_finding` with
+-its `candidate_id` and the required `title`, `severity`, `url`, and `impact`,
++its required `candidate_id`, `title`, `severity`, `url`, `observed_impact`,
++and `potential_impact`,
+ plus method, parameter, reproducible request, response excerpt, remediation,
+-and canonical `vuln_class` when available. Do not call it for any other
+-structured outcome.
++and canonical `vuln_class` when available. `observed_impact` states only what
++the linked evidence demonstrates; put untested consequences in
++`potential_impact` as conditional possibilities. The candidate's latest
++confirmed result and registered evidence must be valid. Do not call it for any
++other structured outcome.
+diff --git a/skills/sql-injection/SKILL.md b/skills/sql-injection/SKILL.md
+index 7af75c6..f390c78 100644
+--- a/skills/sql-injection/SKILL.md
++++ b/skills/sql-injection/SKILL.md
+@@ -619,21 +619,28 @@ candidate marked `confirmed (SQLI-2)` or `confirmed (SQLI-3)`, call
+ sql-injection → results.md → confirm_finding → final finding
+ ```
+ 
+-Populate the tool call from the recorded evidence. Include `title`,
+-`severity`, exact `url`, `parameter`, `payload`, `method`, a short proving
+-`response_excerpt`, concrete `impact`, a copy-pasteable `curl`, remediation,
+-and `vuln_class: sqli`:
++Populate the tool call from the recorded evidence. Include the required
++`candidate_id` of the confirmed Candidate, `title`, `severity`, exact `url`,
++`parameter`, `payload`, `method`, a short proving `response_excerpt`,
++`observed_impact`, `potential_impact`, a copy-pasteable `curl`, remediation,
++and `vuln_class: sqli`. The latest result and its registered evidence must be
++valid. `observed_impact` may describe attacker-controlled SQL execution and
++output actually shown by the evidence; `potential_impact` describes further
++database access only as conditional unless the validation demonstrated it.
++Do not present possible impact as observed fact:
+ 
+ ```yaml
+ confirm_finding:
+   title: <short descriptive title>
++  candidate_id: <confirmed workflow Candidate ID>
+   severity: <critical|high|medium|low|info>
+   url: <exact affected endpoint>
+   method: <GET|POST|...>
+   parameter: <parameter>
+   payload: <exact confirming payload>
+   response_excerpt: <short excerpt proving the SQLi>
+-  impact: <concrete evidence-supported impact>
++  observed_impact: <what the linked evidence demonstrates>
++  potential_impact: <untested consequences stated conditionally, or "No additional impact assessed.">
+   curl: <copy-pasteable reproduction>
+   remediation: "Use parameterized queries, prepared statements, or ORM parameter binding for this input."
+   vuln_class: sqli
+diff --git a/skills/ssrf/SKILL.md b/skills/ssrf/SKILL.md
+index 82026aa..831cbab 100644
+--- a/skills/ssrf/SKILL.md
++++ b/skills/ssrf/SKILL.md
+@@ -171,7 +171,11 @@ deeper impact validation would require separate scope and authorization.
+ ## Confirm an evidence-backed finding
+ 
+ After recording a `confirmed` ValidationResult, call `confirm_finding` with
+-its `candidate_id` and the required `title`, `severity`, `url`, and `impact`,
++its required `candidate_id`, `title`, `severity`, `url`, `observed_impact`,
++and `potential_impact`,
+ plus method, parameter, reproducible request, response excerpt, remediation,
+-and canonical `vuln_class` when available. Do not call it for any other
+-structured outcome.
++and canonical `vuln_class` when available. `observed_impact` states only what
++the linked evidence demonstrates; put untested consequences in
++`potential_impact` as conditional possibilities. The candidate's latest
++confirmed result and registered evidence must be valid. Do not call it for any
++other structured outcome.
+diff --git a/skills/ssti/SKILL.md b/skills/ssti/SKILL.md
+index d4212fe..542958a 100644
+--- a/skills/ssti/SKILL.md
++++ b/skills/ssti/SKILL.md
+@@ -275,7 +275,11 @@ Include:
+ ## Confirm an evidence-backed finding
+ 
+ After recording a `confirmed` ValidationResult, call `confirm_finding` with
+-its `candidate_id` and the required `title`, `severity`, `url`, and `impact`,
++its required `candidate_id`, `title`, `severity`, `url`, `observed_impact`,
++and `potential_impact`,
+ plus method, parameter, reproducible request, response excerpt, remediation,
+-and canonical `vuln_class` when available. Do not call it for any other
+-structured outcome.
++and canonical `vuln_class` when available. `observed_impact` states only what
++the linked evidence demonstrates; put untested consequences in
++`potential_impact` as conditional possibilities. The candidate's latest
++confirmed result and registered evidence must be valid. Do not call it for any
++other structured outcome.
+diff --git a/src/agent/decision_planner.py b/src/agent/decision_planner.py
+index 872bb26..e5f3529 100644
+--- a/src/agent/decision_planner.py
++++ b/src/agent/decision_planner.py
+@@ -631,7 +631,7 @@ def render_guidance(
+         "- If the recommended skill is present and not already active, call load_skill before other tools.",
+         "- If scope, authorization, credentials, or testing depth is ambiguous, ask one concise question before active testing.",
+         "- Use coverage(action='untested') when endpoint/parameter candidates are known, then coverage(action='mark') after meaningful tests.",
+-        "- Do not call confirm_finding for suspected behavior; require reproduced request/response evidence first.",
++        "- Call confirm_finding only for a workflow Candidate whose latest result is confirmed and whose registered evidence remains valid; observed_impact states what that evidence demonstrates and potential_impact keeps untested consequences conditional.",
+         "- Checklist:",
+     ]
+ 
+diff --git a/src/agent/system_prompt.py b/src/agent/system_prompt.py
+index d10b1fc..8fdc724 100644
+--- a/src/agent/system_prompt.py
++++ b/src/agent/system_prompt.py
+@@ -50,7 +50,7 @@ Edge cases:
+ - Do not repeatedly ask for authorization once the user has provided a target or selected/said "Authorized testing"; treat that as the session's authorization basis.
+ - After an explicit permission denial, do not immediately re-request equivalent authorization for the same concrete action unless the user changes intent or the proposed action materially changes.
+ - If a request looks clearly outside professional testing (malware deployment outside a lab, credential theft against third parties, destructive activity with no target scope, or mass scanning random public IP ranges), pause and ask one scope-confirmation question instead of refusing immediately. If the user confirms authorized testing, proceed within that scope.
+-- Real PoC + concrete impact for every finding. No theoretical bugs.
++- Real PoC + evidence-supported observed impact for every finding; keep untested consequences conditional in potential impact. No theoretical bugs.
+ - Be surgical, not noisy: prefer targeted requests over wide scans where possible.
+ 
+ # How to work
+@@ -153,7 +153,7 @@ When the program publishes its own taxonomy, use that. Otherwise default to VRT.
+ - Map first: enumerate roles, multi-tenant boundaries, auth flows, file upload paths, integrations (Stripe, Twilio, SendGrid, Auth0, Okta), admin endpoints, internal APIs leaked to the client.
+ - Target high-impact classes first (auth/BAC/IDOR, SSRF, RCE, deserialization, file upload). Don't burn the engagement on reflected XSS in a feedback form.
+ - Always test with two accounts (yours-A, yours-B) for BAC/IDOR. Capture both auth contexts and replay across them.
+-- For every finding: real PoC, concrete impact in one sentence, exact reproducible curl. The triager wants the request, not your essay.
++- For every finding: real PoC, observed impact supported by evidence, potential impact stated conditionally when untested, and an exact reproducible curl. The triager wants the request, not your essay.
+ - Map severity to the program's taxonomy if published, else VRT. Don't over-claim.
+ - Respect program scope precisely. Out-of-scope subdomains: tell the user, don't probe.
+ - Redact program data in PoCs/screenshots.
+@@ -254,7 +254,7 @@ project/
+ - For non-tree lists (findings, steps, options), use plain `-` bullets — no emoji prefixes.
+ 
+ # Findings
+-When you have CONFIRMED a vulnerability — meaning you have reproduced it end-to-end with a real request and observed a response that proves the bug — call the 'confirm_finding' tool with:
++When you have CONFIRMED a vulnerability — meaning the latest workflow ValidationResult for its Candidate is confirmed and linked evidence reproduces the bug — call the 'confirm_finding' tool with that required candidate_id and:
+ - title (short descriptive)
+ - severity (critical|high|medium|low|info)
+ - url (the exact affected endpoint)
+@@ -262,11 +262,12 @@ When you have CONFIRMED a vulnerability — meaning you have reproduced it end-t
+ - payload (exact payload that triggered the bug)
+ - method (HTTP method)
+ - response_excerpt (short snippet proving the bug — SQL error string, reflected canary, ...)
+-- impact (one concrete sentence about what an attacker can do)
++- observed_impact (only what the linked evidence demonstrates)
++- potential_impact (possible consequences not demonstrated by this validation; keep them conditional and never state them as observed facts)
+ - curl (copy-pasteable curl one-liner)
+ - remediation (optional)
+ 
+-Confirmed means reproduced. Do NOT call this for theoretical findings, suspected behavior, or scanner hits you haven't manually verified. The tool writes a markdown report under ./artifacts/findings/ and surfaces a banner in the TUI; the user counts confirmed findings, not chatter. After calling, briefly summarize for the user and ask whether to continue testing or stop.
++The endpoint, method, parameter, and vulnerability class must match the Candidate wherever the Candidate records them. Do NOT call this for theoretical findings, suspected behavior, scanner hits, or a candidate without valid linked evidence. Keep severity within the existing enum and supported by your judgment; the tool does not semantically verify impact prose or severity. The tool writes a markdown report under ./artifacts/findings/ and surfaces a banner in the TUI; the user counts confirmed findings, not chatter. After calling, briefly summarize for the user and ask whether to continue testing or stop.
+ 
+ # Skills
+ Skills are pre-authored playbooks for specific pentest workflows. When a user's task matches a skill, call 'load_skill' with that skill's name BEFORE planning, then follow the skill's guidance.
+@@ -287,7 +288,7 @@ COMPACT_SYSTEM_PROMPT = """You are kagent, a Human-in-the-Loop Agentic AI CLI as
+ - Do not infer a destructive or state-mutating tool action from an ambiguous request. Before calling such a tool, the user must explicitly identify both the action and its object or scope; otherwise ask one concise clarifying question. A permission prompt is approval for a proposed action, not evidence that the proposal matches the user's intent.
+ - After an explicit permission denial, do not immediately re-request equivalent authorization for the same concrete action unless the user changes intent or the proposed action materially changes.
+ - Prefer targeted, reproducible curl/http probes over noisy scanners unless the user explicitly asks for scanners or the tooling profile allows them.
+-- Keep output concise and evidence-backed. For every confirmed vulnerability, provide impact, exact request/curl, response evidence, severity, and remediation.
++- Keep output concise and evidence-backed. For every confirmed vulnerability, provide observed impact supported by evidence, potential impact stated conditionally when untested, exact request/curl, response evidence, severity, and remediation.
+ - Preserve context aggressively: use session memory and summaries, avoid repeating completed tests, and use coverage state to choose next endpoint/parameter/vulnerability-class combinations.
+ - Save important findings, notes, PoCs, commands, and evidence to disk.
+ 
+@@ -301,6 +302,8 @@ COMPACT_SYSTEM_PROMPT = """You are kagent, a Human-in-the-Loop Agentic AI CLI as
+ - Map roles, tenants, auth flows, endpoints, parameters, uploads, integrations, admin paths, and client-side leaked routes/schemas first.
+ - Test BAC/IDOR with two accounts when possible. Replay exact requests across auth contexts.
+ - Chain weak signals only when they create concrete attacker impact; do not submit theoretical or best-practice-only issues as confirmed vulnerabilities.
++- Call confirm_finding only for a workflow Candidate whose latest ValidationResult is confirmed and whose registered evidence is valid; provide its exact candidate_id.
++- Put only evidence-demonstrated facts in observed_impact. State untested consequences conditionally in potential_impact.
+ - For shell commands, use portable macOS/BSD/Linux syntax. Avoid GNU-only flags such as grep -P.
+ 
+ # Formatting
+diff --git a/src/cli/main.py b/src/cli/main.py
+index 554f9d1..d309bc1 100644
+--- a/src/cli/main.py
++++ b/src/cli/main.py
+@@ -657,7 +657,8 @@ async def main() -> int:
+                 parameter=finding.parameter,
+                 detail="\n".join(
+                     [
+-                        finding.impact,
++                        f"Observed impact: {finding.observed_impact}\n"
++                        f"Potential impact: {finding.potential_impact}",
+                         (
+                             f"\nEvidence:\n{finding.responseExcerpt}"
+                             if finding.responseExcerpt
+diff --git a/src/findings/store.py b/src/findings/store.py
+index 554d74a..33b6de6 100644
+--- a/src/findings/store.py
++++ b/src/findings/store.py
+@@ -26,7 +26,8 @@ class Finding:
+     severity: Severity
+     url: str
+ 
+-    impact: str
++    observed_impact: str
++    potential_impact: str
+ 
+     parameter: str | None = None
+     payload: str | None = None
+@@ -71,7 +72,19 @@ class Store:
+         self,
+         finding: Finding,
+     ) -> str:
+-        
++
++        if (
++            not isinstance(finding.candidate_id, str)
++            or not finding.candidate_id.strip()
++            or not isinstance(finding.evidence_refs, list)
++            or not finding.evidence_refs
++        ):
++            raise ValueError(
++                "confirmed finding requires candidate and evidence provenance"
++            )
++        if not all(isinstance(ref, str) and ref.strip() for ref in finding.evidence_refs):
++            raise ValueError("confirmed finding evidence references must be non-empty strings")
++
+         if not _SAFE_SLUG_RE.match(finding.slug):
+             raise ValueError(
+                 f"unsafe finding slug: {finding.slug!r}"
+@@ -224,9 +237,13 @@ def render(
+     lines.extend(
+         [
+             "",
+-            "## Impact",
++            "## Observed impact",
+             "",
+-            f.impact,
++            f.observed_impact,
++            "",
++            "## Potential impact",
++            "",
++            f.potential_impact,
+             "",
+         ]
+     )
+diff --git a/src/skills/template.py b/src/skills/template.py
+index 69594a0..b8a7876 100644
+--- a/src/skills/template.py
++++ b/src/skills/template.py
+@@ -31,7 +31,8 @@ def render_skill_template(name: str) -> str:
+         "## 2. Next step\n\n"
+         "...\n\n"
+         "## Reporting\n\n"
+-        "What proves the bug, the concrete impact in one sentence, and remediation.\n"
+-        "When you have a reproduced finding with a real request/response, call\n"
+-        "`confirm_finding`.\n"
++        "What the evidence demonstrates, any untested possible impact stated\n"
++        "conditionally, and remediation. Call `confirm_finding` only with a\n"
++        "workflow Candidate whose latest result is confirmed and whose evidence\n"
++        "references are valid.\n"
+     )
+diff --git a/src/tools/finding.py b/src/tools/finding.py
+index b72d0e5..b174622 100644
+--- a/src/tools/finding.py
++++ b/src/tools/finding.py
+@@ -49,9 +49,10 @@ class ConfirmFindingTool:
+     def description(self) -> str:
+         return (
+             "Persist a CONFIRMED vulnerability finding. "
+-            "Call this ONLY after you have reproduced the bug "
+-            "end-to-end with a real request and observed a "
+-            "response that proves it.\n\n"
++            "candidate_id is required: its latest workflow validation must be "
++            "confirmed with registered, integrity-checked evidence. Keep "
++            "observed_impact limited to what that evidence demonstrates and "
++            "describe untested consequences conditionally in potential_impact.\n\n"
+             "Writes a markdown report under "
+             "./artifacts/findings/<slug>.md and surfaces a banner in the "
+             "TUI. Do not call for theoretical findings, scanner "
+@@ -69,9 +70,11 @@ class ConfirmFindingTool:
+                 },
+                 "candidate_id": {
+                     "type": "string",
++                    "minLength": 1,
+                     "description": (
+-                        "Optional structured Candidate ID. When supplied, its "
+-                        "latest ValidationResult must be confirmed."
++                        "Required structured Candidate ID from workflow. Its "
++                        "latest ValidationResult must be confirmed and its "
++                        "registered evidence must still pass integrity checks."
+                     ),
+                 },
+                 "severity": {
+@@ -84,11 +87,11 @@ class ConfirmFindingTool:
+                 },
+                 "url": {
+                     "type": "string",
+-                    "description": "Exact affected endpoint URL.",
++                    "description": "Exact affected endpoint URL; its origin and path must match the Candidate.",
+                 },
+                 "parameter": {
+                     "type": "string",
+-                    "description": "Parameter injected/abused.",
++                    "description": "Parameter injected/abused; when the Candidate records one, it must match.",
+                 },
+                 "payload": {
+                     "type": "string",
+@@ -96,15 +99,27 @@ class ConfirmFindingTool:
+                 },
+                 "method": {
+                     "type": "string",
+-                    "description": "HTTP method.",
++                    "description": "HTTP method; when the Candidate records one, it must match.",
+                 },
+                 "response_excerpt": {
+                     "type": "string",
+                     "description": "Response snippet.",
+                 },
+-                "impact": {
++                "observed_impact": {
+                     "type": "string",
+-                    "description": "Concrete impact.",
++                    "description": (
++                        "What the linked validation evidence actually demonstrates. "
++                        "Do not state untested consequences as facts."
++                    ),
++                },
++                "potential_impact": {
++                    "type": "string",
++                    "description": (
++                        "Possible consequences that were not demonstrated by the "
++                        "linked validation. Keep them explicitly conditional; use "
++                        "a short statement such as 'No additional impact assessed.' "
++                        "when none is identified."
++                    ),
+                 },
+                 "curl": {
+                     "type": "string",
+@@ -117,7 +132,8 @@ class ConfirmFindingTool:
+                 "vuln_class": {
+                     "type": "string",
+                     "description": (
+-                        "Canonical class used by Workflow/Coverage, such as "
++                        "Canonical class used by Workflow/Coverage; when supplied "
++                        "it must match the Candidate, such as "
+                         "sql-injection, cross-site-scripting, access-control, "
+                         "or ssrf. Classification supplies CWE/OWASP values."
+                     ),
+@@ -125,9 +141,11 @@ class ConfirmFindingTool:
+             },
+             "required": [
+                 "title",
++                "candidate_id",
+                 "severity",
+                 "url",
+-                "impact",
++                "observed_impact",
++                "potential_impact",
+             ],
+         }
+ 
+@@ -156,8 +174,10 @@ class ConfirmFindingTool:
+         title = arg_string(args, "title")
+         severity = arg_string(args, "severity").lower()
+         url = arg_string(args, "url")
+-        impact = arg_string(args, "impact")
+-        candidate_id = arg_string(args, "candidate_id")
++        observed_impact = arg_string(args, "observed_impact")
++        potential_impact = arg_string(args, "potential_impact")
++        raw_candidate_id = args.get("candidate_id")
++        candidate_id = raw_candidate_id.strip() if isinstance(raw_candidate_id, str) else ""
+ 
+         if not title:
+             raise Exception("title is required")
+@@ -165,53 +185,63 @@ class ConfirmFindingTool:
+         if not url:
+             raise Exception("url is required")
+ 
+-        if not impact:
+-            raise Exception("impact is required")
++        if not candidate_id:
++            raise ValueError("candidate_id is required and must be a non-empty string")
+ 
+-        if candidate_id and self.workflow is None:
+-            raise ValueError("candidate ID requires workflow state")
++        if not observed_impact:
++            raise ValueError("observed_impact is required")
++
++        if not potential_impact:
++            raise ValueError("potential_impact is required")
++
++        if self.workflow is None:
++            raise ValueError("workflow state is required to confirm a finding")
++
++        candidate = self.workflow.candidates.get(candidate_id)
++        if candidate is None:
++            raise ValueError(f"unknown candidate: {candidate_id}")
+ 
+         if (
+-            candidate_id
+-            and self.workflow is not None
+-            and not self.workflow.eligible_for_finding(candidate_id)
++            not self.workflow.eligible_for_finding(candidate_id)
+         ):
+             raise Exception(
+                 "candidate is not eligible for confirm_finding: its latest "
+                 "ValidationResult must have outcome=confirmed and registered evidence"
+             )
+ 
+-        evidence_refs: list[str] | None = None
+-        if candidate_id and self.workflow is not None:
+-            candidate = self.workflow.candidates[candidate_id]
+-            latest = self.workflow.latest_result(candidate_id)
+-            assert latest is not None
+-            root = self.store.project_dir
+-            if not all(
+-                self.workflow.evidence[ref].is_resolvable_for_resume(root)
+-                for ref in latest.evidence_refs
+-            ):
+-                raise ValueError("candidate evidence artifact changed or is unavailable")
+-            requested_class = arg_string(args, "vuln_class")
+-            if requested_class and normalize_candidate_class(requested_class) != candidate.candidate_class:
+-                raise ValueError("finding class does not match candidate class")
+-            if candidate.target:
+-                try:
+-                    if HTTPOrigin.from_url(url) != HTTPOrigin.from_url(candidate.target):
+-                        raise ValueError("finding target does not match candidate target")
+-                except ValueError as exc:
+-                    raise ValueError("finding target does not match candidate target") from exc
+-            if candidate.endpoint:
+-                expected_path = urlparse(candidate.endpoint).path
+-                actual_path = urlparse(url).path
+-                template = re.escape(expected_path).replace(r"\{", "{").replace(r"\}", "}")
+-                template = re.sub(r"\{[^{}]+\}", r"[^/]+", template)
+-                if not re.fullmatch(template, actual_path):
+-                    raise ValueError("finding endpoint does not match candidate endpoint")
+-            requested_method = arg_string(args, "method")
+-            if candidate.method and requested_method and requested_method.upper() != candidate.method:
+-                raise ValueError("finding method does not match candidate method")
+-            evidence_refs = list(latest.evidence_refs)
++        latest = self.workflow.latest_result(candidate_id)
++        assert latest is not None  # eligibility above guarantees a result
++        root = self.store.project_dir
++        if not all(
++            self.workflow.evidence[ref].is_resolvable_for_resume(root)
++            for ref in latest.evidence_refs
++        ):
++            raise ValueError("candidate evidence artifact changed or is unavailable")
++
++        requested_class = arg_string(args, "vuln_class").strip()
++        if requested_class and normalize_candidate_class(requested_class) != candidate.candidate_class:
++            raise ValueError("finding class does not match candidate class")
++        if candidate.target:
++            try:
++                if HTTPOrigin.from_url(url) != HTTPOrigin.from_url(candidate.target):
++                    raise ValueError("finding target does not match candidate target")
++            except ValueError as exc:
++                raise ValueError("finding target does not match candidate target") from exc
++        if candidate.endpoint:
++            expected_path = urlparse(candidate.endpoint).path
++            actual_path = urlparse(url).path
++            template = re.escape(expected_path).replace(r"\{", "{").replace(r"\}", "}")
++            template = re.sub(r"\{[^{}]+\}", r"[^/]+", template)
++            if not re.fullmatch(template, actual_path):
++                raise ValueError("finding endpoint does not match candidate endpoint")
++
++        requested_method = arg_string(args, "method").strip()
++        if candidate.method and requested_method and requested_method.upper() != candidate.method:
++            raise ValueError("finding method does not match candidate method")
++        requested_parameter = arg_string(args, "parameter").strip()
++        if candidate.parameter and requested_parameter and requested_parameter != candidate.parameter:
++            raise ValueError("finding parameter does not match candidate parameter")
++        evidence_refs = list(latest.evidence_refs)
+ 
+         if not is_severity(severity):
+             raise Exception(
+@@ -219,13 +249,7 @@ class ConfirmFindingTool:
+                 + ", ".join(SEVERITIES)
+             )
+ 
+-        classification = classify(
+-            arg_string(args, "vuln_class")
+-            or (
+-                self.workflow.candidates[candidate_id].candidate_class
+-                if candidate_id and self.workflow is not None else ""
+-            )
+-        )
++        classification = classify(candidate.candidate_class)
+         redacted_title = redact(title)
+ 
+         finding = Finding(
+@@ -235,9 +259,10 @@ class ConfirmFindingTool:
+             title=redacted_title,
+             severity=severity,
+             url=redact(url),
+-            impact=redact(impact),
+-            method=redact(arg_string(args, "method")) or None,
+-            parameter=redact(arg_string(args, "parameter")) or None,
++            observed_impact=redact(observed_impact),
++            potential_impact=redact(potential_impact),
++            method=redact(candidate.method or requested_method.upper()) or None,
++            parameter=redact(candidate.parameter or requested_parameter) or None,
+             payload=redact(arg_string(args, "payload")) or None,
+             responseExcerpt=redact(arg_string(args, "response_excerpt")) or None,
+             curl=redact(arg_string(args, "curl")) or None,
+@@ -247,7 +272,7 @@ class ConfirmFindingTool:
+             owasp=(classification.owasp if classification else None),
+             createdAt=datetime.now(UTC).isoformat(),
+             slug=slugify(redacted_title) or f"finding-{int(datetime.now(UTC).timestamp())}",
+-            candidate_id=candidate_id or None,
++            candidate_id=candidate_id,
+             evidence_refs=evidence_refs,
+         )
+ 
+diff --git a/src/ui/core/state.py b/src/ui/core/state.py
+index 336b43a..1f05b3f 100644
+--- a/src/ui/core/state.py
++++ b/src/ui/core/state.py
+@@ -376,14 +376,17 @@ def _format_finding_card(args_json: str) -> dict[str, str] | None:
+     method = s("method")
+     url = s("url")
+     parameter = s("parameter")
+-    impact = s("impact")
++    observed_impact = s("observed_impact")
++    potential_impact = s("potential_impact")
+ 
+     lines = [f"{severity.upper() if severity else 'FINDING'} · {title}"]
+     if url:
+         loc = f"{method + ' ' if method else ''}{url}{f'  (param: {parameter})' if parameter else ''}"
+         lines.append(f"  {loc}")
+-    if impact:
+-        lines.append(f"  impact: {impact}")
++    if observed_impact:
++        lines.append(f"  observed impact: {observed_impact}")
++    if potential_impact:
++        lines.append(f"  potential impact: {potential_impact}")
+     return {"text": "\n".join(lines), "color": _severity_color(severity)}
+ 
+ 
+diff --git a/tests/agent/test_agent.py b/tests/agent/test_agent.py
+index 5c76b36..6d1aa4d 100644
+--- a/tests/agent/test_agent.py
++++ b/tests/agent/test_agent.py
+@@ -59,6 +59,7 @@ from src.tools.coverage import CoverageTool
+ from src.tools.finding import ConfirmFindingTool
+ from src.tools.workflow import WorkflowTool
+ from src.workflow.state import Candidate, ValidationResult, WorkflowState
++from src.workflow.evidence import EvidenceArtifact
+ 
+ from src.session.store import SessionMemory, Store, new_id
+ from tests.helpers.agent_fakes import (
+@@ -4882,7 +4883,21 @@ async def test_complete_workflow_result_reaches_immediate_next_request():
+ 
+ @pytest.mark.asyncio
+ async def test_confirm_finding_success_and_path_reach_immediate_next_request(tmp_path):
+-    tool = ConfirmFindingTool(FindingsStore(str(tmp_path / "findings")))
++    workflow = WorkflowState()
++    candidate, _ = workflow.add_candidate(Candidate(
++        candidate_class="xss", target="https://target.test", endpoint="/search",
++        method="GET", parameter="q",
++    ))
++    proof_path = tmp_path / "finding-proof.txt"
++    proof_path.write_text("Reflected script execution proof", encoding="utf-8")
++    proof = EvidenceArtifact.capture(candidate.id, proof_path.name, tmp_path)
++    workflow.add_evidence(proof)
++    workflow.add_validation_result(ValidationResult(
++        candidate.id, "cross-site-scripting", "confirmed", evidence_refs=[proof.id],
++    ))
++    tool = ConfirmFindingTool(
++        FindingsStore(str(tmp_path / "findings")), workflow=workflow,
++    )
+     client = FakeClient(
+         [
+             tool_batch(
+@@ -4891,9 +4906,11 @@ async def test_confirm_finding_success_and_path_reach_immediate_next_request(tmp
+                     "confirm_finding",
+                     {
+                         "title": "Reflected XSS",
++                        "candidate_id": candidate.id,
+                         "severity": "high",
+                         "url": "https://target.test/search?q=1",
+-                        "impact": "Arbitrary JavaScript execution",
++                        "observed_impact": "Arbitrary JavaScript execution was demonstrated.",
++                        "potential_impact": "Further impact was not assessed.",
+                     },
+                 )
+             ),
+diff --git a/tests/agent/test_systemprompt.py b/tests/agent/test_systemprompt.py
+index 56fd782..8d77164 100644
+--- a/tests/agent/test_systemprompt.py
++++ b/tests/agent/test_systemprompt.py
+@@ -180,6 +180,17 @@ class TestBuildSystemPrompt:
+         assert "Authorized testing" in p
+         assert "proceed within that scope" in p
+ 
++    def test_finding_guidance_separates_observed_and_potential_impact(self):
++        for profile in ("full", "compact"):
++            prompt = build_system_prompt(BuildOptions(
++                skills=Registry(), thinking_enabled=False, target=None,
++                prompt_profile=profile,
++            ))
++            assert "observed_impact" in prompt
++            assert "potential_impact" in prompt
++            assert "candidate_id" in prompt
++            assert "conditionally" in prompt
++
+     def test_requires_explicit_scope_for_destructive_or_state_mutating_tools(self):
+         for profile in ("full", "compact"):
+             prompt = build_system_prompt(
+diff --git a/tests/data/test_findings_http_request.py b/tests/data/test_findings_http_request.py
+index ec88bdb..83dfef8 100644
+--- a/tests/data/test_findings_http_request.py
++++ b/tests/data/test_findings_http_request.py
+@@ -7,7 +7,8 @@ def finding_with_curl(curl: str) -> Finding:
+         title="Finding",
+         severity="high",
+         url="https://app.example.com/fallback",
+-        impact="Impact.",
++        observed_impact="Observed impact.",
++        potential_impact="Potential impact not assessed.",
+         curl=curl,
+         createdAt="2026-06-02T12:21:02.243Z",
+         slug="finding",
+diff --git a/tests/data/test_findings_store.py b/tests/data/test_findings_store.py
+index 36ab81e..6d4593e 100644
+--- a/tests/data/test_findings_store.py
++++ b/tests/data/test_findings_store.py
+@@ -24,7 +24,8 @@ def make_finding(
+     title: str = "Finding",
+     severity: Severity = "high",
+     url: str = "https://app.example.com/api/x",
+-    impact: str = "Impact.",
++    observed_impact: str = "Observed impact.",
++    potential_impact: str = "Potential impact not assessed.",
+     createdAt: str = "2026-06-06T00:00:00.000Z",
+     slug: str = "finding",
+     parameter: str | None = None,
+@@ -36,13 +37,15 @@ def make_finding(
+     vulnerabilityType: str | None = None,
+     cwe: list[str] | None = None,
+     owasp: list[str] | None = None,
+-    candidate_id: str | None = None,
++    candidate_id: str | None = "cand_default",
++    evidence_refs: list[str] | None = None,
+ ) -> Finding:
+     return Finding(
+         title=title,
+         severity=severity,
+         url=url,
+-        impact=impact,
++        observed_impact=observed_impact,
++        potential_impact=potential_impact,
+         createdAt=createdAt,
+         slug=slug,
+         parameter=parameter,
+@@ -55,6 +58,7 @@ def make_finding(
+         cwe=cwe,
+         owasp=owasp,
+         candidate_id=candidate_id,
++        evidence_refs=evidence_refs if evidence_refs is not None else ["ev_default"],
+     )
+ 
+ @pytest.mark.asyncio
+@@ -66,6 +70,19 @@ async def test_saved_finding_file_has_owner_only_permissions(temp_dir: str):
+     assert mode == 0o600
+ 
+ 
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    "finding",
++    [
++        make_finding(candidate_id=None),
++        make_finding(evidence_refs=[]),
++    ],
++)
++async def test_save_requires_candidate_and_evidence_provenance(temp_dir: str, finding):
++    with pytest.raises(ValueError, match="candidate and evidence provenance"):
++        await Store(temp_dir).save(finding)
++
++
+ @pytest.mark.asyncio
+ async def test_legacy_finding_is_read_for_candidate_dedup_without_copy(tmp_path: Path):
+     legacy_store = Store(tmp_path / "findings", project_directory=tmp_path)
+@@ -107,7 +124,12 @@ async def test_concurrent_saves_with_same_slug_never_collide(temp_dir: str):
+     store = Store(temp_dir)
+ 
+     findings = [
+-        make_finding(slug="race", url=f"https://app.example.com/api/{i}")
++        make_finding(
++            slug="race",
++            url=f"https://app.example.com/api/{i}",
++            candidate_id=f"cand_{i}",
++            evidence_refs=[f"ev_{i}"],
++        )
+         for i in range(8)
+     ]
+ 
+@@ -179,7 +201,8 @@ def test_render_includes_all_populated_sections():
+         url="https://app.example.com/search?q=1",
+         method="GET",
+         parameter="q",
+-        impact="Session takeover via stolen cookies.",
++        observed_impact="Session takeover via stolen cookies.",
++        potential_impact="Further impact was not assessed.",
+         payload="<script>alert(1)</script>",
+         responseExcerpt="<div>1<script>alert(1)</script></div>",
+         curl='curl "https://app.example.com/search?q=<script>alert(1)</script>"',
+@@ -196,7 +219,8 @@ def test_render_includes_all_populated_sections():
+     assert "- **Method:** GET" in content
+     assert "- **Parameter:** q" in content
+     assert "- **Reported at:** 2026-06-06T00:00:00.000Z" in content
+-    assert "## Impact\n\nSession takeover via stolen cookies." in content
++    assert "## Observed impact\n\nSession takeover via stolen cookies." in content
++    assert "## Potential impact\n\nFurther impact was not assessed." in content
+     assert "## Payload\n\n```\n<script>alert(1)</script>\n```" in content
+     assert "## Response excerpt" in content
+     assert "## Reproduce\n\n```sh" in content
+@@ -206,8 +230,11 @@ def test_render_includes_all_populated_sections():
+ def test_render_omits_optional_sections_when_absent():
+     f = make_finding(
+         title="Minimal finding",
+-        impact="Some impact.",
++        observed_impact="Some impact.",
++        potential_impact="No further impact assessed.",
+         slug="minimal",
++        candidate_id=None,
++        evidence_refs=[],
+     )
+ 
+     content = render(f)
+diff --git a/tests/integration/test_phase4_workflow_e2e.py b/tests/integration/test_phase4_workflow_e2e.py
+index 0551596..c07b759 100644
+--- a/tests/integration/test_phase4_workflow_e2e.py
++++ b/tests/integration/test_phase4_workflow_e2e.py
+@@ -296,7 +296,8 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
+             "severity": "high",
+             "url": "https://target.test:8443/login",
+             "parameter": "id",
+-            "impact": "Database query manipulation only; no account takeover proven.",
++            "observed_impact": "Database query manipulation was demonstrated.",
++            "potential_impact": "Account takeover was not demonstrated or assessed.",
+             "response_excerpt": "authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYWRtaW4ifQ.signature",
+             "vuln_class": "sqli",
+         },
+diff --git a/tests/integration/test_skill_workflow.py b/tests/integration/test_skill_workflow.py
+index 58e082e..ac554cf 100644
+--- a/tests/integration/test_skill_workflow.py
++++ b/tests/integration/test_skill_workflow.py
+@@ -105,7 +105,9 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
+     finding_args = {
+         "candidate_id": first.candidate_id, "title": "Reflected XSS in search",
+         "severity": "medium", "url": "https://target.test/search",
+-        "method": "GET", "vuln_class": "xss", "impact": "Script execution",
++        "method": "GET", "vuln_class": "xss",
++        "observed_impact": "Script execution was demonstrated.",
++        "potential_impact": "Further browser impact was not assessed.",
+     }
+     await finder.run(finding_args, None, allow)
+     assert len(list((tmp_path / "artifacts/findings").glob("*.md"))) == 1
+diff --git a/tests/skills/test_authentication.py b/tests/skills/test_authentication.py
+index 4b63c53..bf10e15 100644
+--- a/tests/skills/test_authentication.py
++++ b/tests/skills/test_authentication.py
+@@ -560,12 +560,11 @@ class TestSkillDecisionContract:
+         assert "insufficient-identity" in section
+         assert "do not infer binding behavior from the single-use/expiry checks" in section
+ 
+-    def test_impact_must_be_evidence_supported_not_overclaimed(self, body):
++    def test_observed_and_potential_impact_are_separated(self, body):
+         """
+         Patch point 2: impact described before calling `confirm_finding`
+-        must be framed as a reasoned consequence of
+-        the confirmed weakness, not as an action actually executed —
+-        since step 4 forbids demonstrating real account takeover.
++        observed impact must be evidence-backed, with untested consequences
++        kept conditional in potential impact.
+         """
+         section = self._norm(
+             self._section(
+@@ -574,9 +573,9 @@ class TestSkillDecisionContract:
+                 "## Stop conditions",
+             )
+         )
+-        assert "was not itself safely demonstrated" in section
+-        assert "reasoned consequence" in section
+-        assert "not as an action that was actually executed" in section
++        assert "`observed_impact`: only what the authentication evidence demonstrates" in section
++        assert "`potential_impact`: possible consequences" in section
++        assert "stated conditionally" in section
+ 
+     def test_deferred_candidates_are_not_handed_off(self, body):
+         section = self._norm(
+diff --git a/tests/skills/test_sql_injection.py b/tests/skills/test_sql_injection.py
+index 55a2058..826b691 100644
+--- a/tests/skills/test_sql_injection.py
++++ b/tests/skills/test_sql_injection.py
+@@ -296,6 +296,10 @@ class TestScopeBounds:
+ 
+     def test_finding_impact_does_not_overclaim_admin_access(self, skill_text: str):
+         assert "Do not claim full administrative access or account takeover" in _norm(skill_text)
++        section = skill_text.split("## Confirm an evidence-backed finding", 1)[1]
++        assert "`observed_impact`" in section
++        assert "`potential_impact`" in section
++        assert "conditional" in section
+ 
+     def test_audit_metadata_must_come_from_runtime(self, skill_text: str):
+         normalized = _norm(skill_text)
+@@ -344,8 +348,9 @@ class TestFindingContract:
+     def test_confirm_finding_schema_present(self, skill_text: str):
+         assert "confirm_finding:" in skill_text
+         for field_name in (
+-            "title:", "severity:", "url:", "method:", "parameter:",
+-            "payload:", "response_excerpt:", "impact:", "curl:",
++            "title:", "candidate_id:", "severity:", "url:", "method:", "parameter:",
++            "payload:", "response_excerpt:", "observed_impact:",
++            "potential_impact:", "curl:",
+             "remediation:", "vuln_class:",
+         ):
+             assert field_name in skill_text
+diff --git a/tests/tools/test_finding.py b/tests/tools/test_finding.py
+index 78e6260..2487786 100644
+--- a/tests/tools/test_finding.py
++++ b/tests/tools/test_finding.py
+@@ -18,9 +18,15 @@ from src.workflow.state import Candidate, ValidationResult, WorkflowState
+ from src.workflow.evidence import EvidenceArtifact
+ 
+ 
+-def _tool(tmp_path, notifier=None):
++def _tool(tmp_path, notifier=None, *, candidate_class="xss"):
+     store = Store(str(tmp_path / "findings"))
+-    return ConfirmFindingTool(store, notifier=notifier), store
++    workflow = WorkflowState()
++    candidate, _ = workflow.add_candidate(Candidate(candidate_class=candidate_class))
++    proof = _linked_proof(workflow, candidate, tmp_path)
++    workflow.add_validation_result(ValidationResult(
++        candidate.id, "test-skill", "confirmed", evidence_refs=[proof],
++    ))
++    return ConfirmFindingTool(store, notifier=notifier, workflow=workflow), store
+ 
+ 
+ def _linked_proof(workflow, candidate, tmp_path):
+@@ -31,6 +37,20 @@ def _linked_proof(workflow, candidate, tmp_path):
+     return artifact.id
+ 
+ 
++def _valid_args(tool, **overrides):
++    candidate = next(iter(tool.workflow.candidates.values()))
++    return {
++        "candidate_id": candidate.id,
++        "title": "Finding",
++        "severity": "medium",
++        "url": "https://target.test/search",
++        "observed_impact": "The linked evidence demonstrates the behavior.",
++        "potential_impact": "No additional impact assessed.",
++        "vuln_class": candidate.candidate_class,
++        **overrides,
++    }
++
++
+ @pytest.mark.asyncio
+ @pytest.mark.parametrize(
+     "outcome",
+@@ -63,7 +83,8 @@ async def test_structured_non_confirmed_results_are_not_eligible(tmp_path, outco
+                 "title": "Not eligible",
+                 "severity": "medium",
+                 "url": "https://target.test/search",
+-                "impact": "None proven",
++                "observed_impact": "None proven",
++                "potential_impact": "No additional impact assessed.",
+             },
+             None,
+             AlwaysAllow(),
+@@ -75,7 +96,10 @@ async def test_structured_non_confirmed_results_are_not_eligible(tmp_path, outco
+ async def test_confirmed_structured_result_is_eligible(tmp_path):
+     workflow = WorkflowState()
+     candidate, _ = workflow.add_candidate(
+-        Candidate(candidate_class="sqli", endpoint="/product", parameter="id")
++        Candidate(
++            candidate_class="sqli", target="https://target.test",
++            method="GET", endpoint="/product", parameter="id",
++        )
+     )
+     proof = _linked_proof(workflow, candidate, tmp_path)
+     workflow.add_validation_result(
+@@ -97,7 +121,8 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
+             "title": "Confirmed SQL injection",
+             "severity": "high",
+             "url": "https://target.test/product",
+-            "impact": "Database query manipulation",
++            "observed_impact": "Database query manipulation was demonstrated.",
++            "potential_impact": "Further database access was not assessed.",
+         },
+         None,
+         AlwaysAllow(),
+@@ -106,6 +131,10 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
+     report = next((tmp_path / "findings").glob("*.md")).read_text(encoding="utf-8")
+     assert f"- **Candidate ID:** {candidate.id}" in report
+     assert f"- **Evidence:** {proof}" in report
++    assert "## Observed impact\n\nDatabase query manipulation was demonstrated." in report
++    assert "## Potential impact\n\nFurther database access was not assessed." in report
++    assert "- **Method:** GET" in report
++    assert "- **Parameter:** id" in report
+ 
+ 
+ @pytest.mark.asyncio
+@@ -131,7 +160,8 @@ async def test_canonical_finding_resolves_legacy_evidence_from_project_root(tmp_
+         "title": "SQL injection in product",
+         "severity": "high",
+         "url": "https://target.test/product",
+-        "impact": "Database query manipulation",
++        "observed_impact": "Database query manipulation was demonstrated.",
++        "potential_impact": "Further database access was not assessed.",
+     }, None, AlwaysAllow())
+ 
+     reports = list((tmp_path / "artifacts/findings").glob("*.md"))
+@@ -178,7 +208,8 @@ async def test_legacy_nested_cwd_evidence_resumes_without_rewriting(
+         "title": "SQL injection in product",
+         "severity": "high",
+         "url": "https://target.test/product",
+-        "impact": "Database query manipulation",
++        "observed_impact": "Database query manipulation was demonstrated.",
++        "potential_impact": "Further database access was not assessed.",
+     }, None, AlwaysAllow())
+     assert old_proof.exists()
+     assert restored.evidence[artifact.id].path == "sql-injection/target/results.md"
+@@ -193,6 +224,7 @@ async def test_legacy_nested_cwd_evidence_resumes_without_rewriting(
+         ({"url": "https://other.test/product"}, "target does not match"),
+         ({"url": "https://target.test/other"}, "endpoint does not match"),
+         ({"method": "POST"}, "method does not match"),
++        ({"parameter": "name"}, "parameter does not match"),
+     ],
+ )
+ async def test_finding_rejects_candidate_identity_mismatch(tmp_path, override, error):
+@@ -209,7 +241,9 @@ async def test_finding_rejects_candidate_identity_mismatch(tmp_path, override, e
+     args = {
+         "candidate_id": candidate.id, "title": "SQL injection in product",
+         "severity": "high", "url": "https://target.test/product",
+-        "method": "GET", "impact": "Query manipulation",
++        "method": "GET", "parameter": "id",
++        "observed_impact": "Query manipulation was demonstrated.",
++        "potential_impact": "Further impact was not assessed.",
+     }
+     with pytest.raises(ValueError, match=error):
+         await tool.run({**args, **override}, None, AlwaysAllow())
+@@ -231,7 +265,60 @@ async def test_finding_rechecks_evidence_artifact_before_writing(tmp_path):
+     with pytest.raises(ValueError, match="changed or is unavailable"):
+         await tool.run({
+             "candidate_id": candidate.id, "title": "XSS", "severity": "medium",
+-            "url": "https://target.test/search", "impact": "Script execution",
++            "url": "https://target.test/search",
++            "observed_impact": "Script execution was demonstrated.",
++            "potential_impact": "Further impact was not assessed.",
++        }, None, AlwaysAllow())
++    assert not (tmp_path / "findings").exists()
++
++
++@pytest.mark.asyncio
++async def test_finding_rejects_evidence_registered_to_another_candidate(tmp_path):
++    workflow = WorkflowState()
++    candidate, _ = workflow.add_candidate(Candidate(
++        candidate_class="xss", endpoint="/search",
++    ))
++    other, _ = workflow.add_candidate(Candidate(
++        candidate_class="sqli", endpoint="/search",
++    ))
++    other_proof = _linked_proof(workflow, other, tmp_path)
++    workflow.add_validation_result(ValidationResult(
++        candidate.id, "cross-site-scripting", "confirmed",
++        evidence_refs=[other_proof],
++    ))
++    tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
++
++    with pytest.raises(Exception, match="latest ValidationResult"):
++        await tool.run({
++            "candidate_id": candidate.id, "title": "XSS", "severity": "medium",
++            "url": "https://target.test/search",
++            "observed_impact": "Script execution was demonstrated.",
++            "potential_impact": "Further impact was not assessed.",
++        }, None, AlwaysAllow())
++    assert not (tmp_path / "findings").exists()
++
++
++@pytest.mark.asyncio
++async def test_finding_rejects_evidence_artifact_with_changed_hash(tmp_path):
++    workflow = WorkflowState()
++    candidate, _ = workflow.add_candidate(Candidate(
++        candidate_class="xss", endpoint="/search",
++    ))
++    proof = _linked_proof(workflow, candidate, tmp_path)
++    workflow.add_validation_result(ValidationResult(
++        candidate.id, "cross-site-scripting", "confirmed", evidence_refs=[proof],
++    ))
++    (tmp_path / f"proof-{candidate.id}.txt").write_text(
++        "Changed evidence after validation", encoding="utf-8",
++    )
++    tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
++
++    with pytest.raises(ValueError, match="changed or is unavailable"):
++        await tool.run({
++            "candidate_id": candidate.id, "title": "XSS", "severity": "medium",
++            "url": "https://target.test/search",
++            "observed_impact": "Script execution was demonstrated.",
++            "potential_impact": "Further impact was not assessed.",
+         }, None, AlwaysAllow())
+     assert not (tmp_path / "findings").exists()
+ 
+@@ -245,14 +332,16 @@ async def test_unknown_or_resultless_candidate_cannot_create_finding(tmp_path):
+     tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
+ 
+     for candidate_id in ("cand_unknown", candidate.id):
+-        with pytest.raises(Exception, match="latest ValidationResult"):
++        expected = "unknown candidate" if candidate_id == "cand_unknown" else "latest ValidationResult"
++        with pytest.raises(Exception, match=expected):
+             await tool.run(
+                 {
+                     "candidate_id": candidate_id,
+                     "title": "Ineligible",
+                     "severity": "medium",
+                     "url": "https://target.test/search",
+-                    "impact": "No proven impact",
++                    "observed_impact": "No proven impact",
++                    "potential_impact": "No additional impact assessed.",
+                 },
+                 None,
+                 AlwaysAllow(),
+@@ -276,7 +365,8 @@ async def test_same_candidate_creates_one_official_report(tmp_path):
+         "title": "SQL injection in product",
+         "severity": "high",
+         "url": "https://target.test/product",
+-        "impact": "Query manipulation",
++        "observed_impact": "Query manipulation was demonstrated.",
++        "potential_impact": "Further impact was not assessed.",
+     }
+ 
+     await tool.run(args, None, AlwaysAllow())
+@@ -306,7 +396,13 @@ def test_metadata(tmp_path):
+ 
+     schema = tool.schema()
+     assert schema["type"] == "object"
+-    assert schema["required"] == ["title", "severity", "url", "impact"]
++    assert schema["required"] == [
++        "title", "candidate_id", "severity", "url",
++        "observed_impact", "potential_impact",
++    ]
++    assert "impact" not in schema["properties"]
++    assert "linked validation evidence" in schema["properties"]["observed_impact"]["description"]
++    assert "conditional" in schema["properties"]["potential_impact"]["description"]
+     assert schema["properties"]["severity"]["enum"] == list(SEVERITIES)
+     assert schema["properties"]["vuln_class"]["type"] == "string"
+     assert "vuln_class" not in schema["required"]
+@@ -372,18 +468,20 @@ async def test_run_persists_finding_and_notifies(tmp_path):
+     tool, store = _tool(tmp_path, notifier=lambda f, p: seen.append((f, p)))
+ 
+     result = await tool.run(
+-        {
+-            "title": "Reflected XSS in search",
+-            "severity": "High",
+-            "url": "https://target.test/search?q=1",
+-            "impact": "Arbitrary JS execution",
+-            "method": "GET",
+-            "parameter": "q",
+-            "payload": "<script>alert(1)</script>",
+-            "response_excerpt": "<script>alert(1)</script>",
+-            "curl": "curl https://target.test/search",
+-            "remediation": "encode output",
+-        },
++        _valid_args(
++            tool,
++            title="Reflected XSS in search",
++            severity="High",
++            url="https://target.test/search?q=1",
++            observed_impact="Arbitrary JavaScript execution was demonstrated.",
++            potential_impact="Cookie theft was not assessed.",
++            method="GET",
++            parameter="q",
++            payload="<script>alert(1)</script>",
++            response_excerpt="<script>alert(1)</script>",
++            curl="curl https://target.test/search",
++            remediation="encode output",
++        ),
+         None,
+         AlwaysAllow(),
+     )
+@@ -394,12 +492,15 @@ async def test_run_persists_finding_and_notifies(tmp_path):
+     body = written[0].read_text(encoding="utf-8")
+     assert "# Reflected XSS in search" in body
+     assert "- **Severity:** high" in body  # severity lowercased
+-    assert "Candidate ID" not in body
++    assert f"- **Candidate ID:** {tool.workflow.candidates[next(iter(tool.workflow.candidates))].id}" in body
+ 
+     assert len(seen) == 1
+     finding, path = seen[0]
+     assert finding.severity == "high"
+-    assert finding.candidate_id is None
++    assert finding.candidate_id
++    assert finding.evidence_refs
++    assert "## Observed impact" in body
++    assert "## Potential impact" in body
+     assert finding.slug == "reflected-xss-in-search"
+     assert path.endswith(".md")
+     assert path in result
+@@ -412,14 +513,15 @@ async def test_run_redacts_session_material_from_persisted_evidence(tmp_path):
+     password = "correct-horse-battery-staple"
+ 
+     await tool.run(
+-        {
+-            "title": "Authentication response evidence",
+-            "severity": "medium",
+-            "url": f"https://target.test/login?token={jwt}",
+-            "impact": f"password={password}",
+-            "response_excerpt": f"authorization: Bearer {jwt}",
+-            "curl": f"curl -H 'Authorization: Bearer {jwt}' https://target.test",
+-        },
++        _valid_args(
++            tool,
++            title="Authentication response evidence",
++            severity="medium",
++            url=f"https://target.test/login?token={jwt}",
++            observed_impact=f"password={password}",
++            response_excerpt=f"authorization: Bearer {jwt}",
++            curl=f"curl -H 'Authorization: Bearer {jwt}' https://target.test",
++        ),
+         None,
+         AlwaysAllow(),
+     )
+@@ -437,13 +539,14 @@ async def test_run_uses_redacted_title_for_report_and_slug(tmp_path):
+     title = f"Password leak password={secret} in login"
+ 
+     await tool.run(
+-        {
+-            "title": title,
+-            "severity": "medium",
+-            "url": "https://target.test/login",
+-            "impact": f"password={secret}",
+-            "payload": f"password={secret}",
+-        },
++        _valid_args(
++            tool,
++            title=title,
++            severity="medium",
++            url="https://target.test/login",
++            observed_impact=f"password={secret}",
++            payload=f"password={secret}",
++        ),
+         None,
+         AlwaysAllow(),
+     )
+@@ -465,12 +568,12 @@ async def test_run_reports_success_when_notifier_raises(tmp_path):
+     tool, _ = _tool(tmp_path, notifier=broken_notifier)
+ 
+     result = await tool.run(
+-        {
+-            "title": "Persisted despite notifier failure",
+-            "severity": "high",
+-            "url": "https://target.test/login",
+-            "impact": "Impact",
+-        },
++        _valid_args(
++            tool,
++            title="Persisted despite notifier failure",
++            severity="high",
++            url="https://target.test/login",
++        ),
+         None,
+         AlwaysAllow(),
+     )
+@@ -486,16 +589,21 @@ async def test_run_reports_success_when_notifier_raises(tmp_path):
+ )
+ async def test_run_enriches_finding_from_vuln_class(tmp_path, vuln_class):
+     seen: list[Finding] = []
+-    tool, _ = _tool(tmp_path, notifier=lambda finding, _: seen.append(finding))
++    tool, _ = _tool(
++        tmp_path,
++        notifier=lambda finding, _: seen.append(finding),
++        candidate_class=vuln_class,
++    )
+ 
+     await tool.run(
+-        {
+-            "title": "SQL injection",
+-            "severity": "high",
+-            "url": "https://target.test/login",
+-            "impact": "Database access",
+-            "vuln_class": vuln_class,
+-        },
++        _valid_args(
++            tool,
++            title="SQL injection",
++            severity="high",
++            url="https://target.test/login",
++            vuln_class=vuln_class,
++            observed_impact="A database query result was demonstrated.",
++        ),
+         None,
+         AlwaysAllow(),
+     )
+@@ -528,7 +636,8 @@ async def test_access_control_report_is_broad_and_retains_candidate_id(
+             "title": "Order access through another account",
+             "severity": "high",
+             "url": "https://target.test/orders/1",
+-            "impact": "Another account's order was readable",
++            "observed_impact": "Another account's order was readable.",
++            "potential_impact": "Other records were not assessed.",
+         },
+         None,
+         AlwaysAllow(),
+@@ -552,16 +661,17 @@ async def test_access_control_report_is_broad_and_retains_candidate_id(
+ async def test_structured_class_beats_misleading_title(
+     tmp_path, vuln_class, title, expected_type, expected_cwe
+ ):
+-    tool, _ = _tool(tmp_path)
++    tool, _ = _tool(tmp_path, candidate_class=vuln_class)
+ 
+     await tool.run(
+-        {
+-            "vuln_class": vuln_class,
+-            "title": title,
+-            "severity": "medium",
+-            "url": "https://target.test/search",
+-            "impact": "Reproduced impact",
+-        },
++        _valid_args(
++            tool,
++            vuln_class=vuln_class,
++            title=title,
++            severity="medium",
++            url="https://target.test/search",
++            observed_impact="The linked validation reproduced this behavior.",
++        ),
+         None,
+         AlwaysAllow(),
+     )
+@@ -578,16 +688,20 @@ async def test_run_persists_without_classification_for_unknown_class(
+     vuln_class,
+ ):
+     seen: list[Finding] = []
+-    tool, _ = _tool(tmp_path, notifier=lambda finding, _: seen.append(finding))
++    tool, _ = _tool(
++        tmp_path,
++        notifier=lambda finding, _: seen.append(finding),
++        candidate_class=(vuln_class or "unknown"),
++    )
+ 
+     await tool.run(
+-        {
+-            "title": "Unclassified finding",
+-            "severity": "low",
+-            "url": "https://target.test",
+-            "impact": "Impact",
+-            "vuln_class": vuln_class,
+-        },
++        _valid_args(
++            tool,
++            title="Unclassified finding",
++            severity="low",
++            url="https://target.test",
++            vuln_class=vuln_class,
++        ),
+         None,
+         AlwaysAllow(),
+     )
+@@ -601,15 +715,19 @@ async def test_run_persists_without_classification_for_unknown_class(
+ @pytest.mark.asyncio
+ async def test_run_persists_without_classification_when_class_is_omitted(tmp_path):
+     seen: list[Finding] = []
+-    tool, _ = _tool(tmp_path, notifier=lambda finding, _: seen.append(finding))
++    tool, _ = _tool(
++        tmp_path,
++        notifier=lambda finding, _: seen.append(finding),
++        candidate_class="unknown",
++    )
+ 
+     await tool.run(
+-        {
+-            "title": "Legacy finding",
+-            "severity": "info",
+-            "url": "https://target.test",
+-            "impact": "Impact",
+-        },
++        _valid_args(
++            tool,
++            title="Legacy finding",
++            severity="info",
++            url="https://target.test",
++        ),
+         None,
+         AlwaysAllow(),
+     )
+@@ -634,7 +752,8 @@ def test_classifications_do_not_share_mutable_lists():
+     [
+         ("title", "title is required"),
+         ("url", "url is required"),
+-        ("impact", "impact is required"),
++        ("observed_impact", "observed_impact is required"),
++        ("potential_impact", "potential_impact is required"),
+     ],
+ )
+ async def test_run_requires_core_fields(tmp_path, missing, message):
+@@ -643,7 +762,9 @@ async def test_run_requires_core_fields(tmp_path, missing, message):
+         "title": "t",
+         "severity": "high",
+         "url": "u",
+-        "impact": "i",
++        "observed_impact": "Observed.",
++        "potential_impact": "Unassessed.",
++        "candidate_id": next(iter(tool.workflow.candidates)),
+     }
+     args[missing] = ""
+ 
+@@ -651,21 +772,43 @@ async def test_run_requires_core_fields(tmp_path, missing, message):
+         await tool.run(args, None, AlwaysAllow())
+ 
+ 
++@pytest.mark.asyncio
++@pytest.mark.parametrize("candidate_value", [None, ""])
++async def test_run_rejects_null_or_empty_candidate_id(tmp_path, candidate_value):
++    tool, _ = _tool(tmp_path)
++    args = _valid_args(tool)
++    args["candidate_id"] = candidate_value
++
++    with pytest.raises(ValueError, match="candidate_id is required"):
++        await tool.run(args, None, AlwaysAllow())
++
++
++@pytest.mark.asyncio
++async def test_run_rejects_missing_candidate_id(tmp_path):
++    tool, _ = _tool(tmp_path)
++    args = _valid_args(tool)
++    del args["candidate_id"]
++
++    with pytest.raises(ValueError, match="candidate_id is required"):
++        await tool.run(args, None, AlwaysAllow())
++
++
++@pytest.mark.asyncio
++async def test_run_requires_workflow_state(tmp_path):
++    tool, _ = _tool(tmp_path)
++    args = _valid_args(tool)
++    unlinked = ConfirmFindingTool(tool.store)
++
++    with pytest.raises(ValueError, match="workflow state is required"):
++        await unlinked.run(args, None, AlwaysAllow())
++
++
+ @pytest.mark.asyncio
+ async def test_run_rejects_invalid_severity(tmp_path):
+     tool, _ = _tool(tmp_path)
+ 
+     with pytest.raises(Exception, match="severity must be one of"):
+-        await tool.run(
+-            {
+-                "title": "t",
+-                "severity": "sev",
+-                "url": "u",
+-                "impact": "i",
+-            },
+-            None,
+-            AlwaysAllow(),
+-        )
++        await tool.run(_valid_args(tool, title="t", severity="sev", url="u"), None, AlwaysAllow())
+ 
+ 
+ @pytest.mark.asyncio
+@@ -675,12 +818,7 @@ async def test_run_falls_back_to_timestamp_slug_for_unslugifiable_title(
+     tool, _ = _tool(tmp_path)
+ 
+     result = await tool.run(
+-        {
+-            "title": "!!!",
+-            "severity": "low",
+-            "url": "u",
+-            "impact": "i",
+-        },
++        _valid_args(tool, title="!!!", severity="low", url="u"),
+         None,
+         AlwaysAllow(),
+     )
+diff --git a/tests/ui/test_state.py b/tests/ui/test_state.py
+index 9978a19..ac51113 100644
+--- a/tests/ui/test_state.py
++++ b/tests/ui/test_state.py
+@@ -532,8 +532,9 @@ def test_confirm_finding_card():
+                         "method": "GET",
+                         "url": "https://x.test/",
+                         "parameter": "debug",
+-                        "impact":
+-                            "Leaks the PHP version."
++                        "observed_impact":
++                            "The response exposes the PHP version.",
++                        "potential_impact": "No additional impact assessed."
+                     }
+                 ),
+             )
+@@ -552,7 +553,8 @@ def test_confirm_finding_card():
+     )
+ 
+     assert "GET https://x.test/" in last.text
+-    assert "impact: Leaks the PHP version." in last.text
++    assert "observed impact: The response exposes the PHP version." in last.text
++    assert "potential impact: No additional impact assessed." in last.text
+ 
+ 
+ 

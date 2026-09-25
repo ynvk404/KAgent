@@ -26,7 +26,8 @@ class Finding:
     severity: Severity
     url: str
 
-    impact: str
+    observed_impact: str
+    potential_impact: str
 
     parameter: str | None = None
     payload: str | None = None
@@ -71,7 +72,19 @@ class Store:
         self,
         finding: Finding,
     ) -> str:
-        
+
+        if (
+            not isinstance(finding.candidate_id, str)
+            or not finding.candidate_id.strip()
+            or not isinstance(finding.evidence_refs, list)
+            or not finding.evidence_refs
+        ):
+            raise ValueError(
+                "confirmed finding requires candidate and evidence provenance"
+            )
+        if not all(isinstance(ref, str) and ref.strip() for ref in finding.evidence_refs):
+            raise ValueError("confirmed finding evidence references must be non-empty strings")
+
         if not _SAFE_SLUG_RE.match(finding.slug):
             raise ValueError(
                 f"unsafe finding slug: {finding.slug!r}"
@@ -224,9 +237,13 @@ def render(
     lines.extend(
         [
             "",
-            "## Impact",
+            "## Observed impact",
             "",
-            f.impact,
+            f.observed_impact,
+            "",
+            "## Potential impact",
+            "",
+            f.potential_impact,
             "",
         ]
     )

@@ -619,21 +619,28 @@ candidate marked `confirmed (SQLI-2)` or `confirmed (SQLI-3)`, call
 sql-injection → results.md → confirm_finding → final finding
 ```
 
-Populate the tool call from the recorded evidence. Include `title`,
-`severity`, exact `url`, `parameter`, `payload`, `method`, a short proving
-`response_excerpt`, concrete `impact`, a copy-pasteable `curl`, remediation,
-and `vuln_class: sqli`:
+Populate the tool call from the recorded evidence. Include the required
+`candidate_id` of the confirmed Candidate, `title`, `severity`, exact `url`,
+`parameter`, `payload`, `method`, a short proving `response_excerpt`,
+`observed_impact`, `potential_impact`, a copy-pasteable `curl`, remediation,
+and `vuln_class: sqli`. The latest result and its registered evidence must be
+valid. `observed_impact` may describe attacker-controlled SQL execution and
+output actually shown by the evidence; `potential_impact` describes further
+database access only as conditional unless the validation demonstrated it.
+Do not present possible impact as observed fact:
 
 ```yaml
 confirm_finding:
   title: <short descriptive title>
+  candidate_id: <confirmed workflow Candidate ID>
   severity: <critical|high|medium|low|info>
   url: <exact affected endpoint>
   method: <GET|POST|...>
   parameter: <parameter>
   payload: <exact confirming payload>
   response_excerpt: <short excerpt proving the SQLi>
-  impact: <concrete evidence-supported impact>
+  observed_impact: <what the linked evidence demonstrates>
+  potential_impact: <untested consequences stated conditionally, or "No additional impact assessed.">
   curl: <copy-pasteable reproduction>
   remediation: "Use parameterized queries, prepared statements, or ORM parameter binding for this input."
   vuln_class: sqli

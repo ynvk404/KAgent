@@ -24,7 +24,8 @@ def make_finding(
     title: str = "Finding",
     severity: Severity = "high",
     url: str = "https://app.example.com/api/x",
-    impact: str = "Impact.",
+    observed_impact: str = "Observed impact.",
+    potential_impact: str = "Potential impact not assessed.",
     createdAt: str = "2026-06-06T00:00:00.000Z",
     slug: str = "finding",
     parameter: str | None = None,
@@ -36,13 +37,15 @@ def make_finding(
     vulnerabilityType: str | None = None,
     cwe: list[str] | None = None,
     owasp: list[str] | None = None,
-    candidate_id: str | None = None,
+    candidate_id: str | None = "cand_default",
+    evidence_refs: list[str] | None = None,
 ) -> Finding:
     return Finding(
         title=title,
         severity=severity,
         url=url,
-        impact=impact,
+        observed_impact=observed_impact,
+        potential_impact=potential_impact,
         createdAt=createdAt,
         slug=slug,
         parameter=parameter,
@@ -55,6 +58,7 @@ def make_finding(
         cwe=cwe,
         owasp=owasp,
         candidate_id=candidate_id,
+        evidence_refs=evidence_refs if evidence_refs is not None else ["ev_default"],
     )
 
 @pytest.mark.asyncio
@@ -64,6 +68,19 @@ async def test_saved_finding_file_has_owner_only_permissions(temp_dir: str):
 
     mode = stat.S_IMODE(Path(path).stat().st_mode)
     assert mode == 0o600
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "finding",
+    [
+        make_finding(candidate_id=None),
+        make_finding(evidence_refs=[]),
+    ],
+)
+async def test_save_requires_candidate_and_evidence_provenance(temp_dir: str, finding):
+    with pytest.raises(ValueError, match="candidate and evidence provenance"):
+        await Store(temp_dir).save(finding)
 
 
 @pytest.mark.asyncio
@@ -107,7 +124,12 @@ async def test_concurrent_saves_with_same_slug_never_collide(temp_dir: str):
     store = Store(temp_dir)
 
     findings = [
-        make_finding(slug="race", url=f"https://app.example.com/api/{i}")
+        make_finding(
+            slug="race",
+            url=f"https://app.example.com/api/{i}",
+            candidate_id=f"cand_{i}",
+            evidence_refs=[f"ev_{i}"],
+        )
         for i in range(8)
     ]
 
@@ -179,7 +201,8 @@ def test_render_includes_all_populated_sections():
         url="https://app.example.com/search?q=1",
         method="GET",
         parameter="q",
-        impact="Session takeover via stolen cookies.",
+        observed_impact="Session takeover via stolen cookies.",
+        potential_impact="Further impact was not assessed.",
         payload="<script>alert(1)</script>",
         responseExcerpt="<div>1<script>alert(1)</script></div>",
         curl='curl "https://app.example.com/search?q=<script>alert(1)</script>"',
@@ -196,7 +219,8 @@ def test_render_includes_all_populated_sections():
     assert "- **Method:** GET" in content
     assert "- **Parameter:** q" in content
     assert "- **Reported at:** 2026-06-06T00:00:00.000Z" in content
-    assert "## Impact\n\nSession takeover via stolen cookies." in content
+    assert "## Observed impact\n\nSession takeover via stolen cookies." in content
+    assert "## Potential impact\n\nFurther impact was not assessed." in content
     assert "## Payload\n\n```\n<script>alert(1)</script>\n```" in content
     assert "## Response excerpt" in content
     assert "## Reproduce\n\n```sh" in content
@@ -206,8 +230,11 @@ def test_render_includes_all_populated_sections():
 def test_render_omits_optional_sections_when_absent():
     f = make_finding(
         title="Minimal finding",
-        impact="Some impact.",
+        observed_impact="Some impact.",
+        potential_impact="No further impact assessed.",
         slug="minimal",
+        candidate_id=None,
+        evidence_refs=[],
     )
 
     content = render(f)

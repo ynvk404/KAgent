@@ -180,6 +180,17 @@ class TestBuildSystemPrompt:
         assert "Authorized testing" in p
         assert "proceed within that scope" in p
 
+    def test_finding_guidance_separates_observed_and_potential_impact(self):
+        for profile in ("full", "compact"):
+            prompt = build_system_prompt(BuildOptions(
+                skills=Registry(), thinking_enabled=False, target=None,
+                prompt_profile=profile,
+            ))
+            assert "observed_impact" in prompt
+            assert "potential_impact" in prompt
+            assert "candidate_id" in prompt
+            assert "conditionally" in prompt
+
     def test_requires_explicit_scope_for_destructive_or_state_mutating_tools(self):
         for profile in ("full", "compact"):
             prompt = build_system_prompt(

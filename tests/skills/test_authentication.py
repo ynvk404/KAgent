@@ -560,12 +560,11 @@ class TestSkillDecisionContract:
         assert "insufficient-identity" in section
         assert "do not infer binding behavior from the single-use/expiry checks" in section
 
-    def test_impact_must_be_evidence_supported_not_overclaimed(self, body):
+    def test_observed_and_potential_impact_are_separated(self, body):
         """
         Patch point 2: impact described before calling `confirm_finding`
-        must be framed as a reasoned consequence of
-        the confirmed weakness, not as an action actually executed —
-        since step 4 forbids demonstrating real account takeover.
+        observed impact must be evidence-backed, with untested consequences
+        kept conditional in potential impact.
         """
         section = self._norm(
             self._section(
@@ -574,9 +573,9 @@ class TestSkillDecisionContract:
                 "## Stop conditions",
             )
         )
-        assert "was not itself safely demonstrated" in section
-        assert "reasoned consequence" in section
-        assert "not as an action that was actually executed" in section
+        assert "`observed_impact`: only what the authentication evidence demonstrates" in section
+        assert "`potential_impact`: possible consequences" in section
+        assert "stated conditionally" in section
 
     def test_deferred_candidates_are_not_handed_off(self, body):
         section = self._norm(

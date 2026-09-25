@@ -105,7 +105,9 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
     finding_args = {
         "candidate_id": first.candidate_id, "title": "Reflected XSS in search",
         "severity": "medium", "url": "https://target.test/search",
-        "method": "GET", "vuln_class": "xss", "impact": "Script execution",
+        "method": "GET", "vuln_class": "xss",
+        "observed_impact": "Script execution was demonstrated.",
+        "potential_impact": "Further browser impact was not assessed.",
     }
     await finder.run(finding_args, None, allow)
     assert len(list((tmp_path / "artifacts/findings").glob("*.md"))) == 1

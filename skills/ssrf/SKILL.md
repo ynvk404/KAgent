@@ -171,7 +171,11 @@ deeper impact validation would require separate scope and authorization.
 ## Confirm an evidence-backed finding
 
 After recording a `confirmed` ValidationResult, call `confirm_finding` with
-its `candidate_id` and the required `title`, `severity`, `url`, and `impact`,
+its required `candidate_id`, `title`, `severity`, `url`, `observed_impact`,
+and `potential_impact`,
 plus method, parameter, reproducible request, response excerpt, remediation,
-and canonical `vuln_class` when available. Do not call it for any other
-structured outcome.
+and canonical `vuln_class` when available. `observed_impact` states only what
+the linked evidence demonstrates; put untested consequences in
+`potential_impact` as conditional possibilities. The candidate's latest
+confirmed result and registered evidence must be valid. Do not call it for any
+other structured outcome.

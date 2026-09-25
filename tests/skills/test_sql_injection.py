@@ -296,6 +296,10 @@ class TestScopeBounds:
 
     def test_finding_impact_does_not_overclaim_admin_access(self, skill_text: str):
         assert "Do not claim full administrative access or account takeover" in _norm(skill_text)
+        section = skill_text.split("## Confirm an evidence-backed finding", 1)[1]
+        assert "`observed_impact`" in section
+        assert "`potential_impact`" in section
+        assert "conditional" in section
 
     def test_audit_metadata_must_come_from_runtime(self, skill_text: str):
         normalized = _norm(skill_text)
@@ -344,8 +348,9 @@ class TestFindingContract:
     def test_confirm_finding_schema_present(self, skill_text: str):
         assert "confirm_finding:" in skill_text
         for field_name in (
-            "title:", "severity:", "url:", "method:", "parameter:",
-            "payload:", "response_excerpt:", "impact:", "curl:",
+            "title:", "candidate_id:", "severity:", "url:", "method:", "parameter:",
+            "payload:", "response_excerpt:", "observed_impact:",
+            "potential_impact:", "curl:",
             "remediation:", "vuln_class:",
         ):
             assert field_name in skill_text

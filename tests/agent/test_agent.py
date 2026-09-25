@@ -59,6 +59,7 @@ from src.tools.coverage import CoverageTool
 from src.tools.finding import ConfirmFindingTool
 from src.tools.workflow import WorkflowTool
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
+from src.workflow.evidence import EvidenceArtifact
 
 from src.session.store import SessionMemory, Store, new_id
 from tests.helpers.agent_fakes import (
@@ -4882,7 +4883,21 @@ async def test_complete_workflow_result_reaches_immediate_next_request():
 
 @pytest.mark.asyncio
 async def test_confirm_finding_success_and_path_reach_immediate_next_request(tmp_path):
-    tool = ConfirmFindingTool(FindingsStore(str(tmp_path / "findings")))
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(Candidate(
+        candidate_class="xss", target="https://target.test", endpoint="/search",
+        method="GET", parameter="q",
+    ))
+    proof_path = tmp_path / "finding-proof.txt"
+    proof_path.write_text("Reflected script execution proof", encoding="utf-8")
+    proof = EvidenceArtifact.capture(candidate.id, proof_path.name, tmp_path)
+    workflow.add_evidence(proof)
+    workflow.add_validation_result(ValidationResult(
+        candidate.id, "cross-site-scripting", "confirmed", evidence_refs=[proof.id],
+    ))
+    tool = ConfirmFindingTool(
+        FindingsStore(str(tmp_path / "findings")), workflow=workflow,
+    )
     client = FakeClient(
         [
             tool_batch(
@@ -4891,9 +4906,11 @@ async def test_confirm_finding_success_and_path_reach_immediate_next_request(tmp
                     "confirm_finding",
                     {
                         "title": "Reflected XSS",
+                        "candidate_id": candidate.id,
                         "severity": "high",
                         "url": "https://target.test/search?q=1",
-                        "impact": "Arbitrary JavaScript execution",
+                        "observed_impact": "Arbitrary JavaScript execution was demonstrated.",
+                        "potential_impact": "Further impact was not assessed.",
                     },
                 )
             ),

@@ -430,19 +430,21 @@ finding:
 access-control → results.md → confirm_finding → final finding
 ```
 
-Populate the tool call from the recorded evidence. Supply `title`,
-`severity`, exact `url`, `parameter` when applicable, `method`, a short
-proving `response_excerpt`, concrete `impact`, a copy-pasteable `curl`,
-remediation, and the matching coverage class in `vuln_class` (for example,
-`idor` for an IDOR), including:
+Populate the tool call from the recorded evidence. Supply the required
+`candidate_id` of the confirmed Candidate, `title`, `severity`, exact `url`,
+`parameter` when applicable, `method`, a short proving `response_excerpt`,
+`observed_impact`, `potential_impact`, a copy-pasteable `curl`, remediation,
+and the matching coverage class in `vuln_class` (for example, `idor` for an
+IDOR). The latest result and its registered evidence must be valid. Include:
 
 - affected endpoint/method/object;
 - which authorization boundary failed (missing auth / horizontal /
   vertical / tamperable role or ownership field);
 - the exact request(s) and comparison evidence;
-- concrete impact in one or two sentences (what an attacker with only the
-  lower-privilege identity could actually do) — not a hypothetical worst
-  case;
+- `observed_impact`: what the lower-privilege identity was actually able to do
+  in the linked evidence;
+- `potential_impact`: other consequences stated conditionally when they were
+  not demonstrated;
 - suggested remediation direction: enforce ownership/role checks
   server-side on every request (never trust client-supplied role/user
   fields), scoped by the authenticated session — not a rewritten

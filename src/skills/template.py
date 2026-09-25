@@ -31,7 +31,8 @@ def render_skill_template(name: str) -> str:
         "## 2. Next step\n\n"
         "...\n\n"
         "## Reporting\n\n"
-        "What proves the bug, the concrete impact in one sentence, and remediation.\n"
-        "When you have a reproduced finding with a real request/response, call\n"
-        "`confirm_finding`.\n"
+        "What the evidence demonstrates, any untested possible impact stated\n"
+        "conditionally, and remediation. Call `confirm_finding` only with a\n"
+        "workflow Candidate whose latest result is confirmed and whose evidence\n"
+        "references are valid.\n"
     )

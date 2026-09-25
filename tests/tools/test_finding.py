@@ -18,9 +18,15 @@ from src.workflow.state import Candidate, ValidationResult, WorkflowState
 from src.workflow.evidence import EvidenceArtifact
 
 
-def _tool(tmp_path, notifier=None):
+def _tool(tmp_path, notifier=None, *, candidate_class="xss"):
     store = Store(str(tmp_path / "findings"))
-    return ConfirmFindingTool(store, notifier=notifier), store
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(Candidate(candidate_class=candidate_class))
+    proof = _linked_proof(workflow, candidate, tmp_path)
+    workflow.add_validation_result(ValidationResult(
+        candidate.id, "test-skill", "confirmed", evidence_refs=[proof],
+    ))
+    return ConfirmFindingTool(store, notifier=notifier, workflow=workflow), store
 
 
 def _linked_proof(workflow, candidate, tmp_path):
@@ -29,6 +35,20 @@ def _linked_proof(workflow, candidate, tmp_path):
     artifact = EvidenceArtifact.capture(candidate.id, path.name, tmp_path)
     workflow.add_evidence(artifact)
     return artifact.id
+
+
+def _valid_args(tool, **overrides):
+    candidate = next(iter(tool.workflow.candidates.values()))
+    return {
+        "candidate_id": candidate.id,
+        "title": "Finding",
+        "severity": "medium",
+        "url": "https://target.test/search",
+        "observed_impact": "The linked evidence demonstrates the behavior.",
+        "potential_impact": "No additional impact assessed.",
+        "vuln_class": candidate.candidate_class,
+        **overrides,
+    }
 
 
 @pytest.mark.asyncio
@@ -63,7 +83,8 @@ async def test_structured_non_confirmed_results_are_not_eligible(tmp_path, outco
                 "title": "Not eligible",
                 "severity": "medium",
                 "url": "https://target.test/search",
-                "impact": "None proven",
+                "observed_impact": "None proven",
+                "potential_impact": "No additional impact assessed.",
             },
             None,
             AlwaysAllow(),
@@ -75,7 +96,10 @@ async def test_structured_non_confirmed_results_are_not_eligible(tmp_path, outco
 async def test_confirmed_structured_result_is_eligible(tmp_path):
     workflow = WorkflowState()
     candidate, _ = workflow.add_candidate(
-        Candidate(candidate_class="sqli", endpoint="/product", parameter="id")
+        Candidate(
+            candidate_class="sqli", target="https://target.test",
+            method="GET", endpoint="/product", parameter="id",
+        )
     )
     proof = _linked_proof(workflow, candidate, tmp_path)
     workflow.add_validation_result(
@@ -97,7 +121,8 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
             "title": "Confirmed SQL injection",
             "severity": "high",
             "url": "https://target.test/product",
-            "impact": "Database query manipulation",
+            "observed_impact": "Database query manipulation was demonstrated.",
+            "potential_impact": "Further database access was not assessed.",
         },
         None,
         AlwaysAllow(),
@@ -106,6 +131,10 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
     report = next((tmp_path / "findings").glob("*.md")).read_text(encoding="utf-8")
     assert f"- **Candidate ID:** {candidate.id}" in report
     assert f"- **Evidence:** {proof}" in report
+    assert "## Observed impact\n\nDatabase query manipulation was demonstrated." in report
+    assert "## Potential impact\n\nFurther database access was not assessed." in report
+    assert "- **Method:** GET" in report
+    assert "- **Parameter:** id" in report
 
 
 @pytest.mark.asyncio
@@ -131,7 +160,8 @@ async def test_canonical_finding_resolves_legacy_evidence_from_project_root(tmp_
         "title": "SQL injection in product",
         "severity": "high",
         "url": "https://target.test/product",
-        "impact": "Database query manipulation",
+        "observed_impact": "Database query manipulation was demonstrated.",
+        "potential_impact": "Further database access was not assessed.",
     }, None, AlwaysAllow())
 
     reports = list((tmp_path / "artifacts/findings").glob("*.md"))
@@ -178,7 +208,8 @@ async def test_legacy_nested_cwd_evidence_resumes_without_rewriting(
         "title": "SQL injection in product",
         "severity": "high",
         "url": "https://target.test/product",
-        "impact": "Database query manipulation",
+        "observed_impact": "Database query manipulation was demonstrated.",
+        "potential_impact": "Further database access was not assessed.",
     }, None, AlwaysAllow())
     assert old_proof.exists()
     assert restored.evidence[artifact.id].path == "sql-injection/target/results.md"
@@ -193,6 +224,7 @@ async def test_legacy_nested_cwd_evidence_resumes_without_rewriting(
         ({"url": "https://other.test/product"}, "target does not match"),
         ({"url": "https://target.test/other"}, "endpoint does not match"),
         ({"method": "POST"}, "method does not match"),
+        ({"parameter": "name"}, "parameter does not match"),
     ],
 )
 async def test_finding_rejects_candidate_identity_mismatch(tmp_path, override, error):
@@ -209,7 +241,9 @@ async def test_finding_rejects_candidate_identity_mismatch(tmp_path, override, e
     args = {
         "candidate_id": candidate.id, "title": "SQL injection in product",
         "severity": "high", "url": "https://target.test/product",
-        "method": "GET", "impact": "Query manipulation",
+        "method": "GET", "parameter": "id",
+        "observed_impact": "Query manipulation was demonstrated.",
+        "potential_impact": "Further impact was not assessed.",
     }
     with pytest.raises(ValueError, match=error):
         await tool.run({**args, **override}, None, AlwaysAllow())
@@ -231,7 +265,60 @@ async def test_finding_rechecks_evidence_artifact_before_writing(tmp_path):
     with pytest.raises(ValueError, match="changed or is unavailable"):
         await tool.run({
             "candidate_id": candidate.id, "title": "XSS", "severity": "medium",
-            "url": "https://target.test/search", "impact": "Script execution",
+            "url": "https://target.test/search",
+            "observed_impact": "Script execution was demonstrated.",
+            "potential_impact": "Further impact was not assessed.",
+        }, None, AlwaysAllow())
+    assert not (tmp_path / "findings").exists()
+
+
+@pytest.mark.asyncio
+async def test_finding_rejects_evidence_registered_to_another_candidate(tmp_path):
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(Candidate(
+        candidate_class="xss", endpoint="/search",
+    ))
+    other, _ = workflow.add_candidate(Candidate(
+        candidate_class="sqli", endpoint="/search",
+    ))
+    other_proof = _linked_proof(workflow, other, tmp_path)
+    workflow.add_validation_result(ValidationResult(
+        candidate.id, "cross-site-scripting", "confirmed",
+        evidence_refs=[other_proof],
+    ))
+    tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
+
+    with pytest.raises(Exception, match="latest ValidationResult"):
+        await tool.run({
+            "candidate_id": candidate.id, "title": "XSS", "severity": "medium",
+            "url": "https://target.test/search",
+            "observed_impact": "Script execution was demonstrated.",
+            "potential_impact": "Further impact was not assessed.",
+        }, None, AlwaysAllow())
+    assert not (tmp_path / "findings").exists()
+
+
+@pytest.mark.asyncio
+async def test_finding_rejects_evidence_artifact_with_changed_hash(tmp_path):
+    workflow = WorkflowState()
+    candidate, _ = workflow.add_candidate(Candidate(
+        candidate_class="xss", endpoint="/search",
+    ))
+    proof = _linked_proof(workflow, candidate, tmp_path)
+    workflow.add_validation_result(ValidationResult(
+        candidate.id, "cross-site-scripting", "confirmed", evidence_refs=[proof],
+    ))
+    (tmp_path / f"proof-{candidate.id}.txt").write_text(
+        "Changed evidence after validation", encoding="utf-8",
+    )
+    tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
+
+    with pytest.raises(ValueError, match="changed or is unavailable"):
+        await tool.run({
+            "candidate_id": candidate.id, "title": "XSS", "severity": "medium",
+            "url": "https://target.test/search",
+            "observed_impact": "Script execution was demonstrated.",
+            "potential_impact": "Further impact was not assessed.",
         }, None, AlwaysAllow())
     assert not (tmp_path / "findings").exists()
 
@@ -245,14 +332,16 @@ async def test_unknown_or_resultless_candidate_cannot_create_finding(tmp_path):
     tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
 
     for candidate_id in ("cand_unknown", candidate.id):
-        with pytest.raises(Exception, match="latest ValidationResult"):
+        expected = "unknown candidate" if candidate_id == "cand_unknown" else "latest ValidationResult"
+        with pytest.raises(Exception, match=expected):
             await tool.run(
                 {
                     "candidate_id": candidate_id,
                     "title": "Ineligible",
                     "severity": "medium",
                     "url": "https://target.test/search",
-                    "impact": "No proven impact",
+                    "observed_impact": "No proven impact",
+                    "potential_impact": "No additional impact assessed.",
                 },
                 None,
                 AlwaysAllow(),
@@ -276,7 +365,8 @@ async def test_same_candidate_creates_one_official_report(tmp_path):
         "title": "SQL injection in product",
         "severity": "high",
         "url": "https://target.test/product",
-        "impact": "Query manipulation",
+        "observed_impact": "Query manipulation was demonstrated.",
+        "potential_impact": "Further impact was not assessed.",
     }
 
     await tool.run(args, None, AlwaysAllow())
@@ -306,7 +396,13 @@ def test_metadata(tmp_path):
 
     schema = tool.schema()
     assert schema["type"] == "object"
-    assert schema["required"] == ["title", "severity", "url", "impact"]
+    assert schema["required"] == [
+        "title", "candidate_id", "severity", "url",
+        "observed_impact", "potential_impact",
+    ]
+    assert "impact" not in schema["properties"]
+    assert "linked validation evidence" in schema["properties"]["observed_impact"]["description"]
+    assert "conditional" in schema["properties"]["potential_impact"]["description"]
     assert schema["properties"]["severity"]["enum"] == list(SEVERITIES)
     assert schema["properties"]["vuln_class"]["type"] == "string"
     assert "vuln_class" not in schema["required"]
@@ -372,18 +468,20 @@ async def test_run_persists_finding_and_notifies(tmp_path):
     tool, store = _tool(tmp_path, notifier=lambda f, p: seen.append((f, p)))
 
     result = await tool.run(
-        {
-            "title": "Reflected XSS in search",
-            "severity": "High",
-            "url": "https://target.test/search?q=1",
-            "impact": "Arbitrary JS execution",
-            "method": "GET",
-            "parameter": "q",
-            "payload": "<script>alert(1)</script>",
-            "response_excerpt": "<script>alert(1)</script>",
-            "curl": "curl https://target.test/search",
-            "remediation": "encode output",
-        },
+        _valid_args(
+            tool,
+            title="Reflected XSS in search",
+            severity="High",
+            url="https://target.test/search?q=1",
+            observed_impact="Arbitrary JavaScript execution was demonstrated.",
+            potential_impact="Cookie theft was not assessed.",
+            method="GET",
+            parameter="q",
+            payload="<script>alert(1)</script>",
+            response_excerpt="<script>alert(1)</script>",
+            curl="curl https://target.test/search",
+            remediation="encode output",
+        ),
         None,
         AlwaysAllow(),
     )
@@ -394,12 +492,15 @@ async def test_run_persists_finding_and_notifies(tmp_path):
     body = written[0].read_text(encoding="utf-8")
     assert "# Reflected XSS in search" in body
     assert "- **Severity:** high" in body  # severity lowercased
-    assert "Candidate ID" not in body
+    assert f"- **Candidate ID:** {tool.workflow.candidates[next(iter(tool.workflow.candidates))].id}" in body
 
     assert len(seen) == 1
     finding, path = seen[0]
     assert finding.severity == "high"
-    assert finding.candidate_id is None
+    assert finding.candidate_id
+    assert finding.evidence_refs
+    assert "## Observed impact" in body
+    assert "## Potential impact" in body
     assert finding.slug == "reflected-xss-in-search"
     assert path.endswith(".md")
     assert path in result
@@ -412,14 +513,15 @@ async def test_run_redacts_session_material_from_persisted_evidence(tmp_path):
     password = "correct-horse-battery-staple"
 
     await tool.run(
-        {
-            "title": "Authentication response evidence",
-            "severity": "medium",
-            "url": f"https://target.test/login?token={jwt}",
-            "impact": f"password={password}",
-            "response_excerpt": f"authorization: Bearer {jwt}",
-            "curl": f"curl -H 'Authorization: Bearer {jwt}' https://target.test",
-        },
+        _valid_args(
+            tool,
+            title="Authentication response evidence",
+            severity="medium",
+            url=f"https://target.test/login?token={jwt}",
+            observed_impact=f"password={password}",
+            response_excerpt=f"authorization: Bearer {jwt}",
+            curl=f"curl -H 'Authorization: Bearer {jwt}' https://target.test",
+        ),
         None,
         AlwaysAllow(),
     )
@@ -437,13 +539,14 @@ async def test_run_uses_redacted_title_for_report_and_slug(tmp_path):
     title = f"Password leak password={secret} in login"
 
     await tool.run(
-        {
-            "title": title,
-            "severity": "medium",
-            "url": "https://target.test/login",
-            "impact": f"password={secret}",
-            "payload": f"password={secret}",
-        },
+        _valid_args(
+            tool,
+            title=title,
+            severity="medium",
+            url="https://target.test/login",
+            observed_impact=f"password={secret}",
+            payload=f"password={secret}",
+        ),
         None,
         AlwaysAllow(),
     )
@@ -465,12 +568,12 @@ async def test_run_reports_success_when_notifier_raises(tmp_path):
     tool, _ = _tool(tmp_path, notifier=broken_notifier)
 
     result = await tool.run(
-        {
-            "title": "Persisted despite notifier failure",
-            "severity": "high",
-            "url": "https://target.test/login",
-            "impact": "Impact",
-        },
+        _valid_args(
+            tool,
+            title="Persisted despite notifier failure",
+            severity="high",
+            url="https://target.test/login",
+        ),
         None,
         AlwaysAllow(),
     )
@@ -486,16 +589,21 @@ async def test_run_reports_success_when_notifier_raises(tmp_path):
 )
 async def test_run_enriches_finding_from_vuln_class(tmp_path, vuln_class):
     seen: list[Finding] = []
-    tool, _ = _tool(tmp_path, notifier=lambda finding, _: seen.append(finding))
+    tool, _ = _tool(
+        tmp_path,
+        notifier=lambda finding, _: seen.append(finding),
+        candidate_class=vuln_class,
+    )
 
     await tool.run(
-        {
-            "title": "SQL injection",
-            "severity": "high",
-            "url": "https://target.test/login",
-            "impact": "Database access",
-            "vuln_class": vuln_class,
-        },
+        _valid_args(
+            tool,
+            title="SQL injection",
+            severity="high",
+            url="https://target.test/login",
+            vuln_class=vuln_class,
+            observed_impact="A database query result was demonstrated.",
+        ),
         None,
         AlwaysAllow(),
     )
@@ -528,7 +636,8 @@ async def test_access_control_report_is_broad_and_retains_candidate_id(
             "title": "Order access through another account",
             "severity": "high",
             "url": "https://target.test/orders/1",
-            "impact": "Another account's order was readable",
+            "observed_impact": "Another account's order was readable.",
+            "potential_impact": "Other records were not assessed.",
         },
         None,
         AlwaysAllow(),
@@ -552,16 +661,17 @@ async def test_access_control_report_is_broad_and_retains_candidate_id(
 async def test_structured_class_beats_misleading_title(
     tmp_path, vuln_class, title, expected_type, expected_cwe
 ):
-    tool, _ = _tool(tmp_path)
+    tool, _ = _tool(tmp_path, candidate_class=vuln_class)
 
     await tool.run(
-        {
-            "vuln_class": vuln_class,
-            "title": title,
-            "severity": "medium",
-            "url": "https://target.test/search",
-            "impact": "Reproduced impact",
-        },
+        _valid_args(
+            tool,
+            vuln_class=vuln_class,
+            title=title,
+            severity="medium",
+            url="https://target.test/search",
+            observed_impact="The linked validation reproduced this behavior.",
+        ),
         None,
         AlwaysAllow(),
     )
@@ -578,16 +688,20 @@ async def test_run_persists_without_classification_for_unknown_class(
     vuln_class,
 ):
     seen: list[Finding] = []
-    tool, _ = _tool(tmp_path, notifier=lambda finding, _: seen.append(finding))
+    tool, _ = _tool(
+        tmp_path,
+        notifier=lambda finding, _: seen.append(finding),
+        candidate_class=(vuln_class or "unknown"),
+    )
 
     await tool.run(
-        {
-            "title": "Unclassified finding",
-            "severity": "low",
-            "url": "https://target.test",
-            "impact": "Impact",
-            "vuln_class": vuln_class,
-        },
+        _valid_args(
+            tool,
+            title="Unclassified finding",
+            severity="low",
+            url="https://target.test",
+            vuln_class=vuln_class,
+        ),
         None,
         AlwaysAllow(),
     )
@@ -601,15 +715,19 @@ async def test_run_persists_without_classification_for_unknown_class(
 @pytest.mark.asyncio
 async def test_run_persists_without_classification_when_class_is_omitted(tmp_path):
     seen: list[Finding] = []
-    tool, _ = _tool(tmp_path, notifier=lambda finding, _: seen.append(finding))
+    tool, _ = _tool(
+        tmp_path,
+        notifier=lambda finding, _: seen.append(finding),
+        candidate_class="unknown",
+    )
 
     await tool.run(
-        {
-            "title": "Legacy finding",
-            "severity": "info",
-            "url": "https://target.test",
-            "impact": "Impact",
-        },
+        _valid_args(
+            tool,
+            title="Legacy finding",
+            severity="info",
+            url="https://target.test",
+        ),
         None,
         AlwaysAllow(),
     )
@@ -634,7 +752,8 @@ def test_classifications_do_not_share_mutable_lists():
     [
         ("title", "title is required"),
         ("url", "url is required"),
-        ("impact", "impact is required"),
+        ("observed_impact", "observed_impact is required"),
+        ("potential_impact", "potential_impact is required"),
     ],
 )
 async def test_run_requires_core_fields(tmp_path, missing, message):
@@ -643,7 +762,9 @@ async def test_run_requires_core_fields(tmp_path, missing, message):
         "title": "t",
         "severity": "high",
         "url": "u",
-        "impact": "i",
+        "observed_impact": "Observed.",
+        "potential_impact": "Unassessed.",
+        "candidate_id": next(iter(tool.workflow.candidates)),
     }
     args[missing] = ""
 
@@ -652,20 +773,42 @@ async def test_run_requires_core_fields(tmp_path, missing, message):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_value", [None, ""])
+async def test_run_rejects_null_or_empty_candidate_id(tmp_path, candidate_value):
+    tool, _ = _tool(tmp_path)
+    args = _valid_args(tool)
+    args["candidate_id"] = candidate_value
+
+    with pytest.raises(ValueError, match="candidate_id is required"):
+        await tool.run(args, None, AlwaysAllow())
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_missing_candidate_id(tmp_path):
+    tool, _ = _tool(tmp_path)
+    args = _valid_args(tool)
+    del args["candidate_id"]
+
+    with pytest.raises(ValueError, match="candidate_id is required"):
+        await tool.run(args, None, AlwaysAllow())
+
+
+@pytest.mark.asyncio
+async def test_run_requires_workflow_state(tmp_path):
+    tool, _ = _tool(tmp_path)
+    args = _valid_args(tool)
+    unlinked = ConfirmFindingTool(tool.store)
+
+    with pytest.raises(ValueError, match="workflow state is required"):
+        await unlinked.run(args, None, AlwaysAllow())
+
+
+@pytest.mark.asyncio
 async def test_run_rejects_invalid_severity(tmp_path):
     tool, _ = _tool(tmp_path)
 
     with pytest.raises(Exception, match="severity must be one of"):
-        await tool.run(
-            {
-                "title": "t",
-                "severity": "sev",
-                "url": "u",
-                "impact": "i",
-            },
-            None,
-            AlwaysAllow(),
-        )
+        await tool.run(_valid_args(tool, title="t", severity="sev", url="u"), None, AlwaysAllow())
 
 
 @pytest.mark.asyncio
@@ -675,12 +818,7 @@ async def test_run_falls_back_to_timestamp_slug_for_unslugifiable_title(
     tool, _ = _tool(tmp_path)
 
     result = await tool.run(
-        {
-            "title": "!!!",
-            "severity": "low",
-            "url": "u",
-            "impact": "i",
-        },
+        _valid_args(tool, title="!!!", severity="low", url="u"),
         None,
         AlwaysAllow(),
     )

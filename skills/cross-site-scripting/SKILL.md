@@ -444,16 +444,20 @@ canonical finding:
 cross-site-scripting → results.md → confirm_finding → final finding
 ```
 
-Populate the tool call from the recorded evidence. Supply `title`,
-`severity`, exact `url`, `parameter`, `payload`, `method`, a short proving
-`response_excerpt`, concrete `impact`, a copy-pasteable `curl`, remediation,
-and `vuln_class: xss`, including:
+Populate the tool call from the recorded evidence. Supply the required
+`candidate_id` of the confirmed Candidate, `title`, `severity`, exact `url`,
+`parameter`, `payload`, `method`, a short proving `response_excerpt`,
+`observed_impact`, `potential_impact`, a copy-pasteable `curl`, remediation,
+and `vuln_class: xss`. The latest result and its registered evidence must be
+valid. Include:
 
 - affected endpoint/parameter/method;
 - reflection type and authentication context;
 - the exact request and payload that triggers execution, and the response
   or source/sink evidence;
-- concrete impact in one or two sentences — not a hypothetical worst case;
+- `observed_impact`: only what the execution and linked evidence demonstrate;
+- `potential_impact`: untested consequences stated as conditional possibilities,
+  never as facts;
 - suggested remediation direction: context-appropriate output encoding, a
   templating engine that auto-escapes by default, and/or a
   Content-Security-Policy as defense-in-depth. Do not recommend

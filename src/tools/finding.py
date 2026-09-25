@@ -49,9 +49,10 @@ class ConfirmFindingTool:
     def description(self) -> str:
         return (
             "Persist a CONFIRMED vulnerability finding. "
-            "Call this ONLY after you have reproduced the bug "
-            "end-to-end with a real request and observed a "
-            "response that proves it.\n\n"
+            "candidate_id is required: its latest workflow validation must be "
+            "confirmed with registered, integrity-checked evidence. Keep "
+            "observed_impact limited to what that evidence demonstrates and "
+            "describe untested consequences conditionally in potential_impact.\n\n"
             "Writes a markdown report under "
             "./artifacts/findings/<slug>.md and surfaces a banner in the "
             "TUI. Do not call for theoretical findings, scanner "
@@ -69,9 +70,11 @@ class ConfirmFindingTool:
                 },
                 "candidate_id": {
                     "type": "string",
+                    "minLength": 1,
                     "description": (
-                        "Optional structured Candidate ID. When supplied, its "
-                        "latest ValidationResult must be confirmed."
+                        "Required structured Candidate ID from workflow. Its "
+                        "latest ValidationResult must be confirmed and its "
+                        "registered evidence must still pass integrity checks."
                     ),
                 },
                 "severity": {
@@ -84,11 +87,11 @@ class ConfirmFindingTool:
                 },
                 "url": {
                     "type": "string",
-                    "description": "Exact affected endpoint URL.",
+                    "description": "Exact affected endpoint URL; its origin and path must match the Candidate.",
                 },
                 "parameter": {
                     "type": "string",
-                    "description": "Parameter injected/abused.",
+                    "description": "Parameter injected/abused; when the Candidate records one, it must match.",
                 },
                 "payload": {
                     "type": "string",
@@ -96,15 +99,27 @@ class ConfirmFindingTool:
                 },
                 "method": {
                     "type": "string",
-                    "description": "HTTP method.",
+                    "description": "HTTP method; when the Candidate records one, it must match.",
                 },
                 "response_excerpt": {
                     "type": "string",
                     "description": "Response snippet.",
                 },
-                "impact": {
+                "observed_impact": {
                     "type": "string",
-                    "description": "Concrete impact.",
+                    "description": (
+                        "What the linked validation evidence actually demonstrates. "
+                        "Do not state untested consequences as facts."
+                    ),
+                },
+                "potential_impact": {
+                    "type": "string",
+                    "description": (
+                        "Possible consequences that were not demonstrated by the "
+                        "linked validation. Keep them explicitly conditional; use "
+                        "a short statement such as 'No additional impact assessed.' "
+                        "when none is identified."
+                    ),
                 },
                 "curl": {
                     "type": "string",
@@ -117,7 +132,8 @@ class ConfirmFindingTool:
                 "vuln_class": {
                     "type": "string",
                     "description": (
-                        "Canonical class used by Workflow/Coverage, such as "
+                        "Canonical class used by Workflow/Coverage; when supplied "
+                        "it must match the Candidate, such as "
                         "sql-injection, cross-site-scripting, access-control, "
                         "or ssrf. Classification supplies CWE/OWASP values."
                     ),
@@ -125,9 +141,11 @@ class ConfirmFindingTool:
             },
             "required": [
                 "title",
+                "candidate_id",
                 "severity",
                 "url",
-                "impact",
+                "observed_impact",
+                "potential_impact",
             ],
         }
 
@@ -156,8 +174,10 @@ class ConfirmFindingTool:
         title = arg_string(args, "title")
         severity = arg_string(args, "severity").lower()
         url = arg_string(args, "url")
-        impact = arg_string(args, "impact")
-        candidate_id = arg_string(args, "candidate_id")
+        observed_impact = arg_string(args, "observed_impact")
+        potential_impact = arg_string(args, "potential_impact")
+        raw_candidate_id = args.get("candidate_id")
+        candidate_id = raw_candidate_id.strip() if isinstance(raw_candidate_id, str) else ""
 
         if not title:
             raise Exception("title is required")
@@ -165,53 +185,63 @@ class ConfirmFindingTool:
         if not url:
             raise Exception("url is required")
 
-        if not impact:
-            raise Exception("impact is required")
+        if not candidate_id:
+            raise ValueError("candidate_id is required and must be a non-empty string")
 
-        if candidate_id and self.workflow is None:
-            raise ValueError("candidate ID requires workflow state")
+        if not observed_impact:
+            raise ValueError("observed_impact is required")
+
+        if not potential_impact:
+            raise ValueError("potential_impact is required")
+
+        if self.workflow is None:
+            raise ValueError("workflow state is required to confirm a finding")
+
+        candidate = self.workflow.candidates.get(candidate_id)
+        if candidate is None:
+            raise ValueError(f"unknown candidate: {candidate_id}")
 
         if (
-            candidate_id
-            and self.workflow is not None
-            and not self.workflow.eligible_for_finding(candidate_id)
+            not self.workflow.eligible_for_finding(candidate_id)
         ):
             raise Exception(
                 "candidate is not eligible for confirm_finding: its latest "
                 "ValidationResult must have outcome=confirmed and registered evidence"
             )
 
-        evidence_refs: list[str] | None = None
-        if candidate_id and self.workflow is not None:
-            candidate = self.workflow.candidates[candidate_id]
-            latest = self.workflow.latest_result(candidate_id)
-            assert latest is not None
-            root = self.store.project_dir
-            if not all(
-                self.workflow.evidence[ref].is_resolvable_for_resume(root)
-                for ref in latest.evidence_refs
-            ):
-                raise ValueError("candidate evidence artifact changed or is unavailable")
-            requested_class = arg_string(args, "vuln_class")
-            if requested_class and normalize_candidate_class(requested_class) != candidate.candidate_class:
-                raise ValueError("finding class does not match candidate class")
-            if candidate.target:
-                try:
-                    if HTTPOrigin.from_url(url) != HTTPOrigin.from_url(candidate.target):
-                        raise ValueError("finding target does not match candidate target")
-                except ValueError as exc:
-                    raise ValueError("finding target does not match candidate target") from exc
-            if candidate.endpoint:
-                expected_path = urlparse(candidate.endpoint).path
-                actual_path = urlparse(url).path
-                template = re.escape(expected_path).replace(r"\{", "{").replace(r"\}", "}")
-                template = re.sub(r"\{[^{}]+\}", r"[^/]+", template)
-                if not re.fullmatch(template, actual_path):
-                    raise ValueError("finding endpoint does not match candidate endpoint")
-            requested_method = arg_string(args, "method")
-            if candidate.method and requested_method and requested_method.upper() != candidate.method:
-                raise ValueError("finding method does not match candidate method")
-            evidence_refs = list(latest.evidence_refs)
+        latest = self.workflow.latest_result(candidate_id)
+        assert latest is not None  # eligibility above guarantees a result
+        root = self.store.project_dir
+        if not all(
+            self.workflow.evidence[ref].is_resolvable_for_resume(root)
+            for ref in latest.evidence_refs
+        ):
+            raise ValueError("candidate evidence artifact changed or is unavailable")
+
+        requested_class = arg_string(args, "vuln_class").strip()
+        if requested_class and normalize_candidate_class(requested_class) != candidate.candidate_class:
+            raise ValueError("finding class does not match candidate class")
+        if candidate.target:
+            try:
+                if HTTPOrigin.from_url(url) != HTTPOrigin.from_url(candidate.target):
+                    raise ValueError("finding target does not match candidate target")
+            except ValueError as exc:
+                raise ValueError("finding target does not match candidate target") from exc
+        if candidate.endpoint:
+            expected_path = urlparse(candidate.endpoint).path
+            actual_path = urlparse(url).path
+            template = re.escape(expected_path).replace(r"\{", "{").replace(r"\}", "}")
+            template = re.sub(r"\{[^{}]+\}", r"[^/]+", template)
+            if not re.fullmatch(template, actual_path):
+                raise ValueError("finding endpoint does not match candidate endpoint")
+
+        requested_method = arg_string(args, "method").strip()
+        if candidate.method and requested_method and requested_method.upper() != candidate.method:
+            raise ValueError("finding method does not match candidate method")
+        requested_parameter = arg_string(args, "parameter").strip()
+        if candidate.parameter and requested_parameter and requested_parameter != candidate.parameter:
+            raise ValueError("finding parameter does not match candidate parameter")
+        evidence_refs = list(latest.evidence_refs)
 
         if not is_severity(severity):
             raise Exception(
@@ -219,13 +249,7 @@ class ConfirmFindingTool:
                 + ", ".join(SEVERITIES)
             )
 
-        classification = classify(
-            arg_string(args, "vuln_class")
-            or (
-                self.workflow.candidates[candidate_id].candidate_class
-                if candidate_id and self.workflow is not None else ""
-            )
-        )
+        classification = classify(candidate.candidate_class)
         redacted_title = redact(title)
 
         finding = Finding(
@@ -235,9 +259,10 @@ class ConfirmFindingTool:
             title=redacted_title,
             severity=severity,
             url=redact(url),
-            impact=redact(impact),
-            method=redact(arg_string(args, "method")) or None,
-            parameter=redact(arg_string(args, "parameter")) or None,
+            observed_impact=redact(observed_impact),
+            potential_impact=redact(potential_impact),
+            method=redact(candidate.method or requested_method.upper()) or None,
+            parameter=redact(candidate.parameter or requested_parameter) or None,
             payload=redact(arg_string(args, "payload")) or None,
             responseExcerpt=redact(arg_string(args, "response_excerpt")) or None,
             curl=redact(arg_string(args, "curl")) or None,
@@ -247,7 +272,7 @@ class ConfirmFindingTool:
             owasp=(classification.owasp if classification else None),
             createdAt=datetime.now(UTC).isoformat(),
             slug=slugify(redacted_title) or f"finding-{int(datetime.now(UTC).timestamp())}",
-            candidate_id=candidate_id or None,
+            candidate_id=candidate_id,
             evidence_refs=evidence_refs,
         )
 

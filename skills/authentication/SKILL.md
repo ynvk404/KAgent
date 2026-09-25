@@ -593,24 +593,24 @@ finding:
 authentication → results.md → confirm_finding → final finding
 ```
 
-Populate the tool call from the recorded evidence. Supply `title`,
-`severity`, exact `url`, `parameter` when applicable, `method`, a short
-proving `response_excerpt`, concrete `impact`, a copy-pasteable `curl`,
-remediation, and the same canonical `vuln_class` used when recording
-coverage, including:
+Populate the tool call from the recorded evidence. Supply the required
+`candidate_id` of the confirmed Candidate, `title`, `severity`, exact `url`,
+`parameter` when applicable, `method`, a short proving `response_excerpt`,
+`observed_impact`, `potential_impact`, a copy-pasteable `curl`, remediation,
+and the same canonical `vuln_class` used when recording coverage. The latest
+result and its registered evidence must be valid. Include:
 
 - affected endpoint(s)/flow and mechanism;
 - which property failed (fixation / invalidation / MFA bypass / reset-flow
   binding-or-reuse / missing throttling);
 - the exact request(s) and comparison evidence;
-- concrete impact in one or two sentences. Impact must be limited to what
-  the authentication evidence actually supports: when direct impact
-  (e.g. full account takeover) was not itself safely demonstrated — which
-  it should not be, per step 4 — describe it as a reasoned consequence of
-  the confirmed weakness, not as an action that was actually executed
-  (e.g. "an attacker who obtains or intercepts the pre-auth session
-  identifier could gain authenticated access without credentials" rather
-  than "account takeover was demonstrated");
+- `observed_impact`: only what the authentication evidence demonstrates. Do
+  not describe an action such as full account takeover as observed unless the
+  linked evidence actually demonstrates it;
+- `potential_impact`: possible consequences of the confirmed weakness that
+  were not safely demonstrated, stated conditionally (for example, an attacker
+  who obtains a pre-authentication session identifier could gain authenticated
+  access without credentials);
 - suggested remediation direction: regenerate session identifiers on
   privilege change (login/logout), invalidate sessions server-side on
   logout, enforce MFA completion before issuing an authorized session, and

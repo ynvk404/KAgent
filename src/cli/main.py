@@ -657,7 +657,8 @@ async def main() -> int:
                 parameter=finding.parameter,
                 detail="\n".join(
                     [
-                        finding.impact,
+                        f"Observed impact: {finding.observed_impact}\n"
+                        f"Potential impact: {finding.potential_impact}",
                         (
                             f"\nEvidence:\n{finding.responseExcerpt}"
                             if finding.responseExcerpt

@@ -376,14 +376,17 @@ def _format_finding_card(args_json: str) -> dict[str, str] | None:
     method = s("method")
     url = s("url")
     parameter = s("parameter")
-    impact = s("impact")
+    observed_impact = s("observed_impact")
+    potential_impact = s("potential_impact")
 
     lines = [f"{severity.upper() if severity else 'FINDING'} · {title}"]
     if url:
         loc = f"{method + ' ' if method else ''}{url}{f'  (param: {parameter})' if parameter else ''}"
         lines.append(f"  {loc}")
-    if impact:
-        lines.append(f"  impact: {impact}")
+    if observed_impact:
+        lines.append(f"  observed impact: {observed_impact}")
+    if potential_impact:
+        lines.append(f"  potential impact: {potential_impact}")
     return {"text": "\n".join(lines), "color": _severity_color(severity)}
 
 

@@ -532,8 +532,9 @@ def test_confirm_finding_card():
                         "method": "GET",
                         "url": "https://x.test/",
                         "parameter": "debug",
-                        "impact":
-                            "Leaks the PHP version."
+                        "observed_impact":
+                            "The response exposes the PHP version.",
+                        "potential_impact": "No additional impact assessed."
                     }
                 ),
             )
@@ -552,7 +553,8 @@ def test_confirm_finding_card():
     )
 
     assert "GET https://x.test/" in last.text
-    assert "impact: Leaks the PHP version." in last.text
+    assert "observed impact: The response exposes the PHP version." in last.text
+    assert "potential impact: No additional impact assessed." in last.text
 
 
 

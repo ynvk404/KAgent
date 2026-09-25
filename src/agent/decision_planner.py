@@ -631,7 +631,7 @@ def render_guidance(
         "- If the recommended skill is present and not already active, call load_skill before other tools.",
         "- If scope, authorization, credentials, or testing depth is ambiguous, ask one concise question before active testing.",
         "- Use coverage(action='untested') when endpoint/parameter candidates are known, then coverage(action='mark') after meaningful tests.",
-        "- Do not call confirm_finding for suspected behavior; require reproduced request/response evidence first.",
+        "- Call confirm_finding only for a workflow Candidate whose latest result is confirmed and whose registered evidence remains valid; observed_impact states what that evidence demonstrates and potential_impact keeps untested consequences conditional.",
         "- Checklist:",
     ]
 
