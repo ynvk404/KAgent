@@ -37,8 +37,13 @@ def _linked_proof(workflow, candidate, tmp_path):
     return artifact.id
 
 
+def _workflow(tool: ConfirmFindingTool) -> WorkflowState:
+    assert tool.workflow is not None
+    return tool.workflow
+
+
 def _valid_args(tool, **overrides):
-    candidate = next(iter(tool.workflow.candidates.values()))
+    candidate = next(iter(_workflow(tool).candidates.values()))
     return {
         "candidate_id": candidate.id,
         "title": "Finding",
@@ -492,7 +497,8 @@ async def test_run_persists_finding_and_notifies(tmp_path):
     body = written[0].read_text(encoding="utf-8")
     assert "# Reflected XSS in search" in body
     assert "- **Severity:** high" in body  # severity lowercased
-    assert f"- **Candidate ID:** {tool.workflow.candidates[next(iter(tool.workflow.candidates))].id}" in body
+    candidate = next(iter(_workflow(tool).candidates.values()))
+    assert f"- **Candidate ID:** {candidate.id}" in body
 
     assert len(seen) == 1
     finding, path = seen[0]
@@ -764,7 +770,7 @@ async def test_run_requires_core_fields(tmp_path, missing, message):
         "url": "u",
         "observed_impact": "Observed.",
         "potential_impact": "Unassessed.",
-        "candidate_id": next(iter(tool.workflow.candidates)),
+        "candidate_id": next(iter(_workflow(tool).candidates)),
     }
     args[missing] = ""
 
