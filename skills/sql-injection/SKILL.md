@@ -49,11 +49,14 @@ allowed-tools:
 
 Before recording a `confirmed` result, write or update the candidate entry in
 the canonical `artifacts/sql-injection/<target>/results.md`. When that entry contains the
-minimal redacted proof, register this same file with
+minimal redacted proof, register this file with
 `workflow(action="record_evidence", candidate_id="...", evidence_path="...")`
-instead of creating a duplicate evidence Markdown file, and use the returned
-`ev_...` ID in `evidence_refs`.
-The artifact must remain available through finding creation and session resume.
+and use the returned `ev_...` ID in `evidence_refs`. The workflow tool stores
+a redacted, content-addressed snapshot in project-local evidence storage, so
+the candidate's proof remains immutable even though the shared `results.md`
+continues to be updated for later candidates. Do not edit the stored snapshot;
+register the updated source again to create a new proof version. The snapshot
+must remain available through finding creation and session resume.
 If coverage sync is `pending`, call `workflow(action="sync_coverage",
 candidate_id="...")` before `confirm_finding`.
 

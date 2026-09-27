@@ -92,7 +92,7 @@ Context-specific
 confirmation          — one execution marker matched to the observed context
         ↓
 (if HTTP/source evidence is not deterministic)
-requires-browser-confirmation — recorded and stopped, not escalated
+browser-required — recorded and stopped, not escalated
 ```
 
 **There is no optional "impact" phase analogous to `sql-injection`'s Phase
@@ -113,7 +113,7 @@ targeted payload set, not brute-force fuzzing.
 
 **No browser-execution capability is available in the current runtime.**
 When a candidate's evidence depends on actual browser execution (see
-`requires-browser-confirmation` below), record that outcome and stop — do
+`browser-required` below), record that outcome and stop — do
 not attempt to simulate or infer browser execution using `shell`, `http`,
 or any other substitute. This mirrors how `sql-injection` treats its
 OOB-confirmation capability gate: an unavailable capability is a reason to
@@ -257,12 +257,12 @@ Classify what you see around the marker:
   Modern browsers no longer support `expression()`-style CSS execution, so
   this context rarely yields a working execution marker either way —
   classify it accurately when observed, but expect the Phase 2 entry for
-  it to often end in `not confirmed` rather than force a result. Do not
+  it to often end in `not-confirmed` rather than force a result. Do not
   spend more than one probe per sub-case confirming this context is
   genuinely inert before moving on.
 - **Fully encoded/neutralized** — special characters are encoded or
   otherwise neutralized. This candidate is very likely not exploitable as
-  reflected XSS; note this and mark it `not confirmed` rather than forcing
+  reflected XSS; note this and mark it `not-confirmed` rather than forcing
   a payload.
 
 For reflected XSS, the HTTP response establishes the reflection context.
@@ -291,12 +291,12 @@ Interpret the result according to the observed context:
   response evidence may be sufficient for `confirmed`.
 - For a JavaScript string context where execution depends on correctly
   breaking out of the surrounding source syntax, use
-  `requires-browser-confirmation` unless the response provides sufficiently
+  `browser-required` unless the response provides sufficiently
   deterministic evidence that the break-out succeeded and lands in an
   executable position.
 - For DOM-based XSS where the source → sink path is established in client
   code but actual execution is not observed, use
-  `requires-browser-confirmation`.
+  `browser-required`.
 - Never claim browser execution solely because a payload string appears in
   an HTTP response when the observed context does not make execution
   deterministic from that response alone.
@@ -335,7 +335,7 @@ Do not classify an ordinary application response such as a normal `401` or
 `403` as `blocked` merely from the status code. There must be evidence that
 an upstream control intercepted the request before application handling —
 otherwise it is an application-level response and should be evaluated as
-such (e.g. `not confirmed`, or worth noting separately if it suggests an
+such (e.g. `not-confirmed`, or worth noting separately if it suggests an
 access-control issue outside this skill's scope).
 
 Do not retry blocked probes with encoding tricks, alternate payloads, or
@@ -352,7 +352,7 @@ exploitable through an equivalent vector, which is squarely part of
 assessing sanitization coverage; it does not use encoding tricks, case
 obfuscation, or payload fragmentation aimed at evading a filter or WAF —
 those remain out of scope per step 3a. If no close variant works, mark the
-candidate as `not confirmed` rather than escalating further.
+candidate as `not-confirmed` rather than escalating further.
 
 ## 4. Bound the proof — do not escalate into impact demonstration
 
@@ -368,7 +368,7 @@ particular, do not:
 - run automated XSS scanners or fuzzers to "see how bad it is."
 
 If step 3 never produces a clear signal, that's a valid outcome — record it
-as `not confirmed` rather than continuing to escalate technique or payload
+as `not-confirmed` rather than continuing to escalate technique or payload
 variety to force a result.
 
 ## 5. Record the validation evidence
@@ -380,15 +380,15 @@ Every candidate gets exactly one outcome:
   unescaped executable payload can be sufficient when browser parsing is
   deterministic from the response. Contexts that cannot be determined
   reliably from HTTP-level evidence alone (e.g. JS string context, DOM-based
-  sinks) must be recorded as `requires-browser-confirmation` instead, not
+  sinks) must be recorded as `browser-required` instead, not
   as `confirmed`.
-- `not confirmed` — the candidate was actually tested and the observed
+- `not-confirmed` — the candidate was actually tested and the observed
   application behavior did not establish XSS, or the input was fully
   encoded/neutralized.
 - `blocked` — an upstream WAF, rate limiter, CAPTCHA, or equivalent control
   intercepted the probe before application logic could be evaluated (step
   3a); the application itself was never actually tested.
-- `requires-browser-confirmation` — the response or source/sink analysis is
+- `browser-required` — the response or source/sink analysis is
   consistent with XSS, but actual execution depends on browser behavior
   that cannot be established reliably with the available HTTP-level
   evidence, and no browser-execution capability is available in this
@@ -396,8 +396,8 @@ Every candidate gets exactly one outcome:
 
 ### Standard result entry template
 
-Write every candidate's result — confirmed, not confirmed, blocked, or
-requires-browser-confirmation — to:
+Write every candidate's result — confirmed, not-confirmed, blocked, or
+browser-required — to:
 
 `artifacts/cross-site-scripting/<target>/results.md`
 
@@ -410,7 +410,7 @@ appended in the order tested:
 
 - **timestamp:** <ISO 8601 UTC timestamp when this entry was recorded, e.g. 2026-08-27T09:14:32Z>
 - **agent_session_id:** <identifier for the current agent run/session, for audit-trail correlation with logs elsewhere>
-- **outcome:** <confirmed | not confirmed | blocked | requires-browser-confirmation>
+- **outcome:** <confirmed | not-confirmed | blocked | browser-required>
 - **reflection_type:** <reflected | stored | dom-based>
 - **context:** <html-body | html-attribute | js-string | url | html-comment | css-style-attribute | css-style-block | fully-encoded | unknown>
 - **payload(s) used:** <exact detection marker and/or execution marker used, verbatim>
@@ -463,16 +463,16 @@ valid. Include:
   Content-Security-Policy as defense-in-depth. Do not recommend
   blacklist-based input filtering as the primary fix.
 
-Do not call `confirm_finding` for `not confirmed`, `blocked`, or
-`requires-browser-confirmation` candidates — they stay recorded in
-`results.md` only. For `requires-browser-confirmation`
+Do not call `confirm_finding` for `not-confirmed`, `blocked`, or
+`browser-required` candidates — they stay recorded in
+`results.md` only. For `browser-required`
 candidates specifically, flag in the summary that browser-level
 confirmation is needed before the user decides whether to pursue it further.
 
 Also summarize, across all candidates processed:
 
-- how many were confirmed vs. not confirmed vs. blocked vs.
-  requires-browser-confirmation;
+- how many were confirmed vs. not-confirmed vs. blocked vs.
+  browser-required;
 - for not-confirmed candidates, a one-line reason;
 - whether any confirmed result suggests a systemic issue (e.g. the same
   unescaped-output pattern recurring across multiple endpoints) worth
@@ -501,7 +501,7 @@ credentials, chain into session hijacking or other vulnerability classes,
 retry blocked probes with filter-bypass or encoding tricks, leave stored-
 XSS payloads on shared application state without cleanup, simulate browser
 execution with `shell` or any other workaround when
-`requires-browser-confirmation` applies, add a new payload phase to
+`browser-required` applies, add a new payload phase to
 `payloads.txt` without a corresponding gate defined here first, or keep
 escalating payload complexity on a candidate that already gave a clear
 negative result.

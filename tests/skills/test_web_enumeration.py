@@ -75,7 +75,9 @@ def test_web_enumeration_frontmatter_contract():
     assert frontmatter["name"] == "web-enumeration", path
     assert isinstance(frontmatter.get("description"), str)
     assert frontmatter["description"].strip()
-    assert frontmatter["allowed-tools"] == ["shell", "http", "file_write", "workflow"]
+    assert frontmatter["allowed-tools"] == [
+        "shell", "http", "content_discovery", "file_write", "workflow"
+    ]
     assert frontmatter.get("completion-artifact") == (
         "artifacts/web-enumeration/{target}/inventory.md"
     )
@@ -167,15 +169,12 @@ def test_web_enumeration_only_allows_low_noise_tools():
     frontmatter, body, _ = read_skill()
 
     allowed = set(frontmatter["allowed-tools"])
-    assert allowed == {"shell", "http", "file_write", "workflow"}
+    assert allowed == {
+        "shell", "http", "content_discovery", "file_write", "workflow"
+    }
 
-    # Same shape as recon's tool-boundary test: specialized scanners may be
-    # *mentioned* as the explicitly-gated exception, but must not be the
-    # allowed-tools default. Scope the search to before step 1 (where the
-    # scanner boundary is actually defined), not the whole body, since step
-    # 6 later reuses "ffuf"/"gobuster" as bare words without backticks in a
-    # "do not escalate" sentence — that's a different, valid usage, not a
-    # second definition of the boundary.
+    # The semantic wrapper is the allowed tool. Direct scanner invocation
+    # remains outside this skill's default tool contract.
     intro_section = body.split("## Target identifier", 1)[0]
 
     for tool in ["ffuf", "gobuster", "dirsearch"]:
@@ -185,11 +184,8 @@ def test_web_enumeration_only_allows_low_noise_tools():
         )
 
     text = collapse_ws(body)
-    assert (
-        "unless the user explicitly asks for them, or focused discovery "
-        "in step 6 has already been tried and clearly justifies broader "
-        "coverage." in text
-    )
+    assert "Use `content_discovery` only when steps 2–5 leave a concrete path-coverage gap." in text
+    assert "Minimal profile uses native HTTP; full profile may select installed ffuf" in text
 
 
 def test_web_enumeration_execution_rule_uses_real_substitution():
@@ -315,13 +311,11 @@ def test_web_enumeration_focused_discovery_is_optional_and_bounded():
     for phrase in [
         "leave clear discovery gaps",
         "This is still enumeration, not vulnerability testing.",
-        "Requests must remain plain GET requests against paths.",
-        "Escalate gradually and stay on one host at a time.",
-        "Only if the user has explicitly confirmed that broader "
-        "discovery is wanted, use a small wordlist against a single "
-        "scoped host:",
-        "Do not escalate to ffuf, gobuster, larger wordlists, or "
-        "multiple hosts without explicit authorization.",
+        "Requests remain GET-only and target paths on the active origin.",
+        "Call `content_discovery` with `mode=\"auto\"` when a bounded discovery pass is justified.",
+        "checks two independent random nonexistent paths and compares modest normalized response fingerprints",
+        "Minimal profile uses native HTTP. In full profile, runtime may select installed",
+        "If coverage is already sufficient, record a `skipped` or `not_applicable` reason",
         "If enumeration begins to resemble testing for a particular "
         "vulnerability class rather than discovering paths or "
         "resources, stop and hand off to the next phase.",

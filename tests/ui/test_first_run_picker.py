@@ -32,6 +32,16 @@ def test_render_shows_options():
     assert "Enter pick" in text
 
 
+def test_profiles_describe_native_defaults_and_bounded_optional_scanners():
+    minimal, full = OPTIONS
+    assert "native semantic discovery" in minimal.helper
+    assert "explicit user request" in minimal.helper
+    assert "native semantic discovery" in minimal.helper
+    assert "ffuf" in full.description and "nmap" in full.description
+    assert "coverage gap" in full.helper
+    assert "Other scanners are not enabled automatically" in full.helper
+
+
 def test_down_changes_selection():
 
     picker, _, _, _ = make_picker()

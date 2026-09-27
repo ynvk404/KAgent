@@ -72,7 +72,9 @@ def test_recon_frontmatter_contract():
     assert frontmatter["name"] == "recon", path
     assert isinstance(frontmatter.get("description"), str)
     assert frontmatter["description"].strip()
-    assert frontmatter["allowed-tools"] == ["shell", "http", "file_write", "workflow"]
+    assert frontmatter["allowed-tools"] == [
+        "shell", "http", "service_discovery", "file_write", "workflow"
+    ]
     assert frontmatter.get("completion-artifact") == (
         "artifacts/recon/{target}/summary.md"
     )
@@ -86,6 +88,7 @@ def test_recon_body_has_all_phase_boundaries():
         "## 1. Confirm the target and its shape",
         "## 1b. Passive subdomain discovery for a root domain",
         "## 2. Establish reachability",
+        "## 2b. Optional bounded service discovery",
         "## 3. Fingerprint the technology",
         "## 4. Record initial attack-surface clues",
         "## 5. Record reconnaissance results",
@@ -120,7 +123,9 @@ def test_recon_only_allows_low_noise_tools():
     frontmatter, body, _ = read_skill()
 
     allowed = set(frontmatter["allowed-tools"])
-    assert allowed == {"shell", "http", "file_write", "workflow"}
+    assert allowed == {
+        "shell", "http", "service_discovery", "file_write", "workflow"
+    }
 
     # The body may mention specialized scanners as things that are forbidden,
     # but they must not appear in the actual allow-list or be promoted as the

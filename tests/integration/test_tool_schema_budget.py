@@ -10,6 +10,8 @@ from src.engagement.state import EngagementState
 from src.tools.ask import AskUserTool
 from src.tools.browser_capture import register_browser_capture_tools
 from src.tools.coverage import CoverageTool
+from src.tools.capabilities import CapabilityInventory
+from src.tools.content_discovery import ContentDiscoveryTool
 from src.tools.file import (
     FileEditTool,
     FileEditToolAlias,
@@ -23,6 +25,7 @@ from src.tools.http import HTTPTool
 from src.tools.payloads import ReadPayloadsTool
 from src.tools.registry import Registry
 from src.tools.search import GlobTool, GrepTool
+from src.tools.service_discovery import ServiceDiscoveryTool
 from src.tools.shell import BashTool, ShellTool
 from src.tools.skill_file import ReadSkillFileTool
 from src.tools.web import WebFetchTool, WebSearchTool
@@ -39,6 +42,7 @@ def test_default_tool_schema_budget_is_measured_and_bounded(tmp_path):
     target = Target()
     workflow = WorkflowState()
     engagement = EngagementState()
+    capabilities = CapabilityInventory(which=lambda _: None)
     registry = Registry()
     core = [
         ShellTool(),
@@ -52,6 +56,8 @@ def test_default_tool_schema_budget_is_measured_and_bounded(tmp_path):
         GlobTool(),
         GrepTool(),
         HTTPTool(target, engagement),
+        ContentDiscoveryTool(target, engagement, capabilities, lambda: "minimal"),
+        ServiceDiscoveryTool(target, engagement, capabilities, lambda: "minimal"),
         WebFetchTool(engagement),
         WebSearchTool(),
         AskUserTool(None),  # type: ignore[arg-type]
@@ -68,12 +74,13 @@ def test_default_tool_schema_budget_is_measured_and_bounded(tmp_path):
 
     metrics = registry.schema_metrics()
 
-    assert metrics["tool_count"] == 28
+    assert metrics["tool_count"] == 30
     # Includes the ask_user interaction contract for blocking questions,
-    # free-text versus finite choices, and permission-prompt boundaries while
-    # retaining roughly 6% regression headroom over the measured default set.
-    assert metrics["characters"] < 20_000
-    assert metrics["approx_tokens"] < 5_000
+    # free-text versus finite choices, semantic discovery schemas, and
+    # permission-prompt boundaries while retaining roughly 8% regression
+    # headroom over the measured default set.
+    assert metrics["characters"] < 25_000
+    assert metrics["approx_tokens"] < 6_250
     assert metrics["tools"][0]["name"] in {
         "ask_user",
         "confirm_finding",

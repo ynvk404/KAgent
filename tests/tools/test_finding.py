@@ -345,6 +345,29 @@ async def test_finding_rechecks_evidence_artifact_before_writing(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_failed_finding_write_does_not_mark_persistence(tmp_path, monkeypatch):
+    tool, _ = _tool(tmp_path)
+    workflow = _workflow(tool)
+    candidate_id = next(iter(workflow.candidates))
+
+    async def fail_save(_finding):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(tool.store, "save", fail_save)
+    with pytest.raises(OSError, match="disk full"):
+        await tool.run({
+            "candidate_id": candidate_id,
+            "title": "Reflected XSS",
+            "severity": "medium",
+            "url": "https://target.test/search",
+            "observed_impact": "Script execution was demonstrated.",
+            "potential_impact": "No additional impact assessed.",
+        }, None, AlwaysAllow())
+
+    assert not workflow.finding_is_persisted(candidate_id)
+
+
+@pytest.mark.asyncio
 async def test_finding_rejects_evidence_registered_to_another_candidate(tmp_path):
     workflow = WorkflowState()
     candidate, _ = workflow.add_candidate(Candidate(

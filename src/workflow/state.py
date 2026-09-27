@@ -23,10 +23,32 @@ CandidatePriority = Literal["high", "medium", "low"]
 WorkflowMode = Literal["direct", "candidate_validation", "whole_target"]
 InputDisposition = Literal["pending", "analyzed", "dropped", "blocked"]
 WorkflowPhase = Literal["recon", "enumeration", "input_analysis"]
+PhaseCoverageStatus = Literal[
+    "performed", "skipped", "not_applicable", "failed", "cancelled"
+]
+CleanupState = Literal[
+    "not-required", "pending", "succeeded", "failed", "requires-user-action"
+]
 
 WORKFLOW_MODES = frozenset({"direct", "candidate_validation", "whole_target"})
 INPUT_DISPOSITIONS = frozenset({"pending", "analyzed", "dropped", "blocked"})
 WORKFLOW_PHASES = frozenset({"recon", "enumeration", "input_analysis"})
+PHASE_COVERAGE_STATUSES = frozenset(
+    {"performed", "skipped", "not_applicable", "failed", "cancelled"}
+)
+CLEANUP_STATES = frozenset(
+    {"not-required", "pending", "succeeded", "failed", "requires-user-action"}
+)
+PHASE_COVERAGE_DIMENSIONS: dict[str, tuple[str, ...]] = {
+    "recon": (
+        "target_resolution", "reachability", "http_fingerprint", "service_discovery",
+    ),
+    "enumeration": (
+        "html_navigation", "standard_metadata", "api_documentation",
+        "javascript_endpoint_extraction", "browser_burp_capture",
+        "active_content_discovery",
+    ),
+}
 REQUIRED_WHOLE_TARGET_PHASES = ("recon", "enumeration", "input_analysis")
 
 ValidationOutcome = Literal[
@@ -425,12 +447,41 @@ class AttackSurfaceInput:
 
 
 @dataclass(slots=True)
+class PhaseCoverage:
+    status: PhaseCoverageStatus
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in PHASE_COVERAGE_STATUSES:
+            raise ValueError(f"unknown phase coverage status: {self.status}")
+        self.reason = _text(self.reason, limit=300)
+        if self.status != "performed" and not self.reason:
+            raise ValueError(f"{self.status} phase coverage requires a reason")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"status": self.status, "reason": self.reason}
+
+    @classmethod
+    def from_dict(cls, value: Any) -> PhaseCoverage | None:
+        if not isinstance(value, dict):
+            return None
+        status = value.get("status")
+        if not isinstance(status, str) or status not in PHASE_COVERAGE_STATUSES:
+            return None
+        try:
+            return cls(status, value.get("reason"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+
+
+@dataclass(slots=True)
 class WorkflowPhaseCompletion:
     objective_id: str
     phase: WorkflowPhase
     target_origin: str
     artifact_ref: str
     no_inputs_discovered: bool = False
+    coverage: dict[str, PhaseCoverage] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.objective_id = _text(self.objective_id, limit=80) or ""
@@ -448,6 +499,21 @@ class WorkflowPhaseCompletion:
             raise ValueError(
                 "no_inputs_discovered is only valid for input analysis completion"
             )
+        expected = set(PHASE_COVERAGE_DIMENSIONS.get(self.phase, ()))
+        actual = set(self.coverage)
+        if expected and actual != expected:
+            missing = sorted(expected - actual)
+            extra = sorted(actual - expected)
+            raise ValueError(
+                f"{self.phase} completion requires coverage for all dimensions "
+                f"(missing={missing}, extra={extra})"
+            )
+        if not expected and actual:
+            raise ValueError(f"{self.phase} does not accept discovery coverage")
+        if any(not isinstance(item, PhaseCoverage) for item in self.coverage.values()):
+            raise ValueError("phase coverage values must be PhaseCoverage records")
+        if any(item.status in {"failed", "cancelled"} for item in self.coverage.values()):
+            raise ValueError("phase completion cannot contain failed or cancelled coverage")
 
     @property
     def key(self) -> str:
@@ -462,10 +528,19 @@ class WorkflowPhaseCompletion:
         }
         if self.no_inputs_discovered:
             value["no_inputs_discovered"] = True
+        if self.coverage:
+            value["coverage"] = {
+                key: item.to_dict() for key, item in sorted(self.coverage.items())
+            }
         return value
 
     @classmethod
-    def from_dict(cls, value: Any) -> WorkflowPhaseCompletion | None:
+    def from_dict(
+        cls,
+        value: Any,
+        *,
+        allow_legacy_coverage: bool = False,
+    ) -> WorkflowPhaseCompletion | None:
         if not isinstance(value, dict):
             return None
         try:
@@ -481,12 +556,34 @@ class WorkflowPhaseCompletion:
             ):
                 return None
             no_inputs_discovered = value.get("no_inputs_discovered", False)
+            raw_coverage = value.get("coverage")
+            coverage: dict[str, PhaseCoverage] = {}
+            if "coverage" in value:
+                if not isinstance(raw_coverage, dict):
+                    return None
+                for dimension, raw_record in raw_coverage.items():
+                    record = PhaseCoverage.from_dict(raw_record)
+                    if not isinstance(dimension, str) or record is None:
+                        return None
+                    coverage[dimension] = record
+            elif (
+                allow_legacy_coverage
+                and phase in PHASE_COVERAGE_DIMENSIONS
+            ):
+                # Only pre-v4 serialized states predate coverage reporting.
+                coverage = {
+                    dimension: PhaseCoverage(
+                        "skipped", "legacy phase completion predates coverage reporting"
+                    )
+                    for dimension in PHASE_COVERAGE_DIMENSIONS[phase]
+                }
             return cls(
                 objective_id,
                 cast(WorkflowPhase, phase),
                 target_origin,
                 artifact_ref,
                 no_inputs_discovered,
+                coverage,
             )
         except (TypeError, ValueError):
             return None
@@ -508,6 +605,7 @@ class ValidationResult:
     coverage_synced: bool | None = None
     recorded_at: str | None = None
     session_id: str | None = None
+    cleanup_state: CleanupState | None = None
 
     def __post_init__(self) -> None:
         self.candidate_id = _text(self.candidate_id, limit=80) or ""
@@ -532,9 +630,15 @@ class ValidationResult:
             self.confirmation = sanitized
         if not isinstance(self.mutation_performed, bool):
             raise ValueError("mutation_performed must be a boolean")
+        self.cleanup_status = _text(self.cleanup_status)
+        if self.cleanup_state is None:
+            self.cleanup_state = _infer_cleanup_state(
+                self.mutation_performed, self.cleanup_status
+            )
+        elif not isinstance(self.cleanup_state, str) or self.cleanup_state not in CLEANUP_STATES:
+            raise ValueError(f"unknown cleanup state: {self.cleanup_state}")
         if self.coverage_synced is not None and not isinstance(self.coverage_synced, bool):
             raise ValueError("coverage_synced must be a boolean or null")
-        self.cleanup_status = _text(self.cleanup_status)
         self.deferred_reason = _text(self.deferred_reason)
         self.notes = _text(self.notes, limit=_MAX_NOTES_LENGTH)
         self.recorded_at = _text(self.recorded_at, limit=80)
@@ -551,6 +655,7 @@ class ValidationResult:
             "confirmation": self.confirmation,
             "mutation_performed": self.mutation_performed,
             "cleanup_status": self.cleanup_status,
+            "cleanup_state": self.cleanup_state,
             "deferred_reason": self.deferred_reason,
             "notes": self.notes,
             "coverage_synced": self.coverage_synced,
@@ -582,6 +687,7 @@ class ValidationResult:
                 confirmation=value.get("confirmation"),
                 mutation_performed=value.get("mutation_performed", False),
                 cleanup_status=value.get("cleanup_status"),
+                cleanup_state=value.get("cleanup_state"),
                 deferred_reason=value.get("deferred_reason"),
                 notes=value.get("notes"),
                 coverage_synced=value.get("coverage_synced"),
@@ -607,18 +713,48 @@ def validation_result_fingerprint(result: ValidationResult) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _infer_cleanup_state(
+    mutation_performed: bool, cleanup_status: str | None,
+) -> CleanupState:
+    if not mutation_performed:
+        return "not-required"
+    detail = (cleanup_status or "").casefold()
+    if not detail:
+        return "pending"
+    if any(term in detail for term in ("not applicable", "not required")):
+        return "not-required"
+    if any(term in detail for term in (
+        "401", "403", "permission denied", "authorization required",
+        "requires user", "operator action", "manual action",
+    )):
+        return "requires-user-action"
+    if any(term in detail for term in ("failed", "failure", "error", "denied", "timeout")):
+        return "failed"
+    if any(term in detail for term in (
+        "not cleaned", "not deleted", "not removed", "not restored", "not rolled back",
+    )):
+        return "pending"
+    if any(term in detail for term in (
+        "cleaned", "deleted", "removed", "rolled back", "restored", "success",
+    )):
+        return "succeeded"
+    return "pending"
+
+
 @dataclass(slots=True)
 class WorkflowState:
-    version: int = 3
+    version: int = 6
     objective: WorkflowObjective | None = None
     candidates: dict[str, Candidate] = field(default_factory=dict)
     validation_results: list[ValidationResult] = field(default_factory=list)
     evidence: dict[str, EvidenceArtifact] = field(default_factory=dict)
     attack_surface_inputs: dict[str, AttackSurfaceInput] = field(default_factory=dict)
     phase_completions: dict[str, WorkflowPhaseCompletion] = field(default_factory=dict)
+    phase_coverage: dict[str, dict[str, PhaseCoverage]] = field(default_factory=dict)
     active_candidate_ids: set[str] = field(default_factory=set)
     completed_skills: set[str] = field(default_factory=set)
     completed_artifacts: dict[str, str] = field(default_factory=dict)
+    persisted_findings: dict[str, str] = field(default_factory=dict)
     current_phase: str | None = None
 
     def add_candidate(self, candidate: Candidate) -> tuple[Candidate, bool]:
@@ -674,6 +810,73 @@ class WorkflowState:
             if marker.objective_id == current.id
             and marker.target_origin == current.target_origin
         )
+
+    def is_next_phase(self, phase: WorkflowPhase) -> bool:
+        objective = self.objective
+        if objective is None or objective.mode != "whole_target":
+            return False
+        completed = self.completed_phases(objective)
+        return next(
+            (candidate for candidate in REQUIRED_WHOLE_TARGET_PHASES if candidate not in completed),
+            None,
+        ) == phase
+
+    def phase_coverage_record(
+        self, phase: WorkflowPhase, dimension: str
+    ) -> PhaseCoverage | None:
+        objective = self.objective
+        if objective is None:
+            return None
+        marker = self.phase_completions.get(f"{objective.id}:{phase}")
+        if marker is not None:
+            return marker.coverage.get(dimension)
+        return self.phase_coverage.get(
+            self._phase_coverage_key(objective.id, phase), {}
+        ).get(dimension)
+
+    def needs_phase_coverage(
+        self, phase: WorkflowPhase, dimension: str
+    ) -> bool:
+        if not self.is_next_phase(phase):
+            return False
+        record = self.phase_coverage_record(phase, dimension)
+        return record is None or record.status in {"failed", "cancelled"}
+
+    @staticmethod
+    def _phase_coverage_key(objective_id: str, phase: WorkflowPhase) -> str:
+        return f"{objective_id}:{phase}"
+
+    def record_phase_coverage(
+        self,
+        phase: WorkflowPhase,
+        dimension: str,
+        status: PhaseCoverageStatus,
+        *,
+        objective_id: str,
+        target_origin: str,
+        reason: str | None = None,
+    ) -> bool:
+        objective = self.objective
+        marker = PhaseCoverage(status, reason)
+        if (
+            objective is None
+            or objective.mode != "whole_target"
+            or objective.id != objective_id
+            or objective.target_origin != normalize_target_origin(target_origin)
+        ):
+            raise ValueError("phase coverage must match the active objective and target")
+        if phase not in PHASE_COVERAGE_DIMENSIONS:
+            raise ValueError(f"{phase} does not require discovery coverage records")
+        if dimension not in PHASE_COVERAGE_DIMENSIONS[phase]:
+            raise ValueError(f"unknown {phase} coverage dimension: {dimension}")
+        key = self._phase_coverage_key(objective_id, phase)
+        if key in self.phase_completions:
+            raise ValueError("phase coverage cannot change after phase completion")
+        records = self.phase_coverage.setdefault(key, {})
+        if records.get(dimension) == marker:
+            return False
+        records[dimension] = marker
+        return True
 
     def add_attack_surface_input(
         self, item: AttackSurfaceInput
@@ -762,6 +965,7 @@ class WorkflowState:
         target_origin: str,
         artifact_ref: str,
         no_inputs_discovered: bool = False,
+        coverage: dict[str, PhaseCoverage] | None = None,
     ) -> bool:
         objective = self.objective
         marker = WorkflowPhaseCompletion(
@@ -770,6 +974,13 @@ class WorkflowState:
             target_origin=target_origin,
             artifact_ref=artifact_ref,
             no_inputs_discovered=no_inputs_discovered,
+            coverage=(
+                dict(coverage)
+                if coverage is not None
+                else dict(self.phase_coverage.get(
+                    self._phase_coverage_key(objective_id, phase), {}
+                ))
+            ),
         )
         if (
             objective is None
@@ -785,10 +996,11 @@ class WorkflowState:
                 raise ValueError("phase completion is immutable within an objective")
             return False
         self.phase_completions[key] = marker
+        self.phase_coverage.pop(key, None)
         return True
 
     def progress_facts(self) -> frozenset[str]:
-        """Return monotonic semantic facts for the active whole-target objective."""
+        """Return semantic state facts for the active whole-target objective."""
         objective = self.objective
         if objective is None or objective.mode != "whole_target":
             return frozenset()
@@ -806,6 +1018,19 @@ class WorkflowState:
         for marker in self.phase_completions.values():
             if marker.objective_id == objective.id and marker.target_origin == objective.target_origin:
                 facts.add(f"phase:{marker.objective_id}:{marker.phase}:{marker.artifact_ref}")
+                facts.update(
+                    f"phase-coverage:{marker.objective_id}:{marker.phase}:"
+                    f"{dimension}:{item.status}:{item.reason or ''}"
+                    for dimension, item in marker.coverage.items()
+                )
+        for key, records in self.phase_coverage.items():
+            owner_id, separator, _phase = key.rpartition(":")
+            if separator and owner_id == objective.id:
+                facts.update(
+                    f"phase-coverage-pending:{key}:{dimension}:"
+                    f"{item.status}:{item.reason or ''}"
+                    for dimension, item in records.items()
+                )
         objective_candidates = {candidate.id: candidate for candidate in self.objective_candidates()}
         for candidate in objective_candidates.values():
             facts.add(f"candidate:{candidate.id}")
@@ -832,6 +1057,9 @@ class WorkflowState:
         for artifact in self.evidence.values():
             if artifact.candidate_id in objective_candidates:
                 facts.add(f"evidence:{artifact.id}:{artifact.sha256}")
+        for candidate_id, fingerprint in self.persisted_findings.items():
+            if candidate_id in objective_candidates:
+                facts.add(f"finding:{candidate_id}:{fingerprint}")
         return frozenset(facts)
 
     def whole_target_status(
@@ -841,6 +1069,7 @@ class WorkflowState:
         available_phases: frozenset[str],
         validator_classes: frozenset[str],
         coverage_sync_available: bool,
+        invalid_evidence_candidate_ids: frozenset[str] = frozenset(),
     ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
         """Return status, actionable work, and blockers for the active objective."""
         objective = self.objective
@@ -903,6 +1132,13 @@ class WorkflowState:
         terminal_outcomes = {"confirmed", "not-confirmed"}
         for candidate in self.objective_candidates():
             result = self.latest_result(candidate.id)
+            if result and result.cleanup_state == "pending":
+                actionable.append(f"cleanup:{candidate.id}")
+            elif result and result.cleanup_state in {"failed", "requires-user-action"}:
+                blockers.append(
+                    f"mutation cleanup requires operator action:{candidate.id}:"
+                    f"{result.cleanup_state}"
+                )
             if candidate.status in {"new", "queued", "validating"}:
                 if candidate.candidate_class in normalized_validators:
                     actionable.append(f"candidate:{candidate.id}")
@@ -921,10 +1157,18 @@ class WorkflowState:
             if result is None or result.outcome not in terminal_outcomes:
                 blockers.append(f"candidate lacks terminal result:{candidate.id}")
                 continue
-            if result.outcome == "confirmed" and not self.evidence_matches(
-                candidate.id, result.evidence_refs
-            ):
-                blockers.append(f"confirmed candidate lacks linked evidence:{candidate.id}")
+            evidence_required = result.outcome == "confirmed" or bool(result.evidence_refs)
+            evidence_invalid = (
+                candidate.id in invalid_evidence_candidate_ids
+                or (evidence_required and not self.evidence_matches(
+                    candidate.id, result.evidence_refs
+                ))
+            )
+            if evidence_invalid:
+                if candidate.candidate_class in normalized_validators:
+                    actionable.append(f"revalidate:{candidate.id}")
+                else:
+                    blockers.append(f"candidate evidence unavailable:{candidate.id}")
                 continue
             if result.coverage_synced is False:
                 if not candidate.endpoint:
@@ -933,6 +1177,11 @@ class WorkflowState:
                     actionable.append(f"coverage-sync:{candidate.id}")
                 else:
                     blockers.append(f"coverage sync unavailable:{candidate.id}")
+                continue
+            if result.outcome == "confirmed" and not self.finding_is_persisted(
+                candidate.id
+            ):
+                actionable.append(f"finding:{candidate.id}")
 
         if actionable:
             return "actionable", tuple(actionable), tuple(blockers)
@@ -976,7 +1225,9 @@ class WorkflowState:
         if not force:
             existing = self.latest_result(result.candidate_id)
             if existing and validation_result_fingerprint(existing) == fingerprint:
-                for field_name in ("cleanup_status", "deferred_reason", "notes"):
+                for field_name in (
+                    "cleanup_status", "cleanup_state", "deferred_reason", "notes",
+                ):
                     value = getattr(result, field_name)
                     if value is not None:
                         setattr(existing, field_name, value)
@@ -1026,6 +1277,26 @@ class WorkflowState:
             and self.evidence_matches(candidate_id, result.evidence_refs)
         )
 
+    def finding_is_persisted(self, candidate_id: str) -> bool:
+        """Return whether the canonical report matches the latest result."""
+        result = self.latest_result(candidate_id)
+        return bool(
+            result is not None
+            and result.outcome == "confirmed"
+            and self.persisted_findings.get(candidate_id)
+            == validation_result_fingerprint(result)
+        )
+
+    def mark_finding_persisted(self, candidate_id: str) -> None:
+        """Record persistence only after the finding store write succeeds."""
+        if not self.eligible_for_finding(candidate_id):
+            raise ValueError(
+                "candidate is not eligible for persisted finding registration"
+            )
+        result = self.latest_result(candidate_id)
+        assert result is not None
+        self.persisted_findings[candidate_id] = validation_result_fingerprint(result)
+
     def clear(self) -> None:
         self.objective = None
         self.candidates.clear()
@@ -1033,9 +1304,11 @@ class WorkflowState:
         self.evidence.clear()
         self.attack_surface_inputs.clear()
         self.phase_completions.clear()
+        self.phase_coverage.clear()
         self.active_candidate_ids.clear()
         self.completed_skills.clear()
         self.completed_artifacts.clear()
+        self.persisted_findings.clear()
         self.current_phase = None
 
     def replace_from(self, other: WorkflowState) -> None:
@@ -1046,9 +1319,13 @@ class WorkflowState:
         self.evidence = dict(other.evidence)
         self.attack_surface_inputs = dict(other.attack_surface_inputs)
         self.phase_completions = dict(other.phase_completions)
+        self.phase_coverage = {
+            key: dict(records) for key, records in other.phase_coverage.items()
+        }
         self.active_candidate_ids = set(other.active_candidate_ids)
         self.completed_skills = set(other.completed_skills)
         self.completed_artifacts = dict(other.completed_artifacts)
+        self.persisted_findings = dict(other.persisted_findings)
         self.current_phase = other.current_phase
 
     def to_dict(self) -> dict[str, Any]:
@@ -1066,9 +1343,17 @@ class WorkflowState:
                 self.phase_completions[key].to_dict()
                 for key in sorted(self.phase_completions)
             ],
+            "phase_coverage": {
+                key: {
+                    dimension: item.to_dict()
+                    for dimension, item in sorted(records.items())
+                }
+                for key, records in sorted(self.phase_coverage.items())
+            },
             "active_candidate_ids": sorted(self.active_candidate_ids),
             "completed_skills": sorted(self.completed_skills),
             "completed_artifacts": dict(sorted(self.completed_artifacts.items())),
+            "persisted_findings": dict(sorted(self.persisted_findings.items())),
             "current_phase": self.current_phase,
         }
 
@@ -1082,7 +1367,7 @@ class WorkflowState:
             # Version 1 had no registered evidence or independent subcases.
             # Its candidates/results still load, but legacy free-text evidence
             # references do not become finding-eligible without a new proof.
-            state.version = max(3, version)
+            state.version = max(6, version)
 
         state.objective = WorkflowObjective.from_dict(value.get("objective"))
 
@@ -1115,11 +1400,40 @@ class WorkflowState:
                     except (TypeError, ValueError):
                         continue
         raw_phases = value.get("phase_completions", [])
+        allow_legacy_coverage = (
+            not isinstance(version, bool)
+            and isinstance(version, int)
+            and 0 < version < 4
+        )
         if isinstance(raw_phases, list):
             for raw in raw_phases:
-                marker = WorkflowPhaseCompletion.from_dict(raw)
+                marker = WorkflowPhaseCompletion.from_dict(
+                    raw, allow_legacy_coverage=allow_legacy_coverage
+                )
                 if marker is not None:
                     state.phase_completions[marker.key] = marker
+        raw_phase_coverage = value.get("phase_coverage", {})
+        if isinstance(raw_phase_coverage, dict):
+            for key, raw_records in raw_phase_coverage.items():
+                if not isinstance(key, str) or not isinstance(raw_records, dict):
+                    continue
+                if key in state.phase_completions:
+                    continue
+                phase = key.rpartition(":")[2]
+                allowed_dimensions = set(PHASE_COVERAGE_DIMENSIONS.get(phase, ()))
+                if not allowed_dimensions:
+                    continue
+                records: dict[str, PhaseCoverage] = {}
+                for dimension, raw_record in raw_records.items():
+                    parsed = PhaseCoverage.from_dict(raw_record)
+                    if (
+                        isinstance(dimension, str)
+                        and dimension in allowed_dimensions
+                        and parsed is not None
+                    ):
+                        records[dimension] = parsed
+                if records:
+                    state.phase_coverage[key] = records
         if isinstance(raw_results, list):
             for raw in raw_results:
                 result = ValidationResult.from_dict(raw)
@@ -1155,6 +1469,16 @@ class WorkflowState:
                         safe_path = _text(path)
                         if safe_path:
                             state.completed_artifacts[canonical] = safe_path
+        persisted_findings = value.get("persisted_findings")
+        if isinstance(persisted_findings, dict):
+            for candidate_id, fingerprint in persisted_findings.items():
+                if (
+                    isinstance(candidate_id, str)
+                    and candidate_id in state.candidates
+                    and isinstance(fingerprint, str)
+                    and len(fingerprint) == 64
+                ):
+                    state.persisted_findings[candidate_id] = fingerprint
         phase = value.get("current_phase")
         if isinstance(phase, str):
             state.current_phase = _text(phase, limit=80)

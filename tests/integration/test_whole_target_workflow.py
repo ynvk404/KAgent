@@ -20,6 +20,10 @@ from src.workflow.state import (
     WorkflowState,
 )
 from tests.helpers.agent_fakes import FakeClient
+from tests.helpers.workflow import (
+    record_completed_phase,
+    record_phase_coverage_for_test,
+)
 
 
 SKILLS_ROOT = Path(__file__).resolve().parents[2] / "skills"
@@ -94,6 +98,7 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
 
     recon_ref = "artifacts/recon/target-test/summary.md"
     _artifact(tmp_path, recon_ref)
+    await record_phase_coverage_for_test(workflow_tool, "recon")
     await workflow_tool.run({"action": "complete_skill", "skill_name": "recon"}, None, AlwaysAllow())
     enumeration_plan = build_decision_plan(
         "continue", skills.list_enabled(), target, agent._planner_context()
@@ -103,6 +108,7 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
 
     enumeration_ref = "artifacts/web-enumeration/target-test/inventory.md"
     _artifact(tmp_path, enumeration_ref)
+    await record_phase_coverage_for_test(workflow_tool, "enumeration")
     await workflow_tool.run(
         {"action": "complete_skill", "skill_name": "web-enumeration"}, None, AlwaysAllow()
     )
@@ -155,12 +161,70 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
     ) is None
 
 
+@pytest.mark.asyncio
+async def test_whole_target_revalidates_when_immutable_proof_disappears(tmp_path):
+    target = Target("https://target.test")
+    objective = WorkflowObjective(
+        id="assessment-evidence", mode="whole_target",
+        target_origin="https://target.test",
+    )
+    state = WorkflowState(objective=objective)
+    for phase in ("recon", "enumeration", "input_analysis"):
+        record_completed_phase(
+            state,
+            phase,  # type: ignore[arg-type]
+            objective_id=objective.id,
+            target_origin="https://target.test",
+            artifact_ref=f"artifacts/{phase}.md",
+            no_inputs_discovered=phase == "input_analysis",
+        )
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="cross-site-scripting", target="https://target.test",
+        endpoint="/feedback", parameter="comment", objective_id=objective.id,
+    ))
+    skills = SkillRegistry()
+    skills.load_dir(SKILLS_ROOT)
+    workflow_tool = WorkflowTool(state, target, skills=skills, evidence_root=tmp_path)
+    tools = ToolRegistry()
+    tools.register(workflow_tool)
+    agent = Agent(AgentOptions(
+        client=FakeClient([]), tools=tools, skills=skills, prompter=AlwaysAllow(),
+        store=None, target=target, workflow=state,
+    ))
+
+    (tmp_path / "results.md").write_text("redacted proof\n", encoding="utf-8")
+    evidence = json.loads(await workflow_tool.run({
+        "action": "record_evidence", "candidate_id": candidate.id,
+        "evidence_path": "results.md",
+    }, None, AlwaysAllow()))["evidence"]
+    await workflow_tool.run({
+        "action": "record_result", "candidate_id": candidate.id,
+        "skill_name": "cross-site-scripting", "outcome": "confirmed",
+        "evidence_refs": [evidence["id"]], "repeatable": True,
+    }, None, AlwaysAllow())
+
+    status, actionable, _ = agent._whole_target_state()
+    assert status == "actionable"
+    assert actionable == (f"finding:{candidate.id}",)
+
+    (tmp_path / evidence["path"]).unlink()
+    status, actionable, _ = agent._whole_target_state()
+    assert status == "actionable"
+    assert actionable == (f"revalidate:{candidate.id}",)
+    plan = build_decision_plan(
+        "continue", skills.list_enabled(), target, agent._planner_context()
+    )
+    assert plan is not None and plan.recommended_skill == "cross-site-scripting"
+    assert plan.candidate_id == candidate.id
+
+
 def test_whole_target_status_is_blocked_when_only_blocked_input_remains():
     state = WorkflowState(objective=WorkflowObjective(
         id="assessment-blocked", mode="whole_target", target_origin="https://target.test",
     ))
     for phase in ("recon", "enumeration"):
-        state.record_phase_completion(
+        record_completed_phase(
+            state,
             phase, objective_id="assessment-blocked", target_origin="https://target.test",
             artifact_ref=f"artifacts/{phase}.md",
         )

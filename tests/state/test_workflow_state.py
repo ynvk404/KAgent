@@ -6,11 +6,14 @@ from src.workflow.state import (
     VALIDATION_OUTCOMES,
     AttackSurfaceInput,
     Candidate,
+    PHASE_COVERAGE_DIMENSIONS,
     ValidationResult,
+    WorkflowPhaseCompletion,
     WorkflowObjective,
     WorkflowState,
     candidate_fingerprint,
 )
+from tests.helpers.workflow import record_completed_phase
 from src.workflow.evidence import EvidenceArtifact
 
 
@@ -118,8 +121,113 @@ def test_registered_evidence_survives_workflow_serialization(tmp_path):
     old_payload["version"] = 1
     old_payload.pop("evidence")
     migrated = WorkflowState.from_dict(old_payload)
-    assert migrated.version == 3
+    assert migrated.version == 6
     assert not migrated.eligible_for_finding(candidate.id)
+
+
+def test_legacy_phase_completion_migrates_only_for_pre_v4_session():
+    legacy_marker = {
+        "objective_id": "legacy-objective",
+        "phase": "recon",
+        "target_origin": "https://target.test",
+        "artifact_ref": "artifacts/recon/summary.md",
+    }
+    migrated = WorkflowState.from_dict({
+        "version": 3,
+        "phase_completions": [legacy_marker],
+    })
+    marker = migrated.phase_completions.get("legacy-objective:recon")
+    assert marker is not None
+    assert set(marker.coverage) == set(PHASE_COVERAGE_DIMENSIONS["recon"])
+    assert all(item.status == "skipped" for item in marker.coverage.values())
+    assert all("legacy" in (item.reason or "") for item in marker.coverage.values())
+
+    current = WorkflowState.from_dict({
+        "version": 4,
+        "phase_completions": [legacy_marker],
+    })
+    assert "legacy-objective:recon" not in current.phase_completions
+
+    for malformed_coverage in (None, [], {"unknown-dimension": {"status": "performed"}}):
+        malformed = WorkflowState.from_dict({
+            "version": 4,
+            "phase_completions": [{
+                "objective_id": "current-objective",
+                "phase": "input_analysis",
+                "target_origin": "https://target.test",
+                "artifact_ref": "artifacts/input-analysis.md",
+                "no_inputs_discovered": True,
+                "coverage": malformed_coverage,
+            }],
+        })
+        assert "current-objective:input_analysis" not in malformed.phase_completions
+
+
+def test_current_phase_completion_with_incomplete_coverage_fails_closed_and_round_trips():
+    state = whole_target_state("current-coverage")
+    objective = state.objective
+    assert objective is not None
+    state.record_phase_coverage(
+        "recon", "reachability", "performed",
+        objective_id=objective.id,
+        target_origin=objective.target_origin or "",
+    )
+    serialized = state.to_dict()
+    serialized["phase_completions"] = [{
+        "objective_id": objective.id,
+        "phase": "recon",
+        "target_origin": objective.target_origin,
+        "artifact_ref": "artifacts/recon.md",
+        "coverage": {"reachability": {"status": "performed"}},
+    }]
+    restored = WorkflowState.from_dict(serialized)
+    assert f"{objective.id}:recon" not in restored.phase_completions
+    assert restored.needs_phase_coverage("recon", "service_discovery")
+    assert WorkflowState.from_dict(restored.to_dict()).to_dict() == restored.to_dict()
+
+
+def test_pending_phase_coverage_is_workflow_progress_and_retry_changes_the_fact():
+    state = whole_target_state("coverage-progress")
+    objective = state.objective
+    assert objective is not None
+
+    state.record_phase_coverage(
+        "recon", "reachability", "failed",
+        objective_id=objective.id,
+        target_origin=objective.target_origin or "",
+        reason="temporary DNS failure",
+    )
+    failed_facts = state.progress_facts()
+    assert any("reachability:failed" in fact for fact in failed_facts)
+
+    state.record_phase_coverage(
+        "recon", "reachability", "performed",
+        objective_id=objective.id,
+        target_origin=objective.target_origin or "",
+    )
+    performed_facts = state.progress_facts()
+    assert performed_facts - failed_facts
+    assert any("reachability:performed" in fact for fact in performed_facts)
+
+
+def test_phase_completion_moves_pending_coverage_into_the_compact_marker():
+    state = whole_target_state("coverage-snapshot")
+    objective = state.objective
+    assert objective is not None
+    record_completed_phase(
+        state,
+        "recon",
+        objective_id=objective.id,
+        target_origin=objective.target_origin or "",
+        artifact_ref="artifacts/recon.md",
+    )
+
+    key = f"{objective.id}:recon"
+    assert key not in state.phase_coverage
+    assert set(state.phase_completions[key].coverage) == set(PHASE_COVERAGE_DIMENSIONS["recon"])
+    assert not any(f"phase-coverage-pending:{key}:" in fact for fact in state.progress_facts())
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert restored.to_dict() == state.to_dict()
 
 
 def test_workflow_records_redact_secret_bearing_observation_text():
@@ -204,6 +312,148 @@ def test_result_duplicate_suppression_and_explicit_retest():
     assert len(WorkflowState.from_dict(state.to_dict()).validation_results) == 4
 
 
+def test_cleanup_lifecycle_updates_latest_result_without_creating_a_retest():
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(make_candidate())
+    pending = ValidationResult(
+        candidate.id,
+        "sql-injection",
+        "confirmed",
+        evidence_refs=["ev_proof"],
+        mutation_performed=True,
+        cleanup_status="cleanup permission not yet requested",
+    )
+    assert pending.cleanup_state == "pending"
+    assert state.add_validation_result(pending) is True
+
+    failed_cleanup = ValidationResult(
+        candidate.id,
+        "sql-injection",
+        "confirmed",
+        evidence_refs=["ev_proof"],
+        mutation_performed=True,
+        cleanup_status="failed: DELETE returned 401",
+    )
+    assert failed_cleanup.cleanup_state == "requires-user-action"
+    assert state.add_validation_result(failed_cleanup) is False
+    assert len(state.validation_results) == 1
+    assert state.latest_result(candidate.id) is pending
+    assert pending.cleanup_state == "requires-user-action"
+    assert WorkflowState.from_dict(state.to_dict()).latest_result(candidate.id) == pending
+
+
+def test_cleanup_state_is_separate_from_confirmation_and_blocks_clean_completion():
+    state = whole_target_state()
+    complete_required_phases(state)
+    candidate, _ = state.add_candidate(make_candidate(
+        objective_id="objective-current", target="https://target.test",
+    ))
+    artifact = EvidenceArtifact(
+        "ev_proof", candidate.id, "artifacts/proof.md", "a" * 64, 1,
+    )
+    state.add_evidence(artifact)
+    state.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "confirmed",
+        evidence_refs=[artifact.id], coverage_synced=True,
+        mutation_performed=True, cleanup_status="failed: DELETE returned 401",
+    ))
+    args = {
+        "target_origin": "https://target.test",
+        "available_phases": frozenset({"recon", "enumeration", "input_analysis"}),
+        "validator_classes": frozenset({"sql-injection"}),
+        "coverage_sync_available": True,
+    }
+
+    status, actionable, blockers = state.whole_target_status(**args)
+    assert status == "actionable"
+    assert actionable == (f"finding:{candidate.id}",)
+    assert any("cleanup requires operator action" in item for item in blockers)
+
+    state.mark_finding_persisted(candidate.id)
+    status, actionable, blockers = state.whole_target_status(**args)
+    assert status == "blocked" and actionable == ()
+    assert any("requires-user-action" in item for item in blockers)
+
+    cleaned = ValidationResult(
+        candidate.id, "sql-injection", "confirmed",
+        evidence_refs=[artifact.id], coverage_synced=True,
+        mutation_performed=True, cleanup_status="deleted and verified",
+    )
+    assert cleaned.cleanup_state == "succeeded"
+    assert state.add_validation_result(cleaned) is False
+    assert state.whole_target_status(**args) == ("completed", (), ())
+
+
+def test_terminal_candidate_is_revalidated_only_when_evidence_is_invalidated():
+    state = whole_target_state()
+    complete_required_phases(state)
+    candidate, _ = state.add_candidate(make_candidate(
+        objective_id="objective-current", target="https://target.test",
+    ))
+    artifact = EvidenceArtifact(
+        "ev_proof", candidate.id, "artifacts/proof.md", "a" * 64, 1,
+    )
+    state.add_evidence(artifact)
+    state.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "confirmed",
+        evidence_refs=[artifact.id], coverage_synced=True,
+    ))
+    args = {
+        "target_origin": "https://target.test",
+        "available_phases": frozenset({"recon", "enumeration", "input_analysis"}),
+        "validator_classes": frozenset({"sql-injection"}),
+        "coverage_sync_available": True,
+    }
+
+    status, actionable, _ = state.whole_target_status(**args)
+    assert status == "actionable" and actionable == (f"finding:{candidate.id}",)
+
+    state.set_candidate_status(candidate.id, "queued")
+    status, actionable, _ = state.whole_target_status(**args)
+    assert status == "actionable" and actionable == (f"candidate:{candidate.id}",)
+    state.set_candidate_status(candidate.id, "validated")
+
+    invalidated = {
+        **args,
+        "invalid_evidence_candidate_ids": frozenset({candidate.id}),
+    }
+    status, actionable, blockers = state.whole_target_status(**invalidated)
+    assert status == "actionable"
+    assert actionable == (f"revalidate:{candidate.id}",)
+    assert not any(item.startswith(f"finding:{candidate.id}") for item in actionable)
+    assert blockers == ()
+
+    no_validator = {**invalidated, "validator_classes": frozenset()}
+    status, actionable, blockers = state.whole_target_status(**no_validator)
+    assert status == "blocked" and actionable == ()
+    assert any("evidence unavailable" in item for item in blockers)
+
+
+def test_missing_terminal_record_or_dismissal_does_not_trigger_automatic_retest():
+    state = whole_target_state()
+    complete_required_phases(state)
+    dismissed, _ = state.add_candidate(make_candidate(
+        objective_id="objective-current", target="https://target.test",
+        endpoint="/dismissed", status="dismissed",
+    ))
+    inconsistent, _ = state.add_candidate(make_candidate(
+        objective_id="objective-current", target="https://target.test",
+        endpoint="/missing-result", status="validated",
+    ))
+
+    status, actionable, blockers = state.whole_target_status(
+        target_origin="https://target.test",
+        available_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        validator_classes=frozenset({"sql-injection"}),
+        coverage_sync_available=True,
+    )
+
+    assert status == "blocked" and actionable == ()
+    assert any(f"dismissed without terminal result:{dismissed.id}" in item for item in blockers)
+    assert any(f"lacks terminal result:{inconsistent.id}" in item for item in blockers)
+    assert not any(item.startswith("revalidate:") for item in actionable)
+
+
 @pytest.mark.parametrize("version", [1, 2])
 def test_requeued_candidate_status_survives_result_replay(version):
     state = WorkflowState()
@@ -254,7 +504,8 @@ def complete_required_phases(state: WorkflowState) -> None:
     objective = state.objective
     assert objective is not None
     for phase in ("recon", "enumeration", "input_analysis"):
-        state.record_phase_completion(
+        record_completed_phase(
+            state,
             phase,  # type: ignore[arg-type]
             objective_id=objective.id,
             target_origin=objective.target_origin or "",
@@ -368,7 +619,8 @@ def test_completed_input_analysis_without_inventory_attestation_stays_blocked():
     objective = state.objective
     assert objective is not None
     for phase in ("recon", "enumeration", "input_analysis"):
-        state.record_phase_completion(
+        record_completed_phase(
+            state,
             phase,  # type: ignore[arg-type]
             objective_id=objective.id,
             target_origin=objective.target_origin or "",
@@ -436,7 +688,7 @@ def test_completion_and_blocker_contract_and_append_only_result_history():
     assert status == "completed" and actionable == () and blockers == ()
 
 
-def test_confirmed_candidate_without_registered_evidence_cannot_complete_objective():
+def test_confirmed_candidate_without_registered_evidence_is_actionable_for_revalidation():
     state = whole_target_state()
     complete_required_phases(state)
     candidate, _ = state.add_candidate(make_candidate(
@@ -451,9 +703,51 @@ def test_confirmed_candidate_without_registered_evidence_cannot_complete_objecti
         validator_classes=frozenset({"sql-injection"}),
         coverage_sync_available=True,
     )
-    assert status == "blocked"
-    assert actionable == ()
-    assert any("lacks linked evidence" in blocker for blocker in blockers)
+    assert status == "actionable"
+    assert actionable == (f"revalidate:{candidate.id}",)
+    assert blockers == ()
+
+
+def test_confirmed_candidate_requires_current_finding_persistence_to_complete():
+    state = whole_target_state()
+    complete_required_phases(state)
+    candidate, _ = state.add_candidate(make_candidate(
+        objective_id="objective-current", target="https://target.test",
+    ))
+    artifact = EvidenceArtifact(
+        "ev_proof", candidate.id, "artifacts/proof.md", "a" * 64, 1,
+    )
+    state.add_evidence(artifact)
+    state.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "confirmed",
+        evidence_refs=[artifact.id], coverage_synced=True,
+    ))
+
+    args = {
+        "target_origin": "https://target.test",
+        "available_phases": frozenset({"recon", "enumeration", "input_analysis"}),
+        "validator_classes": frozenset({"sql-injection"}),
+        "coverage_sync_available": True,
+    }
+    status, actionable, blockers = state.whole_target_status(**args)
+    assert status == "actionable"
+    assert actionable == (f"finding:{candidate.id}",)
+    assert blockers == ()
+
+    state.mark_finding_persisted(candidate.id)
+    assert state.finding_is_persisted(candidate.id)
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert restored.finding_is_persisted(candidate.id)
+    assert restored.whole_target_status(**args) == ("completed", (), ())
+
+    restored.set_candidate_status(candidate.id, "validating")
+    restored.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "confirmed",
+        evidence_refs=[artifact.id], techniques=["fresh confirmation"],
+        coverage_synced=True,
+    ))
+    assert not restored.finding_is_persisted(candidate.id)
+    assert restored.whole_target_status(**args)[1] == (f"finding:{candidate.id}",)
 
 
 def test_blocker_does_not_stop_objective_while_another_candidate_is_actionable():

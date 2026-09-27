@@ -266,7 +266,8 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
         AlwaysAllow(),
     ))["evidence"]["id"]
     assert repeated_evidence_id == evidence_id
-    assert state.evidence[evidence_id].path == (
+    assert state.evidence[evidence_id].path.startswith(".kagent/evidence/")
+    assert state.evidence[evidence_id].path != (
         "artifacts/sql-injection/target-test-8443/results.md"
     )
     assert state.evidence[evidence_id].size == result_path.stat().st_size

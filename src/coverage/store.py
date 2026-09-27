@@ -251,23 +251,42 @@ class CoverageStore:
     async def ensure_validation_mark(
         self, *, endpoint: str, param: str, vulnClass: str,
         status: CoverageStatus, notes: str, observation_id: str,
+        legacy_observation_ids: tuple[str, ...] = (),
     ) -> CoverageEntry:
-        """Persist one validation outcome without inflating retry counts."""
+        """Persist the current logical observation without counting retries."""
         await self.load()
         key = _key_of(
             _normalize_endpoint(endpoint), param.strip(),
             normalize_candidate_class(vulnClass),
         )
         existing = self.entries.get(key)
-        existing_ids = set(existing.observationIds or []) if existing else set()
-        if existing and observation_id in existing_ids:
-            if self.last_save_error is not None:
-                self._queue_save()
+        existing_ids = list(existing.observationIds or []) if existing else []
+        legacy_ids = set(legacy_observation_ids)
+        matched_legacy_ids = [item for item in existing_ids if item in legacy_ids]
+        if existing and matched_legacy_ids:
+            retained_ids = [item for item in existing_ids if item not in legacy_ids]
+            if observation_id not in retained_ids:
+                retained_ids.append(observation_id)
+            # Earlier versions counted unique result fingerprints. Collapse
+            # those known attempts for this candidate into one logical check.
+            collapsed = max(0, len(matched_legacy_ids) - 1)
+            existing.count = max(1, existing.count - min(collapsed, existing.count - 1))
+            existing.observationIds = retained_ids[-20:]
+            existing.status = status
+            existing.notes = notes
+            existing.lastSeen = int(time.time() * 1000)
+            self._queue_save()
+        elif existing and observation_id in existing_ids:
+            existing.status = status
+            existing.notes = notes
+            existing.lastSeen = int(time.time() * 1000)
+            self._queue_save()
         elif existing and not existing_ids and existing.status == status:
             # Adopt a matching legacy/manual observation as this structured
             # result instead of counting the two persistence paths twice.
             existing.observationIds = [observation_id]
             existing.notes = notes
+            existing.lastSeen = int(time.time() * 1000)
             self._queue_save()
         else:
             existing = await self.mark(

@@ -47,6 +47,9 @@ class PlannerContext:
     pending_input_count: int = 0
     blocked_input_count: int = 0
     coverage_sync_candidate_ids: tuple[str, ...] = ()
+    pending_finding_candidate_ids: tuple[str, ...] = ()
+    revalidation_candidate_ids: tuple[str, ...] = ()
+    pending_cleanup_candidate_ids: tuple[str, ...] = ()
     workflow_status: str | None = None
     workflow_blockers: tuple[str, ...] = ()
 
@@ -344,13 +347,94 @@ def build_whole_target_plan(
             candidate_id=candidate_id,
         )
 
+    if context.revalidation_candidate_ids:
+        candidate_id = context.revalidation_candidate_ids[0]
+        candidate = next(
+            (item for item in context.candidates if item.id == candidate_id), None
+        )
+        validator = next(
+            (
+                skill for skill in skills
+                if candidate is not None
+                and skill.stage == "validation"
+                and not skill.disable_model_invocation
+                and candidate.candidate_class in skill.candidate_classes
+            ),
+            None,
+        )
+        if validator is None:
+            return None
+        return DecisionPlan(
+            recommended_skill=validator.name,
+            reason=f"registered evidence for {candidate_id} is missing or no longer resolvable",
+            risk="normal",
+            checklist=[
+                "Revalidate only this existing candidate because its registered proof is unavailable.",
+                "Save fresh redacted proof and record the updated result before reporting it.",
+            ],
+            guidance=(
+                "Decision planner guidance for this turn:\n"
+                f"Active objective: whole-target assessment {context.objective_id}.\n"
+                f"Revalidate candidate {candidate_id} only to replace missing or invalid proof. "
+                "This is evidence repair, not a general retest; keep the original scope and "
+                "the skill's authorization and stop conditions."
+            ),
+            candidate_id=candidate_id,
+        )
+
+    if context.pending_finding_candidate_ids:
+        candidate_id = context.pending_finding_candidate_ids[0]
+        return DecisionPlan(
+            recommended_skill=None,
+            reason=f"confirmed finding persistence is pending for {candidate_id}",
+            risk="normal",
+            checklist=[
+                "Call confirm_finding with the recorded candidate and evidence; do not retest the target."
+            ],
+            guidance=(
+                "Decision planner guidance for this turn:\n"
+                f"Active objective: whole-target assessment {context.objective_id}.\n"
+                f"Next action: persist the already-confirmed candidate {candidate_id} "
+                "with confirm_finding. Use its existing registered evidence and do "
+                "not repeat live validation."
+            ),
+            candidate_id=candidate_id,
+        )
+
+    if context.pending_cleanup_candidate_ids:
+        candidate_id = context.pending_cleanup_candidate_ids[0]
+        return DecisionPlan(
+            recommended_skill=None,
+            reason=f"mutation cleanup requires a fresh operator decision for {candidate_id}",
+            risk="normal",
+            checklist=[
+                "Ask the operator about the exact cleanup action before attempting it.",
+                "The original mutation approval does not authorize cleanup; keep the permission gate.",
+                "Record cleanup as succeeded only after the cleanup action is verified.",
+            ],
+            guidance=(
+                "Decision planner guidance for this turn:\n"
+                f"Active objective: whole-target assessment {context.objective_id}.\n"
+                f"Mutation cleanup is pending for {candidate_id}. Ask the operator to "
+                "authorize the exact cleanup action, then obtain the normal per-action "
+                "permission. Do not infer DELETE/rollback permission from a prior write; "
+                "if authorization is declined or unavailable, record "
+                "cleanup_state=requires-user-action and leave the objective blocked."
+            ),
+            candidate_id=candidate_id,
+        )
+
     actionable = [
         candidate for candidate in context.candidates
         if candidate.status in {"new", "queued", "validating"}
+        or candidate.id in context.revalidation_candidate_ids
     ]
     actionable.sort(
         key=lambda item: (
-            {"validating": 0, "queued": 1, "new": 2}.get(item.status, 3),
+            (
+                -1 if item.id in context.revalidation_candidate_ids
+                else {"validating": 0, "queued": 1, "new": 2}.get(item.status, 3)
+            ),
             {"high": 0, "medium": 1, "low": 2}.get(item.priority or "", 3),
             item.id,
         )
@@ -369,7 +453,11 @@ def build_whole_target_plan(
             continue
         return DecisionPlan(
             recommended_skill=validator.name,
-            reason=f"candidate {candidate.id} remains actionable in this objective",
+            reason=(
+                f"candidate {candidate.id} evidence needs revalidation"
+                if candidate.id in context.revalidation_candidate_ids
+                else f"candidate {candidate.id} remains actionable in this objective"
+            ),
             risk="normal",
             checklist=[
                 "Validate only this scoped candidate using its skill contract.",

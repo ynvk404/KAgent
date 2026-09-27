@@ -26,9 +26,9 @@ import pytest
 
 class Outcome(str, Enum):
     CONFIRMED = "confirmed"
-    NOT_CONFIRMED = "not confirmed"
+    NOT_CONFIRMED = "not-confirmed"
     BLOCKED = "blocked"
-    REQUIRES_BROWSER_CONFIRMATION = "requires-browser-confirmation"
+    BROWSER_REQUIRED = "browser-required"
 
 
 class ReflectionContext(str, Enum):
@@ -77,7 +77,7 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
     2. fully encoded/neutralized reflection is a clean negative.
     3. context determines whether HTTP-level evidence alone can support
        `confirmed`, or whether it can only ever support
-       `requires-browser-confirmation`.
+       `browser-required`.
     """
     # 3a — blocked takes priority over everything else, for every context
     # including `encoded`; the skill is explicit that an ordinary 401/403
@@ -106,14 +106,14 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
         # reflected, but whether the break-out actually lands in an
         # executable position can't be established from HTTP evidence
         # alone
-        return Outcome.REQUIRES_BROWSER_CONFIRMATION
+        return Outcome.BROWSER_REQUIRED
 
     if probe.context == ReflectionContext.URL_HREF:
         # href/src contexts are inherently non-deterministic from HTTP
         # evidence alone (depends on user interaction, scheme handling,
         # CSP, etc.) — never `confirmed` from curl-level evidence.
         if probe.payload_reflected_unescaped:
-            return Outcome.REQUIRES_BROWSER_CONFIRMATION
+            return Outcome.BROWSER_REQUIRED
         return Outcome.NOT_CONFIRMED
 
     if probe.context == ReflectionContext.DOM_BASED:
@@ -124,7 +124,7 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
         if probe.dom_execution_observed:
             return Outcome.CONFIRMED
         if probe.dom_sink_path_plausible:
-            return Outcome.REQUIRES_BROWSER_CONFIRMATION
+            return Outcome.BROWSER_REQUIRED
         return Outcome.NOT_CONFIRMED
 
     raise ValueError(f"unhandled context: {probe.context}")
@@ -184,7 +184,7 @@ class TestNonDeterministicContextsNeverConfirmFromHttpAlone:
         )
         assert (
             classify_xss_outcome(probe)
-            == Outcome.REQUIRES_BROWSER_CONFIRMATION
+            == Outcome.BROWSER_REQUIRED
         )
 
     def test_js_string_reflected_and_breakout_deterministic_is_confirmed(self):
@@ -209,7 +209,7 @@ class TestNonDeterministicContextsNeverConfirmFromHttpAlone:
         )
         assert (
             classify_xss_outcome(probe)
-            == Outcome.REQUIRES_BROWSER_CONFIRMATION
+            == Outcome.BROWSER_REQUIRED
         )
 
     def test_url_href_not_reflected_is_not_confirmed(self):
@@ -230,7 +230,7 @@ class TestNonDeterministicContextsNeverConfirmFromHttpAlone:
         )
         assert (
             classify_xss_outcome(probe)
-            == Outcome.REQUIRES_BROWSER_CONFIRMATION
+            == Outcome.BROWSER_REQUIRED
         )
 
     def test_dom_based_observed_execution_is_confirmed(self):

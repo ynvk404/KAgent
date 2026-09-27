@@ -1,0 +1,5 @@
+# One reserved destination marker; inspect Location and never follow it.
+https://example.com/
+
+# In-scope control value for comparison (replace with the observed safe route).
+IN_SCOPE_RETURN_PATH

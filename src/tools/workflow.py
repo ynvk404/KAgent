@@ -4,7 +4,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from src.paths import project_root
 from src.permission.permission import Prompter
@@ -13,12 +13,17 @@ from src.coverage.store import CoverageStore, CoverageStatus
 from src.target.target import Target
 from src.workflow.state import (
     CANDIDATE_STATUSES,
+    CLEANUP_STATES,
     INPUT_DISPOSITIONS,
+    PHASE_COVERAGE_DIMENSIONS,
+    PHASE_COVERAGE_STATUSES,
     VALIDATION_OUTCOMES,
     Candidate,
     AttackSurfaceInput,
+    PhaseCoverageStatus,
     WorkflowPhase,
     ValidationResult,
+    CleanupState,
     WorkflowState,
     candidate_origin,
     normalize_target_origin,
@@ -41,6 +46,7 @@ ACTIONS = (
     "start_validation",
     "record_result",
     "sync_coverage",
+    "record_phase_coverage",
     "complete_skill",
     "list",
 )
@@ -83,8 +89,13 @@ class WorkflowTool(Tool):
         return (
             "Manage structured assessment inputs, candidates, evidence, validation "
             "results, coverage, and phase completion. Whole-target input actions "
-            "require an active objective. record_result needs candidate_id, "
-            "skill_name and outcome. Use compact references, never raw traffic."
+            "require an active objective. Before completing recon or enumeration, "
+            "record every required phase coverage dimension with "
+            "record_phase_coverage; skipped/not_applicable require a short reason, "
+            "and failed/cancelled dimensions must be retried or explicitly skipped. "
+            "record_evidence stores a redacted content-addressed snapshot, so mutable "
+            "aggregate proof files may continue to be updated. record_result needs "
+            "candidate_id, skill_name and outcome. Use compact references, never raw traffic."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -150,6 +161,14 @@ class WorkflowTool(Tool):
                 },
                 "mutation_performed": {"type": "boolean"},
                 "cleanup_status": optional_string,
+                "cleanup_state": {
+                    "type": "string",
+                    "enum": sorted(CLEANUP_STATES),
+                    "description": (
+                        "Machine-readable cleanup lifecycle. Mutations default to pending; "
+                        "do not infer cleanup authorization from the original write."
+                    ),
+                },
                 "deferred_reason": optional_string,
                 "notes": optional_string,
                 "force": {
@@ -163,6 +182,23 @@ class WorkflowTool(Tool):
                     ),
                 },
                 "current_phase": optional_string,
+                "phase": {
+                    "type": "string",
+                    "enum": sorted(PHASE_COVERAGE_DIMENSIONS),
+                    "description": "Phase for record_phase_coverage.",
+                },
+                "coverage_dimension": {
+                    "type": "string",
+                    "description": "Required coverage dimension for the selected phase.",
+                },
+                "coverage_status": {
+                    "type": "string",
+                    "enum": sorted(PHASE_COVERAGE_STATUSES),
+                },
+                "coverage_reason": {
+                    "type": "string",
+                    "description": "Required for skipped, not_applicable, failed, or cancelled.",
+                },
                 "artifact_ref": {
                     "type": "string",
                     "description": "Stage output path.",
@@ -207,6 +243,8 @@ class WorkflowTool(Tool):
             result = await self._record_result(args)
         elif action == "sync_coverage":
             result = await self._sync_coverage_action(args)
+        elif action == "record_phase_coverage":
+            result = self._record_phase_coverage(args)
         elif action == "complete_skill":
             result = self._complete_skill(args)
         elif action == "list":
@@ -359,6 +397,34 @@ class WorkflowTool(Tool):
         candidate_id = arg_string(args, "candidate_id")
         try:
             self._validate_current_objective_candidate(candidate_id)
+            objective = self.state.objective
+            candidate = self.state.candidates[candidate_id]
+            latest = self.state.latest_result(candidate_id)
+            if (
+                objective is not None
+                and objective.mode == "whole_target"
+                and latest is not None
+                and latest.outcome in {"confirmed", "not-confirmed"}
+                and candidate.status not in {"queued", "validating"}
+            ):
+                evidence_required = latest.outcome == "confirmed" or bool(
+                    latest.evidence_refs
+                )
+                evidence_invalid = evidence_required and (
+                    not self.state.evidence_matches(candidate_id, latest.evidence_refs)
+                    or any(
+                        not self.state.evidence[reference].is_resolvable_for_resume(
+                            self.evidence_root
+                        )
+                        for reference in latest.evidence_refs
+                        if reference in self.state.evidence
+                    )
+                )
+                if not evidence_invalid:
+                    raise ValueError(
+                        "terminal candidate cannot be reopened during whole-target continuation; "
+                        "request an explicit candidate retest or repair its missing/invalid evidence"
+                    )
             candidate = self.state.set_candidate_status(candidate_id, "validating")
         except ValueError as err:
             return f"error: {err}"
@@ -376,7 +442,9 @@ class WorkflowTool(Tool):
         if not path:
             return "error: record_evidence requires evidence_path"
         try:
-            artifact = EvidenceArtifact.capture(candidate_id, path, self.evidence_root)
+            artifact = EvidenceArtifact.capture_immutable_snapshot(
+                candidate_id, path, self.evidence_root
+            )
             self.state.add_evidence(artifact)
         except (OSError, ValueError) as err:
             return f"error: {err}"
@@ -394,6 +462,7 @@ class WorkflowTool(Tool):
                 confirmation=args.get("confirmation"),
                 mutation_performed=arg_bool(args, "mutation_performed"),
                 cleanup_status=args.get("cleanup_status"),
+                cleanup_state=args.get("cleanup_state"),
                 deferred_reason=args.get("deferred_reason"),
                 notes=args.get("notes"),
                 recorded_at=datetime.now(UTC).isoformat(),
@@ -671,13 +740,19 @@ class WorkflowTool(Tool):
         if candidate.test_case:
             parameter = f"{parameter} [subcase: {candidate.test_case}]"
         fingerprint = validation_result_fingerprint(result)
+        legacy_observation_ids = tuple(
+            validation_result_fingerprint(previous)
+            for previous in self.state.validation_results
+            if previous.candidate_id == candidate.id
+        )
         await self.coverage.ensure_validation_mark(
             endpoint=endpoint,
             param=parameter,
             vulnClass=candidate.candidate_class,
             status=status,
             notes=f"result={fingerprint[:20]}",
-            observation_id=fingerprint,
+            observation_id=f"candidate:{candidate.id}",
+            legacy_observation_ids=legacy_observation_ids,
         )
         result.coverage_synced = True
 
@@ -766,6 +841,27 @@ class WorkflowTool(Tool):
                             "error: input analysis requires at least one recorded input "
                             "or no_inputs_discovered=true"
                         )
+                phase_coverage = self.state.phase_coverage.get(
+                    f"{objective.id}:{workflow_phase}", {}
+                )
+                required_coverage = PHASE_COVERAGE_DIMENSIONS.get(workflow_phase, ())
+                missing_coverage = [
+                    item for item in required_coverage if item not in phase_coverage
+                ]
+                if missing_coverage:
+                    return (
+                        f"error: {canonical} completion requires explicit coverage "
+                        f"for: {', '.join(missing_coverage)}"
+                    )
+                unresolved_coverage = [
+                    item for item in required_coverage
+                    if phase_coverage[item].status in {"failed", "cancelled"}
+                ]
+                if unresolved_coverage:
+                    return (
+                        f"error: {canonical} has unresolved failed/cancelled coverage: "
+                        f"{', '.join(unresolved_coverage)}; retry or record an explicit skip reason"
+                    )
                 if not artifact_ref:
                     return f"error: {canonical} requires an artifact_ref for phase completion"
                 try:
@@ -774,6 +870,9 @@ class WorkflowTool(Tool):
                         objective_id=objective.id,
                         target_origin=objective.target_origin or "",
                         artifact_ref=artifact_ref,
+                        coverage={
+                            key: phase_coverage[key] for key in required_coverage
+                        },
                         no_inputs_discovered=(
                             workflow_phase == "input_analysis"
                             and arg_bool(args, "no_inputs_discovered")
@@ -792,6 +891,37 @@ class WorkflowTool(Tool):
             "phase": workflow_phase,
             "artifact_ref": self.state.completed_artifacts.get(canonical),
         }, indent=2)
+
+    def _record_phase_coverage(self, args: dict[str, Any]) -> str:
+        objective = self.state.objective
+        if objective is None or objective.mode != "whole_target":
+            return "error: phase coverage requires an active whole-target objective"
+        phase = arg_string(args, "phase")
+        dimension = arg_string(args, "coverage_dimension")
+        status = arg_string(args, "coverage_status")
+        reason = arg_string(args, "coverage_reason") or None
+        if phase not in PHASE_COVERAGE_DIMENSIONS:
+            return "error: phase must be recon or enumeration"
+        if status not in PHASE_COVERAGE_STATUSES:
+            return "error: coverage_status is invalid"
+        try:
+            changed = self.state.record_phase_coverage(
+                cast(WorkflowPhase, phase),
+                dimension,
+                cast(PhaseCoverageStatus, status),
+                objective_id=objective.id,
+                target_origin=objective.target_origin or "",
+                reason=reason,
+            )
+        except ValueError as err:
+            return f"error: {err}"
+        return json.dumps({
+            "ok": True,
+            "phase": phase,
+            "dimension": dimension,
+            "status": status,
+            "changed": changed,
+        })
 
     def _validate_current_objective_candidate(self, candidate_id: str) -> None:
         objective = self.state.objective
@@ -890,6 +1020,14 @@ class WorkflowTool(Tool):
                 "current_phase": self.state.current_phase,
                 "objective": objective.to_dict() if objective else None,
                 "completed_phases": sorted(self.state.completed_phases()),
+                "phase_coverage": {
+                    key: {
+                        dimension: record.to_dict()
+                        for dimension, record in sorted(records.items())
+                    }
+                    for key, records in sorted(self.state.phase_coverage.items())
+                    if objective is not None and key.rpartition(":")[0] == objective.id
+                },
                 "attack_surface_inputs": [
                     item.to_dict() for item in self.state.objective_inputs()
                 ],
@@ -947,6 +1085,7 @@ class WorkflowTool(Tool):
             "repeatable": result.repeatable,
             "mutation_performed": result.mutation_performed,
             "cleanup_status": WorkflowTool._brief(result.cleanup_status),
+            "cleanup_state": result.cleanup_state,
             "deferred_reason": WorkflowTool._brief(result.deferred_reason),
         }
 

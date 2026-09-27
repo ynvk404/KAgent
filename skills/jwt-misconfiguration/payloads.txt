@@ -1,0 +1,19 @@
+# Header/claim test templates only. Never place a real token or signature here.
+
+# Control header metadata for a tester-owned disposable fixture.
+{"typ":"JWT","alg":"HS256"}
+
+# Alternate algorithm header; do not treat rejection of a badly-signed token
+# as proof of an algorithm allowlist. A valid signed fixture is required.
+{"typ":"JWT","alg":"RS256"}
+
+# Synthetic unsigned-token header; use only after explicit authorization and
+# only with a synthetic tester-owned subject on a read-only lab endpoint.
+{"typ":"JWT","alg":"none"}
+
+# One-at-a-time claim validation templates; each needs a separately signed,
+# disposable fixture token to avoid conflating claim checks with signature failure.
+{"exp":1}
+{"nbf":4102444800}
+{"iss":"kagent-unexpected-issuer"}
+{"aud":"kagent-unexpected-audience"}

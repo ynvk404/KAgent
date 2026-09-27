@@ -12,13 +12,16 @@ from src.target.target import Target
 from src.tools.workflow import DEFAULT_LIST_LIMIT, WorkflowTool
 from src.tools.outcome import ToolOutput
 from src.tools.coverage import CoverageTool
+from src.workflow.evidence import EvidenceArtifact
 from src.workflow.state import (
     AttackSurfaceInput,
     Candidate,
     ValidationResult,
     WorkflowObjective,
     WorkflowState,
+    validation_result_fingerprint,
 )
+from tests.helpers.workflow import record_phase_coverage_for_test
 
 
 def _confirmed_sqli_args() -> dict:
@@ -98,6 +101,14 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
         ("csrf", "csrf"),
         ("ssrf", "ssrf"),
         ("ssti", "ssti"),
+        ("nosql-injection", "nosql-injection"),
+        ("path-traversal", "path-traversal"),
+        ("cors-misconfiguration", "cors-misconfiguration"),
+        ("open-redirect", "open-redirect"),
+        ("jwt-misconfiguration", "jwt-misconfiguration"),
+        ("file-upload", "file-upload"),
+        ("command-injection", "command-injection"),
+        ("xxe", "xxe"),
     )
     for index, (candidate_class, validator) in enumerate(cases):
         response = json.loads(await tool.run(
@@ -113,14 +124,14 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
         assert response["candidate"]["status"] == "queued"
 
     unsupported = json.loads(await tool.run(
-        {"action": "record_candidate", "candidate_class": "open-redirect", "endpoint": "/redirect"},
+        {"action": "record_candidate", "candidate_class": "unhandled-class", "endpoint": "/redirect"},
         None, AlwaysAllow(),
     ))
     assert unsupported["supported"] is False
     assert unsupported["recommended_skills"] == []
     assert unsupported["candidate"]["status"] == "deferred"
     forced = json.loads(await tool.run(
-        {"action": "record_candidate", "candidate_class": "open-redirect",
+        {"action": "record_candidate", "candidate_class": "unhandled-class",
          "endpoint": "/redirect-2", "status": "queued"},
         None, AlwaysAllow(),
     ))
@@ -183,11 +194,189 @@ async def test_confirmed_requires_registered_candidate_evidence(tmp_path):
     assert "must resolve" in await tool.run(
         {**base, "evidence_refs": ["ev_invented"]}, None, AlwaysAllow(),
     )
-    (tmp_path / "proof.txt").write_text("Changed proof", encoding="utf-8")
+    (tmp_path / state.evidence[evidence].path).unlink()
     assert "changed or is unavailable" in await tool.run(
         {**base, "candidate_id": first.id, "evidence_refs": [evidence]}, None, AlwaysAllow(),
     )
     assert state.validation_results == []
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_snapshots_mutable_shared_artifact_per_candidate(tmp_path):
+    state = WorkflowState()
+    first, _ = state.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test", endpoint="/login",
+    ))
+    second, _ = state.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test", endpoint="/search",
+    ))
+    tool = WorkflowTool(state, evidence_root=tmp_path)
+    aggregate = tmp_path / "results.md"
+    aggregate.write_text(
+        "Candidate A proof\nCookie: session=raw-sensitive-value\n",
+        encoding="utf-8",
+    )
+
+    first_result = json.loads(await tool.run({
+        "action": "record_evidence", "candidate_id": first.id,
+        "evidence_path": "results.md",
+    }, None, AlwaysAllow()))
+    first_artifact = state.evidence[first_result["evidence"]["id"]]
+    first_snapshot = tmp_path / first_artifact.path
+    assert ".kagent/evidence/" in first_artifact.path
+    assert "raw-sensitive-value" not in first_snapshot.read_text(encoding="utf-8")
+    assert first_snapshot.stat().st_mode & 0o222 == 0
+    assert first_snapshot.parent.stat().st_mode & 0o077 == 0
+
+    aggregate.write_text("Candidate B proof, independently captured\n", encoding="utf-8")
+    second_result = json.loads(await tool.run({
+        "action": "record_evidence", "candidate_id": second.id,
+        "evidence_path": "results.md",
+    }, None, AlwaysAllow()))
+    second_artifact = state.evidence[second_result["evidence"]["id"]]
+
+    assert first_artifact.path != second_artifact.path
+    assert first_artifact.is_resolvable(tmp_path)
+    assert second_artifact.is_resolvable(tmp_path)
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert restored.evidence[first_artifact.id].is_resolvable(tmp_path)
+    assert restored.evidence[second_artifact.id].is_resolvable(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_validation_attempts_share_one_logical_coverage_observation(tmp_path):
+    coverage_path = tmp_path / "coverage.json"
+    coverage = CoverageStore(str(coverage_path))
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="cross-site-scripting", target="https://target.test",
+        method="POST", endpoint="/feedback", parameter="comment",
+    ))
+    tool = WorkflowTool(state, coverage=coverage, evidence_root=tmp_path)
+    aggregate = tmp_path / "results.md"
+
+    aggregate.write_text("First attempt: no execution marker\n", encoding="utf-8")
+    first_evidence = json.loads(await tool.run({
+        "action": "record_evidence", "candidate_id": candidate.id,
+        "evidence_path": "results.md",
+    }, None, AlwaysAllow()))["evidence"]["id"]
+    first = json.loads(await tool.run({
+        "action": "record_result", "candidate_id": candidate.id,
+        "skill_name": "cross-site-scripting", "outcome": "not-confirmed",
+        "evidence_refs": [first_evidence], "techniques": ["baseline"],
+    }, None, AlwaysAllow()))
+    assert first["coverage_sync"] == "synced"
+
+    aggregate.write_text("Second attempt: reproducible execution marker\n", encoding="utf-8")
+    second_evidence = json.loads(await tool.run({
+        "action": "record_evidence", "candidate_id": candidate.id,
+        "evidence_path": "results.md",
+    }, None, AlwaysAllow()))["evidence"]["id"]
+    await tool.run({
+        "action": "start_validation", "candidate_id": candidate.id,
+    }, None, AlwaysAllow())
+    second = json.loads(await tool.run({
+        "action": "record_result", "candidate_id": candidate.id,
+        "skill_name": "cross-site-scripting", "outcome": "confirmed",
+        "evidence_refs": [second_evidence], "techniques": ["reflected marker"],
+        "repeatable": True,
+    }, None, AlwaysAllow()))
+
+    assert second["coverage_sync"] == "synced"
+    assert len(state.validation_results) == 2
+    entries = await coverage.list()
+    assert len(entries) == 1
+    assert entries[0].status == "failed"
+    assert entries[0].count == 1
+    assert entries[0].observationIds == [f"candidate:{candidate.id}"]
+
+    restored_coverage = CoverageStore(str(coverage_path))
+    restored_entries = await restored_coverage.list()
+    assert len(restored_entries) == 1
+    assert restored_entries[0].count == 1
+    assert restored_entries[0].status == "failed"
+    restored_state = WorkflowState.from_dict(state.to_dict())
+    assert len(restored_state.validation_results) == 2
+    latest = restored_state.latest_result(candidate.id)
+    assert latest is not None
+    assert latest.evidence_refs == [second_evidence]
+
+
+@pytest.mark.asyncio
+async def test_legacy_attempt_observations_collapse_to_candidate_identity(tmp_path):
+    coverage = CoverageStore(str(tmp_path / "legacy-coverage.json"))
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="cross-site-scripting", target="https://target.test",
+        method="POST", endpoint="/feedback", parameter="comment",
+    ))
+    first = ValidationResult(
+        candidate.id, "cross-site-scripting", "not-confirmed",
+        evidence_refs=["ev_first"], techniques=["baseline"],
+        coverage_synced=True,
+    )
+    second = ValidationResult(
+        candidate.id, "cross-site-scripting", "not-confirmed",
+        evidence_refs=["ev_second"], techniques=["baseline"],
+        coverage_synced=False,
+    )
+    state.add_validation_result(first)
+    state.add_validation_result(second, force=True)
+    for result in (first, second):
+        await coverage.mark(
+            endpoint="POST /feedback", param="comment",
+            vulnClass="cross-site-scripting", status="passed",
+            observation_id=validation_result_fingerprint(result),
+        )
+    before = await coverage.list()
+    assert before[0].count == 2
+
+    tool = WorkflowTool(state, coverage=coverage)
+    synced = json.loads(await tool.run({
+        "action": "sync_coverage", "candidate_id": candidate.id,
+    }, None, AlwaysAllow()))
+
+    assert synced == {"ok": True, "coverage_sync": "synced"}
+    after = await coverage.list()
+    assert len(after) == 1
+    assert after[0].count == 1
+    assert after[0].observationIds == [f"candidate:{candidate.id}"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_lifecycle_updates_without_creating_a_new_validation_attempt(tmp_path):
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="cross-site-scripting", target="https://target.test",
+        endpoint="/feedback", parameter="comment",
+    ))
+    tool = WorkflowTool(state, evidence_root=tmp_path)
+    proof = tmp_path / "proof.md"
+    proof.write_text("Bounded proof for the confirmed behavior.", encoding="utf-8")
+    evidence = json.loads(await tool.run({
+        "action": "record_evidence", "candidate_id": candidate.id,
+        "evidence_path": "proof.md",
+    }, None, AlwaysAllow()))["evidence"]["id"]
+
+    pending = json.loads(await tool.run({
+        "action": "record_result", "candidate_id": candidate.id,
+        "skill_name": "cross-site-scripting", "outcome": "confirmed",
+        "evidence_refs": [evidence], "mutation_performed": True,
+        "cleanup_status": "waiting for separate permission",
+    }, None, AlwaysAllow()))
+    assert pending["result"]["cleanup_state"] == "pending"
+    assert pending["eligible_for_confirm_finding"] is True
+
+    succeeded = json.loads(await tool.run({
+        "action": "record_result", "candidate_id": candidate.id,
+        "skill_name": "cross-site-scripting", "outcome": "confirmed",
+        "evidence_refs": [evidence], "mutation_performed": True,
+        "cleanup_status": "resource deletion verified",
+        "cleanup_state": "succeeded",
+    }, None, AlwaysAllow()))
+    assert succeeded["created"] is False
+    assert succeeded["result"]["cleanup_state"] == "succeeded"
+    assert len(state.validation_results) == 1
 
 
 @pytest.mark.asyncio
@@ -437,6 +626,75 @@ async def test_non_terminal_validation_outcomes_remain_revisitable(tmp_path):
         assert state.set_candidate_status(candidate.id, "queued").status == "queued"
     rows = await coverage.list()
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_start_validation_rejects_terminal_whole_target_candidate_without_retest():
+    objective = WorkflowObjective(
+        id="whole-objective", mode="whole_target", target_origin="https://target.test",
+    )
+    state = WorkflowState(objective=objective)
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="xss", target="https://target.test", endpoint="/search",
+        objective_id=objective.id,
+    ))
+    state.add_validation_result(ValidationResult(
+        candidate.id, "cross-site-scripting", "not-confirmed",
+    ))
+    tool = WorkflowTool(state, Target("https://target.test"))
+
+    blocked = await tool.run({
+        "action": "start_validation", "candidate_id": candidate.id,
+    }, None, AlwaysAllow())
+
+    assert blocked.startswith("error: terminal candidate cannot be reopened")
+    assert candidate.status == "validated"
+
+    # A prior structured requeue is an explicit workflow state transition.
+    state.set_candidate_status(candidate.id, "queued")
+    reopened = await tool.run({
+        "action": "start_validation", "candidate_id": candidate.id,
+    }, None, AlwaysAllow())
+    assert json.loads(reopened)["candidate"]["status"] == "validating"
+
+    state.set_candidate_status(candidate.id, "validated")
+    state.objective = WorkflowObjective(
+        id="explicit-retest", mode="candidate_validation",
+        target_origin="https://target.test", candidate_id=candidate.id,
+    )
+    explicit_retest = await tool.run({
+        "action": "start_validation", "candidate_id": candidate.id,
+    }, None, AlwaysAllow())
+    assert json.loads(explicit_retest)["candidate"]["status"] == "validating"
+
+
+@pytest.mark.asyncio
+async def test_start_validation_allows_broken_terminal_evidence_to_be_repaired(tmp_path):
+    objective = WorkflowObjective(
+        id="whole-objective", mode="whole_target", target_origin="https://target.test",
+    )
+    state = WorkflowState(objective=objective)
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test",
+        endpoint="/search", objective_id=objective.id,
+    ))
+    proof = tmp_path / "proof.md"
+    proof.write_text("first proof bytes", encoding="utf-8")
+    artifact = EvidenceArtifact.capture(candidate.id, "proof.md", tmp_path)
+    state.add_evidence(artifact)
+    state.add_validation_result(ValidationResult(
+        candidate.id, "sql-injection", "confirmed", evidence_refs=[artifact.id],
+    ))
+    proof.write_text("changed proof bytes", encoding="utf-8")
+    tool = WorkflowTool(
+        state, Target("https://target.test"), evidence_root=tmp_path,
+    )
+
+    reopened = await tool.run({
+        "action": "start_validation", "candidate_id": candidate.id,
+    }, None, AlwaysAllow())
+
+    assert json.loads(reopened)["candidate"]["status"] == "validating"
 
 
 @pytest.mark.asyncio
@@ -940,10 +1198,12 @@ async def test_whole_target_phase_completion_checks_order_and_inventory(tmp_path
 
     recon_ref = "artifacts/recon/target-test/summary.md"
     create_artifact(recon_ref)
+    await record_phase_coverage_for_test(tool, "recon")
     recon = json.loads(await tool.run({
         "action": "complete_skill", "skill_name": "recon",
     }, None, AlwaysAllow()))
     assert recon["phase"] == "recon"
+    await record_phase_coverage_for_test(tool, "enumeration")
     enumeration = json.loads(await tool.run({
         "action": "complete_skill", "skill_name": "web-enumeration",
     }, None, AlwaysAllow()))
@@ -975,6 +1235,61 @@ async def test_whole_target_phase_completion_checks_order_and_inventory(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_whole_target_recon_completion_requires_explicit_resolved_coverage(tmp_path):
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    state = whole_target_tool_state()
+    tool = WorkflowTool(
+        state,
+        Target("https://target.test"),
+        skills=skills,
+        evidence_root=tmp_path,
+    )
+    artifact = tmp_path / "artifacts/recon/target-test/summary.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("recon summary", encoding="utf-8")
+
+    missing = await tool.run(
+        {"action": "complete_skill", "skill_name": "recon"}, None, AlwaysAllow()
+    )
+    assert "requires explicit coverage" in missing
+    assert state.completed_phases() == frozenset()
+
+    no_reason = await tool.run({
+        "action": "record_phase_coverage", "phase": "recon",
+        "coverage_dimension": "service_discovery", "coverage_status": "skipped",
+    }, None, AlwaysAllow())
+    assert isinstance(no_reason, ToolOutput) and no_reason.status == "error"
+    assert "requires a reason" in no_reason
+
+    await record_phase_coverage_for_test(tool, "recon")
+    await tool.run({
+        "action": "record_phase_coverage", "phase": "recon",
+        "coverage_dimension": "reachability", "coverage_status": "failed",
+        "coverage_reason": "temporary DNS failure",
+    }, None, AlwaysAllow())
+    unresolved = await tool.run(
+        {"action": "complete_skill", "skill_name": "recon"}, None, AlwaysAllow()
+    )
+    assert "unresolved failed/cancelled coverage" in unresolved
+    assert state.completed_phases() == frozenset()
+
+    await tool.run({
+        "action": "record_phase_coverage", "phase": "recon",
+        "coverage_dimension": "reachability", "coverage_status": "skipped",
+        "coverage_reason": "target unavailable after bounded retry",
+    }, None, AlwaysAllow())
+    completed = json.loads(await tool.run(
+        {"action": "complete_skill", "skill_name": "recon"}, None, AlwaysAllow()
+    ))
+    assert completed["phase"] == "recon"
+    marker = state.phase_completions["objective-active:recon"]
+    assert marker.coverage["reachability"].status == "skipped"
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert restored.phase_completions["objective-active:recon"].coverage == marker.coverage
+
+
+@pytest.mark.asyncio
 async def test_whole_target_explicit_no_input_completion_is_persisted(tmp_path):
     skills = SkillRegistry()
     skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
@@ -995,6 +1310,7 @@ async def test_whole_target_explicit_no_input_completion_is_persisted(tmp_path):
         path.write_text("bounded work completed", encoding="utf-8")
 
     for skill_name in ("recon", "web-enumeration"):
+        await record_phase_coverage_for_test(tool, "recon" if skill_name == "recon" else "enumeration")
         output = await tool.run(
             {"action": "complete_skill", "skill_name": skill_name},
             None,

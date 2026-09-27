@@ -199,6 +199,113 @@ def test_structured_analysis_handoff_selects_matching_validator(
     assert plan.recommended_skill == expected
 
 
+def test_whole_target_prioritizes_pending_finding_persistence():
+    candidate_id = "cand_confirmed"
+    context = PlannerContext(
+        objective_mode="whole_target",
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        completed_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        candidates=(PlannerCandidate(
+            id=candidate_id,
+            candidate_class="sql-injection",
+            status="validated",
+            latest_outcome="confirmed",
+            evidence_count=1,
+            coverage_synced=True,
+        ),),
+        pending_finding_candidate_ids=(candidate_id,),
+        workflow_status="actionable",
+    )
+
+    plan = build_decision_plan(
+        "continue the assessment", shipped_skills(), Target("https://target.test"), context,
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill is None
+    assert plan.candidate_id == candidate_id
+    assert "confirm_finding" in plan.guidance
+    assert "do not repeat live validation" in plan.guidance
+
+
+def test_whole_target_revalidates_only_when_structured_evidence_is_invalid():
+    candidate_id = "cand_confirmed"
+    context = PlannerContext(
+        objective_mode="whole_target",
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        completed_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        candidates=(PlannerCandidate(
+            id=candidate_id,
+            candidate_class="sql-injection",
+            status="validated",
+            latest_outcome="confirmed",
+            evidence_count=1,
+            coverage_synced=True,
+        ),),
+        revalidation_candidate_ids=(candidate_id,),
+        workflow_status="actionable",
+    )
+
+    plan = build_decision_plan(
+        "continue the assessment", shipped_skills(), Target("https://target.test"), context,
+    )
+
+    assert plan is not None and plan.recommended_skill == "sql-injection"
+    assert plan.candidate_id == candidate_id
+    assert "evidence repair" in plan.guidance
+    assert "not a general retest" in plan.guidance
+
+
+def test_whole_target_cleanup_plan_requires_fresh_operator_and_action_permission():
+    candidate_id = "cand_mutated"
+    context = PlannerContext(
+        objective_mode="whole_target",
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        completed_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        candidates=(PlannerCandidate(
+            id=candidate_id,
+            candidate_class="access-control",
+            status="validated",
+            latest_outcome="confirmed",
+        ),),
+        pending_cleanup_candidate_ids=(candidate_id,),
+        workflow_status="actionable",
+    )
+
+    plan = build_decision_plan(
+        "continue the assessment", shipped_skills(), Target("https://target.test"), context,
+    )
+
+    assert plan is not None and plan.recommended_skill is None
+    assert plan.candidate_id == candidate_id
+    assert "Ask the operator" in plan.guidance
+    assert "Do not infer DELETE/rollback permission" in plan.guidance
+
+
+def test_explicit_candidate_revalidation_remains_available_for_terminal_candidate():
+    candidate_id = "cand_terminal"
+    context = PlannerContext(
+        objective_mode="candidate_validation",
+        candidates=(PlannerCandidate(
+            id=candidate_id,
+            candidate_class="sql-injection",
+            status="validated",
+            latest_outcome="confirmed",
+            evidence_count=1,
+        ),),
+    )
+
+    plan = build_decision_plan(
+        f"Revalidate candidate {candidate_id}", shipped_skills(), Target(), context,
+    )
+
+    assert plan is not None and plan.recommended_skill == "sql-injection"
+    assert plan.candidate_id == candidate_id
+
+
 def test_multiple_structured_candidate_classes_remain_ambiguous():
     workflow = WorkflowState()
     workflow.add_candidate(Candidate(candidate_class="sqli", endpoint="/a"))

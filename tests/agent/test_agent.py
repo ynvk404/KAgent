@@ -77,6 +77,7 @@ from tests.helpers.agent_fakes import (
     collect,
     seed_compactable_history,
 )
+from tests.helpers.workflow import record_completed_phase
 
 
 @pytest.mark.asyncio
@@ -2972,6 +2973,261 @@ def whole_target_agent(
     return agent, client
 
 
+class RecordingHTTPTool:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def name(self) -> str:
+        return "http"
+
+    def description(self) -> str:
+        return "test HTTP request recorder"
+
+    def schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {"url": {"type": "string"}}}
+
+    def requires_permission(self) -> bool:
+        return False
+
+    def resolve_url(self, raw: str) -> str:
+        if raw.startswith(("http://", "https://")):
+            return raw
+        return f"https://target.test/{raw.lstrip('/')}"
+
+    async def run(self, args: dict[str, Any], signal, prompter) -> str:
+        self.calls.append(args)
+        return "request recorded"
+
+
+def terminal_whole_target_with_evidence(
+    tmp_path: Path,
+    *,
+    candidate_class: str = "sql-injection",
+    endpoint: str = "/search",
+    method: str = "GET",
+    parameter: str | None = "q",
+    location: str | None = "query",
+):
+    objective = WorkflowObjective(
+        id="whole-objective", mode="whole_target", target_origin="https://target.test",
+    )
+    state = WorkflowState(objective=objective)
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class=candidate_class, target="https://target.test",
+        endpoint=endpoint, method=method, parameter=parameter, location=location,
+        objective_id=objective.id,
+    ))
+    proof_path = tmp_path / "proof.md"
+    proof_path.write_text("Reproducible request/response evidence", encoding="utf-8")
+    artifact = EvidenceArtifact.capture_immutable_snapshot(
+        candidate.id, "proof.md", tmp_path,
+    )
+    state.add_evidence(artifact)
+    state.add_validation_result(ValidationResult(
+        candidate.id, candidate_class, "confirmed", evidence_refs=[artifact.id],
+    ))
+    return state, candidate, artifact
+
+
+def terminal_blocker_agent(tmp_path: Path, state: WorkflowState) -> Agent:
+    target = Target("https://target.test")
+    agent, _ = whole_target_agent(
+        [],
+        [
+            RecordingHTTPTool(),
+            WorkflowTool(state, target, evidence_root=tmp_path),
+        ],
+        workflow=state,
+    )
+    return agent
+
+
+def test_terminal_blocker_allows_different_vuln_class_same_param(tmp_path):
+    state, candidate, _artifact = terminal_whole_target_with_evidence(
+        tmp_path, endpoint="/rest/products/search",
+    )
+    agent = terminal_blocker_agent(tmp_path, state)
+    agent.active_skills.add("cross-site-scripting")
+
+    blocker = agent._terminal_candidate_probe_blocker(
+        "http", {"method": "GET", "url": "/rest/products/search?q=1"},
+    )
+
+    assert candidate.candidate_class == "sql-injection"
+    assert blocker is None
+
+
+def test_terminal_blocker_allows_different_param_same_endpoint(tmp_path):
+    state, _candidate, _artifact = terminal_whole_target_with_evidence(
+        tmp_path,
+        candidate_class="access-control",
+        endpoint="/api/users",
+        method="POST",
+        parameter="role",
+        location="body",
+    )
+    agent = terminal_blocker_agent(tmp_path, state)
+    agent.active_skills.add("access-control")
+
+    blocker = agent._terminal_candidate_probe_blocker(
+        "http",
+        {"method": "POST", "url": "/api/users", "body": "email=test"},
+    )
+
+    assert blocker is None
+
+
+@pytest.mark.parametrize(
+    ("parameter", "location"),
+    [("item_id", "path"), ("", None)],
+)
+def test_terminal_blocker_path_candidate_does_not_wildcard_params(
+    tmp_path, parameter, location,
+):
+    state, _candidate, _artifact = terminal_whole_target_with_evidence(
+        tmp_path,
+        endpoint="/api/items",
+        parameter=parameter,
+        location=location,
+    )
+    agent = terminal_blocker_agent(tmp_path, state)
+
+    blocker = agent._terminal_candidate_probe_blocker(
+        "http", {"method": "GET", "url": "/api/items?search=test"},
+    )
+
+    assert blocker is None
+
+
+def test_terminal_blocker_respects_validating_lease(tmp_path):
+    state, candidate, _artifact = terminal_whole_target_with_evidence(tmp_path)
+    candidate.status = "validating"
+    agent = terminal_blocker_agent(tmp_path, state)
+
+    blocker = agent._terminal_candidate_probe_blocker(
+        "http", {"method": "GET", "url": "/search?q=1"},
+    )
+
+    assert blocker is None
+
+
+def test_terminal_blocker_blocks_exact_duplicate(tmp_path):
+    state, candidate, _artifact = terminal_whole_target_with_evidence(tmp_path)
+    agent = terminal_blocker_agent(tmp_path, state)
+    agent.active_skills.add("sql-injection")
+
+    blocker = agent._terminal_candidate_probe_blocker(
+        "http", {"method": "GET", "url": "/search?q=1"},
+    )
+
+    assert blocker is not None
+    assert "repeated active request blocked" in blocker
+    assert candidate.id in blocker
+
+
+@pytest.mark.asyncio
+async def test_whole_target_blocks_repeat_of_terminal_candidate_but_keeps_finding_actionable(tmp_path):
+    class RecordingShellTool:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def name(self) -> str:
+            return "shell"
+
+        def description(self) -> str:
+            return "test shell recorder"
+
+        def schema(self) -> dict[str, Any]:
+            return {"type": "object", "properties": {"command": {"type": "string"}}}
+
+        def requires_permission(self) -> bool:
+            return False
+
+        async def run(self, args: dict[str, Any], signal, prompter) -> str:
+            self.calls += 1
+            return "command recorded"
+
+    state, candidate, _artifact = terminal_whole_target_with_evidence(tmp_path)
+    http = RecordingHTTPTool()
+    shell = RecordingShellTool()
+    target = Target("https://target.test")
+    workflow_tool = WorkflowTool(state, target, evidence_root=tmp_path)
+    agent, _ = whole_target_agent([], [http, shell, workflow_tool], workflow=state)
+    args = {"method": "GET", "url": "/search?q=again"}
+    call = agent_tool_call("repeat", "http", args)
+
+    result = await agent.run_parsed_tool_call(
+        call, ParsedToolCall(args, json.dumps(args)), FakeSignal(),
+    )
+
+    assert "repeated active request blocked" in result.err_str
+    assert candidate.id in result.err_str
+    assert http.calls == []
+
+    curl_args = {"command": "curl -s 'https://target.test/search?q=again'"}
+    curl_result = await agent.run_parsed_tool_call(
+        agent_tool_call("repeat-curl", "shell", curl_args),
+        ParsedToolCall(curl_args, json.dumps(curl_args)), FakeSignal(),
+    )
+    assert "repeated active request blocked" in curl_result.err_str
+    assert shell.calls == 0
+    _status, actionable, _blockers = agent._whole_target_state()
+    assert f"finding:{candidate.id}" in actionable
+
+
+@pytest.mark.asyncio
+async def test_whole_target_probe_gate_allows_unrelated_parameter_and_explicit_retest(tmp_path):
+    state, candidate, _artifact = terminal_whole_target_with_evidence(tmp_path)
+    http = RecordingHTTPTool()
+    target = Target("https://target.test")
+    agent, _ = whole_target_agent(
+        [], [http, WorkflowTool(state, target, evidence_root=tmp_path)], workflow=state,
+    )
+    unrelated = {"method": "GET", "url": "/search?sort=recent"}
+    unrelated_result = await agent.run_parsed_tool_call(
+        agent_tool_call("unrelated", "http", unrelated),
+        ParsedToolCall(unrelated, json.dumps(unrelated)), FakeSignal(),
+    )
+    assert unrelated_result.err_str == ""
+    assert len(http.calls) == 1
+
+    # A candidate-validation objective is only selected from an explicit user
+    # request to validate that candidate again, so it must remain usable.
+    state.objective = WorkflowObjective(
+        id="explicit-retest", mode="candidate_validation",
+        target_origin="https://target.test", candidate_id=candidate.id,
+    )
+    repeated = {"method": "GET", "url": "/search?q=again"}
+    repeated_result = await agent.run_parsed_tool_call(
+        agent_tool_call("explicit-retest", "http", repeated),
+        ParsedToolCall(repeated, json.dumps(repeated)), FakeSignal(),
+    )
+    assert repeated_result.err_str == ""
+    assert len(http.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_whole_target_probe_gate_reopens_candidate_when_evidence_is_broken(tmp_path):
+    state, candidate, artifact = terminal_whole_target_with_evidence(tmp_path)
+    (tmp_path / artifact.path).unlink()
+    http = RecordingHTTPTool()
+    target = Target("https://target.test")
+    agent, _ = whole_target_agent(
+        [], [http, WorkflowTool(state, target, evidence_root=tmp_path)], workflow=state,
+    )
+    args = {"method": "GET", "url": "/search?q=again"}
+
+    result = await agent.run_parsed_tool_call(
+        agent_tool_call("broken-proof", "http", args),
+        ParsedToolCall(args, json.dumps(args)), FakeSignal(),
+    )
+
+    assert result.err_str == ""
+    assert len(http.calls) == 1
+    _status, actionable, _blockers = agent._whole_target_state()
+    assert f"revalidate:{candidate.id}" in actionable
+
+
 def agent_tool_call(call_id: str, name: str, args: dict[str, Any] | None = None) -> ToolCall:
     return ToolCall(
         id=call_id,
@@ -3001,7 +3257,8 @@ async def test_whole_target_early_final_is_buffered_and_continues_to_runtime_com
             assert self.state is not None and self.state.objective is not None
             objective = self.state.objective
             for phase in ("recon", "enumeration", "input_analysis"):
-                self.state.record_phase_completion(
+                record_completed_phase(
+                    self.state,
                     phase,
                     objective_id=objective.id,
                     target_origin=objective.target_origin or "",
@@ -3115,7 +3372,8 @@ async def test_whole_target_meaningful_progress_resets_stall_counter():
             if self.calls == 3:
                 assert self.state is not None and self.state.objective is not None
                 objective = self.state.objective
-                self.state.record_phase_completion(
+                record_completed_phase(
+                    self.state,
                     "recon", objective_id=objective.id,
                     target_origin=objective.target_origin or "",
                     artifact_ref="artifacts/recon.md",
@@ -3165,12 +3423,111 @@ async def test_malformed_tool_call_retry_counts_as_one_outer_no_progress_iterati
 
 
 @pytest.mark.asyncio
+async def test_whole_target_retries_pending_finding_after_malformed_call(tmp_path):
+    class PersistFindingTool(Tool):
+        def __init__(self, workflow: WorkflowState) -> None:
+            self.workflow = workflow
+            self.calls = 0
+
+        def name(self) -> str:
+            return "confirm_finding"
+
+        def description(self) -> str:
+            return "persist a confirmed finding"
+
+        def schema(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        def requires_permission(self) -> bool:
+            return False
+
+        async def run(self, args, signal, prompter) -> str:
+            self.calls += 1
+            self.workflow.mark_finding_persisted(args["candidate_id"])
+            return "finding persisted"
+
+    state = WorkflowState(objective=WorkflowObjective(
+        id="objective-finding", mode="whole_target",
+        target_origin="https://target.test",
+    ))
+    for phase in ("recon", "enumeration", "input_analysis"):
+        record_completed_phase(
+            state,
+            phase,  # type: ignore[arg-type]
+            objective_id="objective-finding",
+            target_origin="https://target.test",
+            artifact_ref=f"artifacts/{phase}.md",
+            no_inputs_discovered=phase == "input_analysis",
+        )
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="xss", target="https://target.test", endpoint="/search",
+        method="GET", parameter="q", objective_id="objective-finding",
+    ))
+    proof = EvidenceArtifact(
+        "ev_proof", candidate.id, "artifacts/proof.md", "a" * 64, 1,
+    )
+    state.add_evidence(proof)
+    state.add_validation_result(ValidationResult(
+        candidate.id, "cross-site-scripting", "confirmed",
+        evidence_refs=[proof.id], coverage_synced=True,
+    ))
+    finding_tool = PersistFindingTool(state)
+    finding_args = {
+        "candidate_id": candidate.id,
+        "title": "Reflected XSS",
+        "severity": "medium",
+        "url": "https://target.test/search?q=proof",
+        "method": "GET",
+        "parameter": "q",
+        "observed_impact": "Script execution was demonstrated.",
+        "potential_impact": "No additional impact assessed.",
+    }
+    malformed = ChatResponse(
+        message=Message(role="assistant", content=MALFORMED_TOOL_CALL_TEXT),
+        finish_reason="stop",
+    )
+    agent, client = whole_target_agent([
+        malformed,
+        ChatResponse(
+            message=Message(role="assistant", content="No structured call was made."),
+            finish_reason="stop",
+        ),
+        tool_batch(agent_tool_call("persist", "confirm_finding", finding_args)),
+        ChatResponse(
+            message=Message(role="assistant", content="Assessment complete."),
+            finish_reason="stop",
+        ),
+    ], [finding_tool], workflow=state)
+    collector = collect()
+
+    await asyncio.wait_for(
+        agent.run(
+            "Continue from where you stopped and finish the current task.",
+            FakeSignal(), collector["sink"],
+        ),
+        timeout=3,
+    )
+
+    assert state.finding_is_persisted(candidate.id)
+    assert finding_tool.calls == 1
+    assert collector["events"][-1].stop_reason == "workflow_completed"
+    assert len(client.requests) == 4
+    assert any(
+        "confirm_finding" in message.content
+        and "do not repeat live validation" in message.content
+        for message in client.requests[2].messages
+        if message.role == "system"
+    )
+
+
+@pytest.mark.asyncio
 async def test_whole_target_blocker_uses_blocked_stop_reason():
     state = WorkflowState(objective=WorkflowObjective(
         id="objective-blocked", mode="whole_target", target_origin="https://target.test",
     ))
     for phase in ("recon", "enumeration"):
-        state.record_phase_completion(
+        record_completed_phase(
+            state,
             phase, objective_id="objective-blocked", target_origin="https://target.test",
             artifact_ref=f"artifacts/{phase}.md",
         )
@@ -3251,7 +3608,8 @@ def test_authorization_followup_keeps_candidate_blocker_in_same_objective():
         id="whole-objective", mode="whole_target", target_origin="https://target.test",
     ))
     for phase in ("recon", "enumeration", "input_analysis"):
-        state.record_phase_completion(
+        record_completed_phase(
+            state,
             phase, objective_id="whole-objective", target_origin="https://target.test",
             artifact_ref=f"artifacts/{phase}.md",
             no_inputs_discovered=phase == "input_analysis",
@@ -5343,6 +5701,7 @@ async def test_confirm_finding_success_and_path_reach_immediate_next_request(tmp
     assert raw == llm_facing
     assert 'Finding "Reflected XSS" written to' in llm_facing
     assert str(report) in llm_facing
+    assert workflow.finding_is_persisted(candidate.id)
 
 
 @pytest.mark.asyncio

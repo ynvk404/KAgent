@@ -1,0 +1,13 @@
+# NoSQL query-shape validation vectors.
+# Use only against a read-only lab endpoint or a tester-owned synthetic fixture.
+# Never substitute a broad operator that returns unrelated records.
+
+# Detection/control: ordinary scalar marker, preserving the original JSON type.
+KAGENT_NOSQL_MARKER
+
+# Confirmation candidate: narrow equality against a known tester-owned marker.
+{"$eq":"KAGENT_NOSQL_MARKER"}
+
+# Edge case: a JSON scalar/object type change is not confirmation unless the
+# response difference is repeatable and tied to query-operator interpretation.
+{"$eq":"KAGENT_NOSQL_MARKER","$type":"string"}

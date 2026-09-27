@@ -31,6 +31,24 @@ PAYLOAD_CALL_RE = re.compile(
     r'read_payloads\(skill="([a-z0-9-]+)",\s*file="([^"\n]+)"'
 )
 TOOL_SKILL_EXAMPLE_RE = re.compile(r'skill="([a-z0-9-]+)"')
+NEW_VALIDATION_SKILLS = {
+    "nosql-injection": "nosql-injection",
+    "path-traversal": "path-traversal",
+    "cors-misconfiguration": "cors-misconfiguration",
+    "open-redirect": "open-redirect",
+    "jwt-misconfiguration": "jwt-misconfiguration",
+    "file-upload": "file-upload",
+    "command-injection": "command-injection",
+    "xxe": "xxe",
+}
+FORBIDDEN_VECTOR_RE = re.compile(
+    r"(?i)(?:\brm(?:\s+-[rf]+)?\b|\b(?:nc|netcat|ncat)\s+-[le]\b|"
+    r"/dev/tcp|\b(?:reverse|bind)\s+shell\b|<\?php|<script\b|"
+    r"document\.cookie|file:///etc/passwd|/proc/self/environ|"
+    r"\b(?:mkfs|shutdown|reboot|crontab|systemctl)\b|"
+    r"\b(?:drop\s+database|truncate\s+table|union\s+select)\b|"
+    r"\b(?:password|passwd|credential|api[_-]?key)\b)"
+)
 
 
 @pytest.fixture(scope="module")
@@ -44,10 +62,12 @@ def test_shipped_skills_have_valid_selection_metadata(shipped_registry):
     known_tools = {
         "ask_user",
         "confirm_finding",
+        "content_discovery",
         "file_write",
         "http",
         "read_payloads",
         "shell",
+        "service_discovery",
         "workflow",
     }
     known_skills = {skill.name for skill in shipped_registry.list()}
@@ -189,3 +209,48 @@ def test_documented_conformance_test_path_exists():
     assert matches
     for relative_path in matches:
         assert (REPO_ROOT / relative_path).is_file()
+
+
+@pytest.mark.asyncio
+async def test_new_validation_skills_have_expected_metadata_and_vectors(
+    shipped_registry,
+):
+    known_tools = {
+        "ask_user",
+        "confirm_finding",
+        "file_write",
+        "http",
+        "read_payloads",
+        "workflow",
+    }
+    payload_tool = ReadPayloadsTool(shipped_registry)
+
+    for skill_name, candidate_class in NEW_VALIDATION_SKILLS.items():
+        skill = shipped_registry.get(skill_name)
+        assert skill is not None, f"{skill_name} was not discovered"
+        assert skill.stage == "validation"
+        assert skill.candidate_classes == [candidate_class]
+        assert "web-input-analysis" in skill.requires
+        assert {"http", "read_payloads", "workflow", "confirm_finding"} <= set(
+            skill.tools
+        )
+        assert skill.completion_artifact == (
+            f"artifacts/{skill_name}/{{target}}/results.md"
+        )
+        assert validate_skill(skill, known_tools, {item.name for item in shipped_registry.list()}) == []
+
+        payload_path = SKILLS_ROOT / skill_name / "payloads.txt"
+        payload_text = payload_path.read_text(encoding="utf-8")
+        live_vectors = "\n".join(
+            line for line in payload_text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+        assert not FORBIDDEN_VECTOR_RE.search(live_vectors), skill_name
+
+        output = await payload_tool.run(
+            {"skill": skill_name, "file": "payloads.txt"},
+            None,
+            AlwaysAllow(),
+        )
+        assert not output.startswith("error:"), output
+        assert not output.startswith(f'skill "{skill_name}" has no payload')

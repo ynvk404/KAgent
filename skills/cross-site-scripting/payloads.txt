@@ -30,7 +30,7 @@
 # Phase 2 markers establish an execution *hypothesis* from HTTP-level or
 # source/sink evidence. When that evidence is not deterministic (e.g. a
 # JS-string break-out, or a DOM sink whose actual execution can't be
-# observed), SKILL.md requires recording `requires-browser-confirmation`
+# observed), SKILL.md requires recording `browser-required`
 # and stopping — do not attempt to simulate or infer browser execution
 # using shell, http, or any other substitute for an actual browser.
 #
@@ -83,13 +83,13 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
 <img src=x onerror="document.title='xsspoc-{MARKER}'">
     # purpose: event-handler-based close variant for HTML body context
     # applies: ONLY if the <script> entry above specifically failed to execute while Phase 1 showed the marker otherwise landing unescaped — i.e. testing whether the app's sanitizer covers event-handler attributes as well as <script> tags, not evading a WAF or security control
-    # limit: this is the one close variant allowed by SKILL.md step 3 for this context — if this also fails, record not confirmed rather than trying further tag/attribute combinations
+    # limit: this is the one close variant allowed by SKILL.md step 3 for this context — if this also fails, record `not-confirmed` rather than trying further tag/attribute combinations
 
 # --- HTML attribute context ---------------------------------------------
 "><script>document.title='xsspoc-{MARKER}'</script>
     # purpose: break out of a quoted attribute value, then execute
     # applies: marker in Phase 1 rendered inside a quoted attribute, unescaped
-    # limit: try this closing-quote form first; if inconclusive, try at most one close variant (e.g. a single-quote breakout below) before recording not confirmed
+    # limit: try this closing-quote form first; if inconclusive, try at most one close variant (e.g. a single-quote breakout below) before recording `not-confirmed`
 
 '><script>document.title='xsspoc-{MARKER}'</script>
     # purpose: single-quote variant of the attribute breakout above
@@ -100,12 +100,12 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
 ';document.title='xsspoc-{MARKER}';//
     # purpose: break out of a single-quoted JS string literal, then execute
     # applies: marker in Phase 1 rendered inside a JS string (e.g. var x = 'MARKER';)
-    # limit: HTTP-level evidence of this succeeding is usually not deterministic — per SKILL.md step 3, record requires-browser-confirmation unless the response makes the break-out and execution position unambiguous
+    # limit: HTTP-level evidence of this succeeding is usually not deterministic — per SKILL.md step 3, record browser-required unless the response makes the break-out and execution position unambiguous
 
 ";document.title='xsspoc-{MARKER}';//
     # purpose: double-quote variant of the above
     # applies: same as above, for double-quoted JS string literals
-    # limit: same requires-browser-confirmation caveat as above
+    # limit: same browser-required caveat as above
 
 # --- URL / href / src context ---------------------------------------------
 # Do not use a javascript:-scheme payload here by default. Per SKILL.md
@@ -113,7 +113,7 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
 # HTML-encoded, (b) not scheme-validated/allow-listed by the app, and (c)
 # not canonicalized in a way that would strip or neutralize the scheme.
 # Only if all three hold does the entry below apply; otherwise record
-# fully-encoded/neutralized or not confirmed rather than forcing this
+# fully-encoded/neutralized or `not-confirmed` rather than forcing this
 # payload in to "see if it works."
 javascript:document.title='xsspoc-{MARKER}'
     # purpose: scheme-based execution when the value is placed directly into an href/src with no scheme validation
@@ -131,20 +131,20 @@ red;"><script>document.title='xsspoc-{MARKER}'</script><div style="
     # purpose: close the style attribute's quote and the tag itself, then execute, then reopen a dummy attribute so the rest of the page stays well-formed
     # applies: marker in Phase 1 rendered inside a style="..." attribute value, unescaped
     # limit: mechanically the same breakout as HTML attribute context, not the <style>-block entry below — do not use this against a marker that landed inside a <style> block instead
-    # note: modern browsers do not support CSS expression()-style execution, so even a successful attribute breakout here is really just landing in HTML-body-equivalent execution, not "CSS execution" per se — spend at most this one probe, then record not confirmed rather than searching for a legacy-browser-specific technique
+    # note: modern browsers do not support CSS expression()-style execution, so even a successful attribute breakout here is really just landing in HTML-body-equivalent execution, not "CSS execution" per se — spend at most this one probe, then record `not-confirmed` rather than searching for a legacy-browser-specific technique
 
 # --- CSS context: <style> block (e.g. <style>body{color:MARKER}</style>) ---
 color:red;}</style><script>document.title='xsspoc-{MARKER}'</script><style>{
     # purpose: close the surrounding <style> block and execute, then reopen a dummy style block so the rest of the page stays well-formed
     # applies: marker in Phase 1 rendered inside a <style>...</style> block, unescaped
     # limit: mechanically the same breakout as HTML comment context (close/reopen the enclosing construct), not the style-attribute entry above — do not use this against a marker that landed inside a style="..." attribute instead
-    # note: same legacy-browser caveat as above — spend at most this one probe, then record not confirmed
+    # note: same legacy-browser caveat as above — spend at most this one probe, then record `not-confirmed`
 
 # Note on DOM-based candidates: if the sink is client-side (innerHTML,
 # document.write, eval, a postMessage handler, etc.) and you can already
 # cite the exact sink and taint path from source per SKILL.md step 3, a
 # live payload from this file is often unnecessary — source/sink analysis
-# alone can support requires-browser-confirmation (or, if the flow is
+# alone can support browser-required (or, if the flow is
 # unambiguous enough, confirmed). If a live probe is still useful, use
 # whichever entry above matches where the tainted value is written into
 # the DOM (e.g. the HTML body entry for an innerHTML sink rendering raw

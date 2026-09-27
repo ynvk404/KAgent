@@ -34,6 +34,7 @@ requires:
 allowed-tools:
   - shell
   - http
+  - content_discovery
   - file_write
   - workflow
 ---
@@ -51,10 +52,12 @@ endpoints, parameters, forms, API surfaces, and relevant static/JS resources
 — without attempting vulnerability exploitation or drawing vulnerability-
 class conclusions.
 
-Default to `curl` and the built-in `http` tool. Do not pull in specialized
-scanners such as `ffuf`, `gobuster`, `dirsearch`, unless
-the user explicitly asks for them, or focused discovery in step 6 has already
-been tried and clearly justifies broader coverage.
+Default to `curl` and the built-in `http` tool for known-source enumeration.
+Use `content_discovery` only when steps 2–5 leave a concrete path-coverage gap.
+Minimal profile uses native HTTP; full profile may select installed ffuf through
+the semantic tool. Discovery stays on the active origin, is bounded, and requires
+permission. Do not run generic-shell `ffuf`, `gobuster`, or `dirsearch`
+automatically.
 
 Execution rule: substitute the real target into commands before running them.
 Never write literal placeholders such as `<TARGET>`, `<HOST>`, or `<endpoint>`
@@ -272,51 +275,20 @@ Use this step only when steps 2–5 leave clear discovery gaps, such as an
 administrative path referenced by the application but not directly reachable,
 or an application whose routes cannot be mapped from passive sources.
 
-This is still enumeration, not vulnerability testing. Requests must remain
-plain GET requests against paths.
-Escalate gradually and stay on one host at a time.
+This is still enumeration, not vulnerability testing. Requests remain GET-only
+and target paths on the active origin. Call `content_discovery` with `mode="auto"`
+when a bounded discovery pass is justified. The runtime uses a curated wordlist,
+checks two independent random nonexistent paths and compares modest normalized
+response fingerprints to identify wildcard/SPA responses, does not
+follow redirects, and verifies scanner hits over native HTTP. The tool's hard
+limits are 1,000 total requests, 10 requests/second, and 120 seconds; use a
+smaller budget when sufficient. It does not recurse or accept raw scanner flags.
 
-First use a small set of high-value guesses:
-
-```sh
-TARGET="http://localhost:3000"
-
-for p in /admin /api /health /status /.env /config; do
-  code=$(curl -ksS \
-    -o /dev/null \
-    -w "%{http_code}" \
-    --max-time 5 \
-    "$TARGET$p")
-
-  echo "$code $p"
-done
-```
-
-Only if the user has explicitly confirmed that broader discovery is wanted,
-use a small wordlist against a single scoped host:
-
-```sh
-HOST="app.example.com"  # replace with the real scoped host
-WORDLIST=/usr/share/seclists/Discovery/Web-Content/raft-small-words.txt
-
-while read -r w; do
-  code=$(curl -ksS \
-    -o /dev/null \
-    -w "%{http_code}" \
-    --max-time 5 \
-    "https://$HOST/$w")
-
-  case "$code" in
-    200|204|301|302|401|403)
-      echo "$code /$w"
-      ;;
-  esac
-done < "$WORDLIST"
-```
-
-Do not escalate to ffuf, gobuster, larger wordlists, or multiple hosts
-without explicit authorization. Stop when additional requests stop producing
-useful new routes.
+Minimal profile uses native HTTP. In full profile, runtime may select installed
+ffuf only when workflow state confirms this remaining coverage gap; a model
+argument cannot force the scanner. If coverage is already sufficient, record a `skipped`
+or `not_applicable` reason instead of repeating the pass. Stop when additional
+requests stop producing useful new routes.
 
 If enumeration begins to resemble testing for a particular vulnerability
 class rather than discovering paths or resources, stop and hand off to the
@@ -338,6 +310,14 @@ current_phase="analysis")`; runtime rejects completion when the canonical
 artifact is absent, empty, or a different path is supplied. This marks the
 bounded inventory pass complete; newly discovered routes may still justify
 another focused pass.
+
+For whole-target work, record all enumeration coverage dimensions with
+`workflow(action="record_phase_coverage", phase="enumeration", coverage_dimension=..., coverage_status=...)`
+before completion: `html_navigation`, `standard_metadata`, `api_documentation`,
+`javascript_endpoint_extraction`, `browser_burp_capture`, and
+`active_content_discovery`. For skipped/not-applicable dimensions include a
+short reason. Retry failed/cancelled dimensions or record an explicit skip
+reason before completing the phase.
 
 For a whole-target objective, also record every discovered request input
 surface with `workflow(action="record_input", method=..., endpoint=...,

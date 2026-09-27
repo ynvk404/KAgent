@@ -1,0 +1,8 @@
+# A single harmless constant-output marker. Use only after exact lab
+# authorization; select one context-compatible form, not every line.
+
+# Detection/confirmation: command separator followed by a constant printer.
+; printf KAGENT_CMD_MARKER
+
+# Edge case: conditional separator, only if the candidate context requires it.
+&& printf KAGENT_CMD_MARKER

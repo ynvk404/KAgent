@@ -9,7 +9,10 @@ from src.workflow.state import (
     ValidationResult,
     WorkflowObjective,
     WorkflowState,
+    PHASE_COVERAGE_DIMENSIONS,
 )
+from tests.helpers.workflow import record_completed_phase
+from src.workflow.evidence import EvidenceArtifact
 from src.agent.system_prompt import (
     BuildOptions,
     SESSION_MEMORY_CONTEXT_CHAR_LIMIT,
@@ -112,7 +115,8 @@ class TestBuildSystemPrompt:
             "objective-active", "https://target.test", method="GET",
             endpoint="/search", parameter="q", location="query",
         ))
-        workflow.record_phase_completion(
+        record_completed_phase(
+            workflow,
             "recon", objective_id="objective-active",
             target_origin="https://target.test", artifact_ref="artifacts/recon.md",
         )
@@ -124,6 +128,54 @@ class TestBuildSystemPrompt:
         assert "disposition=pending" in rendered
         assert current.id in rendered
         assert old.id not in rendered
+
+    def test_whole_target_prompt_carries_pending_coverage_across_serialization(self):
+        workflow = WorkflowState(objective=WorkflowObjective(
+            id="coverage-handoff", mode="whole_target", target_origin="https://target.test",
+        ))
+        workflow.record_phase_coverage(
+            "recon", "service_discovery", "failed",
+            objective_id="coverage-handoff",
+            target_origin="https://target.test",
+            reason="temporary DNS failure",
+        )
+        restored = WorkflowState.from_dict(workflow.to_dict())
+        rendered = render_workflow(restored)
+
+        assert "recon coverage:" in rendered
+        assert "service_discovery=failed(temporary DNS failure)" in rendered
+        assert "enumeration coverage:" in rendered
+        assert len(PHASE_COVERAGE_DIMENSIONS["enumeration"]) > 0
+
+    def test_prompt_exposes_confirmed_finding_until_report_is_persisted(self):
+        workflow = WorkflowState(objective=WorkflowObjective(
+            id="finding-handoff", mode="whole_target",
+            target_origin="https://target.test",
+        ))
+        candidate, _ = workflow.add_candidate(Candidate(
+            candidate_class="xss", target="https://target.test", endpoint="/search",
+            objective_id="finding-handoff",
+        ))
+        artifact = EvidenceArtifact(
+            "ev_proof", candidate.id, "artifacts/proof.md", "a" * 64, 1,
+        )
+        workflow.add_evidence(artifact)
+        workflow.add_validation_result(ValidationResult(
+            candidate.id, "cross-site-scripting", "confirmed",
+            evidence_refs=[artifact.id], coverage_synced=True,
+            mutation_performed=True, cleanup_state="pending",
+        ))
+
+        rendered = render_workflow(workflow)
+        assert (
+            f"Confirmed findings awaiting canonical report persistence: {candidate.id}"
+            in rendered
+        )
+        assert "cleanup_state=pending" in rendered
+        assert "Compaction and max-step retries are not revalidation requests" in rendered
+
+        workflow.mark_finding_persisted(candidate.id)
+        assert "awaiting canonical report persistence" not in render_workflow(workflow)
 
     def test_thinking_toggle_injects_the_right_directive(self):
         on = build_system_prompt(
@@ -297,14 +349,16 @@ class TestBuildSystemPrompt:
         ]:
             assert want in p, f"missing OWASP framework marker {want}"
 
-    def test_defaults_to_curl_first_minimal_with_no_scanner_override_stanza(self):
+    def test_defaults_to_curl_first_and_native_semantic_discovery(self):
         p = build_system_prompt(
             BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
         )
 
         assert "Tool selection: curl-first" in p
-        assert "Do NOT reach for ffuf" in p
-        assert "Tooling profile: scanners enabled" not in p
+        assert "content_discovery" in p
+        assert "service_discovery" in p
+        assert "minimal profile" in p
+        assert "Tooling profile: full" not in p
 
     def test_warns_against_gnu_only_grep_p_in_shell_commands(self):
         p = build_system_prompt(
@@ -314,7 +368,7 @@ class TestBuildSystemPrompt:
         assert "grep -P" in p
         assert "grep -E" in p
 
-    def test_appends_the_scanner_override_stanza_when_tooling_profile_is_full(self):
+    def test_full_profile_allows_bounded_semantic_scanners_for_coverage_gaps(self):
         p = build_system_prompt(
             BuildOptions(
                 skills=Registry(),
@@ -325,8 +379,10 @@ class TestBuildSystemPrompt:
         )
 
         assert "Tool selection: curl-first" in p
-        assert "Tooling profile: scanners enabled" in p
-        assert "ffuf, nuclei, sqlmap" in p
+        assert "Tooling profile: full" in p
+        assert "installed ffuf through `content_discovery`" in p
+        assert "nmap through `service_discovery`" in p
+        assert "Full profile does not authorize every scanner" in p
 
     def test_does_not_append_the_scanner_override_when_tooling_profile_is_minimal(self):
         p = build_system_prompt(
@@ -337,7 +393,7 @@ class TestBuildSystemPrompt:
                 tooling_profile="minimal",
             )
         )
-        assert "Tooling profile: scanners enabled" not in p
+        assert "Tooling profile: full" not in p
 
     def test_supports_a_compact_profile_for_small_request_budget_providers(self):
         full = build_system_prompt(

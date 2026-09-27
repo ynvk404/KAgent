@@ -73,6 +73,9 @@ from src.tools.registry import Registry as ToolRegistry
 from src.redact.redact import apply as redact
 from src.tools.shell import BashTool, ShellTool
 from src.tools.http import HTTPTool
+from src.tools.capabilities import CapabilityInventory
+from src.tools.content_discovery import ContentDiscoveryTool
+from src.tools.service_discovery import ServiceDiscoveryTool
 
 from src.tools.web import (
     WebFetchTool,
@@ -637,6 +640,7 @@ async def main() -> int:
     memory_store = MemoryStore()
     engagement = EngagementStore().load()
     workflow = WorkflowState()
+    scanner_capabilities = CapabilityInventory()
 
     tools = ToolRegistry()
     tools.register(ShellTool())
@@ -650,6 +654,20 @@ async def main() -> int:
     tools.register(GlobTool())
     tools.register(GrepTool())
     tools.register(HTTPTool(target, engagement_state))
+    tools.register(ContentDiscoveryTool(
+        target,
+        engagement_state,
+        scanner_capabilities,
+        lambda: cfg.tooling_profile.value if cfg.tooling_profile is not None else None,
+        workflow,
+    ))
+    tools.register(ServiceDiscoveryTool(
+        target,
+        engagement_state,
+        scanner_capabilities,
+        lambda: cfg.tooling_profile.value if cfg.tooling_profile is not None else None,
+        workflow,
+    ))
     tools.register(WebFetchTool(engagement_state, target))
     tools.register(WebSearchTool())
     tools.register(AskUserTool(bridged_ask))

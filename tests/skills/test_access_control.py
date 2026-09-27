@@ -251,6 +251,18 @@ class TestSkillDecisionContract:
         assert "proceed with a test" in section
         assert "insufficient-identity" in section
 
+    def test_cleanup_requires_fresh_action_permission_and_blocks_completion(self, body):
+        section = self._norm(self._section(
+            body,
+            "## Structured workflow contract",
+            "\nYou have a specific candidate",
+        ))
+        assert "cleanup_state" in section
+        assert "original write authorization does not authorize" in section
+        assert "normal per-action permission gate" in section
+        assert "requires-user-action" in section
+        assert "whole-target objective is not clean or complete" in section
+
     def test_permission_prompt_cache_invariant_present(self, body):
         """
         Permission prompts (where applicable) are cached per target host,
@@ -433,6 +445,9 @@ class TestRegistryIntegration:
         from src.tools.shell import ShellTool
         from src.tools.file import FileWriteTool
         from src.tools.http import HTTPTool
+        from src.tools.capabilities import CapabilityInventory
+        from src.tools.content_discovery import ContentDiscoveryTool
+        from src.tools.service_discovery import ServiceDiscoveryTool
         from src.tools.ask import AskUserTool
         from src.tools.finding import ConfirmFindingTool
         from src.findings.store import Store
@@ -451,6 +466,10 @@ class TestRegistryIntegration:
         reg.register(FileWriteTool())
         from src.engagement.state import EngagementState
         reg.register(HTTPTool(target, EngagementState()))
+        engagement = EngagementState()
+        inventory = CapabilityInventory(which=lambda _name: None)
+        reg.register(ContentDiscoveryTool(target, engagement, inventory, lambda: "minimal"))
+        reg.register(ServiceDiscoveryTool(target, engagement, inventory, lambda: "minimal"))
         reg.register(AskUserTool(StubPrompter()))
         reg.register(ConfirmFindingTool(Store(str(tmp_path / "findings"))))
         reg.register(WorkflowTool(WorkflowState()))

@@ -1,0 +1,13 @@
+# Harmless multipart body template only; replace the boundary consistently.
+# Use only after exact upload and cleanup authorization for a disposable lab.
+--KAGENT_BOUNDARY
+Content-Disposition: form-data; name="file"; filename="kagent-probe.txt"
+Content-Type: text/plain
+
+KAGENT_UPLOAD_MARKER
+--KAGENT_BOUNDARY--
+
+# Safe metadata-only comparison; keep the body plain text and unchanged.
+filename: kagent-probe.txt
+content-type: application/octet-stream
+content: KAGENT_UPLOAD_MARKER

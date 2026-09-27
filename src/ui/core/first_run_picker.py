@@ -16,29 +16,27 @@ class ProfileOption:
 OPTIONS: list[ProfileOption] = [
     ProfileOption(
         value=ToolingProfile.MINIMAL,
-        label="curl + Unix tools only  (recommended)",
+        label="curl + native discovery  (recommended)",
         description=(
-            "curl + jq, grep, awk, sed, head, sort, uniq"
+            "built-in HTTP, native path discovery and TCP checks"
         ),
         helper=(
-            "The agent stays inside reproducible one-liners. "
-            "Every probe drops straight into a bug-bounty report. "
-            "It won't reach for ffuf / nuclei / sqlmap on its own."
+            "The agent uses built-in and native semantic discovery. Optional "
+            "scanners are not selected automatically in this profile; generic "
+            "shell scanner use requires an explicit user request."
         ),
     ),
 
     ProfileOption(
         value=ToolingProfile.FULL,
-        label="curl + Unix + specialized scanners",
+        label="curl + optional ffuf / nmap",
         description=(
-            "adds ffuf, nuclei, sqlmap, gobuster, "
-            "subfinder, httpx, wfuzz, masscan"
+            "allows bounded ffuf path discovery and nmap TCP checks when installed"
         ),
         helper=(
-            "The agent may pick a specialized scanner when "
-            "it judges the workload (large fuzz, CVE template sweep). "
-            "You still approve each run via the permission modal — "
-            "scanners are only invoked when locally installed."
+            "The agent may select these semantic backends only for a concrete "
+            "coverage gap. Each action stays target-scoped, bounded, and subject "
+            "to the permission prompt. Other scanners are not enabled automatically."
         ),
     ),
 ]

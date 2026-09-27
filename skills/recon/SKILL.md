@@ -27,6 +27,7 @@ requires: []
 allowed-tools:
   - shell
   - http
+  - service_discovery
   - file_write
   - workflow
 ---
@@ -38,10 +39,17 @@ authorized to test. This phase answers "what is this target and what is it
 running?" It does not map endpoints, parameters, or forms. That belongs to
 `web-enumeration`.
 
-Default to `curl` and the built-in `http` tool. Do not pull in specialized
-scanners such as `nmap`, `subfinder`, `httpx`, `ffuf`, or `gobuster` unless
-the user explicitly asks for them, or the target is a root domain wide enough
-that a single request cannot establish reachability.
+Default to `curl` and the built-in `http` tool for reachability and fingerprinting.
+Use `service_discovery` only when the active target's service/port coverage is
+unclear and resolving it is relevant. If the active URL already establishes the
+web port and no broader service question remains, record service discovery as
+`not_applicable` with a reason. In minimal profile it uses bounded native TCP
+checks; full profile may select installed nmap. Do not use generic-shell `nmap`,
+`subfinder`, `httpx`, `ffuf`, or `gobuster` automatically.
+The semantic tool is limited to the active URL's effective port. It resolves
+the target once, checks every resulting address against the private-host policy,
+and pins the scan to a vetted numeric address; do not supply another host or
+port to broaden scope.
 
 Execution rule: substitute the real target into commands before running them.
 Never write literal placeholders such as `<TARGET>`, `<HOST>`, or `<APEX>`
@@ -143,8 +151,10 @@ Save the deduplicated list with `file_write` to:
 Treat each discovered hostname as a separate target for reachability checks.
 
 Do not automatically escalate to `subfinder`, `amass`, or `assetfinder`.
-Only use them when the user explicitly requests them or the scope and
-testing plan justify broader enumeration.
+Use them only when the operator explicitly authorizes domain/subdomain
+enumeration and identifies the in-scope domain; the active hostname alone
+does not authorize sibling hosts. A coverage gap or full tooling profile is
+not sufficient authorization to broaden the target set.
 
 ## 2. Establish reachability
 
@@ -207,6 +217,17 @@ curl -ksS \
 grep -i '^server:' /tmp/headers
 grep -i '^x-powered-by:' /tmp/headers
 ```
+
+## 2b. Optional bounded service discovery
+
+When the target is a host or IP and the exposed service is unclear, call
+`service_discovery` for the active target URL's effective TCP port. It does not
+accept additional ports or hosts, uses a 20-second default timeout (120-second
+hard cap), and does not use UDP, NSE scripts, OS detection, host ranges, service
+version probes, or raw Nmap flags. An open port may
+suggest an HTTP(S) origin; do not request it or add it to scope automatically.
+If service discovery is not useful or its coverage is already established,
+record a `not_applicable` or `skipped` reason in the phase coverage record.
 
 ## 3. Fingerprint the technology
 
@@ -282,6 +303,13 @@ proceed with `enumeration`. If reachability failed, set
 `current_phase="blocked"` and record the failure in the summary instead.
 Completion records that this bounded reconnaissance pass ended; it does not
 force the next skill or prevent targeted recon later.
+
+For whole-target work, record every recon coverage dimension with
+`workflow(action="record_phase_coverage", phase="recon", coverage_dimension=..., coverage_status=...)`
+before completion: `target_resolution`, `reachability`, `http_fingerprint`, and
+`service_discovery`. Each must be `performed`, `skipped`, or `not_applicable`;
+skipped/not-applicable records require a short reason. Retry failed/cancelled
+dimensions or explicitly record why they are being skipped before completing.
 
 The summary should contain:
 

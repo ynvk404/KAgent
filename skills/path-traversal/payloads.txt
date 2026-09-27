@@ -1,0 +1,14 @@
+# Relative-path vectors only. Replace LAB_MARKER_RELATIVE_PATH with one
+# operator-approved, harmless lab fixture; never use secret/system files.
+
+# Detection: ordinary one-level relative traversal.
+../LAB_MARKER_RELATIVE_PATH
+
+# Edge case: a deeper relative form to the same known marker (one probe only).
+../../LAB_MARKER_RELATIVE_PATH
+
+# Encoded separator representation of the same relative form.
+..%2fLAB_MARKER_RELATIVE_PATH
+
+# Alternate separator representation; use only when the lab platform supports it.
+..\LAB_MARKER_RELATIVE_PATH

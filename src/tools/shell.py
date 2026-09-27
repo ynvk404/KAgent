@@ -128,9 +128,9 @@ class ShellTool(Tool):
                     "equivalents (Select-String, -replace, ConvertFrom-Json) "
                     "unless you know the tool is installed.",
                     "",
-                    "Default to curl/Invoke-WebRequest for HTTP work; only use "
-                    "specialized scanners (ffuf, nuclei, sqlmap, etc.) when the "
-                    "user explicitly asks for them.",
+                    "Default to curl/Invoke-WebRequest for HTTP work. Use "
+                    "semantic discovery tools for bounded path/service discovery; "
+                    "generic-shell scanners require an explicit user request.",
                 )
             )
         return "\n".join(
@@ -146,9 +146,9 @@ class ShellTool(Tool):
                 "flags such as `grep -P`; prefer `grep -E`, `awk`, `sed`, "
                 "`perl -ne`, or `jq` for extraction.",
                 "",
-                "Default to curl for HTTP work; only use specialized scanners "
-                "(ffuf, nuclei, sqlmap, etc.) when the user explicitly asks for "
-                "them.",
+                "Default to curl for HTTP work. Use semantic discovery tools for "
+                "bounded path/service discovery; generic-shell scanners require "
+                "an explicit user request.",
             )
         )
 

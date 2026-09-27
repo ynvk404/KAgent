@@ -10,6 +10,7 @@ import time
 import uuid
 import ssl
 import httpx
+from pathlib import Path
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -76,6 +77,7 @@ from src.session.store import (
 from src.skills.registry import (
     Registry as SkillRegistry,
     materialize_skill_body,
+    normalize_candidate_class,
     normalize_metadata_name,
 )
 
@@ -1888,12 +1890,240 @@ class Agent:
             workflow_tool is not None
             and getattr(workflow_tool, "coverage", None) is not None
         )
+        evidence_root = getattr(workflow_tool, "evidence_root", None)
+        invalid_evidence_candidate_ids: frozenset[str] = frozenset()
+        if isinstance(evidence_root, Path):
+            invalid: set[str] = set()
+            for candidate in self.workflow.objective_candidates():
+                result = self.workflow.latest_result(candidate.id)
+                if result is None or not result.evidence_refs:
+                    continue
+                if any(
+                    (artifact := self.workflow.evidence.get(reference)) is None
+                    or not artifact.is_resolvable_for_resume(evidence_root)
+                    for reference in result.evidence_refs
+                ):
+                    invalid.add(candidate.id)
+            invalid_evidence_candidate_ids = frozenset(invalid)
         return self.workflow.whole_target_status(
             target_origin=origin,
             available_phases=self._available_workflow_phases(),
             validator_classes=self._workflow_validator_classes(),
             coverage_sync_available=coverage_sync_available,
+            invalid_evidence_candidate_ids=invalid_evidence_candidate_ids,
         )
+
+    def _terminal_candidate_probe_blocker(
+        self, tool_name: str, args: dict[str, Any],
+    ) -> str | None:
+        """Block raw repeats against terminal candidates until validation is reopened."""
+        objective = self.workflow.objective
+        # A candidate-validation objective is created from an explicit request
+        # to test that candidate again. Whole-target continuation, by contrast,
+        # must not let a raw request silently bypass the structured planner.
+        if objective is None or objective.mode != "whole_target":
+            return None
+        canonical_name = canonical_tool_name(tool_name)
+        requests: list[tuple[str, str, str, dict[str, str]]] = []
+        if canonical_name == "http":
+            http_tool = self.tools.get("http")
+            resolver = getattr(http_tool, "resolve_url", None)
+            raw_url = args.get("url")
+            if not isinstance(raw_url, str) or not callable(resolver):
+                return None
+            try:
+                resolved_url = resolver(raw_url)
+            except (TypeError, ValueError):
+                return None
+            if not isinstance(resolved_url, str):
+                return None
+            headers = args.get("headers")
+            normalized_headers = (
+                {str(key): str(value) for key, value in headers.items()}
+                if isinstance(headers, dict) else {}
+            )
+            body = args.get("body")
+            requests.append((
+                str(args.get("method") or "GET").upper(),
+                resolved_url,
+                body if isinstance(body, str) else "",
+                normalized_headers,
+            ))
+        elif canonical_name == "shell":
+            command = args.get("command")
+            if not isinstance(command, str) or not re.search(
+                r"\bcurl\b", command, re.IGNORECASE
+            ):
+                return None
+            method_match = re.search(
+                r"(?:-X|--request(?:=|\s+))\s*['\"]?([A-Za-z]+)",
+                command,
+                re.IGNORECASE,
+            )
+            method = method_match.group(1).upper() if method_match else "GET"
+            try:
+                tokens = shlex.split(command)
+            except ValueError:
+                tokens = []
+            urls: list[str] = []
+            body_parts: list[str] = []
+            request_headers: dict[str, str] = {}
+            for index, token in enumerate(tokens):
+                if token in {"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode"}:
+                    if index + 1 < len(tokens):
+                        body_parts.append(tokens[index + 1])
+                elif token.startswith(("--data=", "--data-raw=", "--data-binary=", "--data-urlencode=")):
+                    body_parts.append(token.partition("=")[2])
+                elif token in {"-H", "--header"} and index + 1 < len(tokens):
+                    header = tokens[index + 1]
+                    name, separator, value = header.partition(":")
+                    if separator and name.strip():
+                        request_headers[name.strip()] = value.strip()
+                elif token.startswith("--header="):
+                    header = token.partition("=")[2]
+                    name, separator, value = header.partition(":")
+                    if separator and name.strip():
+                        request_headers[name.strip()] = value.strip()
+                elif token in {"--url", "-url"} and index + 1 < len(tokens):
+                    urls.append(tokens[index + 1])
+                elif token.lower().startswith(("http://", "https://")):
+                    urls.append(token.rstrip(").,;"))
+            if not urls:
+                urls = re.findall(r"https?://[^\s\"'<>|;&]+", command, re.IGNORECASE)
+            shell_body = "&".join(body_parts)
+            if body_parts and not method_match:
+                method = "POST"
+            for raw_url in urls:
+                try:
+                    parsed_url = urlsplit(raw_url.rstrip(").,;"))
+                    if not parsed_url.scheme or not parsed_url.netloc:
+                        continue
+                    requests.append((method, parsed_url.geturl(), shell_body, request_headers))
+                except ValueError:
+                    continue
+        else:
+            return None
+        if not requests:
+            return None
+
+        active_origin = self.target.origin()
+        if active_origin is None:
+            return None
+
+        matching_terminal: list[str] = []
+        matching_active_candidate = False
+        active_validation_classes = {
+            normalize_candidate_class(candidate_class)
+            for name in self.active_skills
+            if (skill := self.skills.get(name)) is not None
+            and skill.stage == "validation"
+            for candidate_class in skill.candidate_classes
+        }
+        _, actionable, _ = self._whole_target_state()
+        candidates_requiring_revalidation = {
+            item.partition(":")[2]
+            for item in actionable
+            if item.startswith("revalidate:")
+        }
+        candidates = (
+            self.workflow.objective_candidates()
+            if objective.mode == "whole_target" else ()
+        )
+        for candidate in candidates:
+            if not any(
+                self._request_matches_candidate(
+                    candidate, method, url, body, headers, active_origin.as_url()
+                )
+                for method, url, body, headers in requests
+            ):
+                continue
+            if candidate.status in {"new", "queued", "validating"}:
+                matching_active_candidate = True
+                continue
+            result = self.workflow.latest_result(candidate.id)
+            if (
+                result is not None
+                and result.outcome in {"confirmed", "not-confirmed"}
+                and candidate.id not in candidates_requiring_revalidation
+            ):
+                if (
+                    active_validation_classes
+                    and normalize_candidate_class(candidate.candidate_class)
+                    not in active_validation_classes
+                ):
+                    continue
+                matching_terminal.append(candidate.id)
+
+        if matching_active_candidate or not matching_terminal:
+            return None
+        candidate_id = matching_terminal[0]
+        return (
+            f"repeated active request blocked for terminal candidate {candidate_id}; "
+            "reopen it with start_validation only after an explicit candidate retest, "
+            "missing/invalid evidence, or structured requeue"
+        )
+
+    @staticmethod
+    def _request_matches_candidate(
+        candidate,
+        method: str,
+        request_url: str,
+        body: str,
+        headers: dict[str, str],
+        active_origin: str,
+    ) -> bool:
+        try:
+            active = HTTPOrigin.from_url(active_origin)
+            request = urlsplit(request_url)
+            request_origin = HTTPOrigin.from_url(request_url)
+        except ValueError:
+            return False
+        if request_origin != active:
+            return False
+        if candidate.method and candidate.method != method.upper():
+            return False
+        endpoint = candidate.endpoint or ""
+        endpoint_parts = urlsplit(endpoint)
+        endpoint_path = endpoint_parts.path if endpoint_parts.scheme else endpoint.split("?", 1)[0]
+        request_path = request.path.rstrip("/") or "/"
+        candidate_path = endpoint_path.rstrip("/") or "/"
+        if not candidate_path.startswith("/"):
+            candidate_path = f"/{candidate_path}"
+        if posixpath.normpath(request_path) != posixpath.normpath(candidate_path):
+            return False
+        query_names = {
+            name.casefold()
+            for name, _value in parse_qsl(request.query, keep_blank_values=True)
+        }
+        parameter = candidate.parameter
+        if not parameter or candidate.location == "path":
+            # A path-level or parameter-less candidate represents only an
+            # endpoint probe. Do not let it swallow requests that carry a
+            # separate query/body input.
+            return not query_names and not body.strip()
+        parameter = parameter.casefold()
+        header_names = {name.casefold() for name in headers}
+        body_has_parameter = bool(re.search(
+            rf"(?<![\w-])['\"]?{re.escape(parameter)}['\"]?(?![\w-])\s*(?:=|:)",
+            body,
+            re.IGNORECASE,
+        ))
+        if candidate.location == "query":
+            return parameter in query_names
+        if candidate.location == "body":
+            return body_has_parameter
+        if candidate.location == "header":
+            return parameter in header_names
+        if candidate.location == "cookie":
+            cookie = next(
+                (value for name, value in headers.items() if name.casefold() == "cookie"),
+                "",
+            )
+            return any(
+                item.partition("=")[0].strip().casefold() == parameter
+                for item in cookie.split(";")
+            )
+        return parameter in query_names or body_has_parameter or parameter in header_names
 
     def _whole_target_exploration_phase(self) -> str | None:
         _, actionable, _ = self._whole_target_state()
@@ -1905,8 +2135,14 @@ class Agent:
                 return "input_analysis"
             if item.startswith("candidate:"):
                 return "validation"
+            if item.startswith("revalidate:"):
+                return "validation"
             if item.startswith("coverage-sync:"):
                 return "coverage_sync"
+            if item.startswith("finding:"):
+                return "finding_persistence"
+            if item.startswith("cleanup:"):
+                return "cleanup"
         return None
 
     def _initialize_request_objective(self, user_msg: str, tools_enabled: bool) -> None:
@@ -2048,10 +2284,29 @@ class Agent:
             and result.coverage_synced is False
             and f"coverage-sync:{candidate.id}" in actionable_work
         ) if whole_target else ()
+        pending_findings = tuple(
+            candidate.id
+            for candidate in candidates
+            if f"finding:{candidate.id}" in actionable_work
+        ) if whole_target else ()
+        revalidation_candidates = tuple(
+            candidate.id
+            for candidate in candidates
+            if f"revalidate:{candidate.id}" in actionable_work
+        ) if whole_target else ()
+        pending_cleanup_candidates = tuple(
+            candidate.id
+            for candidate in candidates
+            if f"cleanup:{candidate.id}" in actionable_work
+        ) if whole_target else ()
         return PlannerContext(
             active_skills=frozenset(self.active_skills),
             candidate_classes=(
-                frozenset(item.candidate_class for item in candidates if item.status in {"new", "queued", "validating"})
+                frozenset(
+                    item.candidate_class for item in candidates
+                    if item.status in {"new", "queued", "validating"}
+                    or item.id in revalidation_candidates
+                )
                 if whole_target else self.workflow.relevant_candidate_classes()
             ),
             completed_skills=frozenset(self.workflow.completed_skills),
@@ -2079,6 +2334,9 @@ class Agent:
             pending_input_count=pending_inputs,
             blocked_input_count=blocked_inputs,
             coverage_sync_candidate_ids=sync_candidates,
+            pending_finding_candidate_ids=pending_findings,
+            revalidation_candidate_ids=revalidation_candidates,
+            pending_cleanup_candidate_ids=pending_cleanup_candidates,
             workflow_status=status,
             workflow_blockers=blockers,
         )
@@ -2102,6 +2360,21 @@ class Agent:
         )
         if decision is not None:
             working.append(Message(role="system", content=decision.guidance))
+            return
+        status, _, blockers = self._whole_target_state()
+        if status == "blocked" and blockers:
+            working.append(Message(
+                role="system",
+                content=(
+                    "Runtime whole-target status is blocked; do not claim the assessment "
+                    "is complete or clean. Report the tested result separately from the "
+                    "unresolved operator action, and do not perform cleanup without fresh "
+                    "authorization and the normal per-action permission gate. If cleanup "
+                    "is desired, ask the operator to authorize the exact action; otherwise "
+                    "report it as unresolved. Blockers: "
+                    + "; ".join(blockers)
+                ),
+            ))
 
     def add_scope_origin(self, url: str) -> tuple[HTTPOrigin, bool]:
         if self.target.empty():
@@ -3600,15 +3873,21 @@ class Agent:
                 )
 
             else:
-                try:
-                    result = await self.tools.execute(
-                        tc.function.name,
-                        parsed.args,
-                        signal,
-                        self.prompter,
-                    )
-                except Exception as err:
-                    run_err = err
+                blocker = self._terminal_candidate_probe_blocker(
+                    tc.function.name, parsed.args,
+                )
+                if blocker:
+                    run_err = RuntimeError(blocker)
+                else:
+                    try:
+                        result = await self.tools.execute(
+                            tc.function.name,
+                            parsed.args,
+                            signal,
+                            self.prompter,
+                        )
+                    except Exception as err:
+                        run_err = err
 
         duration_ms = int(
             (time.monotonic() - start) * 1000

@@ -25,6 +25,7 @@ from src.workflow.state import (
     WorkflowObjective,
     WorkflowState,
 )
+from tests.helpers.workflow import record_completed_phase
 from src.workflow.evidence import EvidenceArtifact
 from src.engagement.state import EngagementState
 
@@ -102,7 +103,8 @@ class TestWorkflowPersistence:
             parameter="q", location="body", input_type="text",
             disposition="blocked", disposition_reason="authorization required",
         ))
-        workflow.record_phase_completion(
+        record_completed_phase(
+            workflow,
             "recon", objective_id="objective-a", target_origin="https://target.test",
             artifact_ref="artifacts/recon/target-test/summary.md",
         )

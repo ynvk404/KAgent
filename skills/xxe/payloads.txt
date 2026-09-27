@@ -1,0 +1,11 @@
+# Non-expanding internal entity: harmless parser-behavior marker only.
+<?xml version="1.0"?>
+<!DOCTYPE probe [<!ENTITY marker "KAGENT_XXE_MARKER">]>
+<probe>&marker;</probe>
+
+# External-entity template. Do not send until the exact lab fixture/callback
+# URI is supplied and explicitly authorized; replace it and use one unique
+# marker. Never substitute a secret/system-file URI.
+<?xml version="1.0"?>
+<!DOCTYPE probe [<!ENTITY marker SYSTEM "AUTHORIZED_LAB_MARKER_URI">]>
+<probe>&marker;</probe>

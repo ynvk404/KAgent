@@ -394,8 +394,10 @@ class TestFindingContract:
 
     def test_results_artifact_is_reused_as_evidence(self, skill_text: str):
         normalized = _norm(skill_text)
-        assert "register this same file" in normalized
-        assert "instead of creating a duplicate evidence Markdown file" in normalized
+        assert "register this file with `workflow(action=\"record_evidence\"" in normalized
+        assert "redacted, content-addressed snapshot" in normalized
+        assert "proof remains immutable" in normalized
+        assert "continues to be updated for later candidates" in normalized
 
 
 # ---------------------------------------------------------------------------

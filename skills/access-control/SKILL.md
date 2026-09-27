@@ -62,6 +62,18 @@ reconnaissance. Record every meaningful attempt via
 `insufficient-evidence` and write authorization gates to
 `authorization-required`. Use evidence references rather than response bodies.
 Only `confirmed` is eligible for `confirm_finding`, using the Candidate ID.
+For any explicitly authorized state change, set `mutation_performed: true` and
+record `cleanup_state` as `pending`, `succeeded`, `failed`, or
+`requires-user-action` (use `not-required` only when no cleanup is needed).
+Keep `cleanup_status` as a short explanation, not as the machine-readable state.
+The original write authorization does not authorize a compensating DELETE,
+rollback, or other cleanup request: ask the operator about the exact cleanup
+action and pass the normal per-action permission gate. If that authorization
+is unavailable or declined, do not attempt cleanup; record
+`requires-user-action`. Mark cleanup `succeeded` only after verifying the
+state was actually removed or restored. A confirmed finding remains confirmed
+while cleanup is pending, but the whole-target objective is not clean or
+complete until cleanup is resolved.
 
 You have a specific candidate that `web-input-analysis` flagged
 `suspected_class: access-control`, or that the user directly supplied with a

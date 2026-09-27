@@ -303,6 +303,12 @@ class ConfirmFindingTool:
 
         path = await self.store.save(finding)
 
+        # A confirmed ValidationResult and a persisted canonical report are
+        # separate workflow facts.  Record the latter only after the atomic
+        # store write (or idempotent candidate lookup) has succeeded so a
+        # malformed/missed tool call cannot make whole-target completion lie.
+        self.workflow.mark_finding_persisted(candidate_id)
+
         try:
             self.notifier(finding, path)
         except Exception:

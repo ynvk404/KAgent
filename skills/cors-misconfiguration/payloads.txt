@@ -1,0 +1,10 @@
+# Harmless CORS request-header vectors; do not use credentials by default.
+
+# Detection: safe marker Origin. Do not navigate to or contact this origin.
+Origin: https://example.com
+
+# Preflight for a read-only request only.
+Access-Control-Request-Method: GET
+
+# Optional edge case, only when the candidate specifically involves a custom header.
+Access-Control-Request-Headers: content-type
