@@ -481,6 +481,24 @@ def test_distinct_tool_error_body_is_preserved():
     assert out.transcript[-1].text == f"[error] shell: command failed\n{result}"
 
 
+def test_typed_tool_error_status_never_renders_as_ok_without_exception_text():
+    out = reducer(
+        seed(),
+        AgentEventAction(
+            ToolResultEvent(
+                name="workflow",
+                result="error: record_input requires an active whole-target objective",
+                status="error",
+                error_kind="invalid_args",
+                duration_ms=2,
+            )
+        ),
+    )
+
+    assert out.transcript[-1].text.startswith("[error] workflow")
+    assert "[ok]" not in out.transcript[-1].text
+
+
 def test_runtime_error_event_rendering_is_unchanged():
     out = reducer(
         seed(),

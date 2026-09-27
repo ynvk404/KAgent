@@ -8,9 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from src.paths import user_data_root
+from src.redact.redact import redact_payload
 
 MAX_LOG_BYTES = 4 * 1024 * 1024
 MAX_LOG_GENERATIONS = 3
+LOG_DIR_MODE = 0o700
+LOG_FILE_MODE = 0o600
 
 BASE_LOGGER_NAME = "kagent"
 
@@ -78,7 +81,7 @@ class JsonFormatter(logging.Formatter):
             )
 
         return json.dumps(
-            data,
+            redact_payload(data),
             ensure_ascii=False,
             default=str,
         )
@@ -96,6 +99,55 @@ def _safe_extra(args: dict[str, Any] | None) -> dict[str, Any]:
 
 def default_log_path() -> Path:
     return user_data_root() / "logs" / "kagent.log"
+
+
+def _ensure_private_directory(path: Path) -> None:
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=LOG_DIR_MODE)
+        except FileExistsError:
+            continue
+        directory.chmod(LOG_DIR_MODE)
+
+
+def _restrict_existing_log_files(target: Path) -> None:
+    for path in (target, *(Path(f"{target}.{i}") for i in range(1, MAX_LOG_GENERATIONS + 1))):
+        if path.exists():
+            os.chmod(path, LOG_FILE_MODE)
+
+
+class SecureRotatingFileHandler(RotatingFileHandler):
+    """Rotating file handler that creates every active log with mode 0600."""
+
+    def _open(self):
+        fd = os.open(
+            self.baseFilename,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+            LOG_FILE_MODE,
+        )
+        try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, LOG_FILE_MODE)
+            else:
+                os.chmod(self.baseFilename, LOG_FILE_MODE)
+            return os.fdopen(
+                fd,
+                self.mode,
+                encoding=self.encoding,
+                errors=self.errors,
+            )
+        except BaseException:
+            os.close(fd)
+            raise
 
 
 def _log_level() -> int:
@@ -117,14 +169,15 @@ def init(path: str | Path | None = None) -> None:
     log = _base_logger()
 
     try:
+        is_default_path = path is None
         target = Path(path) if path else default_log_path()
 
-        target.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+        _ensure_private_directory(target.parent)
+        if is_default_path:
+            target.parent.chmod(LOG_DIR_MODE)
+        _restrict_existing_log_files(target)
 
-        handler = RotatingFileHandler(
+        handler = SecureRotatingFileHandler(
             filename=target,
             maxBytes=MAX_LOG_BYTES,
             backupCount=MAX_LOG_GENERATIONS,

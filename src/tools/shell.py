@@ -21,6 +21,11 @@ MAX_TIMEOUT_SECONDS = 30 * 60
 MAX_OUTPUT_BYTES = 64 * 1024
 ABORT_POLL_SECONDS = 0.05
 TERMINATE_GRACE_SECONDS = 1
+FATAL_PARSE_STDERR_RE = re.compile(
+    r"^(?:awk:.*(?:fatal:|syntax error|missing [^)\n]+)|"
+    r"jq: (?:parse error|error:))",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 def is_windows() -> bool:
     return sys.platform == "win32"
@@ -298,9 +303,9 @@ async def run_with_capture(
     cmd: str,
     argv: list[str],
     timeout_seconds: float,
-    signal: Any,
+    abort_signal: Any,
 ) -> ToolOutput:
-    if _is_aborted(signal):
+    if _is_aborted(abort_signal):
         raise RuntimeError("aborted")
 
     kwargs: dict[str, Any] = {}
@@ -337,13 +342,24 @@ async def run_with_capture(
     stderr_task = asyncio.create_task(pump(proc.stderr, stderr_buf))
 
     timed_out = False
+    abort_requested = False
 
     async def watch_abort() -> None:
-        if signal is None:
+        nonlocal abort_requested
+        if abort_signal is None:
             return
         while proc.returncode is None:
-            if getattr(signal, "aborted", False):
+            if getattr(abort_signal, "aborted", False):
+                abort_requested = True
                 kill_process_group(proc.pid)
+                try:
+                    await asyncio.wait_for(
+                        proc.wait(),
+                        timeout=TERMINATE_GRACE_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    kill_process_group(proc.pid, signal.SIGKILL)
+                    await proc.wait()
                 return
             await asyncio.sleep(ABORT_POLL_SECONDS)
 
@@ -382,6 +398,13 @@ async def run_with_capture(
     stdout = stdout_buf.render()
     stderr = stderr_buf.render()
 
+    if abort_requested or _is_aborted(abort_signal):
+        return ToolOutput(
+            f"exit: cancelled\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            status="cancelled",
+            error_kind="cancelled",
+        )
+
     if timed_out:
         return ToolOutput(
             f"exit: timeout after {timeout_seconds}s\nstdout:\n{stdout}\nstderr:\n{stderr}",
@@ -394,6 +417,8 @@ async def run_with_capture(
     result = f"exit: {exit_code}\nstdout:\n{stdout}"
     if stderr:
         result += f"\nstderr:\n{stderr}"
+    if exit_code != 0 or FATAL_PARSE_STDERR_RE.search(stderr):
+        return ToolOutput(result, status="error", error_kind="tool_exception")
     return ToolOutput(result, status="success")
 
 def _is_aborted(signal: Any) -> bool:

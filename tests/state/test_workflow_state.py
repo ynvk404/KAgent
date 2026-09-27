@@ -259,6 +259,7 @@ def complete_required_phases(state: WorkflowState) -> None:
             objective_id=objective.id,
             target_origin=objective.target_origin or "",
             artifact_ref=f"artifacts/{phase}.md",
+            no_inputs_discovered=phase == "input_analysis",
         )
 
 
@@ -358,6 +359,48 @@ def test_old_objective_candidate_does_not_affect_current_whole_target_completion
         coverage_sync_available=True,
     )
     assert old.id in state.candidates
+    assert status == "completed"
+    assert actionable == () and blockers == ()
+
+
+def test_completed_input_analysis_without_inventory_attestation_stays_blocked():
+    state = whole_target_state()
+    objective = state.objective
+    assert objective is not None
+    for phase in ("recon", "enumeration", "input_analysis"):
+        state.record_phase_completion(
+            phase,  # type: ignore[arg-type]
+            objective_id=objective.id,
+            target_origin=objective.target_origin or "",
+            artifact_ref=f"artifacts/{phase}.md",
+        )
+
+    status, actionable, blockers = state.whole_target_status(
+        target_origin="https://target.test",
+        available_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        validator_classes=frozenset(),
+        coverage_sync_available=True,
+    )
+
+    assert status == "blocked"
+    assert actionable == ()
+    assert any("no recorded inputs" in blocker for blocker in blockers)
+
+
+def test_no_input_attestation_survives_workflow_state_round_trip():
+    state = whole_target_state()
+    complete_required_phases(state)
+
+    restored = WorkflowState.from_dict(state.to_dict())
+    marker = restored.phase_completions["objective-current:input_analysis"]
+
+    assert marker.no_inputs_discovered is True
+    status, actionable, blockers = restored.whole_target_status(
+        target_origin="https://target.test",
+        available_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        validator_classes=frozenset(),
+        coverage_sync_available=True,
+    )
     assert status == "completed"
     assert actionable == () and blockers == ()
 

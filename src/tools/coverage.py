@@ -199,6 +199,10 @@ class CoverageTool(Tool):
                 f"status must be one of: {', '.join(STATUSES)}",
             )
 
+        previous = await self.store.get(
+            endpoint=endpoint, param=param, vulnClass=vuln_class,
+        )
+        previous_count = previous.count if previous else 0
         entry = await self.store.mark(
             endpoint=endpoint,
             param=param,
@@ -213,8 +217,9 @@ class CoverageTool(Tool):
             {
                 "ok": True,
                 "action": "mark",
-                "created": entry.count == 1,
-                "updated": entry.count > 1,
+                "created": previous is None,
+                "updated": previous is not None and entry.count > previous_count,
+                "deduplicated": previous is not None and entry.count == previous_count,
                 "entry": {
                     **entry_dict,
                     "endpoint": self._brief(entry.endpoint),

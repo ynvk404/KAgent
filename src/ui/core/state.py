@@ -555,9 +555,14 @@ def _tool_result_prefix(
     result: str,
     duration_ms: float,
     transcript: tuple[TranscriptEntry, ...],
+    status: str = "success",
 ) -> str:
     if err:
         return f"[error] {display_tool_name(name)}: {err}"
+    if status == "error":
+        return f"[error] {display_tool_name(name)}"
+    if status == "cancelled":
+        return f"[cancelled] {display_tool_name(name)}"
     if _is_shell_tool(name):
         exit_code = shell_result_exit_status(result)
         if exit_code and exit_code != "0":
@@ -632,7 +637,9 @@ def _apply_agent_event(state: AppState, ev: AgentEvent) -> AppState:
                 running_tool=_running_tool_label(name, args_json),
             )
 
-        case ToolResultEvent(name=name, result=result, err=err, duration_ms=duration_ms):
+        case ToolResultEvent(
+            name=name, result=result, err=err, duration_ms=duration_ms, status=status
+        ):
             if not err and name == "confirm_finding":
                 return replace(
                     state,
@@ -650,7 +657,9 @@ def _apply_agent_event(state: AppState, ev: AgentEvent) -> AppState:
                     ),
                 )
 
-            prefix = _tool_result_prefix(name, err, result, duration_ms, state.transcript)
+            prefix = _tool_result_prefix(
+                name, err, result, duration_ms, state.transcript, status
+            )
 
             if err and result == f"ERROR: {err}":
                 return replace(

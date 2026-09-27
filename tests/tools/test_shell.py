@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import asyncio
+import os
 
 import pytest
 
@@ -11,6 +13,7 @@ from src.tools.shell import (
     BashTool,
     DENY_PATTERNS,
     ShellTool,
+    run_with_capture,
     rewrite_portable_command,
     shell_invocation,
 )
@@ -214,6 +217,25 @@ async def test_captures_stderr_alongside_stdout():
     assert "stdout-line" in out
     assert "stderr-line" in out
     assert "exit: 3" in out
+    assert out.status == "error"
+    assert out.error_kind == "tool_exception"
+
+
+@pytest.mark.asyncio
+async def test_parser_failure_on_stderr_is_error_even_when_final_exit_is_zero():
+    out = await ShellTool().run(
+        {
+            "command": (
+                "echo 'awk: line 1: syntax error at or near }' >&2; true"
+            )
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    assert "exit: 0" in out
+    assert out.status == "error"
+    assert out.error_kind == "tool_exception"
 
 
 @pytest.mark.asyncio
@@ -228,6 +250,97 @@ async def test_reports_tool_timeouts_instead_of_surfacing_abort_error():
     assert out.status == "error"
     assert out.error_kind == "timeout"
     assert "AbortError" not in out
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups required")
+@pytest.mark.asyncio
+async def test_timeout_kills_process_that_ignores_term_without_internal_error():
+    out = await ShellTool().run(
+        {
+            "command": "trap '' TERM; while :; do sleep 1; done",
+            "timeout_seconds": 1,
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    assert out.status == "error"
+    assert out.error_kind == "timeout"
+    assert "timeout after 1s" in out
+    assert "AttributeError" not in out
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups required")
+@pytest.mark.asyncio
+async def test_cancelled_shell_wait_escalates_and_reaps_term_resistant_process():
+    class AbortSignal:
+        aborted = False
+
+    abort_signal = AbortSignal()
+    task = asyncio.create_task(
+        run_with_capture(
+            "/bin/sh",
+            ["-c", "trap '' TERM; while :; do sleep 1; done"],
+            30,
+            abort_signal,
+        )
+    )
+    await asyncio.sleep(0.1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups required")
+@pytest.mark.asyncio
+async def test_user_abort_terminates_process_that_handles_term():
+    class AbortSignal:
+        aborted = False
+
+    abort_signal = AbortSignal()
+
+    async def abort_soon():
+        await asyncio.sleep(0.1)
+        abort_signal.aborted = True
+
+    abort_task = asyncio.create_task(abort_soon())
+    out = await run_with_capture(
+        "/bin/sh",
+        ["-c", "trap 'exit 0' TERM; sleep 30"],
+        30,
+        abort_signal,
+    )
+    await abort_task
+
+    assert out.status == "cancelled"
+    assert out.error_kind == "cancelled"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups required")
+@pytest.mark.asyncio
+async def test_user_abort_kills_process_that_ignores_term():
+    class AbortSignal:
+        aborted = False
+
+    abort_signal = AbortSignal()
+
+    async def abort_soon():
+        await asyncio.sleep(0.1)
+        abort_signal.aborted = True
+
+    abort_task = asyncio.create_task(abort_soon())
+    out = await run_with_capture(
+        "/bin/sh",
+        ["-c", "trap '' TERM; while :; do sleep 1; done"],
+        30,
+        abort_signal,
+    )
+    await abort_task
+
+    assert out.status == "cancelled"
+    assert out.error_kind == "cancelled"
+    assert "AttributeError" not in out
 
 
 # ==========================================================

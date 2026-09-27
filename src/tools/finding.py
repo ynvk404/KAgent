@@ -32,6 +32,17 @@ SEVERITIES: tuple[Severity, ...] = (
 FindingNotifier = Callable[[Finding, str], None]
 log = get_logger("tools.finding")
 
+_UNBOUNDED_OBSERVED_IMPACT = re.compile(
+    r"\b(?:arbitrary\s+(?:sql|queries|tables|columns|data)|stacked\s+quer(?:y|ies)|"
+    r"file\s+(?:read|write)|every\s+row|full\s+table)\b",
+    re.IGNORECASE,
+)
+_UNCONDITIONAL_POTENTIAL_IMPACT = re.compile(
+    r"\b(?:executes?|reads?|writes?|dumps?|returns?|exposes?)\s+"
+    r"(?:arbitrary|all|every)\b",
+    re.IGNORECASE,
+)
+
 class ConfirmFindingTool:
     def __init__(
         self,
@@ -185,6 +196,29 @@ class ConfirmFindingTool:
         if not potential_impact:
             raise ValueError("potential_impact is required")
 
+        response_excerpt = arg_string(args, "response_excerpt")
+        if _UNBOUNDED_OBSERVED_IMPACT.search(observed_impact):
+            raise ValueError(
+                "observed_impact contains an unverified broad-impact claim; "
+                "record only the behavior demonstrated by linked evidence"
+            )
+        if re.search(r"\b(?:every\s+row|full\s+table)\b", response_excerpt, re.I):
+            raise ValueError(
+                "response_excerpt must report the observed row count, not claim "
+                "the full table without a verified total"
+            )
+        if (
+            _UNCONDITIONAL_POTENTIAL_IMPACT.search(potential_impact)
+            and not re.search(
+                r"\b(?:could|may|might|potentially|if|depending)\b",
+                potential_impact,
+                re.IGNORECASE,
+            )
+        ):
+            raise ValueError(
+                "potential_impact must express untested consequences conditionally"
+            )
+
         if self.workflow is None:
             raise ValueError("workflow state is required to confirm a finding")
 
@@ -255,7 +289,7 @@ class ConfirmFindingTool:
             method=redact(candidate.method or requested_method.upper()) or None,
             parameter=redact(candidate.parameter or requested_parameter) or None,
             payload=redact(arg_string(args, "payload")) or None,
-            responseExcerpt=redact(arg_string(args, "response_excerpt")) or None,
+            responseExcerpt=redact(response_excerpt) or None,
             curl=redact(arg_string(args, "curl")) or None,
             remediation=redact(arg_string(args, "remediation")) or None,
             vulnerabilityType=(classification.type if classification else None),

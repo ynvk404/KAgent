@@ -25,6 +25,40 @@ from tests.helpers.agent_fakes import FakeClient
 SKILLS_ROOT = Path(__file__).resolve().parents[2] / "skills"
 
 
+@pytest.mark.asyncio
+async def test_phase_rich_web_assessment_request_activates_structured_inventory():
+    request = (
+        "Perform a web security assessment of http://juice.lab:3000. "
+        "Start with reconnaissance, enumerate web endpoints and inputs, "
+        "analyze the discovered inputs, then validate any SQL Injection candidates"
+    )
+    target = Target()
+    state = WorkflowState()
+    agent = Agent(AgentOptions(
+        client=FakeClient([]), tools=ToolRegistry(), skills=SkillRegistry(),
+        prompter=AlwaysAllow(), store=None, target=target, workflow=state,
+    ))
+
+    assert agent.initialize_target_from_user_request(request) is True
+    agent._initialize_request_objective(request, True)
+    result = json.loads(await WorkflowTool(state, target).run({
+        "action": "record_input", "method": "GET", "endpoint": "/search",
+        "parameter": "q", "location": "query",
+    }, None, AlwaysAllow()))
+
+    assert state.objective is not None and state.objective.mode == "whole_target"
+    assert state.objective.target_origin == "http://juice.lab:3000"
+    assert result["ok"] is True
+    status, actionable, _ = state.whole_target_status(
+        target_origin=target.base_url(),
+        available_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        validator_classes=frozenset({"sql-injection"}),
+        coverage_sync_available=True,
+    )
+    assert status == "actionable"
+    assert actionable[0] == "phase:recon"
+
+
 def _artifact(root: Path, relative: str) -> None:
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)

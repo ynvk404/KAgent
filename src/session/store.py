@@ -23,6 +23,7 @@ from src.llm.types import (
 )
 from src.logger.logger import get_logger
 from src.paths import user_data_root
+from src.redact.redact import redact_payload
 from src.engagement.state import EngagementState
 from src.target.target import Target
 from src.workflow.state import WorkflowState
@@ -453,7 +454,7 @@ class Store:
                         serialized["tool_truncated"] = True
                 serialized_messages.append(serialized)
 
-            data = {
+            data = redact_payload({
                 "updated_at": datetime.now().isoformat(),
                 "id": self.id if self.id else None,
                 "target": target.to_dict() if target and not target.is_empty() else None,
@@ -463,7 +464,7 @@ class Store:
                     engagement_state.to_dict() if engagement_state else None
                 ),
                 "messages": serialized_messages,
-            }
+            })
 
             self._stage(f"{operation}.json_dumps")
             body = json.dumps(data, ensure_ascii=False) + "\n"

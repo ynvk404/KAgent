@@ -11,21 +11,11 @@ from typing import Any
 
 from src.logger.logger import get_logger
 from src.paths import user_data_root
-from src.redact.redact import apply as redact
+from src.redact.redact import redact_payload
 
 log = get_logger("session_debug")
 DEBUG_DIR_MODE = 0o700
 DEBUG_FILE_MODE = 0o600
-
-
-def redact_payload(value: Any) -> Any:
-    if isinstance(value, str):
-        return redact(value)
-    if isinstance(value, dict):
-        return {k: redact_payload(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [redact_payload(v) for v in value]
-    return value
 
 
 class SessionDebugLog(ABC):

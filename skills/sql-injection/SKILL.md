@@ -73,6 +73,21 @@ user explicitly requests a retest or the request/input materially changed.
 Only an outcome of `confirmed` is eligible for `confirm_finding`; pass the
 Candidate ID to that tool. All other outcomes stop without confirming.
 
+For a boolean-based confirmed result, `record_result` also requires structured
+`confirmation` evidence. Use `kind: boolean-differential`, one shared
+`request_template` containing `{predicate}`, distinct `true_predicate` and
+`false_predicate` values, and at least two `pairs`. Each pair records its
+repetition number plus the HTTP `status`, byte `size`, and a compact content
+`marker` for both `true` and `false`. The runtime rejects identical sides,
+one-pass claims, and non-reproducible pairs. Do not set `repeatable: true` from
+prose or from a baseline-versus-comment comparison.
+
+For time-based SQLI-2, use `kind: time-differential`, a shared
+`request_template` containing `{probe}`, `expected_delay_ms`, and at least two
+paired `control`/`probe` observations with integer status, size, and elapsed
+milliseconds. The runtime verifies that each observed delay is close to the
+declared delay. OOB confirmation remains unavailable in the current runtime.
+
 You have one or more concrete candidates, usually from
 `artifacts/web-input-analysis/<target>/candidates.md` with
 `suspected_class: sql-injection`, or directly specified by the user with an
@@ -417,6 +432,14 @@ A consistent, repeatable difference between the TRUE and FALSE response
 establishes **SQLI-2**. A one-off difference is not — repeat once before
 concluding anything.
 
+The TRUE/FALSE requests must instantiate the same `request_template`; only the
+predicate changes. A benign baseline is useful context but is not the FALSE
+member of the pair. A comment-only breakout that truncates the remainder of a
+query is not, by itself, a boolean differential. Record both members of both
+repetitions in the structured `confirmation` object passed to
+`workflow(action="record_result", ...)`. If the paired observations are equal,
+record that 2a was inconclusive; never preserve a signal claiming they differed.
+
 On an authentication endpoint, the TRUE member of this pair may naturally
 return the application's normal successful-login response, including a session
 token. The status/body differential may be used as SQLI-2 evidence, but the
@@ -518,6 +541,20 @@ unavailable; use a portable standard-library mechanism on the already captured
 response when local processing is necessary and authorized. Prefer the built-in
 `http` tool for ordinary HTTP requests.
 
+When `curl` is genuinely required, keep the body and transfer metadata in
+separate files/streams. For example:
+
+```sh
+curl -o "$body_file" -w '%{http_code} %{size_download}' ...
+```
+
+Parse only that one-line metadata output. Never append a delimiter to a
+multiline body and run `awk -F` over the combined response. Treat a parsing
+error or evidence-related stderr as an
+invalid observation, even when the shell's final command happens to exit zero.
+If the HTTP status was not captured, write `status: unavailable`; never infer
+`200` from a body or invent a status.
+
 Before any evidence reaches a transcript or artifact, redact bearer tokens,
 session cookies, password/password-hash fields, API keys, and sensitive profile
 fields. A token prefix is not needed to prove issuance; use a placeholder such
@@ -591,6 +628,7 @@ tested:
 - **sqli_level:** <1 | 2 | 3 | none>
 - **engine:** <mysql | postgres | mssql | oracle | sqlite | undetermined | n/a>
 - **technique(s) tried:** <e.g. 1b error-based, 2a boolean-based, 2b time-based, 2d OOB — list all tried, mark which produced the result>
+- **structured confirmation:** <for boolean SQLI-2: shared request template, distinct TRUE/FALSE predicates, and both paired observations from at least two repetitions>
 - **evidence:**
   - baseline: <status/size/timing/marker>
   - probe result: <status/size/timing/marker, or literal error string>
@@ -628,6 +666,14 @@ valid. `observed_impact` may describe attacker-controlled SQL execution and
 output actually shown by the evidence; `potential_impact` describes further
 database access only as conditional unless the validation demonstrated it.
 Do not present possible impact as observed fact:
+
+- Report an observed count as `returned 56 rows, consistent with bypassing the
+  filter`; do not call it `every row` or `the full table` unless an independently
+  verified total proves that claim.
+- Do not say the injection `executes arbitrary SQL`, supports stacked queries,
+  or permits file read/write unless that exact capability was separately
+  authorized and demonstrated. Put untested consequences in
+  `potential_impact` using `could`, `may`, or an explicit condition.
 
 ```yaml
 confirm_finding:

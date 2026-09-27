@@ -253,6 +253,12 @@ not meet the candidate-list bar must not be recorded. Inspect `supported` and
 multiple independent suspected classes, record one Candidate per class and
 retain each returned ID; do not collapse them into one result.
 
+Candidate `signals` must describe the observations exactly. If paired probes
+produce identical status, size, and content markers, record them as
+`no differential observed`; never summarize them as TRUE returning rows and
+FALSE returning none. Signal gathering here is not confirmation, and a later
+validator must not inherit a contradicted conclusion from free-form prose.
+
 Write `artifacts/web-input-analysis/<target>/candidates.md`, using the same target
 identifier as `recon` and `web-enumeration`. One entry per candidate:
 

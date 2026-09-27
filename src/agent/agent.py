@@ -175,13 +175,30 @@ _OPERATIONAL_TARGET_TERMS = re.compile(
 )
 _WHOLE_TARGET_INTENT = re.compile(
     r"\b(?:whole[- ]target|entire target|full target|full[- ]scope assessment|"
-    r"full security assessment|security assessment of (?:the )?(?:target|application|website|site)|"
+    r"full security assessment|(?:web\s+)?security assessment(?:\s+of\b)?|"
     r"comprehensive (?:pentest|penetration test|assessment)|"
     r"assess the entire|test the entire target|test (?:all|every) endpoints|"
     r"map (?:the )?entire application|end[- ]to[- ]end (?:pentest|assessment)|"
     r"complete penetration test|(?:run|perform|conduct) (?:a )?(?:pentest|penetration test)|"
     r"pentest (?:the )?(?:target|application|website|site)|"
     r"penetration test (?:the )?(?:target|application|website|site))\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_WHOLE_SCOPE = re.compile(
+    r"\b(?:whole[- ]target|entire target|full target|full[- ]scope|"
+    r"comprehensive (?:pentest|penetration test|assessment)|"
+    r"(?:all|every) endpoints|assess the entire|test the entire|"
+    r"map (?:the )?entire|end[- ]to[- ]end)\b",
+    re.IGNORECASE,
+)
+_WHOLE_TARGET_PHASE_CHAIN = re.compile(
+    r"\brecon(?:naissance)?\b.*\benumerat\w*\b.*\b(?:input|parameter)\w*\b"
+    r".*\bvalidat\w*\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_BOUNDED_ASSESSMENT_INTENT = re.compile(
+    r"\b(?:endpoint|parameter|candidate)\b|"
+    r"\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(?:https?://\S+|/\S+)",
     re.IGNORECASE,
 )
 _PENTEST_REQUEST_INTENT = re.compile(r"\b(?:pentest|penetration test)\b", re.IGNORECASE)
@@ -1907,12 +1924,15 @@ class Agent:
         )
         whole_request = bool(
             not is_purely_informational(normalize(user_msg))
+            and not candidate_request
             and (
                 _WHOLE_TARGET_INTENT.search(user_msg)
-                or (
-                    _PENTEST_REQUEST_INTENT.search(user_msg)
-                    and not candidate_request
-                )
+                or _PENTEST_REQUEST_INTENT.search(user_msg)
+            )
+            and (
+                not _BOUNDED_ASSESSMENT_INTENT.search(user_msg)
+                or _EXPLICIT_WHOLE_SCOPE.search(user_msg)
+                or _WHOLE_TARGET_PHASE_CHAIN.search(user_msg)
             )
         )
 

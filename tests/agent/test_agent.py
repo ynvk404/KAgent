@@ -3006,6 +3006,7 @@ async def test_whole_target_early_final_is_buffered_and_continues_to_runtime_com
                     objective_id=objective.id,
                     target_origin=objective.target_origin or "",
                     artifact_ref=f"artifacts/{phase}.md",
+                    no_inputs_discovered=phase == "input_analysis",
                 )
             return "phases recorded"
 
@@ -3208,6 +3209,43 @@ def test_request_boundary_structures_whole_target_and_candidate_validation_modes
     assert agent.workflow.objective.candidate_id == candidate.id
 
 
+def test_web_security_assessment_of_url_creates_whole_target_objective():
+    agent, _ = whole_target_agent([], [])
+    request = (
+        "Perform a web security assessment of http://juice.lab:3000. "
+        "Start with reconnaissance, enumerate web endpoints and inputs, "
+        "analyze the discovered inputs, then validate any SQL Injection candidates"
+    )
+
+    assert agent.initialize_target_from_user_request(request) is True
+    agent._initialize_request_objective(request, True)
+
+    assert agent.workflow.objective is not None
+    assert agent.workflow.objective.mode == "whole_target"
+    assert agent.workflow.objective.target_origin == "http://juice.lab:3000"
+
+
+def test_informational_security_assessment_question_stays_direct():
+    agent, _ = whole_target_agent([], [])
+    agent._initialize_request_objective(
+        "Explain what a web security assessment is.", True
+    )
+
+    assert agent.workflow.objective is not None
+    assert agent.workflow.objective.mode == "direct"
+
+
+def test_endpoint_specific_security_assessment_stays_direct():
+    agent, _ = whole_target_agent([], [])
+    agent._initialize_request_objective(
+        "Perform a web security assessment of GET /login parameter username.",
+        True,
+    )
+
+    assert agent.workflow.objective is not None
+    assert agent.workflow.objective.mode == "direct"
+
+
 def test_authorization_followup_keeps_candidate_blocker_in_same_objective():
     state = WorkflowState(objective=WorkflowObjective(
         id="whole-objective", mode="whole_target", target_origin="https://target.test",
@@ -3216,6 +3254,7 @@ def test_authorization_followup_keeps_candidate_blocker_in_same_objective():
         state.record_phase_completion(
             phase, objective_id="whole-objective", target_origin="https://target.test",
             artifact_ref=f"artifacts/{phase}.md",
+            no_inputs_discovered=phase == "input_analysis",
         )
     candidate, _ = state.add_candidate(Candidate(
         candidate_class="sql-injection", target="https://target.test",

@@ -938,10 +938,22 @@ def is_workflow_like_item(item: str) -> bool:
 
 
 def is_failure_like_item(item: str) -> bool:
-    return bool(
+    if re.search(
+        r"\b(?:failed|failure|mistake|wrong|avoid repeating|did not work|"
+        r"doesn't work|blocked|regression|hallucination|missed)\b",
+        item,
+        re.I,
+    ):
+        return True
+    if not re.search(r"\berror\b|[A-Z][A-Z0-9_]+_ERROR\b", item, re.I):
+        return False
+    # Parser/DB error strings are often positive vulnerability evidence, not
+    # a failed workflow. Explicit failure language above still takes priority.
+    return not bool(
         re.search(
-            r"\b(?:failed|failure|mistake|wrong|avoid repeating|did not work|"
-            r"doesn't work|blocked|error|regression|hallucination|missed)\b",
+            r"\b(?:confirmed|verified|successful|evidence|signal|leak(?:ed|s)?|"
+            r"error[- ]based|syntax probe|database|dbms|sqlite|mysql|postgres|"
+            r"mssql|oracle)\b",
             item,
             re.I,
         )

@@ -423,6 +423,34 @@ class TestContinuousLearning:
         assert scenarios[0].category == "lesson-learned"
         assert "file permission error" in scenarios[0].lesson
 
+    @pytest.mark.parametrize(
+        "item",
+        [
+            "SQL injection validation — confirmed with error-based + boolean differential evidence.",
+            "q=apple' -> leaks Error: SQLITE_ERROR: near \"'%'\": syntax error",
+            (
+                "Input analysis prioritized the search parameter after a syntax "
+                "probe leaked a raw DB error."
+            ),
+        ],
+    )
+    def test_positive_database_error_evidence_is_not_learned_as_failure(self, item):
+        scenarios = extract_scenarios(
+            f"## Task outcome\n- {item}", source_session_id="sess-positive-db-error"
+        )
+
+        assert all(scenario.category != "lesson-learned" for scenario in scenarios)
+
+    def test_explicit_tool_failure_with_permission_error_remains_a_failure(self):
+        scenarios = extract_scenarios(
+            "## Task outcome\n- Command failed because a permission error prevented the write.",
+            source_session_id="sess-real-error",
+        )
+
+        failures = [item for item in scenarios if item.category == "lesson-learned"]
+        assert len(failures) == 1
+        assert "permission error" in failures[0].lesson
+
     def test_explicit_style_preference_remains_learnable(self):
         scenarios = extract_scenarios(
             "## User request\nI prefer concise answers with clear explanations.",

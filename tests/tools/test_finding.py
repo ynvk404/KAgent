@@ -143,6 +143,58 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "claim", "message"),
+    [
+        (
+            "observed_impact",
+            "The payload returned every row and executes arbitrary SQL.",
+            "unverified broad-impact claim",
+        ),
+        (
+            "response_excerpt",
+            "The full table was returned.",
+            "observed row count",
+        ),
+        (
+            "potential_impact",
+            "The injection executes arbitrary SQL against the database.",
+            "conditionally",
+        ),
+    ],
+)
+async def test_finding_rejects_unbounded_or_unconditional_impact_claims(
+    tmp_path, field, claim, message,
+):
+    tool, _ = _tool(tmp_path)
+    args = _valid_args(tool, **{field: claim})
+
+    with pytest.raises(ValueError, match=message):
+        await tool.run(args, None, AlwaysAllow())
+
+    assert not (tmp_path / "findings").exists()
+
+
+@pytest.mark.asyncio
+async def test_finding_allows_conditional_potential_impact(tmp_path):
+    tool, _ = _tool(tmp_path)
+
+    result = await tool.run(
+        _valid_args(
+            tool,
+            potential_impact=(
+                "If database permissions allow it, an attacker could read "
+                "arbitrary tables; this was not tested."
+            ),
+        ),
+        None,
+        AlwaysAllow(),
+    )
+
+    assert 'Finding "Finding" written' in result
+
+
+@pytest.mark.asyncio
 async def test_canonical_finding_resolves_legacy_evidence_from_project_root(tmp_path):
     workflow = WorkflowState()
     candidate, _ = workflow.add_candidate(
@@ -204,6 +256,21 @@ async def test_legacy_nested_cwd_evidence_resumes_without_rewriting(
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "sql-injection", "outcome": "confirmed",
         "evidence_refs": [artifact.id], "repeatable": True,
+        "techniques": ["boolean-based"],
+        "confirmation": {
+            "kind": "boolean-differential",
+            "request_template": "GET /product?id={predicate}",
+            "true_predicate": "1 AND 1=1",
+            "false_predicate": "1 AND 1=2",
+            "pairs": [
+                {
+                    "repetition": repetition,
+                    "true": {"status": 200, "size": 100, "marker": "row"},
+                    "false": {"status": 200, "size": 20, "marker": "empty"},
+                }
+                for repetition in (1, 2)
+            ],
+        },
     }, None, AlwaysAllow()))
     assert result["eligible_for_confirm_finding"] is True
     await ConfirmFindingTool(

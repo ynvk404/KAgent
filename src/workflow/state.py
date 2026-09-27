@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypeGuard
+from typing import Any, Literal, TypeGuard, cast
 
 from src.skills.registry import normalize_candidate_class, normalize_metadata_name
-from src.redact.redact import apply as redact
+from src.redact.redact import apply as redact, redact_payload
 from src.target.origin import HTTPOrigin
 from .evidence import EvidenceArtifact
 
@@ -430,6 +430,7 @@ class WorkflowPhaseCompletion:
     phase: WorkflowPhase
     target_origin: str
     artifact_ref: str
+    no_inputs_discovered: bool = False
 
     def __post_init__(self) -> None:
         self.objective_id = _text(self.objective_id, limit=80) or ""
@@ -441,18 +442,27 @@ class WorkflowPhaseCompletion:
         self.artifact_ref = _text(self.artifact_ref, limit=500) or ""
         if not self.target_origin or not self.artifact_ref:
             raise ValueError("phase completion requires target_origin and artifact_ref")
+        if not isinstance(self.no_inputs_discovered, bool):
+            raise ValueError("no_inputs_discovered must be a boolean")
+        if self.no_inputs_discovered and self.phase != "input_analysis":
+            raise ValueError(
+                "no_inputs_discovered is only valid for input analysis completion"
+            )
 
     @property
     def key(self) -> str:
         return f"{self.objective_id}:{self.phase}"
 
-    def to_dict(self) -> dict[str, str]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        value: dict[str, Any] = {
             "objective_id": self.objective_id,
             "phase": self.phase,
             "target_origin": self.target_origin,
             "artifact_ref": self.artifact_ref,
         }
+        if self.no_inputs_discovered:
+            value["no_inputs_discovered"] = True
+        return value
 
     @classmethod
     def from_dict(cls, value: Any) -> WorkflowPhaseCompletion | None:
@@ -463,9 +473,21 @@ class WorkflowPhaseCompletion:
             phase = value.get("phase")
             target_origin = value.get("target_origin")
             artifact_ref = value.get("artifact_ref")
-            if not all(isinstance(item, str) for item in (objective_id, phase, target_origin, artifact_ref)):
+            if (
+                not isinstance(objective_id, str)
+                or not isinstance(phase, str)
+                or not isinstance(target_origin, str)
+                or not isinstance(artifact_ref, str)
+            ):
                 return None
-            return cls(objective_id, phase, target_origin, artifact_ref)  # type: ignore[arg-type]
+            no_inputs_discovered = value.get("no_inputs_discovered", False)
+            return cls(
+                objective_id,
+                cast(WorkflowPhase, phase),
+                target_origin,
+                artifact_ref,
+                no_inputs_discovered,
+            )
         except (TypeError, ValueError):
             return None
 
@@ -478,6 +500,7 @@ class ValidationResult:
     evidence_refs: list[str] = field(default_factory=list)
     techniques: list[str] = field(default_factory=list)
     repeatable: bool | None = None
+    confirmation: dict[str, Any] | None = None
     mutation_performed: bool = False
     cleanup_status: str | None = None
     deferred_reason: str | None = None
@@ -497,6 +520,16 @@ class ValidationResult:
         self.techniques = _strings(self.techniques, maximum=_MAX_TECHNIQUES)
         if self.repeatable is not None and not isinstance(self.repeatable, bool):
             raise ValueError("repeatable must be a boolean or null")
+        if self.confirmation is not None:
+            if not isinstance(self.confirmation, dict):
+                raise ValueError("confirmation must be an object or null")
+            encoded = json.dumps(self.confirmation, ensure_ascii=False, default=str)
+            if len(encoded) > 6000:
+                raise ValueError("confirmation exceeds the structured evidence limit")
+            sanitized = redact_payload(self.confirmation)
+            if not isinstance(sanitized, dict):
+                raise ValueError("confirmation must remain an object after redaction")
+            self.confirmation = sanitized
         if not isinstance(self.mutation_performed, bool):
             raise ValueError("mutation_performed must be a boolean")
         if self.coverage_synced is not None and not isinstance(self.coverage_synced, bool):
@@ -515,6 +548,7 @@ class ValidationResult:
             "evidence_refs": list(self.evidence_refs),
             "techniques": list(self.techniques),
             "repeatable": self.repeatable,
+            "confirmation": self.confirmation,
             "mutation_performed": self.mutation_performed,
             "cleanup_status": self.cleanup_status,
             "deferred_reason": self.deferred_reason,
@@ -545,6 +579,7 @@ class ValidationResult:
                 evidence_refs=value.get("evidence_refs", []),
                 techniques=value.get("techniques", []),
                 repeatable=value.get("repeatable"),
+                confirmation=value.get("confirmation"),
                 mutation_performed=value.get("mutation_performed", False),
                 cleanup_status=value.get("cleanup_status"),
                 deferred_reason=value.get("deferred_reason"),
@@ -565,6 +600,7 @@ def validation_result_fingerprint(result: ValidationResult) -> str:
         "evidence_refs": sorted(result.evidence_refs),
         "techniques": sorted(result.techniques),
         "repeatable": result.repeatable,
+        "confirmation": result.confirmation,
         "mutation_performed": result.mutation_performed,
     }
     body = json.dumps(semantic_identity, sort_keys=True, separators=(",", ":"))
@@ -725,6 +761,7 @@ class WorkflowState:
         objective_id: str,
         target_origin: str,
         artifact_ref: str,
+        no_inputs_discovered: bool = False,
     ) -> bool:
         objective = self.objective
         marker = WorkflowPhaseCompletion(
@@ -732,6 +769,7 @@ class WorkflowState:
             phase=phase,
             target_origin=target_origin,
             artifact_ref=artifact_ref,
+            no_inputs_discovered=no_inputs_discovered,
         )
         if (
             objective is None
@@ -822,6 +860,20 @@ class WorkflowState:
         )
         completed = self.completed_phases(objective)
         objective_inputs = self.objective_inputs()
+        input_analysis_marker = self.phase_completions.get(
+            f"{objective.id}:input_analysis"
+        )
+        if (
+            "input_analysis" in completed
+            and not objective_inputs
+            and (
+                input_analysis_marker is None
+                or not input_analysis_marker.no_inputs_discovered
+            )
+        ):
+            blockers.append(
+                "input analysis has no recorded inputs or explicit no-input attestation"
+            )
         for phase in REQUIRED_WHOLE_TARGET_PHASES:
             if phase in completed:
                 continue

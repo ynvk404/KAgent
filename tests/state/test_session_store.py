@@ -333,6 +333,96 @@ class TestTempCollisionOwnership:
 
 class TestMessageProviderState:
     @pytest.mark.asyncio
+    async def test_redacts_secret_material_only_in_persisted_message_copy(self, tmp_path):
+        bearer = "user-bearer-marker-abcdefghijklmnopqrstuvwxyz"
+        cookie = "tool-cookie-marker-abcdefghijklmnopqrstuvwxyz"
+        api_key = "assistant-api-key-marker-1234567890"
+        reasoning = "reasoning-bearer-marker-abcdefghijklmnopqrstuvwxyz"
+        password = "short-password-marker"
+        nested_token = "nested-token-marker-abcdefghijklmnopqrstuvwxyz"
+        nested_cookie = "nested-cookie-marker-abcdefghijklmnopqrstuvwxyz"
+        arguments = json.dumps(
+            {
+                "password": password,
+                "nested": {
+                    "headers": {"Cookie": [nested_cookie]},
+                    "items": [{"access_token": nested_token}],
+                },
+            }
+        )
+        messages = [
+            Message(role="user", content=f"Authorization: Bearer {bearer}"),
+            Message(role="tool", content=f"Set-Cookie: session={cookie}; HttpOnly"),
+            Message(
+                role="assistant",
+                content=f"provider api_key={api_key}",
+                reasoning_content=f"Authorization: Bearer {reasoning}",
+                tool_calls=[
+                    ToolCall(
+                        id="call_secret_args",
+                        function=FunctionCall("submit", arguments),
+                    )
+                ],
+            ),
+        ]
+        store = Store.new_with_id(tmp_path, "redacted-session")
+
+        await store.save(messages)
+
+        raw = store.path.read_text(encoding="utf-8")
+        secrets = (bearer, cookie, api_key, reasoning, password, nested_token, nested_cookie)
+        assert all(secret not in raw for secret in secrets)
+        assert all(secret in messages[0].content + messages[1].content + messages[2].content
+                   + (messages[2].reasoning_content or "") + arguments for secret in secrets)
+
+        restored = store.load().messages
+        assert len(restored) == 3
+        assert "Authorization:" in restored[0].content
+        assert "Set-Cookie:" in restored[1].content
+        assert bearer not in restored[0].content
+        assert cookie not in restored[1].content
+        assert api_key not in restored[2].content
+        assert reasoning not in (restored[2].reasoning_content or "")
+        restored_call = restored[2].tool_calls[0]  # type: ignore[index]
+        restored_args = json.loads(restored_call.function.arguments)
+        persisted_args = restored_call.function.arguments
+        assert password not in persisted_args and "[REDACTED" in persisted_args
+        assert nested_cookie not in persisted_args
+        assert nested_token not in persisted_args
+        assert restored_args["nested"]["headers"]["Cookie"][0] != nested_cookie
+        assert restored_args["nested"]["items"][0]["access_token"] != nested_token
+
+    @pytest.mark.asyncio
+    async def test_redacted_session_keeps_secure_file_mode(self, tmp_path):
+        if os.name != "posix":
+            pytest.skip("POSIX permission bits are required")
+        store = Store.new_with_id(tmp_path, "redacted-file-mode")
+
+        await store.save([Message(role="user", content='{"password":"secret"}')])
+
+        assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+
+    @pytest.mark.asyncio
+    async def test_redacts_session_memory_credentials_without_breaking_memory_schema(
+        self, tmp_path
+    ):
+        store = Store.new_with_id(tmp_path, "redacted-memory")
+        secret = "memory-api-key-marker-abcdefghijklmnopqrstuvwxyz"
+        memory = SessionMemory(
+            objectives=["Continue testing /search"],
+            credentials=[f"api_key={secret}"],
+        )
+
+        await store.save([Message(role="user", content="continue")], memory=memory)
+
+        raw = store.path.read_text(encoding="utf-8")
+        loaded = store.load().memory
+        assert secret not in raw
+        assert loaded is not None
+        assert loaded.objectives == ["Continue testing /search"]
+        assert loaded.credentials == ["[REDACTED]"]
+
+    @pytest.mark.asyncio
     async def test_preserves_raw_ask_user_tool_result_across_session_round_trip(
         self, tmp_path
     ):

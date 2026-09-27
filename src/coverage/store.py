@@ -39,6 +39,7 @@ class CoverageEntry:
     firstSeen: int
     lastSeen: int
     notes: str | None = None
+    observationIds: list[str] | None = None
 
 
 @dataclass
@@ -190,6 +191,7 @@ class CoverageStore:
         vulnClass: str,
         status: CoverageStatus,
         notes: str | None = None,
+        observation_id: str | None = None,
     ) -> CoverageEntry:
 
         await self.load()
@@ -212,6 +214,19 @@ class CoverageStore:
         now = int(time.time() * 1000)
 
         prev = self.entries.get(key)
+        normalized_observation_id = (
+            observation_id.strip() if isinstance(observation_id, str) else ""
+        )
+        previous_ids = list(prev.observationIds or []) if prev else []
+        if prev and normalized_observation_id and normalized_observation_id in previous_ids:
+            return prev
+        # A tuple managed by structured validation results must be retested
+        # through another ValidationResult, which supplies a stable identity.
+        if prev and previous_ids and not normalized_observation_id:
+            return prev
+        next_ids = previous_ids
+        if normalized_observation_id:
+            next_ids = [*previous_ids, normalized_observation_id][-20:]
 
         merged = CoverageEntry(
             endpoint=endpoint,
@@ -222,6 +237,7 @@ class CoverageStore:
             firstSeen=prev.firstSeen if prev else now,
             lastSeen=now,
             notes=notes if notes is not None else (prev.notes if prev else None),
+            observationIds=next_ids or None,
         )
 
         self.entries[key] = merged
@@ -234,7 +250,7 @@ class CoverageStore:
 
     async def ensure_validation_mark(
         self, *, endpoint: str, param: str, vulnClass: str,
-        status: CoverageStatus, notes: str,
+        status: CoverageStatus, notes: str, observation_id: str,
     ) -> CoverageEntry:
         """Persist one validation outcome without inflating retry counts."""
         await self.load()
@@ -243,18 +259,38 @@ class CoverageStore:
             normalize_candidate_class(vulnClass),
         )
         existing = self.entries.get(key)
-        if existing and existing.status == status and existing.notes == notes:
+        existing_ids = set(existing.observationIds or []) if existing else set()
+        if existing and observation_id in existing_ids:
             if self.last_save_error is not None:
                 self._queue_save()
+        elif existing and not existing_ids and existing.status == status:
+            # Adopt a matching legacy/manual observation as this structured
+            # result instead of counting the two persistence paths twice.
+            existing.observationIds = [observation_id]
+            existing.notes = notes
+            self._queue_save()
         else:
             existing = await self.mark(
                 endpoint=endpoint, param=param, vulnClass=vulnClass,
-                status=status, notes=notes,
+                status=status, notes=notes, observation_id=observation_id,
             )
         await self.flush()
         if self.last_save_error is not None:
             raise OSError("coverage store could not be persisted") from self.last_save_error
         return existing
+
+    async def get(
+        self, *, endpoint: str, param: str, vulnClass: str
+    ) -> CoverageEntry | None:
+        """Return one normalized tuple without mutating its observation count."""
+        await self.load()
+        return self.entries.get(
+            _key_of(
+                _normalize_endpoint(endpoint),
+                param.strip(),
+                normalize_candidate_class(vulnClass),
+            )
+        )
 
     async def list(
         self,
@@ -553,6 +589,7 @@ def _is_valid_entry(
     if not all(key in value for key in required):
         return False
 
+    observation_ids = value.get("observationIds")
     return (
         all(
             isinstance(value[key], str) and value[key]
@@ -570,6 +607,13 @@ def _is_valid_entry(
             and not isinstance(value[key], bool)
             and value[key] >= 0
             for key in ("firstSeen", "lastSeen")
+        )
+        and (
+            observation_ids is None
+            or (
+                isinstance(observation_ids, list)
+                and all(isinstance(item, str) and item for item in observation_ids)
+            )
         )
         and (value.get("notes") is None or isinstance(value.get("notes"), str))
     )

@@ -287,6 +287,33 @@ class TestScopeBounds:
         assert "including a clear error-based SQLI-1 signal" in normalized
         assert "Phase 1 alone does not establish SQLI-2" in normalized
 
+    def test_boolean_confirmation_requires_structured_repeated_pairs(self, skill_text: str):
+        normalized = _norm(skill_text)
+        for marker in (
+            "kind: boolean-differential",
+            "request_template",
+            "true_predicate",
+            "false_predicate",
+            "at least two `pairs`",
+            "A benign baseline is useful context but is not the FALSE member",
+        ):
+            assert marker in normalized
+
+    def test_curl_evidence_separates_body_and_metadata(self, skill_text: str):
+        normalized = _norm(skill_text)
+        assert "keep the body and transfer metadata in separate" in normalized
+        assert "Never append a delimiter to a multiline body" in normalized
+        assert "status: unavailable" in normalized
+        assert "never infer `200`" in normalized
+
+    def test_finding_wording_forbids_unverified_full_table_and_arbitrary_sql(
+        self, skill_text: str
+    ):
+        normalized = _norm(skill_text)
+        assert "consistent with bypassing the filter" in normalized
+        assert "do not call it `every row` or `the full table`" in normalized
+        assert "Do not say the injection `executes arbitrary SQL`" in normalized
+
     def test_direct_candidate_enters_workflow_before_active_probes(
         self, skill_text: str
     ):

@@ -36,6 +36,23 @@ async def register_proof(workflow, candidate_id, tmp_path, name):
     return response["evidence"]["id"]
 
 
+def repeated_boolean_confirmation(endpoint: str, parameter: str) -> dict:
+    return {
+        "kind": "boolean-differential",
+        "request_template": f"POST {endpoint}?{parameter}={{predicate}}",
+        "true_predicate": "value' OR 1=1--",
+        "false_predicate": "value' OR 1=2--",
+        "pairs": [
+            {
+                "repetition": repetition,
+                "true": {"status": 200, "size": 900, "marker": "rows=3"},
+                "false": {"status": 200, "size": 30, "marker": "rows=0"},
+            }
+            for repetition in (1, 2)
+        ],
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("user_text", "skill_name", "candidate_class", "endpoint", "parameter"),
@@ -91,16 +108,22 @@ async def test_offline_request_to_confirmed_workflow_handoff(
     evidence_id = await register_proof(
         workflow, candidate_id, tmp_path, f"{skill_name}-proof.txt",
     )
+    result_args = {
+        "action": "record_result",
+        "candidate_id": candidate_id,
+        "skill_name": skill_name,
+        "outcome": "confirmed",
+        "evidence_refs": [evidence_id],
+        "repeatable": True,
+    }
+    if skill_name == "sql-injection":
+        result_args["techniques"] = ["boolean differential"]
+        result_args["confirmation"] = repeated_boolean_confirmation(
+            endpoint, parameter
+        )
     result = json.loads(
         await workflow.run(
-            {
-                "action": "record_result",
-                "candidate_id": candidate_id,
-                "skill_name": skill_name,
-                "outcome": "confirmed",
-                "evidence_refs": [evidence_id],
-                "repeatable": True,
-            },
+            result_args,
             None,
             AlwaysAllow(),
         )
@@ -111,30 +134,14 @@ async def test_offline_request_to_confirmed_workflow_handoff(
 
     duplicate = json.loads(
         await workflow.run(
-            {
-                "action": "record_result",
-                "candidate_id": candidate_id,
-                "skill_name": skill_name,
-                "outcome": "confirmed",
-                "evidence_refs": [evidence_id],
-                "repeatable": True,
-                "notes": "same result, different prose",
-            },
+            {**result_args, "notes": "same result, different prose"},
             None,
             AlwaysAllow(),
         )
     )
     retest = json.loads(
         await workflow.run(
-            {
-                "action": "record_result",
-                "candidate_id": candidate_id,
-                "skill_name": skill_name,
-                "outcome": "confirmed",
-                "evidence_refs": [evidence_id],
-                "repeatable": True,
-                "force": True,
-            },
+            {**result_args, "force": True},
             None,
             AlwaysAllow(),
         )
@@ -220,7 +227,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
                 "endpoint": "/login",
                 "parameter": "id",
                 "source_skill": "web-input-analysis",
-                "signals": ["repeatable boolean differential"],
+                "signals": ["paired boolean probes warrant validator review"],
             },
             None,
             AlwaysAllow(),
@@ -275,6 +282,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
                 "evidence_refs": [evidence_id],
                 "techniques": ["boolean differential"],
                 "repeatable": True,
+                "confirmation": repeated_boolean_confirmation("/login", "id"),
             },
             None,
             AlwaysAllow(),

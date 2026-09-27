@@ -10,6 +10,8 @@ from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
 from src.tools.workflow import DEFAULT_LIST_LIMIT, WorkflowTool
+from src.tools.outcome import ToolOutput
+from src.tools.coverage import CoverageTool
 from src.workflow.state import (
     AttackSurfaceInput,
     Candidate,
@@ -17,6 +19,68 @@ from src.workflow.state import (
     WorkflowObjective,
     WorkflowState,
 )
+
+
+def _confirmed_sqli_args() -> dict:
+    return {
+        "techniques": ["error-based", "boolean-based"],
+        "repeatable": True,
+        "confirmation": {
+            "kind": "boolean-differential",
+            "request_template": "GET /search?q={predicate}",
+            "true_predicate": "value' OR 1=1--",
+            "false_predicate": "value' OR 1=2--",
+            "pairs": [
+                {
+                    "repetition": repetition,
+                    "true": {"status": 200, "size": 900, "marker": "rows=3"},
+                    "false": {"status": 200, "size": 30, "marker": "rows=0"},
+                }
+                for repetition in (1, 2)
+            ],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_workflow_semantic_failure_has_typed_error_status():
+    output = await WorkflowTool(WorkflowState()).run(
+        {
+            "action": "record_input",
+            "method": "GET",
+            "endpoint": "/search",
+            "parameter": "q",
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    assert isinstance(output, ToolOutput)
+    assert output.status == "error"
+    assert output.error_kind == "invalid_args"
+    assert output.startswith("error: record_input requires")
+
+
+@pytest.mark.asyncio
+async def test_candidate_rejects_unstructured_boolean_differential_claim():
+    state = WorkflowState()
+    output = await WorkflowTool(state, Target("https://target.test")).run(
+        {
+            "action": "record_candidate",
+            "candidate_class": "sql-injection",
+            "endpoint": "/search",
+            "parameter": "q",
+            "signals": [
+                "boolean differential: TRUE returns rows while FALSE is empty"
+            ],
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    assert output.status == "error"
+    assert "structured, repeated validation evidence" in output
+    assert state.candidates == {}
 
 
 @pytest.mark.asyncio
@@ -153,6 +217,7 @@ async def test_result_coverage_sync_failure_is_retryable(tmp_path):
     recorded = json.loads(await tool.run({
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "sql-injection", "outcome": "confirmed", "evidence_refs": [evidence],
+        **_confirmed_sqli_args(),
     }, None, AlwaysAllow()))
     assert recorded["coverage_sync"] == "pending"
     assert recorded["eligible_for_confirm_finding"] is False
@@ -166,6 +231,167 @@ async def test_result_coverage_sync_failure_is_retryable(tmp_path):
     assert len(await coverage.list()) == 1
     assert (await coverage.list())[0].status == "failed"
     assert (await coverage.list())[0].count == 1
+
+    duplicate = json.loads(await CoverageTool(coverage).run({
+        "action": "mark", "endpoint": "GET /search", "param": "q",
+        "vuln_class": "sql-injection", "status": "failed",
+        "notes": "duplicate manual mark after workflow sync",
+    }, None, AlwaysAllow()))
+    assert duplicate["entry"]["count"] == 1
+    assert duplicate["created"] is False
+    assert duplicate["updated"] is False
+    assert duplicate["deduplicated"] is True
+    assert (await coverage.list())[0].count == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_coverage_mark_before_workflow_sync_is_adopted(tmp_path):
+    coverage = CoverageStore(str(tmp_path / "coverage.json"))
+    await coverage.mark(
+        endpoint="GET /search",
+        param="q",
+        vulnClass="sql-injection",
+        status="failed",
+        notes="manual finding mark",
+    )
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="sql-injection",
+        target="https://target.test",
+        method="GET",
+        endpoint="/search",
+        parameter="q",
+    ))
+    proof = tmp_path / "proof.txt"
+    proof.write_text("repeatable paired evidence", encoding="utf-8")
+    tool = WorkflowTool(state, coverage=coverage, evidence_root=tmp_path)
+    evidence = json.loads(await tool.run({
+        "action": "record_evidence",
+        "candidate_id": candidate.id,
+        "evidence_path": "proof.txt",
+    }, None, AlwaysAllow()))["evidence"]["id"]
+
+    output = json.loads(await tool.run({
+        "action": "record_result",
+        "candidate_id": candidate.id,
+        "skill_name": "sql-injection",
+        "outcome": "confirmed",
+        "evidence_refs": [evidence],
+        **_confirmed_sqli_args(),
+    }, None, AlwaysAllow()))
+
+    assert output["coverage_sync"] == "synced"
+    entries = await coverage.list()
+    assert len(entries) == 1
+    assert entries[0].count == 1
+    assert entries[0].observationIds
+
+
+@pytest.mark.asyncio
+async def test_error_based_sqli_confirmation_remains_backward_compatible(tmp_path):
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="sql-injection",
+        target="https://target.test",
+        endpoint="/search",
+        parameter="q",
+    ))
+    proof = tmp_path / "proof.txt"
+    proof.write_text("database parser error evidence", encoding="utf-8")
+    tool = WorkflowTool(state, evidence_root=tmp_path)
+    evidence = json.loads(await tool.run({
+        "action": "record_evidence",
+        "candidate_id": candidate.id,
+        "evidence_path": "proof.txt",
+    }, None, AlwaysAllow()))["evidence"]["id"]
+
+    output = json.loads(await tool.run({
+        "action": "record_result",
+        "candidate_id": candidate.id,
+        "skill_name": "sql-injection",
+        "outcome": "confirmed",
+        "evidence_refs": [evidence],
+        "techniques": ["error-based"],
+    }, None, AlwaysAllow()))
+
+    assert output["eligible_for_confirm_finding"] is True
+    assert output["result"]["confirmation"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutate,expected",
+    [
+        (
+            lambda confirmation: confirmation["pairs"].pop(),
+            "at least two paired repetitions",
+        ),
+        (
+            lambda confirmation: confirmation["pairs"][1].update(
+                {"true": {"status": 200, "size": 901, "marker": "rows=3"}}
+            ),
+            "not reproducible",
+        ),
+        (
+            lambda confirmation: confirmation["pairs"][0].update(
+                {"true": {"status": 200, "size": 30, "marker": "rows=0"}}
+            ),
+            "TRUE and FALSE observations must differ",
+        ),
+    ],
+)
+async def test_confirmed_sqli_rejects_unrepeated_or_contradictory_boolean_evidence(
+    tmp_path, mutate, expected,
+):
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test",
+        method="GET", endpoint="/search", parameter="q",
+    ))
+    proof = tmp_path / "proof.txt"
+    proof.write_text("bounded request/response observations", encoding="utf-8")
+    tool = WorkflowTool(state, evidence_root=tmp_path)
+    evidence = json.loads(await tool.run({
+        "action": "record_evidence", "candidate_id": candidate.id,
+        "evidence_path": proof.name,
+    }, None, AlwaysAllow()))["evidence"]["id"]
+    contract = _confirmed_sqli_args()
+    mutate(contract["confirmation"])
+
+    output = await tool.run({
+        "action": "record_result", "candidate_id": candidate.id,
+        "skill_name": "sql-injection", "outcome": "confirmed",
+        "evidence_refs": [evidence], **contract,
+    }, None, AlwaysAllow())
+
+    assert isinstance(output, ToolOutput) and output.status == "error"
+    assert expected in output
+    assert state.validation_results == []
+
+
+def test_confirmed_sqli_accepts_repeated_time_differential_contract():
+    result = ValidationResult(
+        "candidate", "sql-injection", "confirmed",
+        techniques=["time-based"], repeatable=True,
+        confirmation={
+            "kind": "time-differential",
+            "request_template": "POST /login body={probe}",
+            "expected_delay_ms": 5000,
+            "pairs": [
+                {
+                    "repetition": repetition,
+                    "control": {"status": 200, "size": 30, "elapsed_ms": 100},
+                    "probe": {"status": 200, "size": 30, "elapsed_ms": 5100},
+                }
+                for repetition in (1, 2)
+            ],
+        },
+    )
+
+    normalized = WorkflowTool._validate_sqli_confirmation(result)
+
+    assert normalized["kind"] == "time-differential"
+    assert len(normalized["pairs"]) == 2
 
 
 @pytest.mark.asyncio
@@ -309,7 +535,7 @@ async def test_structured_candidate_to_validation_handoff_and_dedup(tmp_path):
                 "skill_name": "sql-injection",
                 "outcome": "confirmed",
                 "evidence_refs": [evidence],
-                "repeatable": True,
+                **_confirmed_sqli_args(),
             },
             None,
             AlwaysAllow(),
@@ -721,12 +947,16 @@ async def test_whole_target_phase_completion_checks_order_and_inventory(tmp_path
     }, None, AlwaysAllow()))
     assert enumeration["phase"] == "enumeration"
 
+    analysis_ref = "artifacts/web-input-analysis/target-test/candidates.md"
+    create_artifact(analysis_ref)
+    assert "requires at least one recorded input" in await tool.run({
+        "action": "complete_skill", "skill_name": "web-input-analysis",
+    }, None, AlwaysAllow())
+
     input_result = json.loads(await tool.run({
         "action": "record_input", "method": "GET", "endpoint": "/search",
         "parameter": "q", "location": "query",
     }, None, AlwaysAllow()))
-    analysis_ref = "artifacts/web-input-analysis/target-test/candidates.md"
-    create_artifact(analysis_ref)
     assert "pending or blocked" in await tool.run({
         "action": "complete_skill", "skill_name": "web-input-analysis",
     }, None, AlwaysAllow())
@@ -740,6 +970,52 @@ async def test_whole_target_phase_completion_checks_order_and_inventory(tmp_path
     }, None, AlwaysAllow()))
     assert analysis["phase"] == "input_analysis"
     assert state.completed_phases() == frozenset({"recon", "enumeration", "input_analysis"})
+
+
+@pytest.mark.asyncio
+async def test_whole_target_explicit_no_input_completion_is_persisted(tmp_path):
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    state = whole_target_tool_state()
+    tool = WorkflowTool(
+        state,
+        Target("https://target.test"),
+        skills=skills,
+        evidence_root=tmp_path,
+    )
+    for relative in (
+        "artifacts/recon/target-test/summary.md",
+        "artifacts/web-enumeration/target-test/inventory.md",
+        "artifacts/web-input-analysis/target-test/candidates.md",
+    ):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("bounded work completed", encoding="utf-8")
+
+    for skill_name in ("recon", "web-enumeration"):
+        output = await tool.run(
+            {"action": "complete_skill", "skill_name": skill_name},
+            None,
+            AlwaysAllow(),
+        )
+        assert json.loads(output)["ok"] is True
+    analysis = await tool.run(
+        {
+            "action": "complete_skill",
+            "skill_name": "web-input-analysis",
+            "no_inputs_discovered": True,
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    assert json.loads(analysis)["phase"] == "input_analysis"
+    marker = state.phase_completions["objective-active:input_analysis"]
+    assert marker.no_inputs_discovered is True
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert restored.phase_completions[
+        "objective-active:input_analysis"
+    ].no_inputs_discovered is True
 
 
 @pytest.mark.asyncio

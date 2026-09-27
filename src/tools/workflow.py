@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from src.workflow.evidence import EvidenceArtifact
 from src.skills.registry import Registry as SkillRegistry, normalize_candidate_class, normalize_metadata_name
 from src.skills.artifacts import completion_artifact_path, resolve_canonical_artifact
 
+from .outcome import ToolOutput
 from .types import Tool, arg_bool, arg_number, arg_string
 
 
@@ -47,6 +49,12 @@ MAX_LIST_LIMIT = 25
 MAX_LIST_COMPLETED_SKILLS = 20
 LIST_TEXT_LIMIT = 200
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
+_SQLI_BOOLEAN_CLAIM_RE = re.compile(
+    r"\bboolean\s+differential\b|"
+    r"\btrue\b.{0,100}\breturns?\b.{0,60}\b(?:rows?|results?|data)\b|"
+    r"\bfalse\b.{0,100}\b(?:empty|zero\s+rows?|no\s+rows?)\b",
+    re.IGNORECASE,
+)
 
 
 class WorkflowTool(Tool):
@@ -73,13 +81,10 @@ class WorkflowTool(Tool):
 
     def description(self) -> str:
         return (
-            "Record compact inputs, candidates, evidence, validation results, and completion. "
-            "Whole-target only: record_input, set_input_disposition, link_input_candidate. "
-            "record_candidate needs candidate_class and target (explicit or active); "
-            "record_evidence needs candidate_id and evidence_path; start_validation "
-            "needs candidate_id; record_result needs candidate_id, skill_name and "
-            "outcome; sync_coverage retries pending writes; complete_skill needs "
-            "skill_name. Use compact references; never include raw traffic."
+            "Manage structured assessment inputs, candidates, evidence, validation "
+            "results, coverage, and phase completion. Whole-target input actions "
+            "require an active objective. record_result needs candidate_id, "
+            "skill_name and outcome. Use compact references, never raw traffic."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -137,6 +142,12 @@ class WorkflowTool(Tool):
                 "evidence_refs": {"type": "array", "items": {"type": "string"}},
                 "techniques": {"type": "array", "items": {"type": "string"}},
                 "repeatable": {"type": "boolean"},
+                "confirmation": {
+                    "type": "object",
+                    "description": (
+                        "Structured proof for differential SQL injection."
+                    ),
+                },
                 "mutation_performed": {"type": "boolean"},
                 "cleanup_status": optional_string,
                 "deferred_reason": optional_string,
@@ -144,6 +155,12 @@ class WorkflowTool(Tool):
                 "force": {
                     "type": "boolean",
                     "description": "Intentional retest only.",
+                },
+                "no_inputs_discovered": {
+                    "type": "boolean",
+                    "description": (
+                        "Attest that whole-target enumeration found no inputs."
+                    ),
                 },
                 "current_phase": optional_string,
                 "artifact_ref": {
@@ -175,26 +192,41 @@ class WorkflowTool(Tool):
     ) -> str:
         action = arg_string(args, "action")
         if action == "record_input":
-            return self._record_input(args)
-        if action == "set_input_disposition":
-            return self._set_input_disposition(args)
-        if action == "link_input_candidate":
-            return self._link_input_candidate(args)
-        if action == "record_candidate":
-            return self._record_candidate(args)
-        if action == "record_evidence":
-            return self._record_evidence(args)
-        if action == "start_validation":
-            return self._start_validation(args)
-        if action == "record_result":
-            return await self._record_result(args)
-        if action == "sync_coverage":
-            return await self._sync_coverage_action(args)
-        if action == "complete_skill":
-            return self._complete_skill(args)
-        if action == "list":
-            return self._list(args)
-        return f"error: action must be one of: {', '.join(ACTIONS)}"
+            result = self._record_input(args)
+        elif action == "set_input_disposition":
+            result = self._set_input_disposition(args)
+        elif action == "link_input_candidate":
+            result = self._link_input_candidate(args)
+        elif action == "record_candidate":
+            result = self._record_candidate(args)
+        elif action == "record_evidence":
+            result = self._record_evidence(args)
+        elif action == "start_validation":
+            result = self._start_validation(args)
+        elif action == "record_result":
+            result = await self._record_result(args)
+        elif action == "sync_coverage":
+            result = await self._sync_coverage_action(args)
+        elif action == "complete_skill":
+            result = self._complete_skill(args)
+        elif action == "list":
+            result = self._list(args)
+        else:
+            result = f"error: action must be one of: {', '.join(ACTIONS)}"
+        return self._typed_result(result)
+
+    @staticmethod
+    def _typed_result(result: str) -> str:
+        """Preserve string compatibility while exposing semantic failures."""
+        if result.startswith("error:"):
+            return ToolOutput(result, status="error", error_kind="invalid_args")
+        try:
+            payload = json.loads(result)
+        except (TypeError, ValueError):
+            return result
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            return ToolOutput(result, status="error", error_kind="tool_exception")
+        return result
 
     def _record_candidate(self, args: dict[str, Any]) -> str:
         if "objective_id" in args:
@@ -243,6 +275,15 @@ class WorkflowTool(Tool):
                 objective_id=objective_id,
                 status=("deferred" if supported is False else args.get("status", "queued")),
             )
+            if candidate.candidate_class == "sql-injection" and any(
+                _SQLI_BOOLEAN_CLAIM_RE.search(signal)
+                for signal in candidate.signals
+            ):
+                return (
+                    "error: boolean differential claims require structured, "
+                    "repeated validation evidence; record only the observed "
+                    "candidate signal here"
+                )
             stored, created = self.state.add_candidate(candidate)
             input_id = arg_string(args, "input_id")
             if input_id:
@@ -350,6 +391,7 @@ class WorkflowTool(Tool):
                 evidence_refs=args.get("evidence_refs", []),
                 techniques=args.get("techniques", []),
                 repeatable=args.get("repeatable"),
+                confirmation=args.get("confirmation"),
                 mutation_performed=arg_bool(args, "mutation_performed"),
                 cleanup_status=args.get("cleanup_status"),
                 deferred_reason=args.get("deferred_reason"),
@@ -373,6 +415,11 @@ class WorkflowTool(Tool):
             skill = self.skills.get(result.skill_name) if self.skills else None
             if skill and skill.candidate_classes and candidate.candidate_class not in skill.candidate_classes:
                 raise ValueError("result skill does not handle candidate class")
+            if (
+                result.outcome == "confirmed"
+                and candidate.candidate_class == "sql-injection"
+            ):
+                result.confirmation = self._validate_sqli_confirmation(result)
             coverage_status = self._coverage_status(result)
             if self.coverage is not None and coverage_status:
                 result.coverage_synced = False
@@ -408,6 +455,199 @@ class WorkflowTool(Tool):
         )
 
     @staticmethod
+    def _validate_sqli_confirmation(
+        result: ValidationResult,
+    ) -> dict[str, Any] | None:
+        """Enforce the reproducible Phase-2 contract at the state boundary."""
+        confirmation = result.confirmation
+        techniques = {item.strip().lower() for item in result.techniques}
+        claims_boolean = any("boolean" in item for item in techniques)
+        claims_time = any("time" in item for item in techniques)
+        if not claims_boolean and not claims_time:
+            if confirmation is None:
+                # Preserve error-based and legacy SQLi result compatibility;
+                # structured enforcement applies to differential claims.
+                return None
+            raise ValueError(
+                "structured SQL injection confirmation requires a matching technique"
+            )
+        if result.repeatable is not True:
+            raise ValueError(
+                "differential SQL injection confirmation requires repeatable=true"
+            )
+        if not isinstance(confirmation, dict):
+            raise ValueError(
+                "differential SQL injection requires structured confirmation evidence"
+            )
+        kind = confirmation.get("kind")
+        if claims_time and not claims_boolean:
+            if kind != "time-differential":
+                raise ValueError(
+                    "time-based SQL injection requires time-differential evidence"
+                )
+            return WorkflowTool._validate_sqli_time_confirmation(
+                confirmation, techniques
+            )
+        if kind != "boolean-differential":
+            raise ValueError(
+                "boolean-based SQL injection requires boolean-differential evidence"
+            )
+        template = confirmation.get("request_template")
+        true_predicate = confirmation.get("true_predicate")
+        false_predicate = confirmation.get("false_predicate")
+        if not isinstance(template, str) or "{predicate}" not in template:
+            raise ValueError("boolean confirmation request_template must contain {predicate}")
+        if (
+            not isinstance(true_predicate, str)
+            or not true_predicate.strip()
+            or not isinstance(false_predicate, str)
+            or not false_predicate.strip()
+            or true_predicate.strip() == false_predicate.strip()
+        ):
+            raise ValueError("boolean confirmation requires distinct TRUE and FALSE predicates")
+        pairs = confirmation.get("pairs")
+        if not isinstance(pairs, list) or len(pairs) < 2:
+            raise ValueError("boolean confirmation requires at least two paired repetitions")
+
+        normalized_pairs: list[dict[str, Any]] = []
+        true_signatures: list[tuple[int, int, str]] = []
+        false_signatures: list[tuple[int, int, str]] = []
+        seen_repetitions: set[int] = set()
+        for raw_pair in pairs[:8]:
+            if not isinstance(raw_pair, dict):
+                raise ValueError("boolean confirmation pairs must be objects")
+            repetition = raw_pair.get("repetition")
+            if (
+                not isinstance(repetition, int)
+                or isinstance(repetition, bool)
+                or repetition < 1
+                or repetition in seen_repetitions
+            ):
+                raise ValueError("boolean confirmation repetitions must be unique positive integers")
+            seen_repetitions.add(repetition)
+            sides: dict[str, dict[str, Any]] = {}
+            for side in ("true", "false"):
+                raw = raw_pair.get(side)
+                if not isinstance(raw, dict):
+                    raise ValueError(f"boolean confirmation pair requires {side} observation")
+                status = raw.get("status")
+                size = raw.get("size")
+                marker = raw.get("marker", "")
+                if (
+                    not isinstance(status, int)
+                    or isinstance(status, bool)
+                    or status < 100
+                    or status > 599
+                ):
+                    raise ValueError("boolean confirmation status must be an HTTP status integer")
+                if (
+                    not isinstance(size, int)
+                    or isinstance(size, bool)
+                    or size < 0
+                ):
+                    raise ValueError("boolean confirmation size must be a non-negative integer")
+                if not isinstance(marker, str):
+                    raise ValueError("boolean confirmation marker must be a string")
+                marker = redact(marker.strip())[:200]
+                sides[side] = {"status": status, "size": size, "marker": marker}
+            true_signature = (
+                sides["true"]["status"], sides["true"]["size"], sides["true"]["marker"]
+            )
+            false_signature = (
+                sides["false"]["status"], sides["false"]["size"], sides["false"]["marker"]
+            )
+            if true_signature == false_signature:
+                raise ValueError("boolean TRUE and FALSE observations must differ")
+            true_signatures.append(true_signature)
+            false_signatures.append(false_signature)
+            normalized_pairs.append({"repetition": repetition, **sides})
+
+        if len(set(true_signatures)) != 1 or len(set(false_signatures)) != 1:
+            raise ValueError("boolean confirmation differential is not reproducible")
+        return {
+            "kind": kind,
+            "request_template": redact(template.strip())[:500],
+            "true_predicate": redact(true_predicate.strip())[:200],
+            "false_predicate": redact(false_predicate.strip())[:200],
+            "pairs": normalized_pairs,
+        }
+
+    @staticmethod
+    def _validate_sqli_time_confirmation(
+        confirmation: dict[str, Any], techniques: set[str]
+    ) -> dict[str, Any]:
+        if not any("time" in item for item in techniques):
+            raise ValueError(
+                "time-differential confirmation requires a time-based technique"
+            )
+        template = confirmation.get("request_template")
+        expected_delay_ms = confirmation.get("expected_delay_ms")
+        pairs = confirmation.get("pairs")
+        if not isinstance(template, str) or "{probe}" not in template:
+            raise ValueError("time confirmation request_template must contain {probe}")
+        if (
+            not isinstance(expected_delay_ms, int)
+            or isinstance(expected_delay_ms, bool)
+            or expected_delay_ms < 1000
+        ):
+            raise ValueError("time confirmation requires expected_delay_ms >= 1000")
+        if not isinstance(pairs, list) or len(pairs) < 2:
+            raise ValueError("time confirmation requires at least two paired repetitions")
+
+        normalized: list[dict[str, Any]] = []
+        seen_repetitions: set[int] = set()
+        for raw_pair in pairs[:8]:
+            if not isinstance(raw_pair, dict):
+                raise ValueError("time confirmation pairs must be objects")
+            repetition = raw_pair.get("repetition")
+            if (
+                not isinstance(repetition, int)
+                or isinstance(repetition, bool)
+                or repetition < 1
+                or repetition in seen_repetitions
+            ):
+                raise ValueError("time confirmation repetitions must be unique positive integers")
+            seen_repetitions.add(repetition)
+            sides: dict[str, dict[str, int]] = {}
+            for side in ("control", "probe"):
+                raw = raw_pair.get(side)
+                if not isinstance(raw, dict):
+                    raise ValueError(f"time confirmation pair requires {side} observation")
+                status = raw.get("status")
+                size = raw.get("size")
+                elapsed_ms = raw.get("elapsed_ms")
+                if (
+                    not isinstance(status, int)
+                    or isinstance(status, bool)
+                    or not 100 <= status <= 599
+                    or not isinstance(size, int)
+                    or isinstance(size, bool)
+                    or size < 0
+                    or not isinstance(elapsed_ms, int)
+                    or isinstance(elapsed_ms, bool)
+                    or elapsed_ms < 0
+                ):
+                    raise ValueError(
+                        "time confirmation observations require integer status, "
+                        "size, and elapsed_ms"
+                    )
+                sides[side] = {
+                    "status": status, "size": size, "elapsed_ms": elapsed_ms,
+                }
+            if (
+                sides["probe"]["elapsed_ms"] - sides["control"]["elapsed_ms"]
+                < int(expected_delay_ms * 0.8)
+            ):
+                raise ValueError("time confirmation delay is not reproducible")
+            normalized.append({"repetition": repetition, **sides})
+        return {
+            "kind": "time-differential",
+            "request_template": redact(template.strip())[:500],
+            "expected_delay_ms": expected_delay_ms,
+            "pairs": normalized,
+        }
+
+    @staticmethod
     def _coverage_status(result: ValidationResult) -> CoverageStatus | None:
         if result.outcome == "confirmed":
             return "failed"
@@ -430,12 +670,14 @@ class WorkflowTool(Tool):
         parameter = candidate.parameter or "(request)"
         if candidate.test_case:
             parameter = f"{parameter} [subcase: {candidate.test_case}]"
+        fingerprint = validation_result_fingerprint(result)
         await self.coverage.ensure_validation_mark(
             endpoint=endpoint,
             param=parameter,
             vulnClass=candidate.candidate_class,
             status=status,
-            notes=f"result={validation_result_fingerprint(result)[:20]}",
+            notes=f"result={fingerprint[:20]}",
+            observation_id=fingerprint,
         )
         result.coverage_synced = True
 
@@ -516,6 +758,14 @@ class WorkflowTool(Tool):
                             "error: input analysis cannot complete while an input "
                             "is pending or blocked"
                         )
+                    if (
+                        not self.state.objective_inputs()
+                        and not arg_bool(args, "no_inputs_discovered")
+                    ):
+                        return (
+                            "error: input analysis requires at least one recorded input "
+                            "or no_inputs_discovered=true"
+                        )
                 if not artifact_ref:
                     return f"error: {canonical} requires an artifact_ref for phase completion"
                 try:
@@ -524,6 +774,10 @@ class WorkflowTool(Tool):
                         objective_id=objective.id,
                         target_origin=objective.target_origin or "",
                         artifact_ref=artifact_ref,
+                        no_inputs_discovered=(
+                            workflow_phase == "input_analysis"
+                            and arg_bool(args, "no_inputs_discovered")
+                        ),
                     )
                 except ValueError as err:
                     return f"error: {err}"

@@ -1,5 +1,94 @@
 
+import json
 import re
+from collections.abc import Mapping
+from typing import Any
+
+
+_SECRET_FIELD_NAMES = frozenset(
+    {
+        "authorization",
+        "proxyauthorization",
+        "cookie",
+        "setcookie",
+        "password",
+        "passwd",
+        "pwd",
+        "token",
+        "accesstoken",
+        "refreshtoken",
+        "idtoken",
+        "apikey",
+        "xapikey",
+        "secret",
+        "clientsecret",
+        "privatekey",
+        "credentials",
+        "jwt",
+    }
+)
+
+
+def _is_secret_field(key: object) -> bool:
+    if not isinstance(key, str):
+        return False
+    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+    return normalized in _SECRET_FIELD_NAMES
+
+
+def _redacted_secret_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return {key: _redacted_secret_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redacted_secret_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redacted_secret_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return [_redacted_secret_value(item) for item in value]
+    return "[REDACTED]"
+
+
+def redact_payload(value: Any) -> Any:
+    """Recursively redact strings and values stored under secret field names."""
+    if isinstance(value, str):
+        redacted = apply(value)
+        if not redacted.lstrip().startswith(("{", "[")):
+            return redacted
+        try:
+            parsed = json.loads(redacted)
+        except (TypeError, ValueError, RecursionError):
+            return redacted
+        sanitized = redact_payload(parsed)
+        if sanitized != parsed:
+            return json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"))
+        return redacted
+    if isinstance(value, Mapping):
+        return {
+            key: (
+                _redacted_secret_value(item)
+                if _is_secret_field(key) and item is not None
+                else redact_payload(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return tuple(redact_payload(item) for item in value)
+    if isinstance(value, list):
+        return [redact_payload(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return [redact_payload(item) for item in value]
+    if isinstance(value, BaseException):
+        return {
+            "name": type(value).__name__,
+            "message": apply(str(value)),
+        }
+    if isinstance(value, (bytes, bytearray)):
+        return apply(bytes(value).decode("utf-8", errors="replace"))
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return apply(str(value))
 
 # Regex patterns
 
@@ -101,6 +190,15 @@ PRIVATE_KEY_BLOCK = re.compile(
 )
 
 
+JSON_SECRET_VALUE = re.compile(
+    r'("(?:authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|'
+    r'password|passwd|pwd|(?:access|refresh|id)?[-_]?token|api[-_]?key|'
+    r'x[-_]?api[-_]?key|secret|client[-_]?secret|private[-_]?key|jwt)"\s*:\s*")'
+    r'((?:\\.|[^"\\])*)(")',
+    re.IGNORECASE,
+)
+
+
 def mask(secret: str) -> str:
 
     if len(secret) <= 6:
@@ -133,6 +231,14 @@ class Redactor:
             "-----END PRIVATE KEY-----",
             text,
         )
+
+        def redact_json_secret(match: re.Match[str]) -> str:
+            secret = match.group(2)
+            if _MASKED_SECRET.fullmatch(secret):
+                return match.group(0)
+            return match.group(1) + mask(secret) + match.group(3)
+
+        out = JSON_SECRET_VALUE.sub(redact_json_secret, out)
 
         for pattern in PATTERNS:
             def repl(match):
