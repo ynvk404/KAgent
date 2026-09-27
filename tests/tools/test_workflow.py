@@ -78,6 +78,7 @@ async def test_candidate_rejects_unstructured_boolean_differential_claim():
         AlwaysAllow(),
     )
 
+    assert isinstance(output, ToolOutput)
     assert output.status == "error"
     assert "structured, repeated validation evidence" in output
     assert state.candidates == {}
@@ -390,6 +391,7 @@ def test_confirmed_sqli_accepts_repeated_time_differential_contract():
 
     normalized = WorkflowTool._validate_sqli_confirmation(result)
 
+    assert normalized is not None
     assert normalized["kind"] == "time-differential"
     assert len(normalized["pairs"]) == 2
 
