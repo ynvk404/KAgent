@@ -492,10 +492,16 @@ def test_malformed_selection_metadata_is_rejected(tmp_path, metadata, message):
 
 def test_candidate_class_alias_normalization():
     assert normalize_candidate_class("SQLI") == "sql-injection"
+    assert normalize_candidate_class("NoSQLi") == "nosql-injection"
     assert normalize_candidate_class("xss") == "cross-site-scripting"
     assert normalize_candidate_class("IDOR") == "access-control"
     assert normalize_candidate_class("bola") == "access-control"
+    assert normalize_candidate_class("authorization") == "access-control"
+    assert normalize_candidate_class("auth") == "auth"
     assert normalize_candidate_class("XXE") == "xxe"
+    assert normalize_candidate_class("CORS") == "cors-misconfiguration"
+    assert normalize_candidate_class("JWT") == "jwt-misconfiguration"
+    assert normalize_candidate_class("CMDI") == "command-injection"
 
 
 def test_validate_skill_accepts_optional_external_tool_prefixes():

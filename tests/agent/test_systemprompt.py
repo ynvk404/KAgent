@@ -349,12 +349,13 @@ class TestBuildSystemPrompt:
         ]:
             assert want in p, f"missing OWASP framework marker {want}"
 
-    def test_defaults_to_curl_first_and_native_semantic_discovery(self):
+    def test_defaults_to_native_scoped_http_and_semantic_discovery(self):
         p = build_system_prompt(
             BuildOptions(skills=Registry(), thinking_enabled=False, target=None)
         )
 
-        assert "Tool selection: curl-first" in p
+        assert "Tool selection: native scoped tools first" in p
+        assert "declare the action phase" in p
         assert "content_discovery" in p
         assert "service_discovery" in p
         assert "minimal profile" in p
@@ -378,7 +379,7 @@ class TestBuildSystemPrompt:
             )
         )
 
-        assert "Tool selection: curl-first" in p
+        assert "Tool selection: native scoped tools first" in p
         assert "Tooling profile: full" in p
         assert "installed ffuf through `content_discovery`" in p
         assert "nmap through `service_discovery`" in p

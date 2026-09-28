@@ -352,18 +352,17 @@ def build_whole_target_plan(
         candidate = next(
             (item for item in context.candidates if item.id == candidate_id), None
         )
-        validator = next(
-            (
-                skill for skill in skills
-                if candidate is not None
-                and skill.stage == "validation"
-                and not skill.disable_model_invocation
-                and candidate.candidate_class in skill.candidate_classes
-            ),
-            None,
-        )
-        if validator is None:
-            return None
+        if candidate is None:
+            return _unresolved_validator_plan(
+                candidate_id, "unknown", 0, revalidation=True,
+            )
+        matching = _validation_skills_for_class(skills, candidate.candidate_class)
+        if len(matching) != 1:
+            return _unresolved_validator_plan(
+                candidate_id, candidate.candidate_class, len(matching),
+                revalidation=True,
+            )
+        validator = matching[0]
         return DecisionPlan(
             recommended_skill=validator.name,
             reason=f"registered evidence for {candidate_id} is missing or no longer resolvable",
@@ -440,17 +439,13 @@ def build_whole_target_plan(
         )
     )
     for candidate in actionable:
-        validator = next(
-            (
-                skill for skill in skills
-                if skill.stage == "validation"
-                and not skill.disable_model_invocation
-                and candidate.candidate_class in skill.candidate_classes
-            ),
-            None,
-        )
-        if validator is None:
-            continue
+        matching = _validation_skills_for_class(skills, candidate.candidate_class)
+        if len(matching) != 1:
+            return _unresolved_validator_plan(
+                candidate.id, candidate.candidate_class, len(matching),
+                revalidation=candidate.id in context.revalidation_candidate_ids,
+            )
+        validator = matching[0]
         return DecisionPlan(
             recommended_skill=validator.name,
             reason=(
@@ -487,6 +482,51 @@ def build_whole_target_plan(
             ),
         )
     return None
+
+
+def _validation_skills_for_class(
+    skills: List[Skill], candidate_class: str,
+) -> list[Skill]:
+    canonical = normalize_candidate_class(candidate_class)
+    return [
+        skill for skill in skills
+        if skill.stage == "validation"
+        and not skill.disable_model_invocation
+        and canonical in {
+            normalize_candidate_class(item)
+            for item in skill.candidate_classes
+        }
+    ]
+
+
+def _unresolved_validator_plan(
+    candidate_id: str,
+    candidate_class: str,
+    match_count: int,
+    *,
+    revalidation: bool,
+) -> DecisionPlan:
+    resolution = "no enabled validator" if match_count == 0 else "ambiguous validator mapping"
+    action = "revalidation" if revalidation else "validation"
+    return DecisionPlan(
+        recommended_skill=None,
+        reason=(
+            f"candidate {candidate_id} has {resolution} for class "
+            f"{candidate_class}; {action} remains unresolved"
+        ),
+        risk="normal",
+        checklist=[
+            "Do not choose a validator by order or infer support from a similar class.",
+            "Resolve the skill registry mapping before continuing this candidate.",
+        ],
+        guidance=(
+            "Decision planner guidance for this turn:\n"
+            f"Candidate {candidate_id} ({candidate_class}) has {resolution}. "
+            "Do not validate it with an arbitrary skill or skip it as complete; "
+            "leave the candidate unresolved and report the registry mismatch."
+        ),
+        candidate_id=candidate_id,
+    )
 
 
 def select_candidate(
@@ -576,21 +616,39 @@ def detect_intent(
         normalize_candidate_class(name)
         for name in planner_context.candidate_classes
     }
+    matched_strong_triggers = [
+        (candidate.name, trigger)
+        for candidate in skills
+        if not candidate.disable_model_invocation
+        for trigger in candidate.triggers.strong
+        if contains_keyword(normalized, trigger)
+    ]
     scores: list[IntentScore] = []
 
     for skill in skills:
         if skill.disable_model_invocation:
             continue
 
+        shadowing_phrases = [
+            trigger
+            for skill_name, trigger in matched_strong_triggers
+            if skill_name != skill.name
+        ]
+
         explicit_skill_hits = (
             [skill.name]
-            if contains_keyword(normalized, skill.name)
+            if contains_unshadowed_keyword(
+                normalized,
+                skill.name,
+                shadowing_phrases,
+            )
             else []
         )
 
         candidate_hits = matching_candidate_classes(
             normalized,
             skill.candidate_classes,
+            shadowing_phrases=shadowing_phrases,
         )
         # A canonical candidate class and any of its unambiguous aliases are
         # equally explicit references.  Avoid counting the canonical form a
@@ -604,6 +662,7 @@ def detect_intent(
         strong_hits = matching_keywords(
             normalized,
             skill.triggers.strong,
+            shadowing_phrases=shadowing_phrases,
         )
         weak_hits = matching_keywords(
             normalized,
@@ -761,12 +820,18 @@ def confidence_check(scores: List[IntentScore]) -> Optional[IntentScore]:
 def matching_candidate_classes(
     normalized: str,
     candidate_classes: List[str],
+    *,
+    shadowing_phrases: List[str] | None = None,
 ) -> List[str]:
     hits: list[str] = []
+    shadows = shadowing_phrases or []
 
     for candidate_class in candidate_classes:
         terms = candidate_class_terms(candidate_class)
-        if any(contains_keyword(normalized, term) for term in terms):
+        if any(
+            contains_unshadowed_keyword(normalized, term, shadows)
+            for term in terms
+        ):
             hits.append(candidate_class)
 
     return hits
@@ -790,15 +855,22 @@ def normalize_metadata_skill_name(name: str) -> str:
 def matching_keywords(
     normalized: str,
     keywords: List[str],
+    *,
+    shadowing_phrases: List[str] | None = None,
 ) -> List[str]:
+    shadows = shadowing_phrases or []
     return [
         keyword
         for keyword in keywords
-        if contains_keyword(normalized, keyword)
+        if contains_unshadowed_keyword(normalized, keyword, shadows)
     ]
 
 
 def contains_keyword(normalized: str, keyword: str) -> bool:
+    return bool(keyword_spans(normalized, keyword))
+
+
+def keyword_spans(normalized: str, keyword: str) -> list[tuple[int, int]]:
     normalized_keyword = normalize(keyword)
     pattern = (
         r"(?<!\w)"
@@ -806,7 +878,41 @@ def contains_keyword(normalized: str, keyword: str) -> bool:
         + r"(?!\w)"
     )
 
-    return re.search(pattern, normalized) is not None
+    return [match.span() for match in re.finditer(pattern, normalized)]
+
+
+def contains_unshadowed_keyword(
+    normalized: str,
+    keyword: str,
+    shadowing_phrases: List[str],
+) -> bool:
+    """Return true when a keyword has an occurrence outside longer phrases.
+
+    Normalization intentionally treats hyphens and spaces alike.  Without an
+    occurrence-aware specificity check, a canonical class such as
+    ``access-control`` can therefore steal a match from the more specific
+    ``access-control-allow-origin`` trigger.  Preserve explicit standalone
+    mentions while suppressing only occurrences fully contained by a longer
+    phrase that actually matched the same input.
+    """
+    keyword_matches = keyword_spans(normalized, keyword)
+    if not keyword_matches:
+        return False
+
+    normalized_keyword = normalize(keyword)
+    shadow_spans = [
+        span
+        for phrase in shadowing_phrases
+        if normalize(phrase) != normalized_keyword
+        for span in keyword_spans(normalized, phrase)
+    ]
+    return any(
+        not any(
+            shadow_start <= start and end <= shadow_end
+            for shadow_start, shadow_end in shadow_spans
+        )
+        for start, end in keyword_matches
+    )
 
 
 def build_checklist(

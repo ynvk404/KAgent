@@ -36,9 +36,9 @@
 #
 # None of these payloads exfiltrate cookies, tokens, or page content, and
 # none chain into session hijacking, credential capture, keylogging, or
-# redirection to an external site. That is out of scope for this skill
-# entirely (see SKILL.md "Bound the proof") and is not something that
-# becomes available under any future phase either.
+# redirection to an external site. They are absent from this default corpus;
+# any separate controlled-impact path needs its own approval gate and
+# supported runtime capability, as described in SKILL.md.
 
 # ============================================================================
 # ===================== PHASE 1 — CONTEXT DETECTION ==========================

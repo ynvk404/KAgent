@@ -59,7 +59,9 @@ class ServiceDiscoveryTool(Tool):
             "Uses native TCP connections by default; full tooling profile may select "
             "installed nmap when recon coverage is missing. No other ports, CIDR, "
             "host lists, UDP, NSE scripts, OS detection, or "
-            "raw scanner flags. Requires permission."
+            "raw scanner flags. A scan validated against the declared active "
+            "target is routine reconnaissance and is eligible for YOLO; other "
+            "permission gates remain active."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -113,6 +115,8 @@ class ServiceDiscoveryTool(Tool):
                 json.dumps(action, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
             return {
+                "riskTier": "routine",
+                "yoloAutoApprove": True,
                 "cacheKey": f"service-discovery:{digest}",
                 "sessionScopeDisplay": (
                     f"TCP service discovery on {host}, ports {','.join(map(str, ports))} "
@@ -120,7 +124,7 @@ class ServiceDiscoveryTool(Tool):
                 ),
             }
         except (TypeError, ValueError):
-            return {"noSessionCache": True}
+            return {"noSessionCache": True, "riskTier": "bounded-impact"}
 
     def summarize(self, args: dict[str, Any]) -> dict[str, str]:
         try:
@@ -248,6 +252,8 @@ class ServiceDiscoveryTool(Tool):
             reason_text = "; ".join(
                 f"{address}: {reason}" for address, reason in address_reasons
             )
+            permission_hints = self.permission_hints(args)
+            declared_target = self.target.origin() == origin
             permission_started = time.monotonic()
             decision = await prompter.ask(
                 PermissionRequest(
@@ -265,7 +271,18 @@ class ServiceDiscoveryTool(Tool):
                         "not resolve the hostname again. Approve only if this exact "
                         "active target and port are within the engagement scope."
                     ),
-                    no_session_cache=True,
+                    no_session_cache=not declared_target,
+                    cache_key=(
+                        permission_hints.get("cacheKey") if declared_target else None
+                    ),
+                    session_scope_display=(
+                        permission_hints.get("sessionScopeDisplay")
+                        if declared_target else None
+                    ),
+                    risk_tier=(
+                        "routine" if declared_target else "bounded-impact"
+                    ),
+                    yolo_auto_approve=declared_target,
                 ),
                 signal,
             )
@@ -518,6 +535,18 @@ class ServiceDiscoveryTool(Tool):
 
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    # Let per-connection wait_for timeouts settle before
+                    # classifying anything still pending as unattempted.
+                    # Both deadlines are based on the same monotonic clock;
+                    # without this event-loop turn, the outer deadline can
+                    # win the race and discard an exact filtered result.
+                    await asyncio.sleep(0)
+                    settled = {task for task in pending if task.done()}
+                    for task in settled:
+                        results[tasks[task]] = task.result()
+                    pending.difference_update(settled)
+                    if not pending:
+                        break
                     for task in pending:
                         task.cancel()
                     await asyncio.gather(*pending, return_exceptions=True)

@@ -66,9 +66,18 @@ mechanism and the operator authorized that exact test.
 
 ## Stop and report
 
-Stop after the baseline, one Origin request, and at most one relevant
-preflight. Do not test credential theft, private-network access, cache
-poisoning, or application actions. Report exact request headers and CORS
+Stop the default flow after the baseline, one Origin request, and at most one
+relevant preflight. It does not automatically test credential theft,
+private-network access, cache poisoning, or application actions. If the
+engagement objective requires a separate browser-readable impact check on a
+disposable account, first record the current result and ask `ask_user` to name
+the candidate, exact endpoint/account, read-only action, data bound, and risk
+tier. Proceed only with that approval and an exact-action runtime permission
+prompt that `/yolo` cannot bypass; get fresh approval for any higher tier.
+This skill currently has no browser-execution tool, so use
+`browser-required` rather than simulate the check. If an impact action has no
+exact, non-`/yolo`-bypassable runtime permission gate, record
+`authorization-required` and stop. Report exact request headers and CORS
 response headers in `artifacts/cors-misconfiguration/<target>/results.md`;
 state whether the resource was public/protected and what browser behavior was
 not tested. Call `confirm_finding` only when the Candidate is `confirmed`

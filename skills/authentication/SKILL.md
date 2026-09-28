@@ -19,6 +19,7 @@ triggers:
     - session fixation
     - session invalidation
     - login bypass
+    - login issue
     - mfa bypass
     - 2fa bypass
     - otp bypass
@@ -85,9 +86,13 @@ that can be skipped, a reset token that isn't properly bound or
 consumable, a fixated pre-auth session that survives login), using only
 credential/session material already available and a strictly bounded
 number of live probes, or record a clear negative, blocked, or
-`insufficient-identity` result. Then record the result and stop.
+`insufficient-evidence` result with the missing identity material in notes.
+Then record the result and stop.
 
-Default to `curl` and the built-in `http` tool. Do not pull in scanners,
+Prefer the built-in `http` tool with `phase: validation` for bounded
+authentication probes. Use `curl` only when the native tool cannot express a
+necessary request detail; shell requests do not enforce target-origin scope.
+Do not pull in scanners,
 credential-stuffing tools, or password-spraying lists (Hydra, Medusa,
 custom wordlists, etc.) — this skill works from one candidate at a time,
 with a small, fixed set of legitimate credentials and a strictly bounded
@@ -149,8 +154,9 @@ or vertical privilege boundaries — that's `access-control`), CSRF,
 JWT/OAuth token *cryptographic* vulnerabilities (alg confusion, signature
 stripping — a separate, currently-inactive skill), or credential-strength
 policy review. If a candidate turns out to be about one of those instead
-of authentication mechanics, record it as `deferred (out of scope)` with
-the specific reason noted, and do not test it here.
+of authentication mechanics, record it as `deferred` with
+the specific reason noted, mark it out of scope for this validator, and do
+not test it here.
 
 If authentication is delegated to an external SSO/OAuth identity
 provider and the relevant authentication decision occurs outside the
@@ -158,7 +164,7 @@ target application's control, do not test the provider itself here.
 Test only the target application's local authentication/session boundary
 that is in scope (e.g. how the application establishes and manages its
 own session after the provider redirects back); otherwise record
-`deferred (out of scope)` with the specific reason (e.g. "authentication
+`deferred` with the specific reason (e.g. "authentication
 decision made by third-party IdP, outside target's control").
 
 ## Target identifier
@@ -211,7 +217,7 @@ If the reset or OTP delivery channel itself (email inbox, SMS provider)
 is outside the tester's access even though the account is a designated
 test account, treat the artifact as unavailable: ask once via `ask_user`
 for either access to that channel or the delivered value, and record
-`insufficient-identity` (not `not confirmed`) if it still isn't available.
+`insufficient-evidence` (not `not-confirmed`) if it still isn't available.
 
 Do not:
 
@@ -227,7 +233,7 @@ Do not:
 - reuse a session or credential obtained for one purpose as if it were a
   different, unauthorized identity;
 - proceed with a test that requires credential/session material you don't
-  have. Record the candidate as `insufficient-identity` instead (step 5)
+  have. Record the candidate as `insufficient-evidence` instead (step 5)
   and move on.
 
 ## 1. Select and restate the candidate
@@ -395,7 +401,7 @@ curl -ksS -o /tmp/reset_request_body -w '%{http_code}\n' --max-time 8 \
   token issued for account A is accepted when completing a reset for
   account B. If a second test account was not made available for this
   candidate, record the binding sub-check specifically as
-  `insufficient-identity` — do not infer binding behavior from the
+  `insufficient-evidence` — do not infer binding behavior from the
   single-use/expiry checks, and do not skip recording it.
 
 Each follow-up request in this tier is against the *same* test
@@ -440,10 +446,10 @@ logins should lock the account after 5 attempts") and the observed
 behavior demonstrates that specific expected control is absent. If the
 candidate didn't establish a specific expected control, record the raw
 observation (throttled / not throttled within 5 attempts) as
-`not confirmed` and note the absence of an established baseline to
+`not-confirmed` and note the absence of an established baseline to
 compare against — this is evidence to preserve, not sufficient support for
 a finding or a conclusion this skill should draw on its own. Record this bounded
-observation even when the outcome is `not confirmed`; do not discard the
+observation even when the outcome is `not-confirmed`; do not discard the
 evidence merely because an expected control wasn't established for
 comparison.
 
@@ -451,7 +457,7 @@ Rules across all tiers:
 
 - One comparison at a time, always against the step 2 baseline.
 - Never test with credentials/session material you weren't actually given
-  — an untested property is `insufficient-identity`, not a negative
+  — an untested property is `insufficient-evidence`, not a negative
   result.
 - If a tier already gives a clear positive (e.g. fixation confirmed at
   Tier 1), you don't need to also run the other tiers for the same
@@ -465,7 +471,7 @@ Rules across all tiers:
   provider-specific block header, or a response shape inconsistent with
   the application's normal auth-failure responses. An ordinary
   `401`/`403` that matches the application's normal failure behavior is
-  a negative application response, to be recorded as `not confirmed`
+  a negative application response, to be recorded as `not-confirmed`
   (or as the relevant tier's negative outcome), not `blocked`.
 
 **Isolation across candidates sharing state.** When multiple candidates
@@ -503,7 +509,7 @@ stop probing it. In particular, do not:
 
 If confirming a property would require action against a real user's
 identifier or credentials you don't have explicit authorization to use,
-stop short and record the candidate as `requires-authorization-for-write`
+stop short and record the candidate as `authorization-required`
 (step 5) rather than performing it.
 
 ## 5. Record the result
@@ -521,24 +527,24 @@ sub-check):
   signal (fixation, invalidation failure, MFA bypass, reset-flow defect,
   or absent throttling against a candidate-established expected control),
   bounded per step 4;
-- `not confirmed` — the relevant property tier(s) were actually tested
+- `not-confirmed` — the relevant property tier(s) were actually tested
   against the live application with real, distinct requests, and none
   showed a weakness;
 - `blocked` — a probe was intercepted by a WAF, rate-limiter, or challenge
   page before reaching the application logic (see the 401/403 rule in
   step 3); the application itself was never actually tested;
-- `insufficient-identity` — the credential/session/test-account/reset- or
+- `insufficient-evidence` — the credential/session/test-account/reset- or
   MFA-channel material this candidate needs was not available and the
   user did not supply it when asked; the application was never actually
   tested for this property;
-- `requires-authorization-for-write` — confirming the property would
+- `authorization-required` — confirming the property would
   require a state-changing authentication action against an identity or
   account the tester is not explicitly authorized to operate on, and that
   authorization wasn't given. In this skill, this outcome specifically
   covers authentication state-changing actions: triggering a password
   reset, MFA enrollment/reset, account lockout/unlock, or forced logout
   against an account or identifier the tester isn't authorized to act on;
-- `deferred (out of scope)` — the candidate turned out to be about
+- `deferred` — the candidate turned out to be about
   authorization, CSRF, token-cryptography, or an external SSO/OAuth
   provider's own decision rather than this application's authentication
   mechanics (see Scope). Record the specific reason (e.g. "authorization,
@@ -548,8 +554,8 @@ sub-check):
   the free-text capture below.
 
 If a candidate's tiers produce different results across its sub-checks
-(e.g. Tier 4's single-use check is `not confirmed` while its binding
-sub-check is `insufficient-identity` for lack of a second test account),
+(e.g. Tier 4's single-use check is `not-confirmed` while its binding
+sub-check is `insufficient-evidence` for lack of a second test account),
 record each sub-check's outcome individually rather than forcing one
 outcome for the whole candidate. The candidate's overall status for
 handoff purposes (step 6) is `confirmed` if any sub-check reached
@@ -571,7 +577,7 @@ For every candidate, regardless of outcome, capture:
   identifiers themselves);
 - attempt count used for Tier 5, if run, and confirmation it stayed at or
   under the 5-attempt cap, plus the raw bounded observation even when the
-  outcome is `not confirmed`;
+  outcome is `not-confirmed`;
 - scope of proof obtained for confirmed candidates (e.g. "fixation
   confirmed on primary login; not tested against SSO login path").
 
@@ -618,10 +624,10 @@ result and its registered evidence must be valid. Include:
   implementation, since you don't have the application's real
   authentication logic.
 
-Do not call `confirm_finding` for `not confirmed`, `blocked`, `insufficient-identity`,
-`requires-authorization-for-write`, or `deferred (out of scope)`
+Do not call `confirm_finding` for `not-confirmed`, `blocked`,
+`insufficient-evidence`, `authorization-required`, or `deferred`
 candidates as findings — they stay in `results.md` only. For
-`insufficient-identity` and `requires-authorization-for-write` candidates
+`insufficient-evidence` and `authorization-required` candidates
 specifically, flag in the summary exactly what credential, test account,
 or authorization would be needed to finish testing them, so the user can
 decide whether to supply it.
@@ -646,4 +652,4 @@ execute real account-takeover demonstrations against another user's
 identity without explicit authorization, run automated credential-testing
 tools by default, retry blocked probes with bypass tricks, or keep
 escalating scope on a candidate that already gave a clear negative or
-`insufficient-identity` result.
+`insufficient-evidence` result.

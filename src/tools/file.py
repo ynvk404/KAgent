@@ -10,8 +10,10 @@ from src.permission.permission import (
     PermissionRequest,
     UserControlledRefusal,
 )
+from src.paths import project_artifact_root, project_root
 
 from .types import (
+    PermissionHints,
     Tool,
     arg_bool,
     arg_string,
@@ -22,6 +24,29 @@ READ_BYTE_CAP = 200 * 1024
 
 WRITE_FILE_MODE = 0o644
 WRITE_DIR_MODE = 0o755
+
+
+def _artifact_permission_hints(path: str, verb: str) -> PermissionHints:
+    """Keep broad trust limited to generated output inside this project."""
+    resolved = Path(real_resolve(str(Path(path).expanduser().resolve())))
+    artifact_root = project_artifact_root().resolve()
+    canonical_project = project_root().resolve()
+    if (
+        artifact_root.is_relative_to(canonical_project)
+        and resolved.is_relative_to(artifact_root)
+    ):
+        return {
+            "riskTier": "routine",
+            "yoloAutoApprove": True,
+            "cacheKey": str(artifact_root),
+            "sessionScopeDisplay": f"{verb} under {artifact_root}",
+        }
+    return {
+        "noSessionCache": True,
+        "riskTier": "high-impact",
+        "cacheKey": str(resolved),
+        "sessionScopeDisplay": f"{verb} to {resolved}",
+    }
 
 def decode_utf8_capped(
     data: bytes,
@@ -82,6 +107,7 @@ async def gate_sensitive_path(
                 f"{verb} it."
             ),
             no_session_cache=True,
+            risk_tier="high-impact",
         ),
         signal,
     )
@@ -242,21 +268,8 @@ class FileWriteTool(Tool):
     def permission_hints(
         self,
         args
-    ):
-        return {
-            "cacheKey":
-                str(
-                    Path(
-                        arg_string(
-                            args,
-                            "path"
-                        )
-                    ).resolve()
-                ),
-            "sessionScopeDisplay": (
-                "writes to " + str(Path(arg_string(args, "path")).resolve())
-            ),
-        }
+    ) -> PermissionHints:
+        return _artifact_permission_hints(arg_string(args, "path"), "writes")
 
     def summarize(
         self,
@@ -377,21 +390,8 @@ class FileEditTool(Tool):
     def permission_hints(
         self,
         args
-    ):
-        return {
-            "cacheKey":
-                str(
-                    Path(
-                        arg_string(
-                            args,
-                            "path"
-                        )
-                    ).resolve()
-                ),
-            "sessionScopeDisplay": (
-                "edits to " + str(Path(arg_string(args, "path")).resolve())
-            ),
-        }
+    ) -> PermissionHints:
+        return _artifact_permission_hints(arg_string(args, "path"), "edits")
 
     def summarize(
         self,

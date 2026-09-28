@@ -6,12 +6,14 @@ import json
 import pytest
 
 from src.agent.agent import Agent, AgentOptions, ParsedToolCall
+from src.ask.ask import Question
 from src.engagement.state import EngagementState, OutOfScopeError
 from src.llm.types import FunctionCall, ToolCall
-from src.permission.permission import AlwaysAllow, AlwaysDeny, UserControlledRefusal
+from src.permission.permission import AlwaysAllow, AlwaysDeny, UserControlledRefusal, YoloPrompter
 from src.session.store import Store
-from src.skills.registry import Registry as SkillRegistry
+from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.target.target import Target
+from src.tools.ask import AskUserTool
 from src.tools.outcome import ToolOutput
 from src.tools.registry import Registry
 from src.tools.http import HTTPTool
@@ -70,6 +72,111 @@ def make_agent():
         client=FakeClient([]), tools=registry, skills=SkillRegistry(),
         prompter=AlwaysAllow(), store=None, target=Target(),
     ))
+
+
+def test_whole_target_validator_classes_exclude_duplicate_mappings():
+    skills = SkillRegistry()
+    for name in ("first-validator", "second-validator"):
+        skills.add(Skill(
+            name=name,
+            description=name,
+            tools=[],
+            disable_model_invocation=False,
+            path=f"/tmp/{name}/SKILL.md",
+            body="",
+            stage="validation",
+            triggers=SkillTriggers(),
+            candidate_classes=["sql-injection"],
+        ))
+    skills.add(Skill(
+        name="unique-validator",
+        description="unique-validator",
+        tools=[],
+        disable_model_invocation=False,
+        path="/tmp/unique-validator/SKILL.md",
+        body="",
+        stage="validation",
+        triggers=SkillTriggers(),
+        candidate_classes=["ssrf"],
+    ))
+    agent = Agent(AgentOptions(
+        client=FakeClient([]), tools=Registry(), skills=skills,
+        prompter=AlwaysAllow(), store=None, target=Target(),
+    ))
+
+    assert agent._workflow_validator_classes() == frozenset({"ssrf"})
+
+
+@pytest.mark.asyncio
+async def test_ask_user_in_a_tool_batch_defers_sibling_actions_until_human_reply():
+    class WaitingHuman:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.answer = asyncio.get_running_loop().create_future()
+
+        async def ask(self, q: Question, signal=None) -> str:
+            self.started.set()
+            return await self.answer
+
+    class SideEffectTool:
+        def __init__(self):
+            self.ran = False
+
+        def name(self):
+            return "side_effect"
+
+        def description(self):
+            return "test side effect"
+
+        def schema(self):
+            return {"type": "object", "properties": {}}
+
+        def requires_permission(self):
+            return False
+
+        async def run(self, args, signal, prompter):
+            self.ran = True
+            return "side effect ran"
+
+    human = WaitingHuman()
+    side_effect = SideEffectTool()
+    tools = Registry()
+    tools.register(AskUserTool(human))
+    tools.register(side_effect)
+    agent = Agent(AgentOptions(
+        client=FakeClient([]), tools=tools, skills=SkillRegistry(),
+        prompter=YoloPrompter(AlwaysAllow(), initial=True),
+        store=None, target=Target(),
+    ))
+    calls = [
+        ToolCall(id="action", function=FunctionCall(
+            name="side_effect", arguments="{}",
+        )),
+        ToolCall(id="question", function=FunctionCall(
+            name="ask_user",
+            arguments=json.dumps({"questions": [{"question": "Approve the exact action?"}]}),
+        )),
+    ]
+    task = asyncio.create_task(agent.execute_tool_calls(
+        calls, FakeSignal(), lambda _event: None, [],
+    ))
+    try:
+        await asyncio.wait_for(human.started.wait(), 2)
+        await asyncio.sleep(0)
+        assert side_effect.ran is False
+        assert not task.done()
+        human.answer.set_result("Yes, for this exact action")
+        batch = await asyncio.wait_for(task, 2)
+    finally:
+        if not human.answer.done():
+            human.answer.cancel()
+        if not task.done():
+            task.cancel()
+
+    assert side_effect.ran is False
+    assert len(batch.calls) == 2
+    assert any("Yes, for this exact action" in str(call.result.result) for call in batch.calls)
+    assert any("deferred until the human answer is available" in str(call.result.result) for call in batch.calls)
 
 
 @pytest.mark.asyncio
@@ -157,10 +264,14 @@ async def test_registry_denial_and_scope_preflight_have_distinct_categories():
         engagement_state=engagement,
     ))
     scope = await agent.run_parsed_tool_call(
-        call, ParsedToolCall({"url": "https://other.test"}, "{}"), FakeSignal(),
+        call,
+        ParsedToolCall({"url": "https://other.test", "phase": "recon"}, "{}"),
+        FakeSignal(),
     )
     denied = await agent.run_parsed_tool_call(
-        call, ParsedToolCall({"url": "https://example.test"}, "{}"), FakeSignal(),
+        call,
+        ParsedToolCall({"url": "https://example.test", "phase": "recon"}, "{}"),
+        FakeSignal(),
     )
     assert (scope.status, scope.error_kind) == ("error", "scope_denied")
     assert (denied.status, denied.error_kind) == ("error", "permission_denied")

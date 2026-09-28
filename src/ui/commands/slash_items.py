@@ -105,7 +105,7 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     SlashItem(
         name="/yolo",
         args="[on|off|default]",
-        description="show or set auto-approve mode for tool calls",
+        description="show or set auto-approval for routine in-scope recon and validation",
     ),
 
     SlashItem(

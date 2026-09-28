@@ -61,6 +61,29 @@ async def test_cache_allow_session_per_tool():
 
 
 @pytest.mark.asyncio
+async def test_bridge_preserves_yolo_eligibility_metadata():
+    shown: list[BridgePermissionRequest] = []
+
+    def publish(request: BridgePermissionRequest | None) -> None:
+        if request is not None:
+            shown.append(request)
+
+    bridge = BridgedPrompter(publish)
+    task = asyncio.create_task(bridge.ask(PermissionRequest(
+        tool="http",
+        summary="s",
+        detail="d",
+        yolo_auto_approve=True,
+    )))
+    await asyncio.sleep(0)
+
+    assert len(shown) == 1
+    assert shown[0].yolo_auto_approve is True
+    shown[0].resolve(Decision.ALLOW_ONCE)
+    assert await task == Decision.ALLOW_ONCE
+
+
+@pytest.mark.asyncio
 async def test_allow_once_does_not_populate_the_session_cache():
     ask, modals = make_bridge(Decision.ALLOW_ONCE)
     req = PermissionRequest(

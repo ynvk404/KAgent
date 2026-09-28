@@ -49,6 +49,23 @@ FORBIDDEN_VECTOR_RE = re.compile(
     r"\b(?:drop\s+database|truncate\s+table|union\s+select)\b|"
     r"\b(?:password|passwd|credential|api[_-]?key)\b)"
 )
+NONCANONICAL_OUTCOME_RE = re.compile(
+    r"`(?:not confirmed|confirmed \([^`]+\)|insufficient-identity|"
+    r"requires-authorization-for-write|deferred \([^`]+\))`|"
+    r"\boutcome:\s*(?:not confirmed|confirmed \(|insufficient-identity|"
+    r"requires-authorization-for-write|deferred \()",
+    re.IGNORECASE,
+)
+CONTROLLED_IMPACT_SKILLS = {
+    "nosql-injection",
+    "command-injection",
+    "xxe",
+    "path-traversal",
+    "file-upload",
+    "jwt-misconfiguration",
+    "cors-misconfiguration",
+    "open-redirect",
+}
 
 
 @pytest.fixture(scope="module")
@@ -63,6 +80,7 @@ def test_shipped_skills_have_valid_selection_metadata(shipped_registry):
         "ask_user",
         "confirm_finding",
         "content_discovery",
+        "file_edit",
         "file_write",
         "http",
         "read_payloads",
@@ -84,6 +102,34 @@ def test_shipped_skills_have_valid_selection_metadata(shipped_registry):
             normalize_candidate_class(candidate_class)
             for candidate_class in skill.candidate_classes
         ]
+
+
+def test_validation_playbooks_do_not_document_noncanonical_outcomes(
+    shipped_registry,
+):
+    for skill in shipped_registry.list_enabled():
+        if skill.stage != "validation":
+            continue
+        match = NONCANONICAL_OUTCOME_RE.search(skill.body)
+        assert match is None, (
+            f"{skill.name} documents noncanonical outcome {match.group(0)!r}"
+            if match
+            else skill.name
+        )
+
+
+def test_new_validation_skills_define_non_yolo_impact_escalation(
+    shipped_registry,
+):
+    for name in CONTROLLED_IMPACT_SKILLS:
+        skill = shipped_registry.get(name)
+        assert skill is not None
+        assert "ask_user" in skill.tools
+        body = re.sub(r"\s+", " ", skill.body.lower())
+        assert "candidate" in body and "risk tier" in body
+        assert "authorization-required" in body
+        assert "yolo" in body
+        assert "cannot bypass" in body or "cannot be bypassed" in body
 
 
 def test_explicit_skill_handoffs_resolve_to_shipped_skills(shipped_registry):

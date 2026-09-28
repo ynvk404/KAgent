@@ -75,8 +75,16 @@ request to the application.
 
 ## Stop and report
 
-No secret-file reads, SSRF to arbitrary destinations, cloud metadata, OOB
-exfiltration, entity expansion bombs, or data extraction. Report whether
+The default proof does not read secret files, reach arbitrary destinations or
+cloud metadata, perform OOB exfiltration, use expansion bombs, or extract
+data. This is not a blanket prohibition on authorized impact validation: if
+the engagement objective needs a separate non-sensitive fixture or controlled
+callback check after the current result is recorded, ask `ask_user` to name
+the candidate, exact target and fixture/callback, single action, bound, and
+risk tier. Proceed only after that approval and an exact-action runtime
+permission prompt that `/yolo` cannot bypass; a new tier needs fresh approval.
+If the runtime cannot enforce that gate, record `authorization-required` and
+stop. Report whether
 internal entity expansion and external resolution were independently
 observed, the exact authorized marker source, and any untested behavior in
 `artifacts/xxe/<target>/results.md`. Register only redacted evidence; call

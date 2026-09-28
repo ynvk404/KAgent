@@ -27,7 +27,7 @@ class ScriptedPrompter(Prompter):
 
 
 @pytest.mark.asyncio
-async def test_auto_approves_without_prompting():
+async def test_auto_approves_only_a_tool_marked_routine_action():
 
     inner = ScriptedPrompter(
         Decision.DENY,
@@ -43,6 +43,7 @@ async def test_auto_approves_without_prompting():
             tool="shell",
             summary="s",
             detail="d",
+            yolo_auto_approve=True,
         )
     )
 
@@ -73,6 +74,43 @@ async def test_yolo_defers_sensitive_requests_to_the_real_prompter():
 
     assert decision == Decision.DENY
     assert len(inner.seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_risk_tier_does_not_force_no_session_cache_or_control_yolo():
+    inner = ScriptedPrompter(Decision.DENY)
+    yolo = YoloPrompter(inner, True)
+    request = PermissionRequest(
+        tool="shell",
+        summary="run bounded impact check",
+        detail="exact command",
+        risk_tier="bounded-impact",
+    )
+
+    decision = await yolo.ask(request)
+
+    assert request.no_session_cache is False
+    assert decision == Decision.DENY
+    assert inner.seen == [request]
+
+
+@pytest.mark.asyncio
+async def test_yolo_eligibility_is_independent_of_risk_tier_and_session_trust():
+    inner = ScriptedPrompter(Decision.DENY)
+    yolo = YoloPrompter(inner, True)
+    request = PermissionRequest(
+        tool="http",
+        summary="bounded validation request",
+        detail="POST marker probe in the active scope",
+        risk_tier="bounded-impact",
+        yolo_auto_approve=True,
+    )
+
+    decision = await yolo.ask(request)
+
+    assert decision == Decision.ALLOW_ONCE
+    assert request.no_session_cache is False
+    assert inner.seen == []
 
 
 @pytest.mark.asyncio

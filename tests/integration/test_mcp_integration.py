@@ -64,6 +64,21 @@ def test_sanitized_mcp_name_collision_is_rejected():
     assert registry.get("mcp_a_b_scan") is first
 
 
+def test_mcp_actions_require_fresh_high_impact_approval():
+    tool = MCPTool(
+        FakeSession({"isError": False, "content": []}),
+        "mcp_browser_click",
+        "click",
+        "Click in browser",
+        {"type": "object"},
+    )
+
+    assert tool.permission_hints({"button": "submit"}) == {
+        "noSessionCache": True,
+        "riskTier": "high-impact",
+    }
+
+
 @pytest.mark.asyncio
 async def test_formats_text_mcp_errors_without_raw_content_json():
 

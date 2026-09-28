@@ -259,11 +259,25 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
     if cmd == "/yolo":
         if not rest:
             current = "on" if app.state.yolo else "off"
+            scope_origins = getattr(
+                getattr(agent, "engagement_state", None),
+                "allowed_origins",
+                (),
+            )
+            scope_text = (
+                ", ".join(origin.as_url() for origin in sorted(scope_origins))
+                if scope_origins else "no target scope declared; set /target first"
+            )
             dispatch(
                 Append(
                     entry=TranscriptEntry(
                         kind="system",
-                        text=f"yolo currently {current}",
+                        text=(
+                            f"YOLO currently {current}. Routine reconnaissance, "
+                            "enumeration, and benign in-scope validation are eligible "
+                            "for auto-approval; impact and sensitive local actions "
+                            f"still require human approval. Scope: {scope_text}."
+                        ),
                     )
                 )
             )
@@ -287,9 +301,20 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         if arg == "default":
             text = "YOLO reset to default (off)"
         elif next_state:
+            scope_origins = getattr(
+                getattr(agent, "engagement_state", None),
+                "allowed_origins",
+                (),
+            )
+            scope_text = (
+                ", ".join(origin.as_url() for origin in sorted(scope_origins))
+                if scope_origins else "no target scope declared; set /target first"
+            )
             text = (
-                "YOLO enabled. Tool calls will be auto-approved. "
-                "Authorized / lab targets only."
+                "YOLO enabled. Routine reconnaissance, enumeration, and benign "
+                "validation inside declared scope may run automatically. Impact "
+                "actions, out-of-scope destinations, and sensitive local actions "
+                f"still require human approval. Scope: {scope_text}."
             )
         else:
             text = "YOLO disabled. Tool calls will prompt for confirmation."

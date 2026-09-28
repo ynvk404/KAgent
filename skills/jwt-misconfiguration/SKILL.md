@@ -3,8 +3,9 @@ name: jwt-misconfiguration
 description: >
   Validate JWT parsing and claim/signature enforcement for a specific
   authorized lab candidate using only a disposable tester-owned subject and a
-  read-only endpoint. Never expose real tokens, guess keys, or impersonate
-  another user or role.
+  read-only endpoint. Real-token exposure and uncontrolled key guessing are
+  excluded; higher-impact tests require synthetic identities and a separate
+  explicit, non-`/yolo`-bypassable permission gate.
 stage: validation
 triggers:
   strong:
@@ -82,10 +83,18 @@ that exact read-only lab check before sending it.
 
 ## Stop and report
 
-Do not test token theft, account takeover, privilege changes, signing-key
-recovery, or session replay. Report the algorithm/claim rule observed, the
-protected fixture action, status and a non-sensitive marker, and explicitly
-state token material was not retained in
+The default flow does not test token theft, account takeover, privilege
+changes, signing-key recovery, or session replay. This does not categorically
+prohibit authorized impact testing with synthetic tokens and disposable lab
+subjects. If the objective requires a higher-impact check after recording the
+current result, ask `ask_user` to name the candidate, exact endpoint and
+synthetic subject, single claim/action, bound, and risk tier; proceed only
+with that approval and an exact-action permission prompt that `/yolo` cannot
+bypass. Never expose a real/reusable token; if the runtime cannot safely
+transport the synthetic fixture or enforce the gate, record
+`authorization-required` and stop. A higher tier requires fresh approval.
+Report the algorithm/claim rule observed, the protected fixture action,
+status and a non-sensitive marker, and explicitly state token material was not retained in
 `artifacts/jwt-misconfiguration/<target>/results.md`. Keep workflow evidence
 referential and redacted.
 

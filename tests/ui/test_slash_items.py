@@ -130,7 +130,9 @@ def test_yolo_catalog_entry():
 
 
     assert item.args == "[on|off|default]"
-    assert item.description == "show or set auto-approve mode for tool calls"
+    assert item.description == (
+        "show or set auto-approval for routine in-scope recon and validation"
+    )
 
 
 

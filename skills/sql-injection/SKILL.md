@@ -38,6 +38,7 @@ allowed-tools:
   - http
   - read_payloads
   - file_write
+  - file_edit
   - ask_user
   - confirm_finding
   - workflow
@@ -84,6 +85,11 @@ repetition number plus the HTTP `status`, byte `size`, and a compact content
 `marker` for both `true` and `false`. The runtime rejects identical sides,
 one-pass claims, and non-reproducible pairs. Do not set `repeatable: true` from
 prose or from a baseline-versus-comment comparison.
+Use a stable semantic marker such as `token issued`; never use the token itself.
+If a known volatile field changes body length between repetitions, set the
+smallest justified `size_tolerance` in bytes. Status and marker must still be
+stable on each side, and the tolerance cannot be used to erase the TRUE/FALSE
+difference.
 
 For time-based SQLI-2, use `kind: time-differential`, a shared
 `request_template` containing `{probe}`, `expected_delay_ms`, and at least two
@@ -176,7 +182,8 @@ skill's job is confirmation, not automated exploitation.
 Oracle, SQLite, etc.). If a candidate's behavior looks like NoSQL/operator
 injection (e.g. MongoDB query-operator payloads, unexpected JSON structure
 handling), that is a different vulnerability class with no active skill
-yet — record it as `deferred (nosql, out of scope)` in results and do not
+yet — record it as `deferred`, note `NoSQL/operator behavior; outside this
+validator` in `deferred_reason`, and do not
 apply SQL syntax to it here.
 
 Execution rule: substitute real values before running requests. Never
@@ -373,6 +380,14 @@ behavior change without an explicit error string (e.g. a size/status delta)
 is enough to establish **SQLI-1** — a syntax-sensitivity signal — but is not
 by itself confirmation; Phase 2 is required before reporting SQLI-2.
 
+Before changing quote, parenthesis, or comment syntax, write down the query
+shape implied by the latest database error and choose the next single probe
+that distinguishes the remaining possibilities. Do not walk a punctuation
+list (`--`, `-- `, `/*`, `')`, `'))`, and so on) one request at a time without
+using the returned parser position/message. Cap syntax-shape adjustments at
+three after the initial signal; if they do not converge, move to a different
+bounded confirmation technique or record the result as inconclusive.
+
 If neither the single-quote probe nor any variant in the Phase 1 section
 produces any observable change from baseline, that's a valid outcome. Don't
 conclude SQL injection is absent from one probe alone — continue into
@@ -442,6 +457,10 @@ query is not, by itself, a boolean differential. Record both members of both
 repetitions in the structured `confirmation` object passed to
 `workflow(action="record_result", ...)`. If the paired observations are equal,
 record that 2a was inconclusive; never preserve a signal claiming they differed.
+Likewise, a successful `UNION SELECT` response compared with a syntax error or
+missing-table error is not a boolean TRUE/FALSE pair. Describe that observation
+as a bounded union/error differential; do not label it boolean-based or invent
+predicates to satisfy the boolean confirmation schema.
 
 On an authentication endpoint, the TRUE member of this pair may naturally
 return the application's normal successful-login response, including a session
@@ -483,8 +502,8 @@ response — that is not a negative result. It means the probe was
 intercepted before reaching application logic. Don't retry with encoding
 tricks or filter-bypass variants to get past it; that's outside this
 skill's scope. Record the candidate as `blocked` (see Recording the result)
-and stop working it. A `blocked` result is distinct from `not confirmed`:
-`not confirmed` means the applicable techniques were tried against the
+and stop working it. A `blocked` result is distinct from `not-confirmed`:
+`not-confirmed` means the applicable techniques were tried against the
 application (per the "stop at the first clear signal" rule, not
 necessarily every technique) and none produced a signal; `blocked` means
 you don't actually know, because something in front of the application
@@ -511,7 +530,7 @@ Procedure:
 1. Generate one unique, random subdomain label per probe (e.g. a short hex token) so any callback received can be attributed unambiguously.
 2. Send the probe once.
 3. Poll or check the callback listener (via the real OOB tool — never `shell`, never a fabricated/local stand-in) for a resolution/hit matching that exact token, within a reasonable wait window (e.g. 30–60s).
-4. A received callback matching the token is a clear positive and establishes **SQLI-2**. No callback is a negative for this technique specifically — record as `not confirmed` (or combine with 2a–2c results) rather than retrying the same payload repeatedly.
+4. A received callback matching the token is a clear positive and establishes **SQLI-2**. No callback is a negative for this technique specifically — record as `not-confirmed` (or combine with 2a–2c results) rather than retrying the same payload repeatedly.
 
 Do not chain OOB payloads into data exfiltration via DNS (e.g. encoding
 query results character-by-character into subdomain labels) without
@@ -563,9 +582,15 @@ session cookies, password/password-hash fields, API keys, and sensitive profile
 fields. A token prefix is not needed to prove issuance; use a placeholder such
 as `[REDACTED_TOKEN]`.
 
+Never copy an opaque cookie, JWT, or CSRF value by hand between tool calls. If a
+single bounded request chain genuinely requires one, extract and consume it in
+the same scoped command without printing it, then persist only a redacted marker.
+For native HTTP probes, set `max_response_bytes` to the smallest body needed for
+the evidence; use `0` for status/header-only checks.
+
 If Phase 2 never produces a clear, repeatable signal — including when 2d
 was unavailable and therefore not attempted — that's a valid outcome:
-record it as `not confirmed` rather than continuing to escalate technique
+record it as `not-confirmed` rather than continuing to escalate technique
 or payload variety to force a result.
 
 ## Phase 3: Minimal Impact Validation (optional)
@@ -609,11 +634,11 @@ extraction by default.
 
 Every candidate gets exactly one outcome:
 
-- `confirmed (SQLI-2)` — a technique actually available in this environment (2a or 2b, or 2d when that capability exists) produced a clear, repeatable positive signal, bounded per "Bound the proof" above;
-- `confirmed (SQLI-3)` — SQLI-2 plus a minimal, authorized impact probe from Phase 3 succeeded;
-- `not confirmed` — the applicable confirmation techniques available in this environment were tried as required by the workflow (per the "stop at the first clear signal" rule — this does not mean every technique must be run against every candidate), and none produced a clear, repeatable SQL injection signal. OOB is included only when its capability check passed and the user authorized it;
+- `confirmed` with `SQLI-2` in `techniques` — a technique actually available in this environment (2a or 2b, or 2d when that capability exists) produced a clear, repeatable positive signal, bounded per "Bound the proof" above;
+- `confirmed` with `SQLI-3` in `techniques` — SQLI-2 plus a minimal, authorized impact probe from Phase 3 succeeded;
+- `not-confirmed` — the applicable confirmation techniques available in this environment were tried as required by the workflow (per the "stop at the first clear signal" rule — this does not mean every technique must be run against every candidate), and none produced a clear, repeatable SQL injection signal. OOB is included only when its capability check passed and the user authorized it;
 - `blocked` — a probe was intercepted by a WAF, rate-limiter, or challenge page before reaching the application (step 2c); the application itself was never actually tested;
-- `deferred (nosql, out of scope)` — behavior indicates NoSQL/operator injection rather than SQL injection (per Scope, above).
+- `deferred` — behavior indicates NoSQL/operator injection rather than SQL injection (per Scope, above); put that reason in `deferred_reason`.
 
 ### Standard result entry template
 
@@ -627,7 +652,9 @@ tested:
 - **candidate_id:** <structured Workflow Candidate ID>
 - **timestamp:** <ISO 8601 UTC timestamp when this entry was recorded, e.g. 2026-08-27T09:14:32Z>
 - **agent_session_id:** <identifier for the current agent run/session, for audit-trail correlation with logs elsewhere>
-- **outcome:** <confirmed (SQLI-2) | confirmed (SQLI-3) | not confirmed | blocked | deferred (nosql, out of scope)>
+- **outcome:** <confirmed | not-confirmed | blocked | deferred>
+- **techniques:** <SQLI-2 | SQLI-3 | technique attempted>
+- **deferred_reason:** <required when outcome is deferred>
 - **sqli_level:** <1 | 2 | 3 | none>
 - **engine:** <mysql | postgres | mssql | oracle | sqlite | undetermined | n/a>
 - **technique(s) tried:** <e.g. 1b error-based, 2a boolean-based, 2b time-based, 2d OOB — list all tried, mark which produced the result>
@@ -639,7 +666,7 @@ tested:
 - **injection_context:** <e.g. "appears to be inside a quoted string in a WHERE clause" | "unquoted numeric context" | unknown — inferred from behavior, not confirmed query text>
 - **order:** <first-order (reflected same request) | second-order-suspected — describe trigger path if second-order>
 - **phase_2d_used:** <yes/no> — if yes: <callback domain used, token, result>; if no because the capability wasn't available, note that explicitly here too
-- **phase_3_status:** <not attempted | authorized and run | authorization declined | not applicable — outcome not confirmed>
+- **phase_3_status:** <not attempted | authorized and run | authorization declined | not applicable — outcome not-confirmed>
 - **notes:** <anything else relevant — WAF behavior, session issues, ambiguous signals, "OOB unavailable (no OOB callback tool in this environment)" when applicable>
 ```
 
@@ -653,7 +680,8 @@ not exposed, write `unavailable`; never invent a plausible value.
 ## Confirm an evidence-backed finding
 
 `sql-injection` first produces tested evidence in `results.md`. For each
-candidate marked `confirmed (SQLI-2)` or `confirmed (SQLI-3)`, call
+candidate whose canonical outcome is `confirmed` (with `SQLI-2` or `SQLI-3`
+recorded in `techniques`), call
 `confirm_finding` to persist the canonical finding:
 
 ```
@@ -708,7 +736,7 @@ token` or `administrative authentication bypass`. Do not claim full
 administrative access or account takeover unless a separately authorized
 workflow actually validated that access against administrative functionality.
 
-Do not call `confirm_finding` for `not confirmed`, `blocked`, or `deferred`
+Do not call `confirm_finding` for `not-confirmed`, `blocked`, or `deferred`
 candidates — they stay recorded in `results.md` only. Do not reuse the recon
 target identifier as a finding file name or hand-roll a different finding
 format; `confirm_finding` owns canonical finding persistence and naming.

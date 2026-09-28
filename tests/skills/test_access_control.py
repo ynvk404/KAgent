@@ -140,11 +140,11 @@ class TestSkillFileStructure:
         )
         outcomes = [
             "`confirmed`",
-            "`not confirmed`",
+            "`not-confirmed`",
             "`blocked`",
-            "`insufficient-identity`",
-            "`requires-authorization-for-write`",
-            "`deferred (out of scope)`",
+            "`insufficient-evidence`",
+            "`authorization-required`",
+            "`deferred`",
         ]
         for outcome in outcomes:
             assert outcome in section, (
@@ -249,7 +249,7 @@ class TestSkillDecisionContract:
         assert "register new accounts" in section
         assert "explicitly authorized" in section
         assert "proceed with a test" in section
-        assert "insufficient-identity" in section
+        assert "insufficient-evidence" in section
 
     def test_cleanup_requires_fresh_action_permission_and_blocks_completion(self, body):
         section = self._norm(self._section(
@@ -323,7 +323,7 @@ class TestSkillDecisionContract:
                 "## 6. Confirm an evidence-backed finding",
             )
         )
-        assert "`deferred (out of scope)`" in step5
+        assert "`deferred`" in step5
         assert "Record" in step5
         assert "specific reason" in step5
 
@@ -367,7 +367,7 @@ class TestSkillDecisionContract:
         assert "403" in section
         assert "status code alone" in section
         assert "application-level" in section
-        assert "not confirmed" in section
+        assert "not-confirmed" in section
         assert "WAF" in section
         assert "upstream" in section
 
@@ -380,7 +380,7 @@ class TestSkillDecisionContract:
             )
         )
 
-        assert "requires-authorization-for-write" in section
+        assert "authorization-required" in section
         assert "explicit authorization" in section
         assert "state-changing" in section
 
@@ -394,7 +394,7 @@ class TestSkillDecisionContract:
         )
 
         assert "Do not call `confirm_finding`" in section
-        assert "deferred (out of scope)" in section
+        assert "`deferred`" in section
 
     def test_only_confirmed_is_handed_off(self, body):
         section = self._norm(
@@ -408,11 +408,11 @@ class TestSkillDecisionContract:
         assert "Do not call `confirm_finding`" in section
 
         for non_handoff in [
-            "not confirmed",
+            "not-confirmed",
             "blocked",
-            "insufficient-identity",
-            "requires-authorization-for-write",
-            "deferred (out of scope)",
+            "insufficient-evidence",
+            "authorization-required",
+            "deferred",
         ]:
             assert non_handoff in section
 

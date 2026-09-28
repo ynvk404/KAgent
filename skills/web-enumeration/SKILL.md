@@ -52,7 +52,9 @@ endpoints, parameters, forms, API surfaces, and relevant static/JS resources
 — without attempting vulnerability exploitation or drawing vulnerability-
 class conclusions.
 
-Default to `curl` and the built-in `http` tool for known-source enumeration.
+Prefer the built-in `http` tool with `phase: recon` for known-source
+enumeration. Use `curl` only when the native tool cannot express a necessary
+request detail; shell requests do not enforce target-origin scope.
 Use `content_discovery` only when steps 2–5 leave a concrete path-coverage gap.
 Minimal profile uses native HTTP; full profile may select installed ffuf through
 the semantic tool. Discovery stays on the active origin, is bounded, and requires

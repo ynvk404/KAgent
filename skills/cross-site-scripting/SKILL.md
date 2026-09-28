@@ -95,18 +95,22 @@ confirmation          — one execution marker matched to the observed context
 browser-required — recorded and stopped, not escalated
 ```
 
-**There is no optional "impact" phase analogous to `sql-injection`'s Phase
-3, and this is a deliberate design choice, not an omission.** For XSS, the
-minimum proof of exploitability (a harmless execution marker landing in an
-executable position) *is* the impact ceiling — there is no smaller,
-separately-authorized "confirm impact" step below it the way there is for
-SQL injection (where confirming the vulnerability and reading a fingerprint
-value are two meaningfully different levels of access). If a future version
-of this skill ever needs a deeper, separately-gated impact phase, it should
-get its own `ask_user` checkpoint here first — `payloads.txt` should never
-grow a new phase section before `SKILL.md` defines the gate for it.
+**The current XSS validator has no optional impact phase analogous to
+SQL injection's Phase 3.** The minimum proof here is a harmless execution
+marker; deeper effects are a separate risk tier, not an automatic continuation
+or a requirement for confirming XSS. This is a limit of this default flow,
+not a blanket prohibition on every authorized controlled-impact demonstration.
+If an engagement objective requires one, first record the current result and
+ask ask_user to name the Candidate, exact lab target/context, synthetic
+subject and single action, data/state bound, and risk tier. Proceed only with
+that specific approval and an exact-action runtime permission gate that
+/yolo cannot bypass; request fresh approval for a higher tier. The current
+runtime has no browser-execution capability, so if the check depends on
+browser behavior, record browser-required and stop rather than simulate it.
 
-Default to `curl` and the built-in `http` tool. Do not pull in browser
+Prefer the built-in `http` tool with `phase: validation` for harmless marker
+probes. Use `curl` only when the native tool cannot express a necessary
+request detail; shell requests do not enforce target-origin scope. Do not pull in browser
 automation frameworks, XSS scanners (XSStrike, dalfox), or payload
 generators — this skill works from one candidate at a time with a small,
 targeted payload set, not brute-force fuzzing.
@@ -146,9 +150,9 @@ it against a context it doesn't match. In particular:
 - Do not read the whole file and try every context's payload against a
   candidate "to see what sticks" — that is the fuzzing behavior this skill
   explicitly avoids.
-- `payloads.txt` has no impact/exploitation section, by design (see
-  "Workflow at a glance" above) — there is nothing further to read once
-  Phase 2 gives you a result.
+- `payloads.txt` has no impact/exploitation section; a separate controlled
+  impact path would need its own gate and runtime capability before any such
+  vectors were added. There is nothing further to read after Phase 2.
 
 ## Target identifier
 
@@ -394,6 +398,13 @@ Every candidate gets exactly one outcome:
   evidence, and no browser-execution capability is available in this
   runtime to close that gap (see "Workflow at a glance").
 
+An API response candidate and a client-side SPA route are separate sinks. A
+negative JSON reflection test applies only to that API candidate. If a route
+such as `#/search?q=...` may flow into a DOM sink, record a separate DOM
+candidate and use `browser-required` when browser execution cannot be checked.
+Do not transfer the API result to the route. When no marker was reflected, set
+`reflection_type` to `none`; never call that observation `reflected`.
+
 ### Standard result entry template
 
 Write every candidate's result — confirmed, not-confirmed, blocked, or
@@ -411,7 +422,7 @@ appended in the order tested:
 - **timestamp:** <ISO 8601 UTC timestamp when this entry was recorded, e.g. 2026-08-27T09:14:32Z>
 - **agent_session_id:** <identifier for the current agent run/session, for audit-trail correlation with logs elsewhere>
 - **outcome:** <confirmed | not-confirmed | blocked | browser-required>
-- **reflection_type:** <reflected | stored | dom-based>
+- **reflection_type:** <none | reflected | stored | dom-based>
 - **context:** <html-body | html-attribute | js-string | url | html-comment | css-style-attribute | css-style-block | fully-encoded | unknown>
 - **payload(s) used:** <exact detection marker and/or execution marker used, verbatim>
 - **evidence:** <the exact request(s) and response excerpt around the marker/payload — not full response bodies, and never response bodies containing real user data>

@@ -124,16 +124,83 @@ def test_shipped_metadata_routes_current_workflows(text, expected):
 
 
 @pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("test no-sql injection", "nosql-injection"),
+        ("test nosql injection", "nosql-injection"),
+        ("test access-control-allow-origin", "cors-misconfiguration"),
+        ("test access-control-allow-credentials", "cors-misconfiguration"),
+        ("authorization issue", "access-control"),
+        ("login issue", "authentication"),
+        ("url redirect issue", "open-redirect"),
+        ("test sql injection", "sql-injection"),
+        ("test access control", "access-control"),
+        ("test authentication", "authentication"),
+        ("test ssrf", "ssrf"),
+        ("test open redirect", "open-redirect"),
+        ("test command injection", "command-injection"),
+    ],
+)
+def test_specific_phrases_do_not_route_to_embedded_candidate_classes(text, expected):
+    assert planned_skill(text) == expected
+
+
+def test_standalone_candidate_mention_survives_a_more_specific_phrase_elsewhere():
+    scores = {
+        score["skill_name"]: score
+        for score in detect_intent(
+            normalize("test access control and access-control-allow-origin"),
+            shipped_skills(),
+        )
+    }
+
+    assert scores["access-control"]["candidate_count"] == 1
+
+
+@pytest.mark.parametrize(
     ("alias", "expected"),
     [
         ("sqli", "sql-injection"),
+        ("nosqli", "nosql-injection"),
         ("xss", "cross-site-scripting"),
         ("idor", "access-control"),
         ("bola", "access-control"),
+        ("authorization", "access-control"),
+        ("cors", "cors-misconfiguration"),
+        ("jwt", "jwt-misconfiguration"),
+        ("cmdi", "command-injection"),
     ],
 )
 def test_candidate_class_aliases_are_normalized(alias, expected):
     assert planned_skill(f"validate candidate class {alias}") == expected
+
+
+@pytest.mark.parametrize("text", ["check auth", "test auth", "validate candidate class auth"])
+def test_ambiguous_auth_alias_fails_closed(text):
+    assert planned_skill(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("nosqli", "nosql-injection"),
+        ("mongodb injection", "nosql-injection"),
+        ("test cors", "cors-misconfiguration"),
+        ("test jwt", "jwt-misconfiguration"),
+        ("jwt signature validation", "jwt-misconfiguration"),
+        ("test cmdi", "command-injection"),
+    ],
+)
+def test_safe_validation_aliases_and_specific_triggers_route(text, expected):
+    assert planned_skill(text) == expected
+
+
+def test_generic_origin_header_phrase_remains_fail_closed():
+    assert planned_skill("check origin header") is None
+
+
+def test_ambiguous_filename_issue_remains_fail_closed():
+    assert planned_skill("filename issue") is None
 
 
 @pytest.mark.parametrize(
@@ -665,6 +732,37 @@ def test_whole_target_planner_handles_pending_inputs_coverage_and_validator():
     assert candidate is not None
     assert candidate.recommended_skill == "sql-injection"
     assert candidate.candidate_id == "cand_sqli"
+
+
+@pytest.mark.parametrize(
+    ("skills", "expected_reason"),
+    [
+        ([], "no enabled validator"),
+        (
+            [
+                metadata_skill("first-validator", candidate_classes=["sql-injection"]),
+                metadata_skill("second-validator", candidate_classes=["sql-injection"]),
+            ],
+            "ambiguous validator mapping",
+        ),
+    ],
+)
+def test_whole_target_candidate_validator_resolution_fails_closed(skills, expected_reason):
+    plan = build_decision_plan(
+        "continue",
+        skills,
+        Target(),
+        whole_context(
+            completed_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+            candidates=(PlannerCandidate("cand_sqli", "sql-injection", "queued"),),
+        ),
+    )
+
+    assert plan is not None
+    assert plan.recommended_skill is None
+    assert plan.candidate_id == "cand_sqli"
+    assert expected_reason in plan.reason
+    assert "do not validate it with an arbitrary skill" in plan.guidance.lower()
 
 
 @pytest.mark.parametrize("status", ["completed", "blocked"])

@@ -179,9 +179,8 @@ filters, or equivalent) as part of Phase 2. Those are Phase 3 only.
 
 For Jinja2 and Velocity/Freemarker, read_payloads(skill="ssti", file="payloads.txt") provides introspection-only probes for this
 phase — use only the `PHASE 2 — VALIDATION` section of that file.
-Everything in the `PHASE 3` section below it requires separate Phase 3
-authorization; reading further into the file for Phase 2 does not grant
-permission to use it.
+The default corpus contains no Phase 3 impact or RCE vectors. Reading it
+cannot authorize or supply an impact probe.
 
 ### Blind SSTI validation
 
@@ -231,12 +230,13 @@ Only proceed when:
 1. SSTI has already been confirmed (SSTI-2), and
 2. the user explicitly authorizes deeper impact validation via ask_user.
 
-This phase may use engine-specific impact payloads from `payloads.txt`,
-including command-execution or a minimal sensitive-read probe. For
-Jinja2, `read_payloads(skill="ssti", file="payloads.txt")` provides
-these — use the `PHASE 3 — IMPACT` section of that file, which includes
-subclass-enumeration-to-`Popen` execution and the `__globals__`
-attribute-proxy route via `url_for`/`lipsum`/`cycler`/`request`.
+The shipped `payloads.txt` intentionally contains no impact, file-read, or
+RCE vectors. Do not invent an impact payload or derive one from an earlier
+probe. After the authorization checkpoint, proceed only when the operator
+also supplies or approves one exact engine-specific procedure and its bounded
+expected effect. If no such procedure is supplied, record
+`authorization-required` or `insufficient-evidence` as appropriate and stop;
+SSTI-2 remains a complete finding.
 
 Only retrieve the minimum non-sensitive or minimally sensitive artifact
 needed to demonstrate impact (e.g. the output of a harmless command like

@@ -22,6 +22,7 @@ from src.config.config import Config, DEFAULT_AUTO_COMPACT_THRESHOLD
 from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
+from src.target.origin import HTTPOrigin
 from src.tools.registry import Registry as ToolRegistry
 from tests.helpers.agent_fakes import FakeClient
 from src.logger.session_debug import (
@@ -72,6 +73,11 @@ def test_parse_flags_rejects_unknown_options_and_invalid_burp_ports():
     with pytest.raises(FlagParseError) as exc_info:
         parse_flags([f"--api-key={secret}"])
     assert secret not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("flag", ["--yolo", "--dangerously-skip-permissions"])
+def test_yolo_cli_flags_enable_the_same_yolo_mode(flag):
+    assert parse_flags([flag]).yolo is True
 
 
 def test_parse_flags_keeps_burp_optional_port_and_alias_behavior():
@@ -163,6 +169,27 @@ def test_cli_target_replaces_previous_origin_and_scope_before_splash():
     assert agent.target.base_url() == "http://juice.lab:3000"
     assert agent.engagement_state.is_in_scope("http://juice.lab:3000/path")
     assert not agent.engagement_state.is_in_scope("http://old.example")
+
+
+def test_cli_yolo_does_not_expand_the_declared_target_scope():
+    flags = parse_flags(["--target", "http://juice.lab:3000", "--yolo"])
+    agent = Agent(AgentOptions(
+        client=FakeClient([]),
+        tools=ToolRegistry(),
+        skills=SkillRegistry(),
+        prompter=AlwaysAllow(),
+        store=None,
+        target=Target("http://previous.example"),
+    ))
+
+    apply_startup_target(agent, flags.target_url)
+
+    assert flags.yolo is True
+    assert agent.engagement_state.allowed_origins == {
+        HTTPOrigin.from_url("http://juice.lab:3000")
+    }
+    assert not agent.engagement_state.is_in_scope("http://juice.lab:3001")
+    assert not agent.engagement_state.is_in_scope("http://127.0.0.1:3000")
     assert not agent.engagement_state.is_in_scope("http://extra.example")
 
 
@@ -192,6 +219,8 @@ def test_help_uses_the_runtime_burp_default(capsys):
     output = capsys.readouterr().out
     assert f"--burp [port]              start local Burp/KAgent bridge (default :{BURP_DEFAULT_PORT})" in output
     assert "--target <url>" in output
+    assert "inside declared target scope" in output
+    assert "impact actions" in output
 
 
 @pytest.mark.parametrize(

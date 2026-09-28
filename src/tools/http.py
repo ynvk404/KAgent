@@ -12,11 +12,13 @@ from .private_host import (
 )
 from .types import (
     Tool,
+    PermissionHints,
     arg_string,
 )
 from .outcome import ToolOutput
 
-RESPONSE_BYTE_CAP = 64 * 1024 
+RESPONSE_BYTE_CAP = 16 * 1024
+MAX_RESPONSE_BYTE_CAP = 64 * 1024
 REQUEST_TIMEOUT = 60
 
 class HTTPTool(Tool):
@@ -33,11 +35,18 @@ class HTTPTool(Tool):
 
     def description(self) -> str:
         return (
-            "Send a single HTTP/HTTPS request. "
+            "Send a single HTTP/HTTPS request in the declared phase: "
+            "recon, validation, or impact. Recon and benign validation "
+            "inside the active engagement scope are eligible for YOLO; "
+            "impact requests require prior explicit ask_user authorization "
+            "and always receive a fresh per-request permission prompt. "
             "The url can be absolute (https://app/api/x) "
             "or a path (/api/x); paths resolve against the active "
             "/target base URL. Useful for poking endpoints, "
             "testing IDOR, header injection, auth bypass. "
+            "Choose validation for bounded differentials and harmless proof, "
+            "including POST probes; choose impact before controlled effect "
+            "or data-access checks. "
             "TLS verification is disabled. "
             "Does not follow redirects (you'll see 30x responses). "
             "Authorized targets only."
@@ -53,6 +62,17 @@ class HTTPTool(Tool):
                         "HTTP method "
                         "(GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD). "
                         "Defaults to GET."
+                    ),
+                },
+                "phase": {
+                    "type": "string",
+                    "enum": ["recon", "validation", "impact"],
+                    "description": (
+                        "Required action intent. Use recon for observation, "
+                        "validation for bounded benign proof (including POST), "
+                        "and impact only after explicit ask_user authorization for "
+                        "controlled exploitation or impact checks. "
+                        "YOLO only auto-approves recon and validation."
                     ),
                 },
                 "url": {
@@ -72,9 +92,19 @@ class HTTPTool(Tool):
                     "type": "string",
                     "description": "Raw request body (optional).",
                 },
+                "max_response_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": MAX_RESPONSE_BYTE_CAP,
+                    "description": (
+                        f"Maximum response-body bytes returned (default {RESPONSE_BYTE_CAP}; "
+                        "use 0 for status and headers only)."
+                    ),
+                },
             },
             "required": [
                 "url",
+                "phase",
             ],
         }
 
@@ -82,9 +112,21 @@ class HTTPTool(Tool):
         return True
 
     def validate_args(self, args: dict) -> None:
+        phase = args.get("phase")
+        if phase not in {"recon", "validation", "impact"}:
+            raise ValueError("phase must be recon, validation, or impact")
         raw_url = arg_string(args, "url")
         if not raw_url:
             raise ValueError("url is required")
+        response_cap = args.get("max_response_bytes", RESPONSE_BYTE_CAP)
+        if (
+            isinstance(response_cap, bool)
+            or not isinstance(response_cap, int)
+            or not 0 <= response_cap <= MAX_RESPONSE_BYTE_CAP
+        ):
+            raise ValueError(
+                f"max_response_bytes must be an integer from 0 to {MAX_RESPONSE_BYTE_CAP}"
+            )
         resolved = self.resolve_url(raw_url)
         parse_http_url(resolved)
         self._require_scope(resolved)
@@ -92,25 +134,37 @@ class HTTPTool(Tool):
     def permission_hints(
         self,
         args: dict,
-    ) -> dict:
+    ) -> PermissionHints:
+        phase = args.get("phase")
         try:
             resolved = self.resolve_url(arg_string(args, "url"))
             origin = HTTPOrigin.from_url(resolved)
 
-            return {
+            hints: PermissionHints = {
                 "cacheKey": origin.as_url(),
                 "sessionScopeDisplay": f"HTTP requests to {origin.as_url()}",
             }
 
         except Exception:
 
-            return {
+            hints = {
                 "cacheKey": arg_string(
                     args,
                     "url",
                 ),
                 "sessionScopeDisplay": "this exact HTTP request origin",
             }
+
+        if phase == "recon":
+            hints["riskTier"] = "routine"
+            hints["yoloAutoApprove"] = True
+        elif phase == "validation":
+            hints["riskTier"] = "bounded-impact"
+            hints["yoloAutoApprove"] = True
+        elif phase == "impact":
+            hints["noSessionCache"] = True
+            hints["riskTier"] = "high-impact"
+        return hints
 
     def summarize(
         self,
@@ -136,7 +190,8 @@ class HTTPTool(Tool):
             {},
         )
 
-        detail = f"{method} {url}"
+        phase = arg_string(args, "phase")
+        detail = f"phase: {phase or 'unspecified'}\n{method} {url}"
 
         if isinstance(headers, dict) and headers:
             detail += "\nheaders:"
@@ -182,6 +237,7 @@ class HTTPTool(Tool):
             args,
             "body",
         )
+        response_cap = args.get("max_response_bytes", RESPONSE_BYTE_CAP)
 
         if not raw_url:
             raise Exception("url is required")
@@ -195,6 +251,7 @@ class HTTPTool(Tool):
             signal,
             "http",
             target=self.target,
+            permission_cache_key=HTTPOrigin.from_url(resolved).as_url(),
         )
 
         headers: dict[str, str] = {}
@@ -232,16 +289,16 @@ class HTTPTool(Tool):
                 truncated = False
 
                 async for chunk in response.aiter_bytes():
-                    remaining = RESPONSE_BYTE_CAP + 1 - total
+                    remaining = response_cap + 1 - total
                     if len(chunk) >= remaining:
                         chunks.append(chunk[:remaining])
                         total += remaining
-                        truncated = total > RESPONSE_BYTE_CAP
+                        truncated = total > response_cap
                         break
                     chunks.append(chunk)
                     total += len(chunk)
 
-                content = b"".join(chunks)[:RESPONSE_BYTE_CAP]
+                content = b"".join(chunks)[:response_cap]
 
                 output = (
                     f"HTTP/1.1 "
@@ -259,7 +316,7 @@ class HTTPTool(Tool):
                     errors="replace"
                 )
                 if truncated:
-                    output += f"\n[response body truncated at {RESPONSE_BYTE_CAP} bytes]"
+                    output += f"\n[response body truncated at {response_cap} bytes]"
 
         if private_reason:
             output = (

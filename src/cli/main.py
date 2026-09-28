@@ -1496,7 +1496,9 @@ Flags:
   --browser-ingest [port]    deprecated alias for --burp
   --no-stream                disable streaming chat (fallback for backends
                              whose SSE/ND-JSON path drops tool_calls)
-  --yolo                     YOLO mode: auto-approve non-sensitive tool calls
+  --yolo                     auto-approve routine recon, enumeration, and benign
+                             validation inside declared target scope; impact actions
+                             and system-sensitive operations still require approval
                              (alias: --dangerously-skip-permissions)
   --list-skills / --list-tools
   --log <path>

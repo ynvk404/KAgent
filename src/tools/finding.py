@@ -14,7 +14,7 @@ from src.findings.store import (
 )
 from src.findings.classification import classify
 from src.permission.permission import Prompter
-from src.redact.redact import apply as redact
+from src.redact.redact import apply as redact, apply_evidence
 from src.logger.logger import get_logger
 from src.workflow.state import WorkflowState
 from src.skills.registry import normalize_candidate_class
@@ -253,7 +253,14 @@ class ConfirmFindingTool:
             except ValueError as exc:
                 raise ValueError("finding target does not match candidate target") from exc
         if candidate.endpoint:
-            expected_path = urlparse(candidate.endpoint).path
+            candidate_endpoint = re.sub(
+                r"^\s*(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+",
+                "",
+                candidate.endpoint,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            expected_path = urlparse(candidate_endpoint).path
             actual_path = urlparse(url).path
             template = re.escape(expected_path).replace(r"\{", "{").replace(r"\}", "}")
             template = re.sub(r"\{[^{}]+\}", r"[^/]+", template)
@@ -284,12 +291,12 @@ class ConfirmFindingTool:
             title=redacted_title,
             severity=severity,
             url=redact(url),
-            observed_impact=redact(observed_impact),
+            observed_impact=apply_evidence(observed_impact),
             potential_impact=redact(potential_impact),
             method=redact(candidate.method or requested_method.upper()) or None,
             parameter=redact(candidate.parameter or requested_parameter) or None,
             payload=redact(arg_string(args, "payload")) or None,
-            responseExcerpt=redact(response_excerpt) or None,
+            responseExcerpt=apply_evidence(response_excerpt) or None,
             curl=redact(arg_string(args, "curl")) or None,
             remediation=redact(arg_string(args, "remediation")) or None,
             vulnerabilityType=(classification.type if classification else None),

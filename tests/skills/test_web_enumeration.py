@@ -162,7 +162,7 @@ def test_web_enumeration_reuses_recon_summary_before_reprobing():
 
 
 # ============================================================================
-# Tool boundary (default to curl/http; scanners are the explicit exception)
+# Tool boundary (native scoped HTTP first; scanners are the explicit exception)
 # ============================================================================
 
 def test_web_enumeration_only_allows_low_noise_tools():

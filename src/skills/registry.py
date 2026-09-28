@@ -34,16 +34,20 @@ VALID_STAGES: frozenset[str] = frozenset(
 CANDIDATE_CLASS_ALIASES: dict[str, str] = {
     "sqli": "sql-injection",
     "sql-injection": "sql-injection",
+    "nosqli": "nosql-injection",
     "xss": "cross-site-scripting",
     "cross-site-scripting": "cross-site-scripting",
     "idor": "access-control",
     "bola": "access-control",
     "access-control": "access-control",
-    "auth": "authentication",
+    "authorization": "access-control",
     "authentication": "authentication",
     "csrf": "csrf",
     "ssrf": "ssrf",
     "ssti": "ssti",
+    "cors": "cors-misconfiguration",
+    "jwt": "jwt-misconfiguration",
+    "cmdi": "command-injection",
 }
 
 OPTIONAL_TOOL_PREFIXES = (

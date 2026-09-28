@@ -274,6 +274,17 @@ def test_displays_unavailable_session_trust_for_non_cacheable_request():
     frame = rendered(PermissionModal(make_req(no_session_cache=True)))
 
     assert "Session trust unavailable for this sensitive action" in frame
+    assert "y allow once · n deny · Esc cancel" in frame
+    assert "a trust for session" not in frame
+
+
+def test_displays_risk_tier_and_explicit_approval_requirement():
+    frame = rendered(PermissionModal(make_req(risk_tier="high-impact")))
+
+    assert "Risk tier: high-impact" in frame
+    assert "explicit action approval required" in frame
+    assert "Session trust: this tool for the current runtime" in frame
+    assert "a trust for session" in frame
 
 
 def test_displays_tool_wide_scope_when_no_cache_scope_is_provided():

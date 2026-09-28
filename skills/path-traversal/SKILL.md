@@ -68,8 +68,16 @@ response cap, which is not permission to retrieve larger files.
 
 ## Stop and report
 
-Do not vary roots or walk directories, enumerate filenames, read secrets, or
-follow a traversal into another vulnerability class. Record the exact
+This default proof does not vary roots, walk directories, enumerate filenames,
+read secrets, or follow a traversal into another vulnerability class. That is
+not a blanket ban on authorized impact validation: if the objective requires
+access to a different non-sensitive, operator-designated fixture after the
+result is recorded, ask `ask_user` to name the candidate, exact target and
+fixture, one action, maximum bytes, and risk tier. Proceed only with that
+specific approval and an exact-action runtime permission prompt that `/yolo`
+cannot bypass; ask again before increasing the tier. If the available HTTP
+path cannot enforce the gate, record `authorization-required` and stop.
+Record the exact
 operator-approved marker, representation tried, status/byte count, whether
 the expected marker appeared, and the bounded response limit in
 `artifacts/path-traversal/<target>/results.md`. Keep workflow evidence

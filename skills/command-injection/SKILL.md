@@ -2,8 +2,9 @@
 name: command-injection
 description: >
   Validate one suspected server-side command injection candidate with a
-  single benign output marker in an authorized isolated lab. Never open an
-  interactive shell, alter files, access secrets, or make network callbacks.
+  single benign output marker in an authorized isolated lab. Higher-impact
+  command execution requires separate explicit approval and a
+  non-`/yolo`-bypassable runtime permission gate.
 stage: validation
 triggers:
   strong:
@@ -47,6 +48,16 @@ files, inspect environment variables, launch programs other than the
 allow-listed marker printer, sleep, create/delete files, or access the
 network. Do not test a state-changing application operation.
 
+This is the default bounded proof, not a blanket prohibition on authorized
+red-team execution. If the engagement objective genuinely requires a higher
+impact test after the marker result is recorded, request a new `ask_user`
+approval naming the candidate, target, exact command/action, scope, limit,
+and risk tier. Run only that action after a separate exact-action permission
+prompt that `/yolo` cannot bypass; a local `shell` command is not proof of
+server-side injection. If the available HTTP path cannot enforce that gate,
+record `authorization-required` and stop. Any move to a higher tier needs a
+new approval.
+
 ## Validation
 
 1. Start the Candidate and capture one baseline request with a benign value.
@@ -70,8 +81,8 @@ network. Do not test a state-changing application operation.
 
 ## Stop and report
 
-Stop on the first marker or after the bounded inconclusive attempt. No
-command chaining beyond the marker printer, data reads, filesystem changes,
+Stop this default flow on the first marker or after the bounded inconclusive
+attempt. Do not automatically chain into data reads, filesystem changes,
 reverse/bind shells, persistence, credential access, lateral movement,
 timing loops, or automated scanners. Record only the exact marker, request
 shape, status, response excerpt, and scope limitation in

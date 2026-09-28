@@ -15,6 +15,7 @@ from typing import Any, Literal, Optional
 from src.logger.logger import get_logger
 from src.paths import legacy_project_data_root, project_data_root, user_data_root
 from src.engagement.safeguards import is_session_authorization_text
+from src.redact.redact import apply_evidence
 
 logger = get_logger("intelligence.store")
 
@@ -1255,6 +1256,8 @@ def redact(
 ) -> str:
     if not text:
         return ""
+    if patterns is None:
+        text = apply_evidence(text)
     for pattern, replacement in (
         patterns if patterns is not None else DEFAULT_REDACT_PATTERNS
     ):

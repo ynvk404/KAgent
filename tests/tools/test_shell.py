@@ -79,6 +79,8 @@ def test_describes_portable_grep_usage_and_avoids_grep_p_guidance():
     assert "grep -P" in desc
     assert "grep -E" in desc
     assert "macOS/BSD" in desc
+    assert "built-in http tool" in desc
+    assert "not origin-scoped" in desc
 
 
 @pytest.mark.asyncio
@@ -384,11 +386,12 @@ async def test_retains_tail_of_large_stream_where_scanner_verdicts_live():
     assert "truncated" in out
 
 
-def test_does_not_opt_out_of_allow_session_caching():
+def test_arbitrary_shell_execution_cannot_be_session_trusted_or_yolo_approved():
     t = ShellTool()
     hints = t.permission_hints({"command": "id"})
-    assert hints.get("noSessionCache") is not True
-    assert hints["sessionScopeDisplay"] == "this exact shell command only"
+    assert hints.get("noSessionCache") is True
+    assert hints.get("riskTier") == "high-impact"
+    assert hints.get("sessionScopeDisplay") == "this exact shell command only"
 
 
 # ==========================================================

@@ -21,6 +21,7 @@ from mcp.client.stdio import stdio_client
 
 from src.config.config import MCPServerConfig
 from src.logger.logger import get_logger
+from src.tools.types import PermissionHints
 
 _log = get_logger("mcp")
 
@@ -258,6 +259,9 @@ class MCPTool:
 
     def requires_permission(self) -> bool:
         return True
+
+    def permission_hints(self, args: dict[str, Any]) -> PermissionHints:
+        return {"noSessionCache": True, "riskTier": "high-impact"}
 
     def summarize(self, args: dict[str, Any]) -> dict[str, str]:
         primary = primary_tool_arg(self._tool_name, args)

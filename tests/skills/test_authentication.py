@@ -142,11 +142,11 @@ class TestSkillFileStructure:
         )
         outcomes = [
             "`confirmed`",
-            "`not confirmed`",
+            "`not-confirmed`",
             "`blocked`",
-            "`insufficient-identity`",
-            "`requires-authorization-for-write`",
-            "`deferred (out of scope)`",
+            "`insufficient-evidence`",
+            "`authorization-required`",
+            "`deferred`",
         ]
         for outcome in outcomes:
             assert outcome in section, (
@@ -292,7 +292,7 @@ class TestSkillDecisionContract:
         assert "register new accounts" in section
         assert "explicitly authorized" in section
         assert "proceed with a test" in section
-        assert "insufficient-identity" in section
+        assert "insufficient-evidence" in section
 
     def test_identity_section_forbids_guessing_or_brute_forcing(self, body):
         section = self._norm(
@@ -314,8 +314,8 @@ class TestSkillDecisionContract:
             )
         )
         assert "reset or OTP delivery channel" in section
-        assert "insufficient-identity" in section
-        assert "not `not confirmed`" in section
+        assert "insufficient-evidence" in section
+        assert "not `not-confirmed`" in section
 
     def test_scope_forbids_scope_expansion(self, body):
         scope = self._norm(
@@ -351,7 +351,7 @@ class TestSkillDecisionContract:
         assert "SSO/OAuth identity" in scope
         assert "outside the" in scope
         assert "target application's control" in scope
-        assert "deferred (out of scope)" in scope
+        assert "`deferred`" in scope
 
     def test_boundary_tiers_present_and_ordered(self, body):
         headers = [
@@ -398,7 +398,7 @@ class TestSkillDecisionContract:
         assert "403" in section
         assert "not by itself evidence" in section
         assert "application-level" in section
-        assert "not confirmed" in section
+        assert "not-confirmed" in section
         assert "WAF" in section
         assert "upstream interception" in section
 
@@ -499,7 +499,7 @@ class TestSkillDecisionContract:
             )
         )
 
-        assert "requires-authorization-for-write" in section
+        assert "authorization-required" in section
         assert "explicit authorization" in section
 
     def test_requires_authorization_for_write_is_scoped_to_auth_state_changes(self, body):
@@ -557,7 +557,7 @@ class TestSkillDecisionContract:
             )
         )
         assert "second, distinct test" in section
-        assert "insufficient-identity" in section
+        assert "insufficient-evidence" in section
         assert "do not infer binding behavior from the single-use/expiry checks" in section
 
     def test_observed_and_potential_impact_are_separated(self, body):
@@ -587,7 +587,7 @@ class TestSkillDecisionContract:
         )
 
         assert "Do not call `confirm_finding`" in section
-        assert "deferred (out of scope)" in section
+        assert "`deferred`" in section
 
     def test_only_confirmed_is_handed_off(self, body):
         section = self._norm(
@@ -601,11 +601,11 @@ class TestSkillDecisionContract:
         assert "Do not call `confirm_finding`" in section
 
         for non_handoff in [
-            "not confirmed",
+            "not-confirmed",
             "blocked",
-            "insufficient-identity",
-            "requires-authorization-for-write",
-            "deferred (out of scope)",
+            "insufficient-evidence",
+            "authorization-required",
+            "deferred",
         ]:
             assert non_handoff in section
 

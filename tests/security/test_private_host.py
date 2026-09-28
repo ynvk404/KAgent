@@ -113,6 +113,7 @@ async def test_declared_private_target_is_session_cacheable():
     request = prompter.ask.call_args.args[0]
 
     assert request.no_session_cache is False
+    assert request.yolo_auto_approve is True
     assert request.cache_key == (
         "private-declared://http://juice.lab:3000"
     )
@@ -141,6 +142,7 @@ async def test_other_private_host_is_not_session_cacheable():
     request = prompter.ask.call_args.args[0]
 
     assert request.no_session_cache is True
+    assert request.yolo_auto_approve is False
     assert request.cache_key is None
 
 

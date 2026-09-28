@@ -10,6 +10,7 @@ triggers:
     - open redirect
     - unvalidated redirect
     - redirect parameter
+    - url redirect issue
     - untrusted location header
   weak:
     - return url
@@ -24,6 +25,7 @@ allowed-tools:
   - http
   - read_payloads
   - file_write
+  - ask_user
   - workflow
   - confirm_finding
 ---
@@ -60,9 +62,16 @@ Do not send credentials to the marker or build a phishing flow.
 
 ## Stop and report
 
-Do not follow the redirect, add user-controlled credentials, test external
-domains other than the reserved marker, or chain into OAuth/phishing. Record
-the exact input, status, raw and resolved `Location`, and same-origin
+The default proof does not follow the redirect, add user-controlled
+credentials, test external domains other than the reserved marker, or chain
+into another flow. This is not a blanket ban on authorized chained-impact
+testing: if the engagement objective requires it after the redirect is
+confirmed and recorded, ask `ask_user` to name the candidate, exact lab
+endpoints/accounts, single chain/action, bound, and risk tier. Proceed only
+with that approval and an exact-action runtime permission prompt that `/yolo`
+cannot bypass; get fresh approval before increasing the tier. If the runtime
+cannot enforce the gate or the chain leaves the active target's scope, record
+`authorization-required` and stop. Record the exact input, status, raw and resolved `Location`, and same-origin
 comparison in `artifacts/open-redirect/<target>/results.md`. Call
 `confirm_finding` only for confirmed evidence, describing the redirect
 behavior observed and leaving downstream abuse conditional.

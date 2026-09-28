@@ -96,8 +96,20 @@ PATTERNS = [
     # Bearer token
     re.compile(r"(bearer\s+)([A-Za-z0-9._-]{16,})", re.IGNORECASE),
 
-    # Authorization header
-    re.compile(r"(authorization:\s*)(\S+\s+\S+)", re.IGNORECASE),
+    # Authorization header. Anchor to a header line so prose such as
+    # "Missing authorization: unauthenticated access" remains readable.
+    re.compile(r"^([ \t]*authorization:\s*)([^\r\n]+)$", re.IGNORECASE | re.MULTILINE),
+
+    # Password-hash formats that are credentials even without a field label.
+    re.compile(r"\b(\$2[aby]\$\d{2}\$)([./A-Za-z0-9]{53})\b"),
+    re.compile(r"\b(\$argon2(?:id|i|d)\$)([^\s\"']{16,})", re.IGNORECASE),
+
+    # Hex password hashes when the nearby prose identifies their meaning.
+    re.compile(
+        r"((?:password(?:[_ -]?hash(?:es)?)?|passwd|pwd|with\s+hash)"
+        r"[^\r\n]{0,96}?(?:[:=]\s*|\s+))([A-Fa-f0-9]{32,128})\b",
+        re.IGNORECASE,
+    ),
 
     # AWS Access Key
     re.compile(r"\b(AKIA|ASIA)([0-9A-Z]{16})\b"),
@@ -254,6 +266,17 @@ class Redactor:
 
 _redactor = Redactor()
 
+_EVIDENCE_DIGEST = re.compile(
+    r"\b(?:[A-Fa-f0-9]{32}|[A-Fa-f0-9]{40}|[A-Fa-f0-9]{64}|"
+    r"[A-Fa-f0-9]{96}|[A-Fa-f0-9]{128})\b"
+)
+
 
 def apply(text: str) -> str:
     return _redactor.apply(text)
+
+
+def apply_evidence(text: str) -> str:
+    """Redact durable proof more conservatively than ordinary prose."""
+    cleaned = apply(text)
+    return _EVIDENCE_DIGEST.sub(lambda match: mask(match.group(0)), cleaned)

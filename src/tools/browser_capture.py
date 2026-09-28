@@ -302,8 +302,8 @@ class BrowserCaptureClearTool(BaseCaptureTool):
             ),
         }
 
-    def permission_hints(self, args: dict[str, Any]) -> dict[str, bool]:
-        return {"noSessionCache": True}
+    def permission_hints(self, args: dict[str, Any]) -> dict[str, Any]:
+        return {"noSessionCache": True, "riskTier": "high-impact"}
 
     async def run(self, args=None, signal=None, prompter=None) -> str:
         self.store.clear()

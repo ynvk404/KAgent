@@ -7,7 +7,7 @@ from typing import Any
 
 from src.config.config import PluginConfig
 from src.permission.permission import Prompter
-from src.tools.types import Tool
+from src.tools.types import PermissionHints, Tool
 
 PLUGIN_TIMEOUT_SECONDS = 5 * 60
 MAX_OUTPUT_BYTES = 128 * 1024
@@ -32,7 +32,12 @@ class CommandPluginTool:
         }
 
     def requires_permission(self) -> bool:
-        return self.cfg.requires_permission
+        # A command plugin is an arbitrary external process; its configured
+        # permission flag cannot prove the action is routine or read-only.
+        return True
+
+    def permission_hints(self, args: dict[str, Any]) -> PermissionHints:
+        return {"noSessionCache": True, "riskTier": "high-impact"}
 
     def summarize(
         self,

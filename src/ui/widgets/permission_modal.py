@@ -78,12 +78,12 @@ def _framed_action(req: BridgedPermissionRequest) -> tuple[str, str, str] | None
     if req.tool in {"file_write", "FileWriteTool", "file_edit", "FileEditTool"}:
         path, separator, remainder = detail.partition("\n")
         if path.startswith("path: "):
-            scope_prefix = (
-                "writes to "
-                if req.tool in {"file_write", "FileWriteTool"}
-                else "edits to "
-            )
-            display_path = (req.session_scope_display or "").removeprefix(scope_prefix)
+            scope = req.session_scope_display or ""
+            for scope_prefix in ("writes to ", "writes under ", "edits to ", "edits under "):
+                if scope.startswith(scope_prefix):
+                    scope = scope.removeprefix(scope_prefix)
+                    break
+            display_path = scope
             return (
                 _COMMAND_TITLES[req.tool],
                 display_path or path.removeprefix("path: "),
@@ -115,7 +115,7 @@ class PermissionModal:
         elif key == "y":
             self.req.resolve(Decision.ALLOW_ONCE)
 
-        elif key == "a":
+        elif key == "a" and not self.req.no_session_cache:
             self.req.resolve(Decision.ALLOW_SESSION)
 
         elif key == "n":
@@ -159,6 +159,12 @@ class PermissionModal:
 
         parts.append(Text(""))
 
+        if req.risk_tier != "routine":
+            parts.append(Text(
+                f"Risk tier: {req.risk_tier} · explicit action approval required",
+                style=WARNING,
+            ))
+
         if req.no_session_cache:
             parts.append(Text("Session trust unavailable for this sensitive action", style=WARNING))
         else:
@@ -167,12 +173,11 @@ class PermissionModal:
                 + (req.session_scope_display or "this tool for the current runtime")
             ))
 
-        parts.extend((Text(""), Text(
-            "y allow once · "
-            "a trust for session · "
-            "n deny · "
-            "Esc cancel",
-            style=MUTED,
-        )))
+        permission_keys = (
+            "y allow once · n deny · Esc cancel"
+            if req.no_session_cache
+            else "y allow once · a trust for session · n deny · Esc cancel"
+        )
+        parts.extend((Text(""), Text(permission_keys, style=MUTED)))
 
         return Group(*parts)

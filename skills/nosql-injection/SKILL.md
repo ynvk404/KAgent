@@ -2,14 +2,16 @@
 name: nosql-injection
 description: >
   Validate a specific suspected NoSQL query/operator injection candidate with
-  a small type-aware differential against an authorized lab endpoint. Use only
-  a read-only operation or tester-owned fixture, stop at the first reproducible
-  signal, and never enumerate or dump database records.
+  a small type-aware differential against an authorized lab endpoint. The
+  default flow uses read-only operations or tester-owned fixtures; any
+  separate impact check requires fresh bounded approval and a hard runtime
+  permission gate.
 stage: validation
 triggers:
   strong:
     - nosql injection
     - no-sql injection
+    - mongodb injection
     - mongodb operator injection
     - mongo query injection
   weak:
@@ -82,6 +84,15 @@ and limits in `artifacts/nosql-injection/<target>/results.md`. Redact all
 identifiers and secrets; retain references rather than full traffic in
 workflow state. Call `confirm_finding` only for a confirmed Candidate with
 registered evidence, and state only what the differential proves.
+
+These limits define the default validator, not a blanket prohibition on
+authorized impact work. If the engagement objective needs a separate,
+bounded read from a tester-owned fixture after confirmation, first record
+the current result, then use `ask_user` to name the candidate, exact target
+and input, action, maximum data scope, and risk tier. Proceed only after that
+specific approval and an exact-action runtime permission prompt that `/yolo`
+cannot bypass; get fresh approval for any higher tier. If the available HTTP
+path cannot provide that gate, record `authorization-required` and stop.
 
 ## Confirm an evidence-backed finding
 

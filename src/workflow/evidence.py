@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from src.redact.redact import apply as redact
+from src.redact.redact import apply_evidence as redact
 
 MAX_EVIDENCE_BYTES = 2_000_000
 

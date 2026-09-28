@@ -149,6 +149,8 @@ class BridgedPrompter(Prompter):
             no_session_cache=req.no_session_cache,
             cache_key=req.cache_key,
             session_scope_display=req.session_scope_display,
+            risk_tier=req.risk_tier,
+            yolo_auto_approve=req.yolo_auto_approve,
             resolve=resolve,
             reject=reject,
         )

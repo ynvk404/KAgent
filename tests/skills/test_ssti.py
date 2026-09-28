@@ -4,10 +4,10 @@ Contract tests for skills/ssti/SKILL.md and skills/ssti/payloads.txt.
 These tests do not execute live HTTP requests or invoke the agent.
 They pin down the agreed SSTI architecture:
 
-- one vulnerability skill with one payload corpus
+- one vulnerability skill with one safe default payload corpus
 - Phase 1: safe fingerprinting
 - Phase 2: non-destructive validation
-- Phase 3: optional impact validation
+- Phase 3: optional impact validation with no shipped impact vectors
 - ask_user required before deeper phases
 - Phase 2 must not contain execution-oriented probes
 - Phase 3 requires explicit authorization
@@ -94,22 +94,12 @@ def payloads():
         "PHASE 2",
     )
 
-    phase2 = section_between(
-        raw,
-        "PHASE 2",
-        "PHASE 3",
-    )
-
-    phase3 = section_after(
-        raw,
-        "PHASE 3",
-    )
+    phase2 = section_after(raw, "PHASE 2")
 
     return {
         "raw": raw,
         "phase1": phase1,
         "phase2": phase2,
-        "phase3": phase3,
     }
 
 
@@ -520,8 +510,9 @@ def test_phase_3_uses_payload_corpus_only_after_authorization(skill):
     ]
 
     assert "payloads.txt" in phase3
-    assert "phase 3 — impact" in phase3
-    assert "explicitly" in phase3 or "explicit" in phase3
+    assert "intentionally contains no impact" in phase3
+    assert "operator" in phase3
+    assert "do not invent an impact payload" in phase3
 
 
 def test_phase_3_requires_minimal_impact(skill):
@@ -562,12 +553,12 @@ def test_phase_3_forbids_post_exploitation_chaining(skill):
 # ---------------------------------------------------------------------------
 
 
-def test_payload_corpus_has_all_three_phase_banners(payloads):
+def test_payload_corpus_has_only_safe_phase_banners(payloads):
     raw = payloads["raw"]
 
     assert "PHASE 1" in raw
     assert "PHASE 2" in raw
-    assert "PHASE 3" in raw
+    assert "PHASE 3 — IMPACT" not in raw
 
 
 def test_payload_corpus_has_phase_order(payloads):
@@ -575,9 +566,7 @@ def test_payload_corpus_has_phase_order(payloads):
 
     phase1 = raw.index("PHASE 1")
     phase2 = raw.index("PHASE 2")
-    phase3 = raw.index("PHASE 3")
-
-    assert phase1 < phase2 < phase3
+    assert phase1 < phase2
 
 
 def test_phase1_payloads_do_not_contain_known_execution_primitives(payloads):
@@ -631,25 +620,23 @@ def test_phase2_contains_benign_introspection(payloads):
     assert "getclass()" in phase2
 
 
-def test_phase3_contains_only_impact_after_banner(payloads):
-    phase3 = payloads["phase3"].lower()
-
-    assert "popen(" in phase3 or "subprocess" in phase3
-    assert "phase 3" in phase3
-
-
-def test_phase3_corpus_does_not_include_broad_default_dumps(payloads):
-    phase3 = payloads["phase3"].lower()
-
-    forbidden_broad_dumps = [
-        "{{config}}",
-        "{{config.items()}}",
-        "{{self}}",
-        "{{request.environ}}",
+def test_default_corpus_contains_no_impact_or_rce_vectors(payloads):
+    raw = payloads["raw"].lower()
+    forbidden = [
+        "__subclasses__",
+        "__globals__",
+        "popen(",
+        "os.popen",
+        "subprocess.popen",
+        "runtime.exec",
+        "execsync",
+        "open('/etc/",
+        'open("/etc/',
+        "/etc/passwd",
     ]
 
-    for payload in forbidden_broad_dumps:
-        assert payload not in phase3
+    for term in forbidden:
+        assert term not in raw
 
 
 def test_payload_corpus_documents_phase_authorization(payloads):
@@ -658,7 +645,7 @@ def test_payload_corpus_documents_phase_authorization(payloads):
     assert "phase 2" in raw
     assert "phase 3" in raw
     assert "ask_user" in raw
-    assert "does not grant permission" in raw
+    assert "cannot supply or authorize it" in raw
 
 
 # ---------------------------------------------------------------------------

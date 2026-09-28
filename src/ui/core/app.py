@@ -1358,7 +1358,11 @@ class KAgent(App):
 
         if modal is not None:
             self.overlay_static.border_title = (
-                "Permission"
+                (
+                    "Permission · y once · n deny"
+                    if modal.req.no_session_cache
+                    else "Permission · y once · a session · n deny"
+                )
                 if isinstance(modal, PermissionModal)
                 else "Provider"
                 if isinstance(modal, ProviderPickerModal)

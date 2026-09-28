@@ -194,11 +194,11 @@ class TestPhase2dCapabilityGateText:
 # ---------------------------------------------------------------------------
 
 EXPECTED_OUTCOMES = {
-    "confirmed (SQLI-2)",
-    "confirmed (SQLI-3)",
-    "not confirmed",
-    "blocked",
-    "deferred (nosql, out of scope)",
+    "`confirmed` with `SQLI-2` in `techniques`",
+    "`confirmed` with `SQLI-3` in `techniques`",
+    "`not-confirmed`",
+    "`blocked`",
+    "`deferred`",
 }
 
 
@@ -209,25 +209,25 @@ class TestOutcomeContract:
 
     def test_not_confirmed_does_not_require_every_technique(self, skill_text: str):
         """
-        Regression for the earlier over-strict wording: `not confirmed`
+        Regression for the earlier over-strict wording: `not-confirmed`
         must not be defined as requiring literally every technique to
         have been run — the "stop at first clear signal" rule means a
-        candidate can validly reach `not confirmed` without exhausting
+        candidate can validly reach `not-confirmed` without exhausting
         every phase-2 technique.
         """
-        # Find the bullet defining not confirmed in "Recording the result"
+        # Find the bullet defining not-confirmed in "Recording the result"
         section = skill_text.split("## Recording the result", 1)[1]
         section = section.split("### Standard result entry template", 1)[0]
         not_confirmed_line = [
-            line for line in section.splitlines() if line.strip().startswith("- `not confirmed`")
+            line for line in section.splitlines() if line.strip().startswith("- `not-confirmed`")
         ]
-        assert not_confirmed_line, "could not find the `not confirmed` definition bullet"
+        assert not_confirmed_line, "could not find the `not-confirmed` definition bullet"
         line = not_confirmed_line[0]
         assert "does not mean every technique must be run" in line or "stop at the first clear signal" in line
         assert "every technique actually available" not in line
 
     def test_blocked_distinct_from_not_confirmed(self, skill_text: str):
-        assert "distinct from `not confirmed`" in skill_text
+        assert "distinct from `not-confirmed`" in skill_text
 
     def test_2c_treated_as_guard_not_confirmation_technique(self, skill_text: str):
         """
@@ -363,7 +363,8 @@ class TestScopeBounds:
         assert "do not iterate" in payloads_text
 
     def test_nosql_deferred_not_handled_here(self, skill_text: str):
-        assert "deferred (nosql, out of scope)" in skill_text
+        assert "`deferred`" in skill_text
+        assert "NoSQL/operator behavior; outside this validator" in _norm(skill_text)
         assert "do not apply SQL syntax to it here" in _norm(skill_text)
 
 
@@ -383,7 +384,7 @@ class TestFindingContract:
             assert field_name in skill_text
 
     def test_only_confirmed_outcomes_are_persisted(self, skill_text: str):
-        assert "Do not call `confirm_finding` for `not confirmed`, `blocked`, or `deferred`" in skill_text
+        assert "Do not call `confirm_finding` for `not-confirmed`, `blocked`, or `deferred`" in skill_text
 
     def test_no_concrete_query_rewrite_in_handoff(self, skill_text: str):
         assert "Do not fill in a rewritten, drop-in query fix" in _norm(skill_text)

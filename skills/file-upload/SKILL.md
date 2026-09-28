@@ -3,8 +3,8 @@ name: file-upload
 description: >
   Evaluate one file-upload candidate using a harmless text marker in a
   designated disposable lab account. Uploads are state-changing and require
-  exact user authorization plus separate cleanup authorization; never upload
-  executable content, web shells, or backdoors.
+  exact user authorization plus separate cleanup authorization. The generic
+  runtime does not currently provide a high-impact gate for active content.
 stage: validation
 triggers:
   strong:
@@ -45,7 +45,19 @@ Use only plain-text content such as `KAGENT_UPLOAD_MARKER`, with a neutral
 `.txt` or operator-approved non-executable extension. Never upload HTML,
 SVG, script, executable, archive, polyglot, web shell, or backdoor content;
 never use a path-bearing filename. If the endpoint's only proof requires
-active content or execution, stop with `authorization-required`.
+active content or execution, stop this default flow with
+`authorization-required`.
+
+This bounded flow is not a blanket prohibition on authorized upload-impact
+testing. If the engagement objective specifically requires an active-content
+or execution check after harmless upload behavior is recorded, first ask
+`ask_user` to name the candidate, disposable account, exact file/action,
+single endpoint, execution bound, cleanup action, and risk tier. Proceed only
+if a runtime permission prompt classifies that exact action as high-impact,
+is non-cacheable, and cannot be bypassed by `/yolo`; get separate approval for
+cleanup and any higher tier. The current generic HTTP gate does not reliably
+classify active content in a request body, so do not run this branch until
+that classification is available.
 
 ## Validation
 
@@ -74,10 +86,11 @@ active content or execution, stop with `authorization-required`.
 
 ## Stop and report
 
-Stop after at most two harmless marker uploads and one retrieval per accepted
-file. Do not test execution, path traversal in filenames, overwrite behavior,
-public-user access, or persistence. Record exact authorization, test account
-role, safe file metadata, result, and cleanup state in
+Stop this default flow after at most two harmless marker uploads and one
+retrieval per accepted file. Do not automatically test execution, path
+traversal in filenames, overwrite behavior, public-user access, or
+persistence. Record exact authorization, test account role, safe file
+metadata, result, and cleanup state in
 `artifacts/file-upload/<target>/results.md`; do not retain actual user files
 or credentials. A confirmed finding must have registered evidence and must
 describe only the behavior shown by the harmless marker.

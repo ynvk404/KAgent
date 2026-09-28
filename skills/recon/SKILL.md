@@ -39,7 +39,9 @@ authorized to test. This phase answers "what is this target and what is it
 running?" It does not map endpoints, parameters, or forms. That belongs to
 `web-enumeration`.
 
-Default to `curl` and the built-in `http` tool for reachability and fingerprinting.
+Prefer the built-in `http` tool with `phase: recon` for reachability and
+fingerprinting. Use `curl` only when the native tool cannot express a necessary
+request detail; shell requests do not enforce target-origin scope.
 Use `service_discovery` only when the active target's service/port coverage is
 unclear and resolving it is relevant. If the active URL already establishes the
 web port and no broader service question remains, record service discovery as

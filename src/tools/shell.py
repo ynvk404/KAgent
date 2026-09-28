@@ -11,7 +11,7 @@ from typing import Any
 from src.logger.logger import get_logger
 from src.permission.permission import Prompter
 from .file import decode_utf8_capped
-from .types import Tool, arg_string
+from .types import PermissionHints, Tool, arg_string
 from .outcome import ToolOutput
 
 log = get_logger("tools.shell")
@@ -116,9 +116,11 @@ class ShellTool(Tool):
         if is_windows():
             return "\n".join(
                 (
-                    "Run a shell command via PowerShell on the local machine. "
-                    "Primary use case is curl/Invoke-WebRequest plus standard "
-                    "utilities for HTTP testing, file inspection, and one-liners. "
+                    "Run an arbitrary command via PowerShell on the local machine. "
+                    "Use the built-in http tool for target requests whenever it "
+                    "can express them; HTTP done through shell is not origin-scoped. "
+                    "Use PowerShell for local OS utilities or HTTP details the "
+                    "native tool cannot express. "
                     "The user will be prompted to approve each command. Capture "
                     "concise output — pipe through `Select-Object -First` for "
                     "huge outputs. Do not run interactive commands. Authorized "
@@ -128,17 +130,18 @@ class ShellTool(Tool):
                     "equivalents (Select-String, -replace, ConvertFrom-Json) "
                     "unless you know the tool is installed.",
                     "",
-                    "Default to curl/Invoke-WebRequest for HTTP work. Use "
+                    "Prefer the built-in http tool for ordinary HTTP probes. Use "
                     "semantic discovery tools for bounded path/service discovery; "
                     "generic-shell scanners require an explicit user request.",
                 )
             )
         return "\n".join(
             (
-                "Run a shell command via /bin/sh -c on the local machine. "
-                "Primary use case is curl + standard Unix utilities (jq, grep, "
-                "awk, sed, head, sort, uniq) for HTTP testing, file inspection, "
-                "and bash one-liners. The user will be prompted to approve each "
+                "Run an arbitrary command via /bin/sh -c on the local machine. "
+                "Use the built-in http tool for target requests whenever it "
+                "can express them; HTTP done through shell is not origin-scoped. "
+                "Use shell for local OS utilities or HTTP details the native "
+                "tool cannot express. The user will be prompted to approve each "
                 "command. Capture concise output — pipe through `head` for huge "
                 "outputs. Do not run interactive commands. Authorized "
                 "engagements only.",
@@ -146,9 +149,9 @@ class ShellTool(Tool):
                 "flags such as `grep -P`; prefer `grep -E`, `awk`, `sed`, "
                 "`perl -ne`, or `jq` for extraction.",
                 "",
-                "Default to curl for HTTP work. Use semantic discovery tools for "
-                "bounded path/service discovery; generic-shell scanners require "
-                "an explicit user request.",
+                "Prefer the built-in http tool for ordinary HTTP probes. Use "
+                "semantic discovery tools for bounded path/service discovery; "
+                "generic-shell scanners require an explicit user request.",
             )
         )
 
@@ -175,8 +178,10 @@ class ShellTool(Tool):
     def requires_permission(self) -> bool:
         return True
 
-    def permission_hints(self, args: dict[str, Any]) -> dict[str, str]:
+    def permission_hints(self, args: dict[str, Any]) -> PermissionHints:
         return {
+            "noSessionCache": True,
+            "riskTier": "high-impact",
             "cacheKey": rewrite_portable_command(arg_string(args, "command") or ""),
             "sessionScopeDisplay": f"this exact {self.tool_name} command only",
         }

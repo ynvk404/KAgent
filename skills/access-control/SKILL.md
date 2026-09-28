@@ -88,9 +88,12 @@ evidence that authorization is missing or bypassable at the relevant
 boundary (anonymous vs. authenticated, low- vs. high-privilege, or
 same-privilege owner vs. non-owner), using only identity material already
 available, or record a clear negative, blocked, or
-`insufficient-identity` result. Then record the result and stop.
+`insufficient-evidence` result with the missing identity boundary in notes.
+Then record the result and stop.
 
-Default to `curl` and the built-in `http` tool. Do not pull in scanners or
+Prefer the built-in `http` tool with `phase: validation` for bounded identity
+comparisons. Use `curl` only when the native tool cannot express a necessary
+request detail; shell requests do not enforce target-origin scope. Do not pull in scanners or
 authorization-fuzzing tools (Autorize-style plugins, etc.) — this skill
 works from one candidate at a time, comparing a small, fixed set of
 identities against a fixed set of requests.
@@ -139,8 +142,9 @@ authorization on admin-like or state-changing endpoints. It does not cover
 authentication mechanics (login, password reset, MFA, session fixation),
 CSRF, JWT/OAuth token vulnerabilities, or session-management bugs — those
 are separate, currently-inactive skills. If a candidate turns out to be
-about one of those instead of authorization, record it as `deferred (out
-of scope)` with the specific reason noted (e.g. "authentication
+about one of those instead of authorization, treat it as out of scope for
+this validator and record it as `deferred` with the specific reason noted
+(e.g. "authentication
 mechanics, not authorization", "CSRF, not authorization", "session-
 management bug, not authorization"), and do not test it here.
 
@@ -196,7 +200,15 @@ Do not:
   session/token — that is a different vulnerability class (authentication)
   and out of scope here;
 - proceed with a test that requires an identity you don't have. Record the
-  candidate as `insufficient-identity` instead (step 5) and move on.
+  candidate as `insufficient-evidence` instead (step 5), note the missing
+  identity material, and move on.
+
+If the operator explicitly authorizes self-registration, account creation is a
+mutation even when the authorization test itself is read-only. Record
+`mutation_performed: true` as soon as an account or basket is created and keep
+cleanup `pending` until each created object is removed or the operator is given
+an exact `requires-user-action` cleanup list. Do not use `not-required` while
+test identities or their data remain on the target.
 
 The one test that never requires a second identity is the
 **anonymous-vs-required-auth** check (step 3, tier 1) — always attempt that
@@ -297,6 +309,12 @@ curl -ksS -o /tmp/lowpriv_body -w '%{http_code} %{size_download}\n' \
 A low-privilege identity receiving the same functional response an admin
 would get (data, or a state-change actually taking effect — see the
 non-destructive rule below) is the vertical/function-level signal.
+An `/admin/` path, route name, or HTTP 200 alone does not establish that the
+response was intended to be restricted. For configuration or bootstrap JSON,
+first establish an authenticated/admin-only boundary and identify sensitive
+content. If the same data is intentionally public to the SPA, record
+`not-confirmed`; if the expected boundary cannot be established, record
+`insufficient-evidence`. Do not assign Medium severity from the route name.
 
 **Tier 4 — parameter/role tampering, only if tiers 1–3 don't apply or are
 inconclusive.** Some apps infer role or ownership from a client-controlled
@@ -326,7 +344,7 @@ baseline and boundary, not treated as an automatic non-result:
 - application-level denial of the unauthorized identity (the request
   reached the application, and the application's own authorization logic
   rejected it) → this is a real, meaningful signal: record as
-  `not confirmed` for that boundary;
+  `not-confirmed` for that boundary;
 - evidence that an upstream WAF, rate limiter, challenge, or other
   intermediary intercepted the request *before* application authorization
   logic ran (e.g. a block page with no application markup, a CAPTCHA, a
@@ -348,7 +366,7 @@ Rules across all tiers:
 
 - One comparison at a time, always against the step 2 baseline.
 - Never test with an identity you weren't actually given (see the identity
-  section above) — an untested boundary is `insufficient-identity`, not a
+  section above) — an untested boundary is `insufficient-evidence`, not a
   negative result.
 - If a tier already gives a clear positive (e.g. anonymous access returns
   full resource data), you don't need to also run the higher tiers for the
@@ -377,7 +395,8 @@ probing it. In particular, do not:
 If a write/state-changing endpoint is the only way to demonstrate the gap
 and you don't have explicit authorization to actually execute it against
 another user's real resource, stop short and record the candidate as
-`requires-authorization-for-write` (step 5) rather than performing it.
+`authorization-required` (step 5) rather than performing it; record the
+specific write authorization needed in notes.
 
 ## 5. Record the result
 
@@ -385,20 +404,20 @@ Every candidate gets exactly one outcome:
 
 - `confirmed` — a tier in step 3 produced a clear, repeatable positive
   signal (unauthorized access or action succeeded), bounded per step 4;
-- `not confirmed` — the relevant boundary tier(s) were actually tested
+- `not-confirmed` — the relevant boundary tier(s) were actually tested
   against the live application with real, distinct identities, and none
   showed unauthorized access;
 - `blocked` — a probe was intercepted by a WAF, rate-limiter, or challenge
   page before reaching the application (step 3, tier 5); the application
   itself was never actually tested;
-- `insufficient-identity` — the boundary this candidate needs (a second
+- `insufficient-evidence` — the boundary this candidate needs (a second
   same-privilege session, a low/high-privilege pair, etc.) was not
   available and the user did not supply it when asked; the application was
   never actually tested for this boundary;
-- `requires-authorization-for-write` — testing would require executing a
+- `authorization-required` — testing would require executing a
   state-changing action against another user's real resource, and explicit
   authorization for that wasn't given;
-- `deferred (out of scope)` — the candidate turned out to be about
+- `deferred` — the candidate turned out to be about
   authentication mechanics, CSRF, JWT/OAuth token vulnerabilities, or
   session-management bugs rather than authorization (see Scope). Record
   the specific reason (e.g. "authentication mechanics, not authorization",
@@ -463,11 +482,17 @@ IDOR). The latest result and its registered evidence must be valid. Include:
   implementation, since you don't have the application's real
   authorization logic.
 
-Do not call `confirm_finding` for `not confirmed`, `blocked`, `insufficient-identity`,
-`requires-authorization-for-write`, or `deferred (out of scope)`
+Keep the title and observed impact within the exact identities and objects that
+were tested. For example, two test users proving access to one basket supports
+"user B can read user A's basket". Claims such as "any authenticated user" or
+"all baskets" belong only in conditional potential impact unless representative
+enumeration evidence establishes that broader scope.
+
+Do not call `confirm_finding` for `not-confirmed`, `blocked`,
+`insufficient-evidence`, `authorization-required`, or `deferred`
 candidates as findings — they stay in `results.md` only. For
-`insufficient-identity` and
-`requires-authorization-for-write` candidates specifically, flag in the
+`insufficient-evidence` and `authorization-required` candidates specifically,
+flag in the
 summary exactly what identity or authorization would be needed to finish
 testing them, so the user can decide whether to supply it.
 
@@ -489,4 +514,4 @@ state-changing actions against another user's data without explicit
 authorization, dump or enumerate multiple victims' data, run automated
 authorization-fuzzing tools by default, retry blocked probes with
 bypass tricks, or keep escalating scope on a candidate that already gave a
-clear negative or `insufficient-identity` result.
+clear negative or `insufficient-evidence` result.

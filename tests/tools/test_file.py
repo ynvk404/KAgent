@@ -4,6 +4,7 @@ import shutil
 import stat
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,6 +13,7 @@ from src.permission.permission import (
     AlwaysDeny,
     Decision,
     PermissionRequest,
+    YoloPrompter,
 )
 from src.tools.file import (
     FileReadTool,
@@ -60,12 +62,18 @@ async def test_file_read_regular_file(file_tmp, signal):
 def test_file_permission_scopes_use_resolved_paths(file_tmp):
     path = file_tmp / "nested" / "notes.txt"
 
-    assert FileWriteTool().permission_hints({"path": str(path)})[
+    write_hints = FileWriteTool().permission_hints({"path": str(path)})
+    edit_hints = FileEditTool().permission_hints({"path": str(path)})
+    assert write_hints.get("noSessionCache") is True
+    assert write_hints.get("riskTier") == "high-impact"
+    assert edit_hints.get("noSessionCache") is True
+    assert edit_hints.get("riskTier") == "high-impact"
+    assert write_hints.get(
         "sessionScopeDisplay"
-    ] == f"writes to {path.resolve()}"
-    assert FileEditTool().permission_hints({"path": str(path)})[
+    ) == f"writes to {path.resolve()}"
+    assert edit_hints.get(
         "sessionScopeDisplay"
-    ] == f"edits to {path.resolve()}"
+    ) == f"edits to {path.resolve()}"
 
 @pytest.mark.asyncio
 async def test_file_read_missing_path(signal):
@@ -324,3 +332,32 @@ async def test_sensitive_path_gate_denies_read(file_tmp, signal):
             signal,
             AlwaysDeny(),
         )
+
+
+@pytest.mark.asyncio
+async def test_yolo_does_not_bypass_sensitive_local_path_gate(file_tmp, signal):
+    path = file_tmp / ".ssh" / "id_rsa"
+    path.parent.mkdir()
+    path.write_text("private key")
+    asked: list[PermissionRequest] = []
+
+    class Recorder:
+        async def ask(
+            self,
+            request: PermissionRequest,
+            signal: Any = None,
+        ) -> Decision:
+            asked.append(request)
+            return Decision.DENY
+
+    with pytest.raises(PermissionError, match="denied"):
+        await FileReadTool().run(
+            {"path": str(path)},
+            signal,
+            YoloPrompter(Recorder(), initial=True),
+        )
+
+    assert len(asked) == 1
+    assert asked[0].no_session_cache is True
+    assert asked[0].risk_tier == "high-impact"
+    assert asked[0].yolo_auto_approve is False

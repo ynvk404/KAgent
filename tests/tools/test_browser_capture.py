@@ -32,7 +32,10 @@ def test_clear_tool_requires_permission_and_explicit_browser_capture_intent():
         "additionalProperties": False,
     }
     assert tool.requires_permission() is True
-    assert tool.permission_hints({}) == {"noSessionCache": True}
+    assert tool.permission_hints({}) == {
+        "noSessionCache": True,
+        "riskTier": "high-impact",
+    }
     assert "explicitly asks to clear or reset browser capture data" in tool.description()
     assert "ambiguous request" in tool.description()
 

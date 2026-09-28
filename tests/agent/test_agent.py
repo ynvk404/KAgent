@@ -3731,20 +3731,23 @@ async def test_permission_escape_denial_ends_turn_without_synthesis():
 
 
 @pytest.mark.asyncio
-async def test_private_host_denial_ends_turn_without_synthesis():
+async def test_private_target_permission_denial_ends_turn_without_synthesis():
     target = Target("http://127.0.0.1")
     engagement = EngagementState()
     engagement.initialize_target(target.base_url())
     tool = HTTPTool(target, engagement)
     client = FakeClient(
-        [tool_batch(tool_call("private", "http", {"url": "http://127.0.0.1/status"}))]
+        [tool_batch(tool_call(
+            "private", "http",
+            {"phase": "recon", "url": "http://127.0.0.1/status"},
+        ))]
     )
     agent = Agent(
         AgentOptions(
             client=client,
             tools=ToolRegistry(),
             skills=SkillRegistry(),
-            prompter=SequencePrompter(Decision.ALLOW_ONCE, Decision.DENY),
+            prompter=SequencePrompter(Decision.DENY),
             store=None,
             target=target,
             engagement_state=engagement,
@@ -3757,7 +3760,7 @@ async def test_private_host_denial_ends_turn_without_synthesis():
 
     assert len(client.requests) == 1
     result = next(event for event in collector["events"] if event.type == "tool-result")
-    assert "private/internal URL denied" in result.err
+    assert "permission denied by user for http" in result.err
     assert collector["events"][-1].type == "done"
     assert collector["events"][-1].stop_reason == "all_tools_refused"
 

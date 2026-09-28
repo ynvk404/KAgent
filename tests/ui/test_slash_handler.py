@@ -492,7 +492,8 @@ def test_yolo_without_argument_shows_current_state():
 
     assert handle_slash(cast(KAgent, app), "/yolo")
 
-    assert last_text(app) == "yolo currently off"
+    assert "YOLO currently off" in last_text(app)
+    assert "no target scope declared" in last_text(app)
     assert not app.state.yolo
     assert len(app.actions) == 1
 
@@ -505,9 +506,24 @@ def test_yolo_on_enables_auto_approve():
     assert app.state.yolo
     assert (
         last_text(app)
-        == "YOLO enabled. Tool calls will be auto-approved. Authorized / lab targets only."
+        == (
+            "YOLO enabled. Routine reconnaissance, enumeration, and benign "
+            "validation inside declared scope may run automatically. Impact "
+            "actions, out-of-scope destinations, and sensitive local actions "
+            "still require human approval. Scope: no target scope declared; "
+            "set /target first."
+        )
     )
     assert len(app.actions) == 1
+
+
+def test_yolo_status_shows_canonical_declared_scope():
+    app = DummyApp()
+    app.agent.apply_target_base_url("HTTP://Juice.Lab.:3000/app")
+
+    assert handle_slash(cast(KAgent, app), "/yolo on")
+
+    assert "Scope: http://juice.lab:3000." in last_text(app)
 
 
 def test_yolo_off_disables_auto_approve():

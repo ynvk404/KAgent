@@ -3,6 +3,9 @@ from __future__ import annotations
 import pytest
 
 from src.findings.store import Store as FindingsStore
+from src.config.config import PluginConfig
+from src.coverage.store import CoverageStore
+from src.engagement.state import EngagementState
 from src.permission.permission import (
     Decision,
     PermissionRequest,
@@ -10,14 +13,16 @@ from src.permission.permission import (
     UserControlledRefusal,
     YoloPrompter,
 )
-from src.tools.registry import Registry
-from src.tools.plugin import CommandPluginTool
-from src.config.config import PluginConfig
+from src.target.target import Target
 from src.tools.coverage import CoverageTool
 from src.tools.finding import ConfirmFindingTool
+from src.tools.file import FileWriteTool
+from src.tools.http import HTTPTool
+from src.tools.plugin import CommandPluginTool
+from src.tools.registry import Registry
+from src.tools.shell import ShellTool
 from src.tools.types import Tool
 from src.tools.workflow import WorkflowTool
-from src.coverage.store import CoverageStore
 from src.workflow.state import WorkflowState
 
 class GatedTool:
@@ -46,6 +51,11 @@ class GatedTool:
     ) -> str:
         self.ran = True
         return "ok"
+
+
+class YoloEligibleTool(GatedTool):
+    def permission_hints(self, _args):
+        return {"yoloAutoApprove": True}
 
 
 def test_duplicate_registration_rejects_and_preserves_original():
@@ -123,7 +133,7 @@ class SpyPrompter:
 async def test_yolo_auto_approves_permission_tool_without_calling_prompter():
     reg = Registry()
 
-    tool = GatedTool()
+    tool = YoloEligibleTool()
     reg.register(tool)
 
     inner = SpyPrompter(
@@ -161,6 +171,74 @@ async def test_yolo_does_not_bypass_non_cacheable_coverage_clear(tmp_path):
         await registry.execute("coverage", {"action": "clear"}, None, yolo)
 
     assert len(inner.calls) == 1
+    assert inner.calls[0].no_session_cache is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["shell", "file_write", "http", "plugin"])
+async def test_yolo_cannot_bypass_high_impact_tool_permissions(action, tmp_path):
+    registry = Registry()
+    if action == "shell":
+        registry.register(ShellTool())
+        args = {"command": "printf approval-gated"}
+        expected_tier = "high-impact"
+    elif action == "file_write":
+        path = tmp_path / "must-not-write.txt"
+        registry.register(FileWriteTool())
+        args = {"path": str(path), "content": "must not be written"}
+        expected_tier = "high-impact"
+    elif action == "plugin":
+        registry.register(CommandPluginTool(PluginConfig(
+            name="plugin",
+            command="python",
+            args=["-c", "raise SystemExit(99)"],
+            description="external action",
+            requires_permission=False,
+        )))
+        args = {}
+        expected_tier = "high-impact"
+    else:
+        target = Target("https://target.test")
+        engagement = EngagementState()
+        engagement.initialize_target(target.base_url())
+        registry.register(HTTPTool(target, engagement))
+        args = {"phase": "impact", "method": "POST", "url": "/submit", "body": "marker"}
+        expected_tier = "high-impact"
+
+    inner = SpyPrompter(Decision.DENY)
+    yolo = YoloPrompter(inner, True)
+
+    with pytest.raises(UserControlledRefusal):
+        await registry.execute(action, args, None, yolo)
+
+    assert len(inner.calls) == 1
+    assert inner.calls[0].no_session_cache is True
+    assert inner.calls[0].risk_tier == expected_tier
+    if action == "file_write":
+        assert not path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+async def test_yolo_cannot_bypass_http_overwrite_or_delete_permissions(method):
+    target = Target("https://target.test")
+    engagement = EngagementState()
+    engagement.initialize_target(target.base_url())
+    registry = Registry()
+    registry.register(HTTPTool(target, engagement))
+    inner = SpyPrompter(Decision.DENY)
+    yolo = YoloPrompter(inner, True)
+
+    with pytest.raises(UserControlledRefusal):
+        await registry.execute(
+            "http",
+            {"phase": "impact", "method": method, "url": "/item/1", "body": "{}"},
+            None,
+            yolo,
+        )
+
+    assert len(inner.calls) == 1
+    assert inner.calls[0].risk_tier == "high-impact"
     assert inner.calls[0].no_session_cache is True
 
 @pytest.mark.asyncio

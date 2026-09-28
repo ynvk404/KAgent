@@ -83,7 +83,9 @@ class ContentDiscoveryTool(Tool):
             "exact HTTP origin. Uses native HTTP by default; full tooling profile "
             "may select installed ffuf when coverage is still missing. GET only, "
             "no recursion, no raw scanner flags, redirects are not followed, and "
-            "every ffuf hit is rechecked with native HTTP. Requires permission."
+            "every ffuf hit is rechecked with native HTTP. Its bounded paths and "
+            "request budget are validated against the active scope; routine "
+            "in-scope enumeration is eligible for YOLO."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -152,6 +154,8 @@ class ContentDiscoveryTool(Tool):
                 json.dumps(action, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
             return {
+                "riskTier": "routine",
+                "yoloAutoApprove": True,
                 "cacheKey": f"content-discovery:{key}",
                 "sessionScopeDisplay": (
                     f"content discovery on {scope.origin.as_url()}{scope.base_path or '/'} "
@@ -241,6 +245,7 @@ class ContentDiscoveryTool(Tool):
             signal,
             self.name(),
             target=self.target,
+            permission_cache_key=self.permission_hints(args).get("cacheKey"),
         )
         observations: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []

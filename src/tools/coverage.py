@@ -136,7 +136,7 @@ class CoverageTool(Tool):
 
     def permission_hints(self, args: dict[str, Any]) -> PermissionHints:
         if arg_string(args, "action") == "clear":
-            return {"noSessionCache": True}
+            return {"noSessionCache": True, "riskTier": "high-impact"}
         return {}
 
     async def run(

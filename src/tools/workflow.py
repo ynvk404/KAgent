@@ -30,7 +30,12 @@ from src.workflow.state import (
     validation_result_fingerprint,
 )
 from src.workflow.evidence import EvidenceArtifact
-from src.skills.registry import Registry as SkillRegistry, normalize_candidate_class, normalize_metadata_name
+from src.skills.registry import (
+    Registry as SkillRegistry,
+    Skill,
+    normalize_candidate_class,
+    normalize_metadata_name,
+)
 from src.skills.artifacts import completion_artifact_path, resolve_canonical_artifact
 
 from .outcome import ToolOutput
@@ -116,7 +121,13 @@ class WorkflowTool(Tool):
                     "type": "string",
                     "description": "Required for record_candidate.",
                 },
-                "target": optional_string,
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "Candidate target for record_candidate only. Omit for record_input; "
+                        "the runtime assigns its objective and target origin."
+                    ),
+                },
                 "endpoint": optional_string,
                 "method": optional_string,
                 "parameter": optional_string,
@@ -295,13 +306,24 @@ class WorkflowTool(Tool):
         validators = (
             self.skills.validators_for_class(candidate_class) if self.skills else []
         )
-        supported = bool(validators) if self.skills else None
+        supported = len(validators) == 1 if self.skills else None
+        validator_resolution = (
+            None if self.skills is None
+            else "unique" if len(validators) == 1
+            else "unavailable" if not validators
+            else "ambiguous"
+        )
+        endpoint, method, normalization_error = self._normalize_method_endpoint(
+            args.get("endpoint"), args.get("method")
+        )
+        if normalization_error:
+            return f"error: {normalization_error}"
         try:
             candidate = Candidate(
                 candidate_class=candidate_class,
                 target=candidate_target,
-                endpoint=args.get("endpoint"),
-                method=args.get("method"),
+                endpoint=endpoint,
+                method=method,
                 parameter=args.get("parameter"),
                 location=args.get("location"),
                 test_case=args.get("test_case"),
@@ -342,6 +364,7 @@ class WorkflowTool(Tool):
                 "created": created,
                 "candidate": stored.to_dict(),
                 "supported": supported,
+                "validator_resolution": validator_resolution,
                 "recommended_skills": [skill.name for skill in validators],
             },
             indent=2,
@@ -351,19 +374,36 @@ class WorkflowTool(Tool):
         objective = self.state.objective
         if objective is None or objective.mode != "whole_target":
             return "error: record_input requires an active whole-target objective"
-        if "objective_id" in args or "target_origin" in args or "target" in args:
-            return "error: objective and target origin are assigned by the runtime"
+        supplied_objective_id = args.get("objective_id")
+        if supplied_objective_id and supplied_objective_id != objective.id:
+            return (
+                "error: objective_id is assigned by the runtime and does not "
+                "match the active whole-target objective"
+            )
         if self.target is None or self.target.empty():
             return "error: record_input requires an active target"
         target_origin = normalize_target_origin(self.target.base_url())
         if target_origin != objective.target_origin:
             return "error: active target does not match the whole-target objective"
+        supplied_origin = args.get("target_origin") or args.get("target")
+        if supplied_origin:
+            try:
+                supplied_target_origin = normalize_target_origin(str(supplied_origin))
+            except ValueError as err:
+                return f"error: {err}"
+            if supplied_target_origin != target_origin:
+                return "error: supplied target does not match the active whole-target origin"
+        endpoint, method, normalization_error = self._normalize_method_endpoint(
+            args.get("endpoint"), args.get("method")
+        )
+        if normalization_error:
+            return f"error: {normalization_error}"
         try:
             item = AttackSurfaceInput(
                 objective_id=objective.id,
                 target_origin=target_origin or "",
-                method=args.get("method"),
-                endpoint=args.get("endpoint"),
+                method=method,
+                endpoint=endpoint,
                 parameter=args.get("parameter"),
                 location=args.get("location"),
                 input_type=args.get("input_type"),
@@ -372,6 +412,27 @@ class WorkflowTool(Tool):
         except (TypeError, ValueError) as err:
             return f"error: {err}"
         return json.dumps({"ok": True, "created": created, "input": stored.to_dict()}, indent=2)
+
+    @staticmethod
+    def _normalize_method_endpoint(
+        endpoint: Any,
+        method: Any,
+    ) -> tuple[Any, Any, str | None]:
+        """Accept a common ``GET /path`` shorthand without storing it twice."""
+        if not isinstance(endpoint, str):
+            return endpoint, method, None
+        match = re.match(
+            r"^\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S.*)$",
+            endpoint,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return endpoint, method, None
+        prefixed_method = match.group(1).upper()
+        explicit_method = str(method).strip().upper() if method else ""
+        if explicit_method and explicit_method != prefixed_method:
+            return endpoint, method, "endpoint method prefix conflicts with method"
+        return match.group(2).strip(), prefixed_method, None
 
     def _set_input_disposition(self, args: dict[str, Any]) -> str:
         try:
@@ -399,6 +460,8 @@ class WorkflowTool(Tool):
             self._validate_current_objective_candidate(candidate_id)
             objective = self.state.objective
             candidate = self.state.candidates[candidate_id]
+            if self.skills is not None:
+                self._require_unique_validator(candidate.candidate_class)
             latest = self.state.latest_result(candidate_id)
             if (
                 objective is not None
@@ -482,7 +545,13 @@ class WorkflowTool(Tool):
             ):
                 raise ValueError("evidence artifact changed or is unavailable")
             skill = self.skills.get(result.skill_name) if self.skills else None
-            if skill and skill.candidate_classes and candidate.candidate_class not in skill.candidate_classes:
+            if self.skills is not None:
+                validator = self._require_unique_validator(candidate.candidate_class)
+                if result.skill_name != validator.name:
+                    raise ValueError(
+                        "result skill must be the unique validator for candidate class"
+                    )
+            elif skill and skill.candidate_classes and candidate.candidate_class not in skill.candidate_classes:
                 raise ValueError("result skill does not handle candidate class")
             if (
                 result.outcome == "confirmed"
@@ -574,9 +643,23 @@ class WorkflowTool(Tool):
             or true_predicate.strip() == false_predicate.strip()
         ):
             raise ValueError("boolean confirmation requires distinct TRUE and FALSE predicates")
+        if re.search(r"\bunion\s+select\b", true_predicate, re.IGNORECASE) or re.search(
+            r"\bunion\s+select\b", false_predicate, re.IGNORECASE
+        ):
+            raise ValueError(
+                "UNION success/error observations are not a boolean differential; "
+                "record the actual union/error technique without boolean confirmation"
+            )
         pairs = confirmation.get("pairs")
         if not isinstance(pairs, list) or len(pairs) < 2:
             raise ValueError("boolean confirmation requires at least two paired repetitions")
+        size_tolerance = confirmation.get("size_tolerance", 0)
+        if (
+            not isinstance(size_tolerance, int)
+            or isinstance(size_tolerance, bool)
+            or not 0 <= size_tolerance <= 4096
+        ):
+            raise ValueError("boolean confirmation size_tolerance must be 0 to 4096 bytes")
 
         normalized_pairs: list[dict[str, Any]] = []
         true_signatures: list[tuple[int, int, str]] = []
@@ -625,19 +708,35 @@ class WorkflowTool(Tool):
             false_signature = (
                 sides["false"]["status"], sides["false"]["size"], sides["false"]["marker"]
             )
-            if true_signature == false_signature:
+            if (
+                sides["true"]["status"] == sides["false"]["status"]
+                and sides["true"]["marker"] == sides["false"]["marker"]
+                and abs(sides["true"]["size"] - sides["false"]["size"])
+                <= size_tolerance
+            ):
                 raise ValueError("boolean TRUE and FALSE observations must differ")
             true_signatures.append(true_signature)
             false_signatures.append(false_signature)
             normalized_pairs.append({"repetition": repetition, **sides})
 
-        if len(set(true_signatures)) != 1 or len(set(false_signatures)) != 1:
+        def stable(signatures: list[tuple[int, int, str]]) -> bool:
+            statuses = {status for status, _, _ in signatures}
+            markers = {marker for _, _, marker in signatures}
+            sizes = [size for _, size, _ in signatures]
+            return (
+                len(statuses) == 1
+                and len(markers) == 1
+                and max(sizes) - min(sizes) <= size_tolerance
+            )
+
+        if not stable(true_signatures) or not stable(false_signatures):
             raise ValueError("boolean confirmation differential is not reproducible")
         return {
             "kind": kind,
             "request_template": redact(template.strip())[:500],
             "true_predicate": redact(true_predicate.strip())[:200],
             "false_predicate": redact(false_predicate.strip())[:200],
+            "size_tolerance": size_tolerance,
             "pairs": normalized_pairs,
         }
 
@@ -952,6 +1051,18 @@ class WorkflowTool(Tool):
                 raise ValueError(
                     "candidate target does not match the active candidate-validation objective"
                 )
+
+    def _require_unique_validator(self, candidate_class: str) -> Skill:
+        if self.skills is None:
+            raise ValueError("skill registry is unavailable for validator resolution")
+        validators = self.skills.validators_for_class(candidate_class)
+        if len(validators) != 1:
+            reason = "unavailable" if not validators else "ambiguous"
+            raise ValueError(
+                f"candidate class {candidate_class} has {reason} validator mapping; "
+                "exactly one enabled validation skill is required"
+            )
+        return validators[0]
 
     @staticmethod
     def _phase_for_skill(canonical: str, skill) -> WorkflowPhase | None:

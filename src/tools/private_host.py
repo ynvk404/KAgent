@@ -62,6 +62,7 @@ async def gate_private_request(
     signal,
     tool_name: str,
     target=None,
+    permission_cache_key: str | None = None,
 ) -> str:
     reason = await private_host_reason(
         parsed.hostname
@@ -93,8 +94,12 @@ async def gate_private_request(
             no_session_cache=(
                 not is_declared_target
             ),
+            risk_tier=(
+                "bounded-impact" if not is_declared_target else "routine"
+            ),
+            yolo_auto_approve=is_declared_target,
             cache_key=(
-                f"private-declared://{origin.as_url()}"
+                permission_cache_key or f"private-declared://{origin.as_url()}"
                 if is_declared_target
                 else None
             ),

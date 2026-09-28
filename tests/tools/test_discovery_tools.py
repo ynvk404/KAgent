@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from src.engagement.state import EngagementState
-from src.permission.permission import AlwaysAllow, Decision, PermissionRequest, UserControlledRefusal
+from src.permission.permission import AlwaysAllow, Decision, PermissionRequest, UserControlledRefusal, YoloPrompter
 from src.target.target import Target
 from src.tools.capabilities import CapabilityInventory
 from src.tools.content_discovery import (
@@ -21,6 +21,7 @@ from src.tools.content_discovery import (
 )
 from src.tools.outcome import ToolOutput
 from src.tools.service_discovery import ServiceDiscoveryTool
+from src.tools.registry import Registry
 from src.workflow.state import WorkflowObjective, WorkflowState
 from tests.helpers.workflow import record_completed_phase
 
@@ -258,10 +259,30 @@ def test_content_permission_summary_and_cache_key_cover_scope_and_budget():
     second_key = second.get("cacheKey")
     display = first.get("sessionScopeDisplay")
     assert isinstance(first_key, str) and isinstance(second_key, str)
+    assert first.get("yoloAutoApprove") is True
+    assert first.get("riskTier") == "routine"
+    assert first.get("noSessionCache", False) is False
     assert first_key != second_key
     assert isinstance(display, str) and "http://target.test:8080" in display
     assert "maximum requests: 8" in detail
     assert "raw" not in detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_yolo_auto_approves_in_scope_content_enumeration():
+    tool = make_content_tool()
+    registry = Registry()
+    registry.register(tool)
+    inner = RecordingPrompter(Decision.DENY)
+
+    await registry.execute(
+        "content_discovery",
+        {"paths": ["health"], "max_requests": 4},
+        None,
+        YoloPrompter(inner, True),
+    )
+
+    assert inner.requests == []
 
 
 @pytest.mark.asyncio
@@ -792,7 +813,7 @@ async def test_service_dns_checks_all_answers_and_scans_only_a_vetted_numeric_ip
     assert reasons == ["8.8.8.8", "127.0.0.1"]
     assert observed == ["8.8.8.8"]
     assert payload["resolved_address"] == "8.8.8.8"
-    assert len(prompter.requests) == 1 and prompter.requests[0].no_session_cache
+    assert len(prompter.requests) == 1 and not prompter.requests[0].no_session_cache
     assert "8.8.8.8, 127.0.0.1" in prompter.requests[0].detail
     assert "selected execution address: 8.8.8.8" in prompter.requests[0].detail
 
@@ -824,7 +845,7 @@ async def test_service_dns_resolution_is_deterministic_bounded_and_fails_closed(
 
 
 @pytest.mark.asyncio
-async def test_private_service_discovery_requires_noncacheable_permission(monkeypatch):
+async def test_private_service_discovery_uses_cacheable_active_target_policy(monkeypatch):
     tool = make_service_tool()
     monkeypatch.setattr(
         "src.tools.service_discovery.private_host_reason",
@@ -840,8 +861,59 @@ async def test_private_service_discovery_requires_noncacheable_permission(monkey
     await tool.run({"mode": "socket"}, None, prompter)
 
     assert len(prompter.requests) == 1
-    assert prompter.requests[0].no_session_cache is True
+    assert prompter.requests[0].no_session_cache is False
+    assert prompter.requests[0].risk_tier == "routine"
+    assert prompter.requests[0].yolo_auto_approve is True
     assert "8080" in prompter.requests[0].detail
+
+
+@pytest.mark.asyncio
+async def test_service_discovery_coalesces_private_gate_with_registry_approval(monkeypatch):
+    tool = make_service_tool()
+    monkeypatch.setattr(
+        "src.tools.service_discovery.private_host_reason",
+        AsyncMock(return_value="loopback IPv4"),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_scan_sockets",
+        AsyncMock(return_value=([], "success", None)),
+    )
+    registry = Registry()
+    registry.register(tool)
+    prompter = RecordingPrompter()
+
+    await registry.execute("service_discovery", {"mode": "socket"}, None, prompter)
+
+    assert len(prompter.requests) == 1
+    assert prompter.requests[0].risk_tier == "routine"
+    assert prompter.requests[0].yolo_auto_approve is True
+
+
+@pytest.mark.asyncio
+async def test_yolo_auto_approves_in_scope_service_discovery_once(monkeypatch):
+    tool = make_service_tool()
+    monkeypatch.setattr(
+        "src.tools.service_discovery.private_host_reason",
+        AsyncMock(return_value="loopback IPv4"),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_scan_sockets",
+        AsyncMock(return_value=([], "success", None)),
+    )
+    registry = Registry()
+    registry.register(tool)
+    inner = RecordingPrompter(Decision.DENY)
+
+    await registry.execute(
+        "service_discovery",
+        {"mode": "socket"},
+        None,
+        YoloPrompter(inner, True),
+    )
+
+    assert inner.requests == []
 
 
 @pytest.mark.asyncio
@@ -860,7 +932,7 @@ async def test_private_service_discovery_denial_never_starts_scan(monkeypatch):
 
     scanner.assert_not_awaited()
     assert len(prompter.requests) == 1
-    assert prompter.requests[0].no_session_cache is True
+    assert prompter.requests[0].no_session_cache is False
 
 
 @pytest.mark.asyncio
@@ -879,7 +951,7 @@ async def test_service_scan_timeout_excludes_permission_wait(monkeypatch):
 
     class DelayedPrompter:
         async def ask(self, request: PermissionRequest, signal=None) -> Decision:
-            assert request.no_session_cache is True
+            assert request.no_session_cache is False
             clock[0] += 8.0
             return Decision.ALLOW_ONCE
 
@@ -947,4 +1019,7 @@ def test_permission_cache_keys_are_action_specific():
     service_key_b = service_b.get("cacheKey")
     assert isinstance(service_key_a, str) and isinstance(service_key_b, str)
     assert service_key_a != service_key_b
+    assert service_a.get("yoloAutoApprove") is True
+    assert service_a.get("riskTier") == "routine"
+    assert service_a.get("noSessionCache", False) is False
     assert service.permission_hints({"ports": [8080, 443]}).get("noSessionCache") is True

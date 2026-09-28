@@ -180,6 +180,7 @@ _WHOLE_TARGET_INTENT = re.compile(
     r"full security assessment|(?:web\s+)?security assessment(?:\s+of\b)?|"
     r"comprehensive (?:pentest|penetration test|assessment)|"
     r"assess the entire|test the entire target|test (?:all|every) endpoints|"
+    r"(?:run|perform|conduct) (?:a )?(?:security )?test (?:on|of) (?:the )?target|"
     r"map (?:the )?entire application|end[- ]to[- ]end (?:pentest|assessment)|"
     r"complete penetration test|(?:run|perform|conduct) (?:a )?(?:pentest|penetration test)|"
     r"pentest (?:the )?(?:target|application|website|site)|"
@@ -1872,11 +1873,17 @@ class Agent:
         return frozenset(phases)
 
     def _workflow_validator_classes(self) -> frozenset[str]:
+        validators_by_class: dict[str, set[str]] = {}
+        for skill in self.skills.list_enabled():
+            if skill.stage != "validation" or skill.disable_model_invocation:
+                continue
+            for candidate_class in skill.candidate_classes:
+                canonical = normalize_candidate_class(candidate_class)
+                validators_by_class.setdefault(canonical, set()).add(skill.name)
         return frozenset(
             candidate_class
-            for skill in self.skills.list_enabled()
-            if skill.stage == "validation" and not skill.disable_model_invocation
-            for candidate_class in skill.candidate_classes
+            for candidate_class, validators in validators_by_class.items()
+            if len(validators) == 1
         )
 
     def _whole_target_state(self) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
@@ -3128,7 +3135,10 @@ class Agent:
                             instruction=(
                                 "The runtime completion contract is satisfied for the current whole-target "
                                 "objective. Give a concise final assessment based on recorded evidence, "
-                                "including confirmed and not-confirmed results, and do not overstate coverage."
+                                "including confirmed and not-confirmed results, and do not overstate coverage. "
+                                "Describe this as workflow completion rather than an exhaustive pentest when "
+                                "surfaces remain untested. Derive every numeric total from the named result list "
+                                "and omit a total if it cannot be reconciled."
                             ),
                             max_steps=max_steps,
                         )
@@ -3256,7 +3266,10 @@ class Agent:
                         instruction=(
                             "The runtime completion contract is satisfied for the current whole-target "
                             "objective. Give a concise final assessment based on recorded evidence, "
-                            "including confirmed and not-confirmed results, and do not overstate coverage."
+                            "including confirmed and not-confirmed results, and do not overstate coverage. "
+                            "Describe this as workflow completion rather than an exhaustive pentest when "
+                            "surfaces remain untested. Derive every numeric total from the named result list "
+                            "and omit a total if it cannot be reconciled."
                         ),
                         max_steps=max_steps,
                     )
@@ -3675,6 +3688,74 @@ class Agent:
         emit,
         working: list[Message],
     ) -> ToolExecutionBatch:
+        if len(tool_calls) > 1 and any(
+            tc.function.name == "ask_user" for tc in tool_calls
+        ):
+            parsed_calls = [self.parse_tool_call(tc) for tc in tool_calls]
+            for tc, parsed in zip(tool_calls, parsed_calls):
+                emit(
+                    {
+                        "type": "tool-call",
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "args": parsed.args,
+                        "argsJSON": parsed.args_json,
+                    }
+                )
+
+            ask_batch_results: list[ToolCallResult | None] = [
+                None for _ in tool_calls
+            ]
+            for index, (tc, parsed) in enumerate(zip(tool_calls, parsed_calls)):
+                if tc.function.name == "ask_user":
+                    ask_batch_results[index] = await self.run_parsed_tool_call(
+                        tc, parsed, signal,
+                    )
+                else:
+                    message = (
+                        "ERROR: action deferred until the human answer is available; "
+                        "ask_user must be called alone. Review the human response and "
+                        "request any permitted action in a later tool call."
+                    )
+                    ask_batch_results[index] = ToolCallResult(
+                        result=message,
+                        err_str=message,
+                        duration_ms=0,
+                        status="error",
+                        error_kind="tool_exception",
+                    )
+
+            executions: list[ExecutedToolCall] = []
+            completed_results: list[ToolCallResult] = []
+            for tc, parsed, result in zip(tool_calls, parsed_calls, ask_batch_results):
+                assert result is not None
+                self.record_tool_result(tc, parsed, result, emit, working)
+                completed_results.append(result)
+                executions.append(ExecutedToolCall(
+                    name=tc.function.name,
+                    args=parsed.args,
+                    parsed=parsed.parse_err is None,
+                    result=result,
+                ))
+
+            try:
+                await self.save()
+            except Exception as err:
+                emit(
+                    {
+                        "type": "error",
+                        "err": Exception(f"save session: {err}"),
+                    }
+                )
+
+            return ToolExecutionBatch(
+                all_refused=all(
+                    result.terminal_user_controlled_refusal
+                    for result in completed_results
+                ),
+                calls=executions,
+            )
+
         sequential = (
             len(tool_calls) <= 1
             or any(

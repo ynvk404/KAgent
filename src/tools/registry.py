@@ -26,6 +26,36 @@ from src.llm.types import ToolSpec
 class InvalidToolArguments(ValueError):
     """A tool's explicit pre-dispatch argument check rejected the call."""
 
+
+class _ExecutionPrompter(Prompter):
+    """Coalesce a nested gate with this invocation's exact registry approval."""
+
+    def __init__(
+        self,
+        inner: Prompter,
+        tool_name: str,
+        cache_key: str | None,
+    ) -> None:
+        self._inner = inner
+        self._tool_name = tool_name
+        self._cache_key = cache_key
+
+    async def ask(self, request: PermissionRequest, signal: Any = None) -> Decision:
+        if (
+            self._cache_key is not None
+            and request.tool == self._tool_name
+            and request.cache_key == self._cache_key
+        ):
+            # The wrapper is created only for the current tool invocation, so
+            # this is one-shot composition, not session authorization.
+            return Decision.ALLOW_ONCE
+        return await self._inner.ask(request, signal)
+
+    def clear_session_cache(self) -> None:
+        clear = getattr(self._inner, "clear_session_cache", None)
+        if callable(clear):
+            clear()
+
 class Registry:
     def __init__(self) -> None:
         self.tools: dict[str, Tool] = {}
@@ -158,6 +188,14 @@ class Registry:
                 session_scope_display=hints.get(
                     "sessionScopeDisplay",
                 ),
+                risk_tier=hints.get(
+                    "riskTier",
+                    "routine",
+                ),
+                yolo_auto_approve=hints.get(
+                    "yoloAutoApprove",
+                    False,
+                ),
             )
 
             decision = await prompter.ask(
@@ -170,10 +208,18 @@ class Registry:
                     f"permission denied by user for {tool.name()}"
                 )
 
+            run_prompter: Prompter = _ExecutionPrompter(
+                prompter,
+                tool.name(),
+                request.cache_key,
+            )
+        else:
+            run_prompter = prompter
+
         return await tool.run(
             args,
             signal,
-            prompter,
+            run_prompter,
         )
 
 def summarize(

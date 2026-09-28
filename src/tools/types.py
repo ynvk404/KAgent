@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal, Optional, Protocol, TypedDict, runtime_checkable
+from src.permission.permission import RiskTier
 
 ContextReductionPolicy = Literal["adaptive", "preserve"]
 
@@ -8,6 +9,8 @@ class PermissionHints(TypedDict, total=False):
     noSessionCache: bool
     cacheKey: str
     sessionScopeDisplay: str
+    riskTier: RiskTier
+    yoloAutoApprove: bool
 
 class ToolSummary(TypedDict):
     summary: str

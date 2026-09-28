@@ -7,7 +7,7 @@ import pytest
 
 from src.coverage.store import CoverageStore
 from src.permission.permission import AlwaysAllow
-from src.skills.registry import Registry as SkillRegistry
+from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.target.target import Target
 from src.tools.workflow import DEFAULT_LIST_LIMIT, WorkflowTool
 from src.tools.outcome import ToolOutput
@@ -16,6 +16,7 @@ from src.workflow.evidence import EvidenceArtifact
 from src.workflow.state import (
     AttackSurfaceInput,
     Candidate,
+    VALIDATION_OUTCOMES,
     ValidationResult,
     WorkflowObjective,
     WorkflowState,
@@ -43,6 +44,91 @@ def _confirmed_sqli_args() -> dict:
             ],
         },
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", sorted(VALIDATION_OUTCOMES))
+async def test_record_result_accepts_every_canonical_outcome(outcome, tmp_path):
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="xxe",
+        target="https://target.test",
+        endpoint="/xml",
+        method="POST",
+        parameter="body",
+        location="body",
+    ))
+    tool = WorkflowTool(
+        state,
+        Target("https://target.test"),
+        evidence_root=tmp_path,
+    )
+    evidence_refs: list[str] = []
+    if outcome == "confirmed":
+        proof = tmp_path / "proof.txt"
+        proof.write_text("Harmless external entity marker observed", encoding="utf-8")
+        evidence_output = json.loads(await tool.run(
+            {
+                "action": "record_evidence",
+                "candidate_id": candidate.id,
+                "evidence_path": "proof.txt",
+            },
+            None,
+            AlwaysAllow(),
+        ))
+        evidence_refs.append(evidence_output["evidence"]["id"])
+
+    output = await tool.run(
+        {
+            "action": "record_result",
+            "candidate_id": candidate.id,
+            "skill_name": "xxe",
+            "outcome": outcome,
+            "evidence_refs": evidence_refs,
+            "deferred_reason": "bounded regression case",
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    response = json.loads(output)
+    assert response["ok"] is True
+    assert response["result"]["outcome"] == outcome
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "not confirmed",
+        "confirmed (SQLI-2)",
+        "insufficient-identity",
+        "requires-authorization-for-write",
+        "deferred (out of scope)",
+    ],
+)
+async def test_record_result_rejects_noncanonical_outcomes(outcome):
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="xxe",
+        target="https://target.test",
+        endpoint="/xml",
+    ))
+    output = await WorkflowTool(state, Target("https://target.test")).run(
+        {
+            "action": "record_result",
+            "candidate_id": candidate.id,
+            "skill_name": "xxe",
+            "outcome": outcome,
+        },
+        None,
+        AlwaysAllow(),
+    )
+
+    assert isinstance(output, ToolOutput)
+    assert output.status == "error"
+    assert output.startswith(f"error: unknown validation outcome: {outcome}")
+    assert state.latest_result(candidate.id) is None
 
 
 @pytest.mark.asyncio
@@ -120,6 +206,7 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
             }, None, AlwaysAllow(),
         ))
         assert response["supported"] is True
+        assert response["validator_resolution"] == "unique"
         assert response["recommended_skills"] == [validator]
         assert response["candidate"]["status"] == "queued"
 
@@ -128,6 +215,7 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
         None, AlwaysAllow(),
     ))
     assert unsupported["supported"] is False
+    assert unsupported["validator_resolution"] == "unavailable"
     assert unsupported["recommended_skills"] == []
     assert unsupported["candidate"]["status"] == "deferred"
     forced = json.loads(await tool.run(
@@ -152,6 +240,50 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
     ))
     assert restored["supported"] is True
     assert restored["candidate"]["status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_candidate_handoff_and_start_validation_fail_closed_for_duplicate_validators():
+    skills = SkillRegistry()
+    for name in ("first-validator", "second-validator"):
+        skills.add(Skill(
+            name=name,
+            description=name,
+            tools=[],
+            disable_model_invocation=False,
+            path=f"/tmp/{name}/SKILL.md",
+            body="",
+            stage="validation",
+            triggers=SkillTriggers(),
+            candidate_classes=["sql-injection"],
+        ))
+    state = WorkflowState()
+    tool = WorkflowTool(state, Target("https://target.test"), skills=skills)
+
+    response = json.loads(await tool.run({
+        "action": "record_candidate",
+        "candidate_class": "sql-injection",
+        "endpoint": "/search",
+    }, None, AlwaysAllow()))
+
+    assert response["supported"] is False
+    assert response["validator_resolution"] == "ambiguous"
+    assert response["recommended_skills"] == ["first-validator", "second-validator"]
+    assert response["candidate"]["status"] == "deferred"
+    assert "ambiguous validator mapping" in await tool.run({
+        "action": "start_validation",
+        "candidate_id": response["candidate"]["id"],
+    }, None, AlwaysAllow())
+    assert state.candidates[response["candidate"]["id"]].status == "deferred"
+
+    result = await tool.run({
+        "action": "record_result",
+        "candidate_id": response["candidate"]["id"],
+        "skill_name": "first-validator",
+        "outcome": "not-confirmed",
+    }, None, AlwaysAllow())
+    assert "ambiguous validator mapping" in result
+    assert state.validation_results == []
 
 
 @pytest.mark.asyncio
