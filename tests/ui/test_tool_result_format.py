@@ -157,7 +157,7 @@ class TestBuildToolResultView:
         assert len(preview_lines) == 6
         assert preview_lines[:5] == [f"line {i}" for i in range(5)]
         assert "more lines" in strip_ansi(v.preview)
-        assert "Ctrl-O to expand" in strip_ansi(v.preview)
+        assert "Ctrl-K latest · Ctrl-O all" in strip_ansi(v.preview)
         assert "line 199" in strip_ansi(v.full)
 
     def test_collapses_giant_single_line_by_char_cap(self, t):
@@ -167,7 +167,7 @@ class TestBuildToolResultView:
         assert len(preview_lines) == 2
         assert len(preview_lines[0]) <= t.PREVIEW_LINE_CHAR_CAP + 24
         assert "<5000 chars>" in preview_lines[0]
-        assert "Ctrl-O to expand" in strip_ansi(v.preview)
+        assert "Ctrl-K latest · Ctrl-O all" in strip_ansi(v.preview)
 
     def test_extracts_mcp_text_then_collapses_it(self, t):
         snapshot = "\n".join(f'  link "item {i}"' for i in range(100))

@@ -34,7 +34,10 @@ _KEYBINDINGS: list[tuple[str, str]] = [
     ),
     ("Ctrl-N / Ctrl-J", "insert a newline inside the input"),
     ("Ctrl-A / Ctrl-E", "jump to start / end of the current line"),
-    ("Ctrl-O / Ctrl-F", "expand tool output / cycle transcript filter"),
+    (
+        "Ctrl-K / Ctrl-O / Ctrl-F",
+        "toggle latest / all tool output / cycle transcript filter",
+    ),
     ("Esc / Ctrl-C", "clear or cancel / quit"),
 ]
 

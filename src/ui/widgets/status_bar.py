@@ -191,7 +191,7 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
         if include_extras and p.transcript_filter != "all":
             line.append(f" · filter: {p.transcript_filter}", style=ACCENT)
         if include_expand and p.expand_hint:
-            line.append(" · Ctrl-O expand output", style=ACCENT)
+            line.append(" · Ctrl-K latest · Ctrl-O all", style=ACCENT)
         return line
 
     full = build(

@@ -88,6 +88,8 @@ class AppState:
     banner: str
     banner_data: BannerData
     transcript: tuple[TranscriptEntry, ...] = field(default_factory=tuple)
+    transcript_revision: int = 0
+    all_tool_outputs_expanded: bool = False
     busy: bool = False
     clear_gen: int = 0
     clear_message: str | None = None
@@ -167,7 +169,12 @@ class CycleTranscriptFilter:
 
 
 @dataclass(frozen=True, slots=True)
-class ExpandToolOutput:
+class ToggleLatestToolOutput:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ToggleAllToolOutputs:
     pass
 
 
@@ -194,7 +201,8 @@ Action = Union[
     SetAsk,
     SetSkillsPicker,
     CycleTranscriptFilter,
-    ExpandToolOutput,
+    ToggleLatestToolOutput,
+    ToggleAllToolOutputs,
     Clear,
     AgentEventAction,
 ]
@@ -259,26 +267,51 @@ def reducer(state: AppState, action: Action) -> AppState:
         case CycleTranscriptFilter():
             return replace(state, transcript_filter=_next_transcript_filter(state.transcript_filter))
 
-        case ExpandToolOutput():
+        case ToggleLatestToolOutput():
             idx = -1
             for i in range(len(state.transcript) - 1, -1, -1):
                 e = state.transcript[i]
-                if e.collapsible and not e.expanded:
+                if e.collapsible and e.full_text is not None:
                     idx = i
                     break
             if idx == -1:
                 return state
             entry = state.transcript[idx]
             transcript = list(state.transcript)
-            transcript[idx] = replace(entry, expanded=True)
-            transcript.append(TranscriptEntry(kind="tool-result", text=entry.full_text or entry.text))
-            return replace(state, transcript=tuple(transcript))
+            transcript[idx] = replace(entry, expanded=not entry.expanded)
+            return replace(
+                state,
+                transcript=tuple(transcript),
+                transcript_revision=state.transcript_revision + 1,
+            )
+
+        case ToggleAllToolOutputs():
+            if not any(
+                entry.collapsible and entry.full_text is not None
+                for entry in state.transcript
+            ):
+                return state
+            expanded = not state.all_tool_outputs_expanded
+            transcript = tuple(
+                replace(entry, expanded=expanded)
+                if entry.collapsible and entry.full_text is not None
+                else entry
+                for entry in state.transcript
+            )
+            return replace(
+                state,
+                transcript=transcript,
+                all_tool_outputs_expanded=expanded,
+                transcript_revision=state.transcript_revision + 1,
+            )
 
         case Clear(message=message):
             return replace(
                 state,
                 transcript=(),
                 clear_gen=state.clear_gen + 1,
+                transcript_revision=state.transcript_revision + 1,
+                all_tool_outputs_expanded=False,
                 clear_message=message,
                 active_skill=(
                     None
@@ -710,6 +743,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent) -> AppState:
             return replace(
                 state,
                 phase="answering",
+                all_tool_outputs_expanded=False,
                 transcript=(
                     *state.transcript,
                     TranscriptEntry(

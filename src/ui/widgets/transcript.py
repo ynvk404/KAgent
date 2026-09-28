@@ -73,10 +73,11 @@ def rows_for_entry(entry: TranscriptEntry, width: int | None = None) -> list[Row
         if ref() is entry and cached_width == width:
             return rows
 
+    entry_text = _display_text(entry)
     text = (
-        render_markdown(entry.text, width=width)
+        render_markdown(entry_text, width=width)
         if entry.kind in MARKDOWN_KINDS
-        else entry.text
+        else entry_text
     )
     lines = text.split("\n")
     out = [Row(kind=entry.kind, text=line, is_first=(j == 0)) for j, line in enumerate(lines)]
@@ -90,10 +91,16 @@ def rows_for_entry(entry: TranscriptEntry, width: int | None = None) -> list[Row
 
 
 def plain_rows_for_entry(entry: TranscriptEntry) -> list[Row]:
-    lines = entry.text.split("\n")
+    lines = _display_text(entry).split("\n")
     out = [Row(kind=entry.kind, text=line, is_first=(j == 0)) for j, line in enumerate(lines)]
     out.append(Row(kind=entry.kind, text="", is_first=False))
     return out
+
+
+def _display_text(entry: TranscriptEntry) -> str:
+    if entry.expanded and entry.full_text is not None:
+        return entry.full_text
+    return entry.text
 
 
 def entry_view(

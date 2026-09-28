@@ -33,7 +33,14 @@ from src.ui.core.app import (
     _modal_text,
 )
 from unittest.mock import AsyncMock
-from src.ui.core.state import AgentEventAction, SetActiveSkill, SetAsk, SetBusy, SetPerm
+from src.ui.core.state import (
+    AgentEventAction,
+    SetActiveSkill,
+    SetAsk,
+    SetBusy,
+    SetPerm,
+    TranscriptEntry,
+)
 from src.ui.commands.slash_handler import handle_slash
 from src.ui.widgets.banner import BannerData
 from src.ui.widgets.text_input_modal import TextInputRequest
@@ -70,6 +77,37 @@ def make_app() -> KAgent:
     app._sync_overlay = lambda: None
     app._render_input = lambda: None
     return app
+
+
+@pytest.mark.asyncio
+async def test_ctrl_k_toggles_latest_and_ctrl_o_toggles_all_tool_output() -> None:
+    app = make_app()
+    app.state = replace(
+        app.state,
+        transcript=(
+            TranscriptEntry(
+                kind="tool-result",
+                text="preview 1",
+                full_text="full 1",
+                collapsible=True,
+            ),
+            TranscriptEntry(
+                kind="tool-result",
+                text="preview 2",
+                full_text="full 2",
+                collapsible=True,
+            ),
+        ),
+    )
+
+    await app._process_key(events.Key("ctrl+k", None))
+    assert [entry.expanded for entry in app.state.transcript] == [False, True]
+
+    await app._process_key(events.Key("ctrl+o", None))
+    assert [entry.expanded for entry in app.state.transcript] == [True, True]
+
+    await app._process_key(events.Key("ctrl+o", None))
+    assert [entry.expanded for entry in app.state.transcript] == [False, False]
 
 
 class FakeInterval:

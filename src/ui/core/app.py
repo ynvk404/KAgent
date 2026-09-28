@@ -69,7 +69,8 @@ from src.ui.core.state import (
     Append,
     Clear,
     CycleTranscriptFilter,
-    ExpandToolOutput,
+    ToggleAllToolOutputs,
+    ToggleLatestToolOutput,
     MergeBannerData,
     SetApiReady,
     SetAsk,
@@ -1062,8 +1063,11 @@ class KAgent(App):
         if await self._handle_modal_key(key, raw_input):
             return
 
+        if key == "ctrl+k":
+            self.dispatch(ToggleLatestToolOutput())
+            return
         if key == "ctrl+o":
-            self.dispatch(ExpandToolOutput())
+            self.dispatch(ToggleAllToolOutputs())
             return
         if key == "ctrl+f":
             self.dispatch(CycleTranscriptFilter())
@@ -1296,7 +1300,9 @@ class KAgent(App):
         committed = transcript[:-1] if live else transcript
 
         filtered_committed = filter_transcript(list(committed), tfilter)
-        generation = f"{self.state.clear_gen}:{tfilter}"
+        generation = (
+            f"{self.state.clear_gen}:{tfilter}:{self.state.transcript_revision}"
+        )
         self.transcript_writer.flush(
             filtered_committed,
             self.state.banner_data,
@@ -1310,7 +1316,7 @@ class KAgent(App):
         else:
             self.live_entry_static.update("")
 
-        expand_hint = any(e.collapsible and not e.expanded for e in transcript)
+        expand_hint = any(e.collapsible for e in transcript)
 
         self._sync_overlay()
         self._sync_status_bar(expand_hint=expand_hint)

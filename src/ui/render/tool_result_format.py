@@ -287,7 +287,7 @@ def _collapsed_notice(content: str, hidden_lines: int, shortened_lines: int) -> 
     else:
         what = "more output"
     return chalk.dim(
-        f"… {what} · {_format_bytes(len(content))} — Ctrl-O to expand"
+        f"… {what} · {_format_bytes(len(content))} — Ctrl-K latest · Ctrl-O all"
     )
 
 

@@ -160,6 +160,39 @@ def test_new_generation_replaces_richlog_content_with_a_fresh_banner() -> None:
     assert "Status: ready" in rendered
 
 
+def test_new_transcript_revision_rerenders_expanded_tool_output_in_place() -> None:
+    output = _RichLogOutput()
+    transcript = Transcript(
+        out=cast(IO[str], output), clear=output.clear, width=lambda: 80
+    )
+    banner = BannerData(provider="test", model="test", cwd=".")
+    collapsed = TranscriptEntry(
+        kind="tool-result",
+        text="preview text",
+        full_text="full output\nlast evidence line",
+        collapsible=True,
+    )
+    expanded = TranscriptEntry(
+        kind="tool-result",
+        text=collapsed.text,
+        full_text=collapsed.full_text,
+        collapsible=True,
+        expanded=True,
+    )
+
+    transcript.flush([collapsed], banner, generation="clear:all:0")
+    assert "preview text" in "\n".join(output.lines)
+    assert "last evidence line" not in "\n".join(output.lines)
+
+    transcript.flush([expanded], banner, generation="clear:all:1")
+
+    rendered = "\n".join(output.lines)
+    assert output.clear_calls == 2
+    assert "preview text" not in rendered
+    assert "full output" in rendered
+    assert "last evidence line" in rendered
+
+
 def test_repeated_resets_do_not_accumulate_status_lines_or_banners() -> None:
     output = _RichLogOutput()
     transcript = Transcript(

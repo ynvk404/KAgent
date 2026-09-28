@@ -16,7 +16,10 @@ from src.ui.core.state import (
     Clear,
     SetActiveSkill,
     CycleTranscriptFilter,
-    ExpandToolOutput,
+    ToggleAllToolOutputs,
+    ToggleLatestToolOutput,
+    Append,
+    TranscriptEntry,
 )
 
 from src.agent.events import (
@@ -509,7 +512,7 @@ def test_runtime_error_event_rendering_is_unchanged():
     assert out.transcript[-1].text == "provider unavailable"
 
 
-def test_evidence_result_remains_raw_and_expandable():
+def test_evidence_result_toggles_latest_output_without_duplicating_transcript():
     raw = "HTTP/1.1 200 OK\ncontent-type: text/plain\n\n" + "\n".join(
         f"evidence line {i}" for i in range(40)
     )
@@ -529,10 +532,66 @@ def test_evidence_result_remains_raw_and_expandable():
     assert entry.collapsible is True
     assert entry.full_text is not None
     assert "evidence line 39" in entry.full_text
-    assert "Ctrl-O to expand" in entry.text
+    assert "Ctrl-K latest" in entry.text
+    assert len(collapsed.transcript) == 1
 
-    expanded = reducer(collapsed, ExpandToolOutput())
-    assert "evidence line 39" in expanded.transcript[-1].text
+    expanded = reducer(collapsed, ToggleLatestToolOutput())
+    assert len(expanded.transcript) == 1
+    assert expanded.transcript[-1].expanded is True
+    assert "evidence line 39" in "\n".join(
+        line.text for line in entry_view(expanded.transcript[-1])
+    )
+
+    collapsed_again = reducer(expanded, ToggleLatestToolOutput())
+    assert len(collapsed_again.transcript) == 1
+    assert collapsed_again.transcript[-1].expanded is False
+    assert "evidence line 39" not in "\n".join(
+        line.text for line in entry_view(collapsed_again.transcript[-1])
+    )
+    assert "evidence line 39" in (collapsed_again.transcript[-1].full_text or "")
+
+
+def test_toggle_all_tool_outputs_alternates_open_and_closed():
+    first = TranscriptEntry(
+        kind="tool-result", text="preview one", full_text="full one", collapsible=True
+    )
+    second = TranscriptEntry(
+        kind="tool-result", text="preview two", full_text="full two", collapsible=True
+    )
+    plain = TranscriptEntry(kind="tool-result", text="short result")
+    state = reducer(reducer(reducer(seed(), Append(first)), Append(second)), Append(plain))
+
+    expanded = reducer(state, ToggleAllToolOutputs())
+    assert [entry.expanded for entry in expanded.transcript] == [True, True, False]
+    assert expanded.all_tool_outputs_expanded is True
+
+    collapsed = reducer(expanded, ToggleAllToolOutputs())
+    assert [entry.expanded for entry in collapsed.transcript] == [False, False, False]
+    assert collapsed.all_tool_outputs_expanded is False
+
+
+def test_new_collapsible_result_resets_all_toggle_to_expand_next():
+    existing = TranscriptEntry(
+        kind="tool-result", text="preview one", full_text="full one", collapsible=True
+    )
+    expanded = reducer(reducer(seed(), Append(existing)), ToggleAllToolOutputs())
+    assert expanded.all_tool_outputs_expanded is True
+
+    raw = "\n".join(f"new evidence {i}" for i in range(40))
+    with_new_result = reducer(
+        expanded,
+        AgentEventAction(ToolResultEvent(name="http", result=raw, duration_ms=1)),
+    )
+    assert with_new_result.all_tool_outputs_expanded is False
+    assert with_new_result.transcript[-1].expanded is False
+
+    opened = reducer(with_new_result, ToggleAllToolOutputs())
+    assert opened.all_tool_outputs_expanded is True
+    assert all(
+        entry.expanded
+        for entry in opened.transcript
+        if entry.collapsible and entry.full_text is not None
+    )
 
 
 def test_confirm_finding_card():

@@ -217,11 +217,11 @@ class TestStatusBarBusyLine:
             "openai/gpt-oss-20b [tools ✓]",
             "hist ~2.4k · req ~5.4k/6k 90%",
             "time 00:01",
-            "Ctrl-O expand output",
+            "Ctrl-K latest · Ctrl-O all",
         ]
         positions = [line.index(field) for field in fields]
         assert positions == sorted(positions)
-        assert line.endswith("Ctrl-O expand output")
+        assert line.endswith("Ctrl-K latest · Ctrl-O all")
         assert "turn 00:01" not in line
 
     @pytest.mark.asyncio
@@ -247,11 +247,11 @@ class TestStatusBarBusyLine:
             "skill: sql-injection",
             "hist ~18.3k · req ~23.5k/16k 147%",
             "time 00:13",
-            "Ctrl-O expand output",
+            "Ctrl-K latest · Ctrl-O all",
         ]
         positions = [line.index(field) for field in fields]
         assert positions == sorted(positions)
-        assert line.endswith("Ctrl-O expand output")
+        assert line.endswith("Ctrl-K latest · Ctrl-O all")
 
     @pytest.mark.asyncio
     async def test_wide_idle_status_without_active_skill_flows_directly_into_hist(self) -> None:
@@ -269,7 +269,7 @@ class TestStatusBarBusyLine:
             size=(140, 3),
         )
         line = next(line for line in frame.splitlines() if "ready" in line)
-        assert "[tools ✓] · hist ~11.6k · req ~16.8k/16k 105% · time 00:18 · Ctrl-O expand output" in line
+        assert "[tools ✓] · hist ~11.6k · req ~16.8k/16k 105% · time 00:18 · Ctrl-K latest · Ctrl-O all" in line
         assert "skill:" not in line
         assert "mem:" not in line
 
@@ -302,7 +302,7 @@ class TestStatusBarBusyLine:
 
         assert "hist ~2.4k · req ~5.4k/6k 90%" in frame
         assert "time 00:01" in frame
-        assert "Ctrl-O expand output" not in frame
+        assert "Ctrl-K latest" not in frame
 
     @pytest.mark.asyncio
     async def test_narrow_status_preserves_context_and_time_before_expand_hint(self) -> None:
@@ -321,7 +321,7 @@ class TestStatusBarBusyLine:
 
         assert "h~2.3k · r~5.3k/6k 88%" in frame
         assert "time 00:18" in frame
-        assert "Ctrl-O expand output" not in frame
+        assert "Ctrl-K latest" not in frame
 
     @pytest.mark.asyncio
     async def test_narrow_status_drops_input_hints_while_preserving_target(self) -> None:
