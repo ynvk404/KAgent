@@ -154,7 +154,8 @@ class TestBuildToolResultView:
         v = t.build_tool_result_view(body)
         assert v.collapsible is True
         preview_lines = strip_ansi(v.preview).split("\n")
-        assert len(preview_lines) <= 13
+        assert len(preview_lines) == 6
+        assert preview_lines[:5] == [f"line {i}" for i in range(5)]
         assert "more lines" in strip_ansi(v.preview)
         assert "Ctrl-O to expand" in strip_ansi(v.preview)
         assert "line 199" in strip_ansi(v.full)
@@ -162,7 +163,10 @@ class TestBuildToolResultView:
     def test_collapses_giant_single_line_by_char_cap(self, t):
         v = t.build_tool_result_view("x" * 5000)
         assert v.collapsible is True
-        assert len(strip_ansi(v.preview)) < 1100
+        preview_lines = strip_ansi(v.preview).splitlines()
+        assert len(preview_lines) == 2
+        assert len(preview_lines[0]) <= t.PREVIEW_LINE_CHAR_CAP + 24
+        assert "<5000 chars>" in preview_lines[0]
         assert "Ctrl-O to expand" in strip_ansi(v.preview)
 
     def test_extracts_mcp_text_then_collapses_it(self, t):
@@ -176,6 +180,31 @@ class TestBuildToolResultView:
 
 def http_resp(status: str, body: str = "") -> str:
     return f"HTTP/1.1 {status}\ncontent-type: application/json\nserver: nginx\n\n{body}"
+
+
+def noisy_http_resp(status: str, body: str = "") -> str:
+    headers = [
+        "content-type: text/plain; charset=utf-8",
+        "etag: \"abc123\"",
+        "x-recruiting: /#/jobs",
+        "cache-control: public, max-age=0",
+        "accept-ranges: bytes",
+        "last-modified: Mon, 01 Jan 2024 00:00:00 GMT",
+        "x-frame-options: SAMEORIGIN",
+        "feature-policy: payment 'self'",
+        "connection: keep-alive",
+        "date: Mon, 01 Jan 2024 00:00:00 GMT",
+        "vary: accept-encoding",
+        "x-content-type-options: nosniff",
+        "x-request-id: request-1",
+        "server: nginx",
+        "pragma: no-cache",
+        "expires: 0",
+        "access-control-allow-origin: *",
+    ]
+    if 300 <= int(status.split()[0]) < 400:
+        headers.insert(1, "location: /login")
+    return "\n".join([f"HTTP/1.1 {status}", *headers, "", *body.split("\n")])
 
 
 class TestLooksLikeHTTPResult:
@@ -212,3 +241,72 @@ class TestBuildToolResultViewRoutesHTTP:
         view = t.build_tool_result_view(raw)
         assert view.full != raw  
         assert "301 Moved Permanently" in strip_ansi(view.full)
+
+    def test_http_preview_keeps_status_and_content_type_without_dumping_headers(self, t):
+        raw = noisy_http_resp("200 OK", "body first\nbody second\nbody third\nbody fourth")
+        view = t.build_tool_result_view(raw)
+
+        assert view.collapsible is True
+        preview = strip_ansi(view.preview)
+        assert "HTTP/1.1 200 OK" in preview
+        assert "content-type: text/plain; charset=utf-8" in preview
+        assert "etag:" not in preview
+        assert "x-recruiting:" not in preview
+        assert "cache-control:" not in preview
+        assert "body first\nbody second\nbody third" in preview
+        assert "body fourth" not in preview
+        assert strip_ansi(view.full) == raw
+
+    def test_http_body_preview_shows_at_most_three_lines(self, t):
+        body = "\n".join(f"body line {index}" for index in range(8))
+        preview = strip_ansi(t.build_tool_result_view(noisy_http_resp("200 OK", body)).preview)
+        before_notice = preview.rsplit("\n… ", 1)[0]
+        body_preview = before_notice.split("\n\n", 1)[1]
+
+        assert body_preview.splitlines() == [
+            "body line 0",
+            "body line 1",
+            "body line 2",
+        ]
+
+    def test_http_redirect_preview_keeps_location(self, t):
+        view = t.build_tool_result_view(
+            noisy_http_resp("302 Found", "<!doctype html>\n<html>\n...\n</html>")
+        )
+        preview = strip_ansi(view.preview)
+
+        assert "HTTP/1.1 302 Found" in preview
+        assert "location: /login" in preview
+        assert "etag:" not in preview
+
+    def test_http_no_body_preview_has_no_empty_body_block(self, t):
+        view = t.build_tool_result_view(noisy_http_resp("204 No Content"))
+        preview = strip_ansi(view.preview)
+
+        assert "HTTP/1.1 204 No Content" in preview
+        assert "\n\n" not in preview
+        assert all(line.strip() for line in preview.splitlines())
+
+    def test_malformed_http_uses_compact_generic_preview(self, t):
+        raw = "\n".join(
+            ["HTTP/1.1 200 OK", "malformed header"]
+            + [f"generic line {index}" for index in range(20)]
+        )
+        preview = strip_ansi(t.build_tool_result_view(raw).preview).splitlines()
+
+        assert preview[:5] == [
+            "HTTP/1.1 200 OK",
+            "malformed header",
+            "generic line 0",
+            "generic line 1",
+            "generic line 2",
+        ]
+        assert len(preview) == 6
+
+    def test_http_preview_keeps_body_truncation_marker_visible(self, t):
+        body = "\n".join(
+            ["body first", "body second", "body third", "body fourth", "[response body truncated at 65536 bytes]"]
+        )
+        view = t.build_tool_result_view(noisy_http_resp("200 OK", body))
+
+        assert "[response body truncated at 65536 bytes]" in strip_ansi(view.preview)

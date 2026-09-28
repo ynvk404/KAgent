@@ -232,10 +232,13 @@ def colorize_http_result(body: str) -> str:
     return "\n".join(out)
 
 
-HEAD_LINES = 12
-PREVIEW_CHAR_CAP = 1000
+GENERIC_PREVIEW_LINES = 5
+PREVIEW_LINE_CHAR_CAP = 220
+HTTP_BODY_PREVIEW_LINES = 3
 COLLAPSE_LINE_THRESHOLD = 16
 COLLAPSE_CHAR_THRESHOLD = 1200
+HTTP_PREVIEW_HEADERS = frozenset({"content-type", "content-length", "location"})
+HTTP_BODY_TRUNCATION_MARKER = "[response body truncated"
 
 
 @dataclass
@@ -270,26 +273,138 @@ def _format_bytes(n: int) -> str:
     return f"{n / (1024 * 1024):.1f} MB"
 
 
+def _clamp_preview_line(line: str) -> tuple[str, bool]:
+    if len(line) <= PREVIEW_LINE_CHAR_CAP:
+        return line, False
+    return f"{line[:PREVIEW_LINE_CHAR_CAP]}… <{len(line)} chars>", True
+
+
+def _collapsed_notice(content: str, hidden_lines: int, shortened_lines: int) -> str:
+    if hidden_lines > 0:
+        what = f"{hidden_lines} more line{'' if hidden_lines == 1 else 's'}"
+    elif shortened_lines > 0:
+        what = f"{shortened_lines} shortened line{'' if shortened_lines == 1 else 's'}"
+    else:
+        what = "more output"
+    return chalk.dim(
+        f"… {what} · {_format_bytes(len(content))} — Ctrl-O to expand"
+    )
+
+
+def _http_preview(content: str) -> tuple[str, int, int] | None:
+    """Build a short HTTP preview; return None when the response shape is malformed."""
+    lines = content.splitlines()
+    status_match = HTTP_STATUS_RE.match(lines[0]) if lines else None
+    if status_match is None:
+        return None
+
+    separator = next(
+        (index for index, line in enumerate(lines[1:], start=1) if not line.strip()),
+        None,
+    )
+    if separator is None:
+        return None
+
+    status_code = int(status_match.group(2))
+    is_redirect = 300 <= status_code < 400
+    wanted_headers = set(HTTP_PREVIEW_HEADERS)
+    if not is_redirect:
+        wanted_headers.discard("location")
+
+    selected_headers: list[str] = []
+    selected_names: set[str] = set()
+    for line in lines[1:separator]:
+        if not line:
+            continue
+        name, delimiter, _value = line.partition(":")
+        if not delimiter or not name.strip():
+            return None
+        normalized_name = name.strip().lower()
+        if normalized_name in wanted_headers and normalized_name not in selected_names:
+            selected_headers.append(line)
+            selected_names.add(normalized_name)
+
+    body = [
+        (index, line)
+        for index, line in enumerate(lines[separator + 1 :], start=separator + 1)
+    ]
+    while body and not body[0][1].strip():
+        body.pop(0)
+
+    body_indices = [index for index, _line in body[:HTTP_BODY_PREVIEW_LINES]]
+    truncation_index = next(
+        (
+            index
+            for index, line in body
+            if HTTP_BODY_TRUNCATION_MARKER in line.lower()
+        ),
+        None,
+    )
+    if (
+        truncation_index is not None
+        and truncation_index not in body_indices
+        and body_indices
+    ):
+        body_indices[-1] = truncation_index
+
+    body_by_index = dict(body)
+    preview_lines = [lines[0], *selected_headers]
+    if body_indices:
+        preview_lines.append("")
+        preview_lines.extend(body_by_index[index] for index in body_indices)
+
+    shortened = 0
+    clamped_lines: list[str] = []
+    for line in preview_lines:
+        clamped, was_shortened = _clamp_preview_line(line)
+        clamped_lines.append(clamped)
+        shortened += int(was_shortened)
+
+    visible_source_lines = 1 + len(selected_headers) + len(body_indices)
+    source_lines = len(lines) - 1  # The header/body separator is structural.
+    hidden_lines = max(0, source_lines - visible_source_lines)
+    return "\n".join(clamped_lines), hidden_lines, shortened
+
+
 def build_tool_result_view(raw: str) -> ToolResultView:
     content = _compact_shell_result_for_transcript(extract_text_content(raw))
+    is_http = looks_like_http_result(content)
     if looks_like_shell_result(content):
         colorize: Callable[[str], str] = colorize_shell_result
-    elif looks_like_http_result(content):
+    elif is_http:
         colorize = colorize_http_result
     else:
         colorize = lambda s: s  # noqa: E731
 
     full = colorize(content)
-    lines = content.split("\n")
+    lines = content.splitlines()
     collapsible = len(lines) > COLLAPSE_LINE_THRESHOLD or len(content) > COLLAPSE_CHAR_THRESHOLD
     if not collapsible:
         return ToolResultView(full=full, preview=full, collapsible=False)
 
-    head_str = "\n".join(lines[:HEAD_LINES])
-    if len(head_str) > PREVIEW_CHAR_CAP:
-        head_str = head_str[:PREVIEW_CHAR_CAP]
-    shown_lines = len(head_str.split("\n"))
-    hidden_lines = max(0, len(lines) - shown_lines)
-    what = f"{hidden_lines} more line{'' if hidden_lines == 1 else 's'}" if hidden_lines > 0 else "more output"
-    notice = chalk.dim(f"… {what} · {_format_bytes(len(content))} — Ctrl-O to expand")
-    return ToolResultView(full=full, preview=f"{colorize(head_str)}\n{notice}", collapsible=True)
+    if is_http:
+        http_preview = _http_preview(content)
+        if http_preview is not None:
+            preview_text, hidden_lines, shortened_lines = http_preview
+            notice = _collapsed_notice(content, hidden_lines, shortened_lines)
+            return ToolResultView(
+                full=full,
+                preview=f"{colorize(preview_text)}\n{notice}",
+                collapsible=True,
+            )
+
+    preview_lines = lines[:GENERIC_PREVIEW_LINES]
+    clamped_lines: list[str] = []
+    shortened_lines = 0
+    for line in preview_lines:
+        clamped, was_shortened = _clamp_preview_line(line)
+        clamped_lines.append(clamped)
+        shortened_lines += int(was_shortened)
+    hidden_lines = max(0, len(lines) - len(preview_lines))
+    notice = _collapsed_notice(content, hidden_lines, shortened_lines)
+    preview_text = "\n".join(clamped_lines)
+    return ToolResultView(
+        full=full,
+        preview=f"{colorize(preview_text)}\n{notice}",
+        collapsible=True,
+    )
