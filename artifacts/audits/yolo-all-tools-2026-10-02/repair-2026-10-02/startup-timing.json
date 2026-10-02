@@ -1,0 +1,21 @@
+{
+  "platform": "linux",
+  "project": "/mnt/d/DOANTOTNGHIEP/kagent",
+  "scope": "worker startup capability only",
+  "imports_seconds": 0.5913619709999693,
+  "samples": [
+    {
+      "available": true,
+      "seconds": 0.02994684800023606
+    },
+    {
+      "available": true,
+      "seconds": 0.029887743000017508
+    },
+    {
+      "available": true,
+      "seconds": 0.06857089300001462
+    }
+  ],
+  "not_measured": "full CLI/provider initialization, interpreter cold start, actual dispatch project inspection"
+}

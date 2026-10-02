@@ -1,0 +1,89 @@
+{
+  "checkpoint": "b1057dcf7de9478c1649a35612d3bebeb3824303",
+  "branch": "work/yolo-all-tools-2026-10-02",
+  "implementation_committed": false,
+  "regression": {
+    "tests": 2430,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1,
+    "passed": 2429,
+    "seconds": 78.904,
+    "skips": [
+      {
+        "class": "tests.security.test_ambiguous_mutating_tool_safety",
+        "test": "test_live_ambiguous_mutating_tool_characterization",
+        "reason": "set KAGENT_RUN_LIVE_TOOL_CHARACTERIZATION=1 to run live model characterization"
+      }
+    ]
+  },
+  "additional_no_manual_grant_phase_deadline_tests": {
+    "tests": 7,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 7,
+    "seconds": 6.573,
+    "skips": []
+  },
+  "pyright": {
+    "errors": 0,
+    "warnings": 0,
+    "environment": "existing venv-linux on WSL Ubuntu"
+  },
+  "git_diff_check": "passed",
+  "index_empty": true,
+  "historical_evidence_unchanged": [
+    "test_current_boundaries.py",
+    "results.xml",
+    "baseline.json"
+  ],
+  "baseline_files_unchanged": 331,
+  "new_or_modified": [
+    "docs/yolo-execution-policy.md",
+    "src/agent/agent.py",
+    "src/agent/mentions.py",
+    "src/agent/system_prompt.py",
+    "src/cli/main.py",
+    "src/engagement/state.py",
+    "src/intelligence/store.py",
+    "src/permission/execution.py",
+    "src/permission/http_grants.py",
+    "src/permission/network.py",
+    "src/permission/observations.py",
+    "src/permission/permission.py",
+    "src/permission/worker.py",
+    "src/skills/load_skill.py",
+    "src/tools/ask.py",
+    "src/tools/content_discovery.py",
+    "src/tools/coverage.py",
+    "src/tools/file.py",
+    "src/tools/finding.py",
+    "src/tools/http.py",
+    "src/tools/mcp_integration.py",
+    "src/tools/permission_status.py",
+    "src/tools/plugin.py",
+    "src/tools/registry.py",
+    "src/tools/service_discovery.py",
+    "src/tools/shell.py",
+    "src/tools/web.py",
+    "src/tools/workflow.py",
+    "src/ui/commands/slash_handler.py",
+    "src/ui/commands/slash_items.py",
+    "tests/agent/test_agent.py",
+    "tests/agent/test_systemprompt.py",
+    "tests/data/test_intelligence_store.py",
+    "tests/security/test_execution_policy.py",
+    "tests/security/test_http_grants.py",
+    "tests/security/test_offline_worker.py",
+    "tests/security/test_yolo_memory_transport.py",
+    "tests/security/test_yolo_results_resume.py",
+    "tests/tools/test_tools_registry.py",
+    "tests/ui/test_slash_handler.py",
+    "tests/ui/test_slash_items.py"
+  ],
+  "model_api_calls": 0,
+  "dependencies_installed": 0,
+  "pushed": false,
+  "release_acceptance": "PARTIAL; P6/all-tools full YOLO NOT MET"
+}

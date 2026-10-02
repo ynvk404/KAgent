@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 
 from src.ask.ask import (
     AskPrompter,
@@ -214,10 +215,22 @@ class AskUserTool(Tool):
                     header=header,
                 )
 
-            choice = await self.prompter.ask(
-                question,
-                signal
-            )
+            from src.permission.execution import policy_for, ExecutionBlocked
+            policy = policy_for(prompter)
+            key = hashlib.sha256(json.dumps([policy.stamp() if policy else None, item],
+                                           sort_keys=True, default=str).encode()).hexdigest()
+            if policy is not None and key in policy.input_questions:
+                choice = policy.input_questions[key]
+                if choice is None:
+                    raise ExecutionBlocked("pending: equivalent input question pending/cancelled; operator retry required")
+            else:
+                if policy is not None:
+                    if len(policy.input_questions) >= 128:
+                        raise ExecutionBlocked("blocked: input-question-capacity; operator retry required")
+                    policy.input_questions[key] = None
+                choice = await self.prompter.ask(question, signal)
+                if policy is not None:
+                    policy.input_questions[key] = choice
 
             answers.append(
                 {

@@ -922,7 +922,11 @@ class KAgent(App):
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         modal = self._get_active_modal()
         if modal is not None:
-            if isinstance(modal, ProviderPickerModal):
+            if isinstance(modal, PermissionModal):
+                self.overlay_content_static.scroll_down(animate=False)
+                event.stop()
+                return
+            elif isinstance(modal, ProviderPickerModal):
                 modal.handle_scroll(1)
             else:
                 modal.handle_key("down")
@@ -945,7 +949,11 @@ class KAgent(App):
     def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         modal = self._get_active_modal()
         if modal is not None:
-            if isinstance(modal, ProviderPickerModal):
+            if isinstance(modal, PermissionModal):
+                self.overlay_content_static.scroll_up(animate=False)
+                event.stop()
+                return
+            elif isinstance(modal, ProviderPickerModal):
                 modal.handle_scroll(-1)
             else:
                 modal.handle_key("up")
@@ -1279,6 +1287,22 @@ class KAgent(App):
         modal = self._get_active_modal()
         if modal is None:
             return False
+
+        if isinstance(modal, PermissionModal) and key in {"up", "down", "pageup", "pagedown", "home", "end"}:
+            scroll = self.overlay_content_static
+            if key == "up":
+                scroll.scroll_up(animate=False)
+            elif key == "down":
+                scroll.scroll_down(animate=False)
+            elif key == "pageup":
+                scroll.scroll_page_up(animate=False)
+            elif key == "pagedown":
+                scroll.scroll_page_down(animate=False)
+            elif key == "home":
+                scroll.scroll_home(animate=False)
+            else:
+                scroll.scroll_end(animate=False)
+            return True
 
         if isinstance(modal, TextInputModal):
             result = modal.handle_key(key, raw_input)
@@ -1882,16 +1906,12 @@ class KAgent(App):
     async def _run_startup_sequence(self) -> None:
         try:
             self._advance_splash("identity")
-            await asyncio.sleep(0.8)  # Keep the existing shine sweep.
             rows = self.startup_splash.readiness_rows() if self.startup_splash else []
-            # This is a cosmetic sequence for work completed before Textual
-            # starts. Share the existing readiness dwell over visible rows.
-            dwell = 3.4 / len(rows) if rows else 0
+            # Runtime initialization already completed before Textual started.
+            # Show its real state without making input wait for animation.
             for phase, _label in rows:
                 self._advance_splash(phase)
-                await asyncio.sleep(dwell)
             self._advance_splash("ready")
-            await asyncio.sleep(0.8)
         except asyncio.CancelledError:
             return
         except Exception as err:

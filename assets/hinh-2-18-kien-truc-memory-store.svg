@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740 480" width="100%" height="100%">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#2d3748"/>
+    </marker>
+    <filter id="shadow" x="-3%" y="-3%" width="106%" height="108%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="1" dy="2" stdDeviation="2" flood-color="#000000" flood-opacity="0.05"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="100%" height="100%" fill="#ffffff"/>
+
+  <!-- 1. Agent Core -->
+  <g transform="translate(240, 22)">
+    <rect width="260" height="60" rx="8" fill="#ffffff" stroke="#2d3748" stroke-width="1.8" filter="url(#shadow)"/>
+    <text x="130" y="23" font-family="Arial, sans-serif" font-size="11" fill="#718096" text-anchor="middle">&lt;&lt;component&gt;&gt;</text>
+    <text x="130" y="44" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#1a202c" text-anchor="middle">Agent Core</text>
+  </g>
+
+  <!-- Connectors: Agent Core <-> Memory Store -->
+  <!-- Add Memory Arrow -->
+  <line x1="320" y1="82" x2="320" y2="142" stroke="#2d3748" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <rect x="180" y="102" width="135" height="20" rx="4" fill="#edf2f7"/>
+  <text x="247" y="116" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#2d3748" text-anchor="middle">Ghi nhận fact mới (add)</text>
+
+  <!-- Retrieve Memory Arrow -->
+  <line x1="420" y1="142" x2="420" y2="88" stroke="#2d3748" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <rect x="428" y="102" width="140" height="20" rx="4" fill="#edf2f7"/>
+  <text x="498" y="116" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#2d3748" text-anchor="middle">Truy hồi fact phù hợp</text>
+
+  <!-- 2. Memory Store -->
+  <g transform="translate(195, 145)">
+    <rect width="350" height="126" rx="8" fill="#ffffff" stroke="#2b6cb0" stroke-width="1.8" filter="url(#shadow)"/>
+    <text x="175" y="23" font-family="Arial, sans-serif" font-size="11" fill="#4a5568" text-anchor="middle">&lt;&lt;component&gt;&gt;</text>
+    <text x="175" y="44" font-family="Arial, sans-serif" font-size="15.5" font-weight="bold" fill="#2b6cb0" text-anchor="middle">Memory Store</text>
+    <line x1="20" y1="54" x2="330" y2="54" stroke="#cbd5e0" stroke-width="1"/>
+    
+    <text x="35" y="74" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">• Quản lý các bản ghi MemoryFact</text>
+    <text x="35" y="93" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">• Lưu thông tin bền vững</text>
+    <text x="35" y="112" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">• Truy hồi thông tin phù hợp</text>
+    <text x="35" y="131" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">• Phân loại theo phạm vi lưu trữ</text>
+  </g>
+
+  <!-- Bifurcation Connectors: Memory Store -> Storage Scopes -->
+  <!-- Left branch (Project) -->
+  <path d="M 300 271 L 300 305 L 205 305 L 205 330" fill="none" stroke="#2d3748" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <rect x="140" y="295" width="130" height="18" rx="4" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="205" y="308" font-family="Arial, sans-serif" font-size="10.5" fill="#4a5568" text-anchor="middle">Đọc / Ghi fact dự án</text>
+
+  <!-- Right branch (Personal) -->
+  <path d="M 440 271 L 440 305 L 535 305 L 535 330" fill="none" stroke="#2d3748" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <rect x="470" y="295" width="130" height="18" rx="4" fill="#ffffff" stroke="#cbd5e0"/>
+  <text x="535" y="308" font-family="Arial, sans-serif" font-size="10.5" fill="#4a5568" text-anchor="middle">Đọc / Ghi fact dùng chung</text>
+
+  <!-- 3. Storage Scopes -->
+  <!-- Scope 1: Project Scope -->
+  <g transform="translate(60, 335)">
+    <rect width="290" height="110" rx="8" fill="#f8fafc" stroke="#319795" stroke-width="1.6" filter="url(#shadow)"/>
+    <text x="145" y="25" font-family="Arial, sans-serif" font-size="13" font-weight="bold" fill="#234e52" text-anchor="middle">Phạm vi Dự án (Project Scope)</text>
+    <line x1="15" y1="36" x2="275" y2="36" stroke="#cbd5e0" stroke-width="1"/>
+    
+    <text x="20" y="58" font-family="Arial, sans-serif" font-size="11.5" fill="#2d3748">• Gắn với dự án / mục tiêu kiểm thử</text>
+    <text x="20" y="77" font-family="Arial, sans-serif" font-size="11.5" fill="#2d3748">• Có thể dùng lại giữa các phiên cùng dự án</text>
+    <text x="20" y="96" font-family="Arial, sans-serif" font-size="11.5" fill="#2d3748">• Dữ liệu đặc thù của dự án</text>
+  </g>
+
+  <!-- Scope 2: Personal Scope -->
+  <g transform="translate(390, 335)">
+    <rect width="290" height="110" rx="8" fill="#f8fafc" stroke="#d69e2e" stroke-width="1.6" filter="url(#shadow)"/>
+    <text x="145" y="25" font-family="Arial, sans-serif" font-size="13" font-weight="bold" fill="#744210" text-anchor="middle">Phạm vi Cá nhân (Personal Scope)</text>
+    <line x1="15" y1="36" x2="275" y2="36" stroke="#cbd5e0" stroke-width="1"/>
+    
+    <text x="20" y="58" font-family="Arial, sans-serif" font-size="11.5" fill="#2d3748">• Không phụ thuộc một dự án cụ thể</text>
+    <text x="20" y="77" font-family="Arial, sans-serif" font-size="11.5" fill="#2d3748">• Có thể dùng lại qua nhiều dự án</text>
+    <text x="20" y="96" font-family="Arial, sans-serif" font-size="11.5" fill="#2d3748">• Thông tin có phạm vi sử dụng rộng hơn</text>
+  </g>
+</svg>

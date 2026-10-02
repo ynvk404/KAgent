@@ -251,9 +251,9 @@ def test_help_groups_commands_and_keeps_runtime_summary_compact():
     assert "Installed skills" in text
     assert "/exit (/quit)" in text
     assert "/burp [port|stop|status]" in text
-    assert "/memory [add <text>|list|forget <text>|clear|intel]  manage saved/session memory" in text
+    assert any(line.startswith('  /memory [add <text>|list|forget <text>|clear|intel]') and line.endswith('manage saved/session memory') for line in text.splitlines())
     assert "/model <id|list>" in text
-    assert "/skills [<name>|enable|disable <name>|new <name>]    list, toggle, or create skills" in text
+    assert any(line.startswith('  /skills [<name>|enable|disable <name>|new <name>]') and line.endswith('list, toggle, or create skills') for line in text.splitlines())
     assert "/ then Tab, Tab" in text
     assert "browser_capture_*" not in text
     assert "coverage(action=" not in text
@@ -507,10 +507,14 @@ def test_yolo_on_enables_auto_approve():
     assert (
         last_text(app)
         == (
-            "YOLO enabled. Routine reconnaissance, enumeration, and benign "
-            "validation inside declared scope may run automatically. Impact "
-            "actions, out-of-scope destinations, and sensitive local actions "
-            "still require human approval. Scope: no target scope declared; "
+            "YOLO enabled: native HTTP automatically receives bounded rights in operator scope. "
+            "Per origin: 500 requests/20 minutes, 3/s (burst 3), concurrency 2, "
+            "request 128 KiB, retained response 64 KiB. You accept unknown server effects; "
+            "bulk delete or changes to real data are NOT prevented. "
+            "Existing limits and revocation remain enforced; confirm-each resumes when OFF. "
+            "Use /permissions to view or adjust. Shell/plugin and compatible local stdio MCP use the isolated worker/scoped HTTP broker; "
+            "ffuf has a constrained HTTP adapter. Raw TCP/nmap, CONNECT and remote MCP remain unavailable. "
+            "Scope: no target scope declared; "
             "set /target first."
         )
     )
@@ -533,7 +537,7 @@ def test_yolo_off_disables_auto_approve():
     assert handle_slash(cast(KAgent, app), "/yolo off")
 
     assert not app.state.yolo
-    assert last_text(app) == "YOLO disabled. Tool calls will prompt for confirmation."
+    assert last_text(app) == "YOLO disabled: YOLO HTTP rights removed. Explicit autonomous HTTP grants remain active; confirm-each still prompts."
     assert len(app.actions) == 1
 
 

@@ -18,6 +18,7 @@ class Target:
     ) -> None:
         self._base_url = base_url.strip()
         self._name = name.strip()
+        self.revision = 0
 
     def base_url(self) -> str:
         return self._base_url
@@ -37,6 +38,8 @@ class Target:
         self,
         url: str,
     ) -> None:
+        if self._base_url != url.strip():
+            self.revision += 1
         self._base_url = url.strip()
 
     def set_name(
@@ -46,6 +49,8 @@ class Target:
         self._name = name.strip()
 
     def clear(self) -> None:
+        if self._base_url:
+            self.revision += 1
         self._base_url = ""
         self._name = ""
 

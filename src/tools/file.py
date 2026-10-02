@@ -19,6 +19,7 @@ from .types import (
     arg_string,
 )
 from .sensitive import is_sensitive_path
+from src.permission.execution import policy_for
 
 READ_BYTE_CAP = 200 * 1024
 
@@ -83,6 +84,13 @@ async def gate_sensitive_path(
     real = real_resolve(
         abs_path
     )
+    policy = policy_for(p)
+    if policy is not None:
+        policy.require_path(real, write=verb in {"write to", "edit"})
+        if not policy.nested_allowed():
+            raise UserControlledRefusal("blocked: file-executor-without-valid-receipt")
+        if policy.yolo:
+            return real
     if (
         not is_sensitive_path(abs_path)
         and not is_sensitive_path(real)
@@ -116,6 +124,12 @@ async def gate_sensitive_path(
         raise UserControlledRefusal(
             f"{verb} of sensitive path denied: {real}"
         )
+
+    if policy is not None:
+        if not policy.nested_allowed():
+            raise UserControlledRefusal("blocked: policy-changed-during-sensitive-read-review")
+        if str(policy.require_path(abs_path, write=verb in {"write to", "edit"})) != real:
+            raise UserControlledRefusal("blocked: file-resource-changed-during-review")
 
     return real
 
@@ -281,7 +295,7 @@ class FileWriteTool(Tool):
         return {
             "summary": f"write file: {path}",
             "detail": (
-                f"path: {path}\n--- content ---\n{_preview(content)}"
+                f"path: {path}\n--- content ---\n{content}"
             ),
         }
 

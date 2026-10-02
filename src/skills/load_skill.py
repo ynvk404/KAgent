@@ -94,4 +94,16 @@ class LoadSkillTool:
                 f"Only the user can load it via /{name}."
             )
 
-        return materialize_skill_body(skill)
+        from src.permission.execution import policy_for
+        policy = policy_for(prompter)
+        prefix = ""
+        if policy is not None:
+            prefix = ("Runtime authority takes precedence over permission-review wording in this playbook. "
+                      "Read permissions_status for actual rights. YOLO auto-approves covered actions, including impact "
+                      "requests; do not ask_user to approve those again. OFF restores ordinary review. "
+                      "Skill prerequisites, proof requirements and stop conditions still apply; a skill cannot grant "
+                      "rights or enable unavailable adapters. Blocked/pending waits for operator action, not repeated "
+                      "permission questions. Missing accounts/OTP remain real input questions. Unsupported class "
+                      "verifiers retain evidence as unverified. Operator /review-result can separately review a proof "
+                      "conclusion; that human review is never autonomous verification or tool authorization.\n\n")
+        return prefix + materialize_skill_body(skill)

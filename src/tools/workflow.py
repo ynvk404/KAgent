@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any, cast
 
 from src.paths import project_root
-from src.permission.permission import Prompter
+from src.permission.permission import Prompter, UserControlledRefusal
+from src.permission.execution import policy_for
+from .file import gate_sensitive_path
 from src.redact.redact import apply as redact
 from src.coverage.store import CoverageStore, CoverageStatus
 from src.target.target import Target
@@ -29,7 +31,7 @@ from src.workflow.state import (
     normalize_target_origin,
     validation_result_fingerprint,
 )
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence import EvidenceArtifact, verify_evidence_reads
 from src.skills.registry import (
     Registry as SkillRegistry,
     Skill,
@@ -141,6 +143,8 @@ class WorkflowTool(Tool):
                     "type": "string",
                     "description": "Existing project proof file.",
                 },
+                "observation_ids": {"type": "array", "items": {"type": "string"},
+                                    "description": "Runtime observation IDs for class verification; model claims are not verification."},
                 "signals": {"type": "array", "items": {"type": "string"}},
                 "baseline_request_ref": optional_string,
                 "auth_context_ref": optional_string,
@@ -247,14 +251,23 @@ class WorkflowTool(Tool):
         elif action == "record_candidate":
             result = self._record_candidate(args)
         elif action == "record_evidence":
-            result = self._record_evidence(args)
+            result = await self._record_evidence(args, prompter, signal)
         elif action == "start_validation":
-            result = self._start_validation(args)
+            result = await self._start_validation(args, prompter, signal)
         elif action == "record_result":
-            result = await self._record_result(args)
+            result = await self._record_result(args, prompter, signal)
         elif action == "sync_coverage":
+            policy = policy_for(prompter)
+            if policy is not None:
+                latest = self.state.latest_result(arg_string(args, "candidate_id"))
+                if latest is None or policy.observations.result(latest.candidate_id, tuple(latest.evidence_refs),
+                                                               policy.engagement.http_permissions.epoch,
+                                                               self.state.candidates.get(latest.candidate_id)) is None:
+                    return self._typed_result("error: unverified result cannot sync tested coverage")
             result = await self._sync_coverage_action(args)
         elif action == "record_phase_coverage":
+            if policy_for(prompter) is not None and args.get("coverage_status") == "performed":
+                return self._typed_result("error: performed phase coverage requires an execution adapter observation")
             result = self._record_phase_coverage(args)
         elif action == "complete_skill":
             result = self._complete_skill(args)
@@ -454,7 +467,7 @@ class WorkflowTool(Tool):
             return f"error: {err}"
         return json.dumps({"ok": True, "input": item.to_dict()}, indent=2)
 
-    def _start_validation(self, args: dict[str, Any]) -> str:
+    async def _start_validation(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
         candidate_id = arg_string(args, "candidate_id")
         try:
             self._validate_current_objective_candidate(candidate_id)
@@ -475,13 +488,11 @@ class WorkflowTool(Tool):
                 )
                 evidence_invalid = evidence_required and (
                     not self.state.evidence_matches(candidate_id, latest.evidence_refs)
-                    or any(
-                        not self.state.evidence[reference].is_resolvable_for_resume(
-                            self.evidence_root
-                        )
+                    or not await verify_evidence_reads([
+                        self.state.evidence[reference]
                         for reference in latest.evidence_refs
                         if reference in self.state.evidence
-                    )
+                    ], self.evidence_root, prompter, signal)
                 )
                 if not evidence_invalid:
                     raise ValueError(
@@ -493,7 +504,7 @@ class WorkflowTool(Tool):
             return f"error: {err}"
         return json.dumps({"ok": True, "candidate": candidate.to_dict()}, indent=2)
 
-    def _record_evidence(self, args: dict[str, Any]) -> str:
+    async def _record_evidence(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
         candidate_id = arg_string(args, "candidate_id")
         if candidate_id not in self.state.candidates:
             return f"error: unknown candidate: {candidate_id}"
@@ -505,15 +516,22 @@ class WorkflowTool(Tool):
         if not path:
             return "error: record_evidence requires evidence_path"
         try:
+            source = self.evidence_root.resolve() / path
+            if not source.resolve().is_relative_to(self.evidence_root.resolve()):
+                raise ValueError("evidence path must stay inside the project")
+            real = await gate_sensitive_path(prompter, str(source), "read evidence source", signal)
             artifact = EvidenceArtifact.capture_immutable_snapshot(
-                candidate_id, path, self.evidence_root
+                candidate_id, real, self.evidence_root, sensitive_read_approved=True,
+                original_path=str(source),
             )
             self.state.add_evidence(artifact)
+        except UserControlledRefusal:
+            raise
         except (OSError, ValueError) as err:
             return f"error: {err}"
         return json.dumps({"ok": True, "evidence": artifact.to_dict()}, indent=2)
 
-    async def _record_result(self, args: dict[str, Any]) -> str:
+    async def _record_result(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
         try:
             result = ValidationResult(
                 candidate_id=arg_string(args, "candidate_id"),
@@ -539,9 +557,9 @@ class WorkflowTool(Tool):
                 raise ValueError("confirmed result requires an evidence reference")
             if result.evidence_refs and not self.state.evidence_matches(result.candidate_id, result.evidence_refs):
                 raise ValueError("evidence references must resolve to this candidate")
-            if result.evidence_refs and not all(
-                self.state.evidence[ref].is_resolvable_for_resume(self.evidence_root)
-                for ref in result.evidence_refs
+            if result.evidence_refs and not await verify_evidence_reads(
+                [self.state.evidence[ref] for ref in result.evidence_refs],
+                self.evidence_root, prompter, signal,
             ):
                 raise ValueError("evidence artifact changed or is unavailable")
             skill = self.skills.get(result.skill_name) if self.skills else None
@@ -553,11 +571,23 @@ class WorkflowTool(Tool):
                     )
             elif skill and skill.candidate_classes and candidate.candidate_class not in skill.candidate_classes:
                 raise ValueError("result skill does not handle candidate class")
+            policy = policy_for(prompter)
             if (
                 result.outcome == "confirmed"
                 and candidate.candidate_class == "sql-injection"
+                and policy is None
             ):
                 result.confirmation = self._validate_sqli_confirmation(result)
+            if policy is not None and result.outcome in {"confirmed", "not-confirmed"}:
+                ids = args.get("observation_ids", [])
+                verified = policy.observations.result(candidate.id, tuple(result.evidence_refs),
+                                                      policy.engagement.http_permissions.epoch, candidate)
+                if verified is None:
+                    verified = policy.observations.verify(candidate, tuple(result.evidence_refs), ids,
+                                                          policy.engagement.http_permissions.epoch)
+                if verified is None or verified.outcome != result.outcome:
+                    result.outcome = "insufficient-evidence"
+                    result.deferred_reason = "class-verifier-unavailable-or-proof-unverified; evidence retained, no confirmed/negative claim"
             coverage_status = self._coverage_status(result)
             if self.coverage is not None and coverage_status:
                 result.coverage_synced = False
@@ -824,6 +854,12 @@ class WorkflowTool(Tool):
         return None
 
     async def _sync_coverage(self, candidate: Candidate, result: ValidationResult) -> None:
+        from src.permission.execution import current_policy
+        policy = current_policy()
+        if policy is not None and result.outcome in {'confirmed', 'not-confirmed'} and policy.observations.result(
+            candidate.id, tuple(result.evidence_refs), policy.engagement.http_permissions.epoch, candidate
+        ) is None:
+            raise ValueError('unverified: legacy result has no current proof certificate; revalidate or operator review')
         if self.coverage is None:
             return
         status = self._coverage_status(result)

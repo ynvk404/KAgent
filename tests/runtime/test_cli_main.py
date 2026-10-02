@@ -219,8 +219,10 @@ def test_help_uses_the_runtime_burp_default(capsys):
     output = capsys.readouterr().out
     assert f"--burp [port]              start local Burp/KAgent bridge (default :{BURP_DEFAULT_PORT})" in output
     assert "--target <url>" in output
-    assert "inside declared target scope" in output
-    assert "impact actions" in output
+    assert "phase never grants HTTP authority" in output
+    assert "without manual grants" in output
+    assert "bulk delete/real-data changes" in output
+    assert "--accept-unknown-http-effects" in output
 
 
 @pytest.mark.parametrize(

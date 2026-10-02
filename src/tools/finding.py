@@ -17,6 +17,7 @@ from src.permission.permission import Prompter
 from src.redact.redact import apply as redact, apply_evidence
 from src.logger.logger import get_logger
 from src.workflow.state import WorkflowState
+from src.workflow.evidence import verify_evidence_reads
 from src.skills.registry import normalize_candidate_class
 from src.target.origin import HTTPOrigin
 from .types import Tool, arg_string
@@ -236,10 +237,19 @@ class ConfirmFindingTool:
 
         latest = self.workflow.latest_result(candidate_id)
         assert latest is not None  # eligibility above guarantees a result
+        from src.permission.execution import policy_for
+        policy = policy_for(prompter)
+        if policy is not None:
+            verified = policy.observations.result(candidate_id, tuple(latest.evidence_refs),
+                                                  policy.engagement.http_permissions.epoch, candidate)
+            if verified is None or verified.outcome != "confirmed":
+                raise ValueError("unverified: trusted class verifier required; raw evidence/candidate remain available")
+            observed_impact = verified.observed_impact
+            severity = verified.severity
+            response_excerpt = verified.response_excerpt
         root = self.store.project_dir
-        if not all(
-            self.workflow.evidence[ref].is_resolvable_for_resume(root)
-            for ref in latest.evidence_refs
+        if not await verify_evidence_reads(
+            [self.workflow.evidence[ref] for ref in latest.evidence_refs], root, prompter, signal,
         ):
             raise ValueError("candidate evidence artifact changed or is unavailable")
 

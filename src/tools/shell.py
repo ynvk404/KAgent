@@ -105,6 +105,9 @@ GREP_P_RE = re.compile(
 )
 
 class ShellTool(Tool):
+    def freeze_for_execution(self):
+        from copy import copy
+        return copy(self)
     def __init__(self, shell: str = "/bin/sh", tool_name: str = "shell"):
         self.shell_path = shell
         self.tool_name = tool_name
@@ -118,10 +121,10 @@ class ShellTool(Tool):
                 (
                     "Run an arbitrary command via PowerShell on the local machine. "
                     "Use the built-in http tool for target requests whenever it "
-                    "can express them; HTTP done through shell is not origin-scoped. "
+                    "can express them. Bound execution requires an enforcing worker; "
                     "Use PowerShell for local OS utilities or HTTP details the "
                     "native tool cannot express. "
-                    "The user will be prompted to approve each command. Capture "
+                    "YOLO auto-approves covered commands; OFF uses normal review. Capture "
                     "concise output — pipe through `Select-Object -First` for "
                     "huge outputs. Do not run interactive commands. Authorized "
                     "engagements only.",
@@ -139,10 +142,10 @@ class ShellTool(Tool):
             (
                 "Run an arbitrary command via /bin/sh -c on the local machine. "
                 "Use the built-in http tool for target requests whenever it "
-                "can express them; HTTP done through shell is not origin-scoped. "
+                "can express them. Bound execution uses the isolated worker and scoped HTTP broker. "
                 "Use shell for local OS utilities or HTTP details the native "
-                "tool cannot express. The user will be prompted to approve each "
-                "command. Capture concise output — pipe through `head` for huge "
+                "tool cannot express. YOLO auto-approves covered commands; OFF uses normal review. "
+                "Capture concise output — pipe through `head` for huge "
                 "outputs. Do not run interactive commands. Authorized "
                 "engagements only.",
                 "Write portable macOS/BSD + Linux commands. Avoid GNU-only "
@@ -198,13 +201,15 @@ class ShellTool(Tool):
         signal: Any,
         prompter: Prompter,
     ) -> ToolOutput:
+        from src.permission.execution import guard_process
+        worker = guard_process(prompter, self, args)
         original_cmd = arg_string(args, "command") or ""
         cmd_str = rewrite_portable_command(original_cmd)
 
         if not cmd_str:
             raise ValueError("command is required")
 
-        for pattern in DENY_PATTERNS:
+        for pattern in (DENY_PATTERNS if worker is None else []):
             if pattern.search(original_cmd) or pattern.search(cmd_str):
                 raise ValueError(f"command blocked by denylist (matched {pattern.pattern})")
 
@@ -223,6 +228,11 @@ class ShellTool(Tool):
             timeout_seconds = min(timeout_arg, MAX_TIMEOUT_SECONDS)
 
         cmd, argv = shell_invocation(self.shell_path, cmd_str)
+        if worker is not None:
+            from src.permission.worker_broker import broker_directory
+            async with broker_directory(signal) as broker:
+                cmd, argv = worker.wrap(cmd, argv, broker=broker)
+                return await run_with_capture(cmd, argv, timeout_seconds, signal)
         return await run_with_capture(cmd, argv, timeout_seconds, signal)
 
 class BashTool(ShellTool):

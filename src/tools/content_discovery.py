@@ -31,6 +31,8 @@ from .private_host import gate_private_request, parse_http_url
 from .shell import run_with_capture
 from .types import PermissionHints, Tool
 from src.workflow.state import WorkflowState
+from src.permission.execution import guard_adapter
+from src.permission.network import governed_stream
 
 
 DEFAULT_MAX_REQUESTS = 120
@@ -189,6 +191,7 @@ class ContentDiscoveryTool(Tool):
         signal: Any,
         prompter: Prompter,
     ) -> ToolOutput:
+        guard_adapter(self, args, prompter)
         scope, words, mode, max_requests, rate, timeout = self._parameters(args)
         backend = self._select_backend(mode, max_requests)
         backend_reason = self._backend_reason(mode, backend, max_requests)
@@ -260,6 +263,7 @@ class ContentDiscoveryTool(Tool):
             verify=False,
             follow_redirects=False,
             timeout=timeout,
+            trust_env=False,
         ) as client:
             for baseline_path in baseline_paths:
                 if baselines and not await sleep_or_abort(1 / rate, signal):
@@ -572,9 +576,10 @@ class ContentDiscoveryTool(Tool):
         chunks: list[bytes] = []
         observed = 0
         body_truncated = False
-        async with client.stream("GET", url, timeout=timeout) as response:
+        async with governed_stream(client, url, timeout, response_cap=MAX_RESPONSE_BYTES) as response:
+            cap = min(MAX_RESPONSE_BYTES, getattr(response, 'extensions', {}).get("policy_response_cap", MAX_RESPONSE_BYTES))
             async for chunk in response.aiter_bytes():
-                room = MAX_RESPONSE_BYTES + 1 - observed
+                room = cap + 1 - observed
                 if len(chunk) >= room:
                     chunks.append(chunk[:room])
                     observed += room
@@ -582,7 +587,7 @@ class ContentDiscoveryTool(Tool):
                     break
                 chunks.append(chunk)
                 observed += len(chunk)
-            body = b"".join(chunks)[:MAX_RESPONSE_BYTES]
+            body = b"".join(chunks)[:cap]
             content_length = self._content_length(response.headers.get("content-length"))
             location = self._safe_location(url, response.headers.get("location"))
             content_type = self._safe_header(response.headers.get("content-type"), 160)
@@ -688,7 +693,10 @@ class ContentDiscoveryTool(Tool):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return [], 0, "operation timeout before ffuf started"
-        with tempfile.TemporaryDirectory(prefix="kagent-content-") as directory:
+        from src.permission.execution import current_policy
+        policy = current_policy()
+        worker = policy.worker if policy is not None else None
+        with tempfile.TemporaryDirectory(prefix="kagent-content-", dir=worker.output_root if worker else None) as directory:
             root = Path(directory)
             wordlist = root / "paths.txt"
             result_file = root / "results.json"
@@ -707,9 +715,17 @@ class ContentDiscoveryTool(Tool):
                 "-noninteractive",
             ]
             try:
-                output = await run_with_capture(
-                    binary, argv, remaining, signal
-                )
+                if worker is not None:
+                    assert policy is not None
+                    from src.permission.worker_broker import broker_directory
+                    argv[1] = '/work/' + wordlist.relative_to(policy.root).as_posix()
+                    argv[argv.index('-o') + 1] = '/work/' + result_file.relative_to(policy.root).as_posix()
+                    argv += ['-x', 'http://127.0.0.1:18080']
+                    async with broker_directory(signal) as broker:
+                        executable, wrapped = worker.wrap(binary, argv, broker=broker, scanner=True)
+                        output = await run_with_capture(executable, wrapped, remaining, signal)
+                else:
+                    output = await run_with_capture(binary, argv, remaining, signal)
             except OSError:
                 self.capabilities.mark_unavailable("ffuf", binary)
                 return [], 0, "ffuf could not be started (missing or not executable)"

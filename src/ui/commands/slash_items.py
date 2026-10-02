@@ -11,7 +11,6 @@ class SlashItem:
     args: str | None = None
 
 SLASH_ITEMS: tuple[SlashItem, ...] = (
-
     SlashItem(
         name="/help",
         description="show keybindings + slash commands",
@@ -29,47 +28,15 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     ),
 
     SlashItem(
-        name="/plan",
-        args="[objective]",
-        description="plan-only mode without tools",
+        name="/thinking",
+        args="[on|off|default]",
+        description="show or set reasoning mode",
     ),
 
     SlashItem(
-        name="/next",
-        args="[objective]",
-        description="coverage-driven next test suggestions",
-    ),
-
-    SlashItem(
-        name="/compact",
-        description="summarize conversation into persistent session memory",
-    ),
-
-    SlashItem(
-        name="/memory",
-        args="[add <text>|list|forget <text>|clear]",
-        description="saved + session memory; add/list curated facts",
-    ),
-
-    SlashItem(
-        name="/snapshot",
-        description="write the current redacted context snapshot now",
-    ),
-
-    SlashItem(
-        name="/burp",
-        args="[port|stop]",
-        description="manage the local Burp/KAgent bridge listener",
-    ),
-
-    SlashItem(
-        name="/clear",
-        description="clear the on-screen transcript only",
-    ),
-
-    SlashItem(
-        name="/reset",
-        description="clear conversation + saved session",
+        name="/maxsteps",
+        args="[<n>|default]",
+        description="show or set per-turn tool-call limit",
     ),
 
     SlashItem(
@@ -85,27 +52,67 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     ),
 
     SlashItem(
+        name="/permissions",
+        args="[action]",
+        description="view execution profile, HTTP limits and tool revocations",
+    ),
+
+    SlashItem(
+        name="/yolo",
+        args="[on|off|default]",
+        description="toggle profile-based auto-approval; independent resource checks remain",
+    ),
+
+    SlashItem(
+        name="/plan",
+        args="[objective]",
+        description="plan-only mode without tools",
+    ),
+
+    SlashItem(
+        name="/next",
+        args="[objective]",
+        description="coverage-driven next test suggestions",
+    ),
+    SlashItem(name="/review-result", args="<candidate-id> <outcome> <severity> <impact>",
+              description="operator review of immutable proof; does not grant tool execution"),
+
+    SlashItem(
         name="/skills",
         args="[enable|disable|new <name>]",
         description="list/toggle skills",
     ),
 
     SlashItem(
-        name="/maxsteps",
-        args="[<n>|default]",
-        description="show or set per-turn tool-call limit",
+        name="/burp",
+        args="[port|stop]",
+        description="manage the local Burp/KAgent bridge listener",
     ),
 
     SlashItem(
-        name="/thinking",
-        args="[on|off|default]",
-        description="show or set reasoning mode",
+        name="/memory",
+        args="[add <text>|list|forget <text>|clear]",
+        description="saved + session memory; add/list curated facts",
     ),
 
     SlashItem(
-        name="/yolo",
-        args="[on|off|default]",
-        description="show or set auto-approval for routine in-scope recon and validation",
+        name="/compact",
+        description="summarize conversation into persistent session memory",
+    ),
+
+    SlashItem(
+        name="/snapshot",
+        description="write the current redacted context snapshot now",
+    ),
+
+    SlashItem(
+        name="/clear",
+        description="clear the on-screen transcript only",
+    ),
+
+    SlashItem(
+        name="/reset",
+        description="clear conversation + saved session",
     ),
 
     SlashItem(

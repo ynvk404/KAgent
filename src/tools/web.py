@@ -14,6 +14,9 @@ import httpx
 
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter
+from src.permission.execution import policy_for
+from src.permission.execution import guard_adapter
+from src.permission.network import governed_send
 from src.target.target import Target
 from .private_host import gate_private_request, parse_http_url
 from .types import Tool, arg_string
@@ -169,6 +172,7 @@ def _fetch_failure_output(
     )
 
 async def _decode_capped(response: httpx.Response, cap: int) -> str:
+    cap = min(cap, getattr(response, "extensions", {}).get("policy_response_cap", cap))
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     parts: list[str] = []
     total = 0
@@ -221,23 +225,28 @@ class WebFetchTool(Tool):
         return False
 
     async def run(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> ToolOutput:
+        guard_adapter(self, args, prompter)
         url = arg_string(args, "url")
         if not url:
             raise ValueError("url is required")
 
         parsed = parse_http_url(url)
         self.engagement.require_in_scope(url)
+        policy = policy_for(prompter)
+        if policy is not None:
+            policy.require_network(url)
         private_reason = await gate_private_request(
             prompter, parsed, signal, "web_fetch", target=self.target
         )
 
-        cache_key = f"fetch:{parsed}"
+        cache_key = f"fetch:{parsed}" + (f":{policy.stamp()}:{self.engagement.http_permissions.epoch}" if policy else "")
         cached = _cache_get(cache_key)
         if cached is not None:
             return cached if isinstance(cached, ToolOutput) else ToolOutput(cached)
 
         try:
-            resp = await _run_cancelable(_do_fetch(url), FETCH_TIMEOUT_SECONDS, signal)
+            operation = _do_fetch(url, prompter, signal) if policy is not None else _do_fetch(url)
+            resp = await _run_cancelable(operation, FETCH_TIMEOUT_SECONDS, signal)
         except _FetchAborted:
             raise
         except _FetchFailed as err:
@@ -249,15 +258,22 @@ class WebFetchTool(Tool):
             message, code = _map_httpx_error(err)
             return _fetch_failure_output(url, message, False, code, _failure_kind(err))
 
-        async with resp:
+        try:
             raw = await _decode_capped(resp, FETCH_BODY_CAP)
             status, status_text = resp.status_code, resp.reason_phrase
+        except httpx.HTTPError as err:
+            message, code = _map_httpx_error(err)
+            return _fetch_failure_output(url, message, False, code, _failure_kind(err))
+        finally:
+            await resp.aclose()
 
         text = strip_html(raw)
         if len(text) > FETCH_TEXT_CAP:
             text = f"{text[:FETCH_TEXT_CAP]}\n[... truncated ...]"
 
         result = f"URL: {url}\nStatus: {status} {status_text}\n\n{text}"
+        if policy is not None:
+            result += f"\n[runtime observation: {resp.extensions.get('runtime_observation_id', 'unavailable')}]"
         if private_reason:
             result = (
                 f"note: private/internal host approved for this fetch "
@@ -268,8 +284,9 @@ class WebFetchTool(Tool):
         _cache_set(cache_key, observed)
         return observed
 
-async def _do_fetch(url: str) -> httpx.Response:
-    client = httpx.AsyncClient(follow_redirects=False)
+async def _do_fetch(url: str, prompter: Any = None, signal: Any = None) -> httpx.Response:
+    options: dict[str, Any] = {'trust_env': False} if policy_for(prompter) is not None else {}
+    client = httpx.AsyncClient(follow_redirects=False, **options)
     request = client.build_request(
         "GET",
         url,
@@ -279,8 +296,8 @@ async def _do_fetch(url: str) -> httpx.Response:
         },
     )
     try:
-        resp = await client.send(request, stream=True)
-    except Exception:
+        resp = await governed_send(client, request, prompter, signal, response_cap=FETCH_BODY_CAP)
+    except BaseException:
         await client.aclose()
         raise
 
@@ -288,8 +305,10 @@ async def _do_fetch(url: str) -> httpx.Response:
     original_aclose = resp.aclose
 
     async def _aclose():
-        await original_aclose()
-        await client.aclose()
+        try:
+            await original_aclose()
+        finally:
+            await client.aclose()
 
     resp.aclose = _aclose  # type: ignore[method-assign]
     return resp
@@ -411,19 +430,24 @@ class WebSearchTool(Tool):
         return False
 
     async def run(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> str | ToolOutput:
+        guard_adapter(self, args, prompter)
         query = arg_string(args, "query")
         if not query:
             raise ValueError("query is required")
 
         endpoint = f"https://html.duckduckgo.com/html/?q={_url_encode(query)}"
+        policy = policy_for(prompter)
+        if policy is not None:
+            policy.require_network(endpoint, research=True)
 
-        cache_key = f"search:{query.strip()}"
+        cache_key = f"search:{query.strip()}" + (f":{policy.stamp()}:{policy.research_permissions.epoch}" if policy else "")
         cached = _cache_get(cache_key)
         if cached is not None:
             return cached
 
         try:
-            resp = await _run_cancelable(_do_search(endpoint), FETCH_TIMEOUT_SECONDS, signal)
+            operation = _do_search(endpoint, prompter, signal) if policy is not None else _do_search(endpoint)
+            resp = await _run_cancelable(operation, FETCH_TIMEOUT_SECONDS, signal)
         except _FetchAborted:
             raise
         except _FetchFailed as err:
@@ -435,8 +459,13 @@ class WebSearchTool(Tool):
             message, code = _map_httpx_error(err)
             return _fetch_failure_output(endpoint, message, False, code, _failure_kind(err))
 
-        async with resp:
+        try:
             body = await _decode_capped(resp, SEARCH_BODY_CAP)
+        except httpx.HTTPError as err:
+            message, code = _map_httpx_error(err)
+            return _fetch_failure_output(endpoint, message, False, code, _failure_kind(err))
+        finally:
+            await resp.aclose()
 
         results: list[tuple[str, str, str]] = []
         for m in DDG_RESULT_RE.finditer(body):
@@ -474,23 +503,27 @@ class WebSearchTool(Tool):
         _cache_set(cache_key, result)
         return result
 
-async def _do_search(endpoint: str) -> httpx.Response:
-    client = httpx.AsyncClient(follow_redirects=True)
+async def _do_search(endpoint: str, prompter: Any = None, signal: Any = None) -> httpx.Response:
+    controlled = policy_for(prompter) is not None
+    options: dict[str, Any] = {'trust_env': False} if controlled else {}
+    client = httpx.AsyncClient(follow_redirects=not controlled, **options)
     request = client.build_request(
         "GET",
         endpoint,
         headers={"User-Agent": "Mozilla/5.0 kagent/0.1"},
     )
     try:
-        resp = await client.send(request, stream=True)
-    except Exception:
+        resp = await governed_send(client, request, prompter, signal, response_cap=SEARCH_BODY_CAP, research=True)
+    except BaseException:
         await client.aclose()
         raise
     original_aclose = resp.aclose
 
     async def _aclose():
-        await original_aclose()
-        await client.aclose()
+        try:
+            await original_aclose()
+        finally:
+            await client.aclose()
 
     resp.aclose = _aclose  # type: ignore[method-assign]
     return resp

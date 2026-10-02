@@ -4,6 +4,8 @@ import asyncio
 import io
 import json
 import re
+import tempfile
+from copy import deepcopy
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import (
@@ -110,19 +112,40 @@ class MCPSession:
         self._closed = False
 
     @staticmethod
-    async def open(server: MCPServerConfig) -> "MCPSession":
+    async def open(server: MCPServerConfig, *, worker: Any = None, broker: Any = None) -> "MCPSession":
+        # AnyIO transport/session contexts must enter and exit in the same task.
+        # The long-lived owner below avoids returning their cancel scopes into
+        # a different Registry/CLI task.
+        if worker is not None:
+            return cast(MCPSession, await OwnedMCPSession.open(server, worker=worker, broker=broker))
+        return await MCPSession._open(server)
+
+    @staticmethod
+    async def _open(server: MCPServerConfig, *, worker: Any = None, broker: Any = None) -> "MCPSession":
         if not server.command:
             raise ValueError(f"mcp server {server.name} has no command")
 
-        params = StdioServerParameters(
-            command=server.command,
-            args=server.args,
-            env=server.env,
-        )
+        command, argv = server.command, list(server.args)
+        if worker is not None:
+            if server.env:
+                raise ValueError('blocked: MCP environment export adapter unavailable; no ambient fallback')
+            command, argv = worker.wrap(command, argv, broker=broker)
+        params = StdioServerParameters(command=command, args=argv,
+                                       env={} if worker is not None else server.env)
 
         exit_stack = AsyncExitStack()
         try:
-            errlog = cast(TextIO, _StderrLogWriter(server.name))
+            # SDK stdio_client passes errlog to subprocess: it needs a real
+            # fileno(), not a TextIOBase writer with only write().
+            errlog = tempfile.TemporaryFile(mode='w+', encoding='utf-8')
+            def close_stderr():
+                from src.redact.redact import apply_evidence
+                errlog.seek(0)
+                text = apply_evidence(errlog.read(65536))
+                if text:
+                    warn('mcp child stderr (bounded)', server=server.name, line=text)
+                errlog.close()
+            exit_stack.callback(close_stderr)
 
             read, write = await exit_stack.enter_async_context(
                 stdio_client(params, errlog=errlog)
@@ -214,9 +237,90 @@ class MCPSession:
                 self._stderr_task.cancel()
 
         try:
-            await asyncio.wait_for(close_op(), timeout=CLOSE_DEADLINE_S)
+            async with asyncio.timeout(CLOSE_DEADLINE_S):
+                await close_op()
         except asyncio.TimeoutError:
             warn("mcp: close deadline exceeded; abandoning child", server=self.server_name)
+
+
+class OwnedMCPSession:
+    def __init__(self, server_name):
+        self.server_name = server_name
+        self.queue: asyncio.Queue = asyncio.Queue()
+        self.task: asyncio.Task | None = None
+        self.closed = False
+
+    @classmethod
+    async def open(cls, server, *, worker, broker):
+        proxy = cls(server.name)
+        ready = asyncio.get_running_loop().create_future()
+
+        async def owner():
+            session = None
+            try:
+                session = await MCPSession._open(server, worker=worker, broker=broker)
+                ready.set_result(True)
+                while True:
+                    method, args, future = await proxy.queue.get()
+                    if method == 'close':
+                        break
+                    if future.cancelled():
+                        continue
+                    try:
+                        result = await getattr(session, method)(*args)
+                        if not future.done():
+                            future.set_result(result)
+                    except Exception as exc:
+                        if not future.done():
+                            future.set_exception(exc)
+            except BaseException as exc:
+                if not ready.done():
+                    ready.set_exception(exc)
+            finally:
+                if session is not None:
+                    await session.close()
+
+        proxy.task = asyncio.create_task(owner())
+        try:
+            await ready
+        except BaseException:
+            proxy.task.cancel()
+            await asyncio.gather(proxy.task, return_exceptions=True)
+            raise
+        return proxy
+
+    async def invoke(self, method, *args):
+        if self.closed or self.task is None or self.task.done():
+            raise RuntimeError('isolated MCP session closed')
+        future = asyncio.get_running_loop().create_future()
+        await self.queue.put((method, args, future))
+        try:
+            return await future
+        except asyncio.CancelledError:
+            # A cancelled RPC must not retain an isolated process/lease.
+            self.task.cancel()
+            raise
+
+    def is_closed(self):
+        return self.closed
+
+    async def list_tools(self):
+        return await self.invoke('list_tools')
+
+    async def call_tool(self, name, args, cancel_event=None):
+        return await self.invoke('call_tool', name, args, cancel_event)
+
+    async def close(self):
+        if self.closed or self.task is None:
+            return
+        self.closed = True
+        await self.queue.put(('close', (), None))
+        try:
+            async with asyncio.timeout(CLOSE_DEADLINE_S):
+                await asyncio.shield(self.task)
+        except asyncio.TimeoutError:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
 
 
 class MCPToolSession(Protocol):
@@ -232,6 +336,16 @@ class MCPToolSession(Protocol):
 
 class MCPTool:
 
+    @property
+    def cfg(self):
+        return self._server
+
+    def freeze_for_execution(self):
+        from copy import copy
+        frozen = copy(self)
+        frozen._server = deepcopy(self._server)
+        return frozen
+
     def __init__(
         self,
         session: MCPToolSession,
@@ -245,6 +359,8 @@ class MCPTool:
         self._remote_name = remote_name
         self._desc = desc
         self._schema_obj = schema_obj
+        self._execution_policy: Any = None
+        self._server: MCPServerConfig | None = None
 
     def name(self) -> str:
         return self._tool_name
@@ -264,12 +380,16 @@ class MCPTool:
         return {"noSessionCache": True, "riskTier": "high-impact"}
 
     def summarize(self, args: dict[str, Any]) -> dict[str, str]:
-        primary = primary_tool_arg(self._tool_name, args)
-        if primary is not None:
-            return {"summary": display_tool_name(self._tool_name), "detail": primary}
+        from src.redact.redact import redact_payload
+
         return {
-            "summary": f"mcp: {self._tool_name}",
-            "detail": json.dumps(args, indent=2),
+            "summary": f"mcp: {self._session.server_name}/{self._remote_name}",
+            "detail": json.dumps(redact_payload({
+                "server": self._session.server_name,
+                "executor": {"command": self._server.command, "args": self._server.args} if self._server else None,
+                "tool": self._remote_name,
+                "args": args,
+            }), indent=2, ensure_ascii=False),
         }
 
     async def run(
@@ -280,6 +400,23 @@ class MCPTool:
         cancel_event: Optional[asyncio.Event] = None,
         _p: Any = None,
     ) -> str:
+        from src.permission.execution import policy_for, ExecutionBlocked
+        policy = policy_for(prompter)
+        if policy is not None:
+            if self._execution_policy is not policy or self._server is None or policy.worker is None or not policy.nested_allowed():
+                raise ExecutionBlocked('blocked: enforcement-unavailable; MCP worker identity/receipt unavailable')
+            from src.permission.worker_broker import broker_directory
+            # Fresh isolated server per invocation prevents background RPCs
+            # from retaining a completed request's network authority.
+            async with broker_directory(signal) as broker:
+                session = await MCPSession.open(self._server, worker=policy.worker, broker=broker)
+                try:
+                    result = await session.call_tool(self._remote_name, args, cancel_event)
+                finally:
+                    await session.close()
+            if result['isError']:
+                raise RuntimeError(format_mcp_error(self._tool_name, self._remote_name, result['content']))
+            return truncate_string(json.dumps(bound_content(result['content'], MCP_RESULT_CHAR_CAP), default=str), MCP_RESULT_CHAR_CAP)
         evt = cancel_event if cancel_event is not None else (signal if isinstance(signal, asyncio.Event) else None)
         result = await self._session.call_tool(self._remote_name, args, evt)
         if result["isError"]:
@@ -356,8 +493,13 @@ def extract_mcp_text(content: Any) -> str:
     return "\n".join(parts)
 
 
-async def discover_mcp_tools(server: MCPServerConfig) -> dict[str, Any]:
-    session = await MCPSession.open(server)
+async def discover_mcp_tools(server: MCPServerConfig, *, execution_policy: Any = None) -> dict[str, Any]:
+    if execution_policy is not None:
+        from src.permission.execution import ExecutionBlocked
+        if execution_policy.worker is None:
+            raise ExecutionBlocked('blocked: enforcement-unavailable; MCP isolated worker required')
+    server = deepcopy(server)
+    session = await MCPSession.open(server, worker=execution_policy.worker if execution_policy else None)
     try:
         remote = await session.list_tools()
         tools: list[MCPTool] = []
@@ -375,6 +517,8 @@ async def discover_mcp_tools(server: MCPServerConfig) -> dict[str, Any]:
                 t.get("description") or "",
                 schema,
             )
+            wrapped._execution_policy = execution_policy
+            wrapped._server = server
             tools.append(wrapped)
         return {"session": session, "tools": tools}
     except Exception:

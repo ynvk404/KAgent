@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.permission.http_grants import HTTPPermissions
+    from src.permission.execution import ExecutionPolicy
 
 RiskTier = Literal["routine", "bounded-impact", "high-impact"]
 _RISK_TIERS = frozenset({"routine", "bounded-impact", "high-impact"})
@@ -15,6 +19,7 @@ class Decision(str, Enum):
     ALLOW_ONCE = "allow-once"
     ALLOW_SESSION = "allow-session"
     DENY = "deny"
+    GRANT_LAB = "grant-lab"
 
 @dataclass(slots=True)
 class PermissionRequest:
@@ -30,6 +35,7 @@ class PermissionRequest:
     # Set only when the tool has validated the action as routine and in scope.
     # This is deliberately independent of risk_tier and session-cache policy.
     yolo_auto_approve: bool = field(default=False, kw_only=True)
+    offer_http_lab: bool = field(default=False, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.risk_tier not in _RISK_TIERS:
@@ -52,17 +58,37 @@ class YoloPrompter:
     ) -> None:
         self._inner = inner
         self._yolo = initial
+        self._http_permissions: set[HTTPPermissions] = set()
+        self.execution_policy: ExecutionPolicy | None = None
+
+    def bind_execution_policy(self, policy: ExecutionPolicy) -> None:
+        self.execution_policy = policy
+        self.bind_http_permissions(policy.engagement.http_permissions)
+        policy.set_yolo(self._yolo)
+
+    def bind_http_permissions(self, permissions: HTTPPermissions) -> None:
+        """Trusted runtime mode selection, never a tool hint/model argument."""
+        self._http_permissions.add(permissions)
+        permissions.set_yolo(self._yolo)
 
     def set_yolo(
         self,
         enabled: bool,
     ) -> None:
         self._yolo = enabled
+        for permissions in self._http_permissions:
+            permissions.set_yolo(enabled)
+        if self.execution_policy is not None:
+            self.execution_policy.set_yolo(enabled)
 
     def is_yolo(
         self,
     ) -> bool:
         return self._yolo
+
+    def operator_review_prompter(self) -> Prompter:
+        """Only UI/CLI handlers use this for explicit manual policy changes."""
+        return self._inner
 
     def clear_session_cache(self) -> None:
         clear = getattr(self._inner, "clear_session_cache", None)
@@ -74,8 +100,13 @@ class YoloPrompter:
         request: PermissionRequest,
         signal: Any = None,
     ) -> Decision:
-        if self._yolo and request.yolo_auto_approve:
-            return Decision.ALLOW_ONCE
+        if self._yolo:
+            if self.execution_policy is not None:
+                if self.execution_policy.nested_allowed():
+                    return Decision.ALLOW_ONCE
+                raise UserControlledRefusal("blocked: permission-without-execution-receipt")
+            if request.yolo_auto_approve:
+                return Decision.ALLOW_ONCE
 
         return await self._inner.ask(
             request,

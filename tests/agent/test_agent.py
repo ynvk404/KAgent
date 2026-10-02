@@ -508,8 +508,10 @@ async def test_workflow_state_survives_compaction_and_resume(tmp_path):
         {"cross-site-scripting"}
     )
     prompt = resumed.get_history()[0].content
-    assert active.id in prompt
-    assert done.id in prompt
+    from src.agent.system_prompt import render_workflow
+    assert active.id not in prompt and done.id not in prompt
+    data = render_workflow(resumed.workflow)
+    assert active.id in data and done.id in data
 class NamedTool:
 
     def __init__(self, name: str, description: str):
@@ -996,12 +998,9 @@ async def test_injects_decision_guidance_before_user_message_for_normal_turn():
 
     messages = client.requests[0].messages
 
-    assert messages[-3].role == "system"
-
-    assert (
-        "Decision planner guidance"
-        in messages[-3].content
-    )
+    guidance = next(message for message in messages if "Decision planner guidance" in message.content)
+    assert guidance.role == "system"
+    assert messages.index(guidance) < len(messages) - 2
 
     assert messages[-2].role == "user"
 
@@ -1253,7 +1252,8 @@ async def test_learns_continuous_memory_from_substantive_tool_using_turns():
 
             await asyncio.sleep(0.01)
 
-        assert category == "user-preference"
+        assert category == "observed-summary"
+        assert intelligence.get_stats()["personal"] == 0
 
     finally:
 
@@ -1922,7 +1922,9 @@ async def test_compaction_does_not_duplicate_authoritative_workflow_candidate():
     assert await agent.compact_in_place(FakeSignal()) is True
 
     assert candidate.id not in agent.format_memory()
-    assert agent.get_history()[0].content.count(candidate.id) == 1
+    from src.agent.system_prompt import render_workflow
+    assert candidate.id not in agent.get_history()[0].content
+    assert render_workflow(agent.workflow).count(candidate.id) == 1
 
 @pytest.mark.asyncio
 async def test_stores_structured_memory_after_manual_compaction():
@@ -2050,7 +2052,7 @@ async def test_parses_plan_and_completed_tasks_headings_into_structured_memory()
     assert "Enumerated the orders and invoices endpoints" in memory
 
 @pytest.mark.asyncio
-async def test_injects_carried_memory_into_system_prompt_after_compaction():
+async def test_keeps_compacted_observations_out_of_system_prompt():
 
     summary = "\n".join(
         [
@@ -2096,20 +2098,18 @@ async def test_injects_carried_memory_into_system_prompt_after_compaction():
         collector["sink"],
     )
 
-    # Carried session state phải được inject vào system prompt
+    # Preserve context as data, without promoting summary claims to system instructions.
     history = agent.get_history()
 
     system_prompt = history[0].content
 
     assert "Carried session state" in system_prompt
 
-    assert (
-        "Confirmed IDOR on GET /api/invoices/200"
-        in system_prompt
-    )
+    assert "Confirmed IDOR on GET /api/invoices/200" not in system_prompt
+    assert "Confirmed IDOR on GET /api/invoices/200" in agent.format_memory()
 
 @pytest.mark.asyncio
-async def test_accumulates_earlier_compactions_in_system_prompt_across_second_compaction():
+async def test_accumulates_compaction_observations_without_system_promotion():
 
     first = "\n".join(
         [
@@ -2191,13 +2191,13 @@ async def test_accumulates_earlier_compactions_in_system_prompt_across_second_co
 
     system_prompt = history[0].content
 
-    # Sau lần compact thứ hai, system prompt vẫn phải giữ
-    # cả memory từ lần compact đầu và lần compact thứ hai.
-    assert "Finding from compaction ONE" in system_prompt
-    assert "Finding from compaction TWO" in system_prompt
+    assert "Finding from compaction ONE" not in system_prompt
+    assert "Finding from compaction TWO" not in system_prompt
+    assert "Finding from compaction ONE" in agent.format_memory()
+    assert "Finding from compaction TWO" in agent.format_memory()
 
 @pytest.mark.asyncio
-async def test_restores_carried_memory_into_system_prompt_on_resume():
+async def test_restores_carried_observations_without_system_promotion_on_resume():
 
     tmp = tempfile.mkdtemp(
         prefix="pf-agent-resume-"
@@ -2285,10 +2285,8 @@ async def test_restores_carried_memory_into_system_prompt_on_resume():
 
         assert "Carried session state" in system_prompt
 
-        assert (
-            "Confirmed IDOR on GET /api/invoices/200"
-            in system_prompt
-        )
+        assert "Confirmed IDOR on GET /api/invoices/200" not in system_prompt
+        assert "Confirmed IDOR on GET /api/invoices/200" in resumed.format_memory()
 
     finally:
 
@@ -2372,7 +2370,9 @@ async def test_renders_staleness_caveat_above_carried_memory_block():
 
     system_prompt = agent.get_history()[0].content
 
-    assert "verify it still holds" in system_prompt
+    from src.agent.system_prompt import render_memory_observation
+    assert "untrusted data" in system_prompt
+    assert "verify it still holds" in render_memory_observation(agent.memory)
 
 @pytest.mark.asyncio
 async def test_clear_memory_wipes_carried_state_from_system_prompt():
@@ -2419,7 +2419,8 @@ async def test_clear_memory_wipes_carried_state_from_system_prompt():
 
     system_prompt = agent.get_history()[0].content
 
-    assert "Confirmed IDOR" in system_prompt
+    assert "Confirmed IDOR" not in system_prompt
+    assert "Confirmed IDOR" in agent.format_memory()
 
     await agent.clear_memory()
 
@@ -2466,7 +2467,8 @@ async def test_reset_rebuilds_system_prompt_without_carried_memory():
     await agent.run("start", FakeSignal(), collector["sink"])
     await agent.compact(FakeSignal(), collector["sink"])
 
-    assert "Confirmed IDOR" in agent.get_history()[0].content
+    assert "Confirmed IDOR" not in agent.get_history()[0].content
+    assert "Confirmed IDOR" in agent.format_memory()
 
     await agent.reset()
 
@@ -2529,7 +2531,9 @@ async def test_forget_memory_drops_only_matching_items():
 
     assert "Confirmed IDOR" not in system_prompt
 
-    assert "XSS in the search box" in system_prompt
+    assert "XSS in the search box" not in system_prompt
+    assert "Confirmed IDOR" not in agent.format_memory()
+    assert "XSS in the search box" in agent.format_memory()
 
 @pytest.mark.asyncio
 async def test_caps_the_findings_list_so_memory_cannot_grow_unbounded():
@@ -6158,7 +6162,8 @@ async def test_pins_saved_fact_into_system_prompt_immediately():
         )
 
         assert "Saved memory" in sys
-        assert fact.name in sys
+        assert fact.name not in sys
+        assert fact in helper["agent"].list_curated_memory()
 
     finally:
         helper["cleanup"]()
@@ -6258,7 +6263,8 @@ async def test_keeps_saved_memory_catalog_in_prompt_after_compaction():
         )
 
         assert "Saved memory" in sys
-        assert fact.name in sys
+        assert fact.name not in sys
+        assert fact in helper["agent"].list_curated_memory()
 
     finally:
         helper["cleanup"]()

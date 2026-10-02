@@ -38,11 +38,19 @@ def new_provider_async_client(timeout: float = CHAT_TIMEOUT_SEC) -> httpx.AsyncC
     the process environment.  Target-facing tools own their proxy policy
     separately and intentionally do not use this factory.
     """
-    return httpx.AsyncClient(timeout=timeout, trust_env=False)
+    from .validation_budget import active_validation_budget
+    budget = active_validation_budget.get()
+    if budget is None:
+        return httpx.AsyncClient(timeout=timeout, trust_env=False)
+    return httpx.AsyncClient(timeout=timeout, trust_env=False,
+                             transport=budget.transport())
 
 
 def new_provider_session() -> requests.Session:
     """Build the synchronous equivalent used by provider model discovery."""
+    from .validation_budget import active_validation_budget, ValidationBudgetExceeded
+    if active_validation_budget.get() is not None:
+        raise ValidationBudgetExceeded('synchronous provider discovery unavailable during budgeted validation')
     session = requests.Session()
     session.trust_env = False
     return session
