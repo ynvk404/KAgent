@@ -39,6 +39,13 @@ class BaseCaptureTool(Tool, ABC):
     def __init__(self, store: CaptureStore):
         self.store = store
 
+    def bind_execution_policy(self, policy):
+        from copy import copy
+        from src.browser.scoped_store import ScopedCaptureStore
+        bound = copy(self)
+        bound.store = ScopedCaptureStore(self.store, policy)
+        return bound
+
     @abstractmethod
     def name(self) -> str: ...
 

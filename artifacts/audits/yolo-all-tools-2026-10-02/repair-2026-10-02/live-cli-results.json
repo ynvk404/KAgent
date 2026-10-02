@@ -1,0 +1,34 @@
+{
+  "configured_model": "deepseek-flash",
+  "configured_max_tokens": null,
+  "scope": "http://juice.lab:3000",
+  "restricted_trial": "fixed read-only harness actions; no live mutation or test-object ownership claim",
+  "approval_dialogs": 0,
+  "native_successes": 1,
+  "worker_http_success": true,
+  "events": [
+    {
+      "type": "tool-call",
+      "name": "http",
+      "status": null
+    },
+    {
+      "type": "tool-result",
+      "name": "http",
+      "status": "observation"
+    },
+    {
+      "type": "done",
+      "name": null,
+      "status": null
+    }
+  ],
+  "policy_calls": 2,
+  "session_id": "88eacd2e-e2db-4f17-914f-e451f3d580c2",
+  "cli_exit": 0,
+  "api_attempts_total": 4,
+  "sessions_total": 1,
+  "estimated_upper_usd": "0.004865112",
+  "unknown_usage": true,
+  "price_source": "https://api-docs.deepseek.com/quick_start/pricing/"
+}

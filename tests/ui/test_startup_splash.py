@@ -510,6 +510,21 @@ def _make_test_kagent(show_splash: bool = False) -> KAgent:
 
 
 class TestAppSplashIntegration:
+    @pytest.mark.asyncio
+    async def test_completed_startup_does_not_wait_for_cosmetic_sleep(self, monkeypatch) -> None:
+        app = _make_test_kagent(show_splash=True)
+        # Test the actual startup coroutine without patching Textual's clock.
+        # Runtime work is finished; the sequence must not await a fixed delay.
+        app.startup_splash = StartupSplash()
+        finished = []
+        monkeypatch.setattr(app, "_finish_splash", lambda: finished.append(True))
+        monkeypatch.setattr(app, "refresh", lambda *args, **kwargs: None)
+        result = app._run_startup_sequence().__await__()
+        with pytest.raises(StopIteration):
+            next(result)
+        assert finished == [True]
+        assert app.startup_splash.phase == "ready"
+
     def test_default_show_splash_is_false(self) -> None:
         app = _make_test_kagent(show_splash=False)
         assert app.show_splash is False

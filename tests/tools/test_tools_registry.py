@@ -178,7 +178,7 @@ async def test_yolo_does_not_bypass_non_cacheable_coverage_clear(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["shell", "file_write", "http", "plugin"])
-async def test_yolo_preserves_high_impact_tool_and_http_confirm_each_permissions(action, tmp_path, monkeypatch):
+async def test_unprofiled_generic_tools_and_ordinary_http_keep_review(action, tmp_path, monkeypatch):
     send = AsyncMock()
     monkeypatch.setattr("src.tools.http.httpx.AsyncClient.send", send)
     registry = Registry()
@@ -211,7 +211,7 @@ async def test_yolo_preserves_high_impact_tool_and_http_confirm_each_permissions
         expected_tier = "high-impact"
 
     inner = SpyPrompter(Decision.DENY)
-    yolo = YoloPrompter(inner, True)
+    yolo = YoloPrompter(inner, action != "http")
 
     with pytest.raises(UserControlledRefusal):
         await registry.execute(action, args, None, yolo)
@@ -226,7 +226,7 @@ async def test_yolo_preserves_high_impact_tool_and_http_confirm_each_permissions
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
-async def test_yolo_cannot_bypass_http_confirm_each_denial(method, monkeypatch):
+async def test_ordinary_http_confirm_each_denial_stops_dispatch(method, monkeypatch):
     send = AsyncMock()
     monkeypatch.setattr("src.tools.http.httpx.AsyncClient.send", send)
     target = Target("https://target.test")
@@ -236,7 +236,7 @@ async def test_yolo_cannot_bypass_http_confirm_each_denial(method, monkeypatch):
     registry = Registry()
     registry.register(HTTPTool(target, engagement))
     inner = SpyPrompter(Decision.DENY)
-    yolo = YoloPrompter(inner, True)
+    yolo = YoloPrompter(inner, False)
 
     with pytest.raises(UserControlledRefusal):
         await registry.execute(

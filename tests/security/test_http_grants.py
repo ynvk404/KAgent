@@ -247,14 +247,14 @@ async def test_reusable_grant_not_yolo_dependent(runtime):
 
 
 @pytest.mark.asyncio
-async def test_confirm_each_even_yolo(runtime):
+async def test_yolo_overrides_review_preference_without_changing_grant_bounds(runtime):
     tool, registry, sent, _ = runtime
     tool.permissions.activate(ORIGIN, HTTPLimits(), "confirm-each")
     operator = Operator(Decision.ALLOW_ONCE)
     for phase in ["recon", "impact"]:
         await registry.execute("http", args(phase=phase), None, YoloPrompter(operator, True))
-    assert len(operator.requests) == len(sent) == 2
-    assert all(not req.offer_http_lab for req in operator.requests)
+    assert not operator.requests and len(sent) == 2
+    assert next(iter(tool.permissions.grants.values())).mode == "confirm-each"
 
 
 @pytest.mark.asyncio
@@ -429,7 +429,7 @@ async def test_pending_and_deny_do_not_spam_or_create_session_deny(runtime):
     with pytest.raises(HTTPBlocked):
         await task
     for _ in range(3):
-        with pytest.raises(HTTPBlocked, match="previously"):
+        with pytest.raises(HTTPBlocked, match="exact action declined"):
             await registry.execute("http", args(), None, operator)
     assert len(operator.requests) == 1 and not sent and not tool.permissions.denied
     tool.permissions.retry(ORIGIN)
@@ -604,7 +604,7 @@ async def test_cancel_during_review_reopens_only_by_operator(runtime):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    with pytest.raises(HTTPBlocked, match="previously"):
+    with pytest.raises(HTTPBlocked, match="exact action declined"):
         await registry.execute("http", args(), None, operator)
     assert len(operator.requests) == 1 and not sent
     assert not tool.permissions._pending

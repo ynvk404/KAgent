@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from src.paths import project_root
 from src.permission.permission import Prompter, UserControlledRefusal
+from src.permission.execution import policy_for
 from .file import gate_sensitive_path
 from src.redact.redact import apply as redact
 from src.coverage.store import CoverageStore, CoverageStatus
@@ -142,6 +143,8 @@ class WorkflowTool(Tool):
                     "type": "string",
                     "description": "Existing project proof file.",
                 },
+                "observation_ids": {"type": "array", "items": {"type": "string"},
+                                    "description": "Runtime observation IDs for class verification; model claims are not verification."},
                 "signals": {"type": "array", "items": {"type": "string"}},
                 "baseline_request_ref": optional_string,
                 "auth_context_ref": optional_string,
@@ -254,8 +257,17 @@ class WorkflowTool(Tool):
         elif action == "record_result":
             result = await self._record_result(args, prompter, signal)
         elif action == "sync_coverage":
+            policy = policy_for(prompter)
+            if policy is not None:
+                latest = self.state.latest_result(arg_string(args, "candidate_id"))
+                if latest is None or policy.observations.result(latest.candidate_id, tuple(latest.evidence_refs),
+                                                               policy.engagement.http_permissions.epoch,
+                                                               self.state.candidates.get(latest.candidate_id)) is None:
+                    return self._typed_result("error: unverified result cannot sync tested coverage")
             result = await self._sync_coverage_action(args)
         elif action == "record_phase_coverage":
+            if policy_for(prompter) is not None and args.get("coverage_status") == "performed":
+                return self._typed_result("error: performed phase coverage requires an execution adapter observation")
             result = self._record_phase_coverage(args)
         elif action == "complete_skill":
             result = self._complete_skill(args)
@@ -559,11 +571,23 @@ class WorkflowTool(Tool):
                     )
             elif skill and skill.candidate_classes and candidate.candidate_class not in skill.candidate_classes:
                 raise ValueError("result skill does not handle candidate class")
+            policy = policy_for(prompter)
             if (
                 result.outcome == "confirmed"
                 and candidate.candidate_class == "sql-injection"
+                and policy is None
             ):
                 result.confirmation = self._validate_sqli_confirmation(result)
+            if policy is not None and result.outcome in {"confirmed", "not-confirmed"}:
+                ids = args.get("observation_ids", [])
+                verified = policy.observations.result(candidate.id, tuple(result.evidence_refs),
+                                                      policy.engagement.http_permissions.epoch, candidate)
+                if verified is None:
+                    verified = policy.observations.verify(candidate, tuple(result.evidence_refs), ids,
+                                                          policy.engagement.http_permissions.epoch)
+                if verified is None or verified.outcome != result.outcome:
+                    result.outcome = "insufficient-evidence"
+                    result.deferred_reason = "class-verifier-unavailable-or-proof-unverified; evidence retained, no confirmed/negative claim"
             coverage_status = self._coverage_status(result)
             if self.coverage is not None and coverage_status:
                 result.coverage_synced = False
@@ -830,6 +854,12 @@ class WorkflowTool(Tool):
         return None
 
     async def _sync_coverage(self, candidate: Candidate, result: ValidationResult) -> None:
+        from src.permission.execution import current_policy
+        policy = current_policy()
+        if policy is not None and result.outcome in {'confirmed', 'not-confirmed'} and policy.observations.result(
+            candidate.id, tuple(result.evidence_refs), policy.engagement.http_permissions.epoch, candidate
+        ) is None:
+            raise ValueError('unverified: legacy result has no current proof certificate; revalidate or operator review')
         if self.coverage is None:
             return
         status = self._coverage_status(result)

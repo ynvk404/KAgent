@@ -113,7 +113,7 @@ class EngagementState:
         return state
 
     def replace_from(self, other: "EngagementState") -> None:
-        self.http_permissions.reset()
+        self.http_permissions.reset(preserve_denial=True)
         self.version = other.version
         self.revision = other.revision
         self.allowed_origins = frozenset(other.allowed_origins)

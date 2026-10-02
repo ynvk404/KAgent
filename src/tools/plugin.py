@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import signal as signal_module
+import os
+from copy import deepcopy
 from typing import Any
 
 from src.config.config import PluginConfig
@@ -15,6 +17,9 @@ MAX_OUTPUT_BYTES = 128 * 1024
 class CommandPluginTool:
     def __init__(self, cfg: PluginConfig):
         self.cfg = cfg
+
+    def freeze_for_execution(self):
+        return CommandPluginTool(deepcopy(self.cfg))
 
     def name(self) -> str:
         return self.cfg.name
@@ -58,14 +63,22 @@ class CommandPluginTool:
         signal: Any,
         prompter: Prompter,
     ) -> str:
+        from src.permission.execution import guard_process
+        worker = guard_process(prompter, self, args)
         if not self.cfg.command:
             raise RuntimeError(
                 f"plugin {self.cfg.name} has no command"
             )
 
+        command, argv = self.cfg.command, self.cfg.args
+        if worker is not None:
+            from src.permission.worker_broker import broker_directory
+            async with broker_directory(signal) as broker:
+                command, argv = worker.wrap(command, argv, broker=broker)
+                return await run_plugin(command, argv, args, signal)
         return await run_plugin(
-            self.cfg.command,
-            self.cfg.args,
+            command,
+            argv,
             args,
             signal,
         )
@@ -82,17 +95,47 @@ async def run_plugin(
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=os.name != "nt",
     )
 
     payload = json.dumps(args).encode()
 
-    communicate_task: asyncio.Task[tuple[bytes, bytes]] = asyncio.ensure_future(
-        proc.communicate(payload)
-    )
+    totals = [0, 0]
+
+    async def pump(stream, index: int) -> bytes:
+        retained = bytearray()
+        while True:
+            chunk = await stream.read(65536)
+            if not chunk:
+                return bytes(retained)
+            totals[index] += len(chunk)
+            retained.extend(chunk[:max(0, MAX_OUTPUT_BYTES - len(retained))])
+
+    async def bounded_communicate() -> tuple[bytes, bytes]:
+        assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+        out_task = asyncio.create_task(pump(proc.stdout, 0))
+        err_task = asyncio.create_task(pump(proc.stderr, 1))
+        try:
+            try:
+                proc.stdin.write(payload)
+                await proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                proc.stdin.close()
+            stdout, stderr = await asyncio.gather(out_task, err_task)
+            await proc.wait()
+            return stdout, stderr
+        finally:
+            for task in (out_task, err_task):
+                task.cancel()
+            await asyncio.gather(out_task, err_task, return_exceptions=True)
+
+    communicate_task = asyncio.create_task(bounded_communicate())
 
     async def _watch_abort() -> None:
         while not communicate_task.done():
-            if getattr(signal, "aborted", False):
+            if getattr(signal, "aborted", False) or getattr(signal, "is_set", lambda: False)():
                 return
             await asyncio.sleep(0.05)
 
@@ -101,11 +144,18 @@ async def run_plugin(
     async def stop_process() -> None:
         if proc.returncode is None:
             try:
-                proc.kill()
+                if os.name != "nt":
+                    os.killpg(proc.pid, signal_module.SIGKILL)
+                else:
+                    proc.kill()
             except ProcessLookupError:
                 pass
         # communicate owns the pipe readers; let it drain the killed process.
-        await communicate_task
+        try:
+            await asyncio.wait_for(asyncio.shield(communicate_task), 3)
+        except asyncio.TimeoutError:
+            communicate_task.cancel()
+            await asyncio.gather(communicate_task, return_exceptions=True)
 
     try:
         done, _pending = await asyncio.wait(
@@ -133,8 +183,8 @@ async def run_plugin(
 
     stdout, stderr = communicate_task.result()
 
-    stdout = truncate(stdout, len(stdout))
-    stderr = truncate(stderr, len(stderr))
+    stdout = truncate(stdout, totals[0])
+    stderr = truncate(stderr, totals[1])
 
     if proc.returncode == 0:
         if stderr:

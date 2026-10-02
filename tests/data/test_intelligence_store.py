@@ -481,7 +481,8 @@ class TestContinuousLearning:
 
         stats = store.get_stats()
         assert stats["project"] > 0
-        assert stats["personal"] > 0
+        assert stats["personal"] == 0
+        assert all(item.category == "observed-summary" and item.source == "derived-untrusted-summary" for item in extracted)
 
     @pytest.mark.asyncio
     async def test_clear_intelligence(self, store: IntelligenceStore, sample_scenario: IntelligenceScenario):

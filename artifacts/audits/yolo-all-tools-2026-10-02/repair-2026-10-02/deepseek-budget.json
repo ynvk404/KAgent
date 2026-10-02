@@ -1,0 +1,54 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "session": 1,
+      "reserved_upper_usd": "0.4813905",
+      "charged_upper_usd": "0.000138168",
+      "usage": {
+        "prompt_tokens": 346,
+        "completion_tokens": 60,
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 218,
+        "total_tokens": 406
+      }
+    },
+    {
+      "attempt": 2,
+      "session": 1,
+      "reserved_upper_usd": "0.0012288",
+      "charged_upper_usd": "0.0012288",
+      "usage": null
+    },
+    {
+      "attempt": 3,
+      "session": 1,
+      "reserved_upper_usd": "0.4945920",
+      "charged_upper_usd": "0.003183636",
+      "usage": {
+        "prompt_tokens": 10363,
+        "completion_tokens": 125,
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 10107,
+        "total_tokens": 10488
+      }
+    },
+    {
+      "attempt": 4,
+      "session": 1,
+      "reserved_upper_usd": "0.4949028",
+      "charged_upper_usd": "0.000314508",
+      "usage": {
+        "prompt_tokens": 10697,
+        "completion_tokens": 128,
+        "prompt_cache_hit_tokens": 10368,
+        "prompt_cache_miss_tokens": 329,
+        "total_tokens": 10825
+      }
+    }
+  ],
+  "sessions": 1,
+  "unknown_usage": true,
+  "model": "deepseek-flash",
+  "price_source": "https://api-docs.deepseek.com/quick_start/pricing/"
+}

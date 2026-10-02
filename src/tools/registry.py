@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from copy import deepcopy
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from .types import (
     ContextReductionTool,
 )
 from src.llm.types import ToolSpec
+from src.permission.execution import ExecutionPolicy, ExecutionReceipt, policy_for
 from .approval_display import redact_approval as redact
 
 
@@ -42,6 +44,10 @@ class _ExecutionPrompter(Prompter):
         self._inner = inner
         self._tool_name = tool_name
         self._cache_key = cache_key
+
+    @property
+    def execution_policy(self):
+        return policy_for(self._inner)
 
     async def ask(self, request: PermissionRequest, signal: Any = None) -> Decision:
         if (
@@ -136,18 +142,38 @@ class Registry:
         }
 
     async def execute(
+        self, name: str, args: dict[str, Any], signal: Any, prompter: Prompter,
+    ) -> str:
+        tool = self.tools.get(name)
+        if tool is None:
+            raise RuntimeError(f"unknown tool: {name}")
+        freeze = getattr(tool, "freeze_for_execution", None)
+        if callable(freeze):
+            tool = cast(Tool, freeze())
+        args = deepcopy(args)
+        policy = policy_for(prompter)
+        if policy is not None and type(tool).__module__ == 'src.tools.browser_capture':
+            tool = cast(Tool, getattr(tool, 'bind_execution_policy')(policy))
+        receipt = policy.prepare(tool, args) if policy is not None else None
+        try:
+            return await self._execute(tool, args, signal, prompter, policy, receipt)
+        except (UserControlledRefusal, asyncio.CancelledError):
+            if policy is not None and receipt is not None:
+                policy.finish_review(receipt, denied=True)
+            raise
+        finally:
+            if policy is not None and receipt is not None:
+                policy.finish_review(receipt)
+
+    async def _execute(
         self,
-        name: str,
+        tool: Tool,
         args: dict[str, Any],
         signal: Any,
         prompter: Prompter,
+        policy: ExecutionPolicy | None,
+        receipt: ExecutionReceipt | None,
     ) -> str:
-        tool = self.tools.get(name)
-
-        if tool is None:
-            raise RuntimeError(
-                f"unknown tool: {name}"
-            )
 
         # Approval and dispatch use the same private snapshot, even if the
         # caller changes nested arguments while the operator is reviewing.
@@ -163,7 +189,12 @@ class Registry:
             # Native HTTP uses operator grants/exact receipts rather than the
             # generic phase hints and origin permission cache. Direct tool calls
             # use the same gate; this is not an unguarded dispatch path.
-            return await tool.run_authorized(args, signal, prompter)
+            token = policy.start(receipt, tool, args, signal) if policy and receipt else None
+            try:
+                return await tool.run_authorized(args, signal, prompter)
+            finally:
+                if token is not None and policy is not None:
+                    policy.stop(token)
 
         requires_permission = (
             tool.requires_permission_for(args)
@@ -211,10 +242,8 @@ class Registry:
                 ),
             )
 
-            decision = await prompter.ask(
-                request,
-                signal,
-            )
+            decision = (Decision.ALLOW_ONCE if policy is not None and policy.yolo
+                        else await prompter.ask(request, signal))
 
             if decision == Decision.DENY:
                 raise UserControlledRefusal(
@@ -229,11 +258,12 @@ class Registry:
         else:
             run_prompter = prompter
 
-        return await tool.run(
-            args,
-            signal,
-            run_prompter,
-        )
+        token = policy.start(receipt, tool, args, signal) if policy and receipt else None
+        try:
+            return await tool.run(args, signal, run_prompter)
+        finally:
+            if token is not None and policy is not None:
+                policy.stop(token)
 
 def summarize(
     tool: Tool,

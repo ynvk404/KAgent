@@ -237,6 +237,16 @@ class ConfirmFindingTool:
 
         latest = self.workflow.latest_result(candidate_id)
         assert latest is not None  # eligibility above guarantees a result
+        from src.permission.execution import policy_for
+        policy = policy_for(prompter)
+        if policy is not None:
+            verified = policy.observations.result(candidate_id, tuple(latest.evidence_refs),
+                                                  policy.engagement.http_permissions.epoch, candidate)
+            if verified is None or verified.outcome != "confirmed":
+                raise ValueError("unverified: trusted class verifier required; raw evidence/candidate remain available")
+            observed_impact = verified.observed_impact
+            severity = verified.severity
+            response_excerpt = verified.response_excerpt
         root = self.store.project_dir
         if not await verify_evidence_reads(
             [self.workflow.evidence[ref] for ref in latest.evidence_refs], root, prompter, signal,

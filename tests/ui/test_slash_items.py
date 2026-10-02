@@ -15,7 +15,7 @@ def test_menu_orders_help_first_then_related_commands():
         "/help",
         "/provider", "/model", "/thinking", "/maxsteps",
         "/target", "/scope", "/permissions", "/yolo",
-        "/plan", "/next", "/skills", "/burp",
+        "/plan", "/next", "/review-result", "/skills", "/burp",
         "/memory", "/compact", "/snapshot",
         "/clear", "/reset", "/exit",
     ]
@@ -48,7 +48,7 @@ def test_prefix_matches_command_names():
     assert [
         s.name for s in filter_slash("/re")
     ] == [
-        "/reset"
+        "/review-result", "/reset"
     ]
 
 
@@ -152,7 +152,7 @@ def test_yolo_catalog_entry():
 
     assert item.args == "[on|off|default]"
     assert item.description == (
-        "toggle scoped HTTP autonomy and eligible tool auto-approval"
+        "toggle profile-based auto-approval; independent resource checks remain"
     )
 
 

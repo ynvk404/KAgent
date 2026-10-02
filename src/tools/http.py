@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 import asyncio
 import httpx
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter, UserControlledRefusal, YoloPrompter
 from src.permission.http_grants import EffectiveHTTP, check_cancelled
+from src.permission.execution import policy_for
+from src.permission.network import pin_request
 from src.target.target import Target
 from .private_host import gate_private_request, parse_http_url
 from .types import Tool, PermissionHints, arg_string
@@ -35,7 +38,7 @@ class HTTPTool(Tool):
             'their exact origin and limits. Without a grant, an exact request requires '
             'operator approval. Operator YOLO activation grants bounded scoped autonomy '
             'without manual grant commands. Scope alone is not authority. Confirm-each '
-            'still prompts. Blocked/pending authorization must wait for operator action; '
+            'prompts in ordinary mode and resumes after YOLO is turned off. Blocked/pending authorization must wait for operator action; '
             'do not retry it with different phase/wording/payload. Relative paths resolve '
             'against /target. TLS verification is disabled; redirects are not followed. '
             'Raw HTTP cannot establish safe server-side effects or test-only resources.'
@@ -115,6 +118,12 @@ class HTTPTool(Tool):
             prompter.bind_http_permissions(self.permissions)
         args = deepcopy(args)
         action, request = self.prepare(args)
+        policy = policy_for(prompter)
+        if policy is not None:
+            if not policy.nested_allowed():
+                raise UserControlledRefusal('blocked: http-executor-without-receipt')
+            request, address = await pin_request(policy, request)
+            action = replace(action, transport_address=address)
         receipt = await self.permissions.authorize(action, prompter, signal, lambda: self.target.revision)
         # Independent gate: generic Registry approval cannot coalesce this gate.
         try:
@@ -125,10 +134,14 @@ class HTTPTool(Tool):
             self.permissions.pause_private(action.origin)
             raise
         check_cancelled(signal)
-        async with httpx.AsyncClient(verify=False, follow_redirects=False, timeout=REQUEST_TIMEOUT) as client:
+        transport_options: dict[str, Any] = {'trust_env': False} if policy is not None else {}
+        async with httpx.AsyncClient(verify=False, follow_redirects=False, timeout=REQUEST_TIMEOUT, **transport_options) as client:
             reservation = await self.permissions.reserve_when_ready(action, receipt, signal, lambda: self.target.revision)
             response = None
             try:
+                if policy is not None and not policy.nested_allowed():
+                    from src.permission.execution import ExecutionBlocked
+                    raise ExecutionBlocked("blocked: policy-changed-before-http-send")
                 reservation.start()
                 # No suspension between reservation and starting send.
                 response = await client.send(request, stream=True)
@@ -155,6 +168,9 @@ class HTTPTool(Tool):
                     output += f'\n[response body truncated at {action.response_cap} bytes]'
                 if private_reason:
                     output = f'note: private/internal host independently approved (reason: {private_reason})\n\n' + output
+                if policy is not None:
+                    observation = policy.observations.capture(action, response.status_code, content, complete=not truncated)
+                    output += f'\n[runtime observation: {observation}]'
                 return ToolOutput(output, status='observation', http_status=response.status_code, truncated=truncated)
             finally:
                 try:

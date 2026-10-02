@@ -178,6 +178,7 @@ class EvidenceArtifact:
         *, approved_paths: set[str] | None = None,
     ) -> bool:
         from src.tools.file import gate_sensitive_path
+        from src.permission.execution import policy_for
 
         for base in self._resume_roots(root):
             path = base / self.path
@@ -185,11 +186,19 @@ class EvidenceArtifact:
                 continue
             # One approval covers the source restriction and all checksum reads
             # for this immutable derivative in the current operation only.
-            gated = self.source_path if self.source_path and is_sensitive_path(self.source_path) else str(path)
+            policy = policy_for(prompter)
+            managed = bool(policy and Path(self.path).parts[:2] == (".kagent", "evidence"))
+            if managed:
+                assert policy is not None
+                policy.require_evidence(self, base)
+            gated = self.source_path if self.source_path and (managed or is_sensitive_path(self.source_path)) else str(path)
             if approved_paths is None or gated not in approved_paths:
                 await gate_sensitive_path(prompter, gated, "read evidence", signal)
                 if approved_paths is not None:
                     approved_paths.add(gated)
+            if managed:
+                assert policy is not None
+                policy.require_evidence(self, base)
             if self.is_resolvable(base, sensitive_read_approved=True):
                 return True
         return False

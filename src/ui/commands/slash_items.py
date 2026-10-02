@@ -54,13 +54,13 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     SlashItem(
         name="/permissions",
         args="[action]",
-        description="manage HTTP permissions",
+        description="view execution profile, HTTP limits and tool revocations",
     ),
 
     SlashItem(
         name="/yolo",
         args="[on|off|default]",
-        description="toggle scoped HTTP autonomy and eligible tool auto-approval",
+        description="toggle profile-based auto-approval; independent resource checks remain",
     ),
 
     SlashItem(
@@ -74,6 +74,8 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
         args="[objective]",
         description="coverage-driven next test suggestions",
     ),
+    SlashItem(name="/review-result", args="<candidate-id> <outcome> <severity> <impact>",
+              description="operator review of immutable proof; does not grant tool execution"),
 
     SlashItem(
         name="/skills",

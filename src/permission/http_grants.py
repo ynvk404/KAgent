@@ -12,7 +12,7 @@ import json
 import math
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict, replace
 from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from src.permission.permission import Decision, PermissionRequest, Prompter, UserControlledRefusal
@@ -85,6 +85,7 @@ class EffectiveHTTP:
     target_revision: int
     scope_revision: int
     epoch: str
+    transport_address: str = ""
 
     @property
     def origin(self) -> HTTPOrigin:
@@ -94,6 +95,7 @@ class EffectiveHTTP:
     def digest(self) -> str:
         material = [self.method, self.url, [(k.hex(), v.hex()) for k, v in self.headers],
                     self.body.hex(), self.response_cap, False, False, 60]
+        material.append(self.transport_address)
         return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode()).hexdigest()
 
     @property
@@ -104,7 +106,7 @@ class EffectiveHTTP:
         headers = "\n".join(f"{k.decode('ascii')}: {v.decode('latin1')}" for k, v in self.headers)
         return redact_approval(
             f"{self.method} {self.url}\n{headers}\n\n{self.body.decode('utf-8', errors='replace')}\n\n"
-            f"response body cap: {self.response_cap}; timeout: 60s; redirects: off; TLS verification: off"
+            f"response body cap: {self.response_cap}; timeout: 60s; redirects: off; TLS verification: off; socket: {self.transport_address or 'library DNS'}"
         )
 
 
@@ -183,6 +185,7 @@ class HTTPPermissions:
         self._receipts: dict[str, HTTPReceipt] = {}
         self._pending: set[HTTPOrigin] = set()
         self._suppressed: set[HTTPOrigin] = set()
+        self._declined_actions: dict[str, HTTPOrigin] = {}
         self._revoked: set[HTTPOrigin] = set()
         self._blocked_gate: set[HTTPOrigin] = set()
         self._grant_pending: set[HTTPOrigin] = set()
@@ -190,6 +193,30 @@ class HTTPPermissions:
         self._yolo_enabled = False
         self._target_revision: Callable[[], int] | None = None
         self._bound_target = 0
+        # Controller opt-in: retained restrictions never restore authorization.
+        self.constraint_journal: Callable[[], None] | None = None
+        self._constraints: dict[HTTPOrigin, _Budget] = {}
+
+    def constraint_state(self) -> list[dict[str, Any]]:
+        rows = dict(self._constraints)
+        rows.update(self._exact_budgets)
+        rows.update({origin: self._budgets[grant.id] for origin, grant in self.grants.items()})
+        return [{"origin": origin.as_url(), "limits": asdict(budget.limits), "used": budget.used,
+                 "deadline": time.time() + budget.expires_at - self.clock()} for origin, budget in rows.items()]
+
+    def restore_constraints(self, rows: list[dict[str, Any]]) -> None:
+        for row in rows:
+            origin = HTTPOrigin.from_url(row["origin"])
+            limits = HTTPLimits(**row["limits"])
+            budget = _Budget(limits, self.clock() + min(limits.seconds, float(row["deadline"]) - time.time()),
+                             0, self.clock(), max(0, int(row["used"])))
+            self._constraints[origin] = budget
+            grant = self.grants.get(origin)
+            if grant is not None:
+                self._budgets[grant.id] = budget
+                self.grants[origin] = replace(grant, limits=limits, expires_at=budget.expires_at)
+        self.revision += 1
+        self._receipts.clear()
 
     def bind_target(self, getter: Callable[[], int]) -> None:
         self._target_revision = getter
@@ -213,6 +240,8 @@ class HTTPPermissions:
                 # or a sticky revoke. Explicit manual grants remain unchanged.
                 for origin, grant in list(self.grants.items()):
                     if grant.activation == "yolo":
+                        if self.constraint_journal is not None:
+                            self._constraints[origin] = self._budgets[grant.id]
                         del self.grants[origin]
         self._refresh_yolo()
 
@@ -227,6 +256,11 @@ class HTTPPermissions:
 
     def reset(self, *, preserve_denial: bool = False) -> None:
         # Old in-flight reservations retain their own budget for safe release.
+        if self.constraint_journal is not None and preserve_denial:
+            self._constraints.update(self._exact_budgets)
+            self._constraints.update({origin: self._budgets[grant.id] for origin, grant in self.grants.items()})
+        elif not preserve_denial:
+            self._constraints.clear()
         self.epoch = uuid.uuid4().hex
         self.revision += 1
         denied = self.denied if preserve_denial else False
@@ -236,7 +270,9 @@ class HTTPPermissions:
         self._exact_budgets.clear()
         self._receipts.clear()
         self._suppressed.clear()
-        self._revoked.clear()
+        self._declined_actions.clear()
+        if not preserve_denial:
+            self._revoked.clear()
         self._blocked_gate.clear()
         # Pending asks keep their origin until their finally; old approvals
         # cannot cross epochs and cannot cause another concurrent dialog.
@@ -262,6 +298,7 @@ class HTTPPermissions:
         origin = self.engagement.require_in_scope(url)
         self.denied = False
         self._suppressed.discard(origin)
+        self._declined_actions = {digest: value for digest, value in self._declined_actions.items() if value != origin}
         self._revoked.discard(origin)
         self._blocked_gate.discard(origin)
         budget = self._exact_budgets.get(origin)
@@ -287,10 +324,15 @@ class HTTPPermissions:
         self.revision += 1
         self._receipts.clear()
         selected_mode: Literal["autonomous", "confirm-each"] = "autonomous" if mode == "autonomous" else "confirm-each"
+        carried = self._constraints.get(origin) if activation == "yolo" else None
+        if carried is not None:
+            limits = carried.limits
         grant = HTTPGrant(uuid.uuid4().hex, self.session_id, self.epoch, origin, selected_mode, limits,
-                          now, now + limits.seconds, self.revision, activation=activation)
+                          now, carried.expires_at if carried else now + limits.seconds, self.revision, activation=activation)
         self.grants[origin] = grant
-        self._budgets[grant.id] = _Budget(limits, grant.expires_at, limits.burst, now)
+        self._budgets[grant.id] = carried if carried else _Budget(limits, grant.expires_at, limits.burst, now)
+        if self.constraint_journal is not None:
+            self._constraints[origin] = self._budgets[grant.id]
         self._suppressed.discard(origin)
         self._revoked.discard(origin)
         return grant
@@ -332,13 +374,51 @@ class HTTPPermissions:
         if action.epoch != self.epoch or action.target_revision != target_revision or action.scope_revision != self.engagement.revision:
             raise HTTPBlocked("pending: target/scope/session changed; approval invalidated")
 
+    @property
+    def revoked_origins(self) -> frozenset[HTTPOrigin]:
+        return frozenset(self._revoked)
+
+    def revocation_state(self) -> dict[str, Any]:
+        return {"denied": self.denied, "origins": [o.as_url() for o in sorted(self._revoked)]}
+
+    def restore_revocations(self, raw: dict[str, Any]) -> None:
+        self.denied = raw.get("denied") is True
+        self._revoked |= {HTTPOrigin.from_url(url) for url in raw.get("origins", [])}
+        for origin in list(self.grants):
+            if self.denied or origin in self._revoked:
+                del self.grants[origin]
+        self.revision += 1
+        self._receipts.clear()
+
+    @property
+    def target_revision(self) -> int:
+        self.sync_target()
+        return self._target_revision() if self._target_revision is not None else 0
+
+    def authorize_adapter(self, action: EffectiveHTTP) -> HTTPReceipt:
+        """Controller transport entrypoint after the independent operation receipt.
+
+        Not exposed as a tool. Ordinary discovery approval covers its prepared
+        operation, rather than asking again for every baseline/verification.
+        """
+        self.sync_target()
+        self._check(action, self.target_revision)
+        if action.origin in self._revoked or action.origin in self._blocked_gate:
+            raise HTTPBlocked("blocked: origin revoked/private gate declined")
+        grant = self.grants.get(action.origin)
+        try:
+            self._capacity(action, self._budget(action, grant))
+        except HTTPPending:
+            pass
+        return self._mint(action, grant)
+
     def _budget(self, action: EffectiveHTTP, grant: HTTPGrant | None) -> _Budget:
         now = self.clock()
         if grant is not None:
             return self._budgets[grant.id]
         if action.origin not in self._exact_budgets:
             limits = HTTPLimits()
-            self._exact_budgets[action.origin] = _Budget(limits, now + limits.seconds, limits.burst, now)
+            self._exact_budgets[action.origin] = self._constraints.get(action.origin) or _Budget(limits, now + limits.seconds, limits.burst, now)
         return self._exact_budgets[action.origin]
 
     def _capacity(self, action: EffectiveHTTP, budget: _Budget) -> None:
@@ -414,12 +494,14 @@ class HTTPPermissions:
             self._capacity(action, budget)
         except HTTPPending:
             pass  # Dispatch scheduler waits at most 30s, without asking again.
-        if grant is not None and grant.mode == "autonomous":
+        if action.digest in self._declined_actions:
+            raise HTTPBlocked("pending: exact action declined/cancelled; operator retry required")
+        if grant is not None and (grant.mode == "autonomous" or self._yolo_enabled):
             return self._mint(action, grant)
         if origin in self._pending or origin in self._grant_pending:
             # Coalesce authorization issues, not distinct exact receipts.
             raise HTTPBlocked("pending: equivalent HTTP authorization review already open for this origin")
-        if origin in self._suppressed:
+        if action.digest in self._declined_actions or origin in self._suppressed:
             raise HTTPBlocked("pending: review previously declined/cancelled; operator /permissions retry required")
         self._pending.add(origin)
         revision = self.revision
@@ -439,7 +521,7 @@ class HTTPPermissions:
                 if grant is None:
                     raise HTTPBlocked("blocked: operator declined lab grant; no dispatch")
             elif decision != Decision.ALLOW_ONCE:
-                self._suppressed.add(origin)
+                self._declined_actions[action.digest] = origin
                 raise HTTPBlocked("blocked: permission denied by user for http; future equivalent reviews pending operator retry")
             try:
                 self._capacity(action, self._budget(action, grant))
@@ -448,7 +530,7 @@ class HTTPPermissions:
             return self._mint(action, grant)
         except BaseException:
             if action.epoch == self.epoch:
-                self._suppressed.add(origin)
+                self._declined_actions[action.digest] = origin
             raise
         finally:
             self._pending.discard(origin)
@@ -478,6 +560,16 @@ class HTTPPermissions:
         budget.active += 1
         origin = action.origin
         self._inflight[origin] = self._inflight.get(origin, 0) + 1
+
+        if self.constraint_journal is not None:
+            try:
+                self.constraint_journal()
+            except BaseException:
+                budget.used -= 1
+                budget.tokens += 1
+                budget.active -= 1
+                self._inflight[origin] -= 1
+                raise
 
         def release_slot() -> None:
             remaining = self._inflight[origin] - 1
