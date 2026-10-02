@@ -66,6 +66,338 @@ def test_candidate_round_trip_optional_fields_and_malformed_input():
     assert Candidate.from_dict({"candidate_class": "", "status": "wat"}) is None
 
 
+def test_request_context_round_trips_without_changing_semantic_ids():
+    baseline = make_candidate()
+    enriched = make_candidate(
+        content_type="application/json",
+        request_template=(
+            '{"email":"{INJECTION_POINT}","password":"example-secret"}'
+        ),
+        auth_context_ref="captures/auth-context.md",
+    )
+    assert enriched.id == baseline.id
+    assert enriched.request_template is not None
+    assert "example-secret" not in enriched.request_template
+    restored_candidate = Candidate.from_dict(enriched.to_dict())
+    assert restored_candidate == enriched
+
+    legacy_candidate = enriched.to_dict()
+    legacy_candidate.pop("content_type")
+    legacy_candidate.pop("request_template")
+    old_candidate = Candidate.from_dict(legacy_candidate)
+    assert old_candidate is not None and old_candidate.id == baseline.id
+    assert old_candidate.content_type is None and old_candidate.request_template is None
+
+    old_input = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="email",
+        location="body",
+        input_type="string",
+    )
+    rich_input = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="email",
+        location="body",
+        input_type="string",
+        content_type="application/json",
+        sample_payload='{"email":"user@example.test","password":"example-secret"}',
+    )
+    assert rich_input.id == old_input.id
+    assert rich_input.sample_payload is not None
+    assert "example-secret" not in rich_input.sample_payload
+    restored_input = AttackSurfaceInput.from_dict(rich_input.to_dict())
+    assert restored_input == rich_input
+
+    legacy_input = rich_input.to_dict()
+    legacy_input.pop("content_type")
+    legacy_input.pop("sample_payload")
+    old_input = AttackSurfaceInput.from_dict(legacy_input)
+    assert old_input is not None and old_input.id == rich_input.id
+    assert old_input.content_type is None and old_input.sample_payload is None
+
+
+@pytest.mark.parametrize(
+    ("content_type", "payload", "secrets"),
+    [
+        (
+            "application/json",
+            '{"nested":{"csrf_token":"{INJECTION_POINT}",'
+            '"session_cookie":"json-session-secret","username":"alice"}}',
+            ("json-session-secret",),
+        ),
+        (
+            "application/x-www-form-urlencoded",
+            "username=alice&password=demo-pass&csrf_token={INJECTION_POINT}",
+            ("demo-pass",),
+        ),
+        (
+            "multipart/form-data; boundary=fixture",
+            "--fixture\r\n"
+            'Content-Disposition: form-data; name="username"\r\n\r\n'
+            "alice\r\n"
+            "--fixture\r\n"
+            'Content-Disposition: form-data; name="session_cookie"\r\n\r\n'
+            "multipart-session-secret\r\n"
+            "--fixture\r\n"
+            'Content-Disposition: form-data; name="csrf_token"\r\n\r\n'
+            "{INJECTION_POINT}\r\n"
+            "--fixture--\r\n",
+            ("multipart-session-secret",),
+        ),
+    ],
+)
+def test_request_context_redacts_common_body_formats(
+    content_type: str, payload: str, secrets: tuple[str, ...]
+):
+    candidate = make_candidate(
+        content_type=content_type, request_template=payload
+    )
+    item = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="username",
+        location="body",
+        input_type="string",
+        content_type=content_type,
+        sample_payload=payload,
+    )
+
+    assert candidate.id == make_candidate().id
+    assert item.id == AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="username",
+        location="body",
+        input_type="string",
+    ).id
+    for context in (candidate.request_template, item.sample_payload):
+        assert context is not None
+        assert "alice" in context
+        assert "{INJECTION_POINT}" in context
+        assert all(secret not in context for secret in secrets)
+
+
+def test_context_merge_keeps_conflicting_request_context_together():
+    state = whole_target_state()
+    first_input = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="username",
+        location="body",
+        input_type="string",
+        content_type="application/json",
+        sample_payload='{"admin":"{INJECTION_POINT}"}',
+    )
+    conflicting_input = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="username",
+        location="body",
+        input_type="string",
+        content_type="application/x-www-form-urlencoded",
+        sample_payload="username={INJECTION_POINT}",
+    )
+    stored_input, _ = state.add_attack_surface_input(first_input)
+    duplicate_input, created = state.add_attack_surface_input(conflicting_input)
+    assert not created and duplicate_input is stored_input
+    assert stored_input.content_type == "application/json"
+    assert stored_input.sample_payload == '{"admin":"{INJECTION_POINT}"}'
+
+    first_candidate, _ = state.add_candidate(make_candidate(
+        target="https://target.test",
+        objective_id="objective-current",
+        content_type="application/json",
+        request_template=None,
+        baseline_request_ref="captures/admin-baseline.json",
+        auth_context_ref="captures/admin-session.md",
+    ))
+    conflicting_candidate, created = state.add_candidate(make_candidate(
+        target="https://target.test",
+        objective_id="objective-current",
+        content_type="application/x-www-form-urlencoded",
+        request_template="username={INJECTION_POINT}",
+        baseline_request_ref="captures/user-baseline.json",
+        auth_context_ref="captures/user-session.md",
+    ))
+    assert not created and conflicting_candidate is first_candidate
+    assert first_candidate.content_type == "application/json"
+    assert first_candidate.request_template is None
+    assert first_candidate.baseline_request_ref == "captures/admin-baseline.json"
+    assert first_candidate.auth_context_ref == "captures/admin-session.md"
+
+
+def test_request_context_dedup_fills_only_missing_context_fields():
+    state = whole_target_state()
+    first_input = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="email",
+        location="body",
+        input_type="string",
+    )
+    enriched_input = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="email",
+        location="body",
+        input_type="string",
+        content_type="application/json",
+        sample_payload='{"email":"{INJECTION_POINT}"}',
+    )
+    first, created = state.add_attack_surface_input(first_input)
+    duplicate, duplicate_created = state.add_attack_surface_input(enriched_input)
+    assert created is True and duplicate_created is False and duplicate is first
+    assert first.content_type == "application/json"
+    assert first.sample_payload == '{"email":"{INJECTION_POINT}"}'
+
+    first_candidate, _ = state.add_candidate(make_candidate(
+        target="https://target.test",
+        objective_id="objective-current",
+        baseline_request_ref=None,
+        auth_context_ref=None,
+    ))
+    duplicate_candidate, created = state.add_candidate(make_candidate(
+        target="https://target.test",
+        objective_id="objective-current",
+        content_type="application/json",
+        request_template='{"email":"{INJECTION_POINT}"}',
+        baseline_request_ref="captures/baseline.json",
+        auth_context_ref="captures/auth-context.md",
+    ))
+    assert created is False and duplicate_candidate is first_candidate
+    assert first_candidate.content_type == "application/json"
+    assert first_candidate.request_template == '{"email":"{INJECTION_POINT}"}'
+    assert first_candidate.baseline_request_ref == "captures/baseline.json"
+    assert first_candidate.auth_context_ref == "captures/auth-context.md"
+
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert restored.attack_surface_inputs[first.id].sample_payload == first.sample_payload
+    restored_candidate = restored.candidates[first_candidate.id]
+    assert restored_candidate.request_template == first_candidate.request_template
+    assert restored_candidate.baseline_request_ref == "captures/baseline.json"
+    assert restored_candidate.auth_context_ref == "captures/auth-context.md"
+
+
+def test_duplicate_context_enrichment_requires_a_shared_request_anchor():
+    state = whole_target_state()
+    sample = '{"username":"{INJECTION_POINT}"}'
+    first_input = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="username",
+        location="body",
+        input_type="string",
+        sample_payload=sample,
+    )
+    second_input = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="username",
+        location="body",
+        input_type="string",
+        content_type="application/json",
+        sample_payload=sample,
+    )
+    stored_input, _ = state.add_attack_surface_input(first_input)
+    assert state.add_attack_surface_input(second_input) == (stored_input, False)
+    assert stored_input.content_type == "application/json"
+    assert stored_input.sample_payload == sample
+
+    first_candidate = make_candidate(
+        target="https://target.test",
+        objective_id="objective-current",
+        content_type="application/json",
+        request_template=None,
+        baseline_request_ref="captures/admin-baseline.json",
+        auth_context_ref=None,
+    )
+    second_candidate = make_candidate(
+        target="https://target.test",
+        objective_id="objective-current",
+        content_type="application/json",
+        request_template='{"username":"{INJECTION_POINT}"}',
+        baseline_request_ref="captures/admin-baseline.json",
+        auth_context_ref="captures/admin-session.md",
+    )
+    stored_candidate, _ = state.add_candidate(first_candidate)
+    duplicate_candidate, created = state.add_candidate(second_candidate)
+    assert not created and duplicate_candidate is stored_candidate
+    assert stored_candidate.content_type == "application/json"
+    assert stored_candidate.request_template == '{"username":"{INJECTION_POINT}"}'
+    assert stored_candidate.auth_context_ref == "captures/admin-session.md"
+
+
+def test_content_type_alone_does_not_anchor_duplicate_request_context():
+    state = whole_target_state()
+    first_input = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="q",
+        location="body",
+        input_type="string",
+        content_type="application/json",
+    )
+    duplicate_input = AttackSurfaceInput(
+        objective_id="objective-current",
+        target_origin="https://target.test",
+        method="POST",
+        endpoint="/api/login",
+        parameter="q",
+        location="body",
+        input_type="string",
+        content_type="application/json",
+        sample_payload="q={INJECTION_POINT}&role=user",
+    )
+    stored_input, _ = state.add_attack_surface_input(first_input)
+    duplicate, created = state.add_attack_surface_input(duplicate_input)
+    assert not created and duplicate is stored_input
+    assert stored_input.content_type == "application/json"
+    assert stored_input.sample_payload is None
+
+    base = dict(
+        target="https://target.test",
+        objective_id="objective-current",
+        content_type="application/json",
+    )
+    first_candidate, _ = state.add_candidate(make_candidate(
+        **base,
+        baseline_request_ref="captures/json-admin.json",
+    ))
+    duplicate_candidate, created = state.add_candidate(make_candidate(
+        **base,
+        auth_context_ref="captures/user-session.md",
+        request_template='{"q":"{INJECTION_POINT}","role":"user"}',
+    ))
+    assert not created and duplicate_candidate is first_candidate
+    assert first_candidate.baseline_request_ref == "captures/json-admin.json"
+    assert first_candidate.auth_context_ref is None
+    assert first_candidate.request_template is None
+
+
 def test_candidate_id_rejects_non_semantic_persisted_identity():
     payload = make_candidate().to_dict()
     payload["id"] = "cand_wrong"

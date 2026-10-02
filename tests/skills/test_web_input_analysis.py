@@ -174,7 +174,7 @@ def test_skill_is_analysis_not_exploitation(
     assert "does not produce findings" in flat_lower
     assert "not exploitation" in flat_lower
 
-    assert "do not develop it further here" in flat_lower
+    assert "do not fetch or copy additional data" in flat_lower
     assert "do not decide a finding exists here" in flat_lower
 
 
@@ -252,7 +252,7 @@ def test_tier2_is_once_per_candidate(
 ) -> None:
     lower = skill_text.lower()
 
-    assert "at most once per candidate" in lower
+    assert "at most once per input" in lower
     assert "unique, inert marker" in lower
 
 
@@ -270,18 +270,18 @@ def test_tier3_is_limited_and_not_confirmation(
 def test_no_exploit_escalation(
     flat_lower: str,
 ) -> None:
-    forbidden_escalation_markers = [
-        "union building",
-        "payload escalation",
-        "session hijacking",
+    for marker in [
+        "no sql boolean bypass",
+        "time delays",
+        "nosql operators to bypass authentication",
+        "another user's session or object",
+        "ssrf impact checks",
+        "command execution",
+        "an xss execution payload",
         "data extraction",
-        "sleep-based timing hit",
-    ]
-
-    for marker in forbidden_escalation_markers:
+    ]:
         assert marker in flat_lower
-
-    assert "stop, do not develop it further here" in flat_lower
+    assert "do not run a dedicated validator's payload set" in flat_lower
 
 
 def test_sensitive_data_is_not_recorded(
@@ -300,17 +300,20 @@ def test_sensitive_data_is_not_recorded(
 @pytest.mark.parametrize(
     "context, suspected_class",
     [
-        ("Reflected value, no/partial encoding", "cross-site-scripting"),
+        (
+            "Controllable value appears in an HTML rendering context",
+            "cross-site-scripting",
+        ),
         (
             "Query/filter param + syntax-sensitive response",
             "sql-injection",
         ),
         (
-            "Object identifier + no visible ownership check",
+            "Object identifier on an authenticated object route",
             "access-control",
         ),
         (
-            "State-changing action referencing another user/object's ID",
+            "State-changing action whose documented request lets the caller select an object",
             "access-control",
         ),
     ],
@@ -599,7 +602,7 @@ def test_skill_has_no_finding_confirmation_workflow(
     lower = skill_text.lower()
 
     assert "does not produce findings" in lower
-    assert "confirmation and poc" in lower
+    assert "leave confirmation to the dedicated validator" in lower
     assert "vulnerability-specific skill" in lower
 
 
@@ -645,8 +648,19 @@ def test_examples_do_not_become_runtime_defaults(
     The SKILL may contain example URLs, but it must explicitly say they are
     examples/replacements rather than literal runtime values.
     """
-    assert "replace with the real target" in flat_lower
     assert "substitute real values before running commands" in flat_lower
+    assert "use the scoped `http` tool" in flat_lower
+    assert "shell-based http requests that bypass the runtime scope" in flat_lower
+
+
+def test_controllability_and_reflection_context_gate_candidates(flat_lower: str) -> None:
+    assert "do not create a candidate until the inventory or a bounded observation" in flat_lower
+    assert "establish controllability from existing evidence" in flat_lower
+    assert "if the response does not show a repeatable input-related difference" in flat_lower
+    for context in ("html text", "attribute", "script", "url", "json", "non-rendered response"):
+        assert context in flat_lower
+    assert "raw json reflection alone is not a candidate" in flat_lower
+    assert "a numeric id, a reflected string, a status code, or an error message alone is not that evidence" in flat_lower
 
 
 def test_target_placeholder_is_only_used_as_identifier_in_output_paths(

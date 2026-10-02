@@ -106,6 +106,21 @@ def test_web_enumeration_body_has_all_phase_boundaries():
         assert heading in body, f"Missing required section: {heading}"
 
 
+def test_enumeration_preserves_route_provenance_and_request_shape():
+    _, body, _ = read_skill()
+    text = collapse_ws(body).lower()
+
+    assert "client_route`, `backend_endpoint`, or `unknown_route_reference" in text
+    assert "a string alone does not establish a backend endpoint" in text
+    assert "observed from the specification" in text
+    assert "do not say they are reachable until requested" in text
+    assert "normalized body hash or length" in text
+    assert "does not make a backend endpoint valid" in text
+    assert "same method, surrounding route shape, and response/source pattern" in text
+    assert "requestbody.content` media type/schema" in text
+    assert "sample_payload" in text and "content_type" in text
+
+
 # ============================================================================
 # Target identifier reuse (must not re-derive its own convention)
 # ============================================================================
@@ -293,7 +308,7 @@ def test_web_enumeration_static_and_js_enumeration_does_not_deobfuscate():
         "unauthorized cross-origin domains.",
         "This step extracts route and endpoint strings already known by "
         "the frontend.",
-        "Do not deobfuscate or reverse-engineer bundles.",
+        "Do not deobfuscate or reverse-engineer bundles",
         '"/(api|rest)/[A-Za-z0-9/_-]+"',
     ]:
         assert phrase in text, f"Missing static/JS enumeration rule: {phrase}"

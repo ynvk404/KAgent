@@ -130,6 +130,46 @@ class TestBuildSystemPrompt:
         assert current.id in rendered
         assert old.id not in rendered
 
+    def test_workflow_prompt_carries_request_template_and_input_schema(self):
+        workflow = WorkflowState(objective=WorkflowObjective(
+            id="request-context", mode="whole_target",
+            target_origin="https://target.test",
+        ))
+        candidate, _ = workflow.add_candidate(Candidate(
+            candidate_class="sql-injection", target="https://target.test",
+            method="POST", endpoint="/api/search", parameter="filter",
+            location="body", content_type="application/json",
+            request_template=(
+                '{"filter":"{INJECTION_POINT}","limit":10,'
+                '"password":"prompt-password-secret","email":"user@example.test"}'
+            ),
+            baseline_request_ref="captures/baseline.json",
+            auth_context_ref="captures/auth-context.md",
+            objective_id="request-context", status="queued",
+        ))
+        workflow.add_attack_surface_input(AttackSurfaceInput(
+            "request-context", "https://target.test", method="POST",
+            endpoint="/api/search", parameter="filter", location="body",
+            input_type="string", content_type="application/json",
+            sample_payload=(
+                '{"auth":{"access_token":"prompt-token-secret"},'
+                '"filters":{"q":"{INJECTION_POINT}","username":"alice"}}'
+            ),
+        ))
+
+        rendered = render_workflow(WorkflowState.from_dict(workflow.to_dict()))
+
+        assert candidate.id in rendered
+        assert "content_type=application/json" in rendered
+        assert 'request_template: {"filter":"{INJECTION_POINT}","limit":10' in rendered
+        assert "baseline_request_ref=captures/baseline.json" in rendered
+        assert "auth_context_ref=captures/auth-context.md" in rendered
+        assert 'sample_payload: {"auth":{"access_token":"[REDACTED]"}' in rendered
+        assert "{INJECTION_POINT}" in rendered
+        assert "user@example.test" in rendered
+        assert "prompt-password-secret" not in rendered
+        assert "prompt-token-secret" not in rendered
+
     def test_whole_target_prompt_carries_pending_coverage_across_serialization(self):
         workflow = WorkflowState(objective=WorkflowObjective(
             id="coverage-handoff", mode="whole_target", target_origin="https://target.test",

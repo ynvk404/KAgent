@@ -3,6 +3,17 @@ import json
 import re
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import unquote_plus
+
+
+_INJECTION_POINT = "{INJECTION_POINT}"
+_REQUEST_CONTEXT_FIELDS = frozenset({"request_template", "sample_payload"})
+_FORM_FIELD = re.compile(r"(^|[?&;])([^?&;=]+)=([^?&;]*)")
+_MULTIPART_DISPOSITION = re.compile(
+    r'content-disposition:\s*form-data\s*;[^\r\n]*?\bname\s*=\s*'
+    r'(?:"([^"]+)"|([^;\s]+))',
+    re.IGNORECASE,
+)
 
 
 _SECRET_FIELD_NAMES = frozenset(
@@ -25,6 +36,13 @@ _SECRET_FIELD_NAMES = frozenset(
         "privatekey",
         "credentials",
         "jwt",
+        "csrf",
+        "csrftoken",
+        "xsrf",
+        "xsrftoken",
+        "sessioncookie",
+        "sessionkey",
+        "sessiontoken",
     }
 )
 
@@ -47,15 +65,123 @@ def _redacted_secret_value(value: Any) -> Any:
         return tuple(_redacted_secret_value(item) for item in value)
     if isinstance(value, (set, frozenset)):
         return [_redacted_secret_value(item) for item in value]
+    if isinstance(value, str) and value == _INJECTION_POINT:
+        return _INJECTION_POINT
     return "[REDACTED]"
+
+
+def _redact_form_encoded(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        key = unquote_plus(match.group(2))
+        if not _is_secret_field(key):
+            return match.group(0)
+        encoded_value = match.group(3)
+        if _is_injection_marker(encoded_value):
+            return match.group(0)
+        if not encoded_value:
+            return match.group(0)
+        return f"{match.group(1)}{match.group(2)}=[REDACTED]"
+
+    return _FORM_FIELD.sub(replace, value)
+
+
+def _is_injection_marker(value: str) -> bool:
+    return value == _INJECTION_POINT or unquote_plus(value) == _INJECTION_POINT
+
+
+def _multipart_boundary(content_type: str | None, value: str) -> str | None:
+    if content_type:
+        match = re.search(
+            r"(?:^|;)\s*boundary\s*=\s*(?:\"([^\"]+)\"|'([^']+)'|([^;\s]+))",
+            content_type,
+            re.IGNORECASE,
+        )
+        if match:
+            return next((part for part in match.groups() if part), None)
+    first_line = next((line for line in value.splitlines() if line.startswith("--")), "")
+    if first_line:
+        boundary = first_line[2:].removesuffix("--").strip()
+        return boundary or None
+    return None
+
+
+def _redact_multipart(value: str, content_type: str | None) -> str:
+    boundary = _multipart_boundary(content_type, value)
+    if not boundary:
+        return "[REDACTED]"
+    separator = f"--{boundary}"
+    if separator not in value:
+        return "[REDACTED]"
+
+    chunks = value.split(separator)
+    output = [chunks[0]]
+    for chunk in chunks[1:]:
+        if chunk.startswith("--"):
+            output.append(separator + chunk)
+            continue
+        split = re.search(r"\r?\n\r?\n", chunk)
+        if split is None:
+            return "[REDACTED]"
+        headers = chunk[:split.start()]
+        body = chunk[split.end():]
+        disposition = _MULTIPART_DISPOSITION.search(headers)
+        if disposition is None:
+            output.append(separator + chunk)
+            continue
+        name = disposition.group(1) or disposition.group(2) or ""
+        if not _is_secret_field(name):
+            output.append(separator + chunk)
+            continue
+        trailing = ""
+        if body.endswith("\r\n"):
+            body, trailing = body[:-2], "\r\n"
+        elif body.endswith("\n"):
+            body, trailing = body[:-1], "\n"
+        if body != _INJECTION_POINT:
+            body = "[REDACTED]"
+        output.append(separator + chunk[:split.end()] + body + trailing)
+
+    if content_type and content_type.lower().split(";", 1)[0].strip() == "multipart/form-data":
+        if not any(_MULTIPART_DISPOSITION.search(chunk) for chunk in chunks[1:]):
+            return "[REDACTED]"
+    return "".join(output)
+
+
+def redact_request_context(value: str, content_type: str | None = None) -> str:
+    """Redact bounded JSON, form, and multipart request skeletons."""
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    text = value.strip()
+    is_multipart = media_type == "multipart/form-data" or bool(
+        re.search(r"(?im)^content-disposition:\s*form-data\b", text)
+    )
+    if is_multipart:
+        return _redact_multipart(text, content_type)
+
+    is_json = (
+        media_type == "application/json"
+        or media_type.endswith("+json")
+        or text.startswith(("{", "["))
+    )
+    if is_json:
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError, RecursionError):
+            return "[REDACTED]"
+        return json.dumps(
+            redact_payload(parsed), ensure_ascii=False, separators=(",", ":")
+        )
+
+    return _redact_form_encoded(apply(text))
 
 
 def redact_payload(value: Any) -> Any:
     """Recursively redact strings and values stored under secret field names."""
     if isinstance(value, str):
         redacted = apply(value)
+        if re.search(r"(?im)^content-disposition:\s*form-data\b", redacted):
+            return redact_request_context(redacted, "multipart/form-data")
         if not redacted.lstrip().startswith(("{", "[")):
-            return redacted
+            return _redact_form_encoded(redacted)
         try:
             parsed = json.loads(redacted)
         except (TypeError, ValueError, RecursionError):
@@ -65,10 +191,15 @@ def redact_payload(value: Any) -> Any:
             return json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"))
         return redacted
     if isinstance(value, Mapping):
+        content_type = value.get("content_type")
         return {
             key: (
                 _redacted_secret_value(item)
                 if _is_secret_field(key) and item is not None
+                else redact_request_context(
+                    item, content_type if isinstance(content_type, str) else None
+                )
+                if key in _REQUEST_CONTEXT_FIELDS and isinstance(item, str)
                 else redact_payload(item)
             )
             for key, item in value.items()
@@ -205,7 +336,9 @@ PRIVATE_KEY_BLOCK = re.compile(
 JSON_SECRET_VALUE = re.compile(
     r'("(?:authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|'
     r'password|passwd|pwd|(?:access|refresh|id)?[-_]?token|api[-_]?key|'
-    r'x[-_]?api[-_]?key|secret|client[-_]?secret|private[-_]?key|jwt)"\s*:\s*")'
+    r'x[-_]?api[-_]?key|secret|client[-_]?secret|private[-_]?key|jwt|'
+    r'csrf[-_]?token|xsrf[-_]?token|csrf|xsrf|'
+    r'session[-_]?(?:cookie|key|token))"\s*:\s*")'
     r'((?:\\.|[^"\\])*)(")',
     re.IGNORECASE,
 )
@@ -246,20 +379,31 @@ class Redactor:
 
         def redact_json_secret(match: re.Match[str]) -> str:
             secret = match.group(2)
+            if secret == _INJECTION_POINT:
+                return match.group(0)
             if _MASKED_SECRET.fullmatch(secret):
                 return match.group(0)
             return match.group(1) + mask(secret) + match.group(3)
 
         out = JSON_SECRET_VALUE.sub(redact_json_secret, out)
 
+        if not out.lstrip().startswith(("{", "[")):
+            out = _redact_form_encoded(out)
+
         for pattern in PATTERNS:
             def repl(match):
                 prefix = match.group(1)
                 secret = match.group(2)
+                if _is_injection_marker(secret):
+                    return match.group(0)
                 if _MASKED_SECRET.fullmatch(secret):
                     return match.group(0)
                 return prefix + mask(secret)
             out = pattern.sub(repl, out)
+
+        if not out.lstrip().startswith(("{", "[")):
+            if re.search(r"(?im)^content-disposition:\s*form-data\b", out):
+                out = redact_request_context(out, "multipart/form-data")
 
         return out
 

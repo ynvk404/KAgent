@@ -83,13 +83,17 @@ Read every entry. Drop entries that are clearly not worth analyzing:
 - endpoints with no input surface at all (no query, body, header, cookie,
   or path parameter).
 
-Everything else becomes a candidate to classify.
+Everything else becomes an input to triage, not automatically a candidate.
+Parameter names and HTTP methods are context hints only. Do not create a
+Candidate until the inventory or a bounded observation shows that the server
+reads or uses that specific input.
 
 ## 2. Classify context for each candidate
 
-For each parameter, determine where and how it's likely used, based on what
-`web-enumeration` already observed (naming, location, response, source) —
-not new probing yet:
+For each parameter, determine where and how it may be used, based on what
+`web-enumeration` observed (request schema, route source, auth state, and
+response context). Treat names and locations as hypotheses, not evidence that
+the server consumes a value:
 
 - **Reflected in HTML/JS output** — parameter value appears to influence
   rendered content (search boxes, error messages, "welcome back {name}").
@@ -116,8 +120,19 @@ not new probing yet:
   policy, or another security-control input whose enforcement can be tested
   independently of business data.
 
-Record the context alongside each candidate. A parameter can have more than
-one context (e.g. an ID that's also reflected in an error message).
+Record the context alongside each input. A parameter can have more than one
+context (for example, an identifier that also appears in an error response).
+Before creating a Candidate, establish controllability from existing evidence
+or one safe, single-value baseline comparison. Keep all other request fields
+unchanged. If the response does not show a repeatable input-related difference,
+record `control not observed` or the remaining ambiguity and do not infer use
+from the parameter name. This check does not need to identify a code sink.
+
+For a reflection hypothesis, record where the value appears: HTML text,
+attribute, script, URL, JSON, or a non-rendered response. A marker in raw JSON
+or a response the browser does not render is not an XSS candidate by itself.
+If client-side rendering is unknown, record that ambiguity and stop short of
+an XSS Candidate.
 
 ## 3. Light signal-gathering, in order of intrusiveness (non-destructive)
 
@@ -131,51 +146,31 @@ recorded: observed response, whether the value appeared in the body, auth
 state, sibling endpoints. Most candidates should be classifiable from this
 alone.
 
-**Tier 2 — harmless marker, at most once per candidate.** If context alone
+**Tier 2 — harmless marker, at most once per input.** If context alone
 doesn't tell you whether a value is reflected, send one request with a
-unique, inert marker and check if/how it comes back (unmodified, HTML-encoded,
-stripped, absent):
-
-```sh
-TARGET="http://localhost:3000"  # replace with the real target
-
-curl -ksS "$TARGET/search?q=pf_marker_$(date +%s)" | grep -o 'pf_marker_[0-9]*'
-```
+unique, inert marker using the scoped `http` tool and its permission gate.
+Check whether it comes back and, if so, whether it is in HTML text, an
+attribute, script, URL, JSON, or a non-rendered response. Keep the method,
+endpoint, content type, and all other values at the known-good baseline. Do not
+send shell-based HTTP requests that bypass the runtime scope and permission
+checks.
 
 This tells you *whether reflection happens*, not whether it's exploitable.
 
-**Tier 3 — minimal value-change probe, only if tiers 1–2 leave the candidate
+**Tier 3 — minimal value-change probe, only if tiers 1–2 leave the input
 unclassifiable, and at most one probe per parameter.** Tier 3 exists solely to
 help you classify and prioritize a candidate — it is never a way to "weakly
 confirm" that a vulnerability exists. A different response shape tells you a
 parameter is worth handing to `sql-injection` with higher confidence; it does
 not tell you SQLi is present, and it must not be written up or treated as
 partial evidence of a finding. Use this tier only to resolve genuine
-ambiguity — e.g. context suggests a query/filter parameter but you can't tell
-if it's syntax-sensitive at all, or an identifier's ownership scoping is
-genuinely unclear from the inventory. Compare against a known-good baseline
-in the same request pair:
-
-```sh
-TARGET="http://localhost:3000"
-
-# Baseline vs. one syntax-sensitivity probe — only if still needed after
-# tiers 1-2:
-curl -ksS -o /dev/null -w '%{http_code} %{size_download}\n' \
-  --max-time 5 "$TARGET/product?id=1"
-curl -ksS -o /dev/null -w '%{http_code} %{size_download}\n' \
-  --max-time 5 "$TARGET/product?id=1'"
-
-# Ownership check — only if inventory genuinely doesn't show whether the
-# endpoint scopes by session, and only when you have two distinct sessions
-# to compare (your own resource vs. a resource you don't own). A single
-# unauthenticated request to one ID is not a swap and should be recorded as
-# "not probed" rather than as an ownership signal:
-curl -ksS -o /dev/null -w '%{http_code}\n' --max-time 5 \
-  -H "Cookie: $SESSION_OWN" "$TARGET/api/orders/1"
-curl -ksS -o /dev/null -w '%{http_code}\n' --max-time 5 \
-  -H "Cookie: $SESSION_OWN" "$TARGET/api/orders/2"  # not your resource
-```
+ambiguity, compare with a known-good baseline, and use the scoped `http` tool
+with its current permission decision. A minimal syntax perturbation may be
+used for a query/filter input when the exact request is permitted. Do not use
+boolean bypasses, time delays, UNION payloads, NoSQL operators to bypass
+authentication, another user's session or object, SSRF impact checks, command
+execution, or an XSS execution payload here. Never probe a state-changing
+request unless the single change is known to be non-mutating and permitted.
 
 Rules across all tiers:
 
@@ -183,20 +178,23 @@ Rules across all tiers:
   not the routine — if you're using it on most candidates, you're probably
   under-using the context already in the inventory.
 - One value change at a time, always against a baseline, never chained into
-  a working exploit (no UNION building, no payload escalation, no session
-  hijacking, no data extraction).
+  a working exploit (no SQL boolean bypass, payload escalation, session
+  swapping, SSRF impact validation, command execution, XSS execution, or data
+  extraction).
+- A permission prompt approves only the proposed request. It does not supply
+  missing intent, authorize another origin, or turn a state-changing probe
+  into a non-destructive one.
 - Never record response bodies containing another user's real data beyond
   noting "returned data" vs "did not" — do not copy PII/secrets into the
   candidate file.
-- If a Tier 3 probe already looks like a full proof (e.g. a sleep-based
-  timing hit, a reflected script tag executing) — stop, do not develop it
-  further here. Note it as a high-confidence candidate and let the
-  vulnerability-specific skill do the actual confirmation and PoC.
+- If a bounded request unexpectedly exposes sensitive data or an unanticipated
+  effect, stop. Do not fetch or copy additional data. Keep only the minimum
+  redacted observation, leave confirmation to the dedicated validator, and do
+  not claim a finding here.
 
-If a candidate's context alone is already a strong, well-known signal (e.g.
-a numeric ID in a URL with no ownership check visible anywhere), skip
-probing entirely and classify from context alone — don't probe just to
-probe.
+If context already supports a useful hypothesis, skip probing — do not probe
+just to probe. A numeric ID, a reflected string, a status code, or an error
+message alone is not that evidence.
 
 ## 4. Map signals to a suspected vulnerability class
 
@@ -204,10 +202,10 @@ For each candidate, form a reasoned suspicion, not a conclusion:
 
 | Context / signal | Suspected class |
 |---|---|
-| Reflected value, no/partial encoding | `cross-site-scripting` |
+| Controllable value appears in an HTML rendering context with encoding or DOM handling that remains unclear | `cross-site-scripting`; raw JSON reflection alone is not a candidate |
 | Query/filter param + syntax-sensitive response (error/size/timing shift) | `sql-injection` |
-| Object identifier + no visible ownership check | `access-control` |
-| State-changing action referencing another user/object's ID | `access-control` |
+| Object identifier on an authenticated object route, with observed evidence that the input selects an in-scope object and the ownership boundary remains unobserved | `access-control`; an ID/name or absent client-side check alone is insufficient |
+| State-changing action whose documented request lets the caller select an object while its authorization boundary remains unclear | `access-control`; an HTTP method or identifier name alone is insufficient, and do not submit or swap cross-user IDs here |
 | URL-fetch, image-import, webhook, or callback parameter with server-side fetch evidence | `ssrf`; an ordinary browser redirect alone is not SSRF |
 | Reflected template expression evaluated by the server | `ssti` |
 | Login, reset, MFA, logout, or session-lifecycle property | `authentication` |
@@ -231,6 +229,10 @@ vulnerability class that doesn't have a skill yet.
 
 A candidate can map to more than one suspected class; list all of them with
 independent confidence.
+
+This phase gathers only bounded signals. Stop and hand off once the input is
+controllable and a plausible class hypothesis has evidence. Do not run a
+dedicated validator's payload set or try to prove exploitability here.
 
 ## 5. Prioritize
 
@@ -259,7 +261,11 @@ For every candidate strong enough to include in the list, also call
 `workflow(action="record_candidate", source_skill="web-input-analysis", ...)`
 with its canonical `candidate_class`, method, endpoint, parameter/location,
 short signals, and references to the baseline request or auth context when
-available. Store references, not raw request/response bodies. The returned
+available. When known, also pass `content_type` and a compact
+`request_template` with `{INJECTION_POINT}` in the tested field. Reuse the
+inventory's method, endpoint, parameter, and content type through `input_id`
+when they are omitted. Store references and sanitized request skeletons, not
+raw request/response bodies or credentials. The returned
 Candidate ID is the handoff key for the validation skill. The workflow tool
 deduplicates the same semantic target/method/endpoint/input/class tuple, so do
 not manufacture alternate IDs. When an input record exists, pass its
@@ -283,22 +289,23 @@ identifier as `recon` and `web-enumeration`. One entry per candidate:
   parameter: id
   location: query
   context: object identifier
-  signal: response size/time differs on syntax perturbation (' vs baseline)
+  signal: syntax punctuation changed the response shape against the baseline
   suspected_class: sql-injection
   confidence: medium
-  rationale: numeric id feeding what looks like a direct lookup; single
-    quote altered response shape vs baseline, not yet confirmed
+  rationale: syntax-sensitive request behavior observed once; context supports
+    a server-side query hypothesis, not yet confirmed
   recommended_next_skill: sql-injection
 
 - endpoint: GET /api/orders/{id}
   parameter: id
   location: path
   context: object identifier, state-changing sibling endpoints exist (PUT/DELETE)
-  signal: swapped id returned 200 + body without an auth-context check visible
+  signal: authenticated inventory documents an object lookup; owner scoping was
+    not observable during passive analysis
   suspected_class: access-control
-  confidence: medium
-  rationale: no ownership scoping observed; same pattern likely applies to
-    PUT/DELETE variants, not tested here
+  confidence: low
+  rationale: object ownership behavior remains unknown; no IDs or sessions were
+    swapped during analysis
   recommended_next_skill: access-control
 
 - endpoint: GET /redirect
@@ -312,6 +319,12 @@ identifier as `recon` and `web-enumeration`. One entry per candidate:
   rationale: redirect-only sink with no server-side fetch evidence
   recommended_next_skill: open-redirect
 ```
+
+Include `content_type`, `request_template`, `baseline_request_ref`, and
+`auth_context_ref` when available. Do not invent a request template for path,
+header, cookie, multipart, or nested JSON inputs when the representation is
+ambiguous; carry the known content type and references and state the
+limitation.
 
 Do not include a `poc` or `exploit` field — that's the vulnerability
 skill's output, not this one's.

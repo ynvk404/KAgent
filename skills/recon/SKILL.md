@@ -220,6 +220,26 @@ grep -i '^server:' /tmp/headers
 grep -i '^x-powered-by:' /tmp/headers
 ```
 
+### Redirect and origin handling
+
+The native `http` tool does not follow redirects. Record each observed status
+and `Location` explicitly. Follow a redirect manually only when its destination
+is inside the active authorized origin. For a same-origin redirect, make a
+separate bounded request to the recorded path and retain both response steps.
+Treat an HTTP-to-HTTPS upgrade as a scheme change that needs its own in-scope
+check; do not silently switch the active target. For a cross-origin or SSO
+redirect, record the destination as an external reference and stop there.
+Never forward cookies or authorization headers to it. If a bounded manual
+check repeats a previously seen URL or redirect edge, record a redirect loop
+and stop.
+
+A `401` or `404` JSON response at a root path such as `/`, `/api`, or
+`/api/v1` still proves that an HTTP service responded. Record the status, media
+type, and compact error shape, then mark the application architecture as
+API-only or hybrid only if other evidence supports it. Hand any API paths or
+documentation clues to enumeration. Do not label the service unreachable
+because a root route has no web page or API operation.
+
 ## 2b. Optional bounded service discovery
 
 When the target is a host or IP and the exposed service is unclear, call
@@ -230,6 +250,28 @@ version probes, or raw Nmap flags. An open port may
 suggest an HTTP(S) origin; do not request it or add it to scope automatically.
 If service discovery is not useful or its coverage is already established,
 record a `not_applicable` or `skipped` reason in the phase coverage record.
+
+## 2c. Record target shape and security observations
+
+Use evidence from the initial page, headers, cookies, and only the bounded
+indicators above to record an architecture hypothesis:
+
+- `traditional/SSR`: server-rendered documents, forms, or navigation links;
+- `SPA`: an application shell plus client bundles or observed client routing;
+- `API-only`: API-shaped responses or documentation without an observed web UI;
+- `hybrid`: evidence for both a rendered application and separate API surfaces;
+- `unknown`: evidence does not distinguish these shapes.
+
+Keep each observation separate from the inference. A single status, header,
+technology fingerprint, or bundle filename is not enough to confirm the
+architecture.
+
+Record security and intermediary clues as observations with their source and
+evidence: cookie names and `Secure`/`HttpOnly`/`SameSite` attributes, CSP,
+HSTS, observed CORS headers, and indicators such as `cf-ray` or a matching
+challenge page. One header is a clue, not a `waf_detected` conclusion. Note
+that a `403`, `429`, or challenge response may come from an intermediary; do
+not assign it to application behavior without evidence.
 
 ## 3. Fingerprint the technology
 
@@ -318,9 +360,16 @@ The summary should contain:
 - target and target type (URL, apex, or IP);
 - reachable service and observed status;
 - final URL after redirects, when applicable;
+- effective in-scope origin and redirect edges, including any unvisited
+  cross-origin or scheme-upgrade destination;
+- architecture hypothesis with its supporting observations, or `unknown`;
 - observed technologies, explicitly marked as confirmed or hypothesis;
+- authentication/session and security-header clues, without copying secrets;
+- intermediary observations with evidence and confidence;
+- script bundles, document/API clues, and relevant paths for enumeration;
 - initial attack-surface clues;
-- relevant uncertainties;
+- unresolved reachability, redirect, architecture, and intermediary ambiguity;
+- other relevant uncertainties;
 - recommended next phase.
 
 Do not create a security finding from reconnaissance observations alone unless

@@ -30,6 +30,50 @@ def test_deepseek_replay_requires_matching_provider_and_model():
     assert "SECRET_INTERNAL_REASONING_MARKER" not in format_history_for_compaction([assistant])
 
 
+def test_compaction_log_redacts_nested_workflow_request_context():
+    form_secret = "compaction-form-password"
+    multipart_secret = "compaction-session-cookie"
+    arguments = json.dumps({
+        "content_type": "application/x-www-form-urlencoded",
+        "sample_payload": (
+            "username=alice&password=" + form_secret
+            + "&q={INJECTION_POINT}"
+        ),
+        "request_template": (
+            "--fixture\r\n"
+            'Content-Disposition: form-data; name="session_cookie"\r\n\r\n'
+            + multipart_secret + "\r\n--fixture--\r\n"
+        ),
+    })
+    history = [Message(
+        role="assistant",
+        content="",
+        tool_calls=[ToolCall(
+            "call-workflow-context", FunctionCall("workflow", arguments)
+        )],
+    )]
+
+    rendered = format_history_for_compaction(history)
+
+    assert form_secret not in rendered
+    assert multipart_secret not in rendered
+    assert "username=alice" in rendered
+    assert "{INJECTION_POINT}" in rendered
+
+
+def test_compaction_keeps_runtime_session_id_in_tool_result():
+    runtime_id = "runtime-session-123"
+    message = Message(
+        role="tool",
+        name="workflow",
+        content=json.dumps({"session_id": runtime_id, "ok": True}),
+    )
+
+    rendered = format_history_for_compaction([message])
+
+    assert runtime_id in rendered
+
+
 @pytest.mark.asyncio
 async def test_deepseek_sequential_tool_reasoning_survives_session_round_trip(tmp_path):
     history = [Message(role="user", content="inspect")]

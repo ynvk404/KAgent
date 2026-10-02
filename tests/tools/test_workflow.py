@@ -1275,19 +1275,53 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
         "action": "record_input", "method": "GET", "endpoint": "/search",
         "parameter": "q", "location": "query", "input_type": "text",
     }
+    input_args.update({
+        "method": "POST", "endpoint": "/api/v1/auth/login",
+        "parameter": "email", "location": "body", "input_type": "string",
+        "content_type": "application/json",
+        "sample_payload": '{"email":"user@example.test","password":"example-secret"}',
+    })
     first = json.loads(await tool.run(input_args, None, AlwaysAllow()))
     duplicate = json.loads(await tool.run(input_args, None, AlwaysAllow()))
     assert first["created"] is True and duplicate["created"] is False
     input_id = first["input"]["id"]
+    assert first["input"]["content_type"] == "application/json"
+    assert "example-secret" not in first["input"]["sample_payload"]
+    assert duplicate["input"]["sample_payload"] == first["input"]["sample_payload"]
 
     candidate = json.loads(await tool.run({
         "action": "record_candidate", "candidate_class": "xss",
-        "method": "GET", "endpoint": "/search", "parameter": "q",
         "target": "https://TARGET.test:443/any-path", "input_id": input_id,
+        "request_template": '{"email":"{INJECTION_POINT}","password":"example-secret"}',
+        "baseline_request_ref": "captures/login-baseline.json",
+        "auth_context_ref": "captures/auth-context.md",
     }, None, AlwaysAllow()))
     candidate_id = candidate["candidate"]["id"]
     assert candidate["candidate"]["objective_id"] == "objective-active"
+    assert candidate["candidate"]["method"] == "POST"
+    assert candidate["candidate"]["endpoint"] == "/api/v1/auth/login"
+    assert candidate["candidate"]["parameter"] == "email"
+    assert candidate["candidate"]["content_type"] == "application/json"
+    assert "example-secret" not in candidate["candidate"]["request_template"]
+    assert candidate["candidate"]["baseline_request_ref"] == "captures/login-baseline.json"
+    assert candidate["candidate"]["auth_context_ref"] == "captures/auth-context.md"
     assert state.attack_surface_inputs[input_id].candidate_ids == [candidate_id]
+
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert restored.attack_surface_inputs[input_id].content_type == "application/json"
+    restored_candidate = restored.candidates[candidate_id]
+    assert restored_candidate.request_template == candidate["candidate"]["request_template"]
+    assert restored_candidate.baseline_request_ref == "captures/login-baseline.json"
+    assert restored_candidate.auth_context_ref == "captures/auth-context.md"
+    listed = json.loads(await tool.run({"action": "list"}, None, AlwaysAllow()))
+    listed_input = listed["attack_surface_inputs"][0]
+    listed_candidate = listed["candidates"][0]
+    assert listed_input["content_type"] == "application/json"
+    assert listed_input["sample_payload"].startswith('{"email":')
+    assert listed_candidate["content_type"] == "application/json"
+    assert listed_candidate["request_template"] == candidate["candidate"]["request_template"]
+    assert listed_candidate["baseline_request_ref"] == "captures/login-baseline.json"
+    assert listed_candidate["auth_context_ref"] == "captures/auth-context.md"
     assert "objective_id is assigned" in await tool.run({
         "action": "record_candidate", "candidate_class": "xss",
         "objective_id": "some-other-objective",
@@ -1307,6 +1341,80 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
         "action": "link_input_candidate", "input_id": input_id,
         "candidate_id": old_candidate.id,
     }, None, AlwaysAllow())
+
+
+@pytest.mark.asyncio
+async def test_workflow_result_and_list_use_redacted_form_context():
+    state = whole_target_tool_state()
+    tool = WorkflowTool(state, Target("https://target.test"))
+    body = "username=alice&password=demo-pass&q={INJECTION_POINT}"
+    recorded = json.loads(await tool.run({
+        "action": "record_input",
+        "method": "POST",
+        "endpoint": "/search",
+        "parameter": "q",
+        "location": "body",
+        "input_type": "string",
+        "content_type": "application/x-www-form-urlencoded",
+        "sample_payload": body,
+    }, None, AlwaysAllow()))
+
+    assert "demo-pass" not in json.dumps(recorded)
+    assert "username=alice" in recorded["input"]["sample_payload"]
+    assert "password=[REDACTED]" in recorded["input"]["sample_payload"]
+    assert "q={INJECTION_POINT}" in recorded["input"]["sample_payload"]
+
+    candidate = json.loads(await tool.run({
+        "action": "record_candidate",
+        "candidate_class": "xss",
+        "input_id": recorded["input"]["id"],
+        "request_template": body,
+    }, None, AlwaysAllow()))
+    listed = json.loads(await tool.run({"action": "list"}, None, AlwaysAllow()))
+    assert "demo-pass" not in json.dumps(candidate)
+    assert "demo-pass" not in json.dumps(listed)
+    assert "q={INJECTION_POINT}" in candidate["candidate"]["request_template"]
+    assert "password=[REDACTED]" in listed["candidates"][0]["request_template"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_request_context_fields_require_strings():
+    state = whole_target_tool_state()
+    tool = WorkflowTool(state, Target("https://target.test"))
+    bad_input = await tool.run({
+        "action": "record_input", "method": "POST", "endpoint": "/login",
+        "content_type": 17,
+    }, None, AlwaysAllow())
+    assert isinstance(bad_input, ToolOutput) and bad_input.status == "error"
+    assert state.attack_surface_inputs == {}
+
+    bad_candidate = await tool.run({
+        "action": "record_candidate", "candidate_class": "xss",
+        "endpoint": "/login", "request_template": {"email": "{INJECTION_POINT}"},
+    }, None, AlwaysAllow())
+    assert isinstance(bad_candidate, ToolOutput) and bad_candidate.status == "error"
+    assert state.candidates == {}
+
+
+@pytest.mark.asyncio
+async def test_selecting_candidate_returns_full_bounded_request_template():
+    state = whole_target_tool_state()
+    request_template = '{"query":"' + ("x" * 1200) + '{INJECTION_POINT}"}'
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class="sql-injection", target="https://target.test",
+        endpoint="/api/search", method="POST", parameter="query", location="body",
+        content_type="application/json", request_template=request_template,
+        objective_id="objective-active",
+    ))
+    tool = WorkflowTool(state, Target("https://target.test"))
+
+    listed = json.loads(await tool.run({
+        "action": "list", "candidate_id": candidate.id,
+    }, None, AlwaysAllow()))
+
+    assert listed["returned"] == 1
+    assert listed["candidates"][0]["request_template"] == request_template
+    assert listed["candidates"][0]["request_template_truncated"] is False
 
 
 @pytest.mark.asyncio

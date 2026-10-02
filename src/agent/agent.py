@@ -29,7 +29,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from .mentions import expand_file_mentions
 
-from src.redact.redact import apply as redact
+from src.redact.redact import apply as redact, redact_payload
 from src.permission.invocations import permission_turn
 
 from src.llm.client import (
@@ -4751,14 +4751,14 @@ def format_history_for_compaction(messages: list[Message]) -> str:
             lines.append(f"\n[{m.role}]")
 
         if m.content:
-            lines.append(redact(m.content))
+            lines.append(redact_payload(m.content))
 
         if m.tool_calls:
             for tc in m.tool_calls:
                 lines.append(
                     f"tool_call {tc.id} "
                     f"{tc.function.name} "
-                    f"{redact(tc.function.arguments)}"
+                    f"{redact_payload(tc.function.arguments)}"
                 )
 
     return "\n".join(lines)

@@ -117,6 +117,16 @@ class WorkflowTool(Tool):
                 },
                 "input_id": optional_string,
                 "input_type": optional_string,
+                "content_type": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "Observed request media type.",
+                },
+                "sample_payload": {
+                    "type": "string",
+                    "maxLength": 4000,
+                    "description": "Redacted request body skeleton.",
+                },
                 "disposition": {"type": "string", "enum": sorted(INPUT_DISPOSITIONS)},
                 "disposition_reason": optional_string,
                 "candidate_class": {
@@ -125,10 +135,7 @@ class WorkflowTool(Tool):
                 },
                 "target": {
                     "type": "string",
-                    "description": (
-                        "Candidate target for record_candidate only. Omit for record_input; "
-                        "the runtime assigns its objective and target origin."
-                    ),
+                    "description": "Target for record_candidate; omit for record_input (runtime assigns scope).",
                 },
                 "endpoint": optional_string,
                 "method": optional_string,
@@ -136,7 +143,7 @@ class WorkflowTool(Tool):
                 "location": optional_string,
                 "test_case": {
                     "type": "string",
-                    "description": "Stable test subcase on one input.",
+                    "description": "Stable subcase for one input.",
                 },
                 "priority": {"type": "string", "enum": ["high", "medium", "low"]},
                 "evidence_path": {
@@ -144,10 +151,15 @@ class WorkflowTool(Tool):
                     "description": "Existing project proof file.",
                 },
                 "observation_ids": {"type": "array", "items": {"type": "string"},
-                                    "description": "Runtime observation IDs for class verification; model claims are not verification."},
+                                    "description": "Runtime observation IDs; claims alone are not verification."},
                 "signals": {"type": "array", "items": {"type": "string"}},
                 "baseline_request_ref": optional_string,
                 "auth_context_ref": optional_string,
+                "request_template": {
+                    "type": "string",
+                    "maxLength": 4000,
+                    "description": "Body skeleton; mark test value {INJECTION_POINT}. Omit credentials.",
+                },
                 "source_skill": optional_string,
                 "status": {
                     "type": "string",
@@ -156,9 +168,7 @@ class WorkflowTool(Tool):
                 },
                 "skill_name": {
                     "type": "string",
-                    "description": (
-                        "Required for record_result and complete_skill."
-                    ),
+                    "description": "Required for record_result and complete_skill.",
                 },
                 "outcome": {
                     "type": "string",
@@ -170,9 +180,7 @@ class WorkflowTool(Tool):
                 "repeatable": {"type": "boolean"},
                 "confirmation": {
                     "type": "object",
-                    "description": (
-                        "Structured proof for differential SQL injection."
-                    ),
+                    "description": "Structured SQL injection proof.",
                 },
                 "mutation_performed": {"type": "boolean"},
                 "cleanup_status": optional_string,
@@ -302,6 +310,7 @@ class WorkflowTool(Tool):
         objective = self.state.objective
         objective_id: str | None = None
         requested_input_id = arg_string(args, "input_id")
+        input_item = None
         if requested_input_id and (objective is None or objective.mode != "whole_target"):
             return "error: input_id requires an active whole-target objective"
         if objective is not None and objective.mode == "whole_target":
@@ -335,15 +344,33 @@ class WorkflowTool(Tool):
             candidate = Candidate(
                 candidate_class=candidate_class,
                 target=candidate_target,
-                endpoint=endpoint,
-                method=method,
-                parameter=args.get("parameter"),
-                location=args.get("location"),
+                endpoint=(
+                    endpoint if endpoint is not None
+                    else input_item.endpoint if input_item is not None else None
+                ),
+                method=(
+                    method if method is not None
+                    else input_item.method if input_item is not None else None
+                ),
+                parameter=(
+                    args.get("parameter") if args.get("parameter") is not None
+                    else input_item.parameter if input_item is not None else None
+                ),
+                location=(
+                    args.get("location") if args.get("location") is not None
+                    else input_item.location if input_item is not None else None
+                ),
                 test_case=args.get("test_case"),
                 priority=args.get("priority"),
                 signals=args.get("signals", []),
                 baseline_request_ref=args.get("baseline_request_ref"),
                 auth_context_ref=args.get("auth_context_ref"),
+                content_type=(
+                    args.get("content_type")
+                    if args.get("content_type") is not None
+                    else input_item.content_type if input_item is not None else None
+                ),
+                request_template=args.get("request_template"),
                 source_skill=args.get("source_skill"),
                 objective_id=objective_id,
                 status=("deferred" if supported is False else args.get("status", "queued")),
@@ -420,6 +447,8 @@ class WorkflowTool(Tool):
                 parameter=args.get("parameter"),
                 location=args.get("location"),
                 input_type=args.get("input_type"),
+                content_type=args.get("content_type"),
+                sample_payload=args.get("sample_payload"),
             )
             stored, created = self.state.add_attack_surface_input(item)
         except (TypeError, ValueError) as err:
@@ -1176,7 +1205,8 @@ class WorkflowTool(Tool):
                     if objective is not None and key.rpartition(":")[0] == objective.id
                 },
                 "attack_surface_inputs": [
-                    item.to_dict() for item in self.state.objective_inputs()
+                    self._input_summary(item)
+                    for item in self.state.objective_inputs()
                 ],
                 "completed_skills_total": len(self.state.completed_skills),
                 "completed_skills": sorted(self.state.completed_skills)[
@@ -1187,7 +1217,10 @@ class WorkflowTool(Tool):
                     for name, path in sorted(self.state.completed_artifacts.items())
                     if name in self.state.completed_skills
                 },
-                "candidates": [self._candidate_summary(item) for item in selected],
+                "candidates": [
+                    self._candidate_summary(item, include_full_request_template=bool(candidate_id))
+                    for item in selected
+                ],
                 "latest_results": [
                     self._result_summary(result) for result in latest_results
                 ],
@@ -1196,7 +1229,11 @@ class WorkflowTool(Tool):
         )
 
     @staticmethod
-    def _candidate_summary(candidate: Candidate) -> dict[str, Any]:
+    def _candidate_summary(
+        candidate: Candidate, *, include_full_request_template: bool = False,
+    ) -> dict[str, Any]:
+        request_template = candidate.request_template or ""
+        template_limit = 4000 if include_full_request_template else 1000
         return {
             "id": candidate.id,
             "candidate_class": candidate.candidate_class,
@@ -1213,8 +1250,32 @@ class WorkflowTool(Tool):
                 candidate.baseline_request_ref
             ),
             "auth_context_ref": WorkflowTool._brief(candidate.auth_context_ref),
+            "content_type": candidate.content_type,
+            "request_template": request_template[:template_limit] or None,
+            "request_template_truncated": len(request_template) > template_limit,
             "source_skill": candidate.source_skill,
             "objective_id": candidate.objective_id,
+        }
+
+    @staticmethod
+    def _input_summary(item: AttackSurfaceInput) -> dict[str, Any]:
+        sample_payload = item.sample_payload or ""
+        return {
+            "id": item.id,
+            "objective_id": item.objective_id,
+            "target_origin": item.target_origin,
+            "method": item.method,
+            "endpoint": WorkflowTool._brief(item.endpoint),
+            "parameter": WorkflowTool._brief(item.parameter),
+            "location": item.location,
+            "input_type": item.input_type,
+            "content_type": item.content_type,
+            "sample_payload": sample_payload[:500] or None,
+            "sample_payload_truncated": len(sample_payload) > 500,
+            "disposition": item.disposition,
+            "disposition_reason": WorkflowTool._brief(item.disposition_reason),
+            "disposition_transitions": list(item.disposition_transitions),
+            "candidate_ids": list(item.candidate_ids),
         }
 
     @staticmethod

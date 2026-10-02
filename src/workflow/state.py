@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeGuard, cast
 
 from src.skills.registry import normalize_candidate_class, normalize_metadata_name
-from src.redact.redact import apply as redact, redact_payload
+from src.redact.redact import (
+    apply as redact,
+    redact_payload,
+    redact_request_context,
+)
 from src.target.origin import HTTPOrigin
 from .evidence import EvidenceArtifact
 
@@ -81,6 +85,7 @@ _MAX_REFS = 20
 _MAX_TECHNIQUES = 12
 _MAX_ITEM_LENGTH = 500
 _MAX_NOTES_LENGTH = 1000
+_MAX_REQUEST_CONTEXT_LENGTH = 4000
 
 
 def _text(value: Any, *, limit: int = _MAX_ITEM_LENGTH) -> str | None:
@@ -90,6 +95,20 @@ def _text(value: Any, *, limit: int = _MAX_ITEM_LENGTH) -> str | None:
         raise ValueError("expected a string")
     normalized = redact(" ".join(value.strip().split()))
     return normalized[:limit] or None
+
+
+def _request_context(value: Any, content_type: str | None = None) -> str | None:
+    """Keep a compact request skeleton while preserving its structure."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("expected a string")
+    normalized = redact_request_context(value, content_type)
+    if len(normalized) > _MAX_REQUEST_CONTEXT_LENGTH:
+        raise ValueError(
+            f"request context must be at most {_MAX_REQUEST_CONTEXT_LENGTH} characters"
+        )
+    return normalized or None
 
 
 def _strings(value: Any, *, maximum: int) -> list[str]:
@@ -196,6 +215,8 @@ class Candidate:
     source_skill: str | None = None
     objective_id: str | None = None
     status: CandidateStatus = "new"
+    content_type: str | None = None
+    request_template: str | None = None
 
     def __post_init__(self) -> None:
         self.candidate_class = normalize_candidate_class(self.candidate_class)
@@ -212,6 +233,10 @@ class Candidate:
         self.signals = _strings(self.signals, maximum=_MAX_SIGNALS)
         self.baseline_request_ref = _text(self.baseline_request_ref)
         self.auth_context_ref = _text(self.auth_context_ref)
+        self.content_type = _text(self.content_type, limit=200)
+        self.request_template = _request_context(
+            self.request_template, self.content_type
+        )
         self.source_skill = (
             normalize_metadata_name(self.source_skill) if self.source_skill else None
         )
@@ -247,6 +272,8 @@ class Candidate:
             "signals": list(self.signals),
             "baseline_request_ref": self.baseline_request_ref,
             "auth_context_ref": self.auth_context_ref,
+            "content_type": self.content_type,
+            "request_template": self.request_template,
             "source_skill": self.source_skill,
             "objective_id": self.objective_id,
             "status": self.status,
@@ -270,6 +297,8 @@ class Candidate:
                 signals=value.get("signals", []),
                 baseline_request_ref=value.get("baseline_request_ref"),
                 auth_context_ref=value.get("auth_context_ref"),
+                content_type=value.get("content_type"),
+                request_template=value.get("request_template"),
                 source_skill=value.get("source_skill"),
                 objective_id=value.get("objective_id"),
                 status=value.get("status", "new"),
@@ -364,6 +393,8 @@ class AttackSurfaceInput:
     disposition_reason: str | None = None
     disposition_transitions: list[str] = field(default_factory=list)
     id: str = ""
+    content_type: str | None = None
+    sample_payload: str | None = None
 
     def __post_init__(self) -> None:
         self.objective_id = _text(self.objective_id, limit=80) or ""
@@ -381,6 +412,8 @@ class AttackSurfaceInput:
         self.input_type = _text(self.input_type, limit=80)
         if self.input_type:
             self.input_type = self.input_type.lower()
+        self.content_type = _text(self.content_type, limit=200)
+        self.sample_payload = _request_context(self.sample_payload, self.content_type)
         if self.disposition not in INPUT_DISPOSITIONS:
             raise ValueError(f"unknown input disposition: {self.disposition}")
         self.candidate_ids = _strings(self.candidate_ids, maximum=_MAX_REFS)
@@ -413,6 +446,8 @@ class AttackSurfaceInput:
             "parameter": self.parameter,
             "location": self.location,
             "input_type": self.input_type,
+            "content_type": self.content_type,
+            "sample_payload": self.sample_payload,
             "disposition": self.disposition,
             "candidate_ids": list(self.candidate_ids),
             "disposition_reason": self.disposition_reason,
@@ -437,6 +472,8 @@ class AttackSurfaceInput:
                 parameter=value.get("parameter"),
                 location=value.get("location"),
                 input_type=value.get("input_type"),
+                content_type=value.get("content_type"),
+                sample_payload=value.get("sample_payload"),
                 disposition=value.get("disposition", "pending"),
                 candidate_ids=value.get("candidate_ids", []),
                 disposition_reason=value.get("disposition_reason"),
@@ -741,6 +778,39 @@ def _infer_cleanup_state(
     return "pending"
 
 
+def _merge_compatible_context(
+    existing: Any,
+    incoming: Any,
+    fields: tuple[str, ...],
+    *,
+    anchors: tuple[str, ...],
+) -> bool:
+    """Merge missing request context only when overlapping values agree."""
+    if any(
+        getattr(existing, field_name) is not None
+        and getattr(incoming, field_name) is not None
+        and getattr(existing, field_name) != getattr(incoming, field_name)
+        for field_name in fields
+    ):
+        return False
+    existing_has_context = any(
+        getattr(existing, field_name) is not None for field_name in fields
+    )
+    incoming_has_context = any(
+        getattr(incoming, field_name) is not None for field_name in fields
+    )
+    if existing_has_context and incoming_has_context and not any(
+        getattr(existing, field_name) is not None
+        and getattr(existing, field_name) == getattr(incoming, field_name)
+        for field_name in anchors
+    ):
+        return False
+    for field_name in fields:
+        if getattr(existing, field_name) is None:
+            setattr(existing, field_name, getattr(incoming, field_name))
+    return True
+
+
 @dataclass(slots=True)
 class WorkflowState:
     version: int = 6
@@ -763,9 +833,18 @@ class WorkflowState:
             existing.signals = list(dict.fromkeys([*existing.signals, *candidate.signals]))[
                 :_MAX_SIGNALS
             ]
+            _merge_compatible_context(
+                existing,
+                candidate,
+                (
+                    "content_type",
+                    "request_template",
+                    "baseline_request_ref",
+                    "auth_context_ref",
+                ),
+                anchors=("baseline_request_ref", "auth_context_ref"),
+            )
             for field_name in (
-                "baseline_request_ref",
-                "auth_context_ref",
                 "source_skill",
                 "priority",
             ):
@@ -896,6 +975,12 @@ class WorkflowState:
             for candidate_id in item.candidate_ids:
                 if candidate_id not in existing.candidate_ids:
                     existing.candidate_ids.append(candidate_id)
+            _merge_compatible_context(
+                existing,
+                item,
+                ("content_type", "sample_payload"),
+                anchors=("sample_payload",),
+            )
             return existing, False
         self.attack_surface_inputs[item.id] = item
         return item, True

@@ -25,6 +25,8 @@ APP_NAME = "kagent"
 SESSION_MEMORY_CONTEXT_CHAR_LIMIT = 10_000
 WORKFLOW_CONTEXT_CHAR_LIMIT = 6_000
 WORKFLOW_VALUE_CHAR_LIMIT = 200
+WORKFLOW_REQUEST_TEMPLATE_CHAR_LIMIT = 500
+WORKFLOW_SAMPLE_PAYLOAD_CHAR_LIMIT = 300
 
 BASE_SYSTEM_PROMPT = """You are kagent, an agentic AI assistant for AUTHORIZED penetration testing and security research, specialized for offensive security workflows.
 
@@ -594,6 +596,27 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                 f"  - {candidate.id} class={candidate.candidate_class} "
                 f"status={candidate.status} {_workflow_brief(scope)}".rstrip()
             )
+            request_context: list[str] = []
+            if candidate.content_type:
+                request_context.append(f"content_type={candidate.content_type}")
+            if candidate.baseline_request_ref:
+                request_context.append(
+                    f"baseline_request_ref={_workflow_brief(candidate.baseline_request_ref)}"
+                )
+            if candidate.auth_context_ref:
+                request_context.append(
+                    f"auth_context_ref={_workflow_brief(candidate.auth_context_ref)}"
+                )
+            if request_context:
+                lines.append("    request_context: " + "; ".join(request_context))
+            if candidate.request_template:
+                template = candidate.request_template[:WORKFLOW_REQUEST_TEMPLATE_CHAR_LIMIT]
+                if len(candidate.request_template) > WORKFLOW_REQUEST_TEMPLATE_CHAR_LIMIT:
+                    template += (
+                        " [truncated; retrieve full template with workflow list for "
+                        f"{candidate.id}]"
+                    )
+                lines.append(f"    request_template: {template}")
     if recent_results:
         lines.append("- Recent validation results:")
         for result in recent_results:
@@ -624,8 +647,14 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
             lines.append(
                 f"- Input {item.id}: {item.method or '*'} {item.endpoint or '*'} "
                 f"parameter={item.parameter or '*'} location={item.location or '*'} "
-                f"type={item.input_type or '*'} disposition={item.disposition}"
+                f"type={item.input_type or '*'} content_type={item.content_type or '*'} "
+                f"disposition={item.disposition}"
             )
+            if item.sample_payload:
+                sample = item.sample_payload[:WORKFLOW_SAMPLE_PAYLOAD_CHAR_LIMIT]
+                if len(item.sample_payload) > WORKFLOW_SAMPLE_PAYLOAD_CHAR_LIMIT:
+                    sample += " [truncated]"
+                lines.append(f"  sample_payload: {sample}")
     return _bounded_prompt_context(
         "\n".join(lines) + "\n",
         WORKFLOW_CONTEXT_CHAR_LIMIT,

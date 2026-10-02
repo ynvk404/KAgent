@@ -101,6 +101,8 @@ class TestWorkflowPersistence:
         item, _ = workflow.add_attack_surface_input(AttackSurfaceInput(
             "objective-a", "https://target.test", method="POST", endpoint="/search",
             parameter="q", location="body", input_type="text",
+            content_type="application/json",
+            sample_payload='{"q":"{INJECTION_POINT}","password":"example-secret"}',
             disposition="blocked", disposition_reason="authorization required",
         ))
         record_completed_phase(
@@ -110,7 +112,12 @@ class TestWorkflowPersistence:
         )
         candidate, _ = workflow.add_candidate(Candidate(
             candidate_class="sql-injection", target="https://target.test",
-            endpoint="/search", parameter="q", objective_id="objective-a",
+            endpoint="/search", method="POST", parameter="q", location="body",
+            content_type="application/json",
+            request_template='{"q":"{INJECTION_POINT}"}',
+            baseline_request_ref="captures/search-baseline.json",
+            auth_context_ref="captures/session-context.md",
+            objective_id="objective-a",
         ))
         workflow.link_input_candidate(item.id, candidate.id)
 
@@ -121,6 +128,14 @@ class TestWorkflowPersistence:
         assert loaded.objective == workflow.objective
         assert loaded.objective_inputs()[0].disposition == "blocked"
         assert loaded.completed_phases() == frozenset({"recon"})
+        assert loaded.objective_inputs()[0].sample_payload == (
+            '{"q":"{INJECTION_POINT}","password":"[REDACTED]"}'
+        )
+        restored_candidate = loaded.candidates[candidate.id]
+        assert restored_candidate.content_type == "application/json"
+        assert restored_candidate.request_template == '{"q":"{INJECTION_POINT}"}'
+        assert restored_candidate.baseline_request_ref == "captures/search-baseline.json"
+        assert restored_candidate.auth_context_ref == "captures/session-context.md"
 
     @pytest.mark.asyncio
     async def test_requeued_candidate_survives_session_save_and_resume(self, tmp_path):
@@ -197,6 +212,43 @@ class TestWorkflowPersistence:
         )
 
         assert store.load().workflow.to_dict() == WorkflowState().to_dict()
+
+    def test_old_workflow_snapshot_without_request_context_still_loads(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "legacy-request-context")
+        legacy_candidate = Candidate(
+            candidate_class="sql-injection", target="https://target.test",
+            endpoint="/api/search", method="POST", parameter="q", location="body",
+            objective_id="objective-legacy",
+        ).to_dict()
+        legacy_candidate.pop("content_type")
+        legacy_candidate.pop("request_template")
+        legacy_input = AttackSurfaceInput(
+            "objective-legacy", "https://target.test", method="POST",
+            endpoint="/api/search", parameter="q", location="body", input_type="string",
+        ).to_dict()
+        legacy_input.pop("content_type")
+        legacy_input.pop("sample_payload")
+        store.path.write_text(json.dumps({
+            "messages": [],
+            "workflow": {
+                "version": 6,
+                "objective": {
+                    "id": "objective-legacy", "mode": "whole_target",
+                    "target_origin": "https://target.test", "candidate_id": None,
+                },
+                "candidates": [legacy_candidate],
+                "attack_surface_inputs": [legacy_input],
+            },
+        }), encoding="utf-8")
+
+        loaded = store.load().workflow
+
+        candidate = next(iter(loaded.candidates.values()))
+        input_item = next(iter(loaded.attack_surface_inputs.values()))
+        assert candidate.id == legacy_candidate["id"]
+        assert candidate.content_type is None and candidate.request_template is None
+        assert input_item.id == legacy_input["id"]
+        assert input_item.content_type is None and input_item.sample_payload is None
 
     @pytest.mark.parametrize("workflow", [None, "bad", ["bad"], {"candidates": "bad"}])
     def test_malformed_or_empty_workflow_degrades_safely(self, tmp_path, workflow):
@@ -335,6 +387,25 @@ class TestTempCollisionOwnership:
 
 class TestMessageProviderState:
     @pytest.mark.asyncio
+    async def test_runtime_session_id_survives_tool_result_session_persistence(
+        self, tmp_path
+    ):
+        runtime_id = "runtime-session-123"
+        store = Store.new_with_id(tmp_path, "session-id-tool-result")
+        messages = [Message(
+            role="tool",
+            name="workflow",
+            content=json.dumps({"session_id": runtime_id, "ok": True}),
+        )]
+
+        await store.save(messages)
+
+        raw = store.path.read_text(encoding="utf-8")
+        assert runtime_id in raw
+        restored = store.load().messages[0]
+        assert json.loads(restored.content) == {"session_id": runtime_id, "ok": True}
+
+    @pytest.mark.asyncio
     async def test_redacts_secret_material_only_in_persisted_message_copy(self, tmp_path):
         bearer = "user-bearer-marker-abcdefghijklmnopqrstuvwxyz"
         cookie = "tool-cookie-marker-abcdefghijklmnopqrstuvwxyz"
@@ -393,6 +464,50 @@ class TestMessageProviderState:
         assert nested_token not in persisted_args
         assert restored_args["nested"]["headers"]["Cookie"][0] != nested_cookie
         assert restored_args["nested"]["items"][0]["access_token"] != nested_token
+
+    @pytest.mark.asyncio
+    async def test_redacts_nested_workflow_body_formats_in_persisted_tool_arguments(
+        self, tmp_path
+    ):
+        form_secret = "short-form-password"
+        multipart_secret = "multipart-session-cookie"
+        arguments = json.dumps({
+            "action": "record_input",
+            "content_type": "application/x-www-form-urlencoded",
+            "sample_payload": (
+                "username=alice&password=" + form_secret
+                + "&csrf_token={INJECTION_POINT}"
+                + "&access_token=%7BINJECTION_POINT%7D"
+            ),
+            "request_template": (
+                "--fixture\r\n"
+                'Content-Disposition: form-data; name="session_cookie"\r\n\r\n'
+                + multipart_secret + "\r\n--fixture--\r\n"
+            ),
+        })
+        messages = [Message(
+            role="assistant",
+            content="",
+            tool_calls=[ToolCall(
+                id="call_workflow_body",
+                function=FunctionCall("workflow", arguments),
+            )],
+        )]
+        store = Store.new_with_id(tmp_path, "workflow-body-redaction")
+
+        await store.save(messages)
+
+        raw = store.path.read_text(encoding="utf-8")
+        assert form_secret not in raw
+        assert multipart_secret not in raw
+        restored_args = json.loads(
+            store.load().messages[0].tool_calls[0].function.arguments  # type: ignore[index]
+        )
+        assert "alice" in restored_args["sample_payload"]
+        assert "{INJECTION_POINT}" in restored_args["sample_payload"]
+        assert "access_token=%7BINJECTION_POINT%7D" in restored_args["sample_payload"]
+        assert form_secret not in restored_args["sample_payload"]
+        assert multipart_secret not in restored_args["request_template"]
 
     @pytest.mark.asyncio
     async def test_redacted_session_keeps_secure_file_mode(self, tmp_path):

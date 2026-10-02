@@ -138,6 +138,25 @@ application routes. Do not recursively crawl the entire application here.
 Only retain URLs within the authorized target scope. Skip clearly external
 origins unless they are explicitly in scope.
 
+Use recon's architecture hypothesis to choose sources. For a traditional or
+SSR application, prioritize anchors, forms, actions, hidden fields, and
+navigation. For an SPA, inspect the shell, referenced bundles, observed router
+configuration, and fetch/XHR/axios call sites for API base URLs. For an
+API-only target, prioritize exposed OpenAPI/Swagger documents and API clues
+already recorded by recon. Keep a `client_route`, `backend_endpoint`, or
+`unknown_route_reference` label for each route clue. A router path or a string
+found in JavaScript alone is not a backend endpoint.
+
+For a JavaScript clue to count as a backend endpoint reference, record the
+surrounding evidence that it is used as a network request (for example a
+fetch/XHR/axios call or a configured API client). A route used by the frontend
+router is a client route. If context is unclear, keep it as an
+`unknown_route_reference`. A reference becomes `reachable` only after a
+same-origin request observes a response; a linked or documented path that has
+not been requested remains `observed` or `inferred` with its source. Record
+`probed` for a deliberate request and `inaccessible` only for an observed
+access failure. A `403` may reflect an intermediary noted by recon.
+
 ## 3. Enumerate parameters and forms
 
 For each relevant HTML page already collected, extract form structure:
@@ -151,6 +170,7 @@ For each form, record:
 
 - HTTP method;
 - action URL;
+- content type from `enctype` or the documented request format;
 - field name;
 - field type;
 - hidden/required state when observable;
@@ -168,6 +188,9 @@ documentation when present. Record the parameter name and its location:
 
 Do not submit forms or inject test values at this stage. Enumeration records
 structure only.
+For JSON/API bodies, prefer the documented schema or observed field structure
+and write a compact payload skeleton with inert placeholders. Do not copy
+actual submitted values, credentials, tokens, or session material.
 
 ## 4. Enumerate API surfaces
 
@@ -189,15 +212,19 @@ for p in /api /api/v1 /swagger.json /swagger/v1/swagger.json \
 done
 ```
 
-If a Swagger/OpenAPI document is found, parse documented routes, methods, and
-parameters directly:
+If a Swagger/OpenAPI document is found, parse documented routes, methods,
+parameters, each operation's `requestBody.content` media type/schema, and any
+operation-level security requirement. Record their provenance as `observed
+from the specification`; do not say they are reachable until requested.
+
+For an API-only target with a useful specification, inventory the documented
+surface before considering focused discovery. Do not run a default wordlist
+pass while the specification covers the route gap.
 
 ```sh
 curl -ksS --max-time 8 "$TARGET/swagger.json" \
   | jq -r '.paths | keys[]' 2>/dev/null
 ```
-
-Use the actual discovered specification path when it is not `/swagger.json`.
 
 If a GraphQL endpoint is identified, record:
 
@@ -268,8 +295,27 @@ grep -oE 'src="[^"]+\.js"' /tmp/body \
 
 Skip JavaScript or other resources that resolve to clearly unauthorized
 cross-origin domains.
+This step extracts route clues already known by the frontend. Keep the source
+bundle and call-site evidence with each clue, then classify it as a client
+route, a backend endpoint reference, or unknown. Do not deobfuscate or
+reverse-engineer bundles, and do not treat every `/...` string as an API.
 This step extracts route and endpoint strings already known by the frontend.
-Do not deobfuscate or reverse-engineer bundles.
+Treat them as clues; a string alone does not establish a backend endpoint.
+
+## 5b. Calibrate ambiguous responses and group route shapes
+
+When a guessed path or content-discovery hit returns `200`, compare it with a
+small number of nonexistent same-origin paths. Use a fresh random path and
+compare content type, normalized body hash or length, and redirect behavior.
+Matching an SPA shell or wildcard response does not make a backend endpoint
+valid. The bounded `content_discovery` tool already performs this calibration;
+do not repeat it manually when its result is definitive.
+
+Group REST identifiers as `/users/{id}` only after at least two observed paths
+with different values share the same method, surrounding route shape, and
+response/source pattern. Preserve the concrete paths as examples. Do not
+replace every numeric or UUID-like segment automatically; IDs can select
+semantically different routes or versions.
 
 ## 6. Focused content discovery (optional, bounded)
 
@@ -323,31 +369,40 @@ reason before completing the phase.
 
 For a whole-target objective, also record every discovered request input
 surface with `workflow(action="record_input", method=..., endpoint=...,
-parameter=..., location=..., input_type=...)`. Use one compact record per
-method/endpoint/parameter/location/type combination; do not include request or
-response bodies, cookies, tokens, or other secrets. Record query, body, path,
-header, and cookie inputs that were actually observed. The runtime assigns the
-active objective and target origin and deduplicates semantic duplicates.
+parameter=..., location=..., input_type=..., content_type=...,
+sample_payload=...)` when those details are known. Use one compact record per
+method/endpoint/parameter/location/type combination; `content_type` and
+`sample_payload` are optional and do not change the input identity. Store a
+small body skeleton, not raw traffic: retain the structure and replace values
+with inert examples or `{INJECTION_POINT}`. Omit passwords, tokens, cookies,
+PII, and unrelated fields. Record query, body, path, header, and cookie inputs
+that were actually observed. The runtime assigns the active objective and
+target origin and deduplicates semantic duplicates.
 
 ### GET /search
 
+- route_type: backend_endpoint
 - parameter: `q`
 - location: query
 - content_type: -
 - auth: public
 - source: application JS (`main.js`)
+- provenance: reachable; same-origin response observed
 - observed_response: `200`, HTML page with results
 - notes: parameter observed in application flow
 
 ### POST /api/orders
 
+- route_type: backend_endpoint
 - parameter: `items`, `address`
 - location: body (JSON)
 - content_type: application/json
+- sample_payload: `{"items":[{"productId":"{id}","quantity":"{number}"}],"address":"{INJECTION_POINT}"}`
 - auth: session cookie required
 - source: form action + `swagger.json`
-- observed_response: `201` on documented valid request
-- notes: request not submitted during enumeration
+- provenance: observed from specification; not requested, so reachability is unknown
+- observed_response: not probed
+- notes: request not submitted during enumeration; no cookie value stored
 
 Each entry should record only observed facts, such as:
 

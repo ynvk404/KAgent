@@ -257,6 +257,31 @@ def test_recon_requires_summary_without_creating_findings():
     )
 
 
+def test_recon_handoff_records_topology_without_scope_drift():
+    _, body, _ = read_skill()
+    text = collapse_ws(body).lower()
+
+    for observation in (
+        "same-origin",
+        "http-to-https upgrade",
+        "cross-origin or sso redirect",
+        "redirect loop",
+        "401` or `404` json response at a root path such as `/`, `/api`, or `/api/v1`",
+        "traditional/ssr",
+        "api-only",
+        "unknown",
+        "cookie names and `secure`/`httponly`/`samesite`",
+        "csp",
+        "hsts",
+        "cf-ray",
+        "a `403`, `429`, or challenge response may come from an intermediary",
+    ):
+        assert observation in text
+    assert "never forward cookies or authorization headers to it" in text
+    assert "do not silently switch the active target" in text
+    assert "one header is a clue, not a `waf_detected` conclusion" in text
+
+
 def test_recon_transition_is_linear():
     _, body, _ = read_skill()
 

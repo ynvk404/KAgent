@@ -113,8 +113,10 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
         {"action": "complete_skill", "skill_name": "web-enumeration"}, None, AlwaysAllow()
     )
     input_result = json.loads(await workflow_tool.run({
-        "action": "record_input", "method": "GET", "endpoint": "/search",
-        "parameter": "q", "location": "query", "input_type": "text",
+        "action": "record_input", "method": "POST", "endpoint": "/api/v1/search",
+        "parameter": "filter", "location": "body", "input_type": "string",
+        "content_type": "application/json",
+        "sample_payload": '{"filter":"{INJECTION_POINT}","limit":10}',
     }, None, AlwaysAllow()))
     analysis_plan = build_decision_plan(
         "continue", skills.list_enabled(), target, agent._planner_context()
@@ -124,10 +126,25 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
 
     candidate_result = json.loads(await workflow_tool.run({
         "action": "record_candidate", "candidate_class": "sql-injection",
-        "source_skill": "web-input-analysis", "method": "GET", "endpoint": "/search",
-        "parameter": "q", "input_id": input_result["input"]["id"],
+        "source_skill": "web-input-analysis", "method": "POST",
+        "endpoint": "/api/v1/search", "parameter": "filter", "location": "body",
+        "input_id": input_result["input"]["id"],
+        "request_template": '{"filter":"{INJECTION_POINT}","limit":10}',
+        "baseline_request_ref": "captures/search-baseline.json",
+        "auth_context_ref": "captures/auth-context.md",
     }, None, AlwaysAllow()))
     candidate_id = candidate_result["candidate"]["id"]
+    assert candidate_result["candidate"]["content_type"] == "application/json"
+    assert candidate_result["candidate"]["request_template"] == (
+        '{"filter":"{INJECTION_POINT}","limit":10}'
+    )
+    assert state.objective_inputs()[0].sample_payload == (
+        '{"filter":"{INJECTION_POINT}","limit":10}'
+    )
+    assert state.candidates[candidate_id].baseline_request_ref == (
+        "captures/search-baseline.json"
+    )
+    assert state.candidates[candidate_id].auth_context_ref == "captures/auth-context.md"
     await workflow_tool.run({
         "action": "set_input_disposition", "input_id": input_result["input"]["id"],
         "disposition": "analyzed",
@@ -159,6 +176,62 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
     assert build_decision_plan(
         "continue", skills.list_enabled(), target, agent._planner_context()
     ) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "method", "parameter", "location", "content_type", "sample", "template"),
+    [
+        (
+            "/login", "POST", "email", "body", "application/x-www-form-urlencoded",
+            "email={INJECTION_POINT}&password=",
+            "email={INJECTION_POINT}&password=",
+        ),
+        (
+            "/api/v1/search", "POST", "filter", "body", "application/json",
+            '{"filter":"{INJECTION_POINT}","limit":10}',
+            '{"filter":"{INJECTION_POINT}","limit":10}',
+        ),
+        (
+            "/v1/accounts/search", "POST", "query", "body", "application/json",
+            '{"query":"{INJECTION_POINT}","limit":10}',
+            '{"query":"{INJECTION_POINT}","limit":10}',
+        ),
+    ],
+    ids=["traditional-form", "spa-json-api", "api-only"],
+)
+async def test_request_shape_context_survives_input_to_candidate_handoff(
+    endpoint, method, parameter, location, content_type, sample, template,
+):
+    target = Target("https://target.test")
+    state = WorkflowState(objective=WorkflowObjective(
+        id="assessment-handoff", mode="whole_target", target_origin="https://target.test",
+    ))
+    tool = WorkflowTool(state, target)
+    input_result = json.loads(await tool.run({
+        "action": "record_input", "endpoint": endpoint, "method": method,
+        "parameter": parameter, "location": location, "input_type": "string",
+        "content_type": content_type, "sample_payload": sample,
+    }, None, AlwaysAllow()))
+    candidate_result = json.loads(await tool.run({
+        "action": "record_candidate", "candidate_class": "authentication",
+        "input_id": input_result["input"]["id"],
+        "request_template": template,
+        "baseline_request_ref": "captures/request-baseline.json",
+        "auth_context_ref": "captures/auth-context.md",
+    }, None, AlwaysAllow()))
+
+    restored = WorkflowState.from_dict(state.to_dict())
+    candidate = restored.candidates[candidate_result["candidate"]["id"]]
+    assert candidate.method == method
+    assert candidate.endpoint == endpoint
+    assert candidate.parameter == parameter
+    assert candidate.location == location
+    assert candidate.content_type == content_type
+    assert candidate.request_template == template
+    assert candidate.baseline_request_ref == "captures/request-baseline.json"
+    assert candidate.auth_context_ref == "captures/auth-context.md"
+    assert restored.attack_surface_inputs[input_result["input"]["id"]].sample_payload == sample
 
 
 @pytest.mark.asyncio
