@@ -12,6 +12,10 @@ from src.permission.permission import (
 )
 
 
+class PrivateHostDeclined(UserControlledRefusal):
+    """Only an actual operator DENY, not cancellation or a stale policy."""
+
+
 def parse_http_url(raw: str):
     try:
         parsed = urlparse(raw)
@@ -113,7 +117,7 @@ async def gate_private_request(
     )
 
     if decision == Decision.DENY:
-        raise UserControlledRefusal(
+        raise PrivateHostDeclined(
             f"request to private/internal URL denied: "
             f"{parsed.geturl()}"
         )

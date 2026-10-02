@@ -112,3 +112,48 @@ async def test_real_probe_does_not_admit_project_fifo(tmp_path):
     assert worker is not None
     with pytest.raises(ExecutionBlocked, match="host-ipc"):
         worker.wrap("/bin/true", [])
+
+
+@pytest.mark.parametrize('name', sorted(worker_module.EXCLUDED_DIRECTORY_NAMES))
+def test_dependency_and_cache_directories_are_pruned_before_descent(tmp_path, monkeypatch, name):
+    excluded = tmp_path / 'nested' / name
+    excluded.mkdir(parents=True)
+    worker_module.os.mkfifo(excluded / 'unchecked-fifo')
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'payload.txt').write_text("' OR 1=1-- <script>fixture</script>")
+    visited = []
+    original_walk = worker_module.os.walk
+
+    def observed_walk(path, **kwargs):
+        for directory, folders, files in original_walk(path, **kwargs):
+            visited.append(Path(directory))
+            yield directory, folders, files
+
+    monkeypatch.setattr(worker_module.os, 'walk', observed_walk)
+    worker = OfflineWorker(tmp_path, (), '/usr/bin/bwrap', '/usr/bin/prlimit')
+    _, args = worker.wrap('/bin/true', [])
+    assert source in visited
+    assert not any(path.is_relative_to(excluded) for path in visited)
+    assert '/work/nested/' + name in args  # The unchecked tree is hidden too.
+
+
+@pytest.mark.asyncio
+async def test_pruned_dependencies_are_hidden_but_project_security_still_applies(tmp_path):
+    if worker_module.shutil.which('bwrap') is None or worker_module.shutil.which('prlimit') is None:
+        pytest.skip('existing Linux worker required')
+    for name in ('venv-linux', '.git'):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / 'fake-secret').write_text('FAKE_UNCHECKED_SECRET')
+        worker_module.os.mkfifo(directory / 'unchecked-fifo')
+    (tmp_path / 'source.txt').write_text('SOURCE_OK <script>fixture</script>')
+    worker = await OfflineWorker.available(tmp_path, ())
+    assert worker is not None
+    command, args = await worker.prepare('/bin/sh', ['-c', 'cat source.txt; cat venv-linux/fake-secret .git/fake-secret'])
+    process = await asyncio.create_subprocess_exec(command, *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    stdout, _ = await asyncio.wait_for(process.communicate(), 3)
+    assert b'SOURCE_OK <script>fixture</script>' in stdout and b'FAKE_UNCHECKED_SECRET' not in stdout
+    worker_module.os.mkfifo(tmp_path / 'source-fifo')
+    with pytest.raises(ExecutionBlocked, match='host-ipc'):
+        await worker.prepare('/bin/true', [])

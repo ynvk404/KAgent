@@ -12,12 +12,13 @@ import json
 import math
 import time
 import uuid
-from dataclasses import dataclass, asdict, replace
+from dataclasses import dataclass, asdict, replace, field
 from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from src.permission.permission import Decision, PermissionRequest, Prompter, UserControlledRefusal
 from src.target.origin import HTTPOrigin
 from src.tools.approval_display import redact_approval
+from src.permission.invocations import review_id, on_review_end, permission_invocation
 
 if TYPE_CHECKING:
     from src.engagement.state import EngagementState
@@ -86,6 +87,7 @@ class EffectiveHTTP:
     scope_revision: int
     epoch: str
     transport_address: str = ""
+    invocation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     @property
     def origin(self) -> HTTPOrigin:
@@ -147,6 +149,7 @@ class HTTPReceipt:
     policy_revision: int
     expires_at: float
     grant_id: str | None
+    invocation_id: str = ''
 
 
 @dataclass(slots=True)
@@ -185,7 +188,7 @@ class HTTPPermissions:
         self._receipts: dict[str, HTTPReceipt] = {}
         self._pending: set[HTTPOrigin] = set()
         self._suppressed: set[HTTPOrigin] = set()
-        self._declined_actions: dict[str, HTTPOrigin] = {}
+        self._declined_actions: dict[tuple[str, str], HTTPOrigin] = {}
         self._revoked: set[HTTPOrigin] = set()
         self._blocked_gate: set[HTTPOrigin] = set()
         self._grant_pending: set[HTTPOrigin] = set()
@@ -440,13 +443,18 @@ class HTTPPermissions:
     def _mint(self, action: EffectiveHTTP, grant: HTTPGrant | None) -> HTTPReceipt:
         receipt = HTTPReceipt(uuid.uuid4().hex, self.session_id, self.epoch, action.digest, action.origin,
                               action.scope_revision, action.target_revision, self.revision,
-                              self.clock() + 60, grant.id if grant else None)
+                              self.clock() + 60, grant.id if grant else None, action.invocation_id)
         # Bound ephemeral receipt storage; expired receipts cannot be reused.
         self._receipts = {k: v for k, v in self._receipts.items() if v.expires_at > self.clock()}
         if len(self._receipts) >= 1024:
             raise HTTPBlocked("pending: too many outstanding receipts")
         self._receipts[receipt.id] = receipt
         return receipt
+
+    def discard_receipt(self, receipt: HTTPReceipt) -> None:
+        """Retire only this invocation's unused receipt, never other decisions."""
+        if self._receipts.get(receipt.id) == receipt:
+            del self._receipts[receipt.id]
 
     async def review_grant(self, url: str, limits: HTTPLimits, mode: str, prompter: Prompter, signal: Any = None) -> HTTPGrant | None:
         self.sync_target()
@@ -464,10 +472,6 @@ class HTTPPermissions:
                 tool="http_lab_grant", summary=f"Activate {mode} HTTP lab grant for {origin.as_url()}",
                 detail=f"issuer: operator; session: {self.session_id}\n{limits.display()}\n\n{WARNING}",
                 no_session_cache=True, risk_tier="high-impact"), signal)
-        except BaseException:
-            if epoch == self.epoch:
-                self._suppressed.add(origin)
-            raise
         finally:
             self._grant_pending.discard(origin)
         check_cancelled(signal)
@@ -479,13 +483,15 @@ class HTTPPermissions:
             return None
         return self.activate(origin.as_url(), limits, mode)
 
+    @permission_invocation
     async def authorize(self, action: EffectiveHTTP, prompter: Prompter, signal: Any, target_revision: Callable[[], int]) -> HTTPReceipt:
         self.sync_target()
         check_cancelled(signal)
         self._check(action, target_revision())
         origin = action.origin
+        decline_key = (review_id(), action.digest)
         if origin in self._blocked_gate:
-            raise HTTPBlocked("pending: private-host permission declined/cancelled; operator retry required")
+            raise HTTPBlocked("pending: private-host permission declined; operator retry required")
         grant = self.grants.get(origin)
         if origin in self._revoked:
             raise HTTPBlocked("blocked: grant revoked; operator retry/new grant required")
@@ -494,15 +500,15 @@ class HTTPPermissions:
             self._capacity(action, budget)
         except HTTPPending:
             pass  # Dispatch scheduler waits at most 30s, without asking again.
-        if action.digest in self._declined_actions:
-            raise HTTPBlocked("pending: exact action declined/cancelled; operator retry required")
+        if decline_key in self._declined_actions:
+            raise HTTPBlocked("pending: exact action declined in this turn; operator retry required")
         if grant is not None and (grant.mode == "autonomous" or self._yolo_enabled):
             return self._mint(action, grant)
         if origin in self._pending or origin in self._grant_pending:
             # Coalesce authorization issues, not distinct exact receipts.
             raise HTTPBlocked("pending: equivalent HTTP authorization review already open for this origin")
-        if action.digest in self._declined_actions or origin in self._suppressed:
-            raise HTTPBlocked("pending: review previously declined/cancelled; operator /permissions retry required")
+        if origin in self._suppressed:
+            raise HTTPBlocked("pending: lab grant review previously declined; operator /permissions retry required")
         self._pending.add(origin)
         revision = self.revision
         try:
@@ -521,17 +527,16 @@ class HTTPPermissions:
                 if grant is None:
                     raise HTTPBlocked("blocked: operator declined lab grant; no dispatch")
             elif decision != Decision.ALLOW_ONCE:
-                self._declined_actions[action.digest] = origin
-                raise HTTPBlocked("blocked: permission denied by user for http; future equivalent reviews pending operator retry")
+                self._declined_actions[decline_key] = origin
+                def clear_decline() -> None:
+                    self._declined_actions.pop(decline_key, None)
+                on_review_end(clear_decline)
+                raise HTTPBlocked("blocked: permission denied by user for http; equivalent reviews suppressed for this turn")
             try:
                 self._capacity(action, self._budget(action, grant))
             except HTTPPending:
                 pass
             return self._mint(action, grant)
-        except BaseException:
-            if action.epoch == self.epoch:
-                self._declined_actions[action.digest] = origin
-            raise
         finally:
             self._pending.discard(origin)
 
@@ -543,7 +548,7 @@ class HTTPPermissions:
         known = self._receipts.get(receipt.id)
         if known is None or known != receipt or receipt.session_id != self.session_id or receipt.epoch != self.epoch:
             raise HTTPBlocked("blocked: unknown/replayed receipt")
-        if (receipt.digest != action.digest or receipt.origin != action.origin or
+        if (receipt.digest != action.digest or receipt.invocation_id != action.invocation_id or receipt.origin != action.origin or
             receipt.scope_revision != action.scope_revision or receipt.target_revision != action.target_revision or
             receipt.policy_revision != self.revision or self.clock() >= receipt.expires_at):
             raise HTTPBlocked("blocked: receipt changed/expired/policy invalidated")
@@ -587,11 +592,14 @@ class HTTPPermissions:
         receipt lifetime and budgets anew; terminal failures never retry.
         """
         deadline = time.monotonic() + 30
-        for _ in range(600):
-            try:
-                return self.reserve(action, receipt, signal, target_revision())
-            except HTTPPending:
-                if time.monotonic() >= deadline:
-                    break
-                await asyncio.sleep(0.05)
-        raise HTTPPending("pending: rate/concurrency scheduling deadline reached; no automatic retry/dialog")
+        try:
+            for _ in range(600):
+                try:
+                    return self.reserve(action, receipt, signal, target_revision())
+                except HTTPPending:
+                    if time.monotonic() >= deadline:
+                        break
+                    await asyncio.sleep(0.05)
+            raise HTTPPending("pending: rate/concurrency scheduling deadline reached; no automatic retry/dialog")
+        finally:
+            self.discard_receipt(receipt)

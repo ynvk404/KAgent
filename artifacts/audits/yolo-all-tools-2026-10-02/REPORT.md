@@ -139,3 +139,22 @@ non-Linux sandbox chưa đầy đủ. 15 lớp chỉ kiểm human-review workflo
 coi là 15 auto verifiers. L01/A03/A15 và full A16/A17 chưa đạt. Không dùng số test
 pass hoặc tên worker để tuyên bố bảo toàn mọi luồng/chống prompt injection toàn diện.
 Không commit/push/reset/clean/cài dependency. Checkpoint HEAD giữ nguyên.
+
+## Bổ sung runtime responsiveness và cancellation HTTP — 02/10/2026
+
+Kết quả lịch sử trước sửa được giữ nguyên. Sau checkpoint `6100830`, đã sửa
+actual worker inspection khóa UI bằng async preparation, rồi prune dependency/
+cache trực tiếp trước descent và che các cây chưa kiểm tra khỏi worker. Trên
+cùng project `/mnt/d`, scan 106,218 giây trước prune còn 1,340 giây sau prune;
+đây là phép đo read-only, không model API/tool dispatch/live target.
+
+Exact HTTP cancellation/exception từng bị cached như DENY theo request shape,
+và Registry giữ invocation-declined qua turn. Hiện chỉ explicit exact DENY
+được chống hỏi lặp trong turn do controller tạo; invocation/turn mới có identity
+mới. Receipt HTTP còn ràng buộc invocation ID và cleanup riêng. Scope/revoke/
+private-host DENY thật/deny phiên/budget vẫn độc lập, không được reset bởi YOLO.
+
+Code, tests, nguyên nhân và trước/sau chi tiết:
+[IMPLEMENTATION.md](IMPLEMENTATION.md),
+[worker-responsiveness-2026-10-02/RESULTS.md](worker-responsiveness-2026-10-02/RESULTS.md).
+Không coi các sửa lỗi này là full YOLO hoặc chống prompt injection toàn diện.

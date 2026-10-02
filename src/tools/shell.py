@@ -231,7 +231,7 @@ class ShellTool(Tool):
         if worker is not None:
             from src.permission.worker_broker import broker_directory
             async with broker_directory(signal) as broker:
-                cmd, argv = worker.wrap(cmd, argv, broker=broker)
+                cmd, argv = await worker.prepare(cmd, argv, broker=broker, signal=signal)
                 return await run_with_capture(cmd, argv, timeout_seconds, signal)
         return await run_with_capture(cmd, argv, timeout_seconds, signal)
 

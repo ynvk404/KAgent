@@ -13,11 +13,20 @@ import os
 import stat
 import sys
 import tempfile
-from typing import Any
+import threading
+import time
+
+from src.permission.http_grants import check_cancelled
 
 from src.permission.execution import ExecutionBlocked
 
 PROBE_TIMEOUT_SECONDS = 5.0
+INSPECTION_TIMEOUT_SECONDS = 120.0
+INSPECTION_POLL_SECONDS = 0.05
+EXCLUDED_DIRECTORY_NAMES = frozenset({
+    'venv-linux', 'venv', '.venv', '.git', 'node_modules', '__pycache__',
+    '.pytest_cache', '.mypy_cache', 'dist', 'build',
+})
 
 
 class OfflineWorker:
@@ -61,15 +70,81 @@ class OfflineWorker:
                     pass
                 await proc.wait()
 
-    def wrap(self, command: str, argv: list[str], *, broker: Path | None = None, scanner: bool = False) -> tuple[str, list[str]]:
-        if self.root.is_symlink() or self.output_root.is_symlink():
+    async def prepare(self, command: str, argv: list[str], *, broker: Path | None = None,
+                      scanner: bool = False, signal=None) -> tuple[str, list[str]]:
+        """Inspect off the UI loop; cancellation/revoke never dispatch a child.
+
+        A stopped thread checks its flag between filesystem operations. Python
+        cannot interrupt a blocked kernel filesystem call; that thread may live
+        until the call returns, but it only inspects and never launches a process.
+        Do not cache inspections: another tool/operator can change the tree.
+        """
+        from src.permission.execution import current_policy
+        policy = current_policy()
+        stopped = threading.Event()
+        deadline = time.monotonic() + INSPECTION_TIMEOUT_SECONDS
+
+        def check_authority() -> None:
+            check_cancelled(signal)
+            if policy is not None and (policy.worker is not self or not policy.nested_allowed()):
+                raise ExecutionBlocked("blocked: worker-receipt-revoked/changed")
+            if time.monotonic() >= deadline:
+                raise ExecutionBlocked("blocked: worker-inspection-timeout; no process started")
+
+        check_authority()
+        inspection = asyncio.create_task(asyncio.to_thread(
+            self.wrap, command, list(argv), broker=broker, scanner=scanner,
+            _stopped=stopped, _deadline=deadline))
+        try:
+            while not inspection.done():
+                await asyncio.wait({inspection}, timeout=INSPECTION_POLL_SECONDS)
+                check_authority()
+            result = inspection.result()
+            check_authority()
+            self._check_roots()
+            return result
+        finally:
+            stopped.set()
+            inspection.cancel()
+            await asyncio.gather(inspection, return_exceptions=True)
+
+    def _check_roots(self) -> None:
+        if (self.root.is_symlink() or self.root.resolve() != self.root or self.output_root.is_symlink()
+                or not self.output_root.resolve().is_relative_to(self.root)):
             raise ExecutionBlocked("blocked: worker-resource-changed")
+
+    def wrap(self, command: str, argv: list[str], *, broker: Path | None = None, scanner: bool = False,
+             _stopped: threading.Event | None = None, _deadline: float | None = None) -> tuple[str, list[str]]:
+        def checkpoint() -> None:
+            if _stopped is not None and _stopped.is_set():
+                raise ExecutionBlocked("blocked: worker-inspection-cancelled")
+            if _deadline is not None and time.monotonic() >= _deadline:
+                raise ExecutionBlocked("blocked: worker-inspection-timeout; no process started")
+
+        checkpoint()
+        self._check_roots()
         def scan_error(error: OSError) -> None:
             raise ExecutionBlocked("blocked: worker-root-inspection-failed") from error
 
+        excluded: list[Path] = []
         for directory, folders, files in os.walk(self.root, followlinks=False, onerror=scan_error):
-            folders[:] = [name for name in folders if not any((Path(directory) / name).is_relative_to(p) for p in self.protected)]
+            checkpoint()
+            kept = []
+            for name in folders:
+                path = Path(directory) / name
+                if any(path.is_relative_to(p) for p in self.protected):
+                    continue
+                if name in EXCLUDED_DIRECTORY_NAMES:
+                    # Skipped trees must also be inaccessible to the process:
+                    # otherwise unchecked hardlinks/FIFOs/sockets bypass preflight.
+                    if path.is_symlink():
+                        raise ExecutionBlocked('blocked: excluded-worker-directory-is-symlink')
+                    excluded.append(path)
+                    continue
+                kept.append(name)
+            folders[:] = kept  # Prune before os.walk descends, not after traversal.
             for name in files:
+                checkpoint()
                 path = Path(directory) / name
                 if any(path.is_relative_to(p) for p in self.protected):
                     continue
@@ -83,6 +158,7 @@ class OfflineWorker:
                     raise ExecutionBlocked("blocked: worker-root-contains-host-ipc/device")
                 if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
                     raise ExecutionBlocked("blocked: worker-root-contains-ambiguous-hardlink")
+        checkpoint()
         # Go scanners reserve a large virtual arena even for tiny scans. This
         # trusted adapter profile increases AS, not network/filesystem rights.
         # NPROC counts the controller's entire real UID (including IDE/WSL
@@ -107,6 +183,11 @@ class OfflineWorker:
                     args += ["--tmpfs", destination, "--remount-ro", destination]
                 else:
                     args += ["--ro-bind", "/dev/null", destination]
+        for path in excluded:
+            if path.is_symlink() or not path.is_dir():
+                raise ExecutionBlocked('blocked: excluded-worker-directory-changed')
+            destination = '/work/' + path.relative_to(self.root).as_posix()
+            args += ['--tmpfs', destination, '--remount-ro', destination]
         if broker is not None:
             args += ["--ro-bind", str(broker), "/run/kagent", "--ro-bind",
                      str(Path(__file__).with_name('worker_relay.py')), "/relay.py"]

@@ -25,6 +25,7 @@ from .types import (
 )
 from src.llm.types import ToolSpec
 from src.permission.execution import ExecutionPolicy, ExecutionReceipt, policy_for
+from src.permission.invocations import permission_invocation
 from .approval_display import redact_approval as redact
 
 
@@ -141,6 +142,7 @@ class Registry:
             "tools": rows,
         }
 
+    @permission_invocation
     async def execute(
         self, name: str, args: dict[str, Any], signal: Any, prompter: Prompter,
     ) -> str:
@@ -157,10 +159,6 @@ class Registry:
         receipt = policy.prepare(tool, args) if policy is not None else None
         try:
             return await self._execute(tool, args, signal, prompter, policy, receipt)
-        except (UserControlledRefusal, asyncio.CancelledError):
-            if policy is not None and receipt is not None:
-                policy.finish_review(receipt, denied=True)
-            raise
         finally:
             if policy is not None and receipt is not None:
                 policy.finish_review(receipt)
@@ -246,6 +244,8 @@ class Registry:
                         else await prompter.ask(request, signal))
 
             if decision == Decision.DENY:
+                if policy is not None and receipt is not None:
+                    policy.finish_review(receipt, denied=True)
                 raise UserControlledRefusal(
                     f"permission denied by user for {tool.name()}"
                 )
