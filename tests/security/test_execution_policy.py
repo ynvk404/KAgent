@@ -11,6 +11,7 @@ import pytest
 
 from src.engagement.state import EngagementState, OutOfScopeError
 from src.permission.execution import ExecutionPolicy, ExecutionBlocked
+from src.permission.invocations import review_turn
 from src.permission.http_grants import HTTPLimits, HTTPBlocked
 from src.permission.permission import Decision, UserControlledRefusal, YoloPrompter
 from src.target.target import Target
@@ -180,9 +181,10 @@ async def test_off_decline_once_suppresses_issue_without_session_deny(runtime, t
     registry, p, policy, operator, _, _, _ = runtime
     p.set_yolo(False)
     args = {"path": str(tmp_path / "new"), "content": "fixture"}
-    for _ in range(2):
-        with pytest.raises(UserControlledRefusal):
-            await registry.execute("file_write", args, None, p)
+    with review_turn():
+        for _ in range(2):
+            with pytest.raises(UserControlledRefusal):
+                await registry.execute("file_write", args, None, p)
     assert len(operator.requests) == 1 and not policy.engagement.http_permissions.denied
     operator.decision = Decision.ALLOW_ONCE
     await registry.execute("file_write", {**args, "path": str(tmp_path / "other")}, None, p)

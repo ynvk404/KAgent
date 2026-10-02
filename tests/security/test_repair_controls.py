@@ -116,16 +116,20 @@ async def test_operator_proof_review_separate_from_yolo_tool_approval(lab, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_exact_http_deny_does_not_deny_other_request(lab):
+async def test_exact_http_deny_does_not_deny_other_request_or_future_turn(lab):
     registry, p, policy, operator, origin, requests = lab
-    p.set_yolo(False)
-    with pytest.raises(UserControlledRefusal):
-        await registry.execute('http', {'url':origin+'/one', 'phase':'recon'}, None, p)
-    operator.decision = Decision.ALLOW_ONCE
-    await registry.execute('http', {'url':origin+'/two', 'phase':'recon'}, None, p)
-    p.set_yolo(True)
-    with pytest.raises(UserControlledRefusal):
-        await registry.execute('http', {'url':origin+'/one', 'phase':'validation'}, None, p)
+    from src.permission.invocations import review_turn
+    with review_turn():
+        p.set_yolo(False)
+        with pytest.raises(UserControlledRefusal):
+            await registry.execute('http', {'url':origin+'/one', 'phase':'recon'}, None, p)
+        operator.decision = Decision.ALLOW_ONCE
+        await registry.execute('http', {'url':origin+'/two', 'phase':'recon'}, None, p)
+        p.set_yolo(True)
+        with pytest.raises(UserControlledRefusal):
+            await registry.execute('http', {'url':origin+'/one', 'phase':'validation'}, None, p)
     # OFF keeps its independent private-host gate: deny + exact approval +
     # first private-host approval. The declined ON retry opens no extra gate.
     assert len(requests) == 1 and operator.calls == 3
+    await registry.execute('http', {'url':origin+'/one', 'phase':'validation'}, None, p)
+    assert len(requests) == 2 and operator.calls == 3

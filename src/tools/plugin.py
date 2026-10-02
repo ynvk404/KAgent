@@ -74,7 +74,7 @@ class CommandPluginTool:
         if worker is not None:
             from src.permission.worker_broker import broker_directory
             async with broker_directory(signal) as broker:
-                command, argv = worker.wrap(command, argv, broker=broker)
+                command, argv = await worker.prepare(command, argv, broker=broker, signal=signal)
                 return await run_plugin(command, argv, args, signal)
         return await run_plugin(
             command,

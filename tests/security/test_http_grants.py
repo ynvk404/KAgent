@@ -9,6 +9,7 @@ import pytest
 
 from src.engagement.state import EngagementState, OutOfScopeError
 from src.permission.http_grants import HTTPLimits, HTTPBlocked
+from src.permission.invocations import review_turn
 from src.permission.http_control import parse_lab_spec
 from src.permission.permission import Decision, PermissionRequest, YoloPrompter
 from src.cli.main import parse_flags, FlagParseError, apply_startup_http_grants
@@ -420,17 +421,18 @@ async def test_pending_and_deny_do_not_spam_or_create_session_deny(runtime):
             return Decision.DENY
 
     operator = Waiting()
-    task = asyncio.create_task(registry.execute("http", args(), None, operator))
-    await opened.wait()
-    for _ in range(5):
-        with pytest.raises(HTTPBlocked, match="already open"):
-            await registry.execute("http", args("/other", phase="impact"), None, operator)
-    release.set()
-    with pytest.raises(HTTPBlocked):
-        await task
-    for _ in range(3):
-        with pytest.raises(HTTPBlocked, match="exact action declined"):
-            await registry.execute("http", args(), None, operator)
+    with review_turn():
+        task = asyncio.create_task(registry.execute("http", args(), None, operator))
+        await opened.wait()
+        for _ in range(5):
+            with pytest.raises(HTTPBlocked, match="already open"):
+                await registry.execute("http", args("/other", phase="impact"), None, operator)
+        release.set()
+        with pytest.raises(HTTPBlocked):
+            await task
+        for _ in range(3):
+            with pytest.raises(HTTPBlocked, match="exact action declined"):
+                await registry.execute("http", args(), None, operator)
     assert len(operator.requests) == 1 and not sent and not tool.permissions.denied
     tool.permissions.retry(ORIGIN)
     await registry.execute("http", args(), None, Operator(Decision.ALLOW_ONCE))
@@ -587,7 +589,7 @@ async def test_dispatch_failures_keep_count_and_release_slot(runtime, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_cancel_during_review_reopens_only_by_operator(runtime):
+async def test_cancel_during_review_does_not_poison_fresh_invocation(runtime):
     tool, registry, sent, _ = runtime
     started = asyncio.Event()
 
@@ -604,10 +606,9 @@ async def test_cancel_during_review_reopens_only_by_operator(runtime):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    with pytest.raises(HTTPBlocked, match="exact action declined"):
-        await registry.execute("http", args(), None, operator)
-    assert len(operator.requests) == 1 and not sent
-    assert not tool.permissions._pending
+    await registry.execute("http", args(), None, Operator(Decision.ALLOW_ONCE))
+    assert len(operator.requests) == 1 and len(sent) == 1
+    assert not tool.permissions._pending and not tool.permissions._declined_actions
 
 
 @pytest.mark.asyncio
@@ -798,7 +799,7 @@ async def test_replacement_grant_cannot_hide_old_inflight_requests(runtime):
 
 
 @pytest.mark.asyncio
-async def test_pending_cancelled_control_plane_grant_does_not_spawn_request_dialog(runtime):
+async def test_pending_grant_coalesces_but_cancel_does_not_poison_new_invocation(runtime):
     tool, registry, sent, _ = runtime
     opened = asyncio.Event()
 
@@ -817,6 +818,7 @@ async def test_pending_cancelled_control_plane_grant_does_not_spawn_request_dial
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    with pytest.raises(HTTPBlocked, match="previously"):
-        await registry.execute("http", args(), None, operator)
-    assert len(operator.requests) == 1 and not sent
+    next_operator = Operator(Decision.ALLOW_ONCE)
+    await registry.execute("http", args(), None, next_operator)
+    assert len(operator.requests) == 1 and len(next_operator.requests) == 1 and len(sent) == 1
+    assert not tool.permissions.grants and not tool.permissions._suppressed

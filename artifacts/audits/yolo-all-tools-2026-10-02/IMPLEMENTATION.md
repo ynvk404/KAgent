@@ -184,3 +184,68 @@ non-Linux sandbox chưa đầy đủ. 15 lớp chỉ kiểm human-review workflo
 coi là 15 auto verifiers. L01/A03/A15 và full A16/A17 chưa đạt. Không dùng số test
 pass hoặc tên worker để tuyên bố bảo toàn mọi luồng/chống prompt injection toàn diện.
 Không commit/push/reset/clean/cài dependency. Checkpoint HEAD giữ nguyên.
+
+## Bổ sung lỗi đứng giao diện sau checklist file/shell — 02/10/2026
+
+Sau checkpoint `6100830915d5cf23ac7b9ebe55211e969bcbb48f`, probe offline phát
+hiện actual dispatch vẫn gọi `OfflineWorker.wrap()` đồng bộ: quét cả project
+trên event loop của Textual. Startup scratch probe không giải quyết đường này.
+Metadata phiên người dùng cho thấy file_write/file_read đã xong, tiếp theo là
+shell rồi file_read và câu trả lời hoàn tất; không đọc/in nội dung riêng của phiên
+và không đóng tiến trình đang mở. Chưa có live stack để khẳng định mọi lần đứng
+đều cùng nguyên nhân.
+
+Đã thêm `OfflineWorker.prepare()` để kiểm tra filesystem bằng thread riêng,
+ngân sách kiểm tra 120 giây, nhận cancellation và kiểm tra lại receipt/revision
+trong lúc chờ và trước trả lệnh. Shell/plugin/MCP/ffuf đều dùng đường này. Root/
+output được kiểm tra lại sau chuẩn bị; ffuf tính lại thời gian còn lại trước launch.
+Không bỏ kiểm tra hardlink/FIFO/device, không cache kiểm tra, không nới quyền hoặc
+thêm host fallback. Thread đang kẹt trong syscall có thể còn sống đến khi syscall
+trả về; nó chỉ kiểm tra file và không khởi chạy tiến trình.
+
+Chi tiết probe trước/sau và kiểm chứng cuối được ghi riêng tại
+[worker-responsiveness-2026-10-02/RESULTS.md](worker-responsiveness-2026-10-02/RESULTS.md).
+Phép đo read-only trên project thật `/mnt/d` mất 106,218 giây nhưng heartbeat chạy
+2.109 lần, khoảng cách lớn nhất 0,073 giây. Đây là khắc phục khóa event loop,
+không phải tăng tốc quét toàn bộ virtualenv. Phiên đang chạy phải được operator
+khởi động lại để nạp code mới. Không gọi model API/live pentest, cài dependency,
+commit hoặc push trong lượt sửa này; kết quả lịch sử phía trên được giữ nguyên.
+
+### Prune dependency/cache và sửa cancellation HTTP — bổ sung cùng ngày
+
+Theo yêu cầu bổ sung, `OfflineWorker.wrap()` prune trực tiếp `folders[:]` cho
+10 tên thư mục dependency/cache tại mọi cấp. Các cây không được kiểm tra bị
+mount thành thư mục rỗng read-only trong worker; không chỉ bỏ lstat mà vẫn cho
+process đọc unchecked FIFO/socket/hardlink. Source/payload/wordlist ngoài các
+cây này tiếp tục được kiểm tra và sử dụng; worker không sử dụng executable/file
+trong excluded tree. Symlink tại excluded directory bị chặn rõ ràng. Native file
+tools giữ policy cũ. Probe cùng project sau prune: **1,340 giây**, heartbeat gap
+tối đa **0,051 giây**; kết quả 106,218 giây trước prune được giữ để đối chiếu.
+
+Nguyên nhân HTTP được báo trước khi sửa: `authorize()` ghi cả cancellation/lỗi
+vào `_declined_actions` theo request digest; Registry ghi cancelled/refused vào
+`_denied` theo args digest. Cache sống quá invocation/turn và có thể chặn request
+mới sau YOLO toggle. Private gate cũng pause origin khi cancelled. Không phải
+grant/revoke bền vững do operator chủ động cấp, và các cache lỗi này không được
+khôi phục từ journal; đây là state trong runtime đang mở.
+
+Đã thêm review context do controller tạo ở `Agent.run()`; Registry và direct
+HTTP ngoài Agent có scope riêng. Chỉ explicit exact DENY được chống hỏi lặp theo
+turn; cleanup chỉ xóa các key thuộc turn vừa kết thúc. Cancellation/exception/
+timeout không bị ghi thành DENY; cancel private gate không pause origin. HTTP
+receipt còn ràng buộc invocation ID mới, bị retire riêng khi không dùng; HTTP
+chờ/gửi/đọc nhận cancellation từ UI và đóng response/trả slot. Giữ private-host
+DENY thật, broad-grant decisions, deny phiên, revoke, scope, giới hạn và accounting;
+không clear mọi operator decision, không reset budget khi đổi turn/bật YOLO.
+
+Test toàn chuỗi dùng whole-target Agent với model giả, registry/policy thật và
+mock transport; không gọi API hoặc live target. Chi tiết kiểm chứng cuối và các
+giới hạn nằm trong [RESULTS.md](worker-responsiveness-2026-10-02/RESULTS.md).
+
+Regression mở rộng cuối: **2.756 passed, 1 skipped**, 2 warning fixture malformed
+config; skip là live-model characterization chưa được bật. Sau chỉnh callback
+cleanup chỉ về type return, HTTP/policy/resume focused cuối **162 passed**.
+Không cộng số rerun vào tổng; XML trước lần sửa assertion cancellation cũ được
+giữ riêng. Pyright/diff-check cuối và metadata: `worker-responsiveness-2026-10-02/`.
+Pyright **0 errors, 0 warnings**; `git diff --check` đạt. Không cài bản pyright mới
+theo version notice; không commit/push, HEAD checkpoint giữ nguyên.

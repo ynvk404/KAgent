@@ -112,16 +112,16 @@ class MCPSession:
         self._closed = False
 
     @staticmethod
-    async def open(server: MCPServerConfig, *, worker: Any = None, broker: Any = None) -> "MCPSession":
+    async def open(server: MCPServerConfig, *, worker: Any = None, broker: Any = None, signal: Any = None) -> "MCPSession":
         # AnyIO transport/session contexts must enter and exit in the same task.
         # The long-lived owner below avoids returning their cancel scopes into
         # a different Registry/CLI task.
         if worker is not None:
-            return cast(MCPSession, await OwnedMCPSession.open(server, worker=worker, broker=broker))
+            return cast(MCPSession, await OwnedMCPSession.open(server, worker=worker, broker=broker, signal=signal))
         return await MCPSession._open(server)
 
     @staticmethod
-    async def _open(server: MCPServerConfig, *, worker: Any = None, broker: Any = None) -> "MCPSession":
+    async def _open(server: MCPServerConfig, *, worker: Any = None, broker: Any = None, signal: Any = None) -> "MCPSession":
         if not server.command:
             raise ValueError(f"mcp server {server.name} has no command")
 
@@ -129,7 +129,7 @@ class MCPSession:
         if worker is not None:
             if server.env:
                 raise ValueError('blocked: MCP environment export adapter unavailable; no ambient fallback')
-            command, argv = worker.wrap(command, argv, broker=broker)
+            command, argv = await worker.prepare(command, argv, broker=broker, signal=signal)
         params = StdioServerParameters(command=command, args=argv,
                                        env={} if worker is not None else server.env)
 
@@ -251,14 +251,14 @@ class OwnedMCPSession:
         self.closed = False
 
     @classmethod
-    async def open(cls, server, *, worker, broker):
+    async def open(cls, server, *, worker, broker, signal=None):
         proxy = cls(server.name)
         ready = asyncio.get_running_loop().create_future()
 
         async def owner():
             session = None
             try:
-                session = await MCPSession._open(server, worker=worker, broker=broker)
+                session = await MCPSession._open(server, worker=worker, broker=broker, signal=signal)
                 ready.set_result(True)
                 while True:
                     method, args, future = await proxy.queue.get()
@@ -409,7 +409,7 @@ class MCPTool:
             # Fresh isolated server per invocation prevents background RPCs
             # from retaining a completed request's network authority.
             async with broker_directory(signal) as broker:
-                session = await MCPSession.open(self._server, worker=policy.worker, broker=broker)
+                session = await MCPSession.open(self._server, worker=policy.worker, broker=broker, signal=signal)
                 try:
                     result = await session.call_tool(self._remote_name, args, cancel_event)
                 finally:

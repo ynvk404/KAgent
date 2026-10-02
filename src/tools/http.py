@@ -9,9 +9,10 @@ from src.engagement.state import EngagementState
 from src.permission.permission import Prompter, UserControlledRefusal, YoloPrompter
 from src.permission.http_grants import EffectiveHTTP, check_cancelled
 from src.permission.execution import policy_for
+from src.permission.invocations import permission_invocation
 from src.permission.network import pin_request
 from src.target.target import Target
-from .private_host import gate_private_request, parse_http_url
+from .private_host import gate_private_request, parse_http_url, PrivateHostDeclined
 from .types import Tool, PermissionHints, arg_string
 from .outcome import ToolOutput
 
@@ -113,7 +114,22 @@ class HTTPTool(Tool):
     async def run_authorized(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> ToolOutput:
         return await self.run(args, signal, prompter)
 
+    @permission_invocation
     async def run(self, args: dict, signal: Any, prompter: Prompter) -> ToolOutput:
+        if signal is None:
+            return await self._run_invocation(args, signal, prompter)
+        check_cancelled(signal)
+        invocation = asyncio.create_task(self._run_invocation(deepcopy(args), signal, prompter))
+        try:
+            while not invocation.done():
+                await asyncio.wait({invocation}, timeout=0.05)
+                check_cancelled(signal)
+            return invocation.result()
+        finally:
+            invocation.cancel()
+            await asyncio.gather(invocation, return_exceptions=True)
+
+    async def _run_invocation(self, args, signal, prompter) -> ToolOutput:
         if isinstance(prompter, YoloPrompter):
             prompter.bind_http_permissions(self.permissions)
         args = deepcopy(args)
@@ -125,12 +141,19 @@ class HTTPTool(Tool):
             request, address = await pin_request(policy, request)
             action = replace(action, transport_address=address)
         receipt = await self.permissions.authorize(action, prompter, signal, lambda: self.target.revision)
+        try:
+            return await self._dispatch(action, request, receipt, policy, signal, prompter)
+        finally:
+            self.permissions.discard_receipt(receipt)
+
+    async def _dispatch(self, action, request, receipt, policy, signal, prompter) -> ToolOutput:
         # Independent gate: generic Registry approval cannot coalesce this gate.
         try:
             private_reason = await gate_private_request(
                 prompter, parse_http_url(action.url), signal, 'http', target=self.target,
             )
-        except (UserControlledRefusal, asyncio.CancelledError):
+        except PrivateHostDeclined:
+            check_cancelled(signal)
             self.permissions.pause_private(action.origin)
             raise
         check_cancelled(signal)

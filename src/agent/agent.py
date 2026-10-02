@@ -30,6 +30,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from .mentions import expand_file_mentions
 
 from src.redact.redact import apply as redact
+from src.permission.invocations import permission_turn
 
 from src.llm.client import (
     Client,
@@ -2649,6 +2650,7 @@ class Agent:
             phase_exploration_cap=MAX_PHASE_EXPLORATION_STEPS,
         )
 
+    @permission_turn
     async def run(
         self,
         user_msg: str,

@@ -36,7 +36,7 @@ server-side effects. Phase/method/endpoint/payload/model labels confer no rights
 - `/permissions deny`: deny shared native network. `/permissions revoke <id>`:
   revoke that exact origin's HTTP grant, including alternate native transports.
 - `/permissions retry <origin>`: explicitly reopen that HTTP issue.
-  `/permissions retry-tools`: explicitly reopen exact declined/cancelled tool
+  `/permissions retry-tools`: explicitly reopen exact declined tool
   reviews and input questions; durable revokes remain.
 - `/permissions network-refresh`: explicitly re-vet DNS bindings next time;
   does not refill a budget or extend scope.
@@ -55,7 +55,15 @@ restored from this journal, summary or intelligence. Constraints may survive
 resume without granting authority; a fresh trusted operator grant can change
 them. After dispatch, remote side effects cannot be rolled back by revoke.
 
-DENY_ONCE suppresses equivalent invocation review, not the whole session.
+DENY_ONCE suppresses equivalent review within the current controller-created
+turn, not future independent turns or the whole session. Cancellation cancels
+only that invocation and never becomes an operator decline. A new Agent turn
+receives fresh review identity; independent Registry/direct HTTP calls outside
+an Agent turn receive their own scope. Models cannot choose that identity.
+Origin/private-host/lab-grant decisions, session denies and tool/grant revokes
+remain separate; changing turns does not clear them, reset quotas or grant rights.
+HTTP receipts bind the effective request and a unique invocation identity; an
+unused receipt is discarded on exit, including cancellation and timeout.
 Different actions remain eligible. Concurrent identical reviews return pending
 instead of sharing an exact receipt. Actual missing-input questions are cached
 in memory and coalesced; the runtime does not fabricate OTP/account answers or
@@ -76,6 +84,22 @@ still inspects the mounted project for hardlinks/host IPC/devices and fails clos
 on inspection errors. The CLI opens the normal interface without a startup
 splash; worker/provider/session initialization is unchanged. Large real
 dispatch trees can still take time to inspect; no unsafe inspection cache is used.
+Shell, plugin, stdio MCP and ffuf prepare their worker off the UI event loop.
+Inspection has a 120-second budget, separate from process execution timeout;
+Esc/task cancellation and changed/revoked execution authority stop preparation
+before process launch. Root/output paths are checked again after preparation.
+An uninterruptible filesystem syscall can outlive cancellation in a read-only
+inspection thread; it cannot launch a child. This keeps the UI responsive but
+does not make a full project/virtualenv scan on `/mnt/d` fast or remove existing
+filesystem race limitations.
+Inspection prunes `venv-linux`, `venv`, `.venv`, `.git`, `node_modules`,
+`__pycache__`, `.pytest_cache`, `.mypy_cache`, `dist`, and `build` before descending,
+at every level. The worker mounts these uninspected trees as empty read-only
+directories so skipping inspection cannot expose unchecked host IPC/hardlinks.
+Worker commands cannot consume files/executables within them; source/payload/
+wordlist inputs must be outside those excluded trees. Native file tools retain
+their existing root/provenance permission checks. Excluded directory symlinks
+are blocked rather than followed. Full filesystem race protection is still absent.
 Per-process AS/CPU, real-UID NPROC and per-file bounds do not provide cgroup
 aggregate memory/CPU/disk quotas. Linux isolation relies on OS correctness and
 trusted system binaries; preflight checks do not eliminate filesystem races.

@@ -722,7 +722,10 @@ class ContentDiscoveryTool(Tool):
                     argv[argv.index('-o') + 1] = '/work/' + result_file.relative_to(policy.root).as_posix()
                     argv += ['-x', 'http://127.0.0.1:18080']
                     async with broker_directory(signal) as broker:
-                        executable, wrapped = worker.wrap(binary, argv, broker=broker, scanner=True)
+                        executable, wrapped = await worker.prepare(binary, argv, broker=broker, scanner=True, signal=signal)
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            return [], 0, "operation timeout before ffuf started"
                         output = await run_with_capture(executable, wrapped, remaining, signal)
                 else:
                     output = await run_with_capture(binary, argv, remaining, signal)

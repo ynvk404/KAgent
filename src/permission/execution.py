@@ -18,6 +18,7 @@ from typing import Any, TYPE_CHECKING
 
 from src.permission.permission import UserControlledRefusal
 from src.permission.http_grants import check_cancelled
+from src.permission.invocations import review_id, on_review_end
 
 if TYPE_CHECKING:
     from src.engagement.state import EngagementState
@@ -33,6 +34,7 @@ class ExecutionReceipt:
     digest: str
     revision: tuple[str, int, int, int]
     expires: float
+    review_id: str = 'library'
 
 
 _active: ContextVar[tuple["ExecutionPolicy", ExecutionReceipt] | None] = ContextVar("execution_receipt", default=None)
@@ -70,7 +72,7 @@ class ExecutionPolicy:
         self.yolo = False
         self.revoked: set[str] = set()
         self._receipts: dict[str, ExecutionReceipt] = {}
-        self._denied: set[str] = set()
+        self._denied: set[tuple[str, str]] = set()
         self._pending: set[str] = set()
         self.input_questions: dict[str, str | None] = {}
         self.journal: Path | None = None
@@ -249,7 +251,7 @@ class ExecutionPolicy:
     def prepare(self, tool: Any, args: dict[str, Any]) -> ExecutionReceipt:
         self.validate(tool, args)
         digest = invocation_digest(tool, args)
-        if digest in self._denied:
+        if (review_id(), digest) in self._denied:
             raise ExecutionBlocked("blocked: invocation-declined; operator retry required")
         if digest in self._pending:
             raise ExecutionBlocked("pending: equivalent invocation review already open")
@@ -258,7 +260,7 @@ class ExecutionPolicy:
         self._receipts = {key: value for key, value in self._receipts.items() if value.expires > self.clock()}
         if len(self._receipts) >= 1024:
             raise ExecutionBlocked("pending: receipt-capacity")
-        receipt = ExecutionReceipt(uuid.uuid4().hex, digest, self.stamp(), self.clock() + 60)
+        receipt = ExecutionReceipt(uuid.uuid4().hex, digest, self.stamp(), self.clock() + 60, review_id())
         self._receipts[receipt.id] = receipt
         self._pending.add(digest)
         return receipt
@@ -266,7 +268,9 @@ class ExecutionPolicy:
     def finish_review(self, receipt: ExecutionReceipt, *, denied: bool = False) -> None:
         self._pending.discard(receipt.digest)
         if denied:
-            self._denied.add(receipt.digest)
+            key = (receipt.review_id, receipt.digest)
+            self._denied.add(key)
+            on_review_end(lambda: self._denied.discard(key))
         self._receipts.pop(receipt.id, None)
 
     def start(self, receipt: ExecutionReceipt, tool: Any, args: dict[str, Any], signal: Any):
@@ -275,7 +279,8 @@ class ExecutionPolicy:
         digest = invocation_digest(tool, args)
         if receipt.digest != digest:
             raise ExecutionBlocked("blocked: execution-arguments-changed")
-        if self._receipts.get(receipt.id) != receipt or receipt.revision != self.stamp() or self.clock() >= receipt.expires:
+        if (self._receipts.get(receipt.id) != receipt or receipt.revision != self.stamp()
+                or receipt.review_id != review_id() or self.clock() >= receipt.expires):
             raise ExecutionBlocked("blocked: stale/replayed-execution-receipt")
         if self.used >= self.max_calls or self.active >= self.concurrency:
             raise ExecutionBlocked("pending: execution-budget/concurrency")
@@ -292,7 +297,8 @@ class ExecutionPolicy:
 
     def nested_allowed(self) -> bool:
         entry = _active.get()
-        return entry is not None and entry[0] is self and entry[1].revision == self.stamp()
+        return (entry is not None and entry[0] is self and entry[1].revision == self.stamp()
+                and entry[1].review_id == review_id())
 
     def status(self) -> str:
         return (f"Execution profile: {self.root}; YOLO: {self.yolo}; calls: {self.used}/{self.max_calls}; "

@@ -137,20 +137,23 @@ async def test_explicit_revoke_and_deny_survive_controller_journal(runtime, tmp_
 
 
 @pytest.mark.asyncio
-async def test_cancelled_review_suppresses_equivalent_invocation_not_session(runtime, tmp_path):
+async def test_cancelled_review_does_not_poison_fresh_invocation_or_clear_revokes(runtime, tmp_path):
     registry, p, policy, operator, _, _, _ = runtime
     p.set_yolo(False)
+    policy.revoke('file_read')
     operator.ask = AsyncMock(side_effect=asyncio.CancelledError)
     args = {"path": str(tmp_path / "cancelled"), "content": "fixture"}
     with pytest.raises(asyncio.CancelledError):
         await registry.execute("file_write", args, None, p)
-    with pytest.raises(ExecutionBlocked, match="declined"):
-        await registry.execute("file_write", args, None, p)
     assert operator.ask.call_count == 1 and not (tmp_path / "cancelled").exists()
-    policy.retry()
+    assert not policy._denied and not policy._pending
+    operator.ask.side_effect = None
+    operator.ask.return_value = Decision.ALLOW_ONCE
+    await registry.execute('file_write', args, None, p)
+    assert operator.ask.call_count == 2 and (tmp_path / 'cancelled').read_text() == 'fixture'
     p.set_yolo(True)
     await registry.execute("file_write", args, None, p)
-    assert (tmp_path / "cancelled").read_text() == "fixture"
+    assert (tmp_path / "cancelled").read_text() == "fixture" and 'file_read' in policy.revoked
 
 
 @pytest.mark.asyncio
