@@ -17,6 +17,7 @@ from src.permission.permission import Prompter
 from src.redact.redact import apply as redact, apply_evidence
 from src.logger.logger import get_logger
 from src.workflow.state import WorkflowState
+from src.workflow.evidence import verify_evidence_reads
 from src.skills.registry import normalize_candidate_class
 from src.target.origin import HTTPOrigin
 from .types import Tool, arg_string
@@ -237,9 +238,8 @@ class ConfirmFindingTool:
         latest = self.workflow.latest_result(candidate_id)
         assert latest is not None  # eligibility above guarantees a result
         root = self.store.project_dir
-        if not all(
-            self.workflow.evidence[ref].is_resolvable_for_resume(root)
-            for ref in latest.evidence_refs
+        if not await verify_evidence_reads(
+            [self.workflow.evidence[ref] for ref in latest.evidence_refs], root, prompter, signal,
         ):
             raise ValueError("candidate evidence artifact changed or is unavailable")
 

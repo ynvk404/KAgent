@@ -1,5 +1,6 @@
 from src.ui.commands.slash_items import (
     SLASH_ITEMS,
+    SlashItem,
     filter_slash,
 )
 
@@ -7,6 +8,26 @@ def test_returns_all_items_when_input_is_just_slash():
     result = filter_slash("/")
 
     assert len(result) == len(SLASH_ITEMS)
+
+
+def test_menu_orders_help_first_then_related_commands():
+    assert [item.name for item in filter_slash("/")] == [
+        "/help",
+        "/provider", "/model", "/thinking", "/maxsteps",
+        "/target", "/scope", "/permissions", "/yolo",
+        "/plan", "/next", "/skills", "/burp",
+        "/memory", "/compact", "/snapshot",
+        "/clear", "/reset", "/exit",
+    ]
+
+
+def test_skill_commands_follow_builtin_commands():
+    skill = SlashItem(name="/recon", description="reconnaissance skill")
+
+    assert filter_slash("/", extras=[skill]) == [*SLASH_ITEMS, skill]
+    assert [item.name for item in filter_slash("/m")] == [
+        "/model", "/maxsteps", "/memory",
+    ]
 
 
 def test_returns_no_items_when_input_does_not_start_with_slash():
@@ -131,7 +152,7 @@ def test_yolo_catalog_entry():
 
     assert item.args == "[on|off|default]"
     assert item.description == (
-        "show or set auto-approval for routine in-scope recon and validation"
+        "toggle scoped HTTP autonomy and eligible tool auto-approval"
     )
 
 

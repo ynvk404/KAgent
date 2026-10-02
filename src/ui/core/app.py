@@ -922,7 +922,11 @@ class KAgent(App):
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         modal = self._get_active_modal()
         if modal is not None:
-            if isinstance(modal, ProviderPickerModal):
+            if isinstance(modal, PermissionModal):
+                self.overlay_content_static.scroll_down(animate=False)
+                event.stop()
+                return
+            elif isinstance(modal, ProviderPickerModal):
                 modal.handle_scroll(1)
             else:
                 modal.handle_key("down")
@@ -945,7 +949,11 @@ class KAgent(App):
     def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         modal = self._get_active_modal()
         if modal is not None:
-            if isinstance(modal, ProviderPickerModal):
+            if isinstance(modal, PermissionModal):
+                self.overlay_content_static.scroll_up(animate=False)
+                event.stop()
+                return
+            elif isinstance(modal, ProviderPickerModal):
                 modal.handle_scroll(-1)
             else:
                 modal.handle_key("up")
@@ -1279,6 +1287,22 @@ class KAgent(App):
         modal = self._get_active_modal()
         if modal is None:
             return False
+
+        if isinstance(modal, PermissionModal) and key in {"up", "down", "pageup", "pagedown", "home", "end"}:
+            scroll = self.overlay_content_static
+            if key == "up":
+                scroll.scroll_up(animate=False)
+            elif key == "down":
+                scroll.scroll_down(animate=False)
+            elif key == "pageup":
+                scroll.scroll_page_up(animate=False)
+            elif key == "pagedown":
+                scroll.scroll_page_down(animate=False)
+            elif key == "home":
+                scroll.scroll_home(animate=False)
+            else:
+                scroll.scroll_end(animate=False)
+            return True
 
         if isinstance(modal, TextInputModal):
             result = modal.handle_key(key, raw_input)

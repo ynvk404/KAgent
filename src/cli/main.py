@@ -135,6 +135,7 @@ from src.ui.core.app import (
 )
 from src.ui.core.custom_provider_adapter import ConfigBackedCustomProviderAdapter
 from src.ui.commands.slash_handler import normalize_target_url
+from src.permission.http_control import parse_lab_spec
 
 from src.ui.widgets.banner import BannerData, ToolSupportPill
 
@@ -216,6 +217,8 @@ class ParsedFlags:
     skills_dirs: list[str] = field(default_factory=list)
     resume_id: str = ""
     yolo: bool = False
+    http_lab_grants: list[str] = field(default_factory=list)
+    accept_unknown_http_effects: bool = False
     browser: bool = False
     burp: bool = False
     burp_port: int = 0 
@@ -295,6 +298,15 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
                 raise FlagParseError(f"--resume: {err}") from err
         elif a in ("--yolo", "--dangerously-skip-permissions"):
             out.yolo = True
+        elif a == "--http-lab-grant":
+            spec = next_arg(a)
+            try:
+                parse_lab_spec(spec)
+            except ValueError as err:
+                raise FlagParseError(str(err)) from err
+            out.http_lab_grants.append(spec)
+        elif a == "--accept-unknown-http-effects":
+            out.accept_unknown_http_effects = True
         elif a == "--browser":
             out.browser = True
         elif a == "--no-stream":
@@ -337,6 +349,8 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
 
         i += 1
 
+    if out.http_lab_grants and not out.accept_unknown_http_effects:
+        raise FlagParseError("--http-lab-grant requires explicit --accept-unknown-http-effects; lab data may be deleted")
     return out
 
 
@@ -344,6 +358,18 @@ def apply_startup_target(agent: Agent, target_url: str) -> None:
     """Apply an explicit CLI target using the same scope transition as /target."""
     if target_url:
         agent.apply_target_base_url(target_url)
+
+
+def apply_startup_http_grants(agent: Agent, flags: ParsedFlags) -> None:
+    """Only explicit invocation flags can activate rights; no authorization file."""
+    if flags.http_lab_grants and not flags.accept_unknown_http_effects:
+        raise FlagParseError("operator must explicitly accept unknown HTTP effects")
+    specs = [parse_lab_spec(spec) for spec in flags.http_lab_grants]
+    for origin, _, _ in specs:
+        agent.engagement_state.require_in_scope(origin)
+    for origin, limits, mode in specs:
+        agent.engagement_state.http_permissions.activate(origin, limits, mode)
+    agent.engagement_state.http_permissions.set_yolo(flags.yolo)
 
 
 def require_existing_resume_session(session_id: str) -> session_store.Store:
@@ -976,6 +1002,16 @@ async def main() -> int:
             return 1
 
     apply_startup_target(agent, flags.target_url)
+    try:
+        apply_startup_http_grants(agent, flags)
+        prompter.bind_http_permissions(engagement_state.http_permissions)
+    except (ValueError, PermissionError) as err:
+        print(f"HTTP grant: {err}", file=sys.stderr)
+        await close_runtime_resources(root_ctl=root_ctl, reload_timer=None, watchers=[],
+                                      mcp_sessions=mcp_sessions, close_burp_bridge=close_burp_bridge)
+        return 2
+    if flags.http_lab_grants or flags.yolo:
+        print("HTTP operator grants:\n" + engagement_state.http_permissions.status(), file=sys.stderr)
 
     skill_dirs_to_watch = [d for d in all_skill_dirs if os.path.exists(d)]
     watchers: list[Any] = []
@@ -1496,10 +1532,19 @@ Flags:
   --browser-ingest [port]    deprecated alias for --burp
   --no-stream                disable streaming chat (fallback for backends
                              whose SSE/ND-JSON path drops tool_calls)
-  --yolo                     auto-approve routine recon, enumeration, and benign
-                             validation inside declared target scope; impact actions
-                             and system-sensitive operations still require approval
+  --yolo                     activate bounded native HTTP autonomy in operator scope
+                             without manual grants; accept unknown server effects,
+                             including bulk delete/real-data changes. Per origin:
+                             500 requests/20min, 3/s burst 3, concurrency 2,
+                             request 128KiB, retained response 64KiB. Explicit limits,
+                             revocation and confirm-each remain enforced. Other tools
+                             keep existing gates; phase never grants HTTP authority
                              (alias: --dangerously-skip-permissions)
+  --http-lab-grant <spec>     ORIGIN,MODE,SECONDS,REQUESTS,RATE,BURST,CONCURRENCY,
+                             REQUEST_BYTES,RESPONSE_BYTES (repeatable, in scope only)
+  --accept-unknown-http-effects
+                             required with lab grant: bulk delete/real-data/server
+                             effects are possible; no test-only or sandbox guarantee
   --list-skills / --list-tools
   --log <path>
   --debug-session             write a complete JSONL session debug log
@@ -1507,7 +1552,7 @@ Flags:
   --version / --help
 
 In the TUI: Enter send · Esc cancel turn · Ctrl-C quit · mouse-wheel scroll
-Slash: /help /plan /clear /reset /exit /target /maxsteps /thinking 
+Slash: /help /plan /clear /reset /exit /target /scope /permissions /maxsteps /thinking
 """
     )
 

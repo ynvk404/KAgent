@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch
+from src.permission.http_grants import HTTPLimits
 from src.permission.permission import Decision, UserControlledRefusal, YoloPrompter
 from src.engagement.state import EngagementState, OutOfScopeError
 from src.target.target import Target
@@ -23,6 +24,9 @@ class FakeResponse:
         }
 
         self._content = text.encode()
+
+    async def aclose(self):
+        pass
 
     async def aread(self):
         return self._content
@@ -51,10 +55,7 @@ class FakePrompter:
 
 
 def make_stream_cm():
-    stream_cm = AsyncMock()
-    stream_cm.__aenter__.return_value = FakeResponse()
-    stream_cm.__aexit__.return_value = None
-    return stream_cm
+    return FakeResponse()
 
 
 def scoped_tool(
@@ -94,9 +95,8 @@ def test_summarize_default_get():
         "http: GET http://example.test"
     )
 
-    assert result["detail"] == (
-        "phase: recon\nGET http://example.test"
-    )
+    assert "GET http://example.test" in result["detail"]
+    assert "user-agent: kagent/0.1" in result["detail"]
 
 
 def test_summarize_ignores_malformed_headers():
@@ -104,7 +104,8 @@ def test_summarize_ignores_malformed_headers():
         {"phase": "recon", "url": "http://example.test", "headers": "not-an-object"}
     )
 
-    assert result["detail"] == "phase: recon\nGET http://example.test"
+    assert "GET http://example.test" in result["detail"]
+    assert "user-agent: kagent/0.1" in result["detail"]
 
 @pytest.mark.asyncio
 async def test_default_get_runtime():
@@ -113,14 +114,12 @@ async def test_default_get_runtime():
 
     response = FakeResponse()
 
-    stream_cm = AsyncMock()
-    stream_cm.__aenter__.return_value = response
-    stream_cm.__aexit__.return_value = None
+    stream_cm = response
 
     with (
         patch(
-            "src.tools.http.httpx.AsyncClient.stream",
-            return_value=stream_cm,
+            "src.tools.http.httpx.AsyncClient.send",
+            new=AsyncMock(return_value=stream_cm),
         ) as mock_stream,
         patch(
             "src.tools.http.gate_private_request",
@@ -138,9 +137,9 @@ async def test_default_get_runtime():
 
         mock_stream.assert_called_once()
 
-        _, kwargs = mock_stream.call_args
+        request = mock_stream.call_args.args[0]
 
-        assert kwargs["method"] == "GET"
+        assert request.method == "GET"
 
         assert "HTTP/1.1 200 OK" in out
         assert "ok" in out
@@ -157,12 +156,10 @@ async def test_http_body_cap_reports_only_actual_truncation(size, status):
         text="x" * size, status=status,
         status_text="OK" if status == 200 else "Forbidden",
     )
-    stream_cm = AsyncMock()
-    stream_cm.__aenter__.return_value = response
-    stream_cm.__aexit__.return_value = None
+    stream_cm = response
 
     with (
-        patch("src.tools.http.httpx.AsyncClient.stream", return_value=stream_cm),
+        patch("src.tools.http.httpx.AsyncClient.send", return_value=stream_cm),
         patch(
             "src.tools.http.gate_private_request",
             new=AsyncMock(return_value=""),
@@ -196,8 +193,8 @@ async def test_target_http_keeps_its_environment_proxy_policy(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        def stream(self, **kwargs):
-            return FakeStream()
+        async def send(self, request, **kwargs):
+            return FakeResponse()
 
     monkeypatch.setattr("src.tools.http.httpx.AsyncClient", FakeClient)
     monkeypatch.setattr(
@@ -267,13 +264,11 @@ async def test_allow_private_url():
 
     response = FakeResponse()
 
-    stream_cm = AsyncMock()
-    stream_cm.__aenter__.return_value = response
-    stream_cm.__aexit__.return_value = None
+    stream_cm = response
 
     with patch(
-        "src.tools.http.httpx.AsyncClient.stream",
-        return_value=stream_cm,
+        "src.tools.http.httpx.AsyncClient.send",
+        new=AsyncMock(return_value=stream_cm),
     ) as mock_stream:
 
         out = await tool.run(
@@ -284,7 +279,7 @@ async def test_allow_private_url():
             prompter,
         )
 
-        prompter.ask.assert_called_once()
+        assert prompter.ask.call_count == 2
         mock_stream.assert_called_once()
 
         assert "HTTP/1.1 200 OK" in out
@@ -300,10 +295,9 @@ def test_permission_scope():
             "https://app.example.com/a?x=1"
         }
     ) == {
-        "cacheKey": "https://app.example.com",
-        "sessionScopeDisplay": "HTTP requests to https://app.example.com",
-        "riskTier": "routine",
-        "yoloAutoApprove": True,
+        "noSessionCache": True,
+        "riskTier": "high-impact",
+        "yoloAutoApprove": False,
     }
 
     assert tool.permission_hints(
@@ -313,23 +307,22 @@ def test_permission_scope():
             "http://169.254.169.254/"
         }
     ) == {
-        "cacheKey": "http://169.254.169.254",
-        "sessionScopeDisplay": "HTTP requests to http://169.254.169.254",
-        "riskTier": "routine",
-        "yoloAutoApprove": True,
+        "noSessionCache": True,
+        "riskTier": "high-impact",
+        "yoloAutoApprove": False,
     }
 
 
 @pytest.mark.parametrize(
     ("args", "expected_tier", "expected_auto"),
     [
-        ({"phase": "recon", "method": "GET", "url": "https://app.example/"}, "routine", True),
-        ({"phase": "validation", "method": "POST", "url": "https://app.example/submit", "body": "marker"}, "bounded-impact", True),
+        ({"phase": "recon", "method": "GET", "url": "https://app.example/"}, "high-impact", False),
+        ({"phase": "validation", "method": "POST", "url": "https://app.example/submit", "body": "marker"}, "high-impact", False),
         ({"phase": "impact", "method": "POST", "url": "https://app.example/submit", "body": "effect"}, "high-impact", False),
         ({"phase": "impact", "method": "GET", "url": "https://app.example/resource/1"}, "high-impact", False),
     ],
 )
-def test_http_permission_policy_uses_declared_phase_not_method_or_body(args, expected_tier, expected_auto):
+def test_http_permission_hints_never_authorize_from_phase_method_or_body(args, expected_tier, expected_auto):
     hints = scoped_tool().permission_hints(args)
     assert hints.get("noSessionCache", False) is (not expected_auto)
     assert hints.get("riskTier") == expected_tier
@@ -368,10 +361,9 @@ def test_permission_cache_key_uses_canonical_origin():
     tool = scoped_tool()
 
     assert tool.permission_hints({"url": "HTTPS://App.Example:443/path", "phase": "recon"}) == {
-        "cacheKey": "https://app.example",
-        "sessionScopeDisplay": "HTTP requests to https://app.example",
-        "riskTier": "routine",
-        "yoloAutoApprove": True,
+        "noSessionCache": True,
+        "riskTier": "high-impact",
+        "yoloAutoApprove": False,
     }
 
 
@@ -385,8 +377,8 @@ async def test_http_allows_only_explicit_additional_origins():
     with (
         patch("src.tools.http.gate_private_request", new=AsyncMock(return_value="")),
         patch(
-            "src.tools.http.httpx.AsyncClient.stream",
-            return_value=make_stream_cm(),
+            "src.tools.http.httpx.AsyncClient.send",
+            new=AsyncMock(return_value=make_stream_cm()),
         ) as mock_stream,
     ):
         await tool.run(
@@ -399,19 +391,20 @@ async def test_http_allows_only_explicit_additional_origins():
 
 
 @pytest.mark.asyncio
-async def test_yolo_auto_approves_in_scope_post_validation():
+async def test_autonomous_grant_approves_in_scope_post_validation():
     target = Target("https://app.example")
     engagement = EngagementState()
     engagement.initialize_target(target.base_url())
     registry = Registry()
     registry.register(HTTPTool(target, engagement))
+    engagement.http_permissions.activate(target.base_url(), HTTPLimits())
     inner = FakePrompter(Decision.DENY)
 
     with (
         patch("src.tools.private_host.private_host_reason", new=AsyncMock(return_value="")),
         patch(
-            "src.tools.http.httpx.AsyncClient.stream",
-            return_value=make_stream_cm(),
+            "src.tools.http.httpx.AsyncClient.send",
+            new=AsyncMock(return_value=make_stream_cm()),
         ) as mock_stream,
     ):
         result = await registry.execute(
@@ -427,7 +420,7 @@ async def test_yolo_auto_approves_in_scope_post_validation():
 
 
 @pytest.mark.asyncio
-async def test_impact_http_is_never_yolo_approved():
+async def test_impact_without_yolo_requires_exact_approval():
     target = Target("https://app.example")
     engagement = EngagementState()
     engagement.initialize_target(target.base_url())
@@ -435,13 +428,13 @@ async def test_impact_http_is_never_yolo_approved():
     registry.register(HTTPTool(target, engagement))
     inner = FakePrompter(Decision.DENY)
 
-    with patch("src.tools.http.httpx.AsyncClient.stream") as mock_stream:
-        with pytest.raises(UserControlledRefusal, match="permission denied"):
+    with patch("src.tools.http.httpx.AsyncClient.send") as mock_stream:
+        with pytest.raises(UserControlledRefusal, match="denied"):
             await registry.execute(
                 "http",
                 {"phase": "impact", "method": "GET", "url": "/resource/1"},
                 None,
-                YoloPrompter(inner, True),
+                YoloPrompter(inner, False),
             )
 
     inner.ask.assert_called_once()
@@ -453,12 +446,13 @@ async def test_impact_http_is_never_yolo_approved():
 
 
 @pytest.mark.asyncio
-async def test_private_gate_coalesces_with_exact_target_http_approval():
+async def test_private_target_gate_preserves_independent_yolo_policy():
     target = Target("http://juice.lab:3000")
     engagement = EngagementState()
     engagement.initialize_target(target.base_url())
     registry = Registry()
     registry.register(HTTPTool(target, engagement))
+    engagement.http_permissions.activate(target.base_url(), HTTPLimits())
     inner = FakePrompter(Decision.DENY)
 
     with (
@@ -467,8 +461,8 @@ async def test_private_gate_coalesces_with_exact_target_http_approval():
             new=AsyncMock(return_value="DNS resolves to loopback IPv4"),
         ),
         patch(
-            "src.tools.http.httpx.AsyncClient.stream",
-            return_value=make_stream_cm(),
+            "src.tools.http.httpx.AsyncClient.send",
+            new=AsyncMock(return_value=make_stream_cm()),
         ) as mock_stream,
     ):
         await registry.execute(
@@ -490,6 +484,7 @@ async def test_yolo_does_not_bypass_private_gate_for_another_scoped_origin():
     engagement.add_origin("http://127.0.0.1:8080")
     registry = Registry()
     registry.register(HTTPTool(target, engagement))
+    engagement.http_permissions.activate("http://127.0.0.1:8080", HTTPLimits())
     inner = FakePrompter(Decision.DENY)
 
     with (
@@ -497,7 +492,7 @@ async def test_yolo_does_not_bypass_private_gate_for_another_scoped_origin():
             "src.tools.private_host.private_host_reason",
             new=AsyncMock(return_value="loopback IPv4"),
         ),
-        patch("src.tools.http.httpx.AsyncClient.stream") as mock_stream,
+        patch("src.tools.http.httpx.AsyncClient.send") as mock_stream,
     ):
         with pytest.raises(UserControlledRefusal, match="private/internal URL denied"):
             await registry.execute(
@@ -530,8 +525,8 @@ async def test_http_passes_target_to_private_gate():
             new=AsyncMock(return_value="loopback IPv4"),
         ) as mock_gate,
         patch(
-            "src.tools.http.httpx.AsyncClient.stream",
-            return_value=make_stream_cm(),
+            "src.tools.http.httpx.AsyncClient.send",
+            new=AsyncMock(return_value=make_stream_cm()),
         ),
     ):
         await tool.run(
@@ -559,8 +554,8 @@ async def test_http_prepends_private_note_when_reason_present():
             new=AsyncMock(return_value="loopback IPv4"),
         ),
         patch(
-            "src.tools.http.httpx.AsyncClient.stream",
-            return_value=make_stream_cm(),
+            "src.tools.http.httpx.AsyncClient.send",
+            new=AsyncMock(return_value=make_stream_cm()),
         ),
     ):
         out = await tool.run(
@@ -569,7 +564,7 @@ async def test_http_prepends_private_note_when_reason_present():
             FakePrompter(),
         )
 
-    assert out.startswith("note: private/internal host approved")
+    assert out.startswith("note: private/internal host independently approved")
     assert "loopback IPv4" in out
 
 @pytest.mark.asyncio
@@ -583,8 +578,8 @@ async def test_http_no_note_when_host_is_public():
             new=AsyncMock(return_value=""),
         ),
         patch(
-            "src.tools.http.httpx.AsyncClient.stream",
-            return_value=make_stream_cm(),
+            "src.tools.http.httpx.AsyncClient.send",
+            new=AsyncMock(return_value=make_stream_cm()),
         ),
     ):
         out = await tool.run(

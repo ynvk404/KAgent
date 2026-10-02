@@ -63,6 +63,13 @@ def is_sensitive_path(
 ) -> bool:
     cleaned = abs_path.replace("\\", "/")
 
+    # Sensitive evidence derivatives stay protected independently of their
+    # filename/extension. This is runtime storage metadata, not a payload filter.
+    parts = [part.lower() for part in Path(cleaned).parts]
+    for index in range(len(parts) - 3):
+        if parts[index:index + 2] == [".kagent", "evidence"] and parts[index + 3] == "sensitive":
+            return True
+
     if not cleaned.startswith("/"):
         cleaned = os.path.abspath(cleaned).replace("\\", "/")
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.target.origin import HTTPOrigin
+from src.permission.http_grants import HTTPPermissions
 
 
 class OutOfScopeError(PermissionError):
@@ -15,6 +16,10 @@ class EngagementState:
     version: int = 1
     revision: int = 0
     allowed_origins: frozenset[HTTPOrigin] = field(default_factory=frozenset)
+    http_permissions: HTTPPermissions = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self.http_permissions = HTTPPermissions(self)
 
     def add_origin(self, url: str) -> tuple[HTTPOrigin, bool]:
         origin = HTTPOrigin.from_url(url)
@@ -22,6 +27,7 @@ class EngagementState:
             return origin, False
         self.allowed_origins = self.allowed_origins | {origin}
         self.revision += 1
+        self.http_permissions.scope_changed()
         return origin, True
 
     def remove_origin(self, url: str) -> tuple[HTTPOrigin, bool]:
@@ -30,6 +36,7 @@ class EngagementState:
             return origin, False
         self.allowed_origins = self.allowed_origins - {origin}
         self.revision += 1
+        self.http_permissions.scope_changed()
         return origin, True
 
     def reset_to_origin(self, url: str) -> tuple[HTTPOrigin, bool]:
@@ -38,6 +45,7 @@ class EngagementState:
         if changed:
             self.allowed_origins = frozenset({origin})
             self.revision += 1
+            self.http_permissions.scope_changed()
         return origin, changed
 
     def initialize_target(self, url: str) -> bool:
@@ -50,6 +58,7 @@ class EngagementState:
         if changed:
             self.allowed_origins = frozenset()
             self.revision += 1
+            self.http_permissions.scope_changed()
         return changed
 
     def is_in_scope(self, url: str) -> bool:
@@ -104,6 +113,7 @@ class EngagementState:
         return state
 
     def replace_from(self, other: "EngagementState") -> None:
+        self.http_permissions.reset()
         self.version = other.version
         self.revision = other.revision
         self.allowed_origins = frozenset(other.allowed_origins)

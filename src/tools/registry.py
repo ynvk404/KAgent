@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any, cast
 
 from src.permission.permission import (
@@ -17,10 +18,12 @@ from .types import (
     PermissionHintTool,
     ActionPermissionTool,
     ArgumentValidatingTool,
+    AuthorizedExecutionTool,
     ContextReductionPolicy,
     ContextReductionTool,
 )
 from src.llm.types import ToolSpec
+from .approval_display import redact_approval as redact
 
 
 class InvalidToolArguments(ValueError):
@@ -146,11 +149,21 @@ class Registry:
                 f"unknown tool: {name}"
             )
 
+        # Approval and dispatch use the same private snapshot, even if the
+        # caller changes nested arguments while the operator is reviewing.
+        args = deepcopy(args)
+
         if isinstance(tool, ArgumentValidatingTool):
             try:
                 tool.validate_args(args)
             except (TypeError, ValueError) as err:
                 raise InvalidToolArguments(str(err)) from err
+
+        if isinstance(tool, AuthorizedExecutionTool):
+            # Native HTTP uses operator grants/exact receipts rather than the
+            # generic phase hints and origin permission cache. Direct tool calls
+            # use the same gate; this is not an unguarded dispatch path.
+            return await tool.run_authorized(args, signal, prompter)
 
         requires_permission = (
             tool.requires_permission_for(args)
@@ -176,8 +189,8 @@ class Registry:
 
             request = PermissionRequest(
                 tool=tool.name(),
-                summary=summary["summary"],
-                detail=summary["detail"],
+                summary=redact(summary["summary"]),
+                detail=redact(summary["detail"]),
                 no_session_cache=hints.get(
                     "noSessionCache",
                     False,

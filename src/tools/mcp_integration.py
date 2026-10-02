@@ -264,12 +264,15 @@ class MCPTool:
         return {"noSessionCache": True, "riskTier": "high-impact"}
 
     def summarize(self, args: dict[str, Any]) -> dict[str, str]:
-        primary = primary_tool_arg(self._tool_name, args)
-        if primary is not None:
-            return {"summary": display_tool_name(self._tool_name), "detail": primary}
+        from src.redact.redact import redact_payload
+
         return {
-            "summary": f"mcp: {self._tool_name}",
-            "detail": json.dumps(args, indent=2),
+            "summary": f"mcp: {self._session.server_name}/{self._remote_name}",
+            "detail": json.dumps(redact_payload({
+                "server": self._session.server_name,
+                "tool": self._remote_name,
+                "args": args,
+            }), indent=2, ensure_ascii=False),
         }
 
     async def run(

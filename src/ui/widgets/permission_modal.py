@@ -12,6 +12,7 @@ from src.ui.theme import MUTED, WARNING
 from src.tools.tool_display import display_tool_name
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest
 from src.permission.permission import Decision
+from src.tools.approval_display import redact_approval as redact
 
 COMMAND_TOOLS = {
     "shell",
@@ -101,6 +102,7 @@ class PermissionModal:
         req: BridgedPermissionRequest,
     ):
         self.req = req
+        self.show_full_detail = False
 
     def handle_key(
         self,
@@ -109,11 +111,18 @@ class PermissionModal:
 
         key = key.lower()
 
+        if key == "v":
+            self.show_full_detail = not self.show_full_detail
+            return
+
         if key in ("escape", "esc"):
             self.req.resolve(Decision.DENY)
 
         elif key == "y":
             self.req.resolve(Decision.ALLOW_ONCE)
+
+        elif key == "g" and self.req.offer_http_lab:
+            self.req.resolve(Decision.GRANT_LAB)
 
         elif key == "a" and not self.req.no_session_cache:
             self.req.resolve(Decision.ALLOW_SESSION)
@@ -135,14 +144,14 @@ class PermissionModal:
         show_detail = bool(req.detail) and req.detail != req.summary
 
         if action is None:
-            parts.extend((Text(""), Text(req.summary)))
+            parts.extend((Text(""), Text(redact(req.summary))))
 
         if action is not None:
             parts.append(Text(""))
             title, action_text, explanation = action
             parts.append(
                 Panel(
-                    Text(truncate(action_text, COMMAND_DETAIL_CAP)),
+                    Text(self._detail(action_text, COMMAND_DETAIL_CAP)),
                     title=title,
                     title_align="left",
                     border_style=MUTED,
@@ -152,10 +161,10 @@ class PermissionModal:
                 )
             )
             if explanation:
-                parts.extend((Text(""), Text(truncate(explanation, PROSE_DETAIL_CAP))))
+                parts.extend((Text(""), Text(self._detail(explanation, PROSE_DETAIL_CAP))))
 
         if action is None and show_detail:
-            parts.extend((Text(""), Text(truncate(req.detail, PROSE_DETAIL_CAP))))
+            parts.extend((Text(""), Text(self._detail(req.detail, PROSE_DETAIL_CAP))))
 
         parts.append(Text(""))
 
@@ -166,7 +175,10 @@ class PermissionModal:
             ))
 
         if req.no_session_cache:
-            parts.append(Text("Session trust unavailable for this sensitive action", style=WARNING))
+            parts.append(Text(
+                "Exact request review; generic session trust unavailable. Use operator HTTP grants."
+                if req.tool == "http_lab_grant" or (req.tool == "http" and not req.summary.startswith("http: private/internal URL "))
+                else "Session trust unavailable for this sensitive action", style=WARNING))
         else:
             parts.append(Text(
                 "Session trust: "
@@ -179,5 +191,15 @@ class PermissionModal:
             else "y allow once · a trust for session · n deny · Esc cancel"
         )
         parts.extend((Text(""), Text(permission_keys, style=MUTED)))
+        if req.offer_http_lab:
+            parts.append(Text("g review broad lab grant (separate confirmation)", style=WARNING))
+        parts.append(Text(
+            "v full detail / preview · scroll to review · secrets redacted",
+            style=MUTED,
+        ))
 
         return Group(*parts)
+
+    def _detail(self, text: str, cap: int) -> str:
+        safe = redact(text)
+        return safe if self.show_full_detail else truncate(safe, cap)

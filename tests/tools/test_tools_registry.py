@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import AsyncMock
 
 from src.findings.store import Store as FindingsStore
 from src.config.config import PluginConfig
 from src.coverage.store import CoverageStore
 from src.engagement.state import EngagementState
+from src.permission.http_grants import HTTPLimits
 from src.permission.permission import (
     Decision,
     PermissionRequest,
@@ -176,7 +178,9 @@ async def test_yolo_does_not_bypass_non_cacheable_coverage_clear(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["shell", "file_write", "http", "plugin"])
-async def test_yolo_cannot_bypass_high_impact_tool_permissions(action, tmp_path):
+async def test_yolo_preserves_high_impact_tool_and_http_confirm_each_permissions(action, tmp_path, monkeypatch):
+    send = AsyncMock()
+    monkeypatch.setattr("src.tools.http.httpx.AsyncClient.send", send)
     registry = Registry()
     if action == "shell":
         registry.register(ShellTool())
@@ -201,6 +205,7 @@ async def test_yolo_cannot_bypass_high_impact_tool_permissions(action, tmp_path)
         target = Target("https://target.test")
         engagement = EngagementState()
         engagement.initialize_target(target.base_url())
+        engagement.http_permissions.activate(target.base_url(), HTTPLimits(), "confirm-each")
         registry.register(HTTPTool(target, engagement))
         args = {"phase": "impact", "method": "POST", "url": "/submit", "body": "marker"}
         expected_tier = "high-impact"
@@ -214,16 +219,20 @@ async def test_yolo_cannot_bypass_high_impact_tool_permissions(action, tmp_path)
     assert len(inner.calls) == 1
     assert inner.calls[0].no_session_cache is True
     assert inner.calls[0].risk_tier == expected_tier
+    send.assert_not_called()
     if action == "file_write":
         assert not path.exists()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
-async def test_yolo_cannot_bypass_http_overwrite_or_delete_permissions(method):
+async def test_yolo_cannot_bypass_http_confirm_each_denial(method, monkeypatch):
+    send = AsyncMock()
+    monkeypatch.setattr("src.tools.http.httpx.AsyncClient.send", send)
     target = Target("https://target.test")
     engagement = EngagementState()
     engagement.initialize_target(target.base_url())
+    engagement.http_permissions.activate(target.base_url(), HTTPLimits(), "confirm-each")
     registry = Registry()
     registry.register(HTTPTool(target, engagement))
     inner = SpyPrompter(Decision.DENY)
@@ -240,6 +249,7 @@ async def test_yolo_cannot_bypass_http_overwrite_or_delete_permissions(method):
     assert len(inner.calls) == 1
     assert inner.calls[0].risk_tier == "high-impact"
     assert inner.calls[0].no_session_cache is True
+    send.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_prompts_and_denies_when_yolo_disabled():

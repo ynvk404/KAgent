@@ -12,6 +12,7 @@ from src.llm.models import list_models
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.state import Append, Clear, TranscriptEntry
 from src.ui.widgets.text_input_modal import TextInputRequest
+from src.permission.http_control import parse_lab_spec, GRANT_SYNTAX
 
 if TYPE_CHECKING:
     from src.agent.agent import Agent
@@ -44,10 +45,14 @@ _KEYBINDINGS: list[tuple[str, str]] = [
 _COMMAND_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     ("Everyday", ("/help", "/target", "/scope", "/plan", "/provider", "/model", "/clear", "/reset", "/exit")),
     ("Workflow", ("/next", "/compact", "/memory", "/skills", "/snapshot")),
-    ("Advanced", ("/burp", "/maxsteps", "/thinking", "/yolo")),
+    ("Advanced", ("/permissions", "/burp", "/maxsteps", "/thinking", "/yolo")),
 ]
 
 _HELP_OVERRIDES: dict[str, tuple[str, str]] = {
+    "/permissions": (
+        "[show|grant <spec>|revoke <id>|deny|retry <origin>]",
+        "manage HTTP permissions",
+    ),
     "/burp": ("[port|stop|status]", "manage the local Burp bridge"),
     "/exit": ("(/quit)", "quit kagent"),
     "/memory": (
@@ -255,6 +260,43 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
     agent = app.agent
     dispatch = app.dispatch
 
+    if cmd == "/permissions":
+        rights = agent.engagement_state.http_permissions
+        rights.sync_target()
+        try:
+            sub = rest[0] if rest else "show"
+            if sub == "show" and len(rest) <= 1:
+                text = rights.status() + "\nGrant format: " + GRANT_SYNTAX
+            elif sub == "deny" and len(rest) == 1:
+                rights.deny_session()
+                text = "HTTP denied for session; active grants revoked. Explicit retry/new grant required."
+            elif sub == "revoke" and len(rest) == 2:
+                rights.revoke(rest[1])
+                text = "HTTP grant revoked. New dispatch blocked; already-sent effects cannot be undone."
+            elif sub == "retry" and len(rest) == 2:
+                rights.retry(rest[1])
+                text = ("Operator reopened HTTP review for this origin. Expired/exhausted exact-only "
+                        "envelope can renew with default limits; lab grant budgets unchanged. "
+                        "No exact request approval issued; active YOLO can reopen scoped autonomy.")
+            elif sub == "grant" and len(rest) == 2:
+                origin, limits, mode = parse_lab_spec(rest[1])
+                async def _review_http_grant():
+                    try:
+                        grant = await rights.review_grant(origin, limits, mode, agent.prompter)
+                        result = rights.status() if grant else "HTTP grant declined; no rights issued."
+                        dispatch(Append(entry=TranscriptEntry(kind="system", text=result)))
+                    except Exception as err:
+                        dispatch(Append(entry=TranscriptEntry(kind="error", text=f"HTTP permissions: {err}")))
+                asyncio.create_task(_review_http_grant())
+                return True
+            else:
+                raise ValueError("usage: /permissions [show|grant <spec>|revoke <id>|deny|retry <origin>]\n" + GRANT_SYNTAX)
+        except (ValueError, PermissionError) as err:
+            dispatch(Append(entry=TranscriptEntry(kind="error", text=str(err))))
+            return True
+        dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
+        return True
+
     if cmd in ("/exit", "/quit"):
         app.exit()
         return True
@@ -276,10 +318,9 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                     entry=TranscriptEntry(
                         kind="system",
                         text=(
-                            f"YOLO currently {current}. Routine reconnaissance, "
-                            "enumeration, and benign in-scope validation are eligible "
-                            "for auto-approval; impact and sensitive local actions "
-                            f"still require human approval. Scope: {scope_text}."
+                            f"YOLO currently {current}. When on, native HTTP runs within "
+                            "operator scope and finite limits; confirm-each still prompts. "
+                            f"Other tools keep their existing gates. Scope: {scope_text}."
                         ),
                     )
                 )
@@ -300,6 +341,9 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
         next_state = DEFAULT_YOLO_ENABLED if arg == "default" else arg == "on"
         app.apply_yolo(next_state)
+        engagement = getattr(agent, "engagement_state", None)
+        if engagement is not None:
+            engagement.http_permissions.set_yolo(next_state)
 
         if arg == "default":
             text = "YOLO reset to default (off)"
@@ -314,13 +358,16 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                 if scope_origins else "no target scope declared; set /target first"
             )
             text = (
-                "YOLO enabled. Routine reconnaissance, enumeration, and benign "
-                "validation inside declared scope may run automatically. Impact "
-                "actions, out-of-scope destinations, and sensitive local actions "
-                f"still require human approval. Scope: {scope_text}."
+                "YOLO enabled: native HTTP automatically receives bounded rights in operator scope. "
+                "Per origin: 500 requests/20 minutes, 3/s (burst 3), concurrency 2, "
+                "request 128 KiB, retained response 64 KiB. You accept unknown server effects; "
+                "bulk delete or changes to real data are NOT prevented. "
+                "Existing limits, revocation and confirm-each remain enforced. "
+                "Use /permissions to view or adjust; other tools keep their existing gates. "
+                f"Scope: {scope_text}."
             )
         else:
-            text = "YOLO disabled. Tool calls will prompt for confirmation."
+            text = "YOLO disabled: YOLO HTTP rights removed. Explicit autonomous HTTP grants remain active; confirm-each still prompts."
 
         dispatch(
             Append(

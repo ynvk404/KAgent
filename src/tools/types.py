@@ -72,6 +72,14 @@ class ArgumentValidatingTool(Protocol):
 
 
 @runtime_checkable
+class AuthorizedExecutionTool(Protocol):
+    """Registry-owned dispatch to a tool with typed runtime authorization."""
+
+    async def run_authorized(self, args: dict[str, Any], signal: Any, prompter: Any) -> str:
+        ...
+
+
+@runtime_checkable
 class ContextReductionTool(Protocol):
     """Optional policy for tool results copied into the LLM working context."""
 

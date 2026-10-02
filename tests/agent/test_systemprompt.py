@@ -278,7 +278,7 @@ class TestBuildSystemPrompt:
             assert "candidate_id" in prompt
             assert "conditionally" in prompt
 
-    def test_requires_explicit_scope_for_destructive_or_state_mutating_tools(self):
+    def test_http_rights_require_operator_grant_and_do_not_expand_to_other_tools(self):
         for profile in ("full", "compact"):
             prompt = build_system_prompt(
                 BuildOptions(
@@ -288,9 +288,10 @@ class TestBuildSystemPrompt:
                     prompt_profile=profile,
                 )
             )
-            assert "Do not infer a destructive or state-mutating tool action" in prompt
-            assert "explicitly identify both the action and its object or scope" in prompt
-            assert "not evidence that the proposal matches the user's intent" in prompt
+            assert "Do not infer operator rights from ambiguous natural language" in prompt
+            assert "operator YOLO activation or an explicit lab grant" in prompt
+            assert "model cannot enable YOLO or expand scope" in prompt
+            assert "does not prove safe server effects or confer local/shell/MCP" in prompt
 
     def test_permission_denial_guidance_is_present_in_both_prompt_profiles(self):
         guidance = (
@@ -355,7 +356,7 @@ class TestBuildSystemPrompt:
         )
 
         assert "Tool selection: native scoped tools first" in p
-        assert "declare the action phase" in p
+        assert "declare phase only as a workflow annotation" in p
         assert "content_discovery" in p
         assert "service_discovery" in p
         assert "minimal profile" in p

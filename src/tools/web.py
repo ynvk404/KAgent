@@ -249,9 +249,14 @@ class WebFetchTool(Tool):
             message, code = _map_httpx_error(err)
             return _fetch_failure_output(url, message, False, code, _failure_kind(err))
 
-        async with resp:
+        try:
             raw = await _decode_capped(resp, FETCH_BODY_CAP)
             status, status_text = resp.status_code, resp.reason_phrase
+        except httpx.HTTPError as err:
+            message, code = _map_httpx_error(err)
+            return _fetch_failure_output(url, message, False, code, _failure_kind(err))
+        finally:
+            await resp.aclose()
 
         text = strip_html(raw)
         if len(text) > FETCH_TEXT_CAP:
@@ -280,7 +285,7 @@ async def _do_fetch(url: str) -> httpx.Response:
     )
     try:
         resp = await client.send(request, stream=True)
-    except Exception:
+    except BaseException:
         await client.aclose()
         raise
 
@@ -288,8 +293,10 @@ async def _do_fetch(url: str) -> httpx.Response:
     original_aclose = resp.aclose
 
     async def _aclose():
-        await original_aclose()
-        await client.aclose()
+        try:
+            await original_aclose()
+        finally:
+            await client.aclose()
 
     resp.aclose = _aclose  # type: ignore[method-assign]
     return resp
@@ -435,8 +442,13 @@ class WebSearchTool(Tool):
             message, code = _map_httpx_error(err)
             return _fetch_failure_output(endpoint, message, False, code, _failure_kind(err))
 
-        async with resp:
+        try:
             body = await _decode_capped(resp, SEARCH_BODY_CAP)
+        except httpx.HTTPError as err:
+            message, code = _map_httpx_error(err)
+            return _fetch_failure_output(endpoint, message, False, code, _failure_kind(err))
+        finally:
+            await resp.aclose()
 
         results: list[tuple[str, str, str]] = []
         for m in DDG_RESULT_RE.finditer(body):
@@ -483,14 +495,16 @@ async def _do_search(endpoint: str) -> httpx.Response:
     )
     try:
         resp = await client.send(request, stream=True)
-    except Exception:
+    except BaseException:
         await client.aclose()
         raise
     original_aclose = resp.aclose
 
     async def _aclose():
-        await original_aclose()
-        await client.aclose()
+        try:
+            await original_aclose()
+        finally:
+            await client.aclose()
 
     resp.aclose = _aclose  # type: ignore[method-assign]
     return resp

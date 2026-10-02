@@ -1646,6 +1646,7 @@ class Agent:
         return self.tools_tokens_cache
 
     async def reset(self) -> None:
+        self.engagement_state.http_permissions.reset()
         self.memory = None
         self.workflow.clear()
         self._clear_permission_cache()
@@ -1691,6 +1692,7 @@ class Agent:
         if self.store is None:
             return
 
+        self.engagement_state.http_permissions.reset()
         loaded = self.store.load()
         self._clear_permission_cache()
 
@@ -1907,7 +1909,7 @@ class Agent:
                     continue
                 if any(
                     (artifact := self.workflow.evidence.get(reference)) is None
-                    or not artifact.is_resolvable_for_resume(evidence_root)
+                    or not artifact.is_available_for_resume(evidence_root)
                     for reference in result.evidence_refs
                 ):
                     invalid.add(candidate.id)
