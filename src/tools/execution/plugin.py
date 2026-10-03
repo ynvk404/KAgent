@@ -63,7 +63,7 @@ class CommandPluginTool:
         signal: Any,
         prompter: Prompter,
     ) -> str:
-        from src.permission.execution import guard_process
+        from src.permission.runtime.execution import guard_process
         worker = guard_process(prompter, self, args)
         if not self.cfg.command:
             raise RuntimeError(
@@ -72,7 +72,7 @@ class CommandPluginTool:
 
         command, argv = self.cfg.command, self.cfg.args
         if worker is not None:
-            from src.permission.worker_broker import broker_directory
+            from src.permission.worker.broker import broker_directory
             async with broker_directory(signal) as broker:
                 command, argv = await worker.prepare(command, argv, broker=broker, signal=signal)
                 return await run_plugin(command, argv, args, signal)

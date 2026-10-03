@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from src.permission.http_grants import HTTPLimits
+from src.permission.network.grants import HTTPLimits
 from src.permission.permission import Decision, UserControlledRefusal, YoloPrompter
 from src.engagement.state import EngagementState, OutOfScopeError
 from src.target.target import Target

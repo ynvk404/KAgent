@@ -8,9 +8,9 @@ import pytest
 
 from src.agent.agent import Agent, AgentOptions
 from src.engagement.state import EngagementState
-from src.permission.execution import default_execution_policy, ExecutionBlocked
-from src.permission.http_grants import HTTPBlocked, HTTPLimits
-from src.permission.invocations import review_turn
+from src.permission.runtime.execution import default_execution_policy, ExecutionBlocked
+from src.permission.network.grants import HTTPBlocked, HTTPLimits
+from src.permission.runtime.invocations import review_turn
 from src.permission.permission import Decision, YoloPrompter
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target

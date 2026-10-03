@@ -5,7 +5,7 @@
     "benchmarks"
   ],
   "exclude": [
-    "**/Burp-integration/**",
+    "**/integrations/burp/**",
     "**/venv-linux/**",
     "**/venv/**",
     "**/.venv/**",

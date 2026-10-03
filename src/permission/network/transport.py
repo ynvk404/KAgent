@@ -13,8 +13,8 @@ import socket
 from typing import Any
 import httpx
 
-from src.permission.execution import ExecutionPolicy, ExecutionBlocked, policy_for, current_policy
-from src.permission.http_grants import EffectiveHTTP, check_cancelled
+from src.permission.runtime.execution import ExecutionPolicy, ExecutionBlocked, policy_for, current_policy
+from src.permission.network.grants import EffectiveHTTP, check_cancelled
 
 
 async def pin_request(policy: ExecutionPolicy, request: httpx.Request, *, research: bool = False) -> tuple[httpx.Request, str]:

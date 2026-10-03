@@ -32,8 +32,8 @@ from src.tools.execution.shell import run_with_capture
 from src.tools.http.request_builder import NATIVE_USER_AGENT
 from src.tools.common.types import PermissionHints, Tool
 from src.workflow.state import WorkflowState
-from src.permission.execution import guard_adapter
-from src.permission.network import governed_stream
+from src.permission.runtime.execution import guard_adapter
+from src.permission.network.transport import governed_stream
 
 
 DEFAULT_MAX_REQUESTS = 120
@@ -716,7 +716,7 @@ class ContentDiscoveryTool(Tool):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return [], 0, "operation timeout before ffuf started"
-        from src.permission.execution import current_policy
+        from src.permission.runtime.execution import current_policy
         policy = current_policy()
         worker = policy.worker if policy is not None else None
         with tempfile.TemporaryDirectory(prefix="kagent-content-", dir=worker.output_root if worker else None) as directory:
@@ -740,7 +740,7 @@ class ContentDiscoveryTool(Tool):
             try:
                 if worker is not None:
                     assert policy is not None
-                    from src.permission.worker_broker import broker_directory
+                    from src.permission.worker.broker import broker_directory
                     argv[1] = '/work/' + wordlist.relative_to(policy.root).as_posix()
                     argv[argv.index('-o') + 1] = '/work/' + result_file.relative_to(policy.root).as_posix()
                     argv += ['-x', 'http://127.0.0.1:18080']

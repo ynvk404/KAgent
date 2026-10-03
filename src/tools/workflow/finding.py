@@ -237,7 +237,7 @@ class ConfirmFindingTool:
 
         latest = self.workflow.latest_result(candidate_id)
         assert latest is not None  # eligibility above guarantees a result
-        from src.permission.execution import policy_for
+        from src.permission.runtime.execution import policy_for
         policy = policy_for(prompter)
         if policy is not None:
             verified = policy.observations.result(candidate_id, tuple(latest.evidence_refs),

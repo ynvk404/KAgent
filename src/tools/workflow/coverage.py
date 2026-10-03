@@ -154,7 +154,7 @@ class CoverageTool(Tool):
             )
 
         if action == "mark":
-            from src.permission.execution import policy_for
+            from src.permission.runtime.execution import policy_for
             if policy_for(prompter) is not None:
                 return self._error("mark", "unverified: model mark cannot establish tested coverage; use verifier-backed workflow")
             return await self.run_mark(args)

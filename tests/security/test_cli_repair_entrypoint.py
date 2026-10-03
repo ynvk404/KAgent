@@ -12,11 +12,11 @@ import pytest
 from src.config.config import Config, Backend, ToolingProfile
 from src.llm.runtime.probe import ProbeResult
 from src.llm.core.types import ChatResponse, Message, ToolCall, FunctionCall
-from src.permission.execution import ExecutionBlocked
+from src.permission.runtime.execution import ExecutionBlocked
 from src.permission.permission import Decision, UserControlledRefusal
 from src.ui.core.state import SetPerm
 from src.workflow.state import Candidate
-import src.permission.worker as worker_module
+import src.permission.worker.worker as worker_module
 from tests.helpers.agent_fakes import FakeClient
 from tests.security.test_repair_runtime import lab
 

@@ -201,7 +201,7 @@ class ShellTool(Tool):
         signal: Any,
         prompter: Prompter,
     ) -> ToolOutput:
-        from src.permission.execution import guard_process
+        from src.permission.runtime.execution import guard_process
         worker = guard_process(prompter, self, args)
         original_cmd = arg_string(args, "command") or ""
         cmd_str = rewrite_portable_command(original_cmd)
@@ -229,7 +229,7 @@ class ShellTool(Tool):
 
         cmd, argv = shell_invocation(self.shell_path, cmd_str)
         if worker is not None:
-            from src.permission.worker_broker import broker_directory
+            from src.permission.worker.broker import broker_directory
             async with broker_directory(signal) as broker:
                 cmd, argv = await worker.prepare(cmd, argv, broker=broker, signal=signal)
                 return await run_with_capture(cmd, argv, timeout_seconds, signal)

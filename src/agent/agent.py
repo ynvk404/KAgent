@@ -30,7 +30,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from .mentions import expand_file_mentions
 
 from src.redact.redact import apply as redact, redact_payload
-from src.permission.invocations import permission_turn
+from src.permission.runtime.invocations import permission_turn
 
 from src.llm.core.client import (
     Client,
@@ -1912,7 +1912,7 @@ class Agent:
                 result = self.workflow.latest_result(candidate.id)
                 if result is None or not result.evidence_refs:
                     continue
-                from src.permission.execution import policy_for
+                from src.permission.runtime.execution import policy_for
                 execution = policy_for(self.prompter)
                 if result.outcome in {"confirmed", "not-confirmed"} and execution is not None and execution.observations.result(
                     candidate.id, tuple(result.evidence_refs), execution.engagement.http_permissions.epoch, candidate

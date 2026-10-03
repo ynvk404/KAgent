@@ -8,7 +8,7 @@ from typing import Any, cast
 
 from src.paths import project_root
 from src.permission.permission import Prompter, UserControlledRefusal
-from src.permission.execution import policy_for
+from src.permission.runtime.execution import policy_for
 from src.tools.execution.file import gate_sensitive_path
 from src.redact.redact import apply as redact
 from src.coverage.store import CoverageStore, CoverageStatus
@@ -944,7 +944,7 @@ class WorkflowTool(Tool):
         return None
 
     async def _sync_coverage(self, candidate: Candidate, result: ValidationResult) -> None:
-        from src.permission.execution import current_policy
+        from src.permission.runtime.execution import current_policy
         policy = current_policy()
         if policy is not None and result.outcome in {'confirmed', 'not-confirmed'} and policy.observations.result(
             candidate.id, tuple(result.evidence_refs), policy.engagement.http_permissions.epoch, candidate

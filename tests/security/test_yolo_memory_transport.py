@@ -14,9 +14,9 @@ from src.llm.core.types import ChatResponse, Message
 from tests.helpers.agent_fakes import FakeClient, FakeSignal
 from tests.security.test_execution_policy import Operator
 from src.engagement.state import EngagementState, OutOfScopeError
-from src.permission.execution import ExecutionPolicy
+from src.permission.runtime.execution import ExecutionPolicy
 from src.permission.permission import YoloPrompter
-from src.permission.http_grants import HTTPLimits
+from src.permission.network.grants import HTTPLimits
 from src.target.target import Target
 from src.tools.common.registry import Registry
 from src.tools.http.http_tool import HTTPTool

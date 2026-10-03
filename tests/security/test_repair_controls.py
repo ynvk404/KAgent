@@ -11,7 +11,7 @@ from src.browser.store import CaptureStore
 from src.tools.common.browser_capture import register_browser_capture_tools
 from src.tools.discovery.content import ContentDiscoveryTool
 from src.tools.common.capabilities import CapabilityInventory
-from src.permission.execution import ExecutionBlocked, default_execution_policy
+from src.permission.runtime.execution import ExecutionBlocked, default_execution_policy
 from src.permission.permission import UserControlledRefusal, Decision, YoloPrompter
 from src.engagement.state import EngagementState
 from src.tools.common.registry import Registry
@@ -118,7 +118,7 @@ async def test_operator_proof_review_separate_from_yolo_tool_approval(lab, tmp_p
 @pytest.mark.asyncio
 async def test_exact_http_deny_does_not_deny_other_request_or_future_turn(lab):
     registry, p, policy, operator, origin, requests = lab
-    from src.permission.invocations import review_turn
+    from src.permission.runtime.invocations import review_turn
     with review_turn():
         p.set_yolo(False)
         with pytest.raises(UserControlledRefusal):

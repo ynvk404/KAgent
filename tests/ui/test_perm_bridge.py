@@ -837,8 +837,8 @@ async def test_cancelled_cache_handoff_keeps_fanout_scoped(permissions):
 @pytest.mark.asyncio
 async def test_registry_shared_abort_then_fresh_turn_reads_local_file(permissions, tmp_path):
     from src.engagement.state import EngagementState
-    from src.permission.execution import default_execution_policy
-    from src.permission.invocations import review_turn
+    from src.permission.runtime.execution import default_execution_policy
+    from src.permission.runtime.invocations import review_turn
     from src.permission.permission import YoloPrompter
     from src.tools.execution.file import FileReadTool
     from src.tools.common.registry import Registry

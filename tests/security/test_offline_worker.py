@@ -9,10 +9,10 @@ import pytest
 
 from src.config.config import PluginConfig
 from src.engagement.state import EngagementState
-from src.permission.execution import ExecutionPolicy
-from src.permission.execution import ExecutionBlocked
+from src.permission.runtime.execution import ExecutionPolicy
+from src.permission.runtime.execution import ExecutionBlocked
 from src.permission.permission import Decision, YoloPrompter
-from src.permission.worker import OfflineWorker
+from src.permission.worker.worker import OfflineWorker
 from src.tools.common.registry import Registry
 from src.tools.execution.shell import ShellTool
 from src.tools.execution.plugin import CommandPluginTool

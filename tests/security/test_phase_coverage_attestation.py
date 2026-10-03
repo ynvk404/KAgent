@@ -9,8 +9,8 @@ import httpx
 import pytest
 
 from src.engagement.state import EngagementState
-from src.permission.execution import ExecutionPolicy
-from src.permission.http_grants import HTTPLimits
+from src.permission.runtime.execution import ExecutionPolicy
+from src.permission.network.grants import HTTPLimits
 from src.permission.permission import AlwaysAllow, UserControlledRefusal, YoloPrompter
 from src.target.target import Target
 from src.tools.http.http_tool import HTTPTool

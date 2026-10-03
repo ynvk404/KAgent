@@ -24,8 +24,8 @@ from src.tools.common.types import (
     ContextReductionTool,
 )
 from src.llm.core.types import ToolSpec
-from src.permission.execution import ExecutionPolicy, ExecutionReceipt, policy_for
-from src.permission.invocations import permission_invocation
+from src.permission.runtime.execution import ExecutionPolicy, ExecutionReceipt, policy_for
+from src.permission.runtime.invocations import permission_invocation
 from src.tools.common.approval_display import redact_approval as redact
 
 

@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.permission.execution import ExecutionBlocked
-from src.permission.worker import OfflineWorker
-import src.permission.worker as worker_module
+from src.permission.runtime.execution import ExecutionBlocked
+from src.permission.worker.worker import OfflineWorker
+import src.permission.worker.worker as worker_module
 
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux worker startup")

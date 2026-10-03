@@ -17,8 +17,8 @@ import uuid
 from typing import Any, TYPE_CHECKING
 
 from src.permission.permission import UserControlledRefusal
-from src.permission.http_grants import check_cancelled
-from src.permission.invocations import review_id, on_review_end
+from src.permission.network.grants import check_cancelled
+from src.permission.runtime.invocations import review_id, on_review_end
 
 if TYPE_CHECKING:
     from src.engagement.state import EngagementState
@@ -77,11 +77,11 @@ class ExecutionPolicy:
         self.input_questions: dict[str, str | None] = {}
         self.journal: Path | None = None
         self.worker: Any = None
-        from src.permission.observations import ObservationStore
+        from src.permission.runtime.observations import ObservationStore
         self.observations = ObservationStore()
         self.vetted_ips: dict[str, tuple[str, ...]] = {}
         from src.engagement.state import EngagementState
-        from src.permission.http_grants import HTTPLimits
+        from src.permission.network.grants import HTTPLimits
         research = EngagementState()
         research.add_origin("https://html.duckduckgo.com")
         self.research_permissions = research.http_permissions
@@ -314,7 +314,7 @@ def policy_for(prompter: Any) -> ExecutionPolicy | None:
 
 def default_execution_policy(engagement: EngagementState, root: Path) -> ExecutionPolicy:
     """Shared CLI/test factory: protected storage is never relaxed by a fixture."""
-    runtime = Path(__file__).resolve().parents[2]
+    runtime = Path(__file__).resolve().parents[3]
     return ExecutionPolicy(engagement, root, protected=(runtime / "src", runtime / "skills",
         runtime / "AGENTS.md", root / ".git", root / ".kagent"))
 

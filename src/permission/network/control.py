@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from urllib.parse import urlsplit
-from src.permission.http_grants import HTTPLimits
+from src.permission.network.grants import HTTPLimits
 from src.target.origin import HTTPOrigin
 
 GRANT_SYNTAX = "ORIGIN,MODE,SECONDS,REQUESTS,RATE,BURST,CONCURRENCY,REQUEST_BYTES,RESPONSE_BYTES"

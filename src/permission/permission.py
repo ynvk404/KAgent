@@ -5,8 +5,8 @@ from enum import Enum
 from typing import Any, Literal, Protocol, runtime_checkable, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.permission.http_grants import HTTPPermissions
-    from src.permission.execution import ExecutionPolicy
+    from src.permission.network.grants import HTTPPermissions
+    from src.permission.runtime.execution import ExecutionPolicy
 
 RiskTier = Literal["routine", "bounded-impact", "high-impact"]
 _RISK_TIERS = frozenset({"routine", "bounded-impact", "high-impact"})

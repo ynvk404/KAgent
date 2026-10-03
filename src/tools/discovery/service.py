@@ -148,7 +148,7 @@ class ServiceDiscoveryTool(Tool):
         signal: Any,
         prompter: Prompter,
     ) -> ToolOutput:
-        from src.permission.execution import guard_adapter
+        from src.permission.runtime.execution import guard_adapter
         guard_adapter(self, args, prompter)
         origin, host, ports, mode, timeout = self._parameters(args)
         backend = self._select_backend(mode)
@@ -483,7 +483,7 @@ class ServiceDiscoveryTool(Tool):
                 return {"port": port, "protocol": "tcp", "state": "unknown", "_completed": False}
             async with semaphore:
                 try:
-                    from src.permission.network import socket_budget
+                    from src.permission.network.transport import socket_budget
                     async with socket_budget(host, port, signal, self.target.base_url()):
                         reader, writer = await asyncio.wait_for(
                             asyncio.open_connection(host, port),

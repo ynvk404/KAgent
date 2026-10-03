@@ -16,9 +16,9 @@ import tempfile
 import threading
 import time
 
-from src.permission.http_grants import check_cancelled
+from src.permission.network.grants import check_cancelled
 
-from src.permission.execution import ExecutionBlocked
+from src.permission.runtime.execution import ExecutionBlocked
 
 PROBE_TIMEOUT_SECONDS = 5.0
 INSPECTION_TIMEOUT_SECONDS = 120.0
@@ -79,7 +79,7 @@ class OfflineWorker:
         until the call returns, but it only inspects and never launches a process.
         Do not cache inspections: another tool/operator can change the tree.
         """
-        from src.permission.execution import current_policy
+        from src.permission.runtime.execution import current_policy
         policy = current_policy()
         stopped = threading.Event()
         deadline = time.monotonic() + INSPECTION_TIMEOUT_SECONDS
@@ -190,7 +190,7 @@ class OfflineWorker:
             args += ['--tmpfs', destination, '--remount-ro', destination]
         if broker is not None:
             args += ["--ro-bind", str(broker), "/run/kagent", "--ro-bind",
-                     str(Path(__file__).with_name('worker_relay.py')), "/relay.py"]
+                     str(Path(__file__).with_name('relay.py')), "/relay.py"]
             for key in ('http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY', 'ALL_PROXY'):
                 args += ['--setenv', key, 'http://127.0.0.1:18080']
             args += ['--setenv', 'NO_PROXY', '', '--setenv', 'no_proxy', '']

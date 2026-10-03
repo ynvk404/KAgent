@@ -10,10 +10,10 @@ import pytest
 
 from tests.security.test_execution_policy import runtime, Operator, ORIGIN
 from src.engagement.state import EngagementState
-from src.permission.execution import ExecutionPolicy, ExecutionBlocked
-from src.permission.http_grants import HTTPLimits, HTTPBlocked
+from src.permission.runtime.execution import ExecutionPolicy, ExecutionBlocked
+from src.permission.network.grants import HTTPLimits, HTTPBlocked
 from src.permission.permission import YoloPrompter, Decision
-from src.permission.observations import VerifiedResult
+from src.permission.runtime.observations import VerifiedResult
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.tools.workflow.coverage import CoverageTool
 from src.tools.common.permission_status import PermissionStatusTool

@@ -48,7 +48,7 @@ class ObservationStore:
         self._results: dict[str, tuple[str, tuple[str, ...], VerifiedResult, str]] = {}
         self.storage: Path | None = None
         self._historical: set[str] = set()
-        from src.permission.verifiers import register_production_verifiers
+        from src.permission.runtime.verifiers import register_production_verifiers
         register_production_verifiers(self)
 
     def attach_storage(self, path: Path) -> None:

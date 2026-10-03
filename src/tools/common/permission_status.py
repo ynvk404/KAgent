@@ -1,7 +1,7 @@
 """Read-only controller authority query; cannot grant or restore rights."""
 from __future__ import annotations
 
-from src.permission.execution import policy_for
+from src.permission.runtime.execution import policy_for
 
 
 class PermissionStatusTool:

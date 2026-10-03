@@ -10,10 +10,10 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter, UserControlledRefusal, YoloPrompter
-from src.permission.http_grants import EffectiveHTTP, check_cancelled
-from src.permission.execution import policy_for
-from src.permission.invocations import permission_invocation
-from src.permission.network import pin_request
+from src.permission.network.grants import EffectiveHTTP, check_cancelled
+from src.permission.runtime.execution import policy_for
+from src.permission.runtime.invocations import permission_invocation
+from src.permission.network.transport import pin_request
 from src.target.target import Target
 from src.target.origin import HTTPOrigin
 from src.workflow.state import WorkflowPhase, WorkflowState, normalize_target_origin
@@ -355,7 +355,7 @@ class HTTPTool(Tool):
             response = None
             try:
                 if policy is not None and not policy.nested_allowed():
-                    from src.permission.execution import ExecutionBlocked
+                    from src.permission.runtime.execution import ExecutionBlocked
                     raise ExecutionBlocked("blocked: policy-changed-before-http-send")
                 reservation.start()
                 # No suspension between reservation and starting send.

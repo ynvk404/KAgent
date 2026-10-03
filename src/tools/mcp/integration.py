@@ -400,12 +400,12 @@ class MCPTool:
         cancel_event: Optional[asyncio.Event] = None,
         _p: Any = None,
     ) -> str:
-        from src.permission.execution import policy_for, ExecutionBlocked
+        from src.permission.runtime.execution import policy_for, ExecutionBlocked
         policy = policy_for(prompter)
         if policy is not None:
             if self._execution_policy is not policy or self._server is None or policy.worker is None or not policy.nested_allowed():
                 raise ExecutionBlocked('blocked: enforcement-unavailable; MCP worker identity/receipt unavailable')
-            from src.permission.worker_broker import broker_directory
+            from src.permission.worker.broker import broker_directory
             # Fresh isolated server per invocation prevents background RPCs
             # from retaining a completed request's network authority.
             async with broker_directory(signal) as broker:
@@ -495,7 +495,7 @@ def extract_mcp_text(content: Any) -> str:
 
 async def discover_mcp_tools(server: MCPServerConfig, *, execution_policy: Any = None) -> dict[str, Any]:
     if execution_policy is not None:
-        from src.permission.execution import ExecutionBlocked
+        from src.permission.runtime.execution import ExecutionBlocked
         if execution_policy.worker is None:
             raise ExecutionBlocked('blocked: enforcement-unavailable; MCP isolated worker required')
     server = deepcopy(server)

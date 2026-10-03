@@ -10,9 +10,9 @@ import httpx
 import pytest
 
 from src.engagement.state import EngagementState, OutOfScopeError
-from src.permission.execution import ExecutionPolicy, ExecutionBlocked
-from src.permission.invocations import review_turn
-from src.permission.http_grants import HTTPLimits, HTTPBlocked
+from src.permission.runtime.execution import ExecutionPolicy, ExecutionBlocked
+from src.permission.runtime.invocations import review_turn
+from src.permission.network.grants import HTTPLimits, HTTPBlocked
 from src.permission.permission import Decision, UserControlledRefusal, YoloPrompter
 from src.target.target import Target
 from src.tools.common.registry import Registry

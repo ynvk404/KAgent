@@ -215,7 +215,7 @@ class AskUserTool(Tool):
                     header=header,
                 )
 
-            from src.permission.execution import policy_for, ExecutionBlocked
+            from src.permission.runtime.execution import policy_for, ExecutionBlocked
             policy = policy_for(prompter)
             key = hashlib.sha256(json.dumps([policy.stamp() if policy else None, item],
                                            sort_keys=True, default=str).encode()).hexdigest()

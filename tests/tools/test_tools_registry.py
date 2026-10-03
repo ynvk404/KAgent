@@ -7,7 +7,7 @@ from src.findings.store import Store as FindingsStore
 from src.config.config import PluginConfig
 from src.coverage.store import CoverageStore
 from src.engagement.state import EngagementState
-from src.permission.http_grants import HTTPLimits
+from src.permission.network.grants import HTTPLimits
 from src.permission.permission import (
     Decision,
     PermissionRequest,

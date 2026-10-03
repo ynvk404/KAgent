@@ -9,7 +9,7 @@ import pytest
 
 from src.agent.agent import Agent
 from src.engagement.state import EngagementState
-from src.permission.http_grants import HTTPLimits
+from src.permission.network.grants import HTTPLimits
 from src.permission.permission import Decision, Prompter, YoloPrompter
 from src.target.target import Target
 from src.tools.http.http_tool import HTTPTool
@@ -26,7 +26,7 @@ SPEC = ORIGIN + ",autonomous,1200,500,3,3,2,131072,65536"
 @pytest.mark.asyncio
 async def test_slash_yolo_activates_http_without_manual_grant_and_honors_revoke(monkeypatch):
     import httpx
-    from src.permission.http_grants import HTTPBlocked
+    from src.permission.network.grants import HTTPBlocked
 
     app = make_app()
     engagement = EngagementState()

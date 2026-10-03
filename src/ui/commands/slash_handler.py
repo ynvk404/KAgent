@@ -12,7 +12,7 @@ from src.llm.core.models import list_models
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.state import Append, Clear, TranscriptEntry
 from src.ui.widgets.text_input_modal import TextInputRequest
-from src.permission.http_control import parse_lab_spec, GRANT_SYNTAX
+from src.permission.network.control import parse_lab_spec, GRANT_SYNTAX
 
 if TYPE_CHECKING:
     from src.agent.agent import Agent
@@ -263,7 +263,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
     if cmd == "/review-result":
         async def review_result():
             import json
-            from src.permission.execution import policy_for
+            from src.permission.runtime.execution import policy_for
             from src.permission.permission import PermissionRequest, Decision
             from src.workflow.evidence import verify_evidence_reads
             from src.redact.redact import apply_evidence
@@ -319,7 +319,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
     if cmd == "/permissions":
         rights = agent.engagement_state.http_permissions
-        from src.permission.execution import policy_for
+        from src.permission.runtime.execution import policy_for
         policy = policy_for(getattr(agent, "prompter", None))
         rights.sync_target()
         try:

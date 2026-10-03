@@ -11,9 +11,9 @@ from pathlib import Path
 import tempfile
 import httpx
 
-from src.permission.execution import ExecutionBlocked, current_policy
-from src.permission.network import governed_send
-from src.permission.http_grants import check_cancelled
+from src.permission.runtime.execution import ExecutionBlocked, current_policy
+from src.permission.network.transport import governed_send
+from src.permission.network.grants import check_cancelled
 from src.permission.permission import UserControlledRefusal
 from src.engagement.state import OutOfScopeError
 

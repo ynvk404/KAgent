@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from src.engagement.state import EngagementState
-from src.permission.execution import ExecutionBlocked, default_execution_policy
+from src.permission.runtime.execution import ExecutionBlocked, default_execution_policy
 from src.permission.permission import Decision, YoloPrompter
 from src.permission.permission import UserControlledRefusal
 from src.tools.execution.file import FileReadTool

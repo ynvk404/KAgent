@@ -176,7 +176,7 @@ from src.ui.core.app import (
 )
 from src.ui.core.custom_provider_adapter import ConfigBackedCustomProviderAdapter
 from src.ui.commands.slash_handler import normalize_target_url
-from src.permission.http_control import parse_lab_spec
+from src.permission.network.control import parse_lab_spec
 
 from src.ui.widgets.banner import BannerData, ToolSupportPill
 
@@ -648,9 +648,9 @@ async def main() -> int:
         bridged_perm,
         flags.yolo
     )
-    from src.permission.execution import default_execution_policy
+    from src.permission.runtime.execution import default_execution_policy
     prompter.bind_execution_policy(default_execution_policy(engagement_state, project_root()))
-    from src.permission.worker import OfflineWorker
+    from src.permission.worker.worker import OfflineWorker
     assert prompter.execution_policy is not None
     prompter.execution_policy.worker = await OfflineWorker.available(
         prompter.execution_policy.root, prompter.execution_policy.protected,

@@ -94,7 +94,7 @@ class LoadSkillTool:
                 f"Only the user can load it via /{name}."
             )
 
-        from src.permission.execution import policy_for
+        from src.permission.runtime.execution import policy_for
         policy = policy_for(prompter)
         prefix = ""
         if policy is not None:

@@ -5,7 +5,7 @@ certificate or permission. Actor-specific grants need a trusted browser adapter.
 """
 from __future__ import annotations
 from src.browser.store import CaptureStore
-from src.permission.execution import ExecutionBlocked, ExecutionPolicy
+from src.permission.runtime.execution import ExecutionBlocked, ExecutionPolicy
 from src.engagement.state import OutOfScopeError
 
 

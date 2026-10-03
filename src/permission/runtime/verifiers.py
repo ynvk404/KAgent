@@ -8,7 +8,7 @@ import json
 import re
 from urllib.parse import parse_qs, urlsplit
 
-from src.permission.observations import VerifiedResult
+from src.permission.runtime.observations import VerifiedResult
 
 
 def sql_boolean(candidate, items):

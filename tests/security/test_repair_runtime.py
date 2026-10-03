@@ -9,9 +9,9 @@ import httpx
 import pytest
 
 from src.engagement.state import EngagementState
-from src.permission.execution import default_execution_policy, ExecutionBlocked
+from src.permission.runtime.execution import default_execution_policy, ExecutionBlocked
 from src.permission.permission import Decision, YoloPrompter
-from src.permission.worker import OfflineWorker
+from src.permission.worker.worker import OfflineWorker
 from src.tools.common.registry import Registry
 from src.tools.execution.shell import ShellTool
 from src.tools.execution.plugin import CommandPluginTool

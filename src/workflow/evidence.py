@@ -178,7 +178,7 @@ class EvidenceArtifact:
         *, approved_paths: set[str] | None = None,
     ) -> bool:
         from src.tools.execution.file import gate_sensitive_path
-        from src.permission.execution import policy_for
+        from src.permission.runtime.execution import policy_for
 
         for base in self._resume_roots(root):
             path = base / self.path

@@ -60,7 +60,7 @@ readonly STRICTLY_PROTECTED_PATHS=(
     "tests"
     "docs"
     "assets"
-    "Burp-integration"
+    "integrations/burp"
     "AGENTS.md"
     "PROJECT.md"
     "pyproject.toml"

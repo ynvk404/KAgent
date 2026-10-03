@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.target.origin import HTTPOrigin
-from src.permission.http_grants import HTTPPermissions
+from src.permission.network.grants import HTTPPermissions
 
 
 class OutOfScopeError(PermissionError):

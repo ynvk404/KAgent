@@ -19,7 +19,7 @@ from src.tools.common.types import (
     arg_string,
 )
 from src.tools.execution.sensitive import is_sensitive_path
-from src.permission.execution import policy_for
+from src.permission.runtime.execution import policy_for
 
 READ_BYTE_CAP = 200 * 1024
 

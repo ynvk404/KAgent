@@ -46,7 +46,9 @@ def _load_extension():
 
     module = types.ModuleType(marker)
     sys.modules[marker] = module
-    path = os.path.join(os.path.dirname(__file__), "..", "..", "Burp-integration", "kagent_burp.py")
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "integrations", "burp", "kagent_burp.py"
+    )
     with open(path, "r") as source:
         exec(compile(source.read(), path, "exec"), module.__dict__)
     return module
