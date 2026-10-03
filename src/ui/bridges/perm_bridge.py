@@ -25,6 +25,7 @@ class BridgedPrompter(Prompter):
         self._session_allowed: set[str] = set()
 
         self._busy = False
+        self._owner: asyncio.Future[None] | None = None
         self._waiters: list[asyncio.Future[None]] = []
 
     def clear_session_cache(self) -> None:
@@ -70,6 +71,23 @@ class BridgedPrompter(Prompter):
             return future.result()
         finally:
             abort_waiter.cancel()
+            await asyncio.gather(abort_waiter, return_exceptions=True)
+
+    def _release_owner(self, owner: asyncio.Future[None]) -> None:
+        if self._owner is not owner:
+            return
+
+        while self._waiters:
+            waiter = self._waiters.pop(0)
+            if not waiter.done():
+                # Record ownership before waking the request. Its encompassing
+                # finally releases this token even if the wait aborts/cancels.
+                self._owner = waiter
+                waiter.set_result(None)
+                return
+
+        self._owner = None
+        self._busy = False
 
     async def ask(
         self,
@@ -85,20 +103,19 @@ class BridgedPrompter(Prompter):
         ):
             return Decision.ALLOW_ONCE
 
-        if self._busy:
-            loop = asyncio.get_running_loop()
-            waiter: asyncio.Future[None] = loop.create_future()
-            self._waiters.append(waiter)
-            try:
-                await self._await_with_signal(waiter, signal)
-            except asyncio.CancelledError:
-                if waiter in self._waiters:
-                    self._waiters.remove(waiter)
-                raise
-        else:
-            self._busy = True
-
+        loop = asyncio.get_running_loop()
+        waiter: asyncio.Future[None] = loop.create_future()
         try:
+            if self._busy:
+                self._waiters.append(waiter)
+                await self._await_with_signal(waiter, signal)
+            else:
+                self._busy = True
+                self._owner = waiter
+                waiter.set_result(None)
+
+            if self._is_aborted(signal):
+                raise Exception("aborted")
             if (
                 not request.no_session_cache
                 and self._key_for(request) in self._session_allowed
@@ -108,13 +125,14 @@ class BridgedPrompter(Prompter):
             return await self._ask_once(request, signal)
 
         finally:
-            while self._waiters:
-                waiter = self._waiters.pop(0)
-                if not waiter.done():
-                    waiter.set_result(None)
-                    break
+            if self._owner is waiter:
+                self._release_owner(waiter)
             else:
-                self._busy = False
+                # A request that stopped before handoff never owned the bridge.
+                if waiter in self._waiters:
+                    self._waiters.remove(waiter)
+            if not waiter.done():
+                waiter.cancel()
 
     async def _ask_once(
         self,
@@ -156,9 +174,8 @@ class BridgedPrompter(Prompter):
             reject=reject,
         )
 
-        self._publish(wrapped)
-
         try:
+            self._publish(wrapped)
             return await self._await_with_signal(future, signal)
         finally:
             if not future.done():
