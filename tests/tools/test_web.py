@@ -10,7 +10,7 @@ import pytest
 from src.permission.permission import Decision, PermissionRequest, AlwaysAllow, AlwaysDeny
 from src.engagement.state import EngagementState, OutOfScopeError
 from src.target.target import Target
-from src.tools.web import WebFetchTool, WebSearchTool, clear_web_cache
+from src.tools.http.web import WebFetchTool, WebSearchTool, clear_web_cache
 
 class _Prompter:
     async def ask(
@@ -77,7 +77,7 @@ def fake_httpx_client(monkeypatch: pytest.MonkeyPatch):
     FakeAsyncClient.handler = None
     FakeAsyncClient.last_init_kwargs = None
     FakeAsyncClient.call_count = 0
-    monkeypatch.setattr("src.tools.web.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("src.tools.http.web.httpx.AsyncClient", FakeAsyncClient)
     yield
     clear_web_cache()
 
@@ -242,7 +242,7 @@ async def test_fetch_scope_preflight_blocks_before_private_gate_or_network(monke
     engagement = EngagementState()
     engagement.initialize_target("https://app.example")
     private_gate = AsyncMock()
-    monkeypatch.setattr("src.tools.web.gate_private_request", private_gate)
+    monkeypatch.setattr("src.tools.http.web.gate_private_request", private_gate)
 
     with pytest.raises(OutOfScopeError):
         await WebFetchTool(engagement).run(
@@ -259,7 +259,7 @@ async def test_private_fetch_passes_active_target_to_private_host_gate(monkeypat
     engagement = EngagementState()
     engagement.initialize_target(target.base_url())
     gate = AsyncMock(return_value="")
-    monkeypatch.setattr("src.tools.web.gate_private_request", gate)
+    monkeypatch.setattr("src.tools.http.web.gate_private_request", gate)
     set_handler(ok_handler("ok"))
 
     await WebFetchTool(engagement, target).run(

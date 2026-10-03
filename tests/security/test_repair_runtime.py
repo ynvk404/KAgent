@@ -12,13 +12,13 @@ from src.engagement.state import EngagementState
 from src.permission.execution import default_execution_policy, ExecutionBlocked
 from src.permission.permission import Decision, YoloPrompter
 from src.permission.worker import OfflineWorker
-from src.tools.registry import Registry
-from src.tools.shell import ShellTool
-from src.tools.plugin import CommandPluginTool
-from src.tools.http import HTTPTool
-from src.tools.workflow import WorkflowTool
-from src.tools.finding import ConfirmFindingTool
-from src.tools.mcp_integration import discover_mcp_tools
+from src.tools.common.registry import Registry
+from src.tools.execution.shell import ShellTool
+from src.tools.execution.plugin import CommandPluginTool
+from src.tools.http.http_tool import HTTPTool
+from src.tools.workflow.workflow_tool import WorkflowTool
+from src.tools.workflow.finding import ConfirmFindingTool
+from src.tools.mcp.integration import discover_mcp_tools
 from src.config.config import PluginConfig, MCPServerConfig
 from src.coverage.store import CoverageStore
 from src.findings.store import Store as FindingsStore

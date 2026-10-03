@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 from src.permission.permission import Decision
 from src.target.target import Target
-from src.tools.private_host import (
+from src.tools.http.private_host import (
     gate_private_request,
     parse_http_url,
     same_authorized_origin,
@@ -93,7 +93,7 @@ async def test_declared_private_target_is_session_cacheable():
     parsed = parse_http_url("http://juice.lab:3000/")
 
     with patch(
-        "src.tools.private_host.private_host_reason",
+        "src.tools.http.private_host.private_host_reason",
         new=AsyncMock(
             return_value="DNS resolves to loopback IPv4 (127.0.0.1)"
         ),
@@ -127,7 +127,7 @@ async def test_other_private_host_is_not_session_cacheable():
     parsed = parse_http_url("http://127.0.0.1:8080/")
 
     with patch(
-        "src.tools.private_host.private_host_reason",
+        "src.tools.http.private_host.private_host_reason",
         new=AsyncMock(return_value="loopback IPv4"),
     ):
         await gate_private_request(
@@ -154,7 +154,7 @@ async def test_declared_target_requires_same_port():
     parsed = parse_http_url("http://juice.lab:8080/")
 
     with patch(
-        "src.tools.private_host.private_host_reason",
+        "src.tools.http.private_host.private_host_reason",
         new=AsyncMock(return_value="loopback IPv4"),
     ):
         await gate_private_request(
@@ -180,7 +180,7 @@ async def test_declared_target_requires_same_scheme():
     parsed = parse_http_url("https://juice.lab:3000/")
 
     with patch(
-        "src.tools.private_host.private_host_reason",
+        "src.tools.http.private_host.private_host_reason",
         new=AsyncMock(return_value="loopback IPv4"),
     ):
         await gate_private_request(
@@ -206,7 +206,7 @@ async def test_gate_returns_empty_reason_and_skips_prompt_for_public_host():
     parsed = parse_http_url("http://example.com/")
 
     with patch(
-        "src.tools.private_host.private_host_reason",
+        "src.tools.http.private_host.private_host_reason",
         new=AsyncMock(return_value=""),
     ):
         reason = await gate_private_request(
@@ -229,7 +229,7 @@ async def test_gate_deny_raises_even_for_declared_target():
     parsed = parse_http_url("http://juice.lab:3000/")
 
     with patch(
-        "src.tools.private_host.private_host_reason",
+        "src.tools.http.private_host.private_host_reason",
         new=AsyncMock(return_value="loopback IPv4"),
     ):
         with pytest.raises(UserControlledRefusal, match="denied"):

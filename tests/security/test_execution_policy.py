@@ -15,19 +15,52 @@ from src.permission.invocations import review_turn
 from src.permission.http_grants import HTTPLimits, HTTPBlocked
 from src.permission.permission import Decision, UserControlledRefusal, YoloPrompter
 from src.target.target import Target
-from src.tools.registry import Registry
-from src.tools.http import HTTPTool
-from src.tools.web import WebFetchTool, WebSearchTool, clear_web_cache
-from src.tools.file import FileReadTool, FileWriteTool
-from src.tools.shell import ShellTool
-from src.tools.plugin import CommandPluginTool
-from src.tools.mcp_integration import MCPTool
-from src.tools.capabilities import CapabilityInventory
-from src.tools.content_discovery import ContentDiscoveryTool
+from src.tools.common.registry import Registry
+from src.tools.http.http_tool import HTTPTool
+from src.tools.http.web import WebFetchTool, WebSearchTool, clear_web_cache
+from src.tools.execution.file import FileReadTool, FileWriteTool
+from src.tools.execution.shell import ShellTool
+from src.tools.execution.plugin import CommandPluginTool
+from src.tools.mcp.integration import MCPTool
+from src.tools.common.capabilities import CapabilityInventory
+from src.tools.discovery.content import ContentDiscoveryTool
+from src.tools.discovery.service import ServiceDiscoveryTool
 from src.config.config import PluginConfig
 
 ORIGIN = "http://127.0.0.1:3000"
 REAL_CLIENT = httpx.AsyncClient
+
+
+@pytest.mark.parametrize("tool_type,args", [
+    (ContentDiscoveryTool, {"paths": ["fixture"], "mode": "native"}),
+    (ServiceDiscoveryTool, {"mode": "socket"}),
+])
+def test_canonical_discovery_adapters_keep_native_backend_validation(tmp_path, tool_type, args):
+    state = EngagementState()
+    state.add_origin(ORIGIN)
+    target = Target(ORIGIN)
+    tool = tool_type(target, state, CapabilityInventory(which=lambda _: None), lambda: "minimal")
+    policy = ExecutionPolicy(state, tmp_path)
+    grant = state.http_permissions.activate(ORIGIN, HTTPLimits())
+
+    policy.validate(tool, args)
+    policy.engagement.http_permissions.revoke(grant.id)
+    with pytest.raises(ExecutionBlocked, match="origin-revoked"):
+        policy.validate(tool, args)
+
+
+def test_canonical_file_adapter_receipt_detects_resource_change(tmp_path):
+    path = tmp_path / "fixture.txt"
+    path.write_text("fixture")
+    tool = FileReadTool()
+    args = {"path": str(path)}
+    policy = ExecutionPolicy(EngagementState(), tmp_path)
+    receipt = policy.prepare(tool, args)
+
+    path.write_text("changed fixture")
+
+    with pytest.raises(ExecutionBlocked, match="arguments-changed"):
+        policy.start(receipt, tool, args, None)
 
 
 class Operator:
@@ -235,8 +268,8 @@ def test_receipt_replay_expiry_and_changed_args(runtime, tmp_path):
 async def test_missing_process_enforcement_blocks_before_dialog_and_direct_dispatch(runtime, monkeypatch, kind):
     registry, p, _, operator, _, _, _ = runtime
     dispatch = AsyncMock()
-    monkeypatch.setattr("src.tools.shell.run_with_capture", dispatch)
-    monkeypatch.setattr("src.tools.plugin.run_plugin", dispatch)
+    monkeypatch.setattr("src.tools.execution.shell.run_with_capture", dispatch)
+    monkeypatch.setattr("src.tools.execution.plugin.run_plugin", dispatch)
     session = type("Session", (), {"call_tool": dispatch, "server_name": "fixture"})()
     tool = {"shell": ShellTool(), "plugin": CommandPluginTool(PluginConfig(name="fixture", command="fixture")),
             "mcp": MCPTool(cast(Any, session), "fixture_mcp", "operation", "fixture", {})}[kind]
@@ -253,7 +286,7 @@ async def test_missing_process_enforcement_blocks_before_dialog_and_direct_dispa
 @pytest.mark.asyncio
 async def test_plugin_effective_config_frozen_before_ordinary_review(monkeypatch):
     dispatch = AsyncMock(return_value="fixture")
-    monkeypatch.setattr("src.tools.plugin.run_plugin", dispatch)
+    monkeypatch.setattr("src.tools.execution.plugin.run_plugin", dispatch)
     cfg = PluginConfig(name="fixture", command="before", args=["before"])
     registry = Registry()
     registry.register(CommandPluginTool(cfg))

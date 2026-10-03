@@ -10,9 +10,9 @@ from typing import Any
 
 from src.logger.logger import get_logger
 from src.permission.permission import Prompter
-from .file import decode_utf8_capped
-from .types import PermissionHints, Tool, arg_string
-from .outcome import ToolOutput
+from src.tools.execution.file import decode_utf8_capped
+from src.tools.common.types import PermissionHints, Tool, arg_string
+from src.tools.common.outcome import ToolOutput
 
 log = get_logger("tools.shell")
 

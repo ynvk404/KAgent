@@ -18,19 +18,19 @@ from src.permission.permission import Prompter
 from src.redact.redact import apply as redact
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
-from .capabilities import CapabilityInventory
-from .discovery_common import (
+from src.tools.common.capabilities import CapabilityInventory
+from src.tools.discovery.common import (
     DiscoveryScope,
     is_aborted,
     resolve_discovery_scope,
     sleep_or_abort,
     validate_relative_path,
 )
-from .outcome import ErrorKind, ToolOutput
-from .private_host import gate_private_request, parse_http_url
-from .shell import run_with_capture
-from .request_builder import NATIVE_USER_AGENT
-from .types import PermissionHints, Tool
+from src.tools.common.outcome import ErrorKind, ToolOutput
+from src.tools.http.private_host import gate_private_request, parse_http_url
+from src.tools.execution.shell import run_with_capture
+from src.tools.http.request_builder import NATIVE_USER_AGENT
+from src.tools.common.types import PermissionHints, Tool
 from src.workflow.state import WorkflowState
 from src.permission.execution import guard_adapter
 from src.permission.network import governed_stream

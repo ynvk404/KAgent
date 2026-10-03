@@ -20,7 +20,7 @@ from src.workflow.state import WorkflowState
 from src.workflow.evidence import verify_evidence_reads
 from src.skills.registry import normalize_candidate_class
 from src.target.origin import HTTPOrigin
-from .types import Tool, arg_string
+from src.tools.common.types import Tool, arg_string
 
 SEVERITIES: tuple[Severity, ...] = (
     "critical",

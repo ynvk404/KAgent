@@ -13,9 +13,9 @@ from src.permission.execution import ExecutionPolicy
 from src.permission.http_grants import HTTPLimits
 from src.permission.permission import AlwaysAllow, UserControlledRefusal, YoloPrompter
 from src.target.target import Target
-from src.tools.http import HTTPTool
-from src.tools.registry import Registry
-from src.tools.workflow import WorkflowTool
+from src.tools.http.http_tool import HTTPTool
+from src.tools.common.registry import Registry
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import WorkflowObjective, WorkflowState
 from tests.helpers.workflow import record_completed_phase
 
@@ -49,7 +49,7 @@ def runtime(tmp_path, monkeypatch):
 
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: REAL_CLIENT(
         transport=httpx.MockTransport(handler), **kwargs))
-    monkeypatch.setattr('src.tools.http.gate_private_request', AsyncMock(return_value=''))
+    monkeypatch.setattr('src.tools.http.http_tool.gate_private_request', AsyncMock(return_value=''))
     return registry, prompter, policy, state, response_spec, sent, target
 
 

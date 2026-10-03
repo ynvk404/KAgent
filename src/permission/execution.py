@@ -43,7 +43,7 @@ _active: ContextVar[tuple["ExecutionPolicy", ExecutionReceipt] | None] = Context
 def invocation_digest(tool: Any, args: dict[str, Any]) -> str:
     config = getattr(tool, "cfg", None)
     resource = None
-    if type(tool).__module__ == "src.tools.file" and args.get("path"):
+    if type(tool).__module__ == "src.tools.execution.file" and args.get("path"):
         path = Path(args["path"]).expanduser().resolve()
         try:
             info = path.stat()
@@ -215,29 +215,29 @@ class ExecutionPolicy:
         if "*" in self.revoked or name in self.revoked:
             raise ExecutionBlocked("blocked: tool/session-revoked")
         module = type(tool).__module__
-        if module == "src.tools.mcp_integration" and (self.worker is None or getattr(tool, '_execution_policy', None) is not self):
+        if module == "src.tools.mcp.integration" and (self.worker is None or getattr(tool, '_execution_policy', None) is not self):
             raise ExecutionBlocked('blocked: enforcement-unavailable; MCP isolated executor identity unavailable')
-        if module in {"src.tools.shell", "src.tools.plugin"} and self.worker is None:
+        if module in {"src.tools.execution.shell", "src.tools.execution.plugin"} and self.worker is None:
             raise ExecutionBlocked("blocked: enforcement-unavailable; isolated filesystem/network/process adapter required")
-        if module not in {"src.tools.http", "src.tools.web", "src.tools.file", "src.tools.search",
-                          "src.tools.content_discovery", "src.tools.service_discovery", "src.tools.workflow",
-                          "src.tools.finding", "src.tools.coverage", "src.tools.payloads", "src.tools.skill_file",
-                          "src.tools.skill_paths", "src.tools.ask", "src.tools.browser_capture", "src.skills.load_skill",
-                          "src.tools.shell", "src.tools.plugin", "src.tools.mcp_integration", "src.tools.permission_status"}:
+        if module not in {"src.tools.http.http_tool", "src.tools.http.web", "src.tools.execution.file", "src.tools.execution.search",
+                          "src.tools.discovery.content", "src.tools.discovery.service", "src.tools.workflow.workflow_tool",
+                          "src.tools.workflow.finding", "src.tools.workflow.coverage", "src.tools.skills.payloads", "src.tools.skills.skill_file",
+                          "src.tools.skills.paths", "src.tools.common.ask", "src.tools.common.browser_capture", "src.skills.load_skill",
+                          "src.tools.execution.shell", "src.tools.execution.plugin", "src.tools.mcp.integration", "src.tools.common.permission_status"}:
             raise ExecutionBlocked("blocked: enforcement-unavailable; unregistered capability adapter")
-        if module == "src.tools.file":
+        if module == "src.tools.execution.file":
             self.require_path(args.get("path", ""), write="Read" not in type(tool).__name__)
-        elif module == "src.tools.search":
+        elif module == "src.tools.execution.search":
             self.require_path(args.get("path") or self.root)
-        elif module == "src.tools.http":
+        elif module == "src.tools.http.http_tool":
             self.require_network(tool.resolve_url(args.get("url", "")))
-        elif module == 'src.tools.finding':
+        elif module == 'src.tools.workflow.finding':
             self.engagement.require_in_scope(args.get('url', ''))
-        elif module == "src.tools.web":
+        elif module == "src.tools.http.web":
             self.require_network(args.get("url", "https://html.duckduckgo.com"), research=name == "web_search")
-        elif module in {"src.tools.content_discovery", "src.tools.service_discovery"}:
+        elif module in {"src.tools.discovery.content", "src.tools.discovery.service"}:
             self.require_network(tool.target.base_url())
-            if module.endswith("content_discovery"):
+            if module == "src.tools.discovery.content":
                 _, _, mode, cap, _, _ = tool._parameters(args)
                 backend = tool._select_backend(mode, cap)
             else:

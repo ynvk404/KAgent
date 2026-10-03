@@ -6,7 +6,7 @@ from typing import Any
 from src.permission.permission import Prompter
 from src.skills.registry import Registry as SkillRegistry
 
-from .skill_paths import (
+from src.tools.skills.paths import (
     MAX_BYTES,
     MAX_PREVIEW_BYTES,
     clamp_line_limit,
@@ -15,7 +15,7 @@ from .skill_paths import (
     render_file_preview,
     resolve_skill_dir,
 )
-from .types import Tool, arg_number, arg_string
+from src.tools.common.types import Tool, arg_number, arg_string
 
 __all__ = ["MAX_BYTES", "MAX_PREVIEW_BYTES", "ReadPayloadsTool"]
 

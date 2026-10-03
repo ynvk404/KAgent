@@ -9,7 +9,7 @@ from src.browser.store import CaptureStore
 from src.engagement.state import EngagementState
 from src.permission.permission import Decision
 from src.target.target import Target
-from src.tools.http import HTTPTool
+from src.tools.http.http_tool import HTTPTool
 from src.workflow.state import Candidate, WorkflowState
 
 
@@ -70,9 +70,9 @@ async def test_captured_replay_approves_and_sends_exact_mutated_request(monkeypa
     async def handler(request):
         seen.append(request)
         return httpx.Response(200, content=b"ok", request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     prompter = Allow()
     args = {"phase": "validation", "candidate_id": candidate.id, "mutation_value": "new"}
     prepared, expected = tool.prepare(args)
@@ -100,9 +100,9 @@ async def test_capture_mutation_after_approval_does_not_change_sent_request(monk
     async def handler(request):
         seen.append(request)
         return httpx.Response(200, content=b"ok", request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     class ReplaceDuringApproval(Allow):
         async def ask(self, request, signal=None):
             capture.ingest({"id": "baseline-1", "method": "POST", "url": "http://target.test/api",
@@ -140,9 +140,9 @@ async def test_cookie_context_isolated_by_identity_and_origin(monkeypatch):
         seen.append((str(request.url), request.headers.get("cookie")))
         headers = {"Set-Cookie": "sid=one; Path=/private; HttpOnly"} if request.url.path == "/set" else {}
         return httpx.Response(200, headers=headers, content=b"ok", request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     for path, identity in [("/set", "user"), ("/private/a", "user"), ("/public", "user"),
                            ("/private/a", "admin"), ("/private/a", None)]:
         await tool.run({"phase": "recon", "url": path, **({"auth_context_ref": identity} if identity else {})},
@@ -165,9 +165,9 @@ async def test_redirect_semantics_and_per_hop_approval(monkeypatch, status, expe
         if request.url.path == "/start":
             return httpx.Response(status, headers={"Location": "/end"}, request=request)
         return httpx.Response(200, content=b"ok", request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     prompter = Allow()
     output = await tool.run({"phase": "validation", "url": "/start", "method": "POST", "body": "q=one",
                              "headers": {"Content-Type": "application/x-www-form-urlencoded"}, "max_redirects": 2},
@@ -188,9 +188,9 @@ async def test_cross_origin_redirect_never_forwards_credentials(monkeypatch):
     async def handler(request):
         seen.append(request)
         return httpx.Response(302, headers={"Location": "http://other.test/next"}, request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     output = await tool.run({"phase": "recon", "url": "/start", "headers": {"Authorization": "Bearer private"},
                              "max_redirects": 3}, None, Allow())
     assert len(seen) == 1
@@ -222,9 +222,9 @@ async def test_gzip_output_distinguishes_wire_and_decoded_body(monkeypatch):
     async def handler(request):
         return httpx.Response(200, headers={"Content-Encoding": "gzip", "Content-Length": str(len(encoded))},
                               content=encoded, request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     output = await tool.run({"phase": "recon", "url": "/gzip"}, None, Allow())
     assert "HTTP/1.1 200" in output
     assert "decoded body bytes retained before redaction: 12" in output
@@ -241,9 +241,9 @@ async def test_redirect_loop_stops_with_bounded_hops(monkeypatch):
     async def handler(request):
         seen.append(request)
         return httpx.Response(302, headers={"Location": "/loop"}, request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     output = await tool.run({"phase": "recon", "url": "/loop", "max_redirects": 5}, None, Allow())
     assert len(seen) == 1
     assert "redirect loop stopped" in output
@@ -259,9 +259,9 @@ async def test_redirect_uses_updated_scoped_cookie(monkeypatch):
         if request.url.path == "/start":
             return httpx.Response(302, headers={"Location": "/end", "Set-Cookie": "sid=new; Path=/"}, request=request)
         return httpx.Response(200, content=b"ok", request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     await tool.run({"phase": "recon", "url": "/start", "auth_context_ref": "user", "max_redirects": 1},
                    None, Allow())
     assert seen == [None, "sid=new"]
@@ -277,9 +277,9 @@ async def test_explicit_baseline_cookie_stops_on_redirect_cookie_update(monkeypa
     async def handler(request):
         seen.append(str(request.url))
         return httpx.Response(302, headers={"Location": "/end", "Set-Cookie": "sid=new; Path=/"}, request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     output = await tool.run({"phase": "validation", "candidate_id": candidate.id,
                              "mutation_value": "new", "max_redirects": 2}, None, Allow())
     assert len(seen) == 1
@@ -376,9 +376,9 @@ async def test_malformed_location_and_explicit_cookie_redirect_stop(monkeypatch)
     async def handler(request):
         seen.append(request)
         return httpx.Response(302, headers={"Location": "http://[broken" if request.url.path == "/bad" else "/end"}, request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     result = await tool.run({"phase": "recon", "url": "/bad", "max_redirects": 2}, None, Allow())
     assert "malformed redirect" in result and len(seen) == 1
     candidate = add_candidate(workflow, capture_json(capture))
@@ -396,9 +396,9 @@ async def test_native_proxy_credential_never_reaches_origin(monkeypatch):
     async def handler(request):
         seen.append(request)
         return httpx.Response(200, request=request)
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient",
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient",
                         lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     await tool.run({"phase": "recon", "url": "/", "headers": {
         "Proxy-Authorization": "Basic hidden", "Connection": "X-Hop", "X-Hop": "hidden"}}, None, Allow())
     assert "proxy-authorization" not in seen[0].headers

@@ -11,7 +11,7 @@ from src.permission.permission import (
     Prompter,
     UserControlledRefusal,
 )
-from .types import (
+from src.tools.common.types import (
     Tool,
     ToolSummary,
     PermissionHints,
@@ -26,7 +26,7 @@ from .types import (
 from src.llm.types import ToolSpec
 from src.permission.execution import ExecutionPolicy, ExecutionReceipt, policy_for
 from src.permission.invocations import permission_invocation
-from .approval_display import redact_approval as redact
+from src.tools.common.approval_display import redact_approval as redact
 
 
 class InvalidToolArguments(ValueError):
@@ -154,7 +154,7 @@ class Registry:
             tool = cast(Tool, freeze())
         args = deepcopy(args)
         policy = policy_for(prompter)
-        if policy is not None and type(tool).__module__ == 'src.tools.browser_capture':
+        if policy is not None and type(tool).__module__ == 'src.tools.common.browser_capture':
             tool = cast(Tool, getattr(tool, 'bind_execution_policy')(policy))
         receipt = policy.prepare(tool, args) if policy is not None else None
         try:

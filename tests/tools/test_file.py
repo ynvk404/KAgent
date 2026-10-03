@@ -15,7 +15,7 @@ from src.permission.permission import (
     PermissionRequest,
     YoloPrompter,
 )
-from src.tools.file import (
+from src.tools.execution.file import (
     FileReadTool,
     FileWriteTool,
     FileEditTool,

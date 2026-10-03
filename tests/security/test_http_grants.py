@@ -14,8 +14,8 @@ from src.permission.http_control import parse_lab_spec
 from src.permission.permission import Decision, PermissionRequest, YoloPrompter
 from src.cli.main import parse_flags, FlagParseError, apply_startup_http_grants
 from src.target.target import Target
-from src.tools.http import HTTPTool
-from src.tools.registry import Registry
+from src.tools.http.http_tool import HTTPTool
+from src.tools.common.registry import Registry
 
 ORIGIN = "http://juice.lab:3000"
 REAL_ASYNC_CLIENT = httpx.AsyncClient
@@ -49,8 +49,8 @@ def runtime(monkeypatch):
         return response
 
     original = httpx.AsyncClient
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient", lambda **kw: original(transport=httpx.MockTransport(transport), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient", lambda **kw: original(transport=httpx.MockTransport(transport), **kw))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     return tool, registry, sent, responses
 
 
@@ -468,9 +468,9 @@ async def test_state_change_while_exact_approval_is_pending(runtime, change):
 async def test_private_gate_independent_and_no_repeat_after_deny(runtime, monkeypatch):
     tool, registry, sent, _ = runtime
     tool.permissions.activate(ORIGIN, HTTPLimits())
-    from src.tools.private_host import gate_private_request
-    monkeypatch.setattr("src.tools.http.gate_private_request", gate_private_request)
-    monkeypatch.setattr("src.tools.private_host.private_host_reason", AsyncMock(return_value="loopback IPv4"))
+    from src.tools.http.private_host import gate_private_request
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", gate_private_request)
+    monkeypatch.setattr("src.tools.http.private_host.private_host_reason", AsyncMock(return_value="loopback IPv4"))
     operator = Operator()
     with pytest.raises(PermissionError, match="private/internal URL denied"):
         await registry.execute("http", args(), None, operator)
@@ -669,14 +669,14 @@ def test_session_deny_survives_target_change_until_operator_retry(runtime):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["shell", "mcp", "local-read"])
 async def test_http_grants_do_not_authorize_other_tools(runtime, tmp_path, monkeypatch, kind):
-    from src.tools.shell import ShellTool
-    from src.tools.mcp_integration import MCPTool
-    from src.tools.file import FileReadTool
+    from src.tools.execution.shell import ShellTool
+    from src.tools.mcp.integration import MCPTool
+    from src.tools.execution.file import FileReadTool
     from tests.security.test_action_approval import Session
     tool, registry, _, _ = runtime
     tool.permissions.activate(ORIGIN, HTTPLimits())
     subprocess = AsyncMock()
-    monkeypatch.setattr("src.tools.shell.run_with_capture", subprocess)
+    monkeypatch.setattr("src.tools.execution.shell.run_with_capture", subprocess)
     remote = Session()
     if kind == "shell":
         other = ShellTool()

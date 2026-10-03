@@ -6,7 +6,7 @@ from typing import Any
 from dataclasses import asdict
 from src.coverage.store import CoverageStore, CoverageStatus
 from src.permission.permission import Prompter
-from .types import Tool, PermissionHints, arg_string
+from src.tools.common.types import Tool, PermissionHints, arg_string
 
 ACTIONS = (
     "mark",

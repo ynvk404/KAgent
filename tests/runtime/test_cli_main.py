@@ -23,13 +23,13 @@ from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
 from src.target.origin import HTTPOrigin
-from src.tools.registry import Registry as ToolRegistry
+from src.tools.common.registry import Registry as ToolRegistry
 from tests.helpers.agent_fakes import FakeClient
 from src.logger.session_debug import (
     SessionDebugOptions,
     create_session_debug_log,
 )
-from src.tools.mcp_integration import MCPSession
+from src.tools.mcp.integration import MCPSession
 from src.llm.types import Message
 from src.session.store import Store
 

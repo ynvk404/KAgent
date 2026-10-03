@@ -9,7 +9,7 @@ from src.ask.ask import (
     Question,
 )
 from src.permission.permission import Prompter
-from .types import Tool
+from src.tools.common.types import Tool
 
 AUTHORIZED_TESTING_OPTION = Option(
     label="Authorized testing",

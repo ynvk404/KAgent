@@ -9,7 +9,7 @@ from src.agent.agent import Agent, AgentOptions
 from src.session.store import SessionMemory
 from src.skills.registry import Registry as Skills
 from src.memory.store import MemoryStore, AddMemoryInput
-from src.tools.outcome import ToolOutput
+from src.tools.common.outcome import ToolOutput
 from src.llm.types import ChatResponse, Message
 from tests.helpers.agent_fakes import FakeClient, FakeSignal
 from tests.security.test_execution_policy import Operator
@@ -18,9 +18,9 @@ from src.permission.execution import ExecutionPolicy
 from src.permission.permission import YoloPrompter
 from src.permission.http_grants import HTTPLimits
 from src.target.target import Target
-from src.tools.registry import Registry
-from src.tools.http import HTTPTool
-from src.tools.web import WebFetchTool, clear_web_cache
+from src.tools.common.registry import Registry
+from src.tools.http.http_tool import HTTPTool
+from src.tools.http.web import WebFetchTool, clear_web_cache
 from src.workflow.state import Candidate
 
 

@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
-from .types import (
+from src.tools.common.types import (
     Tool,
     arg_bool,
     arg_number,
@@ -12,7 +12,7 @@ from .types import (
 )
 from src.logger.logger import get_logger
 
-from .file import gate_sensitive_path
+from src.tools.execution.file import gate_sensitive_path
 
 log = get_logger("tools.search")
 

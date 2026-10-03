@@ -17,7 +17,7 @@ from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from src.permission.permission import Decision, PermissionRequest, Prompter, UserControlledRefusal
 from src.target.origin import HTTPOrigin
-from src.tools.approval_display import redact_approval
+from src.tools.common.approval_display import redact_approval
 from src.permission.invocations import review_id, on_review_end, permission_invocation
 
 if TYPE_CHECKING:

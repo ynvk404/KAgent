@@ -632,15 +632,15 @@ class TestRegistryIntegration:
 
     @pytest.fixture
     def registry(self, tmp_path):
-        from src.tools.registry import Registry
-        from src.tools.shell import ShellTool
-        from src.tools.file import FileWriteTool
-        from src.tools.http import HTTPTool
-        from src.tools.ask import AskUserTool
-        from src.tools.finding import ConfirmFindingTool
+        from src.tools.common.registry import Registry
+        from src.tools.execution.shell import ShellTool
+        from src.tools.execution.file import FileWriteTool
+        from src.tools.http.http_tool import HTTPTool
+        from src.tools.common.ask import AskUserTool
+        from src.tools.workflow.finding import ConfirmFindingTool
         from src.findings.store import Store
         from src.target.target import Target
-        from src.tools.workflow import WorkflowTool
+        from src.tools.workflow.workflow_tool import WorkflowTool
         from src.workflow.state import WorkflowState
 
         reg = Registry()

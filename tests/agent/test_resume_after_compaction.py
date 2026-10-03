@@ -14,7 +14,7 @@ from src.permission.permission import AlwaysAllow
 from src.session.store import Store
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
-from src.tools.registry import Registry as ToolRegistry
+from src.tools.common.registry import Registry as ToolRegistry
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
 
 

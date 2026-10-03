@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.tools.request_builder import build_captured_request
+from src.tools.http.request_builder import build_captured_request
 from src.browser.store import CaptureStore, MAX_RAW_REQUEST_B64
 from src.browser.redacted_view import request_view
 from src.workflow.state import Candidate

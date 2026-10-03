@@ -14,8 +14,8 @@ from src.permission.invocations import review_turn
 from src.permission.permission import Decision, YoloPrompter
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
-from src.tools.http import HTTPTool
-from src.tools.registry import Registry
+from src.tools.http.http_tool import HTTPTool
+from src.tools.common.registry import Registry
 from src.ui.core.app import AbortEvent
 from src.llm.types import ChatResponse, Message, ToolCall, FunctionCall
 from tests.helpers.agent_fakes import FakeClient
@@ -76,7 +76,7 @@ def runtime(tmp_path, monkeypatch):
             started.set()
             await release.wait()
         return ''
-    monkeypatch.setattr('src.tools.http.gate_private_request', private_gate)
+    monkeypatch.setattr('src.tools.http.http_tool.gate_private_request', private_gate)
     p = YoloPrompter(Operator(), False)
     p.bind_execution_policy(policy)
     registry = Registry()
@@ -193,14 +193,14 @@ async def test_stale_private_gate_policy_does_not_create_origin_decline(runtime,
     async def stale(*args, **kwargs):
         policy.revoke('http')
         raise UserControlledRefusal('blocked: policy changed during private-host gate')
-    monkeypatch.setattr('src.tools.http.gate_private_request', stale)
+    monkeypatch.setattr('src.tools.http.http_tool.gate_private_request', stale)
     with pytest.raises(UserControlledRefusal):
         await registry.execute('http', ARGS, None, p)
     assert not tool.permissions._blocked_gate and not tool.permissions._receipts and not control.sent
     policy.restore_tool('http')
     async def allowed(*args, **kwargs):
         return ''
-    monkeypatch.setattr('src.tools.http.gate_private_request', allowed)
+    monkeypatch.setattr('src.tools.http.http_tool.gate_private_request', allowed)
     await registry.execute('http', ARGS, None, p)
     assert len(control.sent) == 1 and not control.questions
 

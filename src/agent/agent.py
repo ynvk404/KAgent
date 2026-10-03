@@ -87,11 +87,11 @@ from src.target.target import Target
 from src.workflow.state import WorkflowObjective, WorkflowState, candidate_origin
 from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
 
-from src.tools.aliases import canonical_tool_name
-from src.tools.registry import InvalidToolArguments, Registry as ToolRegistry
-from src.tools.types import ActionPermissionTool
-from src.tools.outcome import ErrorKind, ToolOutput, ToolStatus
-from src.tools.workflow import WorkflowTool
+from src.tools.common.aliases import canonical_tool_name
+from src.tools.common.registry import InvalidToolArguments, Registry as ToolRegistry
+from src.tools.common.types import ActionPermissionTool
+from src.tools.common.outcome import ErrorKind, ToolOutput, ToolStatus
+from src.tools.workflow.workflow_tool import WorkflowTool
 
 from .decision_planner import (
     PlannerCandidate,

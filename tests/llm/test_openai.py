@@ -11,10 +11,10 @@ from src.llm import transport
 from src.browser.store import CaptureStore
 from src.llm.openai import OpenAIClient
 from src.llm.types import ChatRequest, Message, ToolFunction, ToolSpec
-from src.tools.browser_capture import BrowserCaptureClearTool
-from src.tools.ask import AskUserTool
+from src.tools.common.browser_capture import BrowserCaptureClearTool
+from src.tools.common.ask import AskUserTool
 from src.ask.ask import FirstOptionPrompter
-from src.tools.registry import Registry as ToolRegistry
+from src.tools.common.registry import Registry as ToolRegistry
 
 server: HTTPServer | None = None
 base_url = ""

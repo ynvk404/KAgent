@@ -14,14 +14,14 @@ import pytest
 from src.engagement.state import EngagementState
 from src.permission.permission import AlwaysAllow, Decision, PermissionRequest, UserControlledRefusal, YoloPrompter
 from src.target.target import Target
-from src.tools.capabilities import CapabilityInventory
-from src.tools.content_discovery import (
+from src.tools.common.capabilities import CapabilityInventory
+from src.tools.discovery.content import (
     ContentDiscoveryTool,
     MAX_REQUESTS,
 )
-from src.tools.outcome import ToolOutput
-from src.tools.service_discovery import ServiceDiscoveryTool
-from src.tools.registry import Registry
+from src.tools.common.outcome import ToolOutput
+from src.tools.discovery.service import ServiceDiscoveryTool
+from src.tools.common.registry import Registry
 from src.workflow.state import WorkflowObjective, WorkflowState
 from tests.helpers.workflow import record_completed_phase
 
@@ -138,16 +138,16 @@ def make_service_tool(
 def fake_content_network(monkeypatch):
     FakeHTTPClient.responses = {}
     FakeHTTPClient.seen = []
-    monkeypatch.setattr("src.tools.content_discovery.httpx.AsyncClient", FakeHTTPClient)
+    monkeypatch.setattr("src.tools.discovery.content.httpx.AsyncClient", FakeHTTPClient)
     monkeypatch.setattr(
-        "src.tools.content_discovery.gate_private_request",
+        "src.tools.discovery.content.gate_private_request",
         AsyncMock(return_value=""),
     )
 
     async def no_wait(_delay: float, _signal):
         return True
 
-    monkeypatch.setattr("src.tools.content_discovery.sleep_or_abort", no_wait)
+    monkeypatch.setattr("src.tools.discovery.content.sleep_or_abort", no_wait)
 
 
 def test_capability_inventory_detects_once_and_missing_tools_are_supported():
@@ -303,7 +303,7 @@ async def test_content_discovery_filters_spa_wildcard_and_reports_bounded_struct
             return Stream(Response(200, b"same app shell"))
 
     tool = make_content_tool()
-    monkeypatch.setattr("src.tools.content_discovery.httpx.AsyncClient", SPAClient)
+    monkeypatch.setattr("src.tools.discovery.content.httpx.AsyncClient", SPAClient)
     output = await tool.run(
         {"paths": ["admin", "missing"], "max_requests": 4},
         None,
@@ -330,7 +330,7 @@ async def test_content_discovery_uses_two_random_baselines_and_normalizes_dynami
             timestamp = "2026-09-27T12:34:56Z"
             return Stream(Response(200, f"shell:{path}:request=123456789012:{timestamp}".encode()))
 
-    monkeypatch.setattr("src.tools.content_discovery.httpx.AsyncClient", DynamicSPAClient)
+    monkeypatch.setattr("src.tools.discovery.content.httpx.AsyncClient", DynamicSPAClient)
     tool = make_content_tool()
     output = await tool.run({"paths": ["admin"], "max_requests": 3}, None, AlwaysAllow())
     payload = json.loads(str(output))
@@ -365,7 +365,7 @@ async def test_content_discovery_does_not_follow_or_expose_external_redirect_que
             return Stream(Response(302, b"", {"location": "https://other.test/path?token=secret"}))
 
     tool = make_content_tool()
-    monkeypatch.setattr("src.tools.content_discovery.httpx.AsyncClient", RedirectClient)
+    monkeypatch.setattr("src.tools.discovery.content.httpx.AsyncClient", RedirectClient)
     output = await tool.run({"paths": ["redirect"], "max_requests": 3}, None, AlwaysAllow())
 
     payload = json.loads(str(output))
@@ -424,7 +424,7 @@ async def test_content_ffuf_output_is_parsed_and_every_hit_is_verified(monkeypat
         )
         return ToolOutput("exit: 0", status="success")
 
-    monkeypatch.setattr("src.tools.content_discovery.run_with_capture", fake_ffuf)
+    monkeypatch.setattr("src.tools.discovery.content.run_with_capture", fake_ffuf)
     output = await tool.run(
         {"paths": ["admin", "settings"], "mode": "auto", "max_requests": 6},
         None,
@@ -512,7 +512,7 @@ async def test_content_ffuf_malformed_json_returns_error_and_cleans_temp_directo
         output_path.write_text("{bad json", encoding="utf-8")
         return ToolOutput("exit: 0", status="success")
 
-    monkeypatch.setattr("src.tools.content_discovery.run_with_capture", fake_ffuf)
+    monkeypatch.setattr("src.tools.discovery.content.run_with_capture", fake_ffuf)
     output = await tool.run({"paths": ["admin"], "mode": "auto"}, None, AlwaysAllow())
 
     assert output.status == "error"
@@ -526,7 +526,7 @@ async def test_content_discovery_reports_missing_or_unexecutable_ffuf(monkeypatc
         profile="full", ffuf="/tools/ffuf", workflow=make_workflow(phase="enumeration")
     )
     monkeypatch.setattr(
-        "src.tools.content_discovery.run_with_capture",
+        "src.tools.discovery.content.run_with_capture",
         AsyncMock(side_effect=FileNotFoundError("ffuf disappeared")),
     )
     output = await tool.run(
@@ -546,7 +546,7 @@ async def test_content_discovery_preserves_ffuf_timeout_classification(monkeypat
         profile="full", ffuf="/tools/ffuf", workflow=make_workflow(phase="enumeration")
     )
     monkeypatch.setattr(
-        "src.tools.content_discovery.run_with_capture",
+        "src.tools.discovery.content.run_with_capture",
         AsyncMock(return_value=ToolOutput(
             "exit: timeout after 5s", status="error", error_kind="timeout"
         )),
@@ -605,7 +605,7 @@ def test_service_profile_selects_external_backend_only_for_runtime_gap():
 @pytest.mark.asyncio
 async def test_service_socket_backend_reports_open_and_closed_without_subprocess(monkeypatch):
     tool = make_service_tool()
-    monkeypatch.setattr("src.tools.service_discovery.private_host_reason", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.discovery.service.private_host_reason", AsyncMock(return_value=""))
 
     async def fake_open_connection(host: str, port: int):
         assert host == "203.0.113.10"
@@ -629,7 +629,7 @@ async def test_service_socket_backend_reports_open_and_closed_without_subprocess
 @pytest.mark.asyncio
 async def test_service_auto_fallback_explains_missing_nmap(monkeypatch):
     tool = make_service_tool(profile="full")
-    monkeypatch.setattr("src.tools.service_discovery.private_host_reason", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.discovery.service.private_host_reason", AsyncMock(return_value=""))
     monkeypatch.setattr(
         tool,
         "_scan_sockets",
@@ -644,7 +644,7 @@ async def test_service_auto_fallback_explains_missing_nmap(monkeypatch):
 @pytest.mark.asyncio
 async def test_service_socket_backend_cancels_pending_connections_promptly(monkeypatch):
     tool = make_service_tool()
-    monkeypatch.setattr("src.tools.service_discovery.private_host_reason", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.discovery.service.private_host_reason", AsyncMock(return_value=""))
     started = asyncio.Event()
 
     async def blocked_connection(_host: str, _port: int):
@@ -676,7 +676,7 @@ async def test_service_socket_backend_cancels_pending_connections_promptly(monke
 async def test_service_nmap_argv_is_bounded_and_suggested_http_origin_is_not_authorized(monkeypatch):
     workflow = make_workflow()
     tool = make_service_tool(profile="full", nmap="/tools/nmap", workflow=workflow)
-    monkeypatch.setattr("src.tools.service_discovery.private_host_reason", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.discovery.service.private_host_reason", AsyncMock(return_value=""))
     captured: dict[str, object] = {}
 
     async def fake_nmap(binary: str, argv: list[str], _timeout: float, _signal):
@@ -691,7 +691,7 @@ async def test_service_nmap_argv_is_bounded_and_suggested_http_origin_is_not_aut
         )
         return ToolOutput("exit: 0", status="success")
 
-    monkeypatch.setattr("src.tools.service_discovery.run_with_capture", fake_nmap)
+    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", fake_nmap)
     output = await tool.run(
         {"mode": "auto", "ports": [8080]},
         None,
@@ -718,9 +718,9 @@ async def test_service_nmap_missing_executable_returns_structured_error(monkeypa
     tool = make_service_tool(
         profile="full", nmap="/tools/nmap", workflow=make_workflow()
     )
-    monkeypatch.setattr("src.tools.service_discovery.private_host_reason", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.discovery.service.private_host_reason", AsyncMock(return_value=""))
     monkeypatch.setattr(
-        "src.tools.service_discovery.run_with_capture",
+        "src.tools.discovery.service.run_with_capture",
         AsyncMock(side_effect=FileNotFoundError("nmap disappeared")),
     )
 
@@ -745,7 +745,7 @@ async def test_service_nmap_extraports_are_only_exact_when_state_mapping_is_unam
         )
         return ToolOutput("exit: 0", status="success")
 
-    monkeypatch.setattr("src.tools.service_discovery.run_with_capture", aggregate_output)
+    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", aggregate_output)
     entries, status, reason = await tool._scan_nmap(
         "203.0.113.10", (8080, 8081), 20, None
     )
@@ -764,7 +764,7 @@ async def test_service_nmap_extraports_are_only_exact_when_state_mapping_is_unam
         )
         return ToolOutput("exit: 0", status="success")
 
-    monkeypatch.setattr("src.tools.service_discovery.run_with_capture", ambiguous_output)
+    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", ambiguous_output)
     entries, status, _reason = await tool._scan_nmap(
         "203.0.113.10", (8080, 8081), 20, None
     )
@@ -785,7 +785,7 @@ async def test_service_partial_nmap_output_keeps_recon_coverage_retryable(monkey
         )
         return ToolOutput("exit: 0", status="success")
 
-    monkeypatch.setattr("src.tools.service_discovery.run_with_capture", ambiguous_state)
+    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", ambiguous_state)
     output = await tool.run({}, None, AlwaysAllow())
     payload = json.loads(str(output))
 
@@ -809,7 +809,7 @@ async def test_service_nmap_timeout_and_cancel_classification_survive_partial_xm
         )
         return ToolOutput("partial", status="error", error_kind="timeout")
 
-    monkeypatch.setattr("src.tools.service_discovery.run_with_capture", partial_timeout)
+    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", partial_timeout)
     entries, status, reason = await tool._scan_nmap("203.0.113.10", (8080,), 20, None)
     assert entries == [] and status == "error" and reason == "timeout"
 
@@ -817,7 +817,7 @@ async def test_service_nmap_timeout_and_cancel_classification_survive_partial_xm
         Path(argv[argv.index("-oX") + 1]).write_text("<nmaprun>", encoding="utf-8")
         return ToolOutput("partial", status="cancelled", error_kind="cancelled")
 
-    monkeypatch.setattr("src.tools.service_discovery.run_with_capture", partial_cancel)
+    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", partial_cancel)
     entries, status, reason = await tool._scan_nmap("203.0.113.10", (8080,), 20, None)
     assert entries == [] and status == "cancelled" and reason == "cancelled during nmap scan"
 
@@ -833,7 +833,7 @@ async def test_service_dns_checks_all_answers_and_scans_only_a_vetted_numeric_ip
         reasons.append(address)
         return "loopback IPv4" if address == "127.0.0.1" else ""
 
-    monkeypatch.setattr("src.tools.service_discovery.private_host_reason", private_reason)
+    monkeypatch.setattr("src.tools.discovery.service.private_host_reason", private_reason)
     observed: list[str] = []
 
     async def scan(address: str, ports: tuple[int, ...], _timeout: int, _signal):
@@ -861,7 +861,7 @@ async def test_service_dns_resolution_is_deterministic_bounded_and_fails_closed(
         (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", 0)),
         (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", 0)),
     ]
-    monkeypatch.setattr("src.tools.service_discovery.socket.getaddrinfo", lambda *_args: answers)
+    monkeypatch.setattr("src.tools.discovery.service.socket.getaddrinfo", lambda *_args: answers)
     resolved, error = await ServiceDiscoveryTool._resolve_execution_addresses(
         tool, "target.test", 5, None
     )
@@ -872,7 +872,7 @@ async def test_service_dns_resolution_is_deterministic_bounded_and_fails_closed(
         (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (f"8.8.8.{index}", 0))
         for index in range(1, 18)
     ]
-    monkeypatch.setattr("src.tools.service_discovery.socket.getaddrinfo", lambda *_args: many_answers)
+    monkeypatch.setattr("src.tools.discovery.service.socket.getaddrinfo", lambda *_args: many_answers)
     resolved, error = await ServiceDiscoveryTool._resolve_execution_addresses(
         tool, "target.test", 5, None
     )
@@ -883,7 +883,7 @@ async def test_service_dns_resolution_is_deterministic_bounded_and_fails_closed(
 async def test_private_service_discovery_uses_cacheable_active_target_policy(monkeypatch):
     tool = make_service_tool()
     monkeypatch.setattr(
-        "src.tools.service_discovery.private_host_reason",
+        "src.tools.discovery.service.private_host_reason",
         AsyncMock(return_value="loopback IPv4"),
     )
     monkeypatch.setattr(
@@ -906,7 +906,7 @@ async def test_private_service_discovery_uses_cacheable_active_target_policy(mon
 async def test_service_discovery_coalesces_private_gate_with_registry_approval(monkeypatch):
     tool = make_service_tool()
     monkeypatch.setattr(
-        "src.tools.service_discovery.private_host_reason",
+        "src.tools.discovery.service.private_host_reason",
         AsyncMock(return_value="loopback IPv4"),
     )
     monkeypatch.setattr(
@@ -929,7 +929,7 @@ async def test_service_discovery_coalesces_private_gate_with_registry_approval(m
 async def test_yolo_auto_approves_in_scope_service_discovery_once(monkeypatch):
     tool = make_service_tool()
     monkeypatch.setattr(
-        "src.tools.service_discovery.private_host_reason",
+        "src.tools.discovery.service.private_host_reason",
         AsyncMock(return_value="loopback IPv4"),
     )
     monkeypatch.setattr(
@@ -955,7 +955,7 @@ async def test_yolo_auto_approves_in_scope_service_discovery_once(monkeypatch):
 async def test_private_service_discovery_denial_never_starts_scan(monkeypatch):
     tool = make_service_tool()
     monkeypatch.setattr(
-        "src.tools.service_discovery.private_host_reason",
+        "src.tools.discovery.service.private_host_reason",
         AsyncMock(return_value="loopback IPv4"),
     )
     scanner = AsyncMock(return_value=([], "success", None))
@@ -975,11 +975,11 @@ async def test_service_scan_timeout_excludes_permission_wait(monkeypatch):
     tool = make_service_tool()
     clock = [0.0]
     monkeypatch.setattr(
-        "src.tools.service_discovery.time",
+        "src.tools.discovery.service.time",
         SimpleNamespace(monotonic=lambda: clock[0]),
     )
     monkeypatch.setattr(
-        "src.tools.service_discovery.private_host_reason",
+        "src.tools.discovery.service.private_host_reason",
         AsyncMock(return_value="private address"),
     )
     scan_timeouts: list[float] = []

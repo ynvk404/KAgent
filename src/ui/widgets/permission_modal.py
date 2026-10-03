@@ -9,10 +9,10 @@ from rich.text import Text
 
 from src.ui.theme import MUTED, WARNING
 
-from src.tools.tool_display import display_tool_name
+from src.tools.common.tool_display import display_tool_name
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest
 from src.permission.permission import Decision
-from src.tools.approval_display import redact_approval as redact
+from src.tools.common.approval_display import redact_approval as redact
 
 COMMAND_TOOLS = {
     "shell",

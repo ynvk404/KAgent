@@ -16,8 +16,8 @@ from src.permission.permission import AlwaysAllow
 from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
-from src.tools.finding import ConfirmFindingTool
-from src.tools.workflow import WorkflowTool
+from src.tools.workflow.finding import ConfirmFindingTool
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import WorkflowState
 
 

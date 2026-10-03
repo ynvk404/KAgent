@@ -7,7 +7,7 @@ import pytest
 
 from src.permission.permission import Decision, YoloPrompter
 from src.skills.registry import Registry
-from src.tools.payloads import ReadPayloadsTool
+from src.tools.skills.payloads import ReadPayloadsTool
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

@@ -68,27 +68,27 @@ from src.skills.discovery import skill_search_dirs
 from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry as SkillRegistry
 
-from src.tools.plugin import CommandPluginTool
-from src.tools.finding import ConfirmFindingTool
-from src.tools.registry import Registry as ToolRegistry
+from src.tools.execution.plugin import CommandPluginTool
+from src.tools.workflow.finding import ConfirmFindingTool
+from src.tools.common.registry import Registry as ToolRegistry
 from src.redact.redact import apply as redact
-from src.tools.shell import BashTool, ShellTool
-from src.tools.http import HTTPTool
-from src.tools.capabilities import CapabilityInventory
-from src.tools.content_discovery import ContentDiscoveryTool
-from src.tools.service_discovery import ServiceDiscoveryTool
+from src.tools.execution.shell import BashTool, ShellTool
+from src.tools.http.http_tool import HTTPTool
+from src.tools.common.capabilities import CapabilityInventory
+from src.tools.discovery.content import ContentDiscoveryTool
+from src.tools.discovery.service import ServiceDiscoveryTool
 
-from src.tools.web import (
+from src.tools.http.web import (
     WebFetchTool,
     WebSearchTool,
 )
 
-from src.tools.search import (
+from src.tools.execution.search import (
     GlobTool,
     GrepTool,
 )
 
-from src.tools.file import (
+from src.tools.execution.file import (
     FileReadTool,
     FileReadToolAlias,
     FileWriteTool,
@@ -97,14 +97,14 @@ from src.tools.file import (
     FileEditToolAlias,
 )
 
-from src.tools.ask import AskUserTool
-from src.tools.coverage import CoverageTool
-from src.tools.payloads import ReadPayloadsTool
-from src.tools.skill_file import ReadSkillFileTool
-from src.tools.workflow import WorkflowTool
+from src.tools.common.ask import AskUserTool
+from src.tools.workflow.coverage import CoverageTool
+from src.tools.skills.payloads import ReadPayloadsTool
+from src.tools.skills.skill_file import ReadSkillFileTool
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import WorkflowState
 
-from src.tools.mcp_server import (
+from src.tools.mcp.session_servers import (
     BROWSER_MCP_NAMES,
     session_mcp_servers,
 )
@@ -112,11 +112,11 @@ from src.tools.mcp_server import (
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.tools.mcp_integration import MCPSession
+    from src.tools.mcp.integration import MCPSession
 
 from src.browser.store import CaptureStore
 
-from src.tools.browser_capture import (
+from src.tools.common.browser_capture import (
     register_browser_capture_tools,
 )
 
@@ -706,7 +706,7 @@ async def main() -> int:
     tools.register(WebFetchTool(engagement_state, target))
     tools.register(WebSearchTool())
     tools.register(AskUserTool(bridged_ask))
-    from src.tools.permission_status import PermissionStatusTool
+    from src.tools.common.permission_status import PermissionStatusTool
     tools.register(PermissionStatusTool())
     tools.register(
         ConfirmFindingTool(
@@ -878,7 +878,7 @@ async def main() -> int:
     mcp_sessions: list[MCPSession] = []
 
     if session_servers:
-        from src.tools.mcp_integration import discover_mcp_tools  # noqa: PLC0415
+        from src.tools.mcp.integration import discover_mcp_tools  # noqa: PLC0415
 
         mcp_results = await asyncio.gather(
             *(discover_mcp_tools(server, execution_policy=prompter.execution_policy) for server in session_servers),

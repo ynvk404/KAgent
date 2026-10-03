@@ -14,7 +14,7 @@ import asyncio
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
-from src.tools.types import Tool
+from src.tools.common.types import Tool
 from src.memory.store import MemoryStore
 from src.agent.agent import (
     Agent,
@@ -56,11 +56,11 @@ from src.engagement.state import EngagementState
 from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.skills.load_skill import LoadSkillTool
 from src.target.target import Target
-from src.tools.registry import Registry as ToolRegistry
-from src.tools.http import HTTPTool
-from src.tools.coverage import CoverageTool
-from src.tools.finding import ConfirmFindingTool
-from src.tools.workflow import WorkflowTool
+from src.tools.common.registry import Registry as ToolRegistry
+from src.tools.http.http_tool import HTTPTool
+from src.tools.workflow.coverage import CoverageTool
+from src.tools.workflow.finding import ConfirmFindingTool
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import (
     AttackSurfaceInput,
     Candidate,

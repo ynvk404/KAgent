@@ -17,11 +17,11 @@ from src.permission.network import pin_request
 from src.target.target import Target
 from src.target.origin import HTTPOrigin
 from src.workflow.state import WorkflowPhase, WorkflowState, normalize_target_origin
-from .private_host import gate_private_request, parse_http_url, PrivateHostDeclined
-from .types import Tool, PermissionHints, arg_string
-from .outcome import ToolOutput
-from .http_context import HTTPContextStore
-from .request_builder import NATIVE_USER_AGENT, RequestDiff, build_captured_request, origin_headers, validate_host
+from src.tools.http.private_host import gate_private_request, parse_http_url, PrivateHostDeclined
+from src.tools.common.types import Tool, PermissionHints, arg_string
+from src.tools.common.outcome import ToolOutput
+from src.tools.http.context import HTTPContextStore
+from src.tools.http.request_builder import NATIVE_USER_AGENT, RequestDiff, build_captured_request, origin_headers, validate_host
 from src.browser.store import CaptureStore
 from src.redact.redact import apply_evidence as redact_evidence
 

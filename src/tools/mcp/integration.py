@@ -23,7 +23,7 @@ from mcp.client.stdio import stdio_client
 
 from src.config.config import MCPServerConfig
 from src.logger.logger import get_logger
-from src.tools.types import PermissionHints
+from src.tools.common.types import PermissionHints
 
 _log = get_logger("mcp")
 

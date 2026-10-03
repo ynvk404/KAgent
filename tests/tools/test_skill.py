@@ -12,7 +12,7 @@ from src.permission.permission import (
 )
 
 from src.skills.registry import Registry
-from src.tools.skill_file import ReadSkillFileTool
+from src.tools.skills.skill_file import ReadSkillFileTool
 
 class DummyPrompter:
     async def ask(

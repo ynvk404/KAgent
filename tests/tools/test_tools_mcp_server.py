@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.config.config import MCPServerConfig
-from src.tools.mcp_server import (
+from src.tools.mcp.session_servers import (
     BROWSER_MCP_SERVER,
     session_mcp_servers,
 )

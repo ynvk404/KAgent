@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
-from .request_builder import NATIVE_USER_AGENT
+from src.tools.http.request_builder import NATIVE_USER_AGENT
 
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter
@@ -19,9 +19,9 @@ from src.permission.execution import policy_for
 from src.permission.execution import guard_adapter
 from src.permission.network import governed_send
 from src.target.target import Target
-from .private_host import gate_private_request, parse_http_url
-from .types import Tool, arg_string
-from .outcome import ToolOutput, ErrorKind
+from src.tools.http.private_host import gate_private_request, parse_http_url
+from src.tools.common.types import Tool, arg_string
+from src.tools.common.outcome import ToolOutput, ErrorKind
 
 FETCH_TIMEOUT_SECONDS = 30.0
 FETCH_BODY_CAP = 512 * 1024

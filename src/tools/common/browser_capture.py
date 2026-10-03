@@ -9,7 +9,7 @@ from src.browser.store import CaptureStore
 from src.browser.redacted_view import request_view, snapshot_view, issue_view, task_view
 from src.redact.redact import apply_evidence
 from src.permission.permission import Prompter
-from .types import Tool, arg_number, arg_string
+from src.tools.common.types import Tool, arg_number, arg_string
 
 TOOL_PREFIX = "browser_capture_"
 

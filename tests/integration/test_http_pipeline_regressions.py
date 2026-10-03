@@ -15,7 +15,7 @@ from src.browser.redacted_view import snapshot_view
 from src.engagement.state import EngagementState
 from src.permission.permission import Decision
 from src.target.target import Target
-from src.tools.http import HTTPTool
+from src.tools.http.http_tool import HTTPTool
 from src.version.version import VERSION
 from src.workflow.state import Candidate, WorkflowState
 
@@ -204,7 +204,7 @@ async def test_malformed_json_path_is_rejected(runtime,path):
 @pytest.mark.asyncio
 async def test_agent_reset_clears_identity_credentials(runtime):
     from src.agent.agent import Agent,AgentOptions
-    from src.tools.registry import Registry
+    from src.tools.common.registry import Registry
     from src.skills.registry import Registry as SkillRegistry
     from tests.helpers.agent_fakes import FakeClient
     registry=Registry(); registry.register(runtime.tool)
@@ -248,7 +248,7 @@ async def test_post_to_get_redirect_to_same_url_is_not_a_loop(runtime,status):
 
 
 def test_xml_comment_does_not_count_as_named_element():
-    from src.tools.request_builder import build_captured_request
+    from src.tools.http.request_builder import build_captured_request
     row=SimpleNamespace(method='POST',url='http://target.test/api',request_headers=[SimpleNamespace(name='Content-Type',value='application/xml')],request_body='<root><!--<q>old</q>--><q>safe</q></root>',raw_request_b64=None)
     candidate=Candidate(candidate_class='sql-injection',target='http://target.test',method='POST',endpoint='/api',parameter='q',location='raw',content_type='application/xml')
     rejected=False
@@ -258,14 +258,14 @@ def test_xml_comment_does_not_count_as_named_element():
 
 
 def test_multiple_connection_fields_all_nominations_removed():
-    from src.tools.request_builder import origin_headers
+    from src.tools.http.request_builder import origin_headers
     headers=origin_headers([('Connection','X-One'),('Connection','X-Two'),('X-One','fixture'),('X-Two','fixture')])
     extra_forwarded=any(k.lower() in {'x-one','x-two'} for k,v in headers)
     assert extra_forwarded is False
 
 
 def test_unframed_raw_body_requires_recapture():
-    from src.tools.request_builder import build_captured_request
+    from src.tools.http.request_builder import build_captured_request
     raw=b'POST /api HTTP/1.1\r\nHost: target.test\r\nContent-Type: application/json\r\n\r\n{"q":"old"}'
     row=SimpleNamespace(method='POST',url='http://target.test/api',raw_request_b64=base64.b64encode(raw).decode())
     candidate=Candidate(candidate_class='sql-injection',target='http://target.test',method='POST',endpoint='/api',parameter='q',location='body',content_type='application/json')
@@ -276,7 +276,7 @@ def test_unframed_raw_body_requires_recapture():
 
 
 def test_form_unsupported_charset_rejected():
-    from src.tools.request_builder import build_captured_request
+    from src.tools.http.request_builder import build_captured_request
     row=SimpleNamespace(method='POST',url='http://target.test/api',request_headers=[SimpleNamespace(name='Content-Type',value='application/x-www-form-urlencoded; charset=iso-8859-1')],request_body='q=old&keep=%E9',raw_request_b64=None)
     candidate=Candidate(candidate_class='sql-injection',target='http://target.test',method='POST',endpoint='/api',parameter='q',location='form',content_type='application/x-www-form-urlencoded')
     rejected=False
@@ -286,8 +286,8 @@ def test_form_unsupported_charset_rejected():
 
 
 def test_exact_origin_ports_and_ipv6_host_normalization():
-    from src.tools.http_context import HTTPContextStore
-    from src.tools.request_builder import validate_host
+    from src.tools.http.context import HTTPContextStore
+    from src.tools.http.request_builder import validate_host
     store=HTTPContextStore(); store.sync_target(1,1)
     request=httpx.Request('GET','http://127.0.0.1:1234/input')
     store.extract(request,httpx.Response(200,headers={'Set-Cookie':'sid=fixture; Path=/'},request=request),'user')

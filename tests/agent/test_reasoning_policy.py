@@ -13,7 +13,7 @@ from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
 from src.session.store import Store
-from src.tools.registry import Registry as ToolRegistry
+from src.tools.common.registry import Registry as ToolRegistry
 from tests.helpers.agent_fakes import EchoTool, FakeClient, FakeSignal, collect, seed_compactable_history
 
 

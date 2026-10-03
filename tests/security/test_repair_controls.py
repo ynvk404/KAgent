@@ -8,15 +8,15 @@ import httpx
 import pytest
 
 from src.browser.store import CaptureStore
-from src.tools.browser_capture import register_browser_capture_tools
-from src.tools.content_discovery import ContentDiscoveryTool
-from src.tools.capabilities import CapabilityInventory
+from src.tools.common.browser_capture import register_browser_capture_tools
+from src.tools.discovery.content import ContentDiscoveryTool
+from src.tools.common.capabilities import CapabilityInventory
 from src.permission.execution import ExecutionBlocked, default_execution_policy
 from src.permission.permission import UserControlledRefusal, Decision, YoloPrompter
 from src.engagement.state import EngagementState
-from src.tools.registry import Registry
-from src.tools.workflow import WorkflowTool
-from src.tools.finding import ConfirmFindingTool
+from src.tools.common.registry import Registry
+from src.tools.workflow.workflow_tool import WorkflowTool
+from src.tools.workflow.finding import ConfirmFindingTool
 from src.workflow.state import Candidate, WorkflowState
 from src.coverage.store import CoverageStore
 from src.findings.store import Store as FindingsStore

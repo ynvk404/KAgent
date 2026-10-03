@@ -16,15 +16,15 @@ from src.permission.permission import (
     YoloPrompter,
 )
 from src.target.target import Target
-from src.tools.coverage import CoverageTool
-from src.tools.finding import ConfirmFindingTool
-from src.tools.file import FileWriteTool
-from src.tools.http import HTTPTool
-from src.tools.plugin import CommandPluginTool
-from src.tools.registry import Registry
-from src.tools.shell import ShellTool
-from src.tools.types import Tool
-from src.tools.workflow import WorkflowTool
+from src.tools.workflow.coverage import CoverageTool
+from src.tools.workflow.finding import ConfirmFindingTool
+from src.tools.execution.file import FileWriteTool
+from src.tools.http.http_tool import HTTPTool
+from src.tools.execution.plugin import CommandPluginTool
+from src.tools.common.registry import Registry
+from src.tools.execution.shell import ShellTool
+from src.tools.common.types import Tool
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import WorkflowState
 
 class GatedTool:
@@ -180,7 +180,7 @@ async def test_yolo_does_not_bypass_non_cacheable_coverage_clear(tmp_path):
 @pytest.mark.parametrize("action", ["shell", "file_write", "http", "plugin"])
 async def test_unprofiled_generic_tools_and_ordinary_http_keep_review(action, tmp_path, monkeypatch):
     send = AsyncMock()
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient.send", send)
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient.send", send)
     registry = Registry()
     if action == "shell":
         registry.register(ShellTool())
@@ -228,7 +228,7 @@ async def test_unprofiled_generic_tools_and_ordinary_http_keep_review(action, tm
 @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
 async def test_ordinary_http_confirm_each_denial_stops_dispatch(method, monkeypatch):
     send = AsyncMock()
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient.send", send)
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient.send", send)
     target = Target("https://target.test")
     engagement = EngagementState()
     engagement.initialize_target(target.base_url())

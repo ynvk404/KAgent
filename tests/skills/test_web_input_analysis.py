@@ -23,7 +23,7 @@ from src.agent.decision_planner import (
 )
 from src.permission.permission import AlwaysAllow
 from src.target.target import Target
-from src.tools.workflow import WorkflowTool
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import Candidate
 from src.workflow.state import WorkflowState
 

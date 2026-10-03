@@ -7,9 +7,9 @@ from src.engagement.state import EngagementState
 from src.permission.execution import ExecutionBlocked, default_execution_policy
 from src.permission.permission import Decision, YoloPrompter
 from src.permission.permission import UserControlledRefusal
-from src.tools.file import FileReadTool
-from src.tools.registry import Registry
-from src.tools.workflow import WorkflowTool
+from src.tools.execution.file import FileReadTool
+from src.tools.common.registry import Registry
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import Candidate, WorkflowState
 
 

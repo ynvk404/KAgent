@@ -14,10 +14,10 @@ from src.permission.execution import ExecutionPolicy, ExecutionBlocked
 from src.permission.http_grants import HTTPLimits, HTTPBlocked
 from src.permission.permission import YoloPrompter, Decision
 from src.permission.observations import VerifiedResult
-from src.tools.workflow import WorkflowTool
-from src.tools.coverage import CoverageTool
-from src.tools.permission_status import PermissionStatusTool
-from src.tools.ask import AskUserTool
+from src.tools.workflow.workflow_tool import WorkflowTool
+from src.tools.workflow.coverage import CoverageTool
+from src.tools.common.permission_status import PermissionStatusTool
+from src.tools.common.ask import AskUserTool
 from src.coverage.store import CoverageStore
 from src.workflow.state import Candidate, WorkflowState
 

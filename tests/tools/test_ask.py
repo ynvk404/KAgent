@@ -9,7 +9,7 @@ from src.ask.ask import (
     Question,
 )
 from src.permission.permission import AlwaysAllow
-from src.tools.ask import AskUserTool
+from src.tools.common.ask import AskUserTool
 
 class CaptureAskPrompter(AskPrompter):
     def __init__(self):

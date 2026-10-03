@@ -12,13 +12,13 @@ from src.permission.permission import (
 )
 from src.paths import project_artifact_root, project_root
 
-from .types import (
+from src.tools.common.types import (
     PermissionHints,
     Tool,
     arg_bool,
     arg_string,
 )
-from .sensitive import is_sensitive_path
+from src.tools.execution.sensitive import is_sensitive_path
 from src.permission.execution import policy_for
 
 READ_BYTE_CAP = 200 * 1024

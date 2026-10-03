@@ -11,8 +11,8 @@ from src.coverage.store import CoverageStore
 from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
-from src.tools.registry import Registry as ToolRegistry
-from src.tools.workflow import WorkflowTool
+from src.tools.common.registry import Registry as ToolRegistry
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import (
     AttackSurfaceInput,
     Candidate,

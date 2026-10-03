@@ -13,11 +13,11 @@ from src.browser.store import CaptureStore
 from src.engagement.state import EngagementState
 from src.permission.permission import Decision
 from src.target.target import Target
-from src.tools.http import HTTPTool
-from src.tools.content_discovery import ContentDiscoveryTool
-from src.tools.capabilities import CapabilityInventory
-from src.tools.request_builder import NATIVE_USER_AGENT
-from src.tools.web import _do_fetch, _do_search
+from src.tools.http.http_tool import HTTPTool
+from src.tools.discovery.content import ContentDiscoveryTool
+from src.tools.common.capabilities import CapabilityInventory
+from src.tools.http.request_builder import NATIVE_USER_AGENT
+from src.tools.http.web import _do_fetch, _do_search
 from src.version.version import VERSION
 from src.workflow.state import Candidate, WorkflowState
 

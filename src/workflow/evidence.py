@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.redact.redact import apply_evidence as redact
-from src.tools.sensitive import is_sensitive_path
+from src.tools.execution.sensitive import is_sensitive_path
 from src.permission.permission import Prompter, UserControlledRefusal
 
 MAX_EVIDENCE_BYTES = 2_000_000
@@ -177,7 +177,7 @@ class EvidenceArtifact:
         self, root: Path, prompter: Prompter, signal: Any = None,
         *, approved_paths: set[str] | None = None,
     ) -> bool:
-        from src.tools.file import gate_sensitive_path
+        from src.tools.execution.file import gate_sensitive_path
         from src.permission.execution import policy_for
 
         for base in self._resume_roots(root):

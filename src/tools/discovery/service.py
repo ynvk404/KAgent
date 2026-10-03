@@ -18,12 +18,12 @@ from src.engagement.state import EngagementState
 from src.permission.permission import Decision, PermissionRequest, Prompter, UserControlledRefusal
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
-from .capabilities import CapabilityInventory
-from .discovery_common import is_aborted, normalize_host, validate_ports
-from .outcome import ErrorKind, ToolOutput
-from .private_host import private_host_reason
-from .shell import run_with_capture
-from .types import PermissionHints, Tool
+from src.tools.common.capabilities import CapabilityInventory
+from src.tools.discovery.common import is_aborted, normalize_host, validate_ports
+from src.tools.common.outcome import ErrorKind, ToolOutput
+from src.tools.http.private_host import private_host_reason
+from src.tools.execution.shell import run_with_capture
+from src.tools.common.types import PermissionHints, Tool
 from src.workflow.state import WorkflowState
 
 

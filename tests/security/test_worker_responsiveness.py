@@ -16,10 +16,10 @@ from src.permission.execution import ExecutionBlocked, ExecutionPolicy
 from src.permission.permission import Decision, YoloPrompter
 from src.permission.worker import OfflineWorker
 import src.permission.worker as worker_module
-from src.tools.registry import Registry
-from src.tools.shell import ShellTool
-from src.tools.plugin import CommandPluginTool
-from src.tools.mcp_integration import discover_mcp_tools
+from src.tools.common.registry import Registry
+from src.tools.execution.shell import ShellTool
+from src.tools.execution.plugin import CommandPluginTool
+from src.tools.mcp.integration import discover_mcp_tools
 
 
 MCP_SERVER = '''

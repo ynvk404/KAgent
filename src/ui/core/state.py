@@ -28,7 +28,7 @@ else:
     BannerData = Any
 
 try:
-    from src.tools.tool_display import display_tool_name, format_tool_result, primary_tool_arg
+    from src.tools.common.tool_display import display_tool_name, format_tool_result, primary_tool_arg
 except ImportError:
 
     def display_tool_name(name: str) -> str:

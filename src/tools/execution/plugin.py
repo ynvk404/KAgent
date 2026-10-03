@@ -9,7 +9,7 @@ from typing import Any
 
 from src.config.config import PluginConfig
 from src.permission.permission import Prompter
-from src.tools.types import PermissionHints, Tool
+from src.tools.common.types import PermissionHints, Tool
 
 PLUGIN_TIMEOUT_SECONDS = 5 * 60
 MAX_OUTPUT_BYTES = 128 * 1024

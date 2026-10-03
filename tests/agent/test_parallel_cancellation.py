@@ -4,8 +4,8 @@ import sys
 import pytest
 
 from src.agent.agent import map_with_concurrency
-from src.tools.plugin import run_plugin
-from src.tools.shell import run_with_capture
+from src.tools.execution.plugin import run_plugin
+from src.tools.execution.shell import run_with_capture
 from tests.helpers.agent_fakes import FakeSignal
 
 
@@ -59,7 +59,7 @@ async def test_shell_direct_cancellation_terminates_process(monkeypatch):
         created.set()
         return proc
 
-    monkeypatch.setattr("src.tools.shell.asyncio.create_subprocess_exec", create)
+    monkeypatch.setattr("src.tools.execution.shell.asyncio.create_subprocess_exec", create)
     task = asyncio.create_task(run_with_capture(
         "/bin/sh", ["-c", "sleep 30"], 60, FakeSignal(),
     ))
@@ -82,7 +82,7 @@ async def test_plugin_direct_cancellation_terminates_process(monkeypatch):
         created.set()
         return proc
 
-    monkeypatch.setattr("src.tools.plugin.asyncio.create_subprocess_exec", create)
+    monkeypatch.setattr("src.tools.execution.plugin.asyncio.create_subprocess_exec", create)
     task = asyncio.create_task(run_plugin(
         sys.executable, ["-c", "import time; time.sleep(30)"], {}, FakeSignal(),
     ))

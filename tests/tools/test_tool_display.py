@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.tools.tool_display import (
+from src.tools.common.tool_display import (
     display_tool_name,
     primary_tool_arg,
     format_tool_result,

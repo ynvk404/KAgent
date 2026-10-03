@@ -12,7 +12,7 @@ from src.engagement.state import EngagementState
 from src.permission.http_grants import HTTPLimits
 from src.permission.permission import Decision, Prompter, YoloPrompter
 from src.target.target import Target
-from src.tools.http import HTTPTool
+from src.tools.http.http_tool import HTTPTool
 from src.ui.bridges.perm_bridge import BridgedPrompter
 from src.ui.commands.slash_handler import handle_slash
 from src.ui.core.app import KAgent
@@ -44,8 +44,8 @@ async def test_slash_yolo_activates_http_without_manual_grant_and_honors_revoke(
         return httpx.Response(200, content=b"ok")
 
     original = httpx.AsyncClient
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient", lambda **kw: original(transport=httpx.MockTransport(transport), **kw))
-    monkeypatch.setattr("src.tools.http.gate_private_request", AsyncMock(return_value=""))
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient", lambda **kw: original(transport=httpx.MockTransport(transport), **kw))
+    monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     assert handle_slash(app, "/yolo on")
     assert "unknown server effects" in app.state.transcript[-1].text
     await tool.run({"url": "/new", "method": "DELETE", "phase": "recon"}, None, prompter)

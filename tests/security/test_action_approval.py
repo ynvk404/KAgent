@@ -7,9 +7,9 @@ import pytest
 from rich.console import Console
 
 from src.permission.permission import AlwaysDeny, Decision, UserControlledRefusal
-from src.tools.mcp_integration import MCPTool
-from src.tools.registry import Registry
-from src.tools.shell import ShellTool, rewrite_portable_command
+from src.tools.mcp.integration import MCPTool
+from src.tools.common.registry import Registry
+from src.tools.execution.shell import ShellTool, rewrite_portable_command
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest
 from src.ui.widgets.permission_modal import PermissionModal
 
@@ -66,7 +66,7 @@ async def test_shell_preview_matches_rewritten_dispatch_and_preserves_secrets(mo
     async def run_capture(cmd, argv, timeout, signal):
         calls.append((cmd, argv))
         return "fixture output"
-    monkeypatch.setattr("src.tools.shell.run_with_capture", run_capture)
+    monkeypatch.setattr("src.tools.execution.shell.run_with_capture", run_capture)
     class Approve:
         async def ask(self, request, signal=None):
             req = request
@@ -98,7 +98,7 @@ def test_full_detail_toggle_reveals_tail_without_approving_or_secret_leak():
 
 
 def test_credential_flag_values_are_hidden_without_hiding_target_or_operation():
-    from src.tools.approval_display import redact_approval
+    from src.tools.common.approval_display import redact_approval
     text = "curl --password 'fake short' --token=fake-token -u testactor:fake-password -H 'Authorization: Basic ZmFrZQ==' https://target.test/operation"
     safe = redact_approval(text)
     for secret in ["fake short", "fake-token", "fake-password", "ZmFrZQ=="]:

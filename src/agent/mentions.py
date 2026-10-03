@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from dataclasses import dataclass
 
-from src.tools.sensitive import is_sensitive_path
+from src.tools.execution.sensitive import is_sensitive_path
 from src.logger.logger import get_logger
 log = get_logger("agent.mentions")
 

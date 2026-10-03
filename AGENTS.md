@@ -22,12 +22,12 @@ but contributors must still preserve scope in tool and workflow changes.
   It does not authorize another host, origin, target, or action.
 
 - Do not treat every private address or hostname as authorized. HTTP/private
-  host handling in `src/tools/private_host.py` detects loopback, RFC1918,
+  host handling in `src/tools/http/private_host.py` detects loopback, RFC1918,
   link-local/metadata, and DNS-resolved private addresses. It asks through the
   existing permission model; only the exact declared origin (scheme, host, and
   effective port) may receive its private-host session cache.
 
-- Keep the registry gate in `src/tools/registry.py`: tools may require a
+- Keep the registry gate in `src/tools/common/registry.py`: tools may require a
   permission request, including argument-aware requirements and cache hints.
   Do not bypass, weaken, or replace it. `--yolo` is an existing runtime mode,
   not a reason to remove safety checks or turn an approval into durable policy.
@@ -58,7 +58,7 @@ but contributors must still preserve scope in tool and workflow changes.
   another vulnerability class.
 
 - Follow the structured workflow contract in `src/workflow/` and
-  `src/tools/workflow.py`: candidates are compact, fingerprinted records and
+  `src/tools/workflow/workflow_tool.py`: candidates are compact, fingerprinted records and
   validation results refer to evidence rather than embedding full traffic.
   Preserve candidate/result status and finding-eligibility semantics.
 
@@ -218,11 +218,11 @@ but contributors must still preserve scope in tool and workflow changes.
   `src/cli/main.py`.
 
 - Target, permissions, network-origin checks, and execution: `src/target/`,
-  `src/permission/`, `src/tools/registry.py`, `src/tools/private_host.py`,
-  `src/tools/http.py`, and `src/tools/web.py`.
+  `src/permission/`, `src/tools/common/registry.py`, `src/tools/http/private_host.py`,
+  `src/tools/http/http_tool.py`, and `src/tools/http/web.py`.
 
 - Skills, workflow, findings, evidence/artifacts: `src/skills/`,
-  `src/workflow/`, `src/findings/`, `src/tools/finding.py`, `src/coverage/`,
+  `src/workflow/`, `src/findings/`, `src/tools/workflow/finding.py`, `src/coverage/`,
   and `src/browser/`.
 
 - Durable memory/intelligence/redaction/path policy: `src/memory/`,

@@ -9,9 +9,9 @@ from src.coverage.store import CoverageStore
 from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.target.target import Target
-from src.tools.workflow import DEFAULT_LIST_LIMIT, WorkflowTool
-from src.tools.outcome import ToolOutput
-from src.tools.coverage import CoverageTool
+from src.tools.workflow.workflow_tool import DEFAULT_LIST_LIMIT, WorkflowTool
+from src.tools.common.outcome import ToolOutput
+from src.tools.workflow.coverage import CoverageTool
 from src.workflow.evidence import EvidenceArtifact
 from src.workflow.state import (
     AttackSurfaceInput,

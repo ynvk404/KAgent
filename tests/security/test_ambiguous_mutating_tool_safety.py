@@ -21,10 +21,10 @@ from src.llm.types import ChatRequest, Message
 from src.permission.permission import Decision, PermissionRequest
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
-from src.tools.ask import AskUserTool
-from src.tools.browser_capture import BrowserCaptureClearTool
-from src.tools.coverage import CoverageTool
-from src.tools.registry import Registry as ToolRegistry
+from src.tools.common.ask import AskUserTool
+from src.tools.common.browser_capture import BrowserCaptureClearTool
+from src.tools.workflow.coverage import CoverageTool
+from src.tools.common.registry import Registry as ToolRegistry
 
 
 AMBIGUOUS_STIMULI = (

@@ -8,9 +8,9 @@ import pytest
 
 from src.permission.permission import AlwaysAllow, AlwaysDeny, UserControlledRefusal
 from src.target.target import Target
-from src.tools.file import FileReadTool
-from src.tools.search import GrepTool
-from src.tools.workflow import WorkflowTool
+from src.tools.execution.file import FileReadTool
+from src.tools.execution.search import GrepTool
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.evidence import EvidenceArtifact, verify_evidence_reads
 from src.workflow.state import Candidate, WorkflowState
 
@@ -203,7 +203,7 @@ async def test_status_does_not_accept_changed_sensitive_snapshot(tmp_path):
 @pytest.mark.asyncio
 async def test_finding_denial_precedes_evidence_read_and_report_write(tmp_path):
     from src.findings.store import Store
-    from src.tools.finding import ConfirmFindingTool
+    from src.tools.workflow.finding import ConfirmFindingTool
     tool, cid = workflow(tmp_path)
     (tmp_path / ".env").write_text("FAKE_CANARY")
     ev = await snapshot(tool, cid, ".env", AlwaysAllow())

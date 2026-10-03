@@ -7,12 +7,12 @@ from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
 from src.engagement.state import EngagementState
-from src.tools.ask import AskUserTool
-from src.tools.browser_capture import register_browser_capture_tools
-from src.tools.coverage import CoverageTool
-from src.tools.capabilities import CapabilityInventory
-from src.tools.content_discovery import ContentDiscoveryTool
-from src.tools.file import (
+from src.tools.common.ask import AskUserTool
+from src.tools.common.browser_capture import register_browser_capture_tools
+from src.tools.workflow.coverage import CoverageTool
+from src.tools.common.capabilities import CapabilityInventory
+from src.tools.discovery.content import ContentDiscoveryTool
+from src.tools.execution.file import (
     FileEditTool,
     FileEditToolAlias,
     FileReadTool,
@@ -20,16 +20,16 @@ from src.tools.file import (
     FileWriteTool,
     FileWriteToolAlias,
 )
-from src.tools.finding import ConfirmFindingTool
-from src.tools.http import HTTPTool
-from src.tools.payloads import ReadPayloadsTool
-from src.tools.registry import Registry
-from src.tools.search import GlobTool, GrepTool
-from src.tools.service_discovery import ServiceDiscoveryTool
-from src.tools.shell import BashTool, ShellTool
-from src.tools.skill_file import ReadSkillFileTool
-from src.tools.web import WebFetchTool, WebSearchTool
-from src.tools.workflow import WorkflowTool
+from src.tools.workflow.finding import ConfirmFindingTool
+from src.tools.http.http_tool import HTTPTool
+from src.tools.skills.payloads import ReadPayloadsTool
+from src.tools.common.registry import Registry
+from src.tools.execution.search import GlobTool, GrepTool
+from src.tools.discovery.service import ServiceDiscoveryTool
+from src.tools.execution.shell import BashTool, ShellTool
+from src.tools.skills.skill_file import ReadSkillFileTool
+from src.tools.http.web import WebFetchTool, WebSearchTool
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import WorkflowState
 
 

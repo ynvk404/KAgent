@@ -9,7 +9,7 @@ import os
 import pytest
 
 from src.permission.permission import AlwaysAllow
-from src.tools.shell import (
+from src.tools.execution.shell import (
     BashTool,
     DENY_PATTERNS,
     ShellTool,

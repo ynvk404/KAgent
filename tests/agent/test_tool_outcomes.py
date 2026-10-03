@@ -13,10 +13,10 @@ from src.permission.permission import AlwaysAllow, AlwaysDeny, UserControlledRef
 from src.session.store import Store
 from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.target.target import Target
-from src.tools.ask import AskUserTool
-from src.tools.outcome import ToolOutput
-from src.tools.registry import Registry
-from src.tools.http import HTTPTool
+from src.tools.common.ask import AskUserTool
+from src.tools.common.outcome import ToolOutput
+from src.tools.common.registry import Registry
+from src.tools.http.http_tool import HTTPTool
 from tests.helpers.agent_fakes import FakeClient, FakeSignal
 
 

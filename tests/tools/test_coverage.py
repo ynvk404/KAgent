@@ -6,7 +6,7 @@ import pytest
 
 from src.coverage.store import CoverageEntry, CoverageStore
 from src.permission.permission import AlwaysAllow
-from src.tools.coverage import (
+from src.tools.workflow.coverage import (
     ACTIONS,
     COLLECTION_TEXT_LIMIT,
     DEFAULT_PAGE_SIZE,

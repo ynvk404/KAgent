@@ -10,7 +10,7 @@ from src.browser.store import (
     CapturedRequest,
 )
 from src.permission.permission import AlwaysAllow, AlwaysDeny, Decision, PermissionRequest, Prompter
-from src.tools.browser_capture import (
+from src.tools.common.browser_capture import (
     BrowserCaptureClearTool,
     BrowserCaptureBurpTasksTool,
     BrowserCaptureEndpointsTool,
@@ -19,7 +19,7 @@ from src.tools.browser_capture import (
     BrowserCaptureSnapshotTool,
     BrowserCaptureBurpIssuesTool,
 )
-from src.tools.registry import Registry as ToolRegistry
+from src.tools.common.registry import Registry as ToolRegistry
 from src.browser.redacted_view import request_view
 
 signal = None

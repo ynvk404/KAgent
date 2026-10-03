@@ -9,7 +9,7 @@ from typing import Any, cast
 from src.paths import project_root
 from src.permission.permission import Prompter, UserControlledRefusal
 from src.permission.execution import policy_for
-from .file import gate_sensitive_path
+from src.tools.execution.file import gate_sensitive_path
 from src.redact.redact import apply as redact
 from src.coverage.store import CoverageStore, CoverageStatus
 from src.target.target import Target
@@ -40,8 +40,8 @@ from src.skills.registry import (
 )
 from src.skills.artifacts import completion_artifact_path, resolve_canonical_artifact
 
-from .outcome import ToolOutput
-from .types import Tool, arg_bool, arg_number, arg_string
+from src.tools.common.outcome import ToolOutput
+from src.tools.common.types import Tool, arg_bool, arg_number, arg_string
 
 
 ACTIONS = (

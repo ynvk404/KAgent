@@ -6,12 +6,12 @@ from unittest.mock import create_autospec
 import pytest
 from mcp import ClientSession
 
-from src.tools.mcp_integration import (
+from src.tools.mcp.integration import (
     MCPTool,
     MCPSession,
     sanitize,
 )
-from src.tools.registry import Registry
+from src.tools.common.registry import Registry
 
 
 class FakeSession:

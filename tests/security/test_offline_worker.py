@@ -13,9 +13,9 @@ from src.permission.execution import ExecutionPolicy
 from src.permission.execution import ExecutionBlocked
 from src.permission.permission import Decision, YoloPrompter
 from src.permission.worker import OfflineWorker
-from src.tools.registry import Registry
-from src.tools.shell import ShellTool
-from src.tools.plugin import CommandPluginTool
+from src.tools.common.registry import Registry
+from src.tools.execution.shell import ShellTool
+from src.tools.execution.plugin import CommandPluginTool
 
 
 class Operator:

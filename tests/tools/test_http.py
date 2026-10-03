@@ -4,8 +4,8 @@ from src.permission.http_grants import HTTPLimits
 from src.permission.permission import Decision, UserControlledRefusal, YoloPrompter
 from src.engagement.state import EngagementState, OutOfScopeError
 from src.target.target import Target
-from src.tools.http import HTTPTool, RESPONSE_BYTE_CAP
-from src.tools.registry import Registry
+from src.tools.http.http_tool import HTTPTool, RESPONSE_BYTE_CAP
+from src.tools.common.registry import Registry
 from src.version.version import VERSION
 
 
@@ -118,11 +118,11 @@ async def test_default_get_runtime():
 
     with (
         patch(
-            "src.tools.http.httpx.AsyncClient.send",
+            "src.tools.http.http_tool.httpx.AsyncClient.send",
             new=AsyncMock(return_value=stream_cm),
         ) as mock_stream,
         patch(
-            "src.tools.http.gate_private_request",
+            "src.tools.http.http_tool.gate_private_request",
             new=AsyncMock(return_value=""),
         ),
     ):
@@ -159,9 +159,9 @@ async def test_http_body_cap_reports_only_actual_truncation(size, status):
     stream_cm = response
 
     with (
-        patch("src.tools.http.httpx.AsyncClient.send", return_value=stream_cm),
+        patch("src.tools.http.http_tool.httpx.AsyncClient.send", return_value=stream_cm),
         patch(
-            "src.tools.http.gate_private_request",
+            "src.tools.http.http_tool.gate_private_request",
             new=AsyncMock(return_value=""),
         ),
     ):
@@ -196,9 +196,9 @@ async def test_target_http_keeps_its_environment_proxy_policy(monkeypatch):
         async def send(self, request, **kwargs):
             return FakeResponse()
 
-    monkeypatch.setattr("src.tools.http.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient", FakeClient)
     monkeypatch.setattr(
-        "src.tools.http.gate_private_request",
+        "src.tools.http.http_tool.gate_private_request",
         AsyncMock(return_value=""),
     )
 
@@ -267,7 +267,7 @@ async def test_allow_private_url():
     stream_cm = response
 
     with patch(
-        "src.tools.http.httpx.AsyncClient.send",
+        "src.tools.http.http_tool.httpx.AsyncClient.send",
         new=AsyncMock(return_value=stream_cm),
     ) as mock_stream:
 
@@ -375,9 +375,9 @@ async def test_http_allows_only_explicit_additional_origins():
     tool = HTTPTool(Target("http://juice.lab:3000"), engagement)
 
     with (
-        patch("src.tools.http.gate_private_request", new=AsyncMock(return_value="")),
+        patch("src.tools.http.http_tool.gate_private_request", new=AsyncMock(return_value="")),
         patch(
-            "src.tools.http.httpx.AsyncClient.send",
+            "src.tools.http.http_tool.httpx.AsyncClient.send",
             new=AsyncMock(return_value=make_stream_cm()),
         ) as mock_stream,
     ):
@@ -401,9 +401,9 @@ async def test_autonomous_grant_approves_in_scope_post_validation():
     inner = FakePrompter(Decision.DENY)
 
     with (
-        patch("src.tools.private_host.private_host_reason", new=AsyncMock(return_value="")),
+        patch("src.tools.http.private_host.private_host_reason", new=AsyncMock(return_value="")),
         patch(
-            "src.tools.http.httpx.AsyncClient.send",
+            "src.tools.http.http_tool.httpx.AsyncClient.send",
             new=AsyncMock(return_value=make_stream_cm()),
         ) as mock_stream,
     ):
@@ -428,7 +428,7 @@ async def test_impact_without_yolo_requires_exact_approval():
     registry.register(HTTPTool(target, engagement))
     inner = FakePrompter(Decision.DENY)
 
-    with patch("src.tools.http.httpx.AsyncClient.send") as mock_stream:
+    with patch("src.tools.http.http_tool.httpx.AsyncClient.send") as mock_stream:
         with pytest.raises(UserControlledRefusal, match="denied"):
             await registry.execute(
                 "http",
@@ -457,11 +457,11 @@ async def test_private_target_gate_preserves_independent_yolo_policy():
 
     with (
         patch(
-            "src.tools.private_host.private_host_reason",
+            "src.tools.http.private_host.private_host_reason",
             new=AsyncMock(return_value="DNS resolves to loopback IPv4"),
         ),
         patch(
-            "src.tools.http.httpx.AsyncClient.send",
+            "src.tools.http.http_tool.httpx.AsyncClient.send",
             new=AsyncMock(return_value=make_stream_cm()),
         ) as mock_stream,
     ):
@@ -489,10 +489,10 @@ async def test_yolo_does_not_bypass_private_gate_for_another_scoped_origin():
 
     with (
         patch(
-            "src.tools.private_host.private_host_reason",
+            "src.tools.http.private_host.private_host_reason",
             new=AsyncMock(return_value="loopback IPv4"),
         ),
-        patch("src.tools.http.httpx.AsyncClient.send") as mock_stream,
+        patch("src.tools.http.http_tool.httpx.AsyncClient.send") as mock_stream,
     ):
         with pytest.raises(UserControlledRefusal, match="private/internal URL denied"):
             await registry.execute(
@@ -521,11 +521,11 @@ async def test_http_passes_target_to_private_gate():
 
     with (
         patch(
-            "src.tools.http.gate_private_request",
+            "src.tools.http.http_tool.gate_private_request",
             new=AsyncMock(return_value="loopback IPv4"),
         ) as mock_gate,
         patch(
-            "src.tools.http.httpx.AsyncClient.send",
+            "src.tools.http.http_tool.httpx.AsyncClient.send",
             new=AsyncMock(return_value=make_stream_cm()),
         ),
     ):
@@ -550,11 +550,11 @@ async def test_http_prepends_private_note_when_reason_present():
 
     with (
         patch(
-            "src.tools.http.gate_private_request",
+            "src.tools.http.http_tool.gate_private_request",
             new=AsyncMock(return_value="loopback IPv4"),
         ),
         patch(
-            "src.tools.http.httpx.AsyncClient.send",
+            "src.tools.http.http_tool.httpx.AsyncClient.send",
             new=AsyncMock(return_value=make_stream_cm()),
         ),
     ):
@@ -574,11 +574,11 @@ async def test_http_no_note_when_host_is_public():
 
     with (
         patch(
-            "src.tools.http.gate_private_request",
+            "src.tools.http.http_tool.gate_private_request",
             new=AsyncMock(return_value=""),
         ),
         patch(
-            "src.tools.http.httpx.AsyncClient.send",
+            "src.tools.http.http_tool.httpx.AsyncClient.send",
             new=AsyncMock(return_value=make_stream_cm()),
         ),
     ):

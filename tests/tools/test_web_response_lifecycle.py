@@ -6,7 +6,7 @@ import pytest
 
 from src.engagement.state import EngagementState
 from src.permission.permission import AlwaysDeny
-from src.tools.web import WebFetchTool, WebSearchTool, clear_web_cache
+from src.tools.http.web import WebFetchTool, WebSearchTool, clear_web_cache
 from src.version.version import VERSION
 
 

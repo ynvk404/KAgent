@@ -8,12 +8,12 @@ from src.findings.store import Finding, Store, slugify
 from src.findings.classification import classify
 from src.permission.permission import AlwaysAllow
 from src.redact.redact import apply as redact
-from src.tools.finding import (
+from src.tools.workflow.finding import (
     SEVERITIES,
     ConfirmFindingTool,
     is_severity,
 )
-from src.tools.workflow import WorkflowTool
+from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
 from src.workflow.evidence import EvidenceArtifact
 

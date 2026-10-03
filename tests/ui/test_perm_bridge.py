@@ -840,8 +840,8 @@ async def test_registry_shared_abort_then_fresh_turn_reads_local_file(permission
     from src.permission.execution import default_execution_policy
     from src.permission.invocations import review_turn
     from src.permission.permission import YoloPrompter
-    from src.tools.file import FileReadTool
-    from src.tools.registry import Registry
+    from src.tools.execution.file import FileReadTool
+    from src.tools.common.registry import Registry
 
     path = tmp_path / ".env"
     path.write_text("LOCAL_FIXTURE_ONLY=permission-bridge", encoding="utf-8")

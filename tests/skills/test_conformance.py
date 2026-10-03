@@ -14,9 +14,9 @@ from src.skills.registry import (
     normalize_candidate_class,
     validate_skill,
 )
-from src.tools.finding import ConfirmFindingTool
-from src.tools.payloads import ReadPayloadsTool
-from src.tools.skill_file import ReadSkillFileTool
+from src.tools.workflow.finding import ConfirmFindingTool
+from src.tools.skills.payloads import ReadPayloadsTool
+from src.tools.skills.skill_file import ReadSkillFileTool
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
