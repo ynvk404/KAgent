@@ -23,7 +23,7 @@ metadata and choose a private destination.
 To summarize a run:
 
 ```bash
-python -m src.agent.reasoning_benchmark .kagent/reasoning-run-01.jsonl \
+python -m benchmarks.internal.reasoning_benchmark .kagent/reasoning-run-01.jsonl \
   --run-id run-01 --scenario-id case-01 --target-ref lab-01 --scope-ref scope-01
 ```
 

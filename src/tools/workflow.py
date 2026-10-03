@@ -643,6 +643,22 @@ class WorkflowTool(Tool):
                 verified = policy.observations.result(candidate.id, tuple(result.evidence_refs),
                                                       policy.engagement.http_permissions.epoch, candidate)
                 if verified is None:
+                    boolean_sqli = (
+                        result.outcome == "confirmed"
+                        and candidate.candidate_class == "sql-injection"
+                        and (
+                            any("boolean" in technique.lower() for technique in result.techniques)
+                            or (isinstance(result.confirmation, dict)
+                                and result.confirmation.get("kind") == "boolean-differential")
+                        )
+                    )
+                    if boolean_sqli and len({item for item in ids if isinstance(item, str)}) < 4:
+                        raise ValueError(
+                            "boolean SQL injection confirmation needs at least four distinct "
+                            "captured runtime observation IDs: two TRUE and two FALSE requests "
+                            "forming repeatable pairs; collect the missing evidence and retry "
+                            "record_result"
+                        )
                     verified = policy.observations.verify(candidate, tuple(result.evidence_refs), ids,
                                                           policy.engagement.http_permissions.epoch)
                 if verified is None or verified.outcome != result.outcome:

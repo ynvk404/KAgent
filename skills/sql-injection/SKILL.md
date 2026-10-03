@@ -85,6 +85,12 @@ repetition number plus the HTTP `status`, byte `size`, and a compact content
 `marker` for both `true` and `false`. The runtime rejects identical sides,
 one-pass claims, and non-reproducible pairs. Do not set `repeatable: true` from
 prose or from a baseline-versus-comment comparison.
+In a live run, include at least four distinct `observation_ids` from the HTTP
+tool: two actually executed and captured TRUE requests and two actually
+executed and captured FALSE requests, forming the two complete repeatable
+pairs. Match these IDs to the requests described in `confirmation`; a written
+pair or reused observation ID cannot replace a captured request. Do not call
+`record_result` with `outcome: confirmed` until all four observations exist.
 Use a stable semantic marker such as `token issued`; never use the token itself.
 If a known volatile field changes body length between repetitions, set the
 smallest justified `size_tolerance` in bytes. Status and marker must still be

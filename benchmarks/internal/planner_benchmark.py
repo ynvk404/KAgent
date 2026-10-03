@@ -122,7 +122,10 @@ def load_cases(path: str | Path) -> list[PlannerBenchmarkCase]:
 
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
-    cases_path = Path(args[0]) if args else Path("benchmarks/planner_cases.json")
+    default_cases = Path(__file__).resolve().parent / "planner_cases.json"
+    if not default_cases.exists():
+        default_cases = Path("benchmarks/internal/planner_cases.json")
+    cases_path = Path(args[0]) if args else default_cases
     skills_path = Path(args[1]) if len(args) > 1 else Path("skills")
     registry = Registry()
     registry.load_dir(skills_path)

@@ -23,7 +23,7 @@ from src.config.config import PluginConfig, MCPServerConfig
 from src.coverage.store import CoverageStore
 from src.findings.store import Store as FindingsStore
 from src.target.target import Target
-from src.workflow.state import Candidate, WorkflowState
+from src.workflow.state import Candidate, WorkflowObjective, WorkflowState
 from src.llm.validation_budget import ValidationBudget, ValidationBudgetExceeded, BudgetTransport
 
 
@@ -176,6 +176,77 @@ async def test_production_sqli_chain_and_protected_certificate_resume(lab, tmp_p
     candidate.parameter = 'changed'
     assert restored.observations.result(candidate.id, (ref,), 'new-resume-epoch', candidate) is None
     assert len(requests) == 4 and operator.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_boolean_sqli_needs_four_captured_observations_before_terminal_result(lab, tmp_path):
+    registry, p, policy, _, origin, requests = lab
+    state = WorkflowState(objective=WorkflowObjective(
+        id='sqli-assessment', mode='whole_target', target_origin=origin,
+    ))
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class='sql-injection', target=origin, endpoint='/search',
+        method='GET', parameter='q', location='query',
+        objective_id='sqli-assessment', status='validating',
+    ))
+    registry.register(WorkflowTool(state, target=Target(origin), evidence_root=tmp_path))
+    (tmp_path / 'proof.txt').write_text('Bounded SQL boolean proof; no sensitive data.')
+    ref = json.loads(await registry.execute('workflow', {
+        'action': 'record_evidence', 'candidate_id': candidate.id,
+        'evidence_path': 'proof.txt',
+    }, None, p))['evidence']['id']
+
+    async def probe(predicate):
+        url = str(httpx.URL(origin + '/search', params={'q': f"fixture')) OR ({predicate})--"}))
+        await registry.execute('http', {'url': url, 'phase': 'validation'}, None, p)
+
+    for predicate in ('1=1', '1=2', '1=1'):
+        await probe(predicate)
+    args = {
+        'action': 'record_result', 'candidate_id': candidate.id,
+        'skill_name': 'sql-injection', 'outcome': 'confirmed',
+        'techniques': ['boolean-based'], 'evidence_refs': [ref],
+        'observation_ids': list(policy.observations._items),
+    }
+    premature = await registry.execute('workflow', args, None, p)
+    assert 'at least four distinct captured runtime observation IDs' in premature
+    assert 'two TRUE and two FALSE' in premature
+    assert not state.validation_results
+    assert candidate.status == 'validating'
+    assert candidate.id in state.active_candidate_ids
+
+    await probe('1=2')
+    args['observation_ids'] = list(policy.observations._items)
+    result = json.loads(await registry.execute('workflow', args, None, p))
+    assert result['result']['outcome'] == 'confirmed'
+    assert result['eligible_for_confirm_finding']
+    assert candidate.status == 'validated'
+    assert len(requests) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('technique', ['error-based', 'time-based'])
+async def test_other_sqli_techniques_keep_existing_verifier_fallback(lab, tmp_path, technique):
+    registry, p, _, _, origin, _ = lab
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(Candidate(
+        candidate_class='sql-injection', target=origin, endpoint='/search',
+        method='GET', parameter='q', location='query', status='validating',
+    ))
+    registry.register(WorkflowTool(state, target=Target(origin), evidence_root=tmp_path))
+    (tmp_path / 'proof.txt').write_text('Bounded unverified SQLi attempt.')
+    ref = json.loads(await registry.execute('workflow', {
+        'action': 'record_evidence', 'candidate_id': candidate.id,
+        'evidence_path': 'proof.txt',
+    }, None, p))['evidence']['id']
+    result = json.loads(await registry.execute('workflow', {
+        'action': 'record_result', 'candidate_id': candidate.id,
+        'skill_name': 'sql-injection', 'outcome': 'confirmed',
+        'techniques': [technique], 'evidence_refs': [ref],
+        'observation_ids': [],
+    }, None, p))
+    assert result['result']['outcome'] == 'insufficient-evidence'
+    assert candidate.status == 'deferred'
 
 
 def test_budget_persists_limits_and_never_resets_on_resume(tmp_path):

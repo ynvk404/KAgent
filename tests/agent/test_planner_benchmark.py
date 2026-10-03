@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.agent.planner_benchmark import load_cases, run_benchmark
+from benchmarks.internal.planner_benchmark import load_cases, run_benchmark
 from src.skills.registry import Registry
 
 
@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_offline_planner_benchmark_matches_expected_outcomes():
     registry = Registry()
     registry.load_dir(REPO_ROOT / "skills")
-    cases = load_cases(REPO_ROOT / "benchmarks" / "planner_cases.json")
+    cases = load_cases(REPO_ROOT / "benchmarks" / "internal" / "planner_cases.json")
 
     metrics, failures = run_benchmark(cases, registry.list_enabled())
 

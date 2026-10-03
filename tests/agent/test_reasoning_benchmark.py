@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from src.agent.reasoning_benchmark import build_run, load_request_metrics, same_reasoning_configuration
+from benchmarks.internal.reasoning_benchmark import build_run, load_request_metrics, same_reasoning_configuration
 from src.llm.metrics import MetricsCollector, RequestMetrics, TokenUsage
 
 
