@@ -454,3 +454,27 @@ def test_web_enumeration_stop_conditions_prevent_scope_creep():
         "justified by the testing plan and authorized scope.",
     ]:
         assert phrase in stop_block, f"Missing stop/scope rule: {phrase}"
+
+
+def test_input_recording_is_incremental_and_keeps_analysis_boundary():
+    _, body, _ = read_skill()
+    early = collapse_ws(body[:body.index('## 1. Build the target baseline')])
+    assert 'record_input' in early
+    assert 'immediately, before fetching another resource' in early
+    assert 'Do not wait for the final inventory' in early
+    assert 'Record each newly established input once' in early
+    assert 'Do not call `record_candidate`' in early
+    assert 'Keep these inputs pending for `web-input-analysis`' in early
+
+
+def test_large_response_strategy_has_fixed_bounds_and_no_escalation():
+    _, body, _ = read_skill()
+    strategy = collapse_ws(body.split('## Large responses:', 1)[1].split('## 1.', 1)[0])
+    for requirement in (
+        'Do not repeatedly fetch the same large resource',
+        'at most one targeted extraction attempt per resource',
+        'no redirect following, one GET', '--max-time 8 --max-filesize 65536',
+        '40 matches and 4,000 characters', 'Do not raise the bound or restart retrieval',
+        'retaining unresolved source limitations',
+    ):
+        assert requirement in strategy

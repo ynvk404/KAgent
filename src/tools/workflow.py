@@ -94,15 +94,14 @@ class WorkflowTool(Tool):
 
     def description(self) -> str:
         return (
-            "Manage structured assessment inputs, candidates, evidence, validation "
-            "results, coverage, and phase completion. Whole-target input actions "
-            "require an active objective. Before completing recon or enumeration, "
-            "record every required phase coverage dimension with "
-            "record_phase_coverage; skipped/not_applicable require a short reason, "
-            "and failed/cancelled dimensions must be retried or explicitly skipped. "
-            "record_evidence stores a redacted content-addressed snapshot, so mutable "
-            "aggregate proof files may continue to be updated. record_result needs "
-            "candidate_id, skill_name and outcome. Use compact references, never raw traffic."
+            "Manage inputs, candidates, evidence, results, coverage and phase completion. "
+            "Inputs require a whole-target objective. Before recon/enumeration completion, "
+            "account for every coverage dimension: performed is adapter-only; observed is "
+            "unattested review with source/limitation; skipped means omitted and "
+            "not_applicable means irrelevant. Non-performed statuses require reasons; "
+            "retry failed/cancelled work or explain an actual skip. record_evidence stores "
+            "redacted immutable snapshots. record_result needs candidate_id, skill_name "
+            "and outcome. Use compact references, never raw traffic."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -220,7 +219,7 @@ class WorkflowTool(Tool):
                 },
                 "coverage_reason": {
                     "type": "string",
-                    "description": "Required for skipped, not_applicable, failed, or cancelled.",
+                    "description": "Required for observed (source and attestation limitation), skipped, not_applicable, failed, or cancelled.",
                 },
                 "artifact_ref": {
                     "type": "string",
@@ -274,8 +273,40 @@ class WorkflowTool(Tool):
                     return self._typed_result("error: unverified result cannot sync tested coverage")
             result = await self._sync_coverage_action(args)
         elif action == "record_phase_coverage":
-            if policy_for(prompter) is not None and args.get("coverage_status") == "performed":
-                return self._typed_result("error: performed phase coverage requires an execution adapter observation")
+            if policy_for(prompter) is not None:
+                objective = self.state.objective
+                phase = arg_string(args, "phase")
+                dimension = arg_string(args, "coverage_dimension")
+                requested = arg_string(args, "coverage_status")
+                if objective is None or objective.mode != "whole_target":
+                    return self._typed_result("error: phase coverage requires an active whole-target objective")
+                if objective.target_origin != normalize_target_origin(self._active_target()):
+                    return self._typed_result("error: phase coverage must match the active objective and target")
+                if phase not in PHASE_COVERAGE_DIMENSIONS:
+                    return self._typed_result("error: phase must be recon or enumeration")
+                if dimension not in PHASE_COVERAGE_DIMENSIONS[phase]:
+                    return self._typed_result(f"error: unknown {phase} coverage dimension: {dimension}")
+                if requested not in PHASE_COVERAGE_STATUSES:
+                    return self._typed_result("error: coverage_status is invalid")
+                existing = self.state.phase_coverage_record(
+                    cast(WorkflowPhase, phase), dimension,
+                )
+                if existing is not None and existing.status == "performed":
+                    if requested in {"performed", "observed"}:
+                        completed = phase in self.state.completed_phases(objective)
+                        return ToolOutput(json.dumps({
+                            "ok": True, "phase": phase, "dimension": dimension,
+                            "requested_status": requested, "status": "performed",
+                            "changed": False, "already_recorded": True,
+                            "phase_completed": completed,
+                            "message": (
+                                "Already recorded as performed; phase is already completed."
+                                if completed else "Already recorded as performed."
+                            ),
+                        }), status="success")
+                    return self._typed_result("error: runtime-attested performed coverage cannot be replaced by a model claim")
+                if requested == "performed":
+                    return self._typed_result("error: performed phase coverage requires an execution adapter observation")
             result = self._record_phase_coverage(args)
         elif action == "complete_skill":
             result = self._complete_skill(args)
@@ -945,7 +976,41 @@ class WorkflowTool(Tool):
         canonical = normalize_metadata_name(skill_name)[:80]
         artifact_ref = arg_string(args, "artifact_ref")
         skill = self.skills.get(canonical) if self.skills else None
-        if skill and skill.completion_artifact:
+        objective = self.state.objective
+        workflow_phase = (
+            self._phase_for_skill(canonical, skill)
+            if objective is not None and objective.mode == "whole_target" else None
+        )
+        if workflow_phase is not None:
+            readiness = self.phase_completion_readiness(
+                canonical,
+                artifact_ref=artifact_ref or None,
+                no_inputs_discovered=arg_bool(args, "no_inputs_discovered"),
+            )
+            if not readiness["ready"]:
+                return f"error: {readiness['reason']}"
+            artifact_ref = readiness["artifact_ref"]
+            phase_coverage = self.state.phase_coverage.get(
+                f"{objective.id}:{workflow_phase}", {}  # type: ignore[union-attr]
+            )
+            try:
+                self.state.record_phase_completion(
+                    workflow_phase,
+                    objective_id=objective.id,  # type: ignore[union-attr]
+                    target_origin=objective.target_origin or "",  # type: ignore[union-attr]
+                    artifact_ref=artifact_ref,
+                    coverage={
+                        key: phase_coverage[key]
+                        for key in PHASE_COVERAGE_DIMENSIONS.get(workflow_phase, ())
+                    },
+                    no_inputs_discovered=(
+                        workflow_phase == "input_analysis"
+                        and arg_bool(args, "no_inputs_discovered")
+                    ),
+                )
+            except ValueError as err:
+                return f"error: {err}"
+        elif skill and skill.completion_artifact:
             target = self._active_target()
             try:
                 expected = completion_artifact_path(skill.completion_artifact, target)
@@ -968,82 +1033,6 @@ class WorkflowTool(Tool):
             if not artifact_ready:
                 return f"error: {canonical} completion requires {expected}"
             artifact_ref = expected
-        objective = self.state.objective
-        workflow_phase = None
-        if objective is not None and objective.mode == "whole_target":
-            workflow_phase = self._phase_for_skill(canonical, skill)
-            if workflow_phase is not None:
-                if (
-                    skill is None
-                    or skill.disable_model_invocation
-                    or self.skills is None
-                    or self.skills.is_disabled(canonical)
-                ):
-                    return f"error: {canonical} is unavailable for whole-target phase completion"
-                if not skill.completion_artifact:
-                    return f"error: {canonical} has no canonical phase artifact"
-                phases = self.state.completed_phases(objective)
-                if workflow_phase == "enumeration" and "recon" not in phases:
-                    return "error: recon must complete before enumeration"
-                if workflow_phase == "input_analysis":
-                    if "enumeration" not in phases:
-                        return "error: enumeration must complete before input analysis"
-                    unresolved = [
-                        item for item in self.state.objective_inputs()
-                        if item.disposition in {"pending", "blocked"}
-                    ]
-                    if unresolved:
-                        return (
-                            "error: input analysis cannot complete while an input "
-                            "is pending or blocked"
-                        )
-                    if (
-                        not self.state.objective_inputs()
-                        and not arg_bool(args, "no_inputs_discovered")
-                    ):
-                        return (
-                            "error: input analysis requires at least one recorded input "
-                            "or no_inputs_discovered=true"
-                        )
-                phase_coverage = self.state.phase_coverage.get(
-                    f"{objective.id}:{workflow_phase}", {}
-                )
-                required_coverage = PHASE_COVERAGE_DIMENSIONS.get(workflow_phase, ())
-                missing_coverage = [
-                    item for item in required_coverage if item not in phase_coverage
-                ]
-                if missing_coverage:
-                    return (
-                        f"error: {canonical} completion requires explicit coverage "
-                        f"for: {', '.join(missing_coverage)}"
-                    )
-                unresolved_coverage = [
-                    item for item in required_coverage
-                    if phase_coverage[item].status in {"failed", "cancelled"}
-                ]
-                if unresolved_coverage:
-                    return (
-                        f"error: {canonical} has unresolved failed/cancelled coverage: "
-                        f"{', '.join(unresolved_coverage)}; retry or record an explicit skip reason"
-                    )
-                if not artifact_ref:
-                    return f"error: {canonical} requires an artifact_ref for phase completion"
-                try:
-                    self.state.record_phase_completion(
-                        workflow_phase,
-                        objective_id=objective.id,
-                        target_origin=objective.target_origin or "",
-                        artifact_ref=artifact_ref,
-                        coverage={
-                            key: phase_coverage[key] for key in required_coverage
-                        },
-                        no_inputs_discovered=(
-                            workflow_phase == "input_analysis"
-                            and arg_bool(args, "no_inputs_discovered")
-                        ),
-                    )
-                except ValueError as err:
-                    return f"error: {err}"
         self.state.completed_skills.add(canonical)
         if artifact_ref:
             self.state.completed_artifacts[canonical] = redact(artifact_ref)[:500]
@@ -1055,6 +1044,90 @@ class WorkflowTool(Tool):
             "phase": workflow_phase,
             "artifact_ref": self.state.completed_artifacts.get(canonical),
         }, indent=2)
+
+    def phase_completion_readiness(
+        self, skill_name: str, *, artifact_ref: str | None = None,
+        no_inputs_discovered: bool = False,
+    ) -> dict[str, Any]:
+        """Read-only version of the whole-target phase completion gate."""
+        canonical = normalize_metadata_name(skill_name)[:80]
+        skill = self.skills.get(canonical) if self.skills else None
+        phase = self._phase_for_skill(canonical, skill)
+        objective = self.state.objective
+        coverage = self.state.phase_coverage.get(
+            f"{objective.id}:{phase}", {}
+        ) if objective is not None and phase is not None else {}
+        required = PHASE_COVERAGE_DIMENSIONS.get(phase or "", ())
+        result: dict[str, Any] = {
+            "ready": False, "skill_name": canonical, "phase": phase,
+            "artifact_ref": None, "no_inputs_discovered": no_inputs_discovered,
+            "objective_id": objective.id if objective is not None else None,
+            "target_origin": objective.target_origin if objective is not None else None,
+            "prerequisites": (
+                ("recon",) if phase == "enumeration" else
+                ("enumeration",) if phase == "input_analysis" else ()
+            ),
+            "required_coverage": {
+                dimension: coverage[dimension].status if dimension in coverage else None
+                for dimension in required
+            },
+        }
+
+        def reject(reason: str) -> dict[str, Any]:
+            result["reason"] = reason
+            return result
+
+        if objective is None or objective.mode != "whole_target" or phase is None:
+            return reject("phase completion requires an active whole-target objective")
+        if objective.target_origin != normalize_target_origin(self._active_target()):
+            return reject("phase completion must match the active objective and target")
+        if phase in self.state.completed_phases(objective):
+            return reject(f"{phase} phase is already completed")
+        if (
+            skill is None or skill.disable_model_invocation or self.skills is None
+            or self.skills.is_disabled(canonical)
+        ):
+            return reject(f"{canonical} is unavailable for whole-target phase completion")
+        if not skill.completion_artifact:
+            return reject(f"{canonical} has no canonical phase artifact")
+        try:
+            expected = completion_artifact_path(skill.completion_artifact, self._active_target())
+            artifact = resolve_canonical_artifact(self.evidence_root, expected)
+            if artifact_ref and resolve_canonical_artifact(self.evidence_root, artifact_ref) != artifact:
+                return reject(f"{canonical} completion requires {expected}")
+            artifact_ready = artifact.is_file() and artifact.stat().st_size > 0
+        except ValueError as err:
+            return reject(str(err))
+        except OSError:
+            artifact_ready = False
+        result["artifact_ref"] = expected
+        if not artifact_ready:
+            return reject(f"{canonical} completion requires {expected}")
+        phases = self.state.completed_phases(objective)
+        if phase == "enumeration" and "recon" not in phases:
+            return reject("recon must complete before enumeration")
+        if phase == "input_analysis":
+            if "enumeration" not in phases:
+                return reject("enumeration must complete before input analysis")
+            if any(item.disposition in {"pending", "blocked"} for item in self.state.objective_inputs()):
+                return reject("input analysis cannot complete while an input is pending or blocked")
+            if not self.state.objective_inputs() and not no_inputs_discovered:
+                return reject("input analysis requires at least one recorded input or no_inputs_discovered=true")
+        missing = [dimension for dimension in required if dimension not in coverage]
+        if missing:
+            return reject(f"{canonical} completion requires explicit coverage for: {', '.join(missing)}")
+        unresolved = [
+            dimension for dimension in required
+            if coverage[dimension].status in {"failed", "cancelled"}
+        ]
+        if unresolved:
+            return reject(
+                f"{canonical} has unresolved failed/cancelled coverage: "
+                f"{', '.join(unresolved)}; retry or record an explicit skip reason"
+            )
+        result["ready"] = True
+        result["reason"] = "ready"
+        return result
 
     def _record_phase_coverage(self, args: dict[str, Any]) -> str:
         objective = self.state.objective

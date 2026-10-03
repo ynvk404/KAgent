@@ -300,3 +300,13 @@ async def test_new_validation_skills_have_expected_metadata_and_vectors(
         )
         assert not output.startswith("error:"), output
         assert not output.startswith(f'skill "{skill_name}" has no payload')
+
+
+@pytest.mark.parametrize('skill_name', ['recon', 'web-enumeration'])
+def test_discovery_coverage_contract_does_not_instruct_self_attestation(skill_name):
+    text = re.sub(r'\s+', ' ', (SKILLS_ROOT / skill_name / 'SKILL.md').read_text())
+    assert '`performed` is reserved for machine-observed execution' in text
+    assert 'coverage_status="observed"' in text
+    assert 'attestation limitation' in text
+    assert 'Never use `skipped` to simulate' in text
+    assert 'missing observation' in text

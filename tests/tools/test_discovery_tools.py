@@ -377,7 +377,8 @@ async def test_content_discovery_does_not_follow_or_expose_external_redirect_que
 
 @pytest.mark.asyncio
 async def test_content_discovery_cancels_an_inflight_baseline(monkeypatch):
-    tool = make_content_tool()
+    workflow = make_workflow(phase="enumeration")
+    tool = make_content_tool(workflow=workflow)
     started = asyncio.Event()
 
     async def blocked_probe(_client, _url: str, _timeout: float):
@@ -400,6 +401,10 @@ async def test_content_discovery_cancels_an_inflight_baseline(monkeypatch):
     payload = json.loads(str(output))
     assert output.status == "cancelled"
     assert payload["reason"] == "cancelled during wildcard baseline"
+    assert payload["phase_coverage"]["status"] == "cancelled"
+    coverage_record = workflow.phase_coverage_record("enumeration", "active_content_discovery")
+    assert coverage_record is not None
+    assert coverage_record.status == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -442,6 +447,10 @@ async def test_content_ffuf_output_is_parsed_and_every_hit_is_verified(monkeypat
     assert payload["discovered"][0]["verified"] is True
     coverage = workflow.phase_coverage_record("enumeration", "active_content_discovery")
     assert coverage is not None and coverage.status == "performed"
+    assert payload["phase_coverage"] == {
+        "phase": "enumeration", "dimension": "active_content_discovery",
+        "status": "performed", "changed": True, "source": "content_discovery",
+    }
     assert tool._select_backend("auto") == "native"
 
 
@@ -461,7 +470,33 @@ async def test_content_discovery_reports_unscanned_paths_and_keeps_coverage_retr
     assert "covered 1 of 3 requested paths" in payload["reason"]
     coverage = workflow.phase_coverage_record("enumeration", "active_content_discovery")
     assert coverage is not None and coverage.status == "failed"
+    assert payload["phase_coverage"]["status"] == "failed"
+    assert payload["phase_coverage"]["changed"] is True
     assert tool._select_backend("auto") == "native"
+
+
+@pytest.mark.asyncio
+async def test_content_discovery_omits_attestation_without_qualifying_phase():
+    workflow = make_workflow(phase="recon")
+    tool = make_content_tool(workflow=workflow)
+    output = await tool.run({"paths": ["admin"], "max_requests": 3}, None, AlwaysAllow())
+    payload = json.loads(str(output))
+    assert "phase_coverage" not in payload
+    assert workflow.phase_coverage_record("enumeration", "active_content_discovery") is None
+
+
+@pytest.mark.asyncio
+async def test_content_discovery_omits_attestation_when_recording_fails(monkeypatch):
+    workflow = make_workflow(phase="enumeration")
+    tool = make_content_tool(workflow=workflow)
+
+    def reject_record(*args, **kwargs):
+        raise ValueError("phase changed")
+
+    monkeypatch.setattr(WorkflowState, "record_phase_coverage", reject_record)
+    output = await tool.run({"paths": ["admin"], "max_requests": 3}, None, AlwaysAllow())
+    assert "phase_coverage" not in json.loads(str(output))
+    assert workflow.phase_coverage_record("enumeration", "active_content_discovery") is None
 
 
 @pytest.mark.asyncio

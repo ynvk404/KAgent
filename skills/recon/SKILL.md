@@ -348,12 +348,25 @@ proceed with `enumeration`. If reachability failed, set
 Completion records that this bounded reconnaissance pass ended; it does not
 force the next skill or prevent targeted recon later.
 
-For whole-target work, record every recon coverage dimension with
-`workflow(action="record_phase_coverage", phase="recon", coverage_dimension=..., coverage_status=...)`
-before completion: `target_resolution`, `reachability`, `http_fingerprint`, and
-`service_discovery`. Each must be `performed`, `skipped`, or `not_applicable`;
-skipped/not-applicable records require a short reason. Retry failed/cancelled
-dimensions or explicitly record why they are being skipped before completing.
+For whole-target work, inspect workflow coverage before completion and account
+for `target_resolution`, `reachability`, `http_fingerprint`, and
+`service_discovery`. `performed` is reserved for machine-observed execution:
+never call `record_phase_coverage` to self-claim it. Native `http` automatically
+records reachability from a received response, target resolution from its
+pinned numeric transport, and HTTP fingerprinting from inspected response
+headers. This does not attest an inferred framework/database or exploit.
+`service_discovery` records its own execution coverage.
+
+For dimensions without an execution adapter, reviewed work uses
+`workflow(action="record_phase_coverage", phase="recon",
+coverage_dimension=..., coverage_status="observed", coverage_reason=...)`.
+Include the source/artifact and the missing attestation limitation. `observed`
+is an unattested review, not proof of execution. Never use `skipped` to simulate
+performed work or work around a missing adapter. Use `skipped` only for work
+actually omitted and `not_applicable` only when the dimension truly does not
+apply, each with a short valid reason. Do not replace existing runtime
+`performed` records. Retry failed/cancelled dimensions or explain an actual
+skip before completing; missing observations never imply `performed`.
 
 The summary should contain:
 

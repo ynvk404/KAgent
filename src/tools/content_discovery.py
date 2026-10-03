@@ -215,6 +215,7 @@ class ContentDiscoveryTool(Tool):
                 phase_status = "failed"
                 coverage_reason = coverage_incomplete_reason
             objective = self.workflow.objective if self.workflow is not None else None
+            phase_coverage: dict[str, Any] | None = None
             if (
                 phase_status is not None
                 and objective is not None
@@ -222,7 +223,7 @@ class ContentDiscoveryTool(Tool):
                 and self.workflow.is_next_phase("enumeration")
             ):
                 try:
-                    self.workflow.record_phase_coverage(
+                    changed = self.workflow.record_phase_coverage(
                         "enumeration",
                         "active_content_discovery",
                         phase_status,  # type: ignore[arg-type]
@@ -231,9 +232,29 @@ class ContentDiscoveryTool(Tool):
                         reason=(str(coverage_reason or "discovery did not complete")
                                 if phase_status in {"failed", "cancelled"} else None),
                     )
+                    recorded = self.workflow.phase_coverage_record(
+                        "enumeration", "active_content_discovery"
+                    )
+                    if recorded is not None:
+                        phase_coverage = {
+                            "phase": "enumeration",
+                            "dimension": "active_content_discovery",
+                            "status": recorded.status,
+                            "changed": changed,
+                            "source": "content_discovery",
+                        }
                 except ValueError:
                     pass
-            return self._result(*call_args, **call_kwargs)
+            result = self._result(*call_args, **call_kwargs)
+            if phase_coverage is None:
+                return result
+            payload = json.loads(str(result))
+            payload["phase_coverage"] = phase_coverage
+            return ToolOutput(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                status=result.status, error_kind=result.error_kind,
+                http_status=result.http_status, truncated=result.truncated,
+            )
 
         start = time.monotonic()
         deadline = start + timeout

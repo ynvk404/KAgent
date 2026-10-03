@@ -85,11 +85,13 @@ from src.skills.registry import (
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
 from src.workflow.state import WorkflowObjective, WorkflowState, candidate_origin
+from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
 
 from src.tools.aliases import canonical_tool_name
 from src.tools.registry import InvalidToolArguments, Registry as ToolRegistry
 from src.tools.types import ActionPermissionTool
 from src.tools.outcome import ErrorKind, ToolOutput, ToolStatus
+from src.tools.workflow import WorkflowTool
 
 from .decision_planner import (
     PlannerCandidate,
@@ -708,6 +710,7 @@ class WholeTargetStallTracker:
         self.phase_exploration_steps = 0
         self.phase: str | None = None
         self.seen_fingerprints: set[str] = set()
+        self.completion_recovery_used = False
 
     def set_phase(self, phase: str | None) -> None:
         if phase == self.phase:
@@ -715,6 +718,7 @@ class WholeTargetStallTracker:
         self.phase = phase
         self.phase_exploration_steps = 0
         self.seen_fingerprints.clear()
+        self.completion_recovery_used = False
 
     def record_iteration(
         self,
@@ -2356,7 +2360,26 @@ class Agent:
             pending_cleanup_candidate_ids=pending_cleanup_candidates,
             workflow_status=status,
             workflow_blockers=blockers,
+            phase_completion_readiness=self._phase_completion_readiness() if whole_target else None,
         )
+
+    def _phase_completion_readiness(self) -> dict[str, Any] | None:
+        objective = self.workflow.objective
+        if objective is None or objective.mode != "whole_target":
+            return None
+        phase = next(
+            (item for item in REQUIRED_WHOLE_TARGET_PHASES
+             if item not in self.workflow.completed_phases(objective)),
+            None,
+        )
+        skill_name = {
+            "recon": "recon", "enumeration": "web-enumeration",
+            "input_analysis": "web-input-analysis",
+        }.get(phase or "")
+        tool = self.tools.get("workflow")
+        if skill_name is None or not isinstance(tool, WorkflowTool):
+            return None
+        return tool.phase_completion_readiness(skill_name)
 
     def _refresh_whole_target_guidance(self, working: list[Message], user_msg: str) -> None:
         objective = self.workflow.objective
@@ -3321,6 +3344,20 @@ class Agent:
                         max_steps=max_steps,
                     )
                 if stall_tracker.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
+                    listed = any(
+                        execution.name == "workflow"
+                        and execution.args.get("action") == "list"
+                        and execution.result.status == "success"
+                        for execution in execution_batch.calls
+                    )
+                    readiness = self._phase_completion_readiness() if listed else None
+                    if (
+                        listed and readiness is not None and readiness["ready"]
+                        and not stall_tracker.completion_recovery_used
+                        and step < max_steps - 1
+                    ):
+                        stall_tracker.completion_recovery_used = True
+                        continue
                     return await self._whole_target_synthesis(
                         working, signal, emit,
                         thinking_enabled=turn_request_thinking,
@@ -3443,36 +3480,63 @@ class Agent:
         working.append(Message(role="system", content=instruction))
         if self.auto_compact_threshold > 0:
             self.guard_working_context(working, emit, None)
-        request = ChatRequest(
-            model=self.client.model(),
-            messages=working,
-            thinking_enabled=thinking_enabled,
-            reasoning_level=reasoning_level,
-            requested_reasoning_level=requested_reasoning_level,
-        )
-        self._count_llm_call("final_synthesis_llm_calls")
-        chunks: list[str] = []
-        response, streamed = await self._chat_for_turn(
-            request, signal, emit, purpose="final_synthesis", stream_buffer=chunks
-        )
-        self._sanitize_response(response)
-        if streamed and chunks and not response.message.content:
-            response.message.content = "".join(chunks)
-        self._trace_response(
-            response,
-            phase="whole_target_synthesis",
-            step=None,
-            streamed=streamed,
-            malformed_tool_text=False,
-        )
-        if response.message.tool_calls or not response.message.content.strip():
-            emit({
-                "type": "error",
-                "err": InvalidResponseError(
-                    "whole-target synthesis returned tools or no visible text"
-                ),
-            })
-            return "invalid_response"
+        # Keep a retry instruction local: invalid output is never appended to
+        # history/context, streamed to the UI, or interpreted as a tool call.
+        for attempt in range(2):
+            messages = working if attempt == 0 else [*working, Message(
+                role="system",
+                content=("Return only a plain-text assessment summary of the recorded "
+                         "workflow state and observations. Do not request tools or emit "
+                         "DSML, XML tool-call markup, or function calls. Explain the "
+                         "stop reason and remaining work without performing new actions."),
+            )]
+            request = ChatRequest(
+                model=self.client.model(),
+                messages=messages,
+                thinking_enabled=thinking_enabled,
+                reasoning_level=reasoning_level,
+                requested_reasoning_level=requested_reasoning_level,
+            )
+            self._count_llm_call("final_synthesis_llm_calls")
+            chunks: list[str] = []
+            response, streamed = await self._chat_for_turn(
+                request, signal, emit, purpose="final_synthesis", stream_buffer=chunks
+            )
+            if streamed and chunks and not response.message.content:
+                response.message.content = "".join(chunks)
+            self._sanitize_response(response)
+            malformed_tool_text = any(
+                _looks_like_malformed_tool_call(text)
+                or _MALFORMED_TOOL_CALL_TAG_RE.search(text) is not None
+                for text in (response.message.content, "".join(chunks))
+            )
+            self._trace_response(
+                response,
+                phase="whole_target_synthesis",
+                step=None,
+                streamed=streamed,
+                malformed_tool_text=malformed_tool_text,
+            )
+            if response.message.tool_calls or malformed_tool_text:
+                if attempt == 0:
+                    continue
+                response = ChatResponse(message=Message(
+                    role="assistant",
+                    content=(f"Assessment stopped ({stop_reason}). The model returned "
+                             "invalid tool-call output after one summary retry. "
+                             "Review the recorded workflow state and artifacts for "
+                             "completed work and remaining blockers."),
+                ), finish_reason="stop")
+                streamed, chunks = False, []
+            if not response.message.content.strip():
+                emit({
+                    "type": "error",
+                    "err": InvalidResponseError(
+                        "whole-target synthesis returned no visible text"
+                    ),
+                })
+                return "invalid_response"
+            break
         await self._record_assistant_response(
             response, streamed, working, emit, emit_text=False
         )
@@ -4014,7 +4078,7 @@ class Agent:
 
         if run_err is not None:
 
-            err_str = str(run_err)
+            err_str = str(run_err).strip() or type(run_err).__name__
 
             result = f"ERROR: {err_str}"
             status = "cancelled" if signal.aborted else "error"

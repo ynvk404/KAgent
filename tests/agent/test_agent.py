@@ -1,3 +1,4 @@
+from src.llm.reasoning import ReasoningLevel
 import logging
 from types import SimpleNamespace
 
@@ -3310,6 +3311,76 @@ async def test_whole_target_stalls_after_four_iterations_without_semantic_progre
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recovery_action", ["list", "complete_skill"])
+async def test_ready_workflow_list_grants_one_completion_turn(tmp_path, recovery_action):
+    state = WorkflowState(objective=WorkflowObjective(
+        id="ready-phase", mode="whole_target", target_origin="https://target.test",
+    ))
+    record_completed_phase(state, "recon", objective_id="ready-phase",
+                           target_origin="https://target.test", artifact_ref="artifacts/recon.md")
+    from src.workflow.state import PHASE_COVERAGE_DIMENSIONS
+    for dimension in PHASE_COVERAGE_DIMENSIONS["enumeration"]:
+        state.record_phase_coverage("enumeration", dimension, "not_applicable",
+                                    objective_id="ready-phase", target_origin="https://target.test",
+                                    reason="bounded test fixture")
+    ref = "artifacts/web-enumeration/target-test/inventory.md"
+    artifact = tmp_path / ref
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("inventory", encoding="utf-8")
+    workflow_tool = WorkflowTool(state, Target("https://target.test"), evidence_root=tmp_path)
+    responses = [tool_batch(agent_tool_call(f"echo-{i}", "echo", {"msg": "same"})) for i in range(3)]
+    responses.append(tool_batch(agent_tool_call("first-list", "workflow", {"action": "list"})))
+    final_args = ({"action": "list"} if recovery_action == "list" else {
+        "action": "complete_skill", "skill_name": "web-enumeration", "artifact_ref": ref,
+    })
+    responses.append(tool_batch(agent_tool_call("recovery", "workflow", final_args)))
+    responses.append(ChatResponse(message=Message(role="assistant", content="Summary."), finish_reason="stop"))
+    agent, client = whole_target_agent(responses, [EchoTool(), workflow_tool],
+                                       workflow=state, max_steps=5)
+    workflow_tool.skills = agent.skills
+    collector = collect()
+    await agent.run("Continue the whole-target assessment", FakeSignal(), collector["sink"])
+    guidance = [message.content for message in client.requests[4].messages
+                if message.role == "system" and "Decision planner guidance" in message.content]
+    assert any(f'workflow(action="complete_skill", skill_name="web-enumeration", artifact_ref="{ref}")'
+               in message for message in guidance)
+    if recovery_action == "list":
+        assert collector["events"][-1].stop_reason == "workflow_stalled"
+        assert "enumeration" not in state.completed_phases()
+    else:
+        assert "enumeration" in state.completed_phases()
+        assert collector["events"][-1].stop_reason == "max_steps"
+
+
+@pytest.mark.asyncio
+async def test_empty_tool_exception_message_uses_exception_type():
+    class EmptyTimeout(Tool):
+        def name(self) -> str:
+            return "empty_timeout"
+
+        def requires_permission(self) -> bool:
+            return False
+
+        def description(self) -> str:
+            return "raise an empty timeout"
+
+        def schema(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        async def run(self, args, signal, prompter):
+            raise TimeoutError()
+
+    agent, _ = whole_target_agent([
+        tool_batch(agent_tool_call("timeout", "empty_timeout")),
+        ChatResponse(message=Message(role="assistant", content="Done."), finish_reason="stop"),
+    ], [EmptyTimeout()], max_steps=1)
+    collector = collect()
+    await agent.run("Check target", FakeSignal(), collector["sink"])
+    results = [event for event in collector["events"] if event.type == "tool-result"]
+    assert results and "ERROR: TimeoutError" in str(results[0].result)
+
+
+@pytest.mark.asyncio
 async def test_whole_target_streaming_does_not_emit_rejected_final_text():
     class ScriptedStreamingClient(StreamingClient):
         def __init__(self, scripted, deltas):
@@ -6517,3 +6588,111 @@ async def test_agent_reset_max_steps_restores_dual_defaults():
     assert agent.has_explicit_max_steps() is False
     assert agent.get_max_steps_override() is None
     assert agent.get_max_steps() == DEFAULT_MAX_STEPS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad_text', [
+    MALFORMED_TOOL_CALL_TEXT,
+    '<tool_calls><invoke name="http"><arguments>{}</arguments></invoke></tool_calls>',
+    '<function_call name="http">{}</function_call>',
+])
+@pytest.mark.parametrize('retry_clean', [True, False])
+async def test_whole_target_synthesis_retries_markup_once_and_emits_only_clean_summary(bad_text, retry_clean):
+    retry = 'Plain assessment summary.' if retry_clean else bad_text
+    agent, client = whole_target_agent([
+        ChatResponse(message=Message(role='assistant', content=bad_text), finish_reason='stop'),
+        ChatResponse(message=Message(role='assistant', content=retry), finish_reason='stop'),
+    ], [EchoTool()])
+    emitted = []
+    working = [Message(role='system', content='Recorded workflow facts')]
+    status = await agent._whole_target_synthesis(
+        working, FakeSignal(), emitted.append, thinking_enabled=False,
+        reasoning_level=ReasoningLevel.OFF, requested_reasoning_level=ReasoningLevel.OFF,
+        stop_reason='workflow_stalled', instruction='Summarize the stalled assessment.', max_steps=40,
+    )
+    assert status == 'workflow_stalled'
+    assert len(client.requests) == 2
+    assert agent._llm_call_counts['final_synthesis_llm_calls'] == 2
+    assert all(request.tools is None for request in client.requests)
+    assert client.requests[1].messages[:-1] == working[:-1]
+    assert 'plain-text assessment summary' in client.requests[1].messages[-1].content
+    visible = [event['text'] for event in emitted if event['type'] in {'assistant-text', 'assistant-delta'}]
+    assert len(visible) == 1
+    assert '<' not in visible[0] and 'DSML' not in visible[0]
+    assert not any(event['type'] == 'tool-call' for event in emitted)
+    assert len([message for message in agent.history if message.role == 'assistant']) == 1
+    assert agent.history[-1].content == visible[0]
+    assert bad_text not in [message.content for message in working]
+    if retry_clean:
+        assert visible == ['Plain assessment summary.']
+    else:
+        assert 'workflow_stalled' in visible[0] and 'one summary retry' in visible[0]
+
+
+@pytest.mark.asyncio
+async def test_whole_target_synthesis_structured_tools_are_never_executed():
+    tool = EchoTool()
+    agent, client = whole_target_agent([
+        tool_batch(agent_tool_call('hidden', 'echo', {'msg': 'unexpected'})),
+        ChatResponse(message=Message(role='assistant', content='Clean summary.'), finish_reason='stop'),
+    ], [tool])
+    events = []
+    assert await agent._whole_target_synthesis(
+        [], FakeSignal(), events.append, thinking_enabled=False,
+        reasoning_level=ReasoningLevel.OFF, requested_reasoning_level=ReasoningLevel.OFF,
+        stop_reason='workflow_completed', instruction='Summarize.', max_steps=40,
+    ) == 'workflow_completed'
+    assert len(client.requests) == 2 and tool.calls == 0
+    assert agent.history[-1].content == 'Clean summary.'
+    assert not agent.history[-1].tool_calls
+
+
+@pytest.mark.asyncio
+async def test_whole_target_synthesis_normal_text_unchanged_and_single_call():
+    text = 'Completed recon; enumeration remains incomplete. No findings confirmed.'
+    agent, client = whole_target_agent([
+        ChatResponse(message=Message(role='assistant', content=text), finish_reason='stop'),
+    ], [])
+    events = []
+    assert await agent._whole_target_synthesis(
+        [], FakeSignal(), events.append, thinking_enabled=False,
+        reasoning_level=ReasoningLevel.OFF, requested_reasoning_level=ReasoningLevel.OFF,
+        stop_reason='workflow_stalled', instruction='Summarize.', max_steps=40,
+    ) == 'workflow_stalled'
+    assert len(client.requests) == 1
+    assert [e['text'] for e in events if e['type'] == 'assistant-text'] == [text]
+    assert agent.history[-1].content == text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('clean_retry', [True, False])
+async def test_whole_target_synthesis_discards_malformed_stream_even_with_clean_response(monkeypatch, clean_retry):
+    agent, _ = whole_target_agent([], [])
+    calls = []
+
+    async def buffered_chat(request, signal, emit, purpose, stream_buffer):
+        calls.append(request)
+        if clean_retry and len(calls) == 2:
+            stream_buffer.extend(['Clean streamed ', 'summary.'])
+            return ChatResponse(message=Message(role='assistant', content='Clean streamed summary.'),
+                                finish_reason='stop'), True
+        stream_buffer.extend([MALFORMED_TOOL_CALL_TEXT[:30], MALFORMED_TOOL_CALL_TEXT[30:]])
+        return ChatResponse(message=Message(role='assistant', content='Different clean text.'),
+                            finish_reason='stop'), True
+
+    monkeypatch.setattr(agent, '_chat_for_turn', buffered_chat)
+    events = []
+    status = await agent._whole_target_synthesis(
+        [], FakeSignal(), events.append, thinking_enabled=False,
+        reasoning_level=ReasoningLevel.OFF, requested_reasoning_level=ReasoningLevel.OFF,
+        stop_reason='workflow_stalled', instruction='Summarize.', max_steps=40,
+    )
+    assert status == 'workflow_stalled' and len(calls) == 2
+    visible = ''.join(e['text'] for e in events if e['type'] in {'assistant-text', 'assistant-delta'})
+    assert 'DSML' not in visible
+    if clean_retry:
+        assert visible == 'Clean streamed summary.'
+    else:
+        assert 'one summary retry' in visible
+        assert not any(e['type'] == 'assistant-delta' for e in events)
+    assert agent.history[-1].content == visible

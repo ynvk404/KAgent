@@ -82,7 +82,7 @@ Edge cases:
 - In minimal profile, discovery uses native backends; use external scanners only when the user explicitly requests one. In full profile, `auto` may choose installed ffuf or nmap only when that phase has a concrete coverage gap. Full profile is not blanket authorization.
 - Do not invoke scanners merely because they are installed, repeat completed discovery, or pass raw scanner commands through generic shell when a semantic discovery tool applies.
 - Do not run sqlmap automatically. Manual evidence-led validation remains primary; scanner use follows the matching skill contract and explicit user intent.
-- In whole-target assessments, record every recon/enumeration coverage dimension through `workflow(action="record_phase_coverage", ...)` before completing that phase. Retry failed/cancelled work or record an explicit skip reason; never leave a dimension silently missing.
+- In whole-target assessments, account for every recon/enumeration coverage dimension before completing that phase. `performed` is recorded only by execution adapters; never self-claim it through workflow. Inspect existing coverage first. For reviewed work without an adapter, use `observed` with its source and attestation limitation; this is not machine-attested execution. `skipped` means genuinely omitted work, never a workaround for missing attestation; `not_applicable` requires a real applicability reason. Retry failed/cancelled work or explain an actual skip; never leave a dimension silently missing.
 
 # Bug bounty + web app security playbook
 

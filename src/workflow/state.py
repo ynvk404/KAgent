@@ -27,8 +27,9 @@ CandidatePriority = Literal["high", "medium", "low"]
 WorkflowMode = Literal["direct", "candidate_validation", "whole_target"]
 InputDisposition = Literal["pending", "analyzed", "dropped", "blocked"]
 WorkflowPhase = Literal["recon", "enumeration", "input_analysis"]
+# observed is an explicit unattested review; only adapters attest performed.
 PhaseCoverageStatus = Literal[
-    "performed", "skipped", "not_applicable", "failed", "cancelled"
+    "performed", "observed", "skipped", "not_applicable", "failed", "cancelled"
 ]
 CleanupState = Literal[
     "not-required", "pending", "succeeded", "failed", "requires-user-action"
@@ -38,7 +39,7 @@ WORKFLOW_MODES = frozenset({"direct", "candidate_validation", "whole_target"})
 INPUT_DISPOSITIONS = frozenset({"pending", "analyzed", "dropped", "blocked"})
 WORKFLOW_PHASES = frozenset({"recon", "enumeration", "input_analysis"})
 PHASE_COVERAGE_STATUSES = frozenset(
-    {"performed", "skipped", "not_applicable", "failed", "cancelled"}
+    {"performed", "observed", "skipped", "not_applicable", "failed", "cancelled"}
 )
 CLEANUP_STATES = frozenset(
     {"not-required", "pending", "succeeded", "failed", "requires-user-action"}

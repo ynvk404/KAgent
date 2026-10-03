@@ -4,6 +4,8 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 import asyncio
+import ipaddress
+from html.parser import HTMLParser
 import httpx
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter, UserControlledRefusal, YoloPrompter
@@ -12,6 +14,7 @@ from src.permission.execution import policy_for
 from src.permission.invocations import permission_invocation
 from src.permission.network import pin_request
 from src.target.target import Target
+from src.workflow.state import WorkflowPhase, WorkflowState, normalize_target_origin
 from .private_host import gate_private_request, parse_http_url, PrivateHostDeclined
 from .types import Tool, PermissionHints, arg_string
 from .outcome import ToolOutput
@@ -21,9 +24,24 @@ MAX_RESPONSE_BYTE_CAP = 64 * 1024
 REQUEST_TIMEOUT = 60
 
 
+class _NavigationParser(HTMLParser):
+    """Inspect only the bounded captured HTML, without retaining field values."""
+
+    def __init__(self):
+        super().__init__()
+        self.found = False
+
+    def handle_starttag(self, tag, attrs):
+        relevant = {'a': 'href', 'script': 'src', 'form': 'action'}
+        if tag in relevant and any(key == relevant[tag] and value for key, value in attrs):
+            self.found = True
+
+
 class HTTPTool(Tool):
-    def __init__(self, target: Target, engagement: EngagementState):
+    def __init__(self, target: Target, engagement: EngagementState,
+                 workflow: WorkflowState | None = None):
         self.target = target
+        self.workflow = workflow
         self.engagement = engagement
         self.permissions = engagement.http_permissions
         self.permissions.bind_target(lambda: target.revision)
@@ -193,6 +211,7 @@ class HTTPTool(Tool):
                     output = f'note: private/internal host independently approved (reason: {private_reason})\n\n' + output
                 if policy is not None:
                     observation = policy.observations.capture(action, response.status_code, content, complete=not truncated)
+                    self._attest_phase_coverage(action, response, content, observation)
                     output += f'\n[runtime observation: {observation}]'
                 return ToolOutput(output, status='observation', http_status=response.status_code, truncated=truncated)
             finally:
@@ -201,6 +220,56 @@ class HTTPTool(Tool):
                         await response.aclose()
                 finally:
                     reservation.release()
+
+    def _attest_phase_coverage(self, action, response, content: bytes, observation: str) -> None:
+        """Coverage describes executed operations, never inferred application behavior.
+
+        Even an HTTP error or a capped body attests reachability/metadata. HTML
+        navigation needs a parsed navigation reference within captured bytes.
+        Only the first observation for a dimension is retained so duplicate
+        requests cannot manufacture semantic progress with fresh observation IDs.
+        """
+        state = self.workflow
+        objective = state.objective if state is not None else None
+        if (state is None or objective is None or objective.mode != 'whole_target'
+                or normalize_target_origin(action.url) != objective.target_origin
+                or normalize_target_origin(self.target.base_url()) != objective.target_origin):
+            return
+        phase: WorkflowPhase
+        if state.is_next_phase('recon'):
+            dimensions = ['reachability']
+            try:
+                ipaddress.ip_address(action.transport_address)
+            except ValueError:
+                pass
+            else:
+                dimensions.append('target_resolution')
+            if response.headers:
+                dimensions.append('http_fingerprint')
+            phase = 'recon'
+        elif state.is_next_phase('enumeration'):
+            if (action.method != 'GET'
+                    or not 200 <= response.status_code < 300
+                    or response.headers.get('content-type', '').split(';')[0].strip().lower()
+                    not in {'text/html', 'application/xhtml+xml'}):
+                return
+            parser = _NavigationParser()
+            parser.feed(content.decode(errors='replace'))
+            if not parser.found:
+                return
+            dimensions = ['html_navigation']
+            phase = 'enumeration'
+        else:
+            return
+        for dimension in dimensions:
+            existing = state.phase_coverage_record(phase, dimension)
+            if existing is not None and existing.status == 'performed':
+                continue
+            state.record_phase_coverage(
+                phase, dimension, 'performed', objective_id=objective.id,
+                target_origin=objective.target_origin or '',
+                reason=f'runtime HTTP observation: {observation}',
+            )
 
     def _require_scope(self, url: str) -> None:
         self.engagement.require_in_scope(url)

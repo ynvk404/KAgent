@@ -86,6 +86,65 @@ If the target is known but the recon output is unavailable, perform only the
 single lightweight request in step 1 to recover the minimum baseline. Do not
 repeat full reconnaissance or technology fingerprinting here.
 
+## Incremental structured handoff (throughout steps 1–6)
+
+As soon as an endpoint and input are supported by an observed request, form,
+API schema, or network call site, call `workflow(action="record_input", ...)`
+immediately, before fetching another resource. Do not wait for the final
+inventory or for an entire Swagger document, directory listing, or bundle.
+Reuse sufficiently specific evidence from recon. A route name or a GET error
+on a login path does not establish a POST body field: record only the method,
+parameter, and location actually observed. Documented inputs may be recorded
+without submitting a form; retain their source and unknown reachability in the
+inventory. Record each newly established input once; reuse its returned ID.
+
+For a whole-target objective, record every discovered request input
+surface with `workflow(action="record_input", method=..., endpoint=...,
+parameter=..., location=..., input_type=..., content_type=...,
+sample_payload=...)` when those details are known. Use one compact record per
+method/endpoint/parameter/location/type combination; `content_type` and
+`sample_payload` are optional and do not change the input identity. Store a
+small body skeleton, not raw traffic: retain the structure and replace values
+with inert examples or `{INJECTION_POINT}`. Omit passwords, tokens, cookies,
+PII, and unrelated fields. Record query, body, path, header, and cookie inputs
+that were actually observed. The runtime assigns the active objective and
+target origin and deduplicates semantic duplicates.
+
+Keep these inputs pending for `web-input-analysis`. Do not call
+`record_candidate`, assign a vulnerability class, or mark an input analyzed
+in enumeration. Input recording does not complete the phase: write the
+inventory and account for coverage before `complete_skill`.
+
+## Large responses: bounded extraction, then move on
+
+A response truncation marker or context-guard omission is a strategy signal.
+Do not repeatedly fetch the same large resource, increase `max_response_bytes`,
+or add empty queries/cache-busters to obtain the whole blob. Check status and
+Content-Type first: HTML at a guessed Swagger URL is not a JSON specification.
+Use already visible input/schema/link clues and record them immediately.
+
+Prefer searching/grepping a previously retained local artifact. If the needed
+information lies outside the retained prefix and the native tool cannot
+extract it, the allowed `shell` tool may perform at most one targeted
+extraction attempt per resource. Explain the exact purpose (e.g. form names,
+same-origin directory anchors, or one documented operation). Use the exact
+active scheme/host/effective port, no redirect following, one GET, a timeout
+of at most 8 seconds, and a fixed download bound of at most 64 KiB (for example
+curl `--max-time 8 --max-filesize 65536`). Bound parsing to that prefix and
+output to at most 40 matches and 4,000 characters. Extract only the needed
+structure; never print or persist raw credentials or complete traffic.
+Do not run a recursive loop, arbitrary URL batch, or generic shell scanner.
+Shell approval does not authorize an off-origin URL.
+
+If that bounded attempt fails, returns a wildcard shell, or yields no useful
+new structure, record the remaining source limitation in the inventory and
+move to other known inputs. Do not raise the bound or restart retrieval.
+Use `content_discovery` only for an actual path gap, not to download a blob.
+Partial extraction is sufficient for a bounded inventory; do not make complete
+large-resource ingestion a prerequisite for handoff. Once the known input
+surface and coverage are accounted for, write the inventory and transition to
+`web-input-analysis`, retaining unresolved source limitations.
+
 ## 1. Build the target baseline
 
 Reuse `artifacts/recon/<target>/summary.md` when it exists — do not repeat
@@ -359,25 +418,28 @@ artifact is absent, empty, or a different path is supplied. This marks the
 bounded inventory pass complete; newly discovered routes may still justify
 another focused pass.
 
-For whole-target work, record all enumeration coverage dimensions with
-`workflow(action="record_phase_coverage", phase="enumeration", coverage_dimension=..., coverage_status=...)`
-before completion: `html_navigation`, `standard_metadata`, `api_documentation`,
-`javascript_endpoint_extraction`, `browser_burp_capture`, and
-`active_content_discovery`. For skipped/not-applicable dimensions include a
-short reason. Retry failed/cancelled dimensions or record an explicit skip
-reason before completing the phase.
+For whole-target work, inspect coverage and account for `html_navigation`,
+`standard_metadata`, `api_documentation`, `javascript_endpoint_extraction`,
+`browser_burp_capture`, and `active_content_discovery` before completion.
+`performed` is reserved for machine-observed execution; never self-claim it
+through `record_phase_coverage`. Native `http` records `html_navigation` only
+when its captured successful HTML contains parsed link, script, or form
+references. A truncated prefix without those references does not attest it.
+`content_discovery` records `active_content_discovery` after execution.
 
-For a whole-target objective, also record every discovered request input
-surface with `workflow(action="record_input", method=..., endpoint=...,
-parameter=..., location=..., input_type=..., content_type=...,
-sample_payload=...)` when those details are known. Use one compact record per
-method/endpoint/parameter/location/type combination; `content_type` and
-`sample_payload` are optional and do not change the input identity. Store a
-small body skeleton, not raw traffic: retain the structure and replace values
-with inert examples or `{INJECTION_POINT}`. Omit passwords, tokens, cookies,
-PII, and unrelated fields. Record query, body, path, header, and cookie inputs
-that were actually observed. The runtime assigns the active objective and
-target origin and deduplicates semantic duplicates.
+For reviewed work without a matching adapter, use
+`workflow(action="record_phase_coverage", phase="enumeration",
+coverage_dimension=..., coverage_status="observed", coverage_reason=...)` with
+its source/artifact and missing attestation limitation. `observed` means
+unattested review, not machine-attested execution. Never use `skipped` to
+simulate performed work or work around missing attestation. Use `skipped` only
+for genuinely omitted work and `not_applicable` only for a dimension that
+truly does not apply, each with a short valid reason. Do not overwrite runtime
+`performed` records. Retry failed/cancelled dimensions or explain an actual
+skip before completion; a missing observation never implies `performed`.
+
+Reconcile the inventory with the input records already committed incrementally.
+Do not re-record unchanged inputs or wait until this step to record them.
 
 ### GET /search
 

@@ -22,7 +22,7 @@ from src.workflow.state import (
     WorkflowState,
     validation_result_fingerprint,
 )
-from tests.helpers.workflow import record_phase_coverage_for_test
+from tests.helpers.workflow import record_completed_phase, record_phase_coverage_for_test
 
 
 def _confirmed_sqli_args() -> dict:
@@ -1264,6 +1264,97 @@ def whole_target_tool_state() -> WorkflowState:
         target_origin="https://target.test",
     )
     return state
+
+
+@pytest.mark.asyncio
+async def test_phase_readiness_matches_completion_gate_for_artifact_coverage_and_prerequisites(tmp_path):
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    state = whole_target_tool_state()
+    tool = WorkflowTool(state, Target("https://target.test"), skills=skills, evidence_root=tmp_path)
+    ref = "artifacts/web-enumeration/target-test/inventory.md"
+    artifact = tmp_path / ref
+
+    async def rejected(expected: str) -> None:
+        readiness = tool.phase_completion_readiness("web-enumeration")
+        assert readiness["ready"] is False and expected in readiness["reason"]
+        output = await tool.run({"action": "complete_skill", "skill_name": "web-enumeration"}, None, AlwaysAllow())
+        assert expected in output
+
+    await rejected("requires " + ref)
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("", encoding="utf-8")
+    await rejected("requires " + ref)
+    artifact.write_text("inventory", encoding="utf-8")
+    await rejected("recon must complete")
+    record_completed_phase(state, "recon", objective_id="objective-active",
+                           target_origin="https://target.test", artifact_ref="artifacts/recon.md")
+    await rejected("explicit coverage")
+    await record_phase_coverage_for_test(tool, "enumeration")
+    state.record_phase_coverage("enumeration", "active_content_discovery", "failed",
+                                objective_id="objective-active", target_origin="https://target.test",
+                                reason="bounded scan failed")
+    await rejected("unresolved failed/cancelled")
+    state.record_phase_coverage("enumeration", "active_content_discovery", "cancelled",
+                                objective_id="objective-active", target_origin="https://target.test",
+                                reason="operator cancelled")
+    await rejected("unresolved failed/cancelled")
+    state.record_phase_coverage("enumeration", "active_content_discovery", "skipped",
+                                objective_id="objective-active", target_origin="https://target.test",
+                                reason="bounded retry unavailable")
+    readiness = tool.phase_completion_readiness("web-enumeration")
+    assert readiness["ready"] is True
+    assert readiness["objective_id"] == "objective-active"
+    assert readiness["target_origin"] == "https://target.test"
+    assert readiness["prerequisites"] == ("recon",)
+    assert set(readiness["required_coverage"]) == set(state.phase_coverage["objective-active:enumeration"])
+    assert readiness["artifact_ref"] == ref
+    assert "requires " + ref in (await tool.run({
+        "action": "complete_skill", "skill_name": "web-enumeration",
+        "artifact_ref": "artifacts/wrong.md",
+    }, None, AlwaysAllow()))
+    completed = json.loads(await tool.run({
+        "action": "complete_skill", "skill_name": "web-enumeration",
+        "artifact_ref": ref,
+    }, None, AlwaysAllow()))
+    assert completed["phase"] == "enumeration"
+    assert tool.phase_completion_readiness("web-enumeration")["ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_input_analysis_readiness_requires_input_resolution_or_explicit_no_inputs(tmp_path):
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    state = whole_target_tool_state()
+    tool = WorkflowTool(state, Target("https://target.test"), skills=skills, evidence_root=tmp_path)
+    ref = "artifacts/web-input-analysis/target-test/candidates.md"
+    artifact = tmp_path / ref
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("analysis", encoding="utf-8")
+    assert "enumeration must complete" in tool.phase_completion_readiness(
+        "web-input-analysis", no_inputs_discovered=True)["reason"]
+    for phase in ("recon", "enumeration"):
+        record_completed_phase(state, phase, objective_id="objective-active",
+                               target_origin="https://target.test", artifact_ref=f"artifacts/{phase}.md")
+    assert "no_inputs_discovered=true" in tool.phase_completion_readiness(
+        "web-input-analysis")["reason"]
+    readiness = tool.phase_completion_readiness("web-input-analysis", no_inputs_discovered=True)
+    assert readiness["ready"] is True and readiness["artifact_ref"] == ref
+    item = json.loads(await tool.run({
+        "action": "record_input", "method": "GET", "endpoint": "/search",
+        "parameter": "q", "location": "query",
+    }, None, AlwaysAllow()))["input"]
+    assert "pending or blocked" in tool.phase_completion_readiness("web-input-analysis")["reason"]
+    await tool.run({"action": "set_input_disposition", "input_id": item["id"],
+                    "disposition": "blocked", "disposition_reason": "fixture blocker"},
+                   None, AlwaysAllow())
+    assert "pending or blocked" in tool.phase_completion_readiness("web-input-analysis")["reason"]
+    await tool.run({"action": "set_input_disposition", "input_id": item["id"],
+                    "disposition": "analyzed"}, None, AlwaysAllow())
+    assert tool.phase_completion_readiness("web-input-analysis")["ready"] is True
+    result = json.loads(await tool.run({"action": "complete_skill", "skill_name": "web-input-analysis",
+                                        "artifact_ref": ref}, None, AlwaysAllow()))
+    assert result["phase"] == "input_analysis"
 
 
 @pytest.mark.asyncio

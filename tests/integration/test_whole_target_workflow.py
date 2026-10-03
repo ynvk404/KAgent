@@ -94,21 +94,46 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
 
     plan = build_decision_plan("continue", skills.list_enabled(), target, agent._planner_context())
     assert plan is not None and plan.recommended_skill == "recon"
+    assert 'action="complete_skill"' not in plan.guidance
     assert old_candidate.id not in {item.id for item in agent._planner_context().candidates}
 
     recon_ref = "artifacts/recon/target-test/summary.md"
     _artifact(tmp_path, recon_ref)
+    recon_without_coverage = build_decision_plan("continue", skills.list_enabled(), target, agent._planner_context())
+    assert recon_without_coverage is not None
+    assert 'action="complete_skill"' not in recon_without_coverage.guidance
     await record_phase_coverage_for_test(workflow_tool, "recon")
+    ready_recon = build_decision_plan("continue", skills.list_enabled(), target, agent._planner_context())
+    assert ready_recon is not None and f'artifact_ref="{recon_ref}"' in ready_recon.guidance
     await workflow_tool.run({"action": "complete_skill", "skill_name": "recon"}, None, AlwaysAllow())
     enumeration_plan = build_decision_plan(
         "continue", skills.list_enabled(), target, agent._planner_context()
     )
     assert enumeration_plan is not None
     assert enumeration_plan.recommended_skill == "web-enumeration"
+    assert 'skill_name="recon"' not in enumeration_plan.guidance
 
     enumeration_ref = "artifacts/web-enumeration/target-test/inventory.md"
     _artifact(tmp_path, enumeration_ref)
+    enumeration_without_coverage = build_decision_plan("continue", skills.list_enabled(), target, agent._planner_context())
+    assert enumeration_without_coverage is not None
+    assert 'action="complete_skill"' not in enumeration_without_coverage.guidance
     await record_phase_coverage_for_test(workflow_tool, "enumeration")
+    state.record_phase_coverage("enumeration", "active_content_discovery", "failed",
+                                objective_id="assessment-1", target_origin="https://target.test",
+                                reason="bounded scan failed")
+    unresolved_plan = build_decision_plan("continue", skills.list_enabled(), target, agent._planner_context())
+    assert unresolved_plan is not None
+    assert 'action="complete_skill"' not in unresolved_plan.guidance
+    assert "unresolved failed/cancelled" in await workflow_tool.run(
+        {"action": "complete_skill", "skill_name": "web-enumeration"}, None, AlwaysAllow()
+    )
+    state.record_phase_coverage("enumeration", "active_content_discovery", "skipped",
+                                objective_id="assessment-1", target_origin="https://target.test",
+                                reason="bounded retry unavailable")
+    ready_enumeration = build_decision_plan("continue", skills.list_enabled(), target, agent._planner_context())
+    assert ready_enumeration is not None
+    assert f'skill_name="web-enumeration", artifact_ref="{enumeration_ref}"' in ready_enumeration.guidance
     await workflow_tool.run(
         {"action": "complete_skill", "skill_name": "web-enumeration"}, None, AlwaysAllow()
     )
@@ -327,3 +352,83 @@ def test_whole_target_progress_signature_stays_stable_without_semantic_changes()
     candidate.status = "validating"
     candidate.status = "queued"
     assert state.progress_facts() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('input_args', [
+    {'endpoint': '/search', 'method': 'GET', 'parameter': 'q', 'location': 'query'},
+    {'endpoint': '/api/login', 'method': 'POST', 'parameter': 'email', 'location': 'body',
+     'content_type': 'application/json', 'sample_payload': '{"email":"{INJECTION_POINT}"}'},
+])
+async def test_incremental_enumeration_records_progress_without_advancing_phase(tmp_path, input_args):
+    from src.agent.agent import WholeTargetStallTracker, MAX_CONSECUTIVE_NO_PROGRESS
+
+    target = Target('https://target.test')
+    state = WorkflowState(objective=WorkflowObjective(
+        id='incremental', mode='whole_target', target_origin=target.base_url(),
+    ))
+    skills = SkillRegistry()
+    skills.load_dir(SKILLS_ROOT)
+    tool = WorkflowTool(state, target, skills=skills, evidence_root=tmp_path)
+    agent = Agent(AgentOptions(
+        client=FakeClient([]), tools=ToolRegistry(), skills=skills,
+        prompter=AlwaysAllow(), store=None, target=target, workflow=state,
+    ))
+    record_completed_phase(state, 'recon', objective_id='incremental',
+                           target_origin=target.base_url(), artifact_ref='artifacts/recon.md')
+    tracker = WholeTargetStallTracker()
+    tracker.set_phase('enumeration')
+    for _ in range(MAX_CONSECUTIVE_NO_PROGRESS - 1):
+        tracker.record_iteration(new_facts=frozenset(), activity_fingerprints=[])
+    before = state.progress_facts()
+    args = {'action': 'record_input', **input_args}
+    first = json.loads(await tool.run(args, None, AlwaysAllow()))
+    assert tracker.record_iteration(new_facts=state.progress_facts() - before,
+                                    activity_fingerprints=[]) == 'structured_progress'
+    assert tracker.consecutive_no_progress == tracker.phase_exploration_steps == 0
+    assert not state.candidates
+    assert state.is_next_phase('enumeration')
+    assert state.objective_inputs()[0].disposition == 'pending'
+    plan = build_decision_plan('continue', skills.list_enabled(), target, agent._planner_context())
+    assert plan is not None and plan.recommended_skill == 'web-enumeration'
+
+    before = state.progress_facts()
+    duplicate = json.loads(await tool.run(args, None, AlwaysAllow()))
+    assert duplicate['input']['id'] == first['input']['id']
+    assert len(state.objective_inputs()) == 1
+    assert state.progress_facts() == before
+    assert tracker.record_iteration(new_facts=state.progress_facts() - before,
+                                    activity_fingerprints=[]) == 'no_progress'
+
+    _artifact(tmp_path, 'artifacts/web-enumeration/target-test/inventory.md')
+    await record_phase_coverage_for_test(tool, 'enumeration')
+    result = json.loads(await tool.run({'action': 'complete_skill',
+                                       'skill_name': 'web-enumeration'}, None, AlwaysAllow()))
+    assert result['ok'] is True
+    plan = build_decision_plan('continue', skills.list_enabled(), target, agent._planner_context())
+    assert plan is not None and plan.recommended_skill == 'web-input-analysis'
+    assert not state.candidates
+
+
+def test_large_resource_byte_escalation_and_empty_query_never_renew_exploration():
+    from src.agent.agent import (
+        WholeTargetStallTracker, _exploration_fingerprint, MAX_CONSECUTIVE_NO_PROGRESS,
+        ExecutedToolCall, ToolCallResult,
+    )
+
+    tracker = WholeTargetStallTracker()
+    tracker.set_phase('enumeration')
+    fingerprints = [_exploration_fingerprint(ExecutedToolCall('http',
+                    {'url': '/docs/spec' + suffix, 'max_response_bytes': cap}, True,
+                    ToolCallResult('truncated', '', 0, status='observation', truncated=True)),
+                    'https://target.test')
+                    for suffix, cap in [('', 400), ('?', 12000), ('', 30000),
+                                        ('?', 40000), ('', 60000)]]
+    assert fingerprints[0] is not None and len(set(fingerprints)) == 1
+    for index, fingerprint in enumerate(fingerprints):
+        assert fingerprint is not None
+        verdict = tracker.record_iteration(new_facts=frozenset(),
+                                           activity_fingerprints=[fingerprint])
+        assert verdict == ('novel_exploration' if index == 0 else 'no_progress')
+    assert tracker.consecutive_no_progress == MAX_CONSECUTIVE_NO_PROGRESS
+    assert tracker.phase_exploration_steps == 1

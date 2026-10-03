@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import ipaddress
 import re
-from typing import List, Optional, TypedDict
+from typing import Any, List, Optional, TypedDict
 
 from src.skills.registry import (
     CANDIDATE_CLASS_ALIASES,
@@ -52,6 +52,7 @@ class PlannerContext:
     pending_cleanup_candidate_ids: tuple[str, ...] = ()
     workflow_status: str | None = None
     workflow_blockers: tuple[str, ...] = ()
+    phase_completion_readiness: dict[str, Any] | None = None
 
 
 class SkillRecommendation(TypedDict):
@@ -290,6 +291,23 @@ def build_whole_target_plan(
         if skill is None:
             return None
         reason = f"whole-target objective {context.objective_id} requires {phase}"
+        readiness = context.phase_completion_readiness
+        completion_guidance = ""
+        if (
+            readiness is not None and readiness.get("ready") is True
+            and readiness.get("phase") == phase
+            and readiness.get("skill_name") == skill.name
+        ):
+            extra = (
+                ", no_inputs_discovered=true"
+                if readiness.get("no_inputs_discovered") else ""
+            )
+            completion_guidance = (
+                "\nThe runtime phase gate is ready. Call "
+                f"workflow(action=\"complete_skill\", skill_name=\"{skill.name}\", "
+                f"artifact_ref=\"{readiness['artifact_ref']}\"{extra}). "
+                "The workflow tool will validate the completion."
+            )
         return DecisionPlan(
             recommended_skill=skill.name,
             reason=reason,
@@ -305,6 +323,7 @@ def build_whole_target_plan(
                 f"Next bounded phase: {skill.name} ({phase}).\n"
                 "Follow the skill playbook. Runtime structured state controls "
                 "completion; this recommendation is guidance."
+                + completion_guidance
             ),
         )
 
