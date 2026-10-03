@@ -6,7 +6,7 @@ from src.engagement.state import EngagementState, OutOfScopeError
 from src.target.target import Target
 from src.tools.http.http_tool import HTTPTool, RESPONSE_BYTE_CAP
 from src.tools.common.registry import Registry
-from src.version.version import VERSION
+from src.version import VERSION
 
 
 class FakeResponse:

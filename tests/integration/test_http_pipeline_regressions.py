@@ -16,7 +16,7 @@ from src.engagement.state import EngagementState
 from src.permission.permission import Decision
 from src.target.target import Target
 from src.tools.http.http_tool import HTTPTool
-from src.version.version import VERSION
+from src.version import VERSION
 from src.workflow.state import Candidate, WorkflowState
 
 

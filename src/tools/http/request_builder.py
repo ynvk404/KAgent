@@ -14,7 +14,7 @@ from urllib.parse import quote, quote_plus, unquote_plus, unquote_to_bytes, urls
 import httpx
 
 from src.target.origin import HTTPOrigin
-from src.version.version import VERSION
+from src.version import VERSION
 
 NATIVE_USER_AGENT = f"KAgent/{VERSION}"
 DROP_REQUEST_HEADERS = frozenset({

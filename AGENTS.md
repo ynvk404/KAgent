@@ -218,8 +218,11 @@ but contributors must still preserve scope in tool and workflow changes.
   `src/cli/main.py`.
 
 - Target, permissions, network-origin checks, and execution: `src/target/`,
-  `src/permission/`, `src/tools/common/registry.py`, `src/tools/http/private_host.py`,
-  `src/tools/http/http_tool.py`, and `src/tools/http/web.py`.
+  `src/permission/`, `src/permission/network/`, `src/permission/runtime/`,
+  `src/permission/worker/`, `src/tools/common/registry.py`,
+  `src/tools/http/private_host.py`, `src/tools/http/http_tool.py`,
+  `src/tools/http/web.py`, `src/tools/discovery/`, `src/tools/execution/`,
+  `src/tools/mcp/`, `src/tools/skills/`, and `src/tools/workflow/`.
 
 - Skills, workflow, findings, evidence/artifacts: `src/skills/`,
   `src/workflow/`, `src/findings/`, `src/tools/workflow/finding.py`, `src/coverage/`,
@@ -229,6 +232,8 @@ but contributors must still preserve scope in tool and workflow changes.
   `src/intelligence/`, `src/redact/`, `src/engagement/`, and `src/paths.py`.
 
 - Provider/config/runtime integration: `src/config/`, `src/llm/`,
+  `src/llm/core/`, `src/llm/providers/`, `src/llm/runtime/`,
+  `src/llm/transport/`,
   `src/ui/commands/provider_picker.py`, `src/ui/commands/model_picker.py`,
   `src/ui/core/custom_provider_adapter.py`, and `src/cli/main.py`.
 

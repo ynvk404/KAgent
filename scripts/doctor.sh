@@ -146,8 +146,8 @@ fi
 report_info "KAgent Core Import & Metadata"
 
 if [[ -n "$PYTHON_BIN" ]]; then
-    if "$PYTHON_BIN" -c "import src; from src.version.version import describe; print(describe())" >/dev/null 2>&1; then
-        KAGENT_VER="$("$PYTHON_BIN" -c 'from src.version.version import describe; print(describe())')"
+    if "$PYTHON_BIN" -c "import src; from src.version import describe; print(describe())" >/dev/null 2>&1; then
+        KAGENT_VER="$("$PYTHON_BIN" -c 'from src.version import describe; print(describe())')"
         report_pass "KAgent import successful: $KAGENT_VER"
     else
         report_fail "Unable to import KAgent core modules from src/"

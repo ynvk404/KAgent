@@ -21,7 +21,7 @@ from watchdog.events import FileSystemEventHandler
 GROQ_AUTO_COMPACT_THRESHOLD = 5500
 BURP_DEFAULT_PORT = 8888
 
-from src.version.version import VERSION, describe
+from src.version import VERSION, describe
 from src.cli.help import print_help
 
 from src.config import config

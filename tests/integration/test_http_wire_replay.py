@@ -18,7 +18,7 @@ from src.tools.discovery.content import ContentDiscoveryTool
 from src.tools.common.capabilities import CapabilityInventory
 from src.tools.http.request_builder import NATIVE_USER_AGENT
 from src.tools.http.web import _do_fetch, _do_search
-from src.version.version import VERSION
+from src.version import VERSION
 from src.workflow.state import Candidate, WorkflowState
 
 

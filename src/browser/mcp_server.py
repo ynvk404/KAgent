@@ -11,6 +11,7 @@ from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 
 from src.logger import logger
+from src.version import VERSION
 from .server import start_ingest_server, IngestServerOptions
 from .store import CaptureStore
 from src.redact.redact import apply_evidence
@@ -18,7 +19,7 @@ from src.redact.redact import apply_evidence
 log: Any = logger
 
 SERVER_NAME = "kagent-browser"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = VERSION
 DEFAULT_PORT = 9999
 
 

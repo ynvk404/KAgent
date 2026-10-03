@@ -7,7 +7,7 @@ from types import ModuleType
 from typing import Any
 
 from src.cli.help import print_help
-from src.version.version import describe
+from src.version import describe
 
 
 def _runtime() -> ModuleType:

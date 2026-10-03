@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -77,12 +78,16 @@ def test_prepare_benchmark_dry_run():
 
 def _setup_mock_project(root: Path) -> None:
     # Markers
-    (root / "pyproject.toml").write_text("[project]\nname='kagent'\n", encoding="utf-8")
+    project_version = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["project"]["version"]
+    (root / "pyproject.toml").write_text(
+        f"[project]\nname='kagent'\nversion='{project_version}'\n", encoding="utf-8"
+    )
     (root / "AGENTS.md").write_text("# Guide\n", encoding="utf-8")
     (root / "src").mkdir(parents=True)
     (root / "src" / "paths.py").write_text("APP_DIR_NAME = '.kagent'\n", encoding="utf-8")
-    (root / "src" / "version").mkdir(parents=True)
-    (root / "src" / "version" / "version.py").write_text('VERSION = "0.2.0"\ndef describe(): return "kagent 0.2.0"\n', encoding="utf-8")
+    shutil.copy2(REPO_ROOT / "src" / "version.py", root / "src" / "version.py")
     (root / "src" / "cli").mkdir(parents=True)
     (root / "src" / "cli" / "main.py").write_text("def cli_main(): pass\n", encoding="utf-8")
 

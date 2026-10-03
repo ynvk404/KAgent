@@ -2,7 +2,7 @@
 
 import sys
 
-from src.version.version import VERSION
+from src.version import VERSION
 
 
 def print_help() -> None:
