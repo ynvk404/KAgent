@@ -9,8 +9,8 @@ from typing import Any
 import httpx
 import pytest
 
-from src.llm import transport
-from src.llm.errors import ProviderControlError
+from src.llm.transport import http as transport
+from src.llm.transport.errors import ProviderControlError
 
 
 @pytest.mark.asyncio

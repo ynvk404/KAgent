@@ -1,7 +1,7 @@
 import asyncio
 
 from src.ui.commands import model_picker
-from src.llm.errors import ProviderControlError
+from src.llm.transport.errors import ProviderControlError
 from src.ui.core.app import ProviderChange
 from src.ui.core.state import Append, Clear, SetAsk
 

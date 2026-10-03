@@ -3,9 +3,9 @@ import json
 import pytest
 
 from src.agent.agent import format_history_for_compaction, reconcile_tool_calls
-from src.llm.gemini import encode_request as gemini_encode, safe_replay_part
-from src.llm.openai import OpenAIClient
-from src.llm.types import ChatRequest, FunctionCall, Message, ToolCall, ToolProvider, GeminiProvider
+from src.llm.providers.gemini import encode_request as gemini_encode, safe_replay_part
+from src.llm.providers.openai import OpenAIClient
+from src.llm.core.types import ChatRequest, FunctionCall, Message, ToolCall, ToolProvider, GeminiProvider
 from src.session.store import Store
 
 

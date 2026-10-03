@@ -9,7 +9,7 @@ from src.agent.agent import (
     Agent, AgentOptions, COMPACTION_RECENT_MESSAGE_CHAR_LIMIT, recent_useful_turn,
 )
 from tests.helpers.agent_fakes import EchoTool, FakeClient, FakeSignal, collect
-from src.llm.types import ChatResponse, FunctionCall, Message, ToolCall
+from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import AlwaysAllow
 from src.session.store import Store
 from src.skills.registry import Registry as SkillRegistry

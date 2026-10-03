@@ -6,7 +6,7 @@ import pytest
 from src.agent.decision_planner import build_decision_plan
 from src.coverage.store import CoverageStore
 from src.findings.store import Store as FindingsStore
-from src.llm.types import Message
+from src.llm.core.types import Message
 from src.permission.permission import AlwaysAllow
 from src.session.store import Store
 from src.skills.load_skill import LoadSkillTool

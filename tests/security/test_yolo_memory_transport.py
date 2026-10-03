@@ -10,7 +10,7 @@ from src.session.store import SessionMemory
 from src.skills.registry import Registry as Skills
 from src.memory.store import MemoryStore, AddMemoryInput
 from src.tools.common.outcome import ToolOutput
-from src.llm.types import ChatResponse, Message
+from src.llm.core.types import ChatResponse, Message
 from tests.helpers.agent_fakes import FakeClient, FakeSignal
 from tests.security.test_execution_policy import Operator
 from src.engagement.state import EngagementState, OutOfScopeError

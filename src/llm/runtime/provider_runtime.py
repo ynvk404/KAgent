@@ -6,8 +6,8 @@ from dataclasses import dataclass, fields
 from typing import Any, Callable
 
 from src.config.config import Backend, Config, resolve_custom_provider
-from src.llm.client import Client
-from src.llm import factory
+from src.llm.core.client import Client
+from src.llm.core import factory
 from src.llm.providers import OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_MODEL
 
 

@@ -43,7 +43,7 @@ import pytest
 from src.ui.commands.slash_handler import handle_slash, normalize_target_url
 from src.agent.agent import ensure_system_prompt
 from src.target.target import Target
-from src.llm.types import Message
+from src.llm.core.types import Message
 from src.ui.core.state import TranscriptEntry
 
 if TYPE_CHECKING:

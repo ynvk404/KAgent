@@ -7,18 +7,18 @@ import httpx
 
 from src.logger.logger import get_logger
 
-from .client import StreamingClient
-from .errors import classify_backend
-from .providers import (
+from src.llm.core.client import StreamingClient
+from src.llm.transport.errors import classify_backend
+from src.llm.providers import (
     DEEPSEEK_MODELS,
     OPENAI_RECOMMENDED_MODELS,
     kimi_locks_temperature,
     kimi_supports_thinking_toggle,
 )
-from .reasoning import ReasoningCapabilities, ReasoningLevel, resolve_level
-from .metrics import TokenUsage, openai_chat_usage
-from .retry import RetryInfo, RetryOptions, with_retry
-from .transport import (
+from src.llm.core.reasoning import ReasoningCapabilities, ReasoningLevel, resolve_level
+from src.llm.runtime.metrics import TokenUsage, openai_chat_usage
+from src.llm.transport.retry import RetryInfo, RetryOptions, with_retry
+from src.llm.transport.http import (
     attach_retry_after,
     new_call_id,
     new_provider_async_client,
@@ -26,7 +26,7 @@ from .transport import (
     resolve_max_tokens,
     run_cancellable,
 )
-from .types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
+from src.llm.core.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 
 logger = get_logger("llm.openai")
 

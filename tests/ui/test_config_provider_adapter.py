@@ -14,8 +14,8 @@ from src.config.config import (
     config_from_dict,
     config_to_dict,
 )
-from src.llm.openai import OpenAIClient
-from src.llm.provider_runtime import (
+from src.llm.providers.openai import OpenAIClient
+from src.llm.runtime.provider_runtime import (
     build_startup_runtime,
     edit_custom_provider_transactionally,
     switch_provider_transactionally,

@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from src.llm.client import Client
-from src.llm.types import ChatRequest, ChatResponse, Message
+from src.llm.core.client import Client
+from src.llm.core.types import ChatRequest, ChatResponse, Message
 
 
 class FakeSignal:

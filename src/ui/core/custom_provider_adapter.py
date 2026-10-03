@@ -13,7 +13,7 @@ from src.config.config import (
     edit_custom_provider,
 )
 from src.llm.providers import validate_base_url
-from src.llm.models import list_models
+from src.llm.core.models import list_models
 
 
 @dataclass(frozen=True, slots=True)

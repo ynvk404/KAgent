@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from src.agent.agent import DEFAULT_MAX_STEPS, AgentRunOptions, ensure_system_prompt
 from src.config.config import Backend
-from src.llm.models import list_models
+from src.llm.core.models import list_models
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.state import Append, Clear, TranscriptEntry
 from src.ui.widgets.text_input_modal import TextInputRequest

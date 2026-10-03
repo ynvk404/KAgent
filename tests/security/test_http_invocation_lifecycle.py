@@ -17,7 +17,7 @@ from src.target.target import Target
 from src.tools.http.http_tool import HTTPTool
 from src.tools.common.registry import Registry
 from src.ui.core.app import AbortEvent
-from src.llm.types import ChatResponse, Message, ToolCall, FunctionCall
+from src.llm.core.types import ChatResponse, Message, ToolCall, FunctionCall
 from tests.helpers.agent_fakes import FakeClient
 
 

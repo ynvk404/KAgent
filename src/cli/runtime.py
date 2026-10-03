@@ -43,16 +43,56 @@ from src.agent.system_prompt import PromptToolingProfile, PromptProfile
 from src.permission.permission import AlwaysAllow
 from src.permission.permission import YoloPrompter
 
-from src.llm import factory as llm_factory
-from src.llm.provider_runtime import (
+from src.llm.core import factory as llm_factory
+from src.llm.runtime.provider_runtime import (
     build_startup_runtime,
     edit_custom_provider_transactionally,
     PreparedProviderSwitch,
     switch_provider_transactionally,
 )
-from src.llm.model_warnings import model_reliability_warning
-from src.llm.probe import probe_tool_support
-from src.llm.providers import *
+from src.llm.runtime.model_warnings import model_reliability_warning
+from src.llm.runtime.probe import probe_tool_support
+from src.llm.providers import (
+    ANTHROPIC_DEFAULT_BASE_URL,
+    ANTHROPIC_DEFAULT_MAX_TOKENS,
+    ANTHROPIC_DEFAULT_MODEL,
+    ANTHROPIC_MODELS,
+    ANTHROPIC_RECOMMENDED_MODELS,
+    ANTHROPIC_VERSION,
+    DEEPSEEK_DEFAULT_BASE_URL,
+    DEEPSEEK_DEFAULT_MODEL,
+    DEEPSEEK_MODELS,
+    Final,
+    GEMINI_BEST_FIT_MODELS,
+    GEMINI_CHEAP_MODELS,
+    GEMINI_DEFAULT_BASE_URL,
+    GEMINI_DEFAULT_MODEL,
+    GEMINI_RECOMMENDED_MODELS,
+    GROQ_DEFAULT_BASE_URL,
+    GROQ_DEFAULT_MODEL,
+    GROQ_MODELS,
+    KIMI_CONTEXT_WINDOWS,
+    KIMI_DEFAULT_BASE_URL,
+    KIMI_DEFAULT_MAX_TOKENS,
+    KIMI_DEFAULT_MODEL,
+    KIMI_MODELS,
+    KIMI_TEMPERATURE_LOCKED_MODELS,
+    LOOPBACK_HOSTS,
+    OPENAI_DEFAULT_BASE_URL,
+    OPENAI_DEFAULT_MODEL,
+    OPENAI_RECOMMENDED_MODELS,
+    OPENROUTER_DEFAULT_BASE_URL,
+    OPENROUTER_DEFAULT_MODEL,
+    OPENROUTER_RECOMMENDED_MODELS,
+    annotations,
+    anthropic_accepts_temperature,
+    ipaddress,
+    kimi_auto_compact_threshold,
+    kimi_locks_temperature,
+    kimi_supports_thinking_toggle,
+    urlparse,
+    validate_base_url,
+)
 
 from src.memory.store import MemoryStore
 from src.coverage.store import CoverageStore

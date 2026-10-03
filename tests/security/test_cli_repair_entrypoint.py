@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.config.config import Config, Backend, ToolingProfile
-from src.llm.probe import ProbeResult
-from src.llm.types import ChatResponse, Message, ToolCall, FunctionCall
+from src.llm.runtime.probe import ProbeResult
+from src.llm.core.types import ChatResponse, Message, ToolCall, FunctionCall
 from src.permission.execution import ExecutionBlocked
 from src.permission.permission import Decision, UserControlledRefusal
 from src.ui.core.state import SetPerm

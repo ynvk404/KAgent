@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from src.logger.hang_diagnostics import HangDiagnostics
 
-from src.llm.types import (
+from src.llm.core.types import (
     FunctionCall,
     GeminiProvider,
     Message,
@@ -246,7 +246,7 @@ def _message_from_dict(data: Any) -> Message | None:
     raw_parts = data.get("gemini_parts")
     gemini_parts = None
     if provider_state_provider == "gemini" and isinstance(raw_parts, list):
-        from src.llm.gemini import safe_replay_part
+        from src.llm.providers.gemini import safe_replay_part
         gemini_parts = [part for raw in raw_parts if (part := safe_replay_part(raw))]
 
     tool_call_id = data.get("tool_call_id")
@@ -418,7 +418,7 @@ class Store:
 
             self._stage(f"{operation}.serialize_messages")
             serialized_messages = []
-            from src.llm.gemini import safe_replay_part
+            from src.llm.providers.gemini import safe_replay_part
             for msg in messages:
                 serialized: dict[str, Any] = {
                     "role": msg.role,

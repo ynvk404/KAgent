@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from .reasoning import ReasoningLevel
-from .metrics import TokenUsage
+from src.llm.core.reasoning import ReasoningLevel
+from src.llm.runtime.metrics import TokenUsage
 
 Role = Literal[
     "system",

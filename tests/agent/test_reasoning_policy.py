@@ -4,11 +4,11 @@ from pathlib import Path
 import pytest
 
 from src.agent.agent import Agent, AgentOptions
-from src.llm.gemini import GeminiClient
-from src.llm.anthropic import AnthropicClient
-from src.llm.openai import OpenAIClient
-from src.llm.reasoning import ReasoningCapabilities, ReasoningLevel
-from src.llm.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
+from src.llm.providers.gemini import GeminiClient
+from src.llm.providers.anthropic import AnthropicClient
+from src.llm.providers.openai import OpenAIClient
+from src.llm.core.reasoning import ReasoningCapabilities, ReasoningLevel
+from src.llm.core.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target

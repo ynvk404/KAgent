@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, TypedDict, TypeVar
 
-from .errors import BackendError, is_transient
+from src.llm.transport.errors import BackendError, is_transient
 
 T = TypeVar("T")
 

@@ -4,17 +4,17 @@ from typing import Any
 
 import pytest
 
-from src.llm.errors import (
+from src.llm.transport.errors import (
     BackendError,
     is_transient,
     parse_retry_after,
 )
-from src.llm.retry import (
+from src.llm.transport.retry import (
     RetryOptions,
     with_retry,
 )
 
-from src.llm.retry import (
+from src.llm.transport.retry import (
     RetryInfo,
     RetryOptions,
     with_retry,

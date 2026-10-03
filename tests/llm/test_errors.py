@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from src.llm.errors import (
+from src.llm.transport.errors import (
     BackendError,
     classify_backend,
     is_transient,

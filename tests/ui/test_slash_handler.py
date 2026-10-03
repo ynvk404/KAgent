@@ -8,8 +8,8 @@ from typing import cast
 import pytest
 from src.agent.agent import Agent
 from src.config.config import Backend, Config, add_custom_provider, resolve_custom_provider
-from src.llm.factory import new_from_config
-from src.llm.provider_runtime import build_startup_runtime, switch_provider_transactionally
+from src.llm.core.factory import new_from_config
+from src.llm.runtime.provider_runtime import build_startup_runtime, switch_provider_transactionally
 from src.ui.core.app import KAgent, RunAgentOptions
 from src.ui.commands.slash_handler import build_help_text, handle_slash, _handle_model
 from src.ui.commands.slash_items import SLASH_ITEMS

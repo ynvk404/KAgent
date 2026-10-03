@@ -23,7 +23,7 @@ from src.tools.common.types import (
     ContextReductionPolicy,
     ContextReductionTool,
 )
-from src.llm.types import ToolSpec
+from src.llm.core.types import ToolSpec
 from src.permission.execution import ExecutionPolicy, ExecutionReceipt, policy_for
 from src.permission.invocations import permission_invocation
 from src.tools.common.approval_display import redact_approval as redact

@@ -14,12 +14,12 @@ from src.config.config import (
     add_custom_provider,
     config_to_dict,
 )
-from src.llm.openai import OpenAIClient
-from src.llm.provider_runtime import (
+from src.llm.providers.openai import OpenAIClient
+from src.llm.runtime.provider_runtime import (
     build_startup_runtime,
     switch_provider_transactionally,
 )
-from src.llm.factory import new_from_config
+from src.llm.core.factory import new_from_config
 from src.llm.providers import OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_MODEL
 
 

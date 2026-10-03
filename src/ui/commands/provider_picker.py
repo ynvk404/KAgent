@@ -5,8 +5,8 @@ import inspect
 from typing import Any, Awaitable, Callable
 from src.config.config import Backend
 from src.ui.core.app import ConfigSnapshot, ProviderChange
-from src.llm.errors import ProviderControlError
-from src.llm.models import list_models
+from src.llm.transport.errors import ProviderControlError
+from src.llm.core.models import list_models
 from src.llm.providers import validate_base_url
 from src.ask.ask import Question, Option
 from src.ui.bridges.ask_bridge import AskRequest

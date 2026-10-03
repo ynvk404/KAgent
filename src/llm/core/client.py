@@ -5,8 +5,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import TypeGuard
 
-from .types import ChatRequest, ChatResponse
-from .reasoning import ReasoningCapabilities
+from src.llm.core.types import ChatRequest, ChatResponse
+from src.llm.core.reasoning import ReasoningCapabilities
 
 class Client(ABC):
 

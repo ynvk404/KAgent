@@ -3,15 +3,15 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from .client import Client, Pinger
-from .errors import classify_backend
-from .providers import (
+from src.llm.core.client import Client, Pinger
+from src.llm.transport.errors import classify_backend
+from src.llm.providers import (
     ANTHROPIC_DEFAULT_MAX_TOKENS,
     ANTHROPIC_VERSION,
     anthropic_accepts_temperature,
 )
-from .retry import RetryOptions, with_retry
-from .transport import (
+from src.llm.transport.retry import RetryOptions, with_retry
+from src.llm.transport.http import (
     aborted,
     attach_retry_after,
     new_provider_async_client,
@@ -19,7 +19,7 @@ from .transport import (
     resolve_max_tokens,
     run_cancellable,
 )
-from .types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall, ToolSpec
+from src.llm.core.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall, ToolSpec
 
 
 class AnthropicClient(Client, Pinger):

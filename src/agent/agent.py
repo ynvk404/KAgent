@@ -32,26 +32,26 @@ from .mentions import expand_file_mentions
 from src.redact.redact import apply as redact, redact_payload
 from src.permission.invocations import permission_turn
 
-from src.llm.client import (
+from src.llm.core.client import (
     Client,
     StreamingClient,
     is_streaming,
 )
 
-from src.llm.types import (
+from src.llm.core.types import (
     ChatRequest,
     ChatResponse,
     Message,
     ToolCall,
     parsed_args,
 )
-from src.llm.reasoning import (
+from src.llm.core.reasoning import (
     ReasoningLevel,
     ReasoningPurpose,
     requested_level,
     resolve_level,
 )
-from src.llm.metrics import MetricsCollector, RequestMetrics
+from src.llm.runtime.metrics import MetricsCollector, RequestMetrics
 
 from src.logger.logger import debug as log_debug, error as log_error
 

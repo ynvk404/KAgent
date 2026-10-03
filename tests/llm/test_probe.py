@@ -5,10 +5,10 @@ from typing import Any, Optional
 
 import pytest
 
-from src.llm.client import Client
-from src.llm import probe
-from src.llm.probe import PING_TOOL_NAME, probe_tool_support
-from src.llm.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
+from src.llm.core.client import Client
+from src.llm.runtime import probe
+from src.llm.runtime.probe import PING_TOOL_NAME, probe_tool_support
+from src.llm.core.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 
 class _StubClient:
     def __init__(self, reply: ChatResponse) -> None:

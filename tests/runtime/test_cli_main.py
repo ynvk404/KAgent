@@ -30,7 +30,7 @@ from src.logger.session_debug import (
     create_session_debug_log,
 )
 from src.tools.mcp.integration import MCPSession
-from src.llm.types import Message
+from src.llm.core.types import Message
 from src.session.store import Store
 
 

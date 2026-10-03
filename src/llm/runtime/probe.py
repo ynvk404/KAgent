@@ -6,8 +6,8 @@ import contextlib
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from .client import Client
-from .types import (
+from src.llm.core.client import Client
+from src.llm.core.types import (
     ChatRequest,
     ChatResponse,
     Message,

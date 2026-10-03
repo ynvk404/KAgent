@@ -5,10 +5,10 @@ from src.config.config import (
     Config,
 )
 
-from src.llm.anthropic import AnthropicClient
-from src.llm.client import Client
-from src.llm.gemini import GeminiClient
-from src.llm.openai import OpenAIClient
+from src.llm.providers.anthropic import AnthropicClient
+from src.llm.core.client import Client
+from src.llm.providers.gemini import GeminiClient
+from src.llm.providers.openai import OpenAIClient
 
 from src.llm.providers import (
     ANTHROPIC_DEFAULT_BASE_URL,

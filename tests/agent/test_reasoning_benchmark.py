@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 
 from benchmarks.internal.reasoning_benchmark import build_run, load_request_metrics, same_reasoning_configuration
-from src.llm.metrics import MetricsCollector, RequestMetrics, TokenUsage
+from src.llm.runtime.metrics import MetricsCollector, RequestMetrics, TokenUsage
 
 
 def _row(request_id="one", usage=None, purpose="agent_turn"):

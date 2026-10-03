@@ -1,4 +1,4 @@
-from src.llm.reasoning import ReasoningLevel
+from src.llm.core.reasoning import ReasoningLevel
 import logging
 from types import SimpleNamespace
 
@@ -42,9 +42,9 @@ from src.agent.system_prompt import PromptProfile
 from src.coverage.store import CoverageEntry, CoverageStore
 from src.findings.store import Store as FindingsStore
 from src.intelligence.store import IntelligenceScenario, IntelligenceStore
-from src.llm.client import Client, StreamingClient
-from src.llm.openai import OpenAIClient
-from src.llm.types import (
+from src.llm.core.client import Client, StreamingClient
+from src.llm.providers.openai import OpenAIClient
+from src.llm.core.types import (
     ChatRequest,
     ChatResponse,
     Message,

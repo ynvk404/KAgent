@@ -6,7 +6,7 @@ from typing import Any
 import requests
 
 from src.config.config import Backend
-from .providers import (
+from src.llm.providers import (
     ANTHROPIC_DEFAULT_BASE_URL,
     ANTHROPIC_RECOMMENDED_MODELS,
     ANTHROPIC_VERSION,
@@ -24,13 +24,13 @@ from .providers import (
     OPENAI_RECOMMENDED_MODELS,
     validate_base_url,
 )
-from .errors import (
+from src.llm.transport.errors import (
     ProviderControlError,
     exception_has_type_name,
     provider_http_error,
     provider_transport_error,
 )
-from .transport import new_provider_session, parse_openai_model_ids
+from src.llm.transport.http import new_provider_session, parse_openai_model_ids
 
 DEFAULT_TIMEOUT_S: float = 5.0
 

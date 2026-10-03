@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from src.llm.metrics import RequestMetrics
+from src.llm.runtime.metrics import RequestMetrics
 
 
 _SAFE_REF = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$")
@@ -123,7 +123,7 @@ def same_reasoning_configuration(first: BenchmarkRun, second: BenchmarkRun) -> b
 
 def load_request_metrics(path: str | Path) -> list[RequestMetrics]:
     """Read an explicit local export; never execute or infer missing usage."""
-    from src.llm.metrics import TokenUsage
+    from src.llm.runtime.metrics import TokenUsage
 
     records: list[RequestMetrics] = []
     for line in Path(path).read_text(encoding="utf-8").splitlines():

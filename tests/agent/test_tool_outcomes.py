@@ -8,7 +8,7 @@ import pytest
 from src.agent.agent import Agent, AgentOptions, ParsedToolCall
 from src.ask.ask import Question
 from src.engagement.state import EngagementState, OutOfScopeError
-from src.llm.types import FunctionCall, ToolCall
+from src.llm.core.types import FunctionCall, ToolCall
 from src.permission.permission import AlwaysAllow, AlwaysDeny, UserControlledRefusal, YoloPrompter
 from src.session.store import Store
 from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers

@@ -2,17 +2,17 @@
 
 import pytest
 
-from src.llm.gemini import GeminiClient, encode_request as encode_gemini
-from src.llm.anthropic import AnthropicClient, encode_request as encode_anthropic
-from src.llm.openai import OpenAIClient
-from src.llm.reasoning import (
+from src.llm.providers.gemini import GeminiClient, encode_request as encode_gemini
+from src.llm.providers.anthropic import AnthropicClient, encode_request as encode_anthropic
+from src.llm.providers.openai import OpenAIClient
+from src.llm.core.reasoning import (
     ReasoningCapabilities,
     ReasoningLevel as Level,
     ReasoningPurpose as Purpose,
     requested_level,
     resolve_level,
 )
-from src.llm.types import ChatRequest, Message, ToolFunction, ToolSpec
+from src.llm.core.types import ChatRequest, Message, ToolFunction, ToolSpec
 
 
 def _request(level: Level, *, tools: bool = False) -> ChatRequest:

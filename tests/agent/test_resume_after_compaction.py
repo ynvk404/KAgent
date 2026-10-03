@@ -8,8 +8,8 @@ import pytest
 
 from src.agent.agent import Agent, AgentOptions
 from tests.helpers.agent_fakes import EchoTool, FakeSignal, collect, seed_compactable_history
-from src.llm.client import Client
-from src.llm.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
+from src.llm.core.client import Client
+from src.llm.core.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import AlwaysAllow
 from src.session.store import Store
 from src.skills.registry import Registry as SkillRegistry

@@ -1,14 +1,14 @@
 from __future__ import annotations
 import json
 import threading
-from src.llm.types import ToolCall
+from src.llm.core.types import ToolCall
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, cast
 import pytest
-from src.llm import anthropic as anthropic_module
-from src.llm.anthropic import AnthropicClient, map_finish_reason
-from src.llm.types import ChatRequest, FunctionCall, Message, ToolCall, ToolFunction, ToolSpec
+from src.llm.providers import anthropic as anthropic_module
+from src.llm.providers.anthropic import AnthropicClient, map_finish_reason
+from src.llm.core.types import ChatRequest, FunctionCall, Message, ToolCall, ToolFunction, ToolSpec
 
 @dataclass
 class _Captured:

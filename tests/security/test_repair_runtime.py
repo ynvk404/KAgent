@@ -24,7 +24,7 @@ from src.coverage.store import CoverageStore
 from src.findings.store import Store as FindingsStore
 from src.target.target import Target
 from src.workflow.state import Candidate, WorkflowObjective, WorkflowState
-from src.llm.validation_budget import ValidationBudget, ValidationBudgetExceeded, BudgetTransport
+from src.llm.runtime.validation_budget import ValidationBudget, ValidationBudgetExceeded, BudgetTransport
 
 
 class Operator:

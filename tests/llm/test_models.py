@@ -8,10 +8,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 import requests
 
-from src.llm import models as models_module
-from src.llm.errors import ProviderControlError
-from src.llm.models import list_models
-from src.llm.models import _parse_models
+from src.llm.core import models as models_module
+from src.llm.transport.errors import ProviderControlError
+from src.llm.core.models import list_models
+from src.llm.core.models import _parse_models
 from src.llm.providers import validate_base_url
 
 

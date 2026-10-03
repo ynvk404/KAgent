@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from src.logger import logger as kagent_logger
-from src.llm.errors import classify_backend
+from src.llm.transport.errors import classify_backend
 
 
 @pytest.fixture(autouse=True)

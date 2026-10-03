@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from src.config.config import Backend
-from src.llm.model_warnings import (
+from src.llm.runtime.model_warnings import (
     infer_model_billions,
     model_reliability_warning,
 )

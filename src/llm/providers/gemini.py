@@ -3,13 +3,13 @@ from typing import Any, Callable, Dict, List, Optional
 
 from src.logger.logger import get_logger
 
-from .client import Client, Pinger, StreamingClient
-from .errors import classify_backend
-from .retry import RetryOptions, with_retry
-from .providers import GEMINI_RECOMMENDED_MODELS
-from .reasoning import ReasoningCapabilities, ReasoningLevel, resolve_level
-from .metrics import gemini_usage
-from .transport import (
+from src.llm.core.client import Client, Pinger, StreamingClient
+from src.llm.transport.errors import classify_backend
+from src.llm.transport.retry import RetryOptions, with_retry
+from src.llm.providers import GEMINI_RECOMMENDED_MODELS
+from src.llm.core.reasoning import ReasoningCapabilities, ReasoningLevel, resolve_level
+from src.llm.runtime.metrics import gemini_usage
+from src.llm.transport.http import (
     aborted,
     attach_retry_after,
     iter_sse_lines,
@@ -19,7 +19,7 @@ from .transport import (
     resolve_max_tokens,
     run_cancellable,
 )
-from .types import (
+from src.llm.core.types import (
     ChatRequest,
     ChatResponse,
     FunctionCall,

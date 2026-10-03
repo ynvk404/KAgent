@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from src.llm.types import (
+from src.llm.core.types import (
     ChatRequest,
     ChatResponse,
     FunctionCall,

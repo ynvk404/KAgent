@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import src.session.store as session_store
-from src.llm.types import FunctionCall, GeminiProvider, Message, ToolCall, ToolProvider
+from src.llm.core.types import FunctionCall, GeminiProvider, Message, ToolCall, ToolProvider
 from src.session.store import (
     SessionLoadError,
     SessionMemory,

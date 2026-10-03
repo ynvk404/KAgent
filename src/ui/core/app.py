@@ -31,7 +31,7 @@ from src.agent.mentions import (
 )
 from src.ask.ask import Option, Question
 from src.config.config import ToolingProfile, Backend
-from src.llm.models import list_models
+from src.llm.core.models import list_models
 from src.llm.providers import (
     ANTHROPIC_DEFAULT_BASE_URL,
     ANTHROPIC_RECOMMENDED_MODELS,

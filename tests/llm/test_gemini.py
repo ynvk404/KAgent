@@ -8,8 +8,8 @@ from typing import Any, cast
 
 import pytest
 
-from src.llm.gemini import GeminiClient
-from src.llm.types import ChatRequest, FunctionCall, Message, ToolCall, ToolFunction, ToolSpec
+from src.llm.providers.gemini import GeminiClient
+from src.llm.core.types import ChatRequest, FunctionCall, Message, ToolCall, ToolFunction, ToolSpec
 
 @dataclass
 class _Captured:
@@ -317,7 +317,7 @@ async def test_stream_filters_thoughts_without_network(monkeypatch):
 
     client = GeminiClient("https://example.com/v1beta", "", "models/gemini-test")
     monkeypatch.setattr(client, "_open_stream", fake_open_stream)
-    monkeypatch.setattr("src.llm.gemini.iter_sse_lines", fake_sse_lines)
+    monkeypatch.setattr("src.llm.providers.gemini.iter_sse_lines", fake_sse_lines)
     deltas = []
 
     out = await client.chat_stream(

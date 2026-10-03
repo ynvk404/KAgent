@@ -1,4 +1,4 @@
-from src.llm.metrics import MetricsCollector, RequestMetrics, gemini_usage, openai_chat_usage
+from src.llm.runtime.metrics import MetricsCollector, RequestMetrics, gemini_usage, openai_chat_usage
 
 
 def test_provider_usage_shapes_keep_reasoning_and_cache_as_subsets():
