@@ -1753,3 +1753,29 @@ async def test_candidate_validation_objective_rejects_missing_candidate(tmp_path
         "action": "start_validation", "candidate_id": "candidate-missing",
     }, None, AlwaysAllow())
     assert "active candidate-validation objective references an unknown candidate" in output
+
+
+@pytest.mark.asyncio
+async def test_capture_context_handoff_survives_workflow_resume(tmp_path):
+    state = whole_target_tool_state()
+    tool = WorkflowTool(state, Target("https://target.test"), evidence_root=tmp_path)
+    recorded = json.loads(await tool.run({
+        "action": "record_input", "method": "POST", "endpoint": "/api/search",
+        "parameter": "q", "location": "body", "input_type": "string",
+        "content_type": "application/json",
+        "sample_payload": '{"q":"{INJECTION_POINT}","csrf":"secret-value"}',
+        "baseline_request_ref": "wr:captured-1", "auth_context_ref": "user-identity",
+        "source_ref": "browser:tab-1",
+    }, None, AlwaysAllow()))["input"]
+    candidate = json.loads(await tool.run({
+        "action": "record_candidate", "candidate_class": "sql-injection",
+        "input_id": recorded["id"],
+    }, None, AlwaysAllow()))["candidate"]
+    assert candidate["baseline_request_ref"] == "wr:captured-1"
+    assert candidate["auth_context_ref"] == "user-identity"
+    assert candidate["source_ref"] == "browser:tab-1"
+    assert candidate["request_template"] == recorded["sample_payload"]
+    assert "secret-value" not in candidate["request_template"]
+    restored = WorkflowState.from_dict(state.to_dict())
+    assert restored.candidates[candidate["id"]].baseline_request_ref == "wr:captured-1"
+    assert restored.attack_surface_inputs[recorded["id"]].source_ref == "browser:tab-1"

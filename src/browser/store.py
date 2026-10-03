@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import hashlib
 import json
 import threading
 import time
@@ -9,10 +10,11 @@ from typing import Any, Literal, Optional
 from urllib.parse import parse_qsl, urlsplit
 
 BODY_STRING_CAP = 64 * 1024
+MAX_RAW_REQUEST_B64 = 96 * 1024
 MAX_ENDPOINTS = 2000
 MAX_PARAMS_PER_ENDPOINT = 256
 
-RequestSource = Literal["webRequest", "fetch", "xhr", "ws", "unknown"]
+RequestSource = Literal["webRequest", "fetch", "xhr", "ws", "burp", "unknown"]
 BurpAction = Literal["scan", "plan", "scope"]
 
 
@@ -37,6 +39,9 @@ class CapturedRequest:
     request_headers: Optional[list[CapturedHeader]] = None
     response_headers: Optional[list[CapturedHeader]] = None
     request_body: Any = None
+    raw_request_b64: Optional[str] = None
+    raw_request_oversize: bool = False
+    auth_context_ref: Optional[str] = None
     response_body: Optional[str] = None
     time_start: Optional[float] = None
     time_end: Optional[float] = None
@@ -77,6 +82,7 @@ class BurpTask:
     url: Optional[str] = None
     host: Optional[str] = None
     raw_request_b64: Optional[str] = None
+    raw_request_oversize: bool = False
     notes: Optional[str] = None
 
 
@@ -204,7 +210,7 @@ class CaptureStore:
             id_ = f"{kind or 'wr'}:{id_seed}"
 
             source: RequestSource
-            if kind in ("fetch", "xhr", "ws"):
+            if kind in ("fetch", "xhr", "ws", "burp"):
                 source = kind
             elif kind:
                 source = "unknown"
@@ -231,6 +237,11 @@ class CaptureStore:
                     _coalesce(obj.get("responseHeaders"), obj.get("respHeaders"))
                 ),
                 request_body=request_body,
+                raw_request_b64=(obj.get("rawRequestB64") if isinstance(obj.get("rawRequestB64"), str)
+                                 and len(obj["rawRequestB64"]) <= MAX_RAW_REQUEST_B64 else None),
+                raw_request_oversize=isinstance(obj.get("rawRequestB64"), str)
+                                     and len(obj["rawRequestB64"]) > MAX_RAW_REQUEST_B64,
+                auth_context_ref=_str_or_none(obj.get("authContextRef")),
                 response_body=cap_string(response_body_str) if response_body_str is not None else None,
                 time_start=_float_or_none(obj.get("timeStart")),
                 time_end=_float_or_none(obj.get("timeEnd")),
@@ -238,12 +249,28 @@ class CaptureStore:
                 received_at=_now_ms(),
             )
 
+            existing = self.requests.get(id_)
+            # An update without raw bytes cannot establish that a previously
+            # oversize baseline is now complete enough to replay.
+            if existing is not None and existing.raw_request_oversize and entry.raw_request_b64 is None:
+                entry.raw_request_oversize = True
+            if existing is not None and self._request_signature(existing) != self._request_signature(entry):
+                id_ = f"{id_}#{self._request_signature(entry)[:20]}"
+                entry.id = id_
             self.requests.pop(id_, None)
             self.requests[id_] = entry
             self._record_endpoint(method, url, entry.request_body, self._query_params(url))
             self._prune_if_needed()
             self.last_activity_at = _now_ms()
-            return {"ok": True}
+            return {"ok": True, "id": id_}
+
+    @staticmethod
+    def _request_signature(row: CapturedRequest) -> str:
+        material = [row.method, row.url, row.raw_request_b64, row.auth_context_ref,
+                    row.raw_request_oversize,
+                    [(header.name, header.value) for header in row.request_headers or []],
+                    row.request_body]
+        return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode()).hexdigest()
 
     def ingest_snapshot(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
@@ -304,6 +331,10 @@ class CaptureStore:
         with self._lock:
             return self.requests.get(id_)
 
+    def get_burp_task(self, id_: str) -> Optional[BurpTask]:
+        with self._lock:
+            return next((row for row in self.burp_tasks if row.id == id_), None)
+
     def list_endpoints(
         self, url_substr: Optional[str] = None, method: Optional[str] = None
     ) -> list[EndpointSummary]:
@@ -363,7 +394,10 @@ class CaptureStore:
                 method=_str_or_none(obj.get("method")),
                 url=_str_or_none(obj.get("url")),
                 host=_str_or_none(obj.get("host")),
-                raw_request_b64=_str_or_none(obj.get("rawRequestB64")),
+                raw_request_b64=(obj.get("rawRequestB64") if isinstance(obj.get("rawRequestB64"), str)
+                                 and len(obj["rawRequestB64"]) <= MAX_RAW_REQUEST_B64 else None),
+                raw_request_oversize=isinstance(obj.get("rawRequestB64"), str)
+                                     and len(obj["rawRequestB64"]) > MAX_RAW_REQUEST_B64,
                 notes=_str_or_none(obj.get("notes")),
                 source="burp",
                 created_at=_now_ms(),
@@ -372,7 +406,7 @@ class CaptureStore:
             if len(self.burp_tasks) > 1000:
                 del self.burp_tasks[: len(self.burp_tasks) - 1000]
             self.last_activity_at = _now_ms()
-        return {"ok": True, "task": task}
+        return {"ok": True, "id": task.id}
 
     def list_burp_tasks(self) -> list[BurpTask]:
         with self._lock:
@@ -413,7 +447,7 @@ class CaptureStore:
             )
             self._upsert_burp_issue(issue)
             self.last_activity_at = _now_ms()
-        return {"ok": True, "issue": issue}
+        return {"ok": True, "id": issue.id}
 
     def add_burp_issue(
         self,

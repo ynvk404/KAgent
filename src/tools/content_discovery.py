@@ -29,6 +29,7 @@ from .discovery_common import (
 from .outcome import ErrorKind, ToolOutput
 from .private_host import gate_private_request, parse_http_url
 from .shell import run_with_capture
+from .request_builder import NATIVE_USER_AGENT
 from .types import PermissionHints, Tool
 from src.workflow.state import WorkflowState
 from src.permission.execution import guard_adapter
@@ -285,6 +286,7 @@ class ContentDiscoveryTool(Tool):
             follow_redirects=False,
             timeout=timeout,
             trust_env=False,
+            headers={"User-Agent": NATIVE_USER_AGENT},
         ) as client:
             for baseline_path in baseline_paths:
                 if baselines and not await sleep_or_abort(1 / rate, signal):

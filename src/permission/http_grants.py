@@ -88,6 +88,7 @@ class EffectiveHTTP:
     epoch: str
     transport_address: str = ""
     invocation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    redirect_limit: int = 0
 
     @property
     def origin(self) -> HTTPOrigin:
@@ -96,7 +97,7 @@ class EffectiveHTTP:
     @property
     def digest(self) -> str:
         material = [self.method, self.url, [(k.hex(), v.hex()) for k, v in self.headers],
-                    self.body.hex(), self.response_cap, False, False, 60]
+                    self.body.hex(), self.response_cap, False, self.redirect_limit, 60]
         material.append(self.transport_address)
         return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode()).hexdigest()
 
@@ -108,7 +109,9 @@ class EffectiveHTTP:
         headers = "\n".join(f"{k.decode('ascii')}: {v.decode('latin1')}" for k, v in self.headers)
         return redact_approval(
             f"{self.method} {self.url}\n{headers}\n\n{self.body.decode('utf-8', errors='replace')}\n\n"
-            f"response body cap: {self.response_cap}; timeout: 60s; redirects: off; TLS verification: off; socket: {self.transport_address or 'library DNS'}"
+            f"response body cap: {self.response_cap}; timeout: 60s; redirects: "
+            f"{'off' if self.redirect_limit == 0 else f'explicit follow-up, at most {self.redirect_limit} hops'}; "
+            f"TLS verification: off; socket: {self.transport_address or 'library DNS'}"
         )
 
 

@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from src.browser.store import CaptureStore
+from src.browser.redacted_view import request_view, snapshot_view, issue_view, task_view
+from src.redact.redact import apply_evidence
 from src.permission.permission import Prompter
 from .types import Tool, arg_number, arg_string
 
@@ -180,7 +182,7 @@ class BrowserCaptureRequestsTool(BaseCaptureTool):
             {
                 "id": r.id,
                 "method": r.method,
-                "url": r.url,
+                "url": apply_evidence(r.url),
                 "status": r.status,
                 "type": r.type,
                 "source": r.source,
@@ -224,13 +226,13 @@ class BrowserCaptureGetTool(BaseCaptureTool):
             return f"error: no request with id {id_}"
         cap_val = arg_number(args, "body_max_chars")
         cap = int(cap_val) if cap_val is not None else 4000
-        response_body = r.response_body
+        response_body = request_view(r).get("response_body")
         if response_body and len(response_body) > cap:
             response_body = (
                 f"{response_body[:cap]}...<truncated {len(response_body) - cap} chars>"
             )
         trimmed = {
-            **r.__dict__,
+            **request_view(r),
             "responseBody": response_body,
             "receivedAt": _iso(r.received_at),
         }
@@ -243,10 +245,8 @@ class BrowserCaptureSnapshotTool(BaseCaptureTool):
     def description(self) -> str:
         return (
             "Return the most recent session snapshot captured by the "
-            "extension: cookies (incl. HttpOnly), localStorage, "
-            "sessionStorage, document.cookie, page URL. Use this to "
-            "construct authenticated requests via the http tool — copy the "
-            "relevant cookies into a 'Cookie' header."
+            "extension: redacted cookie and storage metadata plus page URL. "
+            "Use a runtime identity context for authenticated replay."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -265,7 +265,7 @@ class BrowserCaptureSnapshotTool(BaseCaptureTool):
         if not snap:
             return 'No snapshots captured yet. Click "Snapshot tab" in the extension popup.'
         return json.dumps(
-            {**snap.__dict__, "receivedAt": _iso(snap.received_at)},
+            {**snapshot_view(snap), "receivedAt": _iso(snap.received_at)},
             indent=2,
         )
 
@@ -335,7 +335,8 @@ class BrowserCaptureBurpTasksTool(BaseCaptureTool):
         if len(tasks) == 0:
             return "No Burp tasks queued."
         return render_list(
-            [{**t.__dict__, "createdAt": _iso(t.created_at)} for t in tasks],
+            [{**task_view(t),
+              "createdAt": _iso(t.created_at)} for t in tasks],
             DEFAULT_LIST_LIMIT,
         )
 
@@ -357,7 +358,7 @@ class BrowserCaptureBurpIssuesTool(BaseCaptureTool):
         if len(issues) == 0:
             return "No KAgent issues queued for Burp import."
         return render_list(
-            [{**i.__dict__, "createdAt": _iso(i.created_at)} for i in issues],
+            [{**issue_view(i), "createdAt": _iso(i.created_at)} for i in issues],
             DEFAULT_LIST_LIMIT,
         )
 

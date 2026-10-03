@@ -15,11 +15,57 @@ from src.tools.browser_capture import (
     BrowserCaptureBurpTasksTool,
     BrowserCaptureEndpointsTool,
     BrowserCaptureRequestsTool,
+    BrowserCaptureGetTool,
+    BrowserCaptureSnapshotTool,
+    BrowserCaptureBurpIssuesTool,
 )
 from src.tools.registry import Registry as ToolRegistry
+from src.browser.redacted_view import request_view
 
 signal = None
 prompter = cast(Prompter, object())
+
+
+@pytest.mark.parametrize("name", ["Api-Key", "ApiKey", "API_KEY", "X-API-Key", "X-API_Key"])
+def test_capture_view_redacts_api_key_header_variants(name):
+    secret = "fixture-private-api-key"
+    view = request_view({"request_headers": [{"name": name, "value": secret},
+                                               {"name": "X-Correlation-ID", "value": "request-123"}]})
+    assert view["request_headers"][0]["name"] == name
+    assert "[REDACTED" in view["request_headers"][0]["value"]
+    assert secret not in view["request_headers"][0]["value"]
+    assert view["request_headers"][1] == {"name": "X-Correlation-ID", "value": "request-123"}
+    assert secret not in str(view)
+
+
+@pytest.mark.asyncio
+async def test_model_capture_views_hide_raw_and_structured_secrets():
+    store = CaptureStore()
+    ingested = store.ingest({
+        "id": "secret", "url": "http://target.test/api?token=short-secret",
+        "requestHeaders": [{"name": "Authorization", "value": "Bearer private"},
+                           {"name": "Cookie", "value": "sid=private"},
+                           {"name": "X-CSRF-Token", "value": "csrf-private"}],
+        "requestBody": '{"csrf":"csrf-private","q":"test"}',
+        "respBody": '{"access_token":"short-secret","ok":true}',
+        "rawRequestB64": "cmF3LXJlcXVlc3Qtc2VjcmV0",
+    })
+    store.ingest_snapshot({"url": "http://target.test/app?api_key=short-secret",
+                           "documentCookie": "sid=private"})
+    store.ingest_burp_issue({"title": "issue", "url": "http://target.test/?token=short-secret",
+                             "detail": "Cookie: sid=private", "rawRequestB64": "cmF3LXJlcXVlc3Qtc2VjcmV0",
+                             "rawResponseB64": "cmF3LXJlc3BvbnNlLXNlY3JldA=="})
+    outputs = [await BrowserCaptureRequestsTool(store).run({}, signal, prompter),
+               await BrowserCaptureGetTool(store).run({"id": ingested["id"]}, signal, prompter),
+               await BrowserCaptureSnapshotTool(store).run({}, signal, prompter),
+               await BrowserCaptureBurpIssuesTool(store).run({}, signal, prompter)]
+    combined = "\n".join(outputs)
+    for secret in ("short-secret", "sid=private", "csrf-private", "cmF3LXJlcXVlc3Qtc2VjcmV0",
+                   "cmF3LXJlc3BvbnNlLXNlY3JldA=="):
+        assert secret not in combined
+    assert "raw_request_b64" not in combined and "raw_response_b64" not in combined
+    stored = store.get_request(ingested["id"])
+    assert stored is not None and stored.raw_request_b64 is not None
 
 
 def test_clear_tool_requires_permission_and_explicit_browser_capture_intent():

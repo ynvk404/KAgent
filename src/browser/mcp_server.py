@@ -13,6 +13,7 @@ from mcp.server.stdio import stdio_server
 from src.logger import logger
 from .server import start_ingest_server, IngestServerOptions
 from .store import CaptureStore
+from src.redact.redact import apply_evidence
 
 log: Any = logger
 
@@ -219,7 +220,7 @@ async def main() -> int:
             ),
             types.Tool(
                 name="browser_capture_snapshot",
-                description="Return the most recent session snapshot captured by the extension: cookies (incl. HttpOnly), localStorage, sessionStorage, document.cookie, page URL. Use this to construct authenticated requests — copy the relevant cookies into a 'Cookie' header.",
+                description="Return the most recent session snapshot with redacted cookie and storage metadata plus page URL. Authenticated replay uses runtime identity context.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -285,7 +286,7 @@ async def main() -> int:
                     {
                         "id": get_val(r, "id"),
                         "method": get_val(r, "method"),
-                        "url": get_val(r, "url"),
+                        "url": apply_evidence(get_val(r, "url")),
                         "status": get_val(r, "status"),
                         "type": get_val(r, "type"),
                         "source": get_val(r, "source"),
@@ -307,9 +308,10 @@ async def main() -> int:
                 return text_result(f"error: no request with id {req_id}", is_error=True)
 
             cap = mcp_int_arg(args_dict, "body_max_chars", 4000, 0)
-            r_dict = to_dict(r)
+            from src.browser.redacted_view import request_view
+            r_dict = request_view(r)
 
-            resp_body = get_val(r, "response_body", "responseBody")
+            resp_body = r_dict.get("response_body", r_dict.get("responseBody"))
             if resp_body and isinstance(resp_body, str) and len(resp_body) > cap:
                 resp_body = f"{resp_body[:cap]}...<truncated {len(resp_body) - cap} chars>"
 
@@ -332,7 +334,8 @@ async def main() -> int:
                     'No snapshots captured yet. Click "Snapshot tab" in the extension popup.'
                 )
 
-            snap_dict = to_dict(snap)
+            from src.browser.redacted_view import snapshot_view
+            snap_dict = snapshot_view(snap)
             recv_at = get_val(snap, "received_at", "receivedAt")
 
             if recv_at:

@@ -12,6 +12,7 @@ from src.workflow.state import (
     WorkflowObjective,
     WorkflowState,
     candidate_fingerprint,
+    attack_surface_input_fingerprint,
 )
 from tests.helpers.workflow import record_completed_phase
 from src.workflow.evidence import EvidenceArtifact
@@ -53,6 +54,7 @@ def test_candidate_normalizes_and_has_stable_semantic_identity():
         parameter="id",
         location="query",
         candidate_class="sqli",
+        baseline_request_ref=candidate.baseline_request_ref,
     )
 
 
@@ -66,7 +68,7 @@ def test_candidate_round_trip_optional_fields_and_malformed_input():
     assert Candidate.from_dict({"candidate_class": "", "status": "wat"}) is None
 
 
-def test_request_context_round_trips_without_changing_semantic_ids():
+def test_request_context_round_trips_with_identity_scoped_ids():
     baseline = make_candidate()
     enriched = make_candidate(
         content_type="application/json",
@@ -75,7 +77,7 @@ def test_request_context_round_trips_without_changing_semantic_ids():
         ),
         auth_context_ref="captures/auth-context.md",
     )
-    assert enriched.id == baseline.id
+    assert enriched.id != baseline.id
     assert enriched.request_template is not None
     assert "example-secret" not in enriched.request_template
     restored_candidate = Candidate.from_dict(enriched.to_dict())
@@ -85,7 +87,7 @@ def test_request_context_round_trips_without_changing_semantic_ids():
     legacy_candidate.pop("content_type")
     legacy_candidate.pop("request_template")
     old_candidate = Candidate.from_dict(legacy_candidate)
-    assert old_candidate is not None and old_candidate.id == baseline.id
+    assert old_candidate is not None and old_candidate.id == enriched.id
     assert old_candidate.content_type is None and old_candidate.request_template is None
 
     old_input = AttackSurfaceInput(
@@ -212,8 +214,8 @@ def test_context_merge_keeps_conflicting_request_context_together():
         sample_payload="username={INJECTION_POINT}",
     )
     stored_input, _ = state.add_attack_surface_input(first_input)
-    duplicate_input, created = state.add_attack_surface_input(conflicting_input)
-    assert not created and duplicate_input is stored_input
+    with pytest.raises(ValueError, match="conflicts"):
+        state.add_attack_surface_input(conflicting_input)
     assert stored_input.content_type == "application/json"
     assert stored_input.sample_payload == '{"admin":"{INJECTION_POINT}"}'
 
@@ -225,15 +227,15 @@ def test_context_merge_keeps_conflicting_request_context_together():
         baseline_request_ref="captures/admin-baseline.json",
         auth_context_ref="captures/admin-session.md",
     ))
-    conflicting_candidate, created = state.add_candidate(make_candidate(
-        target="https://target.test",
-        objective_id="objective-current",
-        content_type="application/x-www-form-urlencoded",
-        request_template="username={INJECTION_POINT}",
-        baseline_request_ref="captures/user-baseline.json",
-        auth_context_ref="captures/user-session.md",
-    ))
-    assert not created and conflicting_candidate is first_candidate
+    other_candidate, created = state.add_candidate(make_candidate(
+            target="https://target.test",
+            objective_id="objective-current",
+            content_type="application/x-www-form-urlencoded",
+            request_template="username={INJECTION_POINT}",
+            baseline_request_ref="captures/user-baseline.json",
+            auth_context_ref="captures/user-session.md",
+        ))
+    assert created and other_candidate.id != first_candidate.id
     assert first_candidate.content_type == "application/json"
     assert first_candidate.request_template is None
     assert first_candidate.baseline_request_ref == "captures/admin-baseline.json"
@@ -282,16 +284,15 @@ def test_request_context_dedup_fills_only_missing_context_fields():
         baseline_request_ref="captures/baseline.json",
         auth_context_ref="captures/auth-context.md",
     ))
-    assert created is False and duplicate_candidate is first_candidate
-    assert first_candidate.content_type == "application/json"
-    assert first_candidate.request_template == '{"email":"{INJECTION_POINT}"}'
-    assert first_candidate.baseline_request_ref == "captures/baseline.json"
-    assert first_candidate.auth_context_ref == "captures/auth-context.md"
+    assert created and duplicate_candidate is not first_candidate
+    assert duplicate_candidate.request_template == '{"email":"{INJECTION_POINT}"}'
+    assert duplicate_candidate.baseline_request_ref == "captures/baseline.json"
+    assert duplicate_candidate.auth_context_ref == "captures/auth-context.md"
 
     restored = WorkflowState.from_dict(state.to_dict())
     assert restored.attack_surface_inputs[first.id].sample_payload == first.sample_payload
-    restored_candidate = restored.candidates[first_candidate.id]
-    assert restored_candidate.request_template == first_candidate.request_template
+    restored_candidate = restored.candidates[duplicate_candidate.id]
+    assert restored_candidate.request_template == duplicate_candidate.request_template
     assert restored_candidate.baseline_request_ref == "captures/baseline.json"
     assert restored_candidate.auth_context_ref == "captures/auth-context.md"
 
@@ -343,10 +344,10 @@ def test_duplicate_context_enrichment_requires_a_shared_request_anchor():
     )
     stored_candidate, _ = state.add_candidate(first_candidate)
     duplicate_candidate, created = state.add_candidate(second_candidate)
-    assert not created and duplicate_candidate is stored_candidate
+    assert created and duplicate_candidate is not stored_candidate
     assert stored_candidate.content_type == "application/json"
-    assert stored_candidate.request_template == '{"username":"{INJECTION_POINT}"}'
-    assert stored_candidate.auth_context_ref == "captures/admin-session.md"
+    assert duplicate_candidate.request_template == '{"username":"{INJECTION_POINT}"}'
+    assert duplicate_candidate.auth_context_ref == "captures/admin-session.md"
 
 
 def test_content_type_alone_does_not_anchor_duplicate_request_context():
@@ -373,8 +374,8 @@ def test_content_type_alone_does_not_anchor_duplicate_request_context():
         sample_payload="q={INJECTION_POINT}&role=user",
     )
     stored_input, _ = state.add_attack_surface_input(first_input)
-    duplicate, created = state.add_attack_surface_input(duplicate_input)
-    assert not created and duplicate is stored_input
+    with pytest.raises(ValueError, match="conflicts"):
+        state.add_attack_surface_input(duplicate_input)
     assert stored_input.content_type == "application/json"
     assert stored_input.sample_payload is None
 
@@ -387,12 +388,12 @@ def test_content_type_alone_does_not_anchor_duplicate_request_context():
         **base,
         baseline_request_ref="captures/json-admin.json",
     ))
-    duplicate_candidate, created = state.add_candidate(make_candidate(
-        **base,
-        auth_context_ref="captures/user-session.md",
-        request_template='{"q":"{INJECTION_POINT}","role":"user"}',
-    ))
-    assert not created and duplicate_candidate is first_candidate
+    other_candidate, created = state.add_candidate(make_candidate(
+            **base,
+            auth_context_ref="captures/user-session.md",
+            request_template='{"q":"{INJECTION_POINT}","role":"user"}',
+        ))
+    assert created and other_candidate.id != first_candidate.id
     assert first_candidate.baseline_request_ref == "captures/json-admin.json"
     assert first_candidate.auth_context_ref is None
     assert first_candidate.request_template is None
@@ -402,6 +403,33 @@ def test_candidate_id_rejects_non_semantic_persisted_identity():
     payload = make_candidate().to_dict()
     payload["id"] = "cand_wrong"
     assert Candidate.from_dict(payload) is None
+
+
+def test_legacy_context_ids_restore_without_dropping_session_refs():
+    candidate = make_candidate(auth_context_ref="user")
+    old_id = candidate_fingerprint(
+        target=candidate.target, method=candidate.method, endpoint=candidate.endpoint,
+        parameter=candidate.parameter, location=candidate.location,
+        candidate_class=candidate.candidate_class, test_case=candidate.test_case,
+        objective_id=candidate.objective_id,
+    )
+    payload = candidate.to_dict()
+    payload["id"] = old_id
+    restored = Candidate.from_dict(payload)
+    assert restored is not None and restored.id == old_id
+    item = AttackSurfaceInput(
+        objective_id="objective-current", target_origin="https://target.test",
+        method="POST", endpoint="/api", parameter="q", location="body",
+        input_type="string", auth_context_ref="user", baseline_request_ref="wr:old",
+    )
+    old_input_id = attack_surface_input_fingerprint(
+        objective_id=item.objective_id, target_origin=item.target_origin,
+        method=item.method, endpoint=item.endpoint, parameter=item.parameter,
+        location=item.location, input_type=item.input_type)
+    item_payload = item.to_dict()
+    item_payload["id"] = old_input_id
+    old_item = AttackSurfaceInput.from_dict(item_payload)
+    assert old_item is not None and old_item.id == old_input_id
 
 
 def test_candidate_dedup_merges_compact_signals():
@@ -424,6 +452,7 @@ def test_candidate_subcases_preserve_old_ids_and_remain_distinct():
         target=baseline.target, method=baseline.method, endpoint=baseline.endpoint,
         parameter=baseline.parameter, location=baseline.location,
         candidate_class=baseline.candidate_class,
+        baseline_request_ref=baseline.baseline_request_ref,
     )
     assert len({baseline.id, horizontal.id, vertical.id}) == 3
     state = WorkflowState()
@@ -864,6 +893,7 @@ def test_candidate_objective_scoping_preserves_legacy_fingerprint():
         parameter=legacy.parameter,
         location=legacy.location,
         candidate_class=legacy.candidate_class,
+        baseline_request_ref=legacy.baseline_request_ref,
     )
     assert first.id != second.id
     assert Candidate.from_dict(legacy.to_dict()) == legacy

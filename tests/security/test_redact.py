@@ -187,3 +187,22 @@ def test_redaction_is_idempotent_for_masked_header_and_query_values(text):
 )
 def test_literal_redacted_substring_in_real_secret_does_not_bypass(text, secret):
     assert secret not in apply(text)
+
+
+@pytest.mark.parametrize("secret_value", [
+    '{"opaque":"fixture-secret"}', '["fixture-secret",123456]', '123456',
+    '"fixture-secret"', '"fixture-secret\\\"quoted"',
+])
+def test_embedded_json_secret_values_use_decoded_keys_and_are_idempotent(secret_value):
+    text = 'HTTP/1.1 200 OK\n\n{"to\\u006ben":' + secret_value + ', "keep":1e0}'
+    safe = apply(text)
+    assert "fixture-secret" not in safe
+    assert "123456" not in safe
+    assert ', "keep":1e0}' in safe
+    assert apply(safe) == safe
+
+
+def test_truncated_embedded_json_secret_fails_closed():
+    safe = apply('HTTP/1.1 200 OK\n\n{"token":{"opaque":"fixture-secret"')
+    assert "fixture-secret" not in safe
+    assert "[REDACTED]" in safe

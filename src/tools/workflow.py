@@ -154,6 +154,7 @@ class WorkflowTool(Tool):
                 "signals": {"type": "array", "items": {"type": "string"}},
                 "baseline_request_ref": optional_string,
                 "auth_context_ref": optional_string,
+                "source_ref": optional_string,
                 "request_template": {
                     "type": "string",
                     "maxLength": 4000,
@@ -394,14 +395,24 @@ class WorkflowTool(Tool):
                 test_case=args.get("test_case"),
                 priority=args.get("priority"),
                 signals=args.get("signals", []),
-                baseline_request_ref=args.get("baseline_request_ref"),
-                auth_context_ref=args.get("auth_context_ref"),
+                baseline_request_ref=(args.get("baseline_request_ref")
+                                      if args.get("baseline_request_ref") is not None
+                                      else input_item.baseline_request_ref if input_item is not None else None),
+                auth_context_ref=(args.get("auth_context_ref")
+                                  if args.get("auth_context_ref") is not None
+                                  else input_item.auth_context_ref if input_item is not None else None),
                 content_type=(
                     args.get("content_type")
                     if args.get("content_type") is not None
                     else input_item.content_type if input_item is not None else None
                 ),
-                request_template=args.get("request_template"),
+                request_template=(args.get("request_template")
+                                  if args.get("request_template") is not None
+                                  else input_item.sample_payload if input_item is not None
+                                  and input_item.sample_payload and "{INJECTION_POINT}" in input_item.sample_payload
+                                  else None),
+                source_ref=(args.get("source_ref") if args.get("source_ref") is not None
+                            else input_item.source_ref if input_item is not None else None),
                 source_skill=args.get("source_skill"),
                 objective_id=objective_id,
                 status=("deferred" if supported is False else args.get("status", "queued")),
@@ -480,6 +491,9 @@ class WorkflowTool(Tool):
                 input_type=args.get("input_type"),
                 content_type=args.get("content_type"),
                 sample_payload=args.get("sample_payload"),
+                baseline_request_ref=args.get("baseline_request_ref"),
+                auth_context_ref=args.get("auth_context_ref"),
+                source_ref=args.get("source_ref"),
             )
             stored, created = self.state.add_attack_surface_input(item)
         except (TypeError, ValueError) as err:
@@ -1343,6 +1357,7 @@ class WorkflowTool(Tool):
             "request_template": request_template[:template_limit] or None,
             "request_template_truncated": len(request_template) > template_limit,
             "source_skill": candidate.source_skill,
+            "source_ref": WorkflowTool._brief(candidate.source_ref),
             "objective_id": candidate.objective_id,
         }
 
@@ -1360,6 +1375,9 @@ class WorkflowTool(Tool):
             "input_type": item.input_type,
             "content_type": item.content_type,
             "sample_payload": sample_payload[:500] or None,
+            "baseline_request_ref": WorkflowTool._brief(item.baseline_request_ref),
+            "auth_context_ref": WorkflowTool._brief(item.auth_context_ref),
+            "source_ref": WorkflowTool._brief(item.source_ref),
             "sample_payload_truncated": len(sample_payload) > 500,
             "disposition": item.disposition,
             "disposition_reason": WorkflowTool._brief(item.disposition_reason),

@@ -310,6 +310,7 @@ def scrub_control(s: str, max_len: int = 512) -> str:
 
 
 def event_text(path: str, parsed: Any) -> str:
+    from src.redact.redact import apply_evidence
     if not isinstance(parsed, dict):
         return "Burp bridge: received event"
 
@@ -317,9 +318,9 @@ def event_text(path: str, parsed: Any) -> str:
 
     target = ""
     if isinstance(parsed.get("url"), str):
-        target = scrub_control(parsed["url"])
+        target = apply_evidence(scrub_control(parsed["url"]))
     elif isinstance(parsed.get("target"), str):
-        target = scrub_control(parsed["target"])
+        target = apply_evidence(scrub_control(parsed["target"]))
 
     if path == "/burp/task":
         action = (

@@ -6,6 +6,7 @@ from typing import Any
 import asyncio
 import ipaddress
 from html.parser import HTMLParser
+from urllib.parse import urljoin, urlsplit
 import httpx
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter, UserControlledRefusal, YoloPrompter
@@ -14,10 +15,15 @@ from src.permission.execution import policy_for
 from src.permission.invocations import permission_invocation
 from src.permission.network import pin_request
 from src.target.target import Target
+from src.target.origin import HTTPOrigin
 from src.workflow.state import WorkflowPhase, WorkflowState, normalize_target_origin
 from .private_host import gate_private_request, parse_http_url, PrivateHostDeclined
 from .types import Tool, PermissionHints, arg_string
 from .outcome import ToolOutput
+from .http_context import HTTPContextStore
+from .request_builder import NATIVE_USER_AGENT, RequestDiff, build_captured_request, origin_headers, validate_host
+from src.browser.store import CaptureStore
+from src.redact.redact import apply_evidence as redact_evidence
 
 RESPONSE_BYTE_CAP = 16 * 1024
 MAX_RESPONSE_BYTE_CAP = 64 * 1024
@@ -39,44 +45,55 @@ class _NavigationParser(HTMLParser):
 
 class HTTPTool(Tool):
     def __init__(self, target: Target, engagement: EngagementState,
-                 workflow: WorkflowState | None = None):
+                 workflow: WorkflowState | None = None,
+                 capture_store: CaptureStore | None = None,
+                 context_store: HTTPContextStore | None = None):
         self.target = target
         self.workflow = workflow
         self.engagement = engagement
+        self.capture_store = capture_store
+        self.context_store = context_store or HTTPContextStore()
         self.permissions = engagement.http_permissions
         self.permissions.bind_target(lambda: target.revision)
+        self.context_store.sync_target(target.revision, engagement.revision, self.permissions.epoch)
 
     def name(self) -> str:
         return 'http'
 
     def description(self) -> str:
         return (
-            'Send one HTTP/HTTPS request within engagement scope. Phase is an annotation, '
-            'never authorization. Operator autonomous lab grants cover new endpoints, '
-            'parameters and payloads, including SQLi/XSS, login and mutations, within '
-            'their exact origin and limits. Without a grant, an exact request requires '
-            'operator approval. Operator YOLO activation grants bounded scoped autonomy '
-            'without manual grant commands. Scope alone is not authority. Confirm-each '
-            'prompts in ordinary mode and resumes after YOLO is turned off. Blocked/pending authorization must wait for operator action; '
-            'do not retry it with different phase/wording/payload. Relative paths resolve '
-            'against /target. TLS verification is disabled; redirects are not followed. '
-            'Raw HTTP cannot establish safe server-side effects or test-only resources.'
+            'Send scoped HTTP/S. Phase labels workflow, never permission. Exact requests '
+            'need approval unless an exact-origin lab grant or bounded YOLO policy applies. '
+            'Blocked requests must await operator action; do not reword or retry to bypass. '
+            'Relative paths use /target. TLS verification is disabled. Redirects require '
+            'max_redirects and separate approval per hop; cross-origin redirects stop. '
+            'Use candidate_id with mutation_value to replay one captured input.'
         )
 
     def schema(self) -> dict:
         return {
             'type': 'object',
             'properties': {
-                'method': {'type': 'string', 'description': 'HTTP method, defaults to GET; does not determine permission.'},
+                'method': {'type': 'string'},
                 'phase': {'type': 'string', 'enum': ['recon', 'validation', 'impact'],
-                          'description': 'Workflow annotation only; cannot open or downgrade permissions.'},
-                'url': {'type': 'string', 'description': 'Absolute HTTP/S URL or target-relative path.'},
+                          'description': 'Workflow annotation; never permission.'},
+                'url': {'type': 'string'},
                 'headers': {'type': 'object', 'additionalProperties': {'type': 'string'}},
-                'body': {'type': 'string', 'description': 'Raw request body; payloads are preserved.'},
+                'body': {'type': 'string'},
+                'candidate_id': {'type': 'string', 'description': 'Captured baseline candidate; omit url/method/body.'},
+                'mutation_value': {'type': 'string', 'description': 'Replacement input value.'},
+                'input_path': {'type': 'string'},
+                'old_value': {'type': 'string'},
+                'occurrence': {'type': 'integer', 'minimum': 0},
+                'auth_context_ref': {'type': 'string'},
+                'profile': {'type': 'string', 'enum': ['native', 'browser-like']},
+                'browser_context': {'type': 'string', 'enum': ['navigation', 'fetch']},
+                'browser_user_agent': {'type': 'string'},
+                'max_redirects': {'type': 'integer', 'minimum': 0, 'maximum': 5},
                 'max_response_bytes': {'type': 'integer', 'minimum': 0, 'maximum': MAX_RESPONSE_BYTE_CAP,
-                                       'description': f'Decoded body retained, default {RESPONSE_BYTE_CAP}; 0 for headers/status.'},
+                                       'description': f'Decoded byte cap; default {RESPONSE_BYTE_CAP}.'},
             },
-            'required': ['url', 'phase'],
+            'required': ['phase'],
         }
 
     def requires_permission(self) -> bool:
@@ -85,20 +102,42 @@ class HTTPTool(Tool):
     def validate_args(self, args: dict) -> None:
         if args.get('phase') not in {'recon', 'validation', 'impact'}:
             raise ValueError('phase must be recon, validation, or impact')
-        if not arg_string(args, 'url'):
-            raise ValueError('url is required')
+        if not arg_string(args, 'url') and not arg_string(args, 'candidate_id'):
+            raise ValueError('url or candidate_id is required')
         cap = args.get('max_response_bytes', RESPONSE_BYTE_CAP)
         if isinstance(cap, bool) or not isinstance(cap, int) or not 0 <= cap <= MAX_RESPONSE_BYTE_CAP:
             raise ValueError(f'max_response_bytes must be an integer from 0 to {MAX_RESPONSE_BYTE_CAP}')
-        resolved = self.resolve_url(arg_string(args, 'url'))
-        parse_http_url(resolved)
-        self._require_scope(resolved)
+        if arg_string(args, 'candidate_id'):
+            self._resolve_baseline(args)
+        else:
+            resolved = self.resolve_url(arg_string(args, 'url'))
+            parse_http_url(resolved)
+            self._require_scope(resolved)
+        if isinstance(args.get('max_redirects', 0), bool) or not isinstance(args.get('max_redirects', 0), int) or not 0 <= args.get('max_redirects', 0) <= 5:
+            raise ValueError('max_redirects must be from 0 through 5')
 
     def permission_hints(self, args: dict) -> PermissionHints:
         return {'noSessionCache': True, 'riskTier': 'high-impact', 'yoloAutoApprove': False}
 
     def prepare(self, args: dict) -> tuple[EffectiveHTTP, httpx.Request]:
+        action, request, _ = self._prepare_with_diff(args)
+        return action, request
+
+    def _prepare_with_diff(self, args: dict) -> tuple[EffectiveHTTP, httpx.Request, RequestDiff | None]:
         self.permissions.sync_target()
+        self.context_store.sync_target(self.target.revision, self.engagement.revision, self.permissions.epoch)
+        if arg_string(args, 'candidate_id'):
+            request, diff = self._resolve_baseline(args)
+            assert self.workflow is not None
+            candidate = self.workflow.candidates[arg_string(args, 'candidate_id')]
+            self.context_store.add_identity(request, candidate.auth_context_ref)
+            cap = args.get('max_response_bytes', RESPONSE_BYTE_CAP)
+            if isinstance(cap, bool) or not isinstance(cap, int) or not 0 <= cap <= MAX_RESPONSE_BYTE_CAP:
+                raise ValueError('invalid response byte cap')
+            action = EffectiveHTTP(request.method, str(request.url), tuple(request.headers.raw), request.content,
+                                   cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
+                                   redirect_limit=args.get('max_redirects', 0))
+            return action, request, diff
         raw_url = arg_string(args, 'url')
         if not raw_url:
             raise ValueError('url is required')
@@ -107,9 +146,31 @@ class HTTPTool(Tool):
             raise ValueError('invalid response byte cap')
         resolved = self.resolve_url(raw_url)
         self._require_scope(resolved)
+        profile = args.get('profile', 'native')
+        if profile not in {'native', 'browser-like'}:
+            raise ValueError('profile must be native or browser-like')
+        if profile == 'browser-like' and (args.get('browser_context') not in {'navigation', 'fetch'}
+                                          or not arg_string(args, 'browser_user_agent')):
+            raise ValueError('browser-like profile needs context and captured browser_user_agent')
+        if profile == 'browser-like' and not (self.capture_store and any(
+            snapshot.user_agent == arg_string(args, 'browser_user_agent')
+            and HTTPOrigin.from_url(snapshot.url) == HTTPOrigin.from_url(resolved)
+            for snapshot in self.capture_store.list_snapshots()
+        )):
+            raise ValueError('browser-like profile needs a same-origin browser snapshot')
         headers = {k: v for k, v in args.get('headers', {}).items() if isinstance(v, str)} if isinstance(args.get('headers'), dict) else {}
+        validate_host(httpx.Headers(headers), resolved)
+        headers = dict(origin_headers(list(headers.items())))
+        if profile == 'browser-like' and any(key.lower() == 'user-agent' and value != arg_string(args, 'browser_user_agent') for key, value in headers.items()):
+            raise ValueError('browser-like User-Agent conflicts with captured snapshot')
         if not any(k.lower() == 'user-agent' for k in headers):
-            headers['user-agent'] = 'kagent/0.1'
+            if profile == 'browser-like':
+                context = args.get('browser_context')
+                ua = arg_string(args, 'browser_user_agent')
+                headers['user-agent'] = ua
+                headers.setdefault('Accept', 'text/html,application/xhtml+xml,*/*;q=0.8' if context == 'navigation' else 'application/json, */*;q=0.8')
+            else:
+                headers['user-agent'] = NATIVE_USER_AGENT
         # Prepare the actual HTTPX Request once, including Host/Content-Length.
         # send(request) does not merge client defaults/cookies after approval.
         request = httpx.Request((arg_string(args, 'method') or 'GET').upper(), resolved,
@@ -119,15 +180,66 @@ class HTTPTool(Tool):
             # Materialize it now and remove credentials from the displayed URL.
             request = next(httpx.BasicAuth(request.url.username, request.url.password).auth_flow(request))
             request.url = request.url.copy_with(username=None, password=None)
+        self.context_store.add_identity(request, arg_string(args, 'auth_context_ref') or None)
         action = EffectiveHTTP(request.method, str(request.url), tuple(request.headers.raw), request.content,
-                               cap, self.target.revision, self.engagement.revision, self.permissions.epoch)
+                               cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
+                               redirect_limit=args.get('max_redirects', 0))
         self._require_scope(action.url)
-        return action, request
+        return action, request, None
+
+    def _resolve_baseline(self, args: dict) -> tuple[httpx.Request, RequestDiff]:
+        if self.workflow is None or self.capture_store is None:
+            raise ValueError('captured replay is unavailable in this runtime')
+        candidate_id = arg_string(args, 'candidate_id')
+        candidate = self.workflow.candidates.get(candidate_id)
+        if candidate is None or not candidate.baseline_request_ref:
+            raise ValueError('candidate has no captured baseline reference')
+        if 'url' in args or 'method' in args or 'body' in args or 'headers' in args:
+            raise ValueError('captured replay does not accept replacement url/method/headers/body')
+        if 'mutation_value' not in args or not isinstance(args['mutation_value'], str):
+            raise ValueError('captured replay requires mutation_value')
+        ref = candidate.baseline_request_ref
+        row = self.capture_store.get_request(ref) or self.capture_store.get_burp_task(ref)
+        if row is None:
+            raise ValueError('captured baseline is unavailable; validation is inconclusive')
+        self._require_scope(row.url or '')
+        if candidate.target is None or HTTPOrigin.from_url(row.url or '') != HTTPOrigin.from_url(candidate.target):
+            raise ValueError('captured baseline origin differs from candidate')
+        identity = candidate.auth_context_ref
+        if 'auth_context_ref' in args and arg_string(args, 'auth_context_ref') != (identity or ''):
+            raise ValueError('replay identity differs from candidate')
+        if getattr(row, 'auth_context_ref', None) not in (None, identity):
+            raise ValueError('captured baseline identity differs from candidate')
+        if self.workflow.objective is not None and self.workflow.objective.mode == 'whole_target':
+            linked = [item for item in self.workflow.attack_surface_inputs.values() if candidate_id in item.candidate_ids]
+            if not linked or any(
+                item.baseline_request_ref != ref
+                or item.auth_context_ref != candidate.auth_context_ref
+                or item.source_ref != candidate.source_ref
+                for item in linked
+            ):
+                raise ValueError('baseline provenance is not linked to candidate input')
+        occurrence = args.get('occurrence', 0)
+        if isinstance(occurrence, bool) or not isinstance(occurrence, int) or occurrence < 0:
+            raise ValueError('occurrence must be a non-negative integer')
+        request, diff = build_captured_request(row, candidate, args['mutation_value'], occurrence=occurrence,
+                                               input_path=arg_string(args, 'input_path') or None,
+                                               old_value=arg_string(args, 'old_value') if 'old_value' in args else None)
+        if 'cookie' in request.headers or 'authorization' in request.headers:
+            if not identity or getattr(row, 'auth_context_ref', None) != identity:
+                raise ValueError('captured credentials have no verified identity binding; recapture required')
+        runtime_cookie = self.context_store.cookie_for(request, identity)
+        if 'cookie' in request.headers and runtime_cookie != request.headers['cookie']:
+            raise ValueError('runtime session cookie is missing or differs from captured baseline; recapture required')
+        if 'authorization' in request.headers and self.context_store.authorization_for(request, identity) != request.headers['authorization']:
+            raise ValueError('runtime authorization is missing or differs from captured baseline; recapture required')
+        return request, diff
 
     def summarize(self, args: dict) -> dict:
-        action, _ = self.prepare(args)
+        action, _, request_diff = self._prepare_with_diff(args)
+        diff = request_diff.summary() + '\n' if request_diff else ''
         return {'summary': f'http: {action.method} {action.url}',
-                'detail': f"phase (annotation): {arg_string(args, 'phase')}\n" + action.preview()}
+                'detail': f"phase (annotation): {arg_string(args, 'phase')}\n" + diff + action.preview()}
 
     async def run_authorized(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> ToolOutput:
         return await self.run(args, signal, prompter)
@@ -151,20 +263,82 @@ class HTTPTool(Tool):
         if isinstance(prompter, YoloPrompter):
             prompter.bind_http_permissions(self.permissions)
         args = deepcopy(args)
-        action, request = self.prepare(args)
+        action, request, diff = self._prepare_with_diff(args)
         policy = policy_for(prompter)
-        if policy is not None:
-            if not policy.nested_allowed():
-                raise UserControlledRefusal('blocked: http-executor-without-receipt')
-            request, address = await pin_request(policy, request)
-            action = replace(action, transport_address=address)
-        receipt = await self.permissions.authorize(action, prompter, signal, lambda: self.target.revision)
-        try:
-            return await self._dispatch(action, request, receipt, policy, signal, prompter)
-        finally:
-            self.permissions.discard_receipt(receipt)
+        identity = (self.workflow.candidates[arg_string(args, 'candidate_id')].auth_context_ref
+                    if diff is not None and self.workflow is not None else arg_string(args, 'auth_context_ref') or None)
+        supplied_headers = args.get('headers')
+        explicit_cookie = bool(diff is not None and 'cookie' in request.headers)
+        if isinstance(supplied_headers, dict):
+            explicit_cookie = explicit_cookie or any(key.lower() == 'cookie' for key in supplied_headers)
+        max_redirects = args.get('max_redirects', 0)
+        if isinstance(max_redirects, bool) or not isinstance(max_redirects, int) or not 0 <= max_redirects <= 5:
+            raise ValueError('max_redirects must be from 0 through 5')
+        seen: set[tuple[str, str]] = set()
+        outputs: list[str] = []
+        for hop in range(max_redirects + 1):
+            redirect_key = (request.method, action.url)
+            if redirect_key in seen:
+                outputs.append('[redirect loop stopped]')
+                break
+            seen.add(redirect_key)
+            if policy is not None:
+                if not policy.nested_allowed():
+                    raise UserControlledRefusal('blocked: http-executor-without-receipt')
+                request, address = await pin_request(policy, request)
+                action = replace(action, transport_address=address)
+            receipt = await self.permissions.authorize(action, prompter, signal, lambda: self.target.revision)
+            try:
+                result, location, cookie_updated = await self._dispatch(action, request, receipt, policy, signal, prompter, identity)
+            finally:
+                self.permissions.discard_receipt(receipt)
+            outputs.append(f'[hop {hop}]\n{result}' if max_redirects else str(result))
+            if not location or hop >= max_redirects:
+                if location and hop >= max_redirects and max_redirects:
+                    outputs.append('[redirect hop limit reached]')
+                break
+            if (action.target_revision, action.scope_revision, action.epoch) != (
+                    self.target.revision, self.engagement.revision, self.permissions.epoch):
+                outputs.append('[HTTP context changed; redirect not followed]')
+                break
+            if explicit_cookie:
+                outputs.append('[redirect explicit Cookie has unknown path provenance; recapture required before following]')
+                break
+            try:
+                next_url = urljoin(action.url, location)
+                parsed_next = urlsplit(next_url)
+            except ValueError:
+                outputs.append('[malformed redirect Location not followed]')
+                break
+            if parsed_next.username or parsed_next.password:
+                outputs.append('[redirect containing URL credentials not followed]')
+                break
+            try:
+                self._require_scope(next_url)
+                next_origin = HTTPOrigin.from_url(next_url)
+            except (ValueError, PermissionError):
+                outputs.append('[redirect outside scope not followed]')
+                break
+            if next_origin != HTTPOrigin.from_url(action.url):
+                outputs.append('[cross-origin redirect not followed; credentials retained locally]')
+                break
+            method = request.method
+            body = request.content
+            if result.http_status == 303 and method != 'HEAD' or result.http_status in {301, 302} and method == 'POST':
+                method, body = 'GET', b''
+            headers = [(k, v) for k, v in origin_headers(list(request.headers.multi_items()))
+                       if k.lower() != 'cookie'
+                       and not (method == 'GET' and k.lower() in {'content-type', 'content-encoding'})]
+            request = httpx.Request(method, next_url, headers=headers, content=body)
+            self.context_store.add_identity(request, identity)
+            action = EffectiveHTTP(request.method, str(request.url), tuple(request.headers.raw), request.content,
+                                   action.response_cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
+                                   redirect_limit=max_redirects - hop - 1)
+        prefix = diff.summary() + '\n' if diff else ''
+        return ToolOutput(redact_evidence(prefix + '\n'.join(outputs)), status='observation', http_status=result.http_status,
+                          truncated=result.truncated)
 
-    async def _dispatch(self, action, request, receipt, policy, signal, prompter) -> ToolOutput:
+    async def _dispatch(self, action, request, receipt, policy, signal, prompter, identity=None) -> tuple[ToolOutput, str | None, bool]:
         # Independent gate: generic Registry approval cannot coalesce this gate.
         try:
             private_reason = await gate_private_request(
@@ -187,6 +361,12 @@ class HTTPTool(Tool):
                 # No suspension between reservation and starting send.
                 response = await client.send(request, stream=True)
                 check_cancelled(signal)
+                self.permissions.sync_target()
+                self.context_store.sync_target(self.target.revision, self.engagement.revision, self.permissions.epoch)
+                self.context_store.extract(
+                    request, response, identity, action.url,
+                    generation=(action.target_revision, action.scope_revision, action.epoch),
+                )
                 chunks: list[bytes] = []
                 total = 0
                 truncated = False
@@ -201,19 +381,27 @@ class HTTPTool(Tool):
                     chunks.append(chunk)
                     total += len(chunk)
                 content = b''.join(chunks)[:action.response_cap]
-                output = f'HTTP/1.1 {response.status_code} {response.reason_phrase}\n'
+                version = getattr(response, 'http_version', None)
+                output = f'{version or "HTTP"} {response.status_code} {response.reason_phrase}\n'
                 for k, v in response.headers.items():
                     output += f'{k}: {v}\n'
+                output += (f'final URL: {action.url}\n'
+                           f'decoded body bytes retained before redaction: {len(content)}\n'
+                           f'wire Content-Length: {response.headers.get("content-length", "unknown")}\n'
+                           f'Content-Encoding: {response.headers.get("content-encoding", "identity")}\n')
                 output += '\n' + content.decode(errors='replace')
                 if truncated:
-                    output += f'\n[response body truncated at {action.response_cap} bytes]'
+                    output += f'\n[response body truncated at {action.response_cap} decoded bytes]'
                 if private_reason:
                     output = f'note: private/internal host independently approved (reason: {private_reason})\n\n' + output
                 if policy is not None:
                     observation = policy.observations.capture(action, response.status_code, content, complete=not truncated)
                     self._attest_phase_coverage(action, response, content, observation)
                     output += f'\n[runtime observation: {observation}]'
-                return ToolOutput(output, status='observation', http_status=response.status_code, truncated=truncated)
+                output = redact_evidence(output)
+                return (ToolOutput(output, status='observation', http_status=response.status_code, truncated=truncated),
+                        response.headers.get('location') if response.status_code in {301, 302, 303, 307, 308} else None,
+                        'set-cookie' in response.headers)
             finally:
                 try:
                     if response is not None:

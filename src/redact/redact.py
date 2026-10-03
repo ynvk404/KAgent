@@ -230,6 +230,7 @@ PATTERNS = [
     # Authorization header. Anchor to a header line so prose such as
     # "Missing authorization: unauthenticated access" remains readable.
     re.compile(r"^([ \t]*authorization:\s*)([^\r\n]+)$", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"^([ \t]*[A-Za-z0-9_-]*(?:auth|cookie|token|api[-_]?key|secret|session|csrf|xsrf)[A-Za-z0-9_-]*:\s*)([^\r\n]+)$", re.IGNORECASE | re.MULTILINE),
 
     # Password-hash formats that are credentials even without a field label.
     re.compile(r"\b(\$2[aby]\$\d{2}\$)([./A-Za-z0-9]{53})\b"),
@@ -279,6 +280,7 @@ PATTERNS = [
 
     # Short JSON password value
     re.compile(r'("password"\s*:\s*")([^"]+)(?=")', re.IGNORECASE),
+    re.compile(r'("(?:access[_-]?token|refresh[_-]?token|api[_-]?key|csrf|xsrf|secret)"\s*:\s*")([^"]*)(?=")', re.IGNORECASE),
 
     # api_key=...
     re.compile(
@@ -364,6 +366,41 @@ _MASKED_SECRET = re.compile(
 )
 
 
+_JSON_FIELD = re.compile(r'("(?:\\.|[^"\\])*")\s*:\s*')
+
+
+def _redact_json_fields(text: str) -> str:
+    """Redact JSON values by decoded key, including JSON embedded in evidence."""
+    decoder = json.JSONDecoder()
+    output: list[str] = []
+    cursor = 0
+    for match in _JSON_FIELD.finditer(text):
+        if match.start() < cursor:
+            continue
+        try:
+            key = json.loads(match.group(1))
+        except ValueError:
+            continue
+        if not _is_secret_field(key):
+            continue
+        start = match.end()
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except (ValueError, RecursionError):
+            # A truncated/invalid secret value has no trustworthy end offset.
+            output.extend((text[cursor:start], '"[REDACTED]"'))
+            return "".join(output)
+        if isinstance(value, str):
+            safe_value = (value if value == _INJECTION_POINT or _MASKED_SECRET.fullmatch(value)
+                          else mask(value))
+        else:
+            safe_value = None if value is None else "[REDACTED]"
+        output.extend((text[cursor:start], json.dumps(safe_value, ensure_ascii=False)))
+        cursor = end
+    output.append(text[cursor:])
+    return "".join(output)
+
+
 class Redactor:
 
     def apply(self, text: str) -> str:
@@ -385,6 +422,7 @@ class Redactor:
                 return match.group(0)
             return match.group(1) + mask(secret) + match.group(3)
 
+        out = _redact_json_fields(out)
         out = JSON_SECRET_VALUE.sub(redact_json_secret, out)
 
         if not out.lstrip().startswith(("{", "[")):

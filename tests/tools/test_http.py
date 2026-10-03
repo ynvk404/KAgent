@@ -6,6 +6,7 @@ from src.engagement.state import EngagementState, OutOfScopeError
 from src.target.target import Target
 from src.tools.http import HTTPTool, RESPONSE_BYTE_CAP
 from src.tools.registry import Registry
+from src.version.version import VERSION
 
 
 class FakeResponse:
@@ -18,6 +19,7 @@ class FakeResponse:
         headers=None,
     ):
         self.status_code = status
+        self.http_version = "HTTP/1.1"
         self.reason_phrase = status_text
         self.headers = headers or {
             "content-type": "text/plain"
@@ -71,9 +73,7 @@ def test_schema_not_require_method():
 
     tool = scoped_tool()
 
-    assert tool.schema()["required"] == [
-        "url", "phase"
-    ]
+    assert tool.schema()["required"] == ["phase"]
 
 
 def test_http_tool_requires_engagement_state_at_construction():
@@ -96,7 +96,7 @@ def test_summarize_default_get():
     )
 
     assert "GET http://example.test" in result["detail"]
-    assert "user-agent: kagent/0.1" in result["detail"]
+    assert f"user-agent: KAgent/{VERSION}" in result["detail"]
 
 
 def test_summarize_ignores_malformed_headers():
@@ -105,7 +105,7 @@ def test_summarize_ignores_malformed_headers():
     )
 
     assert "GET http://example.test" in result["detail"]
-    assert "user-agent: kagent/0.1" in result["detail"]
+    assert f"user-agent: KAgent/{VERSION}" in result["detail"]
 
 @pytest.mark.asyncio
 async def test_default_get_runtime():

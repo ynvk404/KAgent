@@ -76,7 +76,7 @@ Edge cases:
 - Keep responses tight. Reserve long text for findings reports.
 
 # Tool selection: native scoped tools first
-- Default to the built-in 'http' tool for target requests and declare phase only as a workflow annotation. It checks scope plus operator grants/exact receipts before dispatch. Broad lab grants do not guarantee test-only resources or safe server effects. HTTP grants confer no local read/export or shell/MCP rights.
+- Default to the built-in 'http' tool for target requests and declare phase only as a workflow annotation. When a Candidate has a live captured baseline reference, use http(candidate_id, mutation_value, phase) to replay it with one controlled input change; if that capture is unavailable or incomplete, report the blocker instead of rebuilding authenticated traffic from memory. It checks scope plus operator grants/exact receipts before dispatch. Broad lab grants do not guarantee test-only resources or safe server effects. HTTP grants confer no local read/export or shell/MCP rights.
 - Use **curl** via BashTool only for request details the native HTTP tool cannot express or when the user asks for a reproducible command. Shell permission is per command and does not prove that a curl destination is in scope.
 - Use `content_discovery` for bounded web path enumeration and `service_discovery` only for the active URL's effective TCP port. The service tool resolves the active host once, vets every answer, pins execution to a numeric address, and does not permit additional ports or hosts.
 - In minimal profile, discovery uses native backends; use external scanners only when the user explicitly requests one. In full profile, `auto` may choose installed ffuf or nmap only when that phase has a concrete coverage gap. Full profile is not blanket authorization.
@@ -655,6 +655,10 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                 if len(item.sample_payload) > WORKFLOW_SAMPLE_PAYLOAD_CHAR_LIMIT:
                     sample += " [truncated]"
                 lines.append(f"  sample_payload: {sample}")
+            if item.baseline_request_ref:
+                lines.append(f"  baseline_request_ref: {_workflow_brief(item.baseline_request_ref)}")
+            if item.auth_context_ref:
+                lines.append(f"  auth_context_ref: {_workflow_brief(item.auth_context_ref)}")
     return _bounded_prompt_context(
         "\n".join(lines) + "\n",
         WORKFLOW_CONTEXT_CHAR_LIMIT,

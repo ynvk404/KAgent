@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
+from .request_builder import NATIVE_USER_AGENT
 
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter
@@ -292,7 +293,7 @@ async def _do_fetch(url: str, prompter: Any = None, signal: Any = None) -> httpx
         url,
         headers={
             "Accept": "text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.8",
-            "User-Agent": "Mozilla/5.0 kagent/0.1 (+research)",
+            "User-Agent": NATIVE_USER_AGENT,
         },
     )
     try:
@@ -510,7 +511,7 @@ async def _do_search(endpoint: str, prompter: Any = None, signal: Any = None) ->
     request = client.build_request(
         "GET",
         endpoint,
-        headers={"User-Agent": "Mozilla/5.0 kagent/0.1"},
+        headers={"User-Agent": NATIVE_USER_AGENT},
     )
     try:
         resp = await governed_send(client, request, prompter, signal, response_cap=SEARCH_BODY_CAP, research=True)

@@ -181,6 +181,8 @@ def candidate_fingerprint(
     candidate_class: str,
     test_case: str | None = None,
     objective_id: str | None = None,
+    auth_context_ref: str | None = None,
+    baseline_request_ref: str | None = None,
 ) -> str:
     payload = _identity_payload(
         target=target,
@@ -193,6 +195,10 @@ def candidate_fingerprint(
     )
     if objective_id:
         payload["objective_id"] = objective_id.strip()
+    if auth_context_ref:
+        payload["auth_context_ref"] = auth_context_ref.strip()
+    if baseline_request_ref:
+        payload["baseline_request_ref"] = baseline_request_ref.strip()
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:20]
@@ -218,6 +224,7 @@ class Candidate:
     status: CandidateStatus = "new"
     content_type: str | None = None
     request_template: str | None = None
+    source_ref: str | None = None
 
     def __post_init__(self) -> None:
         self.candidate_class = normalize_candidate_class(self.candidate_class)
@@ -238,6 +245,7 @@ class Candidate:
         self.request_template = _request_context(
             self.request_template, self.content_type
         )
+        self.source_ref = _text(self.source_ref)
         self.source_skill = (
             normalize_metadata_name(self.source_skill) if self.source_skill else None
         )
@@ -254,9 +262,19 @@ class Candidate:
             candidate_class=self.candidate_class,
             test_case=self.test_case,
             objective_id=self.objective_id,
+            auth_context_ref=self.auth_context_ref,
+            baseline_request_ref=self.baseline_request_ref,
         )
         if self.id and self.id != stable_id:
-            raise ValueError("candidate id does not match its semantic fingerprint")
+            legacy_id = candidate_fingerprint(
+                target=self.target, method=self.method, endpoint=self.endpoint,
+                parameter=self.parameter, location=self.location,
+                candidate_class=self.candidate_class, test_case=self.test_case,
+                objective_id=self.objective_id,
+            )
+            if self.id != legacy_id:
+                raise ValueError("candidate id does not match its semantic fingerprint")
+            return
         self.id = stable_id
 
     def to_dict(self) -> dict[str, Any]:
@@ -275,6 +293,7 @@ class Candidate:
             "auth_context_ref": self.auth_context_ref,
             "content_type": self.content_type,
             "request_template": self.request_template,
+            "source_ref": self.source_ref,
             "source_skill": self.source_skill,
             "objective_id": self.objective_id,
             "status": self.status,
@@ -300,6 +319,7 @@ class Candidate:
                 auth_context_ref=value.get("auth_context_ref"),
                 content_type=value.get("content_type"),
                 request_template=value.get("request_template"),
+                source_ref=value.get("source_ref"),
                 source_skill=value.get("source_skill"),
                 objective_id=value.get("objective_id"),
                 status=value.get("status", "new"),
@@ -364,6 +384,8 @@ def attack_surface_input_fingerprint(
     parameter: str | None,
     location: str | None,
     input_type: str | None,
+    auth_context_ref: str | None = None,
+    baseline_request_ref: str | None = None,
 ) -> str:
     payload = {
         "objective_id": objective_id.strip(),
@@ -374,6 +396,10 @@ def attack_surface_input_fingerprint(
         "location": (location or "").strip().lower(),
         "input_type": (input_type or "").strip().lower(),
     }
+    if auth_context_ref:
+        payload["auth_context_ref"] = auth_context_ref.strip()
+    if baseline_request_ref:
+        payload["baseline_request_ref"] = baseline_request_ref.strip()
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:20]
@@ -396,6 +422,9 @@ class AttackSurfaceInput:
     id: str = ""
     content_type: str | None = None
     sample_payload: str | None = None
+    baseline_request_ref: str | None = None
+    auth_context_ref: str | None = None
+    source_ref: str | None = None
 
     def __post_init__(self) -> None:
         self.objective_id = _text(self.objective_id, limit=80) or ""
@@ -415,6 +444,9 @@ class AttackSurfaceInput:
             self.input_type = self.input_type.lower()
         self.content_type = _text(self.content_type, limit=200)
         self.sample_payload = _request_context(self.sample_payload, self.content_type)
+        self.baseline_request_ref = _text(self.baseline_request_ref)
+        self.auth_context_ref = _text(self.auth_context_ref)
+        self.source_ref = _text(self.source_ref)
         if self.disposition not in INPUT_DISPOSITIONS:
             raise ValueError(f"unknown input disposition: {self.disposition}")
         self.candidate_ids = _strings(self.candidate_ids, maximum=_MAX_REFS)
@@ -432,9 +464,18 @@ class AttackSurfaceInput:
             parameter=self.parameter,
             location=self.location,
             input_type=self.input_type,
+            auth_context_ref=self.auth_context_ref,
+            baseline_request_ref=self.baseline_request_ref,
         )
         if self.id and self.id != stable_id:
-            raise ValueError("input id does not match its semantic fingerprint")
+            legacy_id = attack_surface_input_fingerprint(
+                objective_id=self.objective_id, target_origin=self.target_origin,
+                method=self.method, endpoint=self.endpoint, parameter=self.parameter,
+                location=self.location, input_type=self.input_type,
+            )
+            if self.id != legacy_id:
+                raise ValueError("input id does not match its semantic fingerprint")
+            return
         self.id = stable_id
 
     def to_dict(self) -> dict[str, Any]:
@@ -449,6 +490,9 @@ class AttackSurfaceInput:
             "input_type": self.input_type,
             "content_type": self.content_type,
             "sample_payload": self.sample_payload,
+            "baseline_request_ref": self.baseline_request_ref,
+            "auth_context_ref": self.auth_context_ref,
+            "source_ref": self.source_ref,
             "disposition": self.disposition,
             "candidate_ids": list(self.candidate_ids),
             "disposition_reason": self.disposition_reason,
@@ -475,6 +519,9 @@ class AttackSurfaceInput:
                 input_type=value.get("input_type"),
                 content_type=value.get("content_type"),
                 sample_payload=value.get("sample_payload"),
+                baseline_request_ref=value.get("baseline_request_ref"),
+                auth_context_ref=value.get("auth_context_ref"),
+                source_ref=value.get("source_ref"),
                 disposition=value.get("disposition", "pending"),
                 candidate_ids=value.get("candidate_ids", []),
                 disposition_reason=value.get("disposition_reason"),
@@ -831,10 +878,7 @@ class WorkflowState:
     def add_candidate(self, candidate: Candidate) -> tuple[Candidate, bool]:
         existing = self.candidates.get(candidate.id)
         if existing is not None:
-            existing.signals = list(dict.fromkeys([*existing.signals, *candidate.signals]))[
-                :_MAX_SIGNALS
-            ]
-            _merge_compatible_context(
+            merged = _merge_compatible_context(
                 existing,
                 candidate,
                 (
@@ -842,9 +886,16 @@ class WorkflowState:
                     "request_template",
                     "baseline_request_ref",
                     "auth_context_ref",
+                    "source_ref",
                 ),
-                anchors=("baseline_request_ref", "auth_context_ref"),
+                anchors=("baseline_request_ref", "auth_context_ref", "source_ref"),
             )
+            if not merged and any(getattr(candidate, name) is not None for name in
+                                  ("request_template", "baseline_request_ref", "auth_context_ref", "source_ref")):
+                raise ValueError("candidate request context conflicts with existing candidate")
+            existing.signals = list(dict.fromkeys([*existing.signals, *candidate.signals]))[
+                :_MAX_SIGNALS
+            ]
             for field_name in (
                 "source_skill",
                 "priority",
@@ -973,15 +1024,18 @@ class WorkflowState:
         if existing is not None:
             if existing.objective_id != item.objective_id:
                 raise ValueError("input identity belongs to a different objective")
+            merged = _merge_compatible_context(
+                existing,
+                item,
+                ("content_type", "sample_payload", "baseline_request_ref", "auth_context_ref", "source_ref"),
+                anchors=("sample_payload", "baseline_request_ref", "source_ref"),
+            )
+            if not merged and any(getattr(item, name) is not None for name in
+                                  ("sample_payload", "baseline_request_ref", "auth_context_ref", "source_ref")):
+                raise ValueError("input request context conflicts with existing input")
             for candidate_id in item.candidate_ids:
                 if candidate_id not in existing.candidate_ids:
                     existing.candidate_ids.append(candidate_id)
-            _merge_compatible_context(
-                existing,
-                item,
-                ("content_type", "sample_payload"),
-                anchors=("sample_payload",),
-            )
             return existing, False
         self.attack_surface_inputs[item.id] = item
         return item, True

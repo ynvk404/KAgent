@@ -1,7 +1,7 @@
 import pytest
 import requests
 
-from src.browser.server import IngestServerOptions, start_ingest_server
+from src.browser.server import IngestServerOptions, start_ingest_server, event_text
 from src.browser.store import CaptureStore
 
 
@@ -49,6 +49,12 @@ def test_requires_bridge_token_for_reads_and_writes(store):
 
     finally:
         handle.close()
+
+
+def test_capture_event_text_redacts_query_credentials():
+    event = event_text("/ingest", {"method": "GET", "url": "http://target.test/?access_token=private-value"})
+    assert "private-value" not in event
+    assert "access_token" in event
 
 
 def test_rejects_non_loopback_host_headers(store):
