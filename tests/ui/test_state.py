@@ -620,8 +620,9 @@ def test_confirm_finding_card():
 
     last = out.transcript[-1]
 
-    assert last.kind == "finding"
-    assert last.prefix == "★ "
+    assert last.kind == "tool-call"
+    assert last.prefix == "⏺ "
+    assert "pending validation" in last.text
     assert last.color == ACCENT
 
     assert (

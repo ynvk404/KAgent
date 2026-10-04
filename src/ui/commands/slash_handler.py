@@ -261,60 +261,8 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
     dispatch = app.dispatch
 
     if cmd == "/review-result":
-        async def review_result():
-            import json
-            from src.permission.runtime.execution import policy_for
-            from src.permission.permission import PermissionRequest, Decision
-            from src.workflow.evidence import verify_evidence_reads
-            from src.redact.redact import apply_evidence
-            policy = policy_for(agent.prompter)
-            token = None
-            receipt = None
-            try:
-                if policy is None or len(rest) < 4:
-                    raise ValueError("usage: /review-result <candidate-id> <confirmed|not-confirmed> <severity> <observed impact>")
-                cid, outcome, severity = rest[:3]
-                if outcome not in {"confirmed", "not-confirmed"} or severity not in {"info", "low", "medium", "high", "critical"}:
-                    raise ValueError("invalid review outcome/severity")
-                candidate = agent.workflow.candidates[cid]
-                policy.engagement.require_in_scope(candidate.target or '')
-                latest = agent.workflow.latest_result(cid)
-                refs = tuple(latest.evidence_refs) if latest else tuple(e.id for e in agent.workflow.evidence.values() if e.candidate_id == cid)
-                artifacts = [agent.workflow.evidence[ref] for ref in refs]
-                tool = agent.tools.get("workflow")
-                if tool is None:
-                    raise ValueError('workflow tool unavailable')
-                args = {"action": "record_result", "candidate_id": cid, "outcome": outcome, "evidence_refs": list(refs),
-                        "skill_name": candidate.candidate_class, "force": True}
-                validators = agent.skills.validators_for_class(candidate.candidate_class)
-                if len(validators) == 1:
-                    args["skill_name"] = validators[0].name
-                receipt = policy.prepare(tool, args)
-                token = policy.start(receipt, tool, args, None)
-                if not artifacts or not await verify_evidence_reads(artifacts, policy.root, agent.prompter, None):
-                    raise ValueError("evidence changed/unavailable")
-                identity = policy.observations.candidate_identity(candidate)
-                proof = "\n\n".join(apply_evidence(policy.require_evidence(e, policy.root).read_text(errors="replace")) for e in artifacts)
-                review = getattr(agent.prompter, 'operator_review_prompter', lambda: agent.prompter)()
-                decision = await review.ask(PermissionRequest(tool="review_result", summary=f"Review {candidate.candidate_class}: {outcome}",
-                    detail=f"This reviews a conclusion, not execution permission. Source: operator-reviewed, not autonomous.\n{apply_evidence(json.dumps(candidate.to_dict()))}\nEvidence: {refs}\nImpact: {apply_evidence(' '.join(rest[3:]))}\n\n{proof}",
-                    no_session_cache=True), None)
-                if decision != Decision.ALLOW_ONCE:
-                    raise ValueError("conclusion review declined; proof remains unverified")
-                if identity != policy.observations.candidate_identity(candidate) or not await verify_evidence_reads(artifacts, policy.root, agent.prompter, None):
-                    raise ValueError("reviewed proof/candidate changed")
-                policy.observations.operator_result(candidate, refs, outcome, severity, " ".join(rest[3:]))
-                result = await tool.run(args, None, agent.prompter)
-                await agent.save()
-                dispatch(Append(entry=TranscriptEntry(kind="system", text=result)))
-            except Exception as exc:
-                dispatch(Append(entry=TranscriptEntry(kind="error", text=f"Result review: {type(exc).__name__}: {exc}")))
-            finally:
-                if policy is not None and token is not None:
-                    policy.stop(token)
-                if policy is not None and receipt is not None:
-                    policy.finish_review(receipt)
-        asyncio.create_task(review_result())
+        from src.ui.commands.result_review import review_result
+        asyncio.create_task(review_result(app, rest))
         return True
 
     if cmd == "/permissions":

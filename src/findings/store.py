@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from src.paths import project_artifact_root, project_root
 
@@ -18,6 +18,15 @@ Severity = Literal[
 ]
 
 _SAFE_SLUG_RE = re.compile(r"^[a-z0-9-]+$")
+_REPORT_SECTIONS = frozenset({
+    "Impact",  # Legacy reports written before observed/potential were split.
+    "Observed impact",
+    "Potential impact",
+    "Payload",
+    "Response excerpt",
+    "Reproduce",
+    "Remediation",
+})
 
 
 @dataclass(slots=True)
@@ -93,12 +102,28 @@ class Store:
         content = render(finding)
 
         async with self._save_lock:
-            return await asyncio.to_thread(
+            pending = asyncio.create_task(asyncio.to_thread(
                 self._write_once_for_candidate,
                 finding.candidate_id,
                 finding.slug,
                 content,
-            )
+            ))
+            try:
+                path = await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                # Keep this store's lock until the reserved-file write finishes.
+                # A cancelled caller never publishes a proposed retry snapshot.
+                while not pending.done():
+                    try:
+                        await asyncio.shield(pending)
+                    except asyncio.CancelledError:
+                        continue
+                pending.result()
+                raise
+            snapshot = read_report(Path(path))
+            for item in fields(Finding):
+                setattr(finding, item.name, getattr(snapshot, item.name))
+            return path
 
     def _write_once_for_candidate(
         self, candidate_id: str | None, slug: str, content: str,
@@ -112,7 +137,7 @@ class Store:
                     continue
                 for path in sorted(directory.glob("*.md")):
                     try:
-                        if marker in path.read_text(encoding="utf-8").splitlines():
+                        if marker in path.read_text(encoding="utf-8").splitlines() and read_report(path).candidate_id == candidate_id:
                             return str(path)
                     except OSError:
                         continue
@@ -289,6 +314,69 @@ def render(
         )
 
     return "\n".join(lines)
+
+
+def read_report(path: Path) -> Finding:
+    """Read the persisted snapshot, including legacy Markdown reports.
+
+    This never calls taxonomy: changing the catalog cannot reclassify a report.
+    Fenced evidence is not parsed as report metadata or section headings.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines or not lines[0].startswith("# "):
+        raise ValueError("persisted finding report has no title")
+    metadata: dict[str, list[str]] = {}
+    sections: dict[str, list[str]] = {}
+    section: str | None = None
+    fence: str | None = None
+    for line in lines[1:]:
+        if fence is not None:
+            if line == fence:
+                fence = None
+            if section is not None:
+                sections[section].append(line)
+            continue
+        fenced = re.fullmatch(r"(`{3,})[a-zA-Z]*", line)
+        if fenced:
+            fence = fenced[1]
+        heading = line[3:] if line.startswith("## ") else None
+        if heading in _REPORT_SECTIONS and not fenced:
+            section = heading
+            sections.setdefault(section, [])
+        elif section is not None:
+            sections[section].append(line)
+        elif (match := re.fullmatch(r"- \*\*(.+?):\*\* (.*)", line)) is not None:
+            metadata.setdefault(match[1], []).append(match[2])
+
+    def value(key: str) -> str | None:
+        values = metadata.get(key, [])
+        return values[0] if values else None
+
+    def body(key: str, *, code: bool = False) -> str | None:
+        value = "\n".join(sections.get(key, [])).strip("\n")
+        if code and value:
+            rows = value.splitlines()
+            if len(rows) >= 2 and rows[0].startswith("```") and rows[-1].startswith("```"):
+                value = "\n".join(rows[1:-1])
+        return value or None
+
+    severity = value("Severity")
+    if severity not in {"critical", "high", "medium", "low", "info"}:
+        raise ValueError("persisted finding report has invalid severity")
+    observed_impact = body("Observed impact")
+    if observed_impact is None:
+        observed_impact = body("Impact")
+    return Finding(
+        title=lines[0][2:], severity=cast(Severity, severity), url=value("URL") or "",
+        observed_impact=observed_impact or "", potential_impact=body("Potential impact") or "",
+        parameter=value("Parameter"), payload=body("Payload", code=True), method=value("Method"),
+        responseExcerpt=body("Response excerpt", code=True), curl=body("Reproduce", code=True),
+        remediation=body("Remediation"), vulnerabilityType=value("Vulnerability Type"),
+        cwe=(value("CWE") or "").split(", ") if value("CWE") else None,
+        owasp=(value("OWASP") or "").split(", ") if value("OWASP") else None,
+        createdAt=value("Reported at") or "", slug=path.stem,
+        candidate_id=value("Candidate ID"), evidence_refs=metadata.get("Evidence"),
+    )
 
 
 def _inline(value: str) -> str:

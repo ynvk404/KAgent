@@ -18,6 +18,7 @@ from src.redact.redact import apply as redact, apply_evidence
 from src.logger.logger import get_logger
 from src.workflow.state import WorkflowState
 from src.workflow.evidence import verify_evidence_reads
+from src.workflow.review import review_snapshot
 from src.skills.registry import normalize_candidate_class
 from src.target.origin import HTTPOrigin
 from src.tools.common.types import Tool, arg_string
@@ -237,6 +238,9 @@ class ConfirmFindingTool:
 
         latest = self.workflow.latest_result(candidate_id)
         assert latest is not None  # eligibility above guarantees a result
+        result_snapshot = review_snapshot(self.workflow, candidate_id)
+        evidence_artifacts = [self.workflow.evidence[ref] for ref in latest.evidence_refs]
+        evidence_read_approvals: set[str] = set()
         from src.permission.runtime.execution import policy_for
         policy = policy_for(prompter)
         if policy is not None:
@@ -249,9 +253,12 @@ class ConfirmFindingTool:
             response_excerpt = verified.response_excerpt
         root = self.store.project_dir
         if not await verify_evidence_reads(
-            [self.workflow.evidence[ref] for ref in latest.evidence_refs], root, prompter, signal,
+            evidence_artifacts, root, prompter, signal,
+            approved_paths=evidence_read_approvals,
         ):
             raise ValueError("candidate evidence artifact changed or is unavailable")
+        if review_snapshot(self.workflow, candidate_id) != result_snapshot:
+            raise ValueError("candidate validation result changed during finalization")
 
         requested_class = arg_string(args, "vuln_class").strip()
         if requested_class and normalize_candidate_class(requested_class) != candidate.candidate_class:
@@ -320,6 +327,19 @@ class ConfirmFindingTool:
 
         path = await self.store.save(finding)
 
+        # Store.save() may wait on disk while the workflow advances. A report
+        # may already have been written, but it must not be finalized or
+        # announced as matching a result that changed during that wait.
+        if review_snapshot(self.workflow, candidate_id) != result_snapshot:
+            raise ValueError("candidate validation result changed during finalization")
+        if not await verify_evidence_reads(
+            evidence_artifacts, root, prompter, signal,
+            approved_paths=evidence_read_approvals,
+        ):
+            raise ValueError("candidate evidence artifact changed or is unavailable")
+        if review_snapshot(self.workflow, candidate_id) != result_snapshot:
+            raise ValueError("candidate validation result changed during finalization")
+
         # A confirmed ValidationResult and a persisted canonical report are
         # separate workflow facts.  Record the latter only after the atomic
         # store write (or idempotent candidate lookup) has succeeded so a
@@ -333,7 +353,13 @@ class ConfirmFindingTool:
             # retry, which would create a duplicate numbered report.
             log.warning("finding notifier failed after persistence", exc_info=True)
 
-        return f'Finding "{finding.title}" written to {path}'
+        if review_snapshot(self.workflow, candidate_id) != result_snapshot:
+            raise ValueError("candidate validation result changed during finalization")
+
+        return (f'Finding "{finding.title}" written to {path}\n'
+                f'Classification: {finding.vulnerabilityType or "unknown"}; '
+                f'CWE: {", ".join(finding.cwe or []) or "none"}; '
+                f'OWASP: {", ".join(finding.owasp or []) or "none"}')
 
 def is_severity(value: str) -> TypeGuard[Severity]:
     return value in SEVERITIES

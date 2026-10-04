@@ -6,6 +6,8 @@ verifiers remain unavailable. Raw artifacts remain usable as unverified proof.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 import time
@@ -14,6 +16,9 @@ from urllib.parse import urlsplit
 import uuid
 from pathlib import Path
 import os
+
+_pending_review: ContextVar[Any] = ContextVar("pending_operator_result", default=None)
+
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,7 @@ class ObservationStore:
         self._results: dict[str, tuple[str, tuple[str, ...], VerifiedResult, str]] = {}
         self.storage: Path | None = None
         self._historical: set[str] = set()
+        self._reviews: dict[str, str] = {}
         from src.permission.runtime.verifiers import register_production_verifiers
         register_production_verifiers(self)
 
@@ -136,6 +142,10 @@ class ObservationStore:
         return None
 
     def result(self, candidate_id: str, references: tuple[str, ...], epoch: str, candidate=None) -> VerifiedResult | None:
+        pending = _pending_review.get()
+        if pending is not None and pending[:4] == (self, candidate_id, references, epoch):
+            if candidate is not None and pending[4] == self.candidate_identity(candidate):
+                return pending[5]
         entry = self._results.get(candidate_id)
         if entry is None or (entry[0] != epoch and candidate_id not in self._historical) or entry[1] != references:
             return None
@@ -145,16 +155,59 @@ class ObservationStore:
             return None
         return entry[2]
 
-    def operator_result(self, candidate, references, outcome, severity, impact):
-        """Trusted UI callback after reviewing the exact immutable proof bundle.
+    def begin_review(self, candidate_id: str) -> str:
+        """Transient ticket: only the latest review may commit a conclusion."""
+        ticket = uuid.uuid4().hex
+        self._reviews[candidate_id] = ticket
+        return ticket
 
-        This is human-reviewed, not autonomous verification or authorization.
-        No model-facing tool can call it.
-        """
-        if outcome not in {"confirmed", "not-confirmed"} or not references or not impact.strip():
-            raise ValueError("review requires proof, outcome and observed impact")
-        result = VerifiedResult(outcome, "Operator-reviewed: " + impact, severity, (), "Operator reviewed linked immutable evidence.", "operator-reviewed")
+    def review_is_current(self, candidate_id: str, ticket: str) -> bool:
+        return self._reviews.get(candidate_id) == ticket
+
+    def finish_review(self, candidate_id: str, ticket: str) -> None:
+        if self.review_is_current(candidate_id, ticket):
+            self._reviews.pop(candidate_id)
+
+    @contextmanager
+    def _staged_operator_result(self, candidate, references, outcome, severity, impact, epoch, *, ticket, guard):
+        """Task-local certificate used during workflow commit; never persisted here."""
+        if not self.review_is_current(candidate.id, ticket):
+            raise ValueError("operator review is stale or superseded")
+        if guard is None:
+            raise ValueError("operator review must include its current-state guard")
+        guard()
+        result = self._operator_certificate(references, outcome, severity, impact)
+        token = _pending_review.set((self, candidate.id, tuple(references), epoch,
+                                     self.candidate_identity(candidate), result, guard))
+        try:
+            yield result
+        finally:
+            _pending_review.reset(token)
+
+    def check_pending_review(self) -> None:
+        pending = _pending_review.get()
+        if pending is not None and pending[0] is self and pending[6] is not None:
+            pending[6]()
+
+    def _commit_review(self, state, candidate, references, result, ticket):
+        """Publish the existing broad certificate after workflow/session commit."""
+        latest = state.latest_result(candidate.id)
+        if (not self.review_is_current(candidate.id, ticket) or latest is None
+                or tuple(latest.evidence_refs) != tuple(references)
+                or latest.outcome != result.outcome or latest.coverage_synced is False):
+            raise ValueError("review has no consistent committed validation result")
+        old_results, old_historical = self._results.copy(), self._historical.copy()
         self._results[candidate.id] = ("operator-reviewed", tuple(references), result, self.candidate_identity(candidate))
         self._historical.add(candidate.id)
-        self.persist()
-        return result
+        try:
+            self.persist()
+        except BaseException:
+            self._results, self._historical = old_results, old_historical
+            raise
+        self.finish_review(candidate.id, ticket)
+
+    @staticmethod
+    def _operator_certificate(references, outcome, severity, impact):
+        if outcome not in {"confirmed", "not-confirmed"} or not references or not impact.strip():
+            raise ValueError("review requires proof, outcome and observed impact")
+        return VerifiedResult(outcome, "Operator-reviewed: " + impact, severity, (), "Operator reviewed linked immutable evidence.", "operator-reviewed")

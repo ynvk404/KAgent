@@ -681,6 +681,8 @@ class WorkflowTool(Tool):
             coverage_status = self._coverage_status(result)
             if self.coverage is not None and coverage_status:
                 result.coverage_synced = False
+            if policy is not None:
+                policy.observations.check_pending_review()
             created = self.state.add_validation_result(
                 result,
                 force=arg_bool(args, "force"),

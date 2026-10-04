@@ -270,9 +270,11 @@ class EvidenceArtifact:
 
 async def verify_evidence_reads(
     artifacts: list[EvidenceArtifact], root: Path, prompter: Prompter, signal: Any,
+    *, approved_paths: set[str] | None = None,
 ) -> bool:
     """Reuse exact read approvals only within this tool operation."""
-    approved_paths: set[str] = set()
+    if approved_paths is None:
+        approved_paths = set()
     for artifact in artifacts:
         if not await artifact.is_resolvable_with_permission(
             root, prompter, signal, approved_paths=approved_paths,

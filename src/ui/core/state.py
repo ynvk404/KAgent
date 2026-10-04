@@ -649,7 +649,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent) -> AppState:
                         transcript=(
                             *state.transcript,
                             TranscriptEntry(
-                                kind="finding", text=card["text"], color=card["color"], prefix="★ "
+                                kind="tool-call", text="Proposed finding (pending validation):\n" + card["text"], color=card["color"], prefix="⏺ "
                             ),
                         ),
                         phase="running-tool",

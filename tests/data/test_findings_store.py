@@ -85,16 +85,16 @@ async def test_save_requires_candidate_and_evidence_provenance(temp_dir: str, fi
 
 @pytest.mark.asyncio
 async def test_legacy_finding_is_read_for_candidate_dedup_without_copy(tmp_path: Path):
-    legacy_store = Store(tmp_path / "findings", project_directory=tmp_path)
-    legacy = await legacy_store.save(make_finding(
-        slug="old-finding", candidate_id="cand_existing"
-    ))
+    fixture = Path(__file__).parent / "fixtures" / "findings" / "legacy-single-impact.md"
+    legacy = tmp_path / "findings" / fixture.name
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(fixture.read_bytes())
     canonical_store = Store(project_directory=tmp_path)
 
     repeated = await canonical_store.save(make_finding(
-        slug="new-name", candidate_id="cand_existing"
+        slug="new-name", candidate_id="cand_legacy0123456789"
     ))
-    assert repeated == legacy
+    assert Path(repeated) == legacy
     assert not (tmp_path / "artifacts/findings").exists()
 
     fresh = await canonical_store.save(make_finding(
@@ -102,6 +102,38 @@ async def test_legacy_finding_is_read_for_candidate_dedup_without_copy(tmp_path:
     ))
     assert Path(fresh) == tmp_path / "artifacts/findings/fresh-finding.md"
     assert Path(legacy).exists()
+
+
+def test_current_report_fixture_restores_markdown_headings_in_body():
+    from src.findings.store import read_report
+
+    fixture = Path(__file__).parent / "fixtures" / "findings" / "current-with-headings.md"
+    finding = read_report(fixture)
+
+    assert finding.title == "Current finding format"
+    assert finding.observed_impact == (
+        "The linked proof demonstrates the response difference.\n"
+        "## Evidence notes\n### Repeated observation\n#### Detail"
+    )
+    assert finding.potential_impact == (
+        "Additional impact remains unassessed.\n## Conditional scenario\n"
+        "### Boundary"
+    )
+    assert finding.payload == "id=1 OR 1=1\n## Payload-looking evidence"
+    assert finding.remediation == "Use parameterized queries.\n## Rollout notes"
+
+
+def test_legacy_single_impact_report_from_repository_history_restores():
+    from src.findings.store import read_report
+
+    fixture = Path(__file__).parent / "fixtures" / "findings" / "legacy-single-impact.md"
+    finding = read_report(fixture)
+
+    assert finding.title == "Legacy SQL injection report"
+    assert finding.candidate_id == "cand_legacy0123456789"
+    assert finding.observed_impact == "A repeatable boolean difference was recorded."
+    assert finding.potential_impact == ""
+    assert finding.evidence_refs is None
 
 @pytest.mark.asyncio
 async def test_save_rejects_path_traversal_slug(temp_dir: str):
@@ -301,3 +333,49 @@ def test_render_keeps_metadata_on_its_own_lines():
 
     assert content.startswith("# A title ## injected section\n")
     assert "- **URL:** https://x - injected" in content
+
+
+@pytest.mark.asyncio
+async def test_retry_restores_entire_legacy_markdown_snapshot_including_fenced_evidence(tmp_path):
+    from src.findings.store import read_report
+    store = Store(project_directory=tmp_path)
+    original = make_finding(
+        title='Legacy report', slug='legacy', payload='marker\n```\n## CWE: not metadata',
+        responseExcerpt='response\n````\n## Severity: not metadata',
+        vulnerabilityType='Broken Access Control', cwe=None, owasp=['A01:2021 Broken Access Control'],
+    )
+    path = await store.save(original)
+    content = Path(path).read_text()
+    retry = make_finding(title='Proposed new title', slug='new-name', cwe=['CWE-639'])
+    assert await store.save(retry) == path
+    assert retry == read_report(Path(path)) == original
+    assert retry.cwe is None and Path(path).read_text() == content
+
+
+@pytest.mark.asyncio
+async def test_cancelled_store_write_holds_lock_until_background_write_finishes(tmp_path, monkeypatch):
+    import threading
+    store = Store(project_directory=tmp_path)
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    original_write = store._write
+    def slow_write(slug, content):
+        loop.call_soon_threadsafe(entered.set)
+        if not release.wait(timeout=5):
+            raise TimeoutError('test did not release writer')
+        return original_write(slug, content)
+    monkeypatch.setattr(store, '_write', slow_write)
+    first = asyncio.create_task(store.save(make_finding(title='Original', slug='first')))
+    await asyncio.wait_for(entered.wait(), 2)
+    first.cancel()
+    retry_finding = make_finding(title='Retry', slug='retry')
+    retry = asyncio.create_task(store.save(retry_finding))
+    await asyncio.sleep(0)
+    assert not retry.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    path = await retry
+    assert retry_finding.title == 'Original'
+    assert list(store.dir.glob('*.md')) == [Path(path)]
