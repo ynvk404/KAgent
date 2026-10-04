@@ -649,11 +649,14 @@ async def main() -> int:
         flags.yolo
     )
     from src.permission.runtime.execution import default_execution_policy
-    prompter.bind_execution_policy(default_execution_policy(engagement_state, project_root()))
+    prompter.bind_execution_policy(default_execution_policy(
+        engagement_state, project_root(),
+        cwe_mcp_deployment_path=cfg.cwe_mcp_deployment_path or None))
     from src.permission.worker.worker import OfflineWorker
     assert prompter.execution_policy is not None
     prompter.execution_policy.worker = await OfflineWorker.available(
         prompter.execution_policy.root, prompter.execution_policy.protected,
+        cwe_mcp_deployment_path=prompter.execution_policy.cwe_mcp_deployment_path,
     )
     findings_store = FindingsStore(project_directory=project_root())
     capture_store = CaptureStore(max_entries=5000)

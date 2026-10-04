@@ -73,6 +73,7 @@ class Config:
     skills_dirs: list[str] = field(default_factory=list)
     disabled_skills: list[str] = field(default_factory=list)
     mcp_servers: list[MCPServerConfig] = field(default_factory=list)
+    cwe_mcp_deployment_path: str = ""
     plugins: list[PluginConfig] = field(default_factory=list)
     session_path: str = ""
     thinking_enabled: bool = False
@@ -204,6 +205,7 @@ def config_from_dict(
         skills_dirs=_string_list_field(data, "skills_dirs"),
         disabled_skills=_string_list_field(data, "disabled_skills"),
         mcp_servers=[_validate_mcp_server(x) for x in _list_field(data, "mcp_servers")],
+        cwe_mcp_deployment_path=_string_field(data, "cwe_mcp_deployment_path", ""),
         plugins=[_validate_plugin(x) for x in _list_field(data, "plugins")],
         session_path=data.get("session_path", ""),
         thinking_enabled=_bool_field(data, "thinking_enabled", False),

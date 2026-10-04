@@ -26,13 +26,20 @@ from src.permission.runtime.execution import policy_for
 from src.redact.redact import apply_evidence
 from src.tools.common.registry import Registry
 from src.tools.mcp.integration import MCPTool
+from src.tools.mcp.cwe_deployment import (
+    CWE_MCP_ARGS,
+    CWE_MCP_COMMAND,
+    CWE_MCP_LAUNCH_PATH,
+    CWE_MCP_SERVER_NAME,
+    require_matching_cwe_deployment,
+)
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.evidence import verify_evidence_reads
 from src.workflow.review import digest, review_snapshot
 
 SEARCH_TOOL = 'mcp_cwe_catalog_search_cwe'
 GET_TOOL = 'mcp_cwe_catalog_get_cwe'
-DEPLOYMENT_LAUNCH = '/work/cwe-mcp-deployment/launch.py'
+DEPLOYMENT_LAUNCH = CWE_MCP_LAUNCH_PATH
 
 
 def promotable(candidate: Candidate) -> bool:
@@ -102,13 +109,14 @@ class TrustedSource:
                     or tool.name() != expected or tool._remote_name != remote
                     or tool._session.server_name != 'cwe_catalog'
                     or tool._execution_policy is not self.policy or tool.cfg is None
-                    or tool.cfg.name != 'cwe_catalog' or tool.cfg.command != '/usr/bin/python3'
-                    or tool.cfg.args != ['-I', '-B', DEPLOYMENT_LAUNCH] or tool.cfg.env
+                    or tool.cfg.name != CWE_MCP_SERVER_NAME or tool.cfg.command != CWE_MCP_COMMAND
+                    or tuple(tool.cfg.args) != CWE_MCP_ARGS or tool.cfg.env
                     or tool.schema() != schema):
                 raise ValueError('designated pinned CWE MCP configuration unavailable or changed')
             tools.append(asdict(tool.cfg))
-        deployment = self.policy.root / 'cwe-mcp-deployment'
-        if deployment.is_symlink() or deployment.resolve() != deployment:
+        deployment = require_matching_cwe_deployment(self.policy, self.policy.worker)
+        if (deployment is None or not deployment.is_absolute() or deployment.is_symlink()
+                or deployment.resolve() != deployment or not deployment.is_dir()):
             raise ValueError('unsafe CWE deployment')
         manifest_path = deployment / 'manifest.json'
         if manifest_path.is_symlink() or not 0 < manifest_path.stat().st_size <= 4096:
@@ -121,7 +129,7 @@ class TrustedSource:
             raise ValueError('reviewed manifest identity mismatch')
         files = ['launch.py', 'manifest.json', *('server/cwe_mcp/'+name for name in
                  ('__init__.py', 'contract.py', 'catalog.py', 'server.py'))]
-        fingerprints = []
+        fingerprints: list[str | None] = []
         for name in files:
             path = deployment / name
             if path.resolve() != path or not path.is_file() or path.stat().st_size > 131072:
@@ -135,7 +143,15 @@ class TrustedSource:
         if xml_hash != EXPECTED_CORPUS.xml_sha256:
             raise ValueError('reviewed CWE deployment corpus changed')
         fingerprints.append(xml_hash)
-        return digest([tools, fingerprints, manifest.model_dump()])
+        archive = deployment / 'runtime.zip'
+        if archive.exists():
+            if archive.resolve() != archive or not archive.is_file() or archive.stat().st_size > 64 * 1024 * 1024:
+                raise ValueError('unsafe CWE runtime archive')
+            with archive.open('rb') as stream:
+                fingerprints.append(hashlib.file_digest(stream, 'sha256').hexdigest())
+        else:
+            fingerprints.append(None)
+        return digest([tools, fingerprints, manifest.model_dump(), str(deployment)])
 
     def unchanged(self):
         if self.current_signature() != self.signature:

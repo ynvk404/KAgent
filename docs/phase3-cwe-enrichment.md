@@ -37,36 +37,84 @@ modules. `setup.py` acquires/builds only at setup time. `launch.py`, `server.py`
 `catalog.py`, and `contract.py` are the independent runtime component.
 `scripts/check_cwe_mcp.py` is controller-side acceptance tooling, not server code.
 
-The generated development deployment is deliberately separate:
+The generated deployment is deliberately separate from source and can live
+outside the repository at an operator-selected canonical absolute path. It must
+not overlap worker-writable output or protected controller storage. A sibling
+directory can contain:
 
 ```text
-cwe-mcp-deployment/
+/path/to/cwe-mcp-deployment/
   launch.py
   server/cwe_mcp/{__init__,contract,catalog,server}.py
   runtime/                         # separately installed SDK/dependencies
+  runtime.zip                      # offline-prepared Python import archive
   manifest.json
   corpus/cwec_v4.20.xml
   corpus/cwe_schema_v7.3.xsd
   corpus/CWE-TERMS-OF-USE.html
 ```
 
-It is ignored by Git. No corpus, wheels, binaries or generated dependency trees
-are added to version control. The existing worker maps the project read-only to
-`/work`; this non-protected deployment is visible there. `/usr/bin/python3`
-runs with `-I -B`; the launcher explicitly adds only deployment-local runtime
-and server directories. It does not import from the hidden KAgent virtualenv,
-export environment variables, or symlink to host dependencies. Python bytecode
-writes and server logs are disabled. The server performs no runtime acquisition,
-network/target interaction, query logging/retention or application writes.
+The deployment is generated and not committed. The repository keeps a
+`.gitignore` entry for a legacy repository-local copy, but normal runtime no
+longer requires that directory. The worker exposes only the configured
+deployment directory, read-only at `/opt/kagent-cwe-mcp/`, and only for the
+exact designated `cwe_catalog` launch. It does not mount the parent or sibling
+directories. `/usr/bin/python3` runs with `-I -B`; the launcher explicitly adds
+only the deployment-local runtime archive, runtime and server directories. It
+does not import from the hidden KAgent virtualenv, export environment variables,
+or symlink to host
+dependencies. Python bytecode writes and server logs are disabled. The server
+performs no runtime acquisition, network/target interaction, query
+logging/retention or application writes.
+
+Setup prepares `runtime.zip` with the serving `/usr/bin/python3` interpreter.
+Pure Python modules, precompiled bytecode, resources, licenses and distribution
+metadata are bundled in a compressed archive to reduce dependency import I/O on WSL-mounted drives.
+Packages containing native extensions remain in `runtime/`, with their original
+filesystem paths. The launcher prefers the archive; existing unprepared trees
+remain compatible but slower. The launcher reads the prepared archive once into
+a process-private sealed Linux memfd and imports through its `/proc/self/fd`
+path. This uses the existing worker `/proc` and resource limits: no extraction,
+host/tmp cache, added mount, shared session or persistent write. The compressed
+archive is limited to the existing 16 MiB per-file bound. Serving never creates
+or updates deployment bytecode or the archive, and every RPC still starts a
+fresh isolated process. Catalog startup reuses the bounded XML parser's tree,
+instead of constructing a second full tree.
+
+Prepared archives contain a complete dependency file/directory inventory with
+SHA-256 hashes, including native packages and resources left on disk. The
+worker verifies it against the current no-follow runtime inspection before
+spawn, under the existing cancellable 120-second inspection budget. Changed,
+added or removed dependencies fail closed before initialization; preserved size
+or mtime does not bypass content verification. Old archives without this
+inventory require explicit re-packing. Serving never regenerates them.
+
+An existing deployment can receive just the offline import preparation, without
+reinstalling dependencies, downloading corpus data or rebuilding the tree:
+
+```sh
+/usr/bin/python3 -I -B components/cwe_mcp/pack_runtime.py /path/to/cwe-mcp-deployment
+```
+
+Use the current reviewed `launch.py` with that prepared archive. The source
+signature includes archive bytes; adding, replacing or removing it during
+classification review invalidates the review. Policy and worker deployment
+paths must match before discovery, dispatch and trusted-source verification.
 KAgent's ordinary permission/tool/session context has its usual retention; this
 feature does not claim universal context egress or non-retention guarantees.
 
 Fresh setup (never overwrites an existing destination):
 
 ```sh
-venv-linux/bin/python -m components.cwe_mcp.setup cwe-mcp-deployment
-venv-linux/bin/python -m scripts.check_cwe_mcp
+venv-linux/bin/python -m components.cwe_mcp.setup /path/to/cwe-mcp-deployment
+venv-linux/bin/python -m scripts.check_cwe_mcp --deployment /path/to/cwe-mcp-deployment
 ```
+
+Set `cwe_mcp_deployment_path` in the operator's KAgent config to that same
+absolute path. Ordinary startup reuses the existing deployment; rebuild it only
+when the component source, pinned corpus, or runtime dependencies change. Setup
+refuses to overwrite an existing destination. A new destination can be built
+and accepted before an operator switches the configured path.
 
 This task acquired and independently hashed the exact official
 [MITRE ZIP](https://cwe.mitre.org/data/xml/cwec_v4.20.xml.zip) and
@@ -92,16 +140,22 @@ This corpus is separately licensed; it is not relicensed as KAgent source.
 
 ## Exact ready-to-use MCP configuration
 
-Add this **entry** to KAgent's existing `mcp_servers` array when activating the
-feature. No active MCP/provider/user configuration was edited by this task.
-The command and path are intentionally designated by the consumer; arbitrary
-servers sharing a display name are not accepted.
+Set the top-level deployment path and add this **entry** to KAgent's existing
+`mcp_servers` array when activating the feature. No active MCP/provider/user
+configuration was edited by this task. The host path is explicit operator
+configuration; the worker-visible path is fixed. Arbitrary servers sharing a
+display name are not accepted.
 
 ```json
 {
-  "name": "cwe_catalog",
-  "command": "/usr/bin/python3",
-  "args": ["-I", "-B", "/work/cwe-mcp-deployment/launch.py"]
+  "cwe_mcp_deployment_path": "/path/to/cwe-mcp-deployment",
+  "mcp_servers": [
+    {
+      "name": "cwe_catalog",
+      "command": "/usr/bin/python3",
+      "args": ["-I", "-B", "/opt/kagent-cwe-mcp/launch.py"]
+    }
+  ]
 }
 ```
 
@@ -197,7 +251,8 @@ checks exact MCPTool/config/server/session/tool/schema/ExecutionPolicy identity,
 then snapshots configuration, deployment code, manifest and pinned XML integrity.
 Changed source/tool/configuration during retrieval or review invalidates it.
 The native file-tool write gate also protects the imported component source and
-`cwe-mcp-deployment/` as new CWE control-plane resources, including under YOLO.
+the explicitly configured CWE deployment as control-plane resources, including
+under YOLO.
 Native writes to legacy `findings/` are also blocked, so models cannot forge
 historical report bindings or erase an existing classification. Read-only
 worker mounts, network authority and general MCP permissions are unchanged. Setup/maintenance is an external operator operation; model file
@@ -309,8 +364,9 @@ classification-only byte preservation, retry/resume, cancellation before/after
 replace and failure/durability/notification behavior. Existing live/external
 skip semantics are preserved.
 
-Real acceptance runs `scripts/check_cwe_mcp.py` with the official corpus and
-separately installed server. It uses the repository's real mounts, configured
+Real acceptance runs `scripts/check_cwe_mcp.py --deployment <absolute-path>`
+with the official corpus and separately installed server. It uses the
+repository's real mounts, configured
 MCP discovery and Registry execution, and verifies denial, namespace/protection/
 read-only mounts, no target HTTP grants, and process cleanup on cancellation and
 timeout. Cleanup tests deliberately stall controller delivery **after a real

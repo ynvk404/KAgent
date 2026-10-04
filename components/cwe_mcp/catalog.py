@@ -7,6 +7,7 @@ import time
 import unicodedata
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import cast
 
 from .contract import (ABSTRACTIONS, ALGORITHM, EXPECTED_MANIFEST, Manifest, NAMESPACE,
                        SCHEMA_IDENTITY, STATUSES, STRUCTURES, USAGES, XML_BYTES,
@@ -41,17 +42,23 @@ class Catalog:
                 or re.search(r'<!\s*(?:DOCTYPE|ENTITY)', decoded, re.I)):
             raise ValueError('XML integrity')
         parser = ET.XMLPullParser(events=('start', 'end'))
+        root: ET.Element | None = None
         depth = count = 0
         for offset in range(0, len(raw), 65536):
             parser.feed(raw[offset:offset + 65536])
             for event_data in parser.read_events():
-                event = event_data[0]
+                # Only start/end events were requested; namespace events
+                # (whose payload differs) are absent from this parser.
+                event, element = cast(tuple[str, ET.Element], event_data)
+                if root is None and event == 'start':
+                    root = element
                 depth += 1 if event == 'start' else -1
                 count += event == 'start'
                 if depth > 64 or count > 500000:
                     raise ValueError('XML structure bound')
         parser.close()
-        root = ET.fromstring(raw)
+        if root is None:
+            raise ValueError('empty XML')
         ns = '{' + NAMESPACE + '}'
         if (root.tag != ns + 'Weakness_Catalog' or root.get('Name') != 'CWE'
                 or root.get('Version') != manifest.corpus.version or root.get('Date') != manifest.corpus.date

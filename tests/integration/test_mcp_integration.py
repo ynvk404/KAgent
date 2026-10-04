@@ -1,5 +1,6 @@
 import asyncio
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
+from pathlib import Path
 from typing import Any
 from unittest.mock import create_autospec
 
@@ -11,7 +12,9 @@ from src.tools.mcp.integration import (
     MCPSession,
     sanitize,
 )
+from src.config.config import MCPServerConfig
 from src.tools.common.registry import Registry
+import src.tools.mcp.integration as mcp_integration
 
 
 class FakeSession:
@@ -77,6 +80,148 @@ def test_mcp_actions_require_fresh_high_impact_approval():
         "noSessionCache": True,
         "riskTier": "high-impact",
     }
+
+
+@pytest.mark.asyncio
+async def test_cwe_mcp_rejects_non_designated_launch_before_worker_dispatch():
+    class Worker:
+        cwe_mcp_deployment_path = Path('/operator/configured/cwe-mcp-deployment')
+        calls = []
+
+        async def prepare(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return '/usr/bin/true', []
+
+    worker = Worker()
+    server = MCPServerConfig('cwe_catalog', '/usr/bin/python3',
+                             ['-I', '-B', '/tmp/untrusted/launch.py'])
+
+    with pytest.raises(ValueError, match='invalid designated CWE MCP launch configuration'):
+        await MCPSession._open(server, worker=worker)
+
+    assert worker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_designated_cwe_mcp_never_falls_back_to_unisolated_launch(monkeypatch):
+    server = MCPServerConfig('cwe_catalog', '/usr/bin/python3',
+                             ['-I', '-B', '/opt/kagent-cwe-mcp/launch.py'])
+    called = []
+
+    def forbidden_spawn(*args, **kwargs):
+        called.append(True)
+        raise AssertionError('unisolated CWE MCP launch attempted')
+
+    monkeypatch.setattr(mcp_integration, 'stdio_client', forbidden_spawn)
+    with pytest.raises(ValueError, match='requires an isolated worker'):
+        await MCPSession._open(server)
+
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_discovery_deployment_mismatch_blocks_before_launch(monkeypatch):
+    from types import SimpleNamespace
+    from src.permission.runtime.execution import ExecutionBlocked
+    policy = SimpleNamespace(cwe_mcp_deployment_path=Path('/configured/deployment'),
+                             worker=SimpleNamespace(cwe_mcp_deployment_path=Path('/other/deployment')))
+    calls = []
+    async def forbidden_open(*args, **kwargs):
+        calls.append(True)
+        raise AssertionError('mismatched deployment launched')
+    monkeypatch.setattr(MCPSession, 'open', forbidden_open)
+    server = MCPServerConfig('cwe_catalog', '/usr/bin/python3', ['-I', '-B', '/opt/kagent-cwe-mcp/launch.py'])
+    with pytest.raises(ExecutionBlocked, match='policy-worker-mismatch'):
+        await mcp_integration.discover_mcp_tools(server, execution_policy=policy)
+    assert not calls
+
+
+@pytest.mark.asyncio
+async def test_discovery_path_change_during_initialize_closes_before_listing(monkeypatch):
+    from types import SimpleNamespace
+    from src.permission.runtime.execution import ExecutionBlocked
+    policy = SimpleNamespace(cwe_mcp_deployment_path=Path('/configured/deployment'),
+                             worker=SimpleNamespace(cwe_mcp_deployment_path=Path('/configured/deployment')))
+    closed = []
+    class Session:
+        async def list_tools(self):
+            raise AssertionError('stale deployment discovery accepted')
+        async def close(self):
+            closed.append(True)
+    async def changed_open(*args, **kwargs):
+        policy.cwe_mcp_deployment_path = Path('/replacement/deployment')
+        policy.worker.cwe_mcp_deployment_path = policy.cwe_mcp_deployment_path
+        return Session()
+    monkeypatch.setattr(MCPSession, 'open', changed_open)
+    server = MCPServerConfig('cwe_catalog', '/usr/bin/python3', ['-I', '-B', '/opt/kagent-cwe-mcp/launch.py'])
+    with pytest.raises(ExecutionBlocked, match='changed during discovery'):
+        await mcp_integration.discover_mcp_tools(server, execution_policy=policy)
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('interruption', ['cancel', 'repeat-cancel', 'timeout'])
+async def test_real_initialization_interruption_closes_transport_in_owner_task(tmp_path, monkeypatch, interruption):
+    from src.permission.worker.worker import OfflineWorker
+    from tests.security.test_worker_responsiveness import MCP_SERVER
+    import shutil
+    if not shutil.which('bwrap') or not shutil.which('prlimit'):
+        pytest.skip('existing Linux worker required')
+    worker = await OfflineWorker.available(tmp_path, ())
+    assert worker is not None
+    entered, closed = asyncio.Event(), asyncio.Event()
+    cleanup_entered, release_cleanup = asyncio.Event(), asyncio.Event()
+    owners = []
+    original_transport = mcp_integration.stdio_client
+    loop = asyncio.get_running_loop()
+    errors = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: errors.append(context))
+
+    @asynccontextmanager
+    async def transport(*args, **kwargs):
+        owner = asyncio.current_task()
+        try:
+            async with original_transport(*args, **kwargs) as streams:
+                try:
+                    yield streams
+                finally:
+                    if interruption == 'repeat-cancel':
+                        cleanup_entered.set()
+                        await release_cleanup.wait()
+        finally:
+            owners.append((owner, asyncio.current_task()))
+            closed.set()
+
+    async def stalled_initialize(self, *args, **kwargs):
+        entered.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(mcp_integration, 'stdio_client', transport)
+    monkeypatch.setattr(ClientSession, 'initialize', stalled_initialize)
+    server = MCPServerConfig('initialization_fixture', '/usr/bin/python3', ['-I', '-B', '-u', '-c', MCP_SERVER])
+    task = asyncio.create_task(MCPSession.open(server, worker=worker))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        if interruption in {'cancel', 'repeat-cancel'}:
+            task.cancel()
+        if interruption == 'repeat-cancel':
+            await asyncio.wait_for(cleanup_entered.wait(), 5)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not closed.is_set() and not task.done()
+            release_cleanup.set()
+        with pytest.raises(TimeoutError if interruption == 'timeout' else asyncio.CancelledError):
+            await task
+        assert closed.is_set() and owners and all(a is b for a, b in owners)
+        await asyncio.sleep(0)
+        assert not errors
+    finally:
+        release_cleanup.set()
+        loop.set_exception_handler(previous_handler)
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

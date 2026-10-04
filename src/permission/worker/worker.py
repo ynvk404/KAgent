@@ -17,6 +17,7 @@ import threading
 import time
 
 from src.permission.network.grants import check_cancelled
+from src.tools.mcp.cwe_deployment import CWE_MCP_MOUNT_PATH, verify_cwe_runtime_archive
 
 from src.permission.runtime.execution import ExecutionBlocked
 
@@ -29,19 +30,41 @@ EXCLUDED_DIRECTORY_NAMES = frozenset({
 })
 
 
+def _paths_overlap(first: Path, second: Path) -> bool:
+    if first.is_relative_to(second) or second.is_relative_to(first):
+        return True
+    # Canonical spelling does not normalize case on a case-insensitive WSL
+    # drive, and bind mounts can give one directory multiple absolute paths.
+    # Compare ancestor identities as well as lexical containment.
+    try:
+        left, right = first.stat(), second.stat()
+    except FileNotFoundError:
+        return False
+    for root, expected in ((first, right), (second, left)):
+        for ancestor in (root, *root.parents):
+            info = ancestor.stat()
+            if (info.st_dev, info.st_ino) == (expected.st_dev, expected.st_ino):
+                return True
+    return False
+
+
 class OfflineWorker:
-    def __init__(self, root: Path, protected: tuple[Path, ...], binary: str, limiter: str):
+    def __init__(self, root: Path, protected: tuple[Path, ...], binary: str, limiter: str,
+                 *, cwe_mcp_deployment_path: Path | None = None):
         self.root = root.resolve()
         self.protected = (*protected, self.root / '.kagent')
         self.binary = binary
         self.limiter = limiter
+        self.cwe_mcp_deployment_path = (Path(cwe_mcp_deployment_path).expanduser()
+                                        if cwe_mcp_deployment_path else None)
         self.output_root = self.root / "artifacts/worker"
         self.output_root.mkdir(parents=True, exist_ok=True)
         if self.output_root.is_symlink() or not self.output_root.resolve().is_relative_to(self.root):
             raise ExecutionBlocked("blocked: unsafe-worker-output-root")
 
     @classmethod
-    async def available(cls, root: Path, protected: tuple[Path, ...]) -> "OfflineWorker | None":
+    async def available(cls, root: Path, protected: tuple[Path, ...], *,
+                        cwe_mcp_deployment_path: Path | None = None) -> "OfflineWorker | None":
         binary, limiter = shutil.which("bwrap"), shutil.which("prlimit")
         if sys.platform != "linux" or binary is None or limiter is None:
             return None
@@ -59,7 +82,8 @@ class OfflineWorker:
                     await proc.wait()
                     if proc.returncode != 0:
                         return None
-            return cls(root, protected, binary, limiter)
+            return cls(root, protected, binary, limiter,
+                       cwe_mcp_deployment_path=cwe_mcp_deployment_path)
         except (OSError, asyncio.TimeoutError, ExecutionBlocked):
             return None
         finally:
@@ -71,7 +95,8 @@ class OfflineWorker:
                 await proc.wait()
 
     async def prepare(self, command: str, argv: list[str], *, broker: Path | None = None,
-                      scanner: bool = False, signal=None) -> tuple[str, list[str]]:
+                      scanner: bool = False, signal=None,
+                      cwe_mcp_deployment_path: Path | None = None) -> tuple[str, list[str]]:
         """Inspect off the UI loop; cancellation/revoke never dispatch a child.
 
         A stopped thread checks its flag between filesystem operations. Python
@@ -94,6 +119,7 @@ class OfflineWorker:
         check_authority()
         inspection = asyncio.create_task(asyncio.to_thread(
             self.wrap, command, list(argv), broker=broker, scanner=scanner,
+            cwe_mcp_deployment_path=cwe_mcp_deployment_path,
             _stopped=stopped, _deadline=deadline))
         try:
             while not inspection.done():
@@ -114,6 +140,7 @@ class OfflineWorker:
             raise ExecutionBlocked("blocked: worker-resource-changed")
 
     def wrap(self, command: str, argv: list[str], *, broker: Path | None = None, scanner: bool = False,
+             cwe_mcp_deployment_path: Path | None = None,
              _stopped: threading.Event | None = None, _deadline: float | None = None) -> tuple[str, list[str]]:
         def checkpoint() -> None:
             if _stopped is not None and _stopped.is_set():
@@ -123,6 +150,9 @@ class OfflineWorker:
 
         checkpoint()
         self._check_roots()
+        deployment = None
+        if cwe_mcp_deployment_path is not None:
+            deployment = self._validate_cwe_deployment(cwe_mcp_deployment_path, checkpoint)
         def scan_error(error: OSError) -> None:
             raise ExecutionBlocked("blocked: worker-root-inspection-failed") from error
 
@@ -176,6 +206,8 @@ class OfflineWorker:
             args += ['--setenv', 'GOMAXPROCS', '2', '--setenv', 'GOMEMLIMIT', '134217728']
         args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--ro-bind", str(self.root), "/work",
                  "--bind", str(self.output_root), "/work/artifacts/worker"]
+        if deployment is not None:
+            args += ["--ro-bind", str(deployment), CWE_MCP_MOUNT_PATH]
         for protected in self.protected:
             if protected.is_relative_to(self.root) and protected.exists():
                 destination = "/work/" + protected.relative_to(self.root).as_posix()
@@ -198,5 +230,59 @@ class OfflineWorker:
         args += ["--chdir", "/work", "--", command, *argv]
         return self.limiter, args
 
+    def _validate_cwe_deployment(self, requested: Path, checkpoint) -> Path:
+        configured = self.cwe_mcp_deployment_path
+        path = Path(requested).expanduser()
+        if configured is None or path != configured or not path.is_absolute():
+            raise ExecutionBlocked("blocked: unconfigured-CWE-deployment-mount")
+        try:
+            info = path.lstat()
+            if (stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode)
+                    or path.resolve(strict=True) != path):
+                raise ExecutionBlocked("blocked: unsafe-CWE-deployment-root")
+            # A read-only bind is ineffective if the same files are exposed
+            # through the worker's writable output mount. Reject ancestors too:
+            # mounting the whole project would expose that writable subtree.
+            output = self.output_root.resolve(strict=True)
+            if _paths_overlap(path, output):
+                raise ExecutionBlocked("blocked: CWE-deployment-overlaps-writable-worker-output")
+            if any(_paths_overlap(path, protected) for protected in self.protected):
+                raise ExecutionBlocked("blocked: CWE-deployment-overlaps-protected-control-plane")
+
+            def scan_error(error: OSError) -> None:
+                raise ExecutionBlocked("blocked: CWE-deployment-inspection-failed") from error
+
+            runtime_entries: dict[str, Path | None] = {}
+            runtime = path / 'runtime'
+            for directory, folders, files in os.walk(path, followlinks=False, onerror=scan_error):
+                checkpoint()
+                for name in [*folders, *files]:
+                    item = Path(directory) / name
+                    entry = item.lstat()
+                    # The canonical root plus a no-follow walk rejects every
+                    # symlink component. Resolving every leaf here causes many
+                    # redundant filesystem round trips, especially on mounted
+                    # Windows drives.
+                    if stat.S_ISLNK(entry.st_mode):
+                        raise ExecutionBlocked("blocked: symlink-in-CWE-deployment")
+                    if stat.S_ISDIR(entry.st_mode):
+                        if item != runtime and item.is_relative_to(runtime):
+                            runtime_entries[item.relative_to(runtime).as_posix()] = None
+                        continue
+                    if (not stat.S_ISREG(entry.st_mode) or entry.st_nlink > 1):
+                        raise ExecutionBlocked("blocked: special-file-or-hardlink-in-CWE-deployment")
+                    if item.is_relative_to(runtime):
+                        runtime_entries[item.relative_to(runtime).as_posix()] = item
+            verify_cwe_runtime_archive(path, runtime_entries, checkpoint)
+            return path
+        except ExecutionBlocked:
+            raise
+        except (FileNotFoundError, OSError, RuntimeError) as error:
+            raise ExecutionBlocked("blocked: unavailable-CWE-deployment") from error
+
     def summary(self) -> str:
-        return "Linux isolated worker: lab read-only; artifacts/worker writable; direct network denied; per-invocation scoped plaintext HTTP broker; CONNECT/raw TCP unavailable; per-process 512 MiB AS/120 CPU s; ffuf adapter 4 GiB AS, GOMAXPROCS 2; 16 MiB per-file; real-UID NPROC 1024 (not a cgroup/disk quota)"
+        cwe_mount = f"; configured CWE MCP read-only mount at {CWE_MCP_MOUNT_PATH}" if self.cwe_mcp_deployment_path else ""
+        return ("Linux isolated worker: lab read-only; artifacts/worker writable; direct network denied; "
+                "per-invocation scoped plaintext HTTP broker; CONNECT/raw TCP unavailable; per-process "
+                "512 MiB AS/120 CPU s; ffuf adapter 4 GiB AS, GOMAXPROCS 2; 16 MiB per-file; "
+                f"real-UID NPROC 1024 (not a cgroup/disk quota){cwe_mount}")

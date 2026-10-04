@@ -35,6 +35,16 @@ def test_official_structure_and_exact_types(make_catalog):
     assert missing['found'] is False and missing['candidate'] is None
 
 
+def test_catalog_reuses_the_bounded_parse_without_building_a_second_tree(make_catalog, monkeypatch):
+    import components.cwe_mcp.catalog as module
+    def second_parse(*args, **kwargs):
+        raise AssertionError('full XML must only be parsed once')
+    monkeypatch.setattr(module.ET, 'fromstring', second_parse)
+    catalog = make_catalog()
+    assert catalog.get({'id': 862})['candidate']['id'] == 862
+    assert catalog.search({'query': 'authorization'})['candidates']
+
+
 @pytest.mark.parametrize('usage', ['Allowed', 'Allowed-with-Review', 'Discouraged', 'Prohibited'])
 @pytest.mark.parametrize('status', ['Deprecated', 'Obsolete', 'Draft', 'Incomplete', 'Usable', 'Stable'])
 def test_status_and_mapping_usage_never_coerced(make_catalog, usage, status):

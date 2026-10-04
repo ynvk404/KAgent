@@ -112,6 +112,17 @@ async def test_official_openai_config_roundtrip_keeps_distinct_key_and_manual_sn
     assert reloaded.manual_openai_compat_base_url == "https://manual.example/v1"
 
 
+@pytest.mark.asyncio
+async def test_cwe_deployment_path_is_explicit_config_and_round_trips(temp_config):
+    cfg = default_config()
+    cfg.cwe_mcp_deployment_path = "/operator/configured/cwe-mcp-deployment"
+    await save(cfg)
+
+    reloaded = load()
+    assert reloaded.cwe_mcp_deployment_path == "/operator/configured/cwe-mcp-deployment"
+    assert config.config_to_dict(reloaded)["cwe_mcp_deployment_path"] == cfg.cwe_mcp_deployment_path
+
+
 def test_malformed_custom_profile_load_falls_back_without_losing_manual_state(
     temp_config,
 ):

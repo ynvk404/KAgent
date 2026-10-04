@@ -56,6 +56,9 @@ def build(destination: Path, *, acquisition: Path | None = None):
         shutil.copy2(source / name, package / name)
     subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-compile', '--only-binary=:all:',
                     '--target', str(destination / 'runtime'), 'mcp==1.28.1'], check=True)
+    # Compile with the serving interpreter, whose ABI may differ from setup's.
+    subprocess.run(['/usr/bin/python3', '-I', '-B', str(source / 'pack_runtime.py'),
+                    str(destination.resolve())], check=True)
     # Target installs may create launcher scripts referring to the host env;
     # runtime uses only imports through launch.py and /usr/bin/python3.
     print(f'Built {destination}; mcp==1.28.1; XML SHA-256={XML_SHA256}')

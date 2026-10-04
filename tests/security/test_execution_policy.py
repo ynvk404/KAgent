@@ -159,6 +159,19 @@ async def test_outside_root_protected_symlink_hardlink_blocked(runtime, tmp_path
     assert not operator.requests
 
 
+def test_operator_configured_cwe_deployment_is_write_protected_even_at_custom_path(tmp_path):
+    deployment = tmp_path / "operator-named-deployment"
+    deployment.mkdir()
+    corpus = deployment / "corpus.xml"
+    corpus.write_text("pinned fixture")
+    policy = ExecutionPolicy(EngagementState(), tmp_path,
+                             cwe_mcp_deployment_path=deployment)
+
+    assert policy.require_path(corpus) == corpus
+    with pytest.raises(ExecutionBlocked, match="CWE adapter control-plane"):
+        policy.require_path(corpus, write=True)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name,args", [("http", {"url": "/", "phase": "recon"}),
                                      ("web_fetch", {"url": ORIGIN}), ("web_search", {"query": "fixture"}),

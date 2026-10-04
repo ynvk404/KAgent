@@ -6,8 +6,8 @@ The only durable output is bounded acceptance metadata under artifacts/.
 from __future__ import annotations
 
 import asyncio
+import argparse
 import json
-import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -27,13 +27,19 @@ from src.permission.worker.worker import OfflineWorker
 from src.skills.registry import Registry as Skills
 from src.tools.common.registry import Registry
 from src.tools.mcp import integration
+from src.tools.mcp.cwe_deployment import (
+    CWE_MCP_ARGS,
+    CWE_MCP_COMMAND,
+    CWE_MCP_LAUNCH_PATH,
+    CWE_MCP_SERVER_NAME,
+)
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.ui.commands.result_review import review_result
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
 
-CONFIG_ENTRY = {'name': 'cwe_catalog', 'command': '/usr/bin/python3',
-                'args': ['-I', '-B', '/work/cwe-mcp-deployment/launch.py']}
+CONFIG_ENTRY = {'name': CWE_MCP_SERVER_NAME, 'command': CWE_MCP_COMMAND,
+                'args': list(CWE_MCP_ARGS)}
 
 class Operator:
     def __init__(self):
@@ -43,12 +49,13 @@ class Operator:
         self.requests.append(request.tool)
         return self.decision
 
-async def connect(root, *, scope=None):
+async def connect(root, deployment, *, scope=None):
     engagement = EngagementState()
     if scope:
         engagement.add_origin(scope)
-    policy = default_execution_policy(engagement, root)
-    policy.worker = await OfflineWorker.available(root, policy.protected)
+    policy = default_execution_policy(engagement, root, cwe_mcp_deployment_path=deployment)
+    policy.worker = await OfflineWorker.available(root, policy.protected,
+                                                  cwe_mcp_deployment_path=deployment)
     if policy.worker is None:
         raise RuntimeError('BLOCKED: existing isolated worker unavailable')
     operator = Operator()
@@ -112,8 +119,8 @@ async def assert_cleanup(root, baseline):
     raise AssertionError('isolated MCP child remained after invocation cleanup')
 
 
-async def checks(root):
-    registry, prompter, policy, operator, session, metrics = await connect(root)
+async def checks(root, deployment):
+    registry, prompter, policy, operator, session, metrics = await connect(root, deployment)
     try:
         search = parse_response(await registry.execute('mcp_cwe_catalog_search_cwe',
             {'query': 'missing authorization', 'max_results': 5}, None, prompter), 'search')
@@ -138,15 +145,19 @@ async def checks(root):
         prompter.set_yolo(True)
         # Verify protection/read-only mounts and network namespace directly with
         # the existing worker; no authority or mount rules are changed.
-        diagnostic = ("import os,socket; from pathlib import Path; "
+        diagnostic = ("import os,socket,errno; from pathlib import Path; "
             "assert not list(Path('/work/.kagent').iterdir()); "
             "assert Path('/proc/net/route').read_text().count('\\n') <= 1; "
             "assert 'eth0' not in Path('/proc/net/dev').read_text(); "
             "assert not Path('/work/venv-linux/pyvenv.cfg').exists(); "
-            "exec(\"try:\\n Path('/work/cwe-mcp-deployment/write-probe').write_text('no')\\n"
-            "except OSError as e:\\n assert e.errno == 30\\nelse:\\n raise AssertionError('deployment writable')\"); "
+            "assert not Path('/work/cwe-mcp-deployment').exists(); "
+            f"assert Path({str(Path('/opt/kagent-cwe-mcp') / 'manifest.json')!r}).is_file(); "
+            f"assert not Path({str(deployment)!r}).exists(); "
+            "exec(\"try:\\n Path('/opt/kagent-cwe-mcp/write-probe').write_text('no')\\n"
+            "except OSError as e:\\n assert e.errno == errno.EROFS\\nelse:\\n raise AssertionError('deployment writable')\"); "
             "print('isolation active')")
-        command, argv = await policy.worker.prepare('/usr/bin/python3', ['-I', '-B', '-c', diagnostic])
+        command, argv = await policy.worker.prepare('/usr/bin/python3', ['-I', '-B', '-c', diagnostic],
+                                                     cwe_mcp_deployment_path=deployment)
         child = await asyncio.create_subprocess_exec(command, *argv, stdout=asyncio.subprocess.PIPE,
                                                      stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await asyncio.wait_for(child.communicate(), 10)
@@ -176,32 +187,54 @@ async def checks(root):
             assert policy.active == 0
             await assert_cleanup(root, baseline)
             entered.clear()
-            old_timeout = integration.MCP_CALL_TIMEOUT_S
-            # Timeout includes the real call plus the deliberately held delivery.
-            integration.MCP_CALL_TIMEOUT_S = 3.0
+            # Exercise the actual configured call deadline; never replace it
+            # with a shorter acceptance-only value.
             try:
                 await registry.execute('mcp_cwe_catalog_get_cwe', {'id': 862}, None, prompter)
             except TimeoutError:
                 pass
             else:
                 raise AssertionError('timeout did not propagate')
-            finally:
-                integration.MCP_CALL_TIMEOUT_S = old_timeout
             assert policy.active == 0
             await assert_cleanup(root, baseline)
         finally:
             ClientSession.call_tool = original_call
+        # Cancellation before _open returns must also unwind SDK contexts in
+        # the owner task, rather than leaving them to async-generator GC.
+        original_initialize = ClientSession.initialize
+        initializing = asyncio.Event()
+        async def initialization_boundary(self, *args, **kwargs):
+            initializing.set()
+            return await original_initialize(self, *args, **kwargs)
+        ClientSession.initialize = initialization_boundary
+        task = asyncio.create_task(registry.execute('mcp_cwe_catalog_get_cwe', {'id': 862}, None, prompter))
+        try:
+            await asyncio.wait_for(initializing.wait(), 50)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError('initialization cancellation did not propagate')
+            assert policy.active == 0
+            await assert_cleanup(root, baseline)
+        finally:
+            ClientSession.initialize = original_initialize
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
         metrics.update(real_registry_search=True, real_registry_get=True, corpus_verified=True,
             normal_permission_denial=True, no_http_grants=True, isolation_active=True,
-            cancellation_cleanup=True, timeout_cleanup=True)
+            cancellation_cleanup=True, timeout_cleanup=True, initialization_cancellation_cleanup=True)
         return metrics
     finally:
         await session.close()
 
 
-async def operator_flow(root):
+async def operator_flow(root, deployment):
     origin = 'http://127.0.0.1:65534'  # Synthetic state only: no target interaction.
-    registry, prompter, policy, operator, session, metrics = await connect(root, scope=origin)
+    registry, prompter, policy, operator, session, metrics = await connect(root, deployment, scope=origin)
     try:
         state = WorkflowState()
         candidate, _ = state.add_candidate(Candidate(candidate_class='access-control', target=origin,
@@ -266,21 +299,40 @@ async def operator_flow(root):
         await session.close()
 
 
-async def main():
+async def main(deployment: Path):
     repository = Path(__file__).resolve().parents[1]
-    deployment = repository / 'cwe-mcp-deployment'
-    if not deployment.is_dir():
-        raise RuntimeError('BLOCKED: run explicit pinned CWE setup first')
-    report = {'repository_mount': await checks(repository)}
-    with tempfile.TemporaryDirectory(prefix='kagent-cwe-acceptance-') as directory:
-        root = Path(directory)
-        # Copy regular files; no hardlinks/symlinks into the hidden host env.
-        shutil.copytree(deployment, root / 'cwe-mcp-deployment')
-        report['isolated_operator_flow'] = await operator_flow(root)
+    if deployment.is_symlink() or not deployment.is_dir() or deployment.resolve() != deployment:
+        raise RuntimeError('BLOCKED: configured CWE deployment must be a canonical directory')
+    initializations = []
+    original_initialize = ClientSession.initialize
+    async def measured_initialize(self, *args, **kwargs):
+        started = time.monotonic()
+        completed = False
+        try:
+            result = await original_initialize(self, *args, **kwargs)
+            completed = True
+            return result
+        finally:
+            sample = {'seconds': time.monotonic() - started, 'completed': completed}
+            initializations.append(sample)
+            print(json.dumps({'initialization_sample': sample}), flush=True)
+    ClientSession.initialize = measured_initialize
+    try:
+        report = {'deployment_path': str(deployment), 'external_deployment': await checks(repository, deployment)}
+        with tempfile.TemporaryDirectory(prefix='kagent-cwe-acceptance-') as directory:
+            root = Path(directory)
+            report['isolated_operator_flow'] = await operator_flow(root, deployment)
+        report['initialization_samples'] = initializations
+    finally:
+        ClientSession.initialize = original_initialize
     destination = repository / 'artifacts/cwe-integration.json'
     destination.parent.mkdir(exist_ok=True)
     destination.write_text(json.dumps(report, indent=2)+'\n')
     print(json.dumps(report, indent=2))
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--deployment', required=True, type=Path,
+                        help='explicit configured CWE MCP deployment root')
+    args = parser.parse_args()
+    asyncio.run(main(args.deployment))

@@ -59,10 +59,15 @@ def invocation_digest(tool: Any, args: dict[str, Any]) -> str:
 
 class ExecutionPolicy:
     def __init__(self, engagement: EngagementState, root: Path, *, protected: tuple[Path, ...] = (),
-                 clock=time.monotonic, max_calls: int = 10000, concurrency: int = 16):
+                 clock=time.monotonic, max_calls: int = 10000, concurrency: int = 16,
+                 cwe_mcp_deployment_path: str | Path | None = None):
         self.engagement = engagement
         self.root = root.resolve()
         self.protected = tuple(p.resolve() for p in protected)
+        # Preserve the configured spelling so worker validation can reject
+        # symlinked and noncanonical roots instead of resolving them away.
+        self.cwe_mcp_deployment_path = (Path(cwe_mcp_deployment_path).expanduser()
+                                        if cwe_mcp_deployment_path else None)
         self.clock = clock
         self.max_calls = max_calls
         self.concurrency = concurrency
@@ -93,6 +98,8 @@ class ExecutionPolicy:
         self.engagement.http_permissions.sync_target()
         profile = hashlib.sha256(json.dumps([str(self.root), [str(p) for p in self.protected],
                                               self.max_calls, self.concurrency,
+                                              str(self.cwe_mcp_deployment_path or ""),
+                                              str(getattr(self.worker, "cwe_mcp_deployment_path", None) or ""),
                                               id(self.worker), self.worker.summary() if self.worker else None],
                                              separators=(",", ":")).encode()).hexdigest()
         return profile, self.revision, self.engagement.revision, self.engagement.http_permissions.revision
@@ -170,6 +177,10 @@ class ExecutionPolicy:
             raise ExecutionBlocked("blocked: canonical-finding-store; use verified finding workflow")
         if write and resolved.is_relative_to(self.root / "findings"):
             raise ExecutionBlocked("blocked: persisted-finding-store; use verified finding workflow")
+        if write and self.cwe_mcp_deployment_path is not None:
+            deployment = self.cwe_mcp_deployment_path.resolve()
+            if resolved.is_relative_to(deployment):
+                raise ExecutionBlocked("blocked: CWE adapter control-plane; use explicit setup maintenance")
         if write and (
             resolved.is_relative_to(self.root / "cwe-mcp-deployment")
             or resolved.is_relative_to(Path(__file__).resolve().parents[3] / "components")
@@ -227,6 +238,10 @@ class ExecutionPolicy:
         if "*" in self.revoked or name in self.revoked:
             raise ExecutionBlocked("blocked: tool/session-revoked")
         module = type(tool).__module__
+        if (module == "src.tools.mcp.integration" and getattr(tool, '_server', None) is not None
+                and tool._server.name == 'cwe_catalog'):
+            from src.tools.mcp.cwe_deployment import require_matching_cwe_deployment
+            require_matching_cwe_deployment(self, self.worker)
         if module == "src.tools.mcp.integration" and (self.worker is None or getattr(tool, '_execution_policy', None) is not self):
             raise ExecutionBlocked('blocked: enforcement-unavailable; MCP isolated executor identity unavailable')
         if module in {"src.tools.execution.shell", "src.tools.execution.plugin"} and self.worker is None:
@@ -324,11 +339,13 @@ def policy_for(prompter: Any) -> ExecutionPolicy | None:
     return policy if isinstance(policy, ExecutionPolicy) else None
 
 
-def default_execution_policy(engagement: EngagementState, root: Path) -> ExecutionPolicy:
+def default_execution_policy(engagement: EngagementState, root: Path, *,
+                             cwe_mcp_deployment_path: str | Path | None = None) -> ExecutionPolicy:
     """Shared CLI/test factory: protected storage is never relaxed by a fixture."""
     runtime = Path(__file__).resolve().parents[3]
     return ExecutionPolicy(engagement, root, protected=(runtime / "src", runtime / "skills",
-        runtime / "AGENTS.md", root / ".git", root / ".kagent"))
+        runtime / "AGENTS.md", root / ".git", root / ".kagent"),
+        cwe_mcp_deployment_path=cwe_mcp_deployment_path)
 
 
 def guard_process(prompter: Any, tool: Any, args: dict[str, Any]):

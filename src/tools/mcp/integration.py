@@ -22,6 +22,11 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from src.config.config import MCPServerConfig
+from src.tools.mcp.cwe_deployment import (
+    CWE_MCP_SERVER_NAME,
+    is_designated_cwe_server,
+    require_matching_cwe_deployment,
+)
 from src.logger.logger import get_logger
 from src.tools.common.types import PermissionHints
 
@@ -126,10 +131,26 @@ class MCPSession:
             raise ValueError(f"mcp server {server.name} has no command")
 
         command, argv = server.command, list(server.args)
+        is_cwe_server = server.name == CWE_MCP_SERVER_NAME
+        if is_cwe_server:
+            if not is_designated_cwe_server(server):
+                raise ValueError('blocked: invalid designated CWE MCP launch configuration')
+            if worker is None:
+                raise ValueError('blocked: designated CWE MCP requires an isolated worker')
         if worker is not None:
             if server.env:
                 raise ValueError('blocked: MCP environment export adapter unavailable; no ambient fallback')
-            command, argv = await worker.prepare(command, argv, broker=broker, signal=signal)
+            cwe_deployment_path = None
+            if is_cwe_server:
+                cwe_deployment_path = worker.cwe_mcp_deployment_path
+                if cwe_deployment_path is None:
+                    raise ValueError('blocked: CWE MCP deployment path is not configured')
+                from src.permission.runtime.execution import current_policy
+                policy = current_policy()
+                if policy is not None:
+                    require_matching_cwe_deployment(policy, worker)
+            command, argv = await worker.prepare(command, argv, broker=broker, signal=signal,
+                                                 cwe_mcp_deployment_path=cwe_deployment_path)
         params = StdioServerParameters(command=command, args=argv,
                                        env={} if worker is not None else server.env)
 
@@ -157,14 +178,13 @@ class MCPSession:
             async def handshake() -> None:
                 await client_session.initialize()
 
-            try:
-                await asyncio.wait_for(handshake(), timeout=HANDSHAKE_TIMEOUT_S)
-            except asyncio.TimeoutError:
-                await exit_stack.aclose()
-                raise
+            await asyncio.wait_for(handshake(), timeout=HANDSHAKE_TIMEOUT_S)
 
             return MCPSession(server.name, client_session, exit_stack)
-        except Exception:
+        except BaseException:
+            # AnyIO contexts must be closed here, in their owning task, even
+            # when cancellation interrupts initialization before a session is
+            # returned. GC finalizers run in a different task and cannot do it.
             await exit_stack.aclose()
             raise
 
@@ -243,6 +263,19 @@ class MCPSession:
             warn("mcp: close deadline exceeded; abandoning child", server=self.server_name)
 
 
+async def _cancel_and_drain_owner(task: asyncio.Task) -> None:
+    """Cancel once; repeated caller cancellation must not interrupt teardown."""
+    if not task.done() and not task.cancelling():
+        task.cancel()
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+    # Retrieve exceptions without moving AnyIO teardown into another task.
+    await asyncio.gather(task, return_exceptions=True)
+
+
 class OwnedMCPSession:
     def __init__(self, server_name):
         self.server_name = server_name
@@ -259,6 +292,8 @@ class OwnedMCPSession:
             session = None
             try:
                 session = await MCPSession._open(server, worker=worker, broker=broker, signal=signal)
+                if ready.done():
+                    raise asyncio.CancelledError
                 ready.set_result(True)
                 while True:
                     method, args, future = await proxy.queue.get()
@@ -284,8 +319,7 @@ class OwnedMCPSession:
         try:
             await ready
         except BaseException:
-            proxy.task.cancel()
-            await asyncio.gather(proxy.task, return_exceptions=True)
+            await _cancel_and_drain_owner(proxy.task)
             raise
         return proxy
 
@@ -298,7 +332,8 @@ class OwnedMCPSession:
             return await future
         except asyncio.CancelledError:
             # A cancelled RPC must not retain an isolated process/lease.
-            self.task.cancel()
+            if not self.task.cancelling():
+                self.task.cancel()
             raise
 
     def is_closed(self):
@@ -319,8 +354,10 @@ class OwnedMCPSession:
             async with asyncio.timeout(CLOSE_DEADLINE_S):
                 await asyncio.shield(self.task)
         except asyncio.TimeoutError:
-            self.task.cancel()
-            await asyncio.gather(self.task, return_exceptions=True)
+            await _cancel_and_drain_owner(self.task)
+        except asyncio.CancelledError:
+            await _cancel_and_drain_owner(self.task)
+            raise
 
 
 class MCPToolSession(Protocol):
@@ -411,6 +448,10 @@ class MCPTool:
             async with broker_directory(signal) as broker:
                 session = await MCPSession.open(self._server, worker=policy.worker, broker=broker, signal=signal)
                 try:
+                    if not policy.nested_allowed():
+                        raise ExecutionBlocked('blocked: MCP execution receipt changed during initialization')
+                    if self._server.name == CWE_MCP_SERVER_NAME:
+                        require_matching_cwe_deployment(policy, policy.worker)
                     result = await session.call_tool(self._remote_name, args, cancel_event)
                 finally:
                     await session.close()
@@ -494,13 +535,19 @@ def extract_mcp_text(content: Any) -> str:
 
 
 async def discover_mcp_tools(server: MCPServerConfig, *, execution_policy: Any = None) -> dict[str, Any]:
+    from src.permission.runtime.execution import ExecutionBlocked
+    deployment = None
     if execution_policy is not None:
-        from src.permission.runtime.execution import ExecutionBlocked
         if execution_policy.worker is None:
             raise ExecutionBlocked('blocked: enforcement-unavailable; MCP isolated worker required')
+        if server.name == CWE_MCP_SERVER_NAME:
+            deployment = require_matching_cwe_deployment(execution_policy, execution_policy.worker)
     server = deepcopy(server)
     session = await MCPSession.open(server, worker=execution_policy.worker if execution_policy else None)
     try:
+        if deployment is not None and execution_policy is not None:
+            if require_matching_cwe_deployment(execution_policy, execution_policy.worker) != deployment:
+                raise ExecutionBlocked('blocked: CWE deployment changed during discovery')
         remote = await session.list_tools()
         tools: list[MCPTool] = []
         for t in remote:

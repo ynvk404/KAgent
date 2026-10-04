@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import shutil
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
@@ -66,7 +67,7 @@ async def scenario(runtime, tmp_path, monkeypatch):
     notifier.clear()
     # Controller pin is independently trusted fixture config; no real acquisition
     # or ambient MCP processes are needed in these focused regression tests.
-    deployment = tmp_path / 'cwe-mcp-deployment'
+    deployment = tmp_path / 'operator-selected-cwe-mcp'
     (deployment / 'server/cwe_mcp').mkdir(parents=True)
     (deployment / 'corpus').mkdir()
     raw = b'Synthetic pinned corpus fixture; no target data.'
@@ -79,7 +80,9 @@ async def scenario(runtime, tmp_path, monkeypatch):
     for file in ('launch.py', 'server/cwe_mcp/__init__.py', 'server/cwe_mcp/contract.py',
                  'server/cwe_mcp/catalog.py', 'server/cwe_mcp/server.py'):
         (deployment / file).write_text('# Reviewed synthetic fixture code\n')
-    policy.worker = SimpleNamespace(summary=lambda: 'isolated fixture worker')
+    policy.cwe_mcp_deployment_path = deployment
+    policy.worker = SimpleNamespace(summary=lambda: 'isolated fixture worker',
+                                   cwe_mcp_deployment_path=deployment)
     remote = SimpleNamespace(item=candidate(), calls=[], closed=0, block=None, opened=asyncio.Event(),
                              cleanup=asyncio.Event(), fail=None, search_override=None, lookup_override=None)
     class Session:
@@ -220,7 +223,8 @@ async def test_failure_preserves_unresolved_finding(scenario, failure):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('change', ['report', 'result', 'identical-retest', 'evidence', 'candidate',
-                                    'policy', 'manifest', 'code', 'corpus', 'config', 'tool'])
+                                    'policy', 'manifest', 'code', 'corpus', 'config',
+                                    'deployment-path', 'runtime-archive', 'tool'])
 async def test_changes_during_operator_selection_invalidate_review(scenario, change):
     s = scenario
     original = report_bytes(s.path)
@@ -248,6 +252,12 @@ async def test_changes_during_operator_selection_invalidate_review(scenario, cha
             (s.deployment / 'corpus/cwec_v4.20.xml').write_text('changed corpus')
         elif change == 'config':
             s.registry.get(enrichment.GET_TOOL)._server.args = ['bad']
+        elif change == 'deployment-path':
+            replacement = s.deployment.parent / 'identical-deployment'
+            shutil.copytree(s.deployment, replacement)
+            s.policy.cwe_mcp_deployment_path = replacement
+        elif change == 'runtime-archive':
+            (s.deployment / 'runtime.zip').write_bytes(b'changed prepared runtime')
         else:
             s.registry.tools.pop(enrichment.GET_TOOL)
         return '1'
@@ -255,6 +265,54 @@ async def test_changes_during_operator_selection_invalidate_review(scenario, cha
     await enrich_cwe(s.app, [s.cand.id])
     assert s.output[-1].entry.kind == 'error' and read_report(s.path).cwe is None
     assert len(s.remote.calls) == 1 and not s.notifier and s.policy.active == 0
+
+
+def test_replacing_configured_deployment_invalidates_trusted_source_signature(scenario):
+    s = scenario
+    source = TrustedSource(s.registry, s.policy)
+    replacement = s.deployment.parent / 'identical-trusted-deployment'
+    shutil.copytree(s.deployment, replacement)
+    s.policy.cwe_mcp_deployment_path = replacement
+    s.policy.worker.cwe_mcp_deployment_path = replacement
+
+    assert source.current_signature() != source.signature
+
+
+def test_worker_deployment_change_invalidates_source_and_policy_stamp(scenario):
+    from src.permission.runtime.execution import ExecutionBlocked
+    s = scenario
+    source = TrustedSource(s.registry, s.policy)
+    stamp = s.policy.stamp()
+    s.policy.worker.cwe_mcp_deployment_path = s.deployment.parent / 'different-deployment'
+
+    assert s.policy.stamp() != stamp
+    with pytest.raises(ExecutionBlocked, match='policy-worker-mismatch'):
+        source.current_signature()
+
+
+@pytest.mark.asyncio
+async def test_worker_policy_deployment_mismatch_prevents_registry_dispatch(scenario):
+    from src.permission.runtime.execution import ExecutionBlocked
+    s = scenario
+    s.policy.worker.cwe_mcp_deployment_path = s.deployment.parent / 'different-deployment'
+    used = s.policy.used
+    with pytest.raises(ExecutionBlocked, match='policy-worker-mismatch'):
+        await s.registry.execute(enrichment.GET_TOOL, {'id': 862}, None, s.prompter)
+    assert not s.remote.calls and s.policy.used == used and s.policy.active == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_path_change_during_initialize_closes_without_rpc(scenario, monkeypatch):
+    from src.permission.runtime.execution import ExecutionBlocked
+    s = scenario
+    session = s.registry.get(enrichment.GET_TOOL)._session
+    async def changed_open(*args, **kwargs):
+        s.policy.worker.cwe_mcp_deployment_path = s.deployment.parent / 'different-deployment'
+        return session
+    monkeypatch.setattr(MCPSession, 'open', changed_open)
+    with pytest.raises(ExecutionBlocked, match='receipt changed during initialization'):
+        await s.registry.execute(enrichment.GET_TOOL, {'id': 862}, None, s.prompter)
+    assert not s.remote.calls and s.remote.closed == 1 and s.policy.active == 0
 
 
 @pytest.mark.asyncio
