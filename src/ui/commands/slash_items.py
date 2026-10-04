@@ -76,6 +76,8 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     ),
     SlashItem(name="/review-result", args="<candidate-id> <outcome> <severity> <impact>",
               description="operator review of immutable proof; does not grant tool execution"),
+    SlashItem(name="/enrich-cwe", args="<candidate-id>",
+              description="review pinned CWE classification for a persisted unresolved finding"),
 
     SlashItem(
         name="/skills",

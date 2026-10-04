@@ -16,6 +16,7 @@ class TextInputRequest:
     reject: Callable[[Exception], None]
     masked: bool = False
     initial_value: str = ""
+    scrollable: bool = False
 
 
 class TextInputModal:

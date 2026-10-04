@@ -1,0 +1,12 @@
+{
+  "manifest_schema_version": "1",
+  "corpus": {
+    "name": "CWE", "version": "4.20", "date": "2026-04-30",
+    "schema_version": "7.3",
+    "xml_sha256": "1f5a78bd62e00f86436b4fe32d5034a57e8f0da88e4063b2072b664ae510912e",
+    "adapter_version": "1.0.0"
+  },
+  "xml_namespace": "http://cwe.mitre.org/cwe-7",
+  "schema_identity": "http://cwe.mitre.org/data/xsd/cwe_schema_v7.3.xsd",
+  "search_algorithm": "weighted-token-v1"
+}

@@ -323,6 +323,13 @@ class ConfirmFindingTool:
             slug=slugify(redacted_title) or f"finding-{int(datetime.now(UTC).timestamp())}",
             candidate_id=candidate_id,
             evidence_refs=evidence_refs,
+            canonical_class=candidate.candidate_class,
+            confirmation_binding=result_snapshot,
+            classification_provenance=(
+                {"origin": "verified-local", "selected_cwe": classification.cwe[0], "revision": 1}
+                if classification and classification.cwe else None
+            ),
+            classification_revision=(1 if classification and classification.cwe else 0),
         )
 
         path = await self.store.save(finding)

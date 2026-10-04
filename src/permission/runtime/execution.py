@@ -168,6 +168,18 @@ class ExecutionPolicy:
             raise ExecutionBlocked("blocked: protected-control-plane")
         if write and resolved.is_relative_to(self.root / "artifacts/findings"):
             raise ExecutionBlocked("blocked: canonical-finding-store; use verified finding workflow")
+        if write and resolved.is_relative_to(self.root / "findings"):
+            raise ExecutionBlocked("blocked: persisted-finding-store; use verified finding workflow")
+        if write and (
+            resolved.is_relative_to(self.root / "cwe-mcp-deployment")
+            or resolved.is_relative_to(Path(__file__).resolve().parents[3] / "components")
+        ):
+            # The controller imports the reviewed wire contract; the isolated
+            # server executes its audited deployment. Model file tools cannot
+            # replace either trust anchor, even with a one-shot approval/YOLO.
+            # Explicit external setup/maintenance still owns these files. This
+            # adds no mounts, network rights or general MCP permission changes.
+            raise ExecutionBlocked("blocked: CWE adapter control-plane; use explicit setup maintenance")
         if resolved.exists():
             kind = resolved.stat().st_mode
             if not (stat.S_ISREG(kind) or stat.S_ISDIR(kind)):

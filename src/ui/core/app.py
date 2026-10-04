@@ -608,6 +608,8 @@ class KAgent(App):
         self._slash_tab_completion: str | None = None
         self._prev_mention_match_count: int | None = None
         self.run_task: asyncio.Task | None = None
+        self._cwe_enrichment_tasks: set[asyncio.Task[None]] = set()
+        self._cwe_enrichment_closing = False
         self.run_abort_event: AbortEvent | None = None
         self.snapshot_task: asyncio.Task | None = None
         self.cols: int = 80
@@ -777,7 +779,10 @@ class KAgent(App):
     ) -> str:
         loop = asyncio.get_running_loop()
 
+        if self.text_input_future is not None and not self.text_input_future.done():
+            raise ValueError("operator input is already pending")
         self.text_input_future = loop.create_future()
+        future = self.text_input_future
 
         self.text_input = TextInputRequest(
             header=input_req.header,
@@ -787,12 +792,21 @@ class KAgent(App):
             resolve=lambda value: self.resolve_text_input(value),
             reject=lambda err: self.reject_text_input(err),
             initial_value=getattr(input_req, "initial_value", "") or "",
+            scrollable=input_req.scrollable,
         )
 
-        self._sync_overlay()
-        self.refresh()
-
-        return await self.text_input_future
+        try:
+            self._sync_overlay()
+            self.refresh()
+            return await future
+        finally:
+            # A cancelled/stale classification review cannot strand an overlay
+            # or clear another caller's newer operator input.
+            if self.text_input_future is future:
+                self.text_input_future = None
+                self.text_input = None
+                self._sync_overlay()
+                self.refresh()
 
     def resolve_text_input(
         self,
@@ -1288,7 +1302,8 @@ class KAgent(App):
         if modal is None:
             return False
 
-        if isinstance(modal, PermissionModal) and key in {"up", "down", "pageup", "pagedown", "home", "end"}:
+        if ((isinstance(modal, PermissionModal) and key in {"up", "down", "pageup", "pagedown", "home", "end"})
+                or (isinstance(modal, TextInputModal) and modal.req.scrollable and key in {"pageup", "pagedown"})):
             scroll = self.overlay_content_static
             if key == "up":
                 scroll.scroll_up(animate=False)
@@ -1373,16 +1388,17 @@ class KAgent(App):
             return
 
         modal = self._get_active_modal()
+        scrollable = isinstance(modal, PermissionModal) or (isinstance(modal, TextInputModal) and modal.req.scrollable)
         self.overlay_static.set_class(
             isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal, ProviderPickerModal)),
             "modal-panel",
         )
         self.overlay_static.set_class(
-            isinstance(modal, PermissionModal),
+            scrollable,
             "permission-panel",
         )
         self.overlay_content_static.set_class(
-            isinstance(modal, PermissionModal),
+            scrollable,
             "permission-content",
         )
 
@@ -1868,7 +1884,23 @@ class KAgent(App):
                 self._run_startup_sequence()
             )
 
+    def start_cwe_enrichment(self, rest: list[str]) -> None:
+        from src.ui.commands.cwe_enrichment import enrich_cwe
+        if self._cwe_enrichment_closing:
+            return
+        task = asyncio.create_task(enrich_cwe(self, rest))
+        self._cwe_enrichment_tasks.add(task)
+        task.add_done_callback(self._cwe_enrichment_tasks.discard)
+
     async def on_unmount(self) -> None:
+        # Cancel before the first shutdown await. Drain preparation/worker and
+        # review cleanup before allowing the runtime to close its resources.
+        self._cwe_enrichment_closing = True
+        tasks = tuple(self._cwe_enrichment_tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
         if self.hang_diagnostics is not None:
             await self.hang_diagnostics.stop()
 

@@ -60,3 +60,6 @@ Thumbs.db
 # Local config
 config.local.json
 .VSCodeCounter/
+
+# Pinned CWE MCP setup output (code/dependencies/corpus are deployment artifacts)
+/cwe-mcp-deployment/

@@ -15,8 +15,9 @@ def digest(value: Any) -> str:
 def review_snapshot(state: WorkflowState, candidate_id: str) -> str:
     """Compare complete review state without changing legacy fingerprints.
 
-    Result position also distinguishes a forced identical retest. This digest
-    is transient concurrency protection, never persisted classification state.
+    Result position also distinguishes a forced identical retest. New reports
+    may retain this digest as their historical confirmation binding. It grants
+    no proof/classification authority and never reconstructs legacy bindings.
     """
     candidate = state.candidates[candidate_id]
     identity = candidate.to_dict()

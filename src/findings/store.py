@@ -3,9 +3,13 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import hashlib
+import json
+import tempfile
+import weakref
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, cast, Any, Callable
 
 from src.paths import project_artifact_root, project_root
 
@@ -27,6 +31,15 @@ _REPORT_SECTIONS = frozenset({
     "Reproduce",
     "Remediation",
 })
+
+# Cooperating Store instances in one process/event loop share the full mutation
+# lock. This is deliberately not cross-process compare-and-swap.
+_STORE_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+MAX_REPORT_BYTES = 2_000_000
+
+
+class ClassificationCommittedError(RuntimeError):
+    """The replacement is visible even though snapshot recovery failed."""
 
 
 @dataclass(slots=True)
@@ -52,6 +65,16 @@ class Finding:
     slug: str = ""
     candidate_id: str | None = None
     evidence_refs: list[str] | None = None
+    canonical_class: str | None = None
+    confirmation_binding: str | None = None
+    classification_provenance: dict[str, Any] | None = None
+    classification_revision: int = 0
+
+    @property
+    def classification_origin(self) -> str | None:
+        if not self.cwe:
+            return None
+        return (self.classification_provenance or {}).get("origin", "legacy/unknown")
 
 
 class Store:
@@ -74,7 +97,92 @@ class Store:
             if directory is not None
             else project_artifact_root(self.project_dir) / "findings"
         )
-        self._save_lock = asyncio.Lock()
+        key = str(self.project_dir)
+        self._save_lock = _STORE_LOCKS.setdefault(key, asyncio.Lock())
+
+    def report_for_candidate(self, candidate_id: str) -> Path:
+        matches: list[Path] = []
+        marker = f"- **Candidate ID:** {candidate_id}".encode("utf-8")
+        for directory in dict.fromkeys((self.dir, self.project_dir / "findings")):
+            if directory.exists():
+                for path in sorted(directory.glob("*.md")):
+                    if marker not in report_bytes(path).splitlines():
+                        continue
+                    if read_report(path).candidate_id == candidate_id:
+                        matches.append(path)
+        if len(matches) != 1:
+            raise ValueError("finding report missing or ambiguous")
+        return matches[0]
+
+    async def promote_classification(
+        self, path: Path, *, expected_digest: str, expected_revision: int,
+        cwe: str, provenance: dict[str, Any], guard: Callable[[], None],
+        publish: Callable[[Finding, str], None],
+    ) -> tuple[Finding, bool]:
+        """One narrow artifact update. The worker thread ONLY prepares a temp.
+
+        os.replace on the controller loop is the visibility/commit point. No
+        await lies between final guards, replacement, and snapshot publication.
+        Cancelled preparation is drained under the shared lock before cleanup.
+        Directory fsync uncertainty never rolls back an already visible report.
+        """
+        async with self._save_lock:
+            guard()
+            raw = report_bytes(path)
+            if hashlib.sha256(raw).hexdigest() != expected_digest:
+                raise ValueError("finding report changed during CWE review")
+            snapshot = read_report(path)
+            if snapshot.cwe or snapshot.classification_revision != expected_revision:
+                raise ValueError("finding already classified or classification revision changed")
+            _read_revision(str(expected_revision + 1))
+            if (not re.fullmatch(r"CWE-[1-9][0-9]{0,5}", cwe)
+                    or provenance.get("origin") != "promoted-external"
+                    or provenance.get("selected_cwe") != cwe
+                    or provenance.get("revision") != expected_revision + 1):
+                raise ValueError("invalid classification update")
+            replacement = classification_replacement(raw, cwe, provenance, expected_revision + 1)
+            pending = asyncio.create_task(asyncio.to_thread(_prepare_classification, path, replacement))
+            temporary = None
+            try:
+                try:
+                    temporary = await asyncio.shield(pending)
+                except asyncio.CancelledError:
+                    while not pending.done():
+                        try:
+                            await asyncio.shield(pending)
+                        except asyncio.CancelledError:
+                            continue
+                    temporary = pending.result()
+                    raise
+                guard()
+                if hashlib.sha256(report_bytes(path)).hexdigest() != expected_digest:
+                    raise ValueError("finding report changed before CWE commit")
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    raise asyncio.CancelledError
+                os.replace(temporary, path)
+                temporary = None  # Commit: the new visible file is authoritative.
+                durable = True
+                try:
+                    _fsync_directory(path.parent)
+                except OSError:
+                    durable = False
+                try:
+                    committed = read_report(path)
+                except Exception as exc:
+                    raise ClassificationCommittedError(
+                        "CWE replacement committed; persisted report refresh failed. Reload the visible report."
+                    ) from exc
+                # Publication is best effort after commit; recovery always reads
+                # persisted data. Neither publish nor notifier can roll back.
+                try:
+                    publish(committed, str(path))
+                except Exception:
+                    pass
+                return committed, durable
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
 
     async def save(
@@ -249,6 +357,15 @@ def render(
     if f.owasp:
         lines.append(f"- **OWASP:** {', '.join(f.owasp)}")
 
+    if f.canonical_class:
+        lines.append(f"- **Canonical class:** {_inline(f.canonical_class)}")
+    if f.confirmation_binding:
+        lines.append(f"- **Confirmation binding:** {f.confirmation_binding}")
+    if f.classification_provenance is not None:
+        lines.append(f"- **Classification provenance:** {json.dumps(f.classification_provenance, sort_keys=True, separators=(',', ':'))}")
+    if f.classification_revision:
+        lines.append(f"- **Classification revision:** {f.classification_revision}")
+
     lines.append(f"- **URL:** {_inline(f.url)}")
 
     if f.method:
@@ -376,7 +493,104 @@ def read_report(path: Path) -> Finding:
         owasp=(value("OWASP") or "").split(", ") if value("OWASP") else None,
         createdAt=value("Reported at") or "", slug=path.stem,
         candidate_id=value("Candidate ID"), evidence_refs=metadata.get("Evidence"),
+        canonical_class=value("Canonical class"), confirmation_binding=value("Confirmation binding"),
+        classification_provenance=_read_provenance(value("Classification provenance")),
+        classification_revision=_read_revision(value("Classification revision")),
     )
+
+
+def _read_revision(value: str | None) -> int:
+    if value is None:
+        return 0
+    if not re.fullmatch(r"[1-9][0-9]{0,8}", value):
+        raise ValueError("invalid persisted classification revision")
+    return int(value)
+
+
+def _read_provenance(value: str | None) -> dict[str, Any] | None:
+    if value is None:
+        return None  # Historical origin remains unknown; never infer taxonomy.
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict) or parsed.get("origin") not in {"verified-local", "promoted-external", "legacy/unknown"}:
+        raise ValueError("invalid persisted classification provenance")
+    return parsed
+
+
+def report_bytes(path: Path) -> bytes:
+    if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
+        raise ValueError("unsafe finding report resource")
+    with path.open("rb") as stream:
+        raw = stream.read(MAX_REPORT_BYTES + 1)
+    if not 0 < len(raw) <= MAX_REPORT_BYTES:
+        raise ValueError("finding report exceeds review bound")
+    return raw
+
+
+def classification_header(raw: bytes):
+    """Require unambiguous historical bindings before retrieval or mutation."""
+    lines = raw.decode("utf-8").splitlines(keepends=True)
+    if not lines or not lines[0].startswith("# "):
+        raise ValueError("ambiguous report structure")
+    boundary = next((i for i, row in enumerate(lines) if row.startswith("## ")), None)
+    if boundary is None or lines[boundary].rstrip("\r\n")[3:] not in _REPORT_SECTIONS:
+        raise ValueError("ambiguous report sections")
+    metadata: dict[str, list[str]] = {}
+    positions = {}
+    for i, row in enumerate(lines[1:boundary], 1):
+        match = re.fullmatch(r"- \*\*(.+?):\*\* (.*)", row.rstrip("\r\n"))
+        if match:
+            metadata.setdefault(match[1], []).append(match[2])
+            positions[match[1]] = i
+        elif row.strip():
+            raise ValueError("ambiguous report metadata")
+    if any(len(values) != 1 for key, values in metadata.items() if key != "Evidence"):
+        raise ValueError("duplicate report metadata")
+    if not all(metadata.get(key) for key in ("Severity", "URL", "Reported at", "Candidate ID", "Evidence", "Canonical class", "Confirmation binding")):
+        raise ValueError("report lacks historical confirmation binding")
+    if any(value.strip() for value in metadata.get("CWE", [])):
+        raise ValueError("classified report cannot be replaced")
+    return lines, boundary, positions
+
+
+def classification_replacement(raw: bytes, cwe: str, provenance: dict[str, Any], revision: int) -> bytes:
+    """Edit only classification header rows, preserving every other byte."""
+    lines, boundary, positions = classification_header(raw)
+    newline = "\r\n" if lines[0].endswith("\r\n") else "\n"
+    updated = {
+        "CWE": cwe, "Classification provenance": json.dumps(provenance, sort_keys=True, separators=(",", ":")),
+        "Classification revision": str(revision),
+    }
+    for key, value in updated.items():
+        if key in positions:
+            lines[positions[key]] = f"- **{key}:** {value}{newline}"
+    additions = [f"- **{key}:** {value}{newline}" for key, value in updated.items() if key not in positions]
+    lines[boundary:boundary] = additions
+    replacement = "".join(lines).encode("utf-8")
+    if len(replacement) > MAX_REPORT_BYTES:
+        raise ValueError("classification replacement exceeds report bound")
+    return replacement
+
+
+def _prepare_classification(path: Path, raw: bytes) -> Path:
+    fd, name = tempfile.mkstemp(prefix=".cwe-", suffix=".tmp", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return temporary
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _fsync_directory(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _inline(value: str) -> str:

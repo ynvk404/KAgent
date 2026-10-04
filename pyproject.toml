@@ -35,4 +35,7 @@ kagent = "src.cli.main:cli_main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["src*", "components", "components.cwe_mcp"]
+
+[tool.setuptools.package-data]
+"components.cwe_mcp" = ["manifest.json"]

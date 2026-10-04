@@ -44,7 +44,7 @@ _KEYBINDINGS: list[tuple[str, str]] = [
 
 _COMMAND_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     ("Everyday", ("/help", "/target", "/scope", "/plan", "/provider", "/model", "/clear", "/reset", "/exit")),
-    ("Workflow", ("/next", "/review-result", "/compact", "/memory", "/skills", "/snapshot")),
+    ("Workflow", ("/next", "/review-result", "/enrich-cwe", "/compact", "/memory", "/skills", "/snapshot")),
     ("Advanced", ("/permissions", "/burp", "/maxsteps", "/thinking", "/yolo")),
 ]
 
@@ -263,6 +263,10 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
     if cmd == "/review-result":
         from src.ui.commands.result_review import review_result
         asyncio.create_task(review_result(app, rest))
+        return True
+
+    if cmd == "/enrich-cwe":
+        app.start_cwe_enrichment(rest)
         return True
 
     if cmd == "/permissions":
