@@ -23,6 +23,7 @@ from src.findings.store import Store as FindingsStore
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
 from src.ui.commands.slash_handler import handle_slash
+from src.findings.classification import classify
 from tests.security.test_repair_runtime import lab, Operator, worker_for
 
 
@@ -95,6 +96,16 @@ async def test_operator_proof_review_separate_from_yolo_tool_approval(lab, tmp_p
     registry.register(ConfirmFindingTool(FindingsStore(project_directory=tmp_path), workflow=state))
     (tmp_path / 'proof.txt').write_text('Synthetic proof; human determines class semantics, not model labels.')
     ref = json.loads(await registry.execute('workflow', {'action':'record_evidence','candidate_id':candidate.id,'evidence_path':'proof.txt'}, None, p))['evidence']['id']
+    finding_args = {
+        'candidate_id': candidate.id, 'title': kind + ' review fixture',
+        'severity': 'critical', 'url': origin + '/review',
+        'observed_impact': 'MODEL CLAIM', 'potential_impact': 'No additional impact assessed.',
+        'vulnerabilityType': 'FORGED TYPE', 'cwe': ['CWE-999999'], 'owasp': ['A99:2099'],
+    }
+    # Classification metadata never supplies proof or substitutes for review.
+    with pytest.raises(Exception, match='not eligible'):
+        await registry.execute('confirm_finding', finding_args, None, p)
+    assert not state.finding_is_persisted(candidate.id) and operator.calls == 0
     output = []
     agent = SimpleNamespace(prompter=p, workflow=state, tools=registry, skills=skills, save=AsyncMock())
     app = SimpleNamespace(agent=agent, dispatch=output.append)
@@ -110,9 +121,26 @@ async def test_operator_proof_review_separate_from_yolo_tool_approval(lab, tmp_p
     assert result.verification_source == 'operator-reviewed'
     assert operator.calls == 1  # conclusion review even in YOLO, not a tool dialog
     assert (await coverage.list())[0].status == 'failed'
-    found = await registry.execute('confirm_finding', {'candidate_id':candidate.id, 'title':kind+' review fixture', 'severity':'critical', 'url':origin+'/review', 'observed_impact':'MODEL CLAIM', 'potential_impact':'No additional impact assessed.'}, None, p)
+    found = await registry.execute('confirm_finding', finding_args, None, p)
     assert 'written to' in found and state.finding_is_persisted(candidate.id)
     assert operator.calls == 1
+    classification = classify(kind)
+    assert classification is not None
+    reports = list((tmp_path / 'artifacts/findings').glob('*.md'))
+    assert len(reports) == 1
+    report = reports[0].read_text(encoding='utf-8')
+    assert f'**Vulnerability Type:** {classification.type}' in report
+    for label, values in (('CWE', classification.cwe), ('OWASP', classification.owasp)):
+        if values:
+            assert f'**{label}:** {", ".join(values)}' in report
+        else:
+            assert f'**{label}:**' not in report
+    assert 'CWE-999999' not in report and 'A99:2099' not in report and 'FORGED TYPE' not in report
+    assert 'MODEL CLAIM' not in report and 'Synthetic observed impact' in report
+    # Retry through the same production gates preserves the original snapshot.
+    await registry.execute('confirm_finding', {**finding_args, 'title': 'Retry renamed'}, None, p)
+    assert reports[0].read_text(encoding='utf-8') == report
+    assert len(list(reports[0].parent.glob('*.md'))) == 1 and operator.calls == 1
 
 
 @pytest.mark.asyncio

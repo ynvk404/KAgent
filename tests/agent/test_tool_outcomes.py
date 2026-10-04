@@ -6,7 +6,7 @@ import json
 import pytest
 
 from src.agent.agent import Agent, AgentOptions, ParsedToolCall
-from src.ask.ask import Question
+from src.tools.common.ask import Question
 from src.engagement.state import EngagementState, OutOfScopeError
 from src.llm.core.types import FunctionCall, ToolCall
 from src.permission.permission import AlwaysAllow, AlwaysDeny, UserControlledRefusal, YoloPrompter

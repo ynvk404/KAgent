@@ -9,6 +9,10 @@ import yaml
 
 from src.logger.logger import get_logger
 from src.skills.artifacts import validate_completion_artifact_template
+from src.vulnerability import (
+    CANDIDATE_CLASS_ALIASES as CANDIDATE_CLASS_ALIASES,
+    normalize_candidate_class as normalize_candidate_class,
+)
 
 log = get_logger("skills.registry")
 
@@ -30,25 +34,6 @@ VALID_STAGES: frozenset[str] = frozenset(
         "reporting",
     }
 )
-
-CANDIDATE_CLASS_ALIASES: dict[str, str] = {
-    "sqli": "sql-injection",
-    "sql-injection": "sql-injection",
-    "nosqli": "nosql-injection",
-    "xss": "cross-site-scripting",
-    "cross-site-scripting": "cross-site-scripting",
-    "idor": "access-control",
-    "bola": "access-control",
-    "access-control": "access-control",
-    "authorization": "access-control",
-    "authentication": "authentication",
-    "csrf": "csrf",
-    "ssrf": "ssrf",
-    "ssti": "ssti",
-    "cors": "cors-misconfiguration",
-    "jwt": "jwt-misconfiguration",
-    "cmdi": "command-injection",
-}
 
 OPTIONAL_TOOL_PREFIXES = (
     "mcp_",
@@ -333,11 +318,6 @@ def normalize_metadata_name(value: str) -> str:
         "-",
         re.sub(r"[\s_]+", "-", value.strip().lower()),
     ).strip("-")
-
-
-def normalize_candidate_class(value: str) -> str:
-    normalized = normalize_metadata_name(value)
-    return CANDIDATE_CLASS_ALIASES.get(normalized, normalized)
 
 
 def normalize_trigger(value: str) -> str:

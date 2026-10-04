@@ -2,7 +2,7 @@ import json
 import pytest
 from typing import Any, cast
 from src.tools.common.ask import AskUserTool
-from src.ask.ask import Question
+from src.tools.common.ask import Question
 from src.permission.permission import Prompter
 
 

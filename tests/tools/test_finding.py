@@ -843,6 +843,27 @@ def test_classifications_do_not_share_mutable_lists():
 
 
 @pytest.mark.asyncio
+async def test_findings_own_metadata_snapshots_without_mutating_other_findings(tmp_path):
+    seen: list[Finding] = []
+    tool, _ = _tool(tmp_path, notifier=lambda finding, _: seen.append(finding), candidate_class="sqli")
+    args = _valid_args(tool)
+    await tool.run(args, None, AlwaysAllow())
+    report_path = next((tmp_path / "findings").glob("*.md"))
+    snapshot = report_path.read_bytes()
+    assert seen[0].cwe is not None and seen[0].owasp is not None
+    seen[0].cwe.append("CWE-999999")
+    seen[0].owasp.clear()
+
+    await tool.run(args, None, AlwaysAllow())
+    assert len(seen) == 2
+    assert seen[1].cwe == ["CWE-89"]
+    assert seen[1].owasp == ["A03:2021 Injection"]
+    assert seen[0].cwe is not seen[1].cwe and seen[0].owasp is not seen[1].owasp
+    assert report_path.read_bytes() == snapshot
+    assert len(list(report_path.parent.glob("*.md"))) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "missing,message",
     [

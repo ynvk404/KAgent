@@ -12,7 +12,7 @@ import os
 import pytest
 
 from src.agent.system_prompt import BuildOptions, build_system_prompt
-from src.ask.ask import FirstOptionPrompter
+from src.tools.common.ask import FirstOptionPrompter
 from src.browser.store import CaptureStore
 from src.coverage.store import CoverageStore
 from src.llm.providers.openai import OpenAIClient

@@ -29,7 +29,7 @@ from src.agent.mentions import (
     list_mention_dir,
     parse_mention_path,
 )
-from src.ask.ask import Option, Question
+from src.tools.common.ask import Option, Question
 from src.config.config import ToolingProfile, Backend
 from src.llm.core.models import list_models
 from src.llm.providers import (

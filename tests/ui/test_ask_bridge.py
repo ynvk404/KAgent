@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from src.ask.ask import Option, Question
+from src.tools.common.ask import Option, Question
 from src.ui.bridges.ask_bridge import AskRequest, BridgedAskPrompter
 
 

@@ -8,7 +8,7 @@ from src.ui.core.app import ConfigSnapshot, ProviderChange
 from src.llm.transport.errors import ProviderControlError
 from src.llm.core.models import list_models
 from src.llm.providers import validate_base_url
-from src.ask.ask import Question, Option
+from src.tools.common.ask import Question, Option
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.core.state import Action, Append, Clear, SetAsk, TranscriptEntry
 from src.ui.widgets.text_input_modal import TextInputRequest

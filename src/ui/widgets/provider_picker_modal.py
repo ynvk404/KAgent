@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable, Sequence
 from rich.text import Text
-from src.ask.ask import Option, Question
+from src.tools.common.ask import Option, Question
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.core.custom_provider_adapter import (
     CustomProviderAdapter,

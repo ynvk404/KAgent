@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 from src.ui.widgets.ask_modal import AskModal
 from src.ui.bridges.ask_bridge import AskRequest
-from src.ask.ask import Option, Question
+from src.tools.common.ask import Option, Question
 
 
 def make_req(**overrides) -> AskRequest:

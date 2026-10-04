@@ -16,7 +16,7 @@ from src.ui.bridges.ask_bridge import BridgedAskPrompter
 from src.ui.bridges.ask_bridge import AskRequest, BridgedAskPrompter
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest, BridgedPrompter
 from src.permission.permission import PermissionRequest
-from src.ask.ask import Option, Question
+from src.tools.common.ask import Option, Question
 from src.agent.agent import Agent
 from src.agent.events import DoneEvent, SkillActiveEvent
 from src.config.config import Backend

@@ -13,7 +13,7 @@ from src.llm.providers.openai import OpenAIClient
 from src.llm.core.types import ChatRequest, Message, ToolFunction, ToolSpec
 from src.tools.common.browser_capture import BrowserCaptureClearTool
 from src.tools.common.ask import AskUserTool
-from src.ask.ask import FirstOptionPrompter
+from src.tools.common.ask import FirstOptionPrompter
 from src.tools.common.registry import Registry as ToolRegistry
 
 server: HTTPServer | None = None

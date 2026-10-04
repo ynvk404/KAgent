@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.ask.ask import Question
+from src.tools.common.ask import Question
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.commands.provider_picker import mask_api_key, open_provider_picker
 from src.ui.core.app import ConfigSnapshot
