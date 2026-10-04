@@ -65,6 +65,29 @@ def test_fixed_tokenization_score_ties_and_exact_priority(make_catalog):
     assert c.search({'query': 'zzzz'})['candidates'] == []
 
 
+@pytest.mark.parametrize('query', ['CWE-89', 'cwe-89', ' CwE-89 ', 'ＣＷＥ－８９'])
+def test_exact_id_priority_uses_query_normalization(make_catalog, query):
+    catalog = make_catalog(xml_document(
+        entry(89, name='SQL Injection', description='SQL query injection.')
+        + entry(2, name='CWE 89', description='CWE 89 lexical distractor.')))
+    response = SearchResponse.model_validate(payload(execute(
+        catalog, 'search_cwe', {'query': query, 'max_results': 1})))
+    assert [(c.id, c.score, c.exact_id_match) for c in response.candidates] == [(89, 0, True)]
+    assert response.results_limited
+    lookup = LookupResponse.model_validate(payload(execute(catalog, 'get_cwe', {'id': 89})))
+    assert lookup.candidate is not None and lookup.candidate.cwe_id == response.candidates[0].cwe_id
+
+
+@pytest.mark.parametrize('query', ['CWE-1', 'cwe-1000', 'CWE-999999', 'CWE-',
+                                 'CWE-089', 'CWE-+89', 'CWE-89x', 'CWE-1000000',
+                                 'CWE-' + '9' * 500, 'prefix CWE-89'])
+def test_non_weakness_or_noncanonical_id_has_no_exact_search_candidate(make_catalog, query):
+    catalog = make_catalog()
+    response = SearchResponse.model_validate(payload(execute(catalog, 'search_cwe', {'query': query})))
+    assert not any(c.exact_id_match for c in response.candidates)
+    assert all(c.entry_type == 'Weakness' for c in response.candidates)
+
+
 @pytest.mark.parametrize('query', ['', '   ', 'x\n', 'a\x1b', 'a\u202e', 'a' * 513,
                                        '😀' * 513, ' '.join(f't{i}' for i in range(33)), True])
 def test_query_bounds(query):

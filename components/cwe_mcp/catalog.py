@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -159,7 +160,7 @@ class Catalog:
             raise ValueError('invalid result limit')
         deadline = time.monotonic() + 2
         query_tokens = tokens(query)
-        exact = re.fullmatch(r'CWE-([1-9][0-9]{0,5})', query.strip())
+        exact = re.fullmatch(r'cwe-([1-9][0-9]{0,5})', unicodedata.normalize('NFKC', query).casefold().strip())
         exact_id = int(exact[1]) if exact else None
         matches = []
         for ident, (name, alternate, description) in self.index.items():
