@@ -5535,7 +5535,9 @@ def test_context_guard_preserves_recent_semantic_result_under_severe_pressure():
     agent.guard_working_context(working, events.append, AgentRunOptions(tools=False))
 
     assert working[0].content == raw
-    assert events == []
+    assert len(events) == 1
+    assert "unresolved pressure: 3000 tokens" in events[0]["summary"]
+    assert "reduced 0" not in events[0]["summary"]
 
 
 def test_context_guard_does_not_old_elide_protected_semantic_result():
@@ -5556,7 +5558,9 @@ def test_context_guard_does_not_old_elide_protected_semantic_result():
 
     assert working[0].content == protected
     assert [message.content for message in working[1:]] == ["x" * 100] * 4
-    assert events == []
+    assert len(events) == 1
+    assert "unresolved pressure: 3100 tokens" in events[0]["summary"]
+    assert "reduced 0" not in events[0]["summary"]
 
 
 def test_context_guard_mixed_policy_reduces_only_adaptive_capacity():

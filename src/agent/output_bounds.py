@@ -141,7 +141,8 @@ def bound_recent_tool_result(
         minimum_retained_length,
         min(len(content), target_length),
     )
-    if len(content) <= target_length or elision_prefix in content:
+    # Markers are presentation, never evidence that untrusted text was bounded.
+    if len(content) <= target_length:
         return content
 
     low = 0
@@ -176,6 +177,25 @@ def bound_recent_tool_result(
     if not best or len(best) >= len(content):
         return content
     return best
+
+
+def bound_distributed_content(
+    content: str, target_length: int, *, minimum_retained_length: int,
+    elision_prefix: str, weights: tuple[int, ...] = (40, 15, 15, 15, 15),
+) -> str:
+    """Shared distributed transform for structured compaction messages."""
+    return bound_recent_tool_result(
+        content, target_length,
+        minimum_retained_length=minimum_retained_length,
+        elision_prefix=elision_prefix,
+        render_windows=lambda text, budget: _render_distributed_windows(
+            text, budget, weights=weights, elision_prefix=elision_prefix,
+        ),
+        render_omissions=lambda text, omitted: _render_distributed_omissions(
+            text, omitted, elision_prefix=elision_prefix,
+            proportional_reductions=_proportional_reductions,
+        ),
+    )
 
 
 def _proportional_reductions(capacities: list[int], required: int) -> list[int]:

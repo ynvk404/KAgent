@@ -7,6 +7,7 @@ from typing import Any, Callable, Optional
 from src.llm.core.types import Message
 from src.session.store import SessionMemory
 from src.workflow.state import WorkflowState
+from .output_bounds import bound_distributed_content, _proportional_reductions
 
 
 @dataclass
@@ -153,34 +154,51 @@ def bounded_history_for_compaction(
     *,
     input_char_limit: int,
     format_history: Callable[[list[Message]], str],
+    sanitize_content: Callable[[str], str],
 ) -> str:
-    full = format_history(messages)
-
+    # Sanitize before sampling: a window must not cut a credential away from
+    # the field/header that identifies it. Provider-private fields stay opaque.
+    safe_messages = [replace(message, content=sanitize_content(message.content))
+                     for message in messages]
+    blocks = [format_history([message]) for message in safe_messages]
+    full = "\n".join(block for block in blocks if block)
     if len(full) <= input_char_limit:
         return full
 
-    tail = full[-input_char_limit:]
-
-    boundary = tail.find("\n[")
-
-    if boundary > 0:
-        trimmed = tail[boundary:]
-    else:
-        trimmed = tail
-
-    return "\n".join(
-        [
-            (
-                "[system]\n"
-                "Older conversation text was omitted because "
-                f"the compaction input exceeded "
-                f"{input_char_limit} characters. "
-                "Preserve continuity from persistent memory "
-                "and the newest visible context below."
-            ),
-            trimmed,
-        ]
+    notice = (
+        "[system]\nOlder conversation text was omitted because "
+        f"the compaction input exceeded {input_char_limit} characters. "
+        "Preserve continuity from persistent memory "
+        "and the newest visible context below."
     )
+    remaining = input_char_limit - len(notice)
+    # Select a newest, ordered suffix by the minimum useful representation of
+    # each Message. A bulky final answer must not displace an oversized tool
+    # merely because its unbounded serialization consumed the entire budget.
+    selected: list[tuple[Message, int]] = []
+    for message, block in reversed(list(zip(safe_messages, blocks))):
+        if not block:
+            continue
+        # Empty messages are skipped by the formatter. A one-character
+        # sentinel measures their envelope, including serialized tool calls.
+        envelope_cost = len(format_history([replace(message, content="x")])) - 1
+        minimum = min(len(message.content), 1024)
+        cost = envelope_cost + minimum + 1  # joining newline, including notice
+        if cost > remaining:
+            break
+        selected.append((message, minimum))
+        remaining -= cost
+    selected.reverse()
+    capacities = [len(message.content) - minimum for message, minimum in selected]
+    allocations = _proportional_reductions(capacities, remaining)
+    bounded_blocks: list[str] = []
+    for (message, minimum), allocation in zip(selected, allocations):
+        content = bound_distributed_content(
+            message.content, minimum + allocation, minimum_retained_length=minimum,
+            elision_prefix="[conversation content elided for compaction",
+        )
+        bounded_blocks.append(format_history([replace(message, content=content)]))
+    return "\n".join([notice, *bounded_blocks])
 
 
 def merge_list(

@@ -361,6 +361,27 @@ class ToolCallResult:
         self.truncated = truncated
 
 
+@dataclass(frozen=True)
+class _BoundedToolResult:
+    # Controller-owned, current-context state. Never persisted or inferred
+    # from markers. Original is the sanitized adapter-returned representation.
+    message: Message
+    original: str
+    elided: bool = False
+
+
+def safe_tool_text(text: str, unavailable: str) -> str:
+    """Fail closed only at the representation boundary, never change execution."""
+    try:
+        sanitized = redact_payload(text)
+        if isinstance(sanitized, str) and (sanitized or not text):
+            return str(sanitized)
+    except Exception:
+        # Neither the original text nor the sanitizer exception is safe to emit.
+        pass
+    return unavailable
+
+
 def tool_error_kind(err: Exception, *, invalid_args: bool = False) -> ErrorKind:
     if invalid_args or isinstance(err, InvalidToolArguments):
         return "invalid_args"
@@ -964,6 +985,8 @@ class Agent:
         self.tools_tokens_cache: int = 0
         self.tools_tokens_key: tuple[str, ...] | None = None
 
+        self._bounded_working: list[Message] | None = None
+        self._bounded_results: dict[int, _BoundedToolResult] = {}
         self.turn_executed_tool = False
         self._trace_enabled = False
         self._trace_run_id = ""
@@ -3158,6 +3181,8 @@ class Agent:
         self._trace_run_id = uuid.uuid4().hex[:12] if self._trace_enabled else ""
         self._trace("run_started")
         self.running = True
+        self._bounded_working = None
+        self._bounded_results.clear()
         self._reset_llm_call_counts()
         self._turn_client_error = False
         stop_reason = "runtime_error"
@@ -3216,6 +3241,8 @@ class Agent:
 
         finally:
 
+            self._bounded_working = None
+            self._bounded_results.clear()
             self.running = False
 
             self._trace("terminal", stop_reason=stop_reason)
@@ -4262,6 +4289,29 @@ class Agent:
         emit,
         opts=None,
     ) -> None:
+        if self._bounded_working is not working:
+            self._bounded_working = working
+            self._bounded_results.clear()
+        current_ids = {id(message) for message in working}
+        self._bounded_results = {
+            key: state for key, state in self._bounded_results.items()
+            if key in current_ids
+        }
+
+        def original(message: Message) -> str:
+            state = self._bounded_results.get(id(message))
+            return state.original if state is not None else message.content
+
+        def replace_result(index: int, content: str, *, elided: bool = False) -> None:
+            message = working[index]
+            source = original(message)
+            self._bounded_results.pop(id(message), None)
+            replacement = replace(message, content=content)
+            working[index] = replacement
+            self._bounded_results[id(replacement)] = _BoundedToolResult(
+                replacement, source, elided,
+            )
+
         if opts is not None and getattr(opts, "tools", True) is False:
             tools_tokens = 0
         else:
@@ -4313,26 +4363,19 @@ class Agent:
 
             msg = working[i]
 
-            if msg.content.startswith(
-                MIDTURN_ELISION_PREFIX
-            ):
+            state = self._bounded_results.get(id(msg))
+            if state is not None and state.elided:
                 continue
 
-            original_length = len(msg.content)
+            original_length = len(original(msg))
             marker = (
                 f"{MIDTURN_ELISION_PREFIX}"
                 f" — {original_length} bytes dropped]"
             )
 
-            working[i] = Message(
-                role=msg.role,
-                content=marker,
-                tool_calls=msg.tool_calls,
-                tool_call_id=msg.tool_call_id,
-                name=msg.name,
-            )
+            replace_result(i, marker, elided=True)
 
-            dropped += original_length - len(marker)
+            dropped += len(msg.content) - len(marker)
 
         current_tokens = size()
         if current_tokens > target_tokens:
@@ -4341,7 +4384,6 @@ class Agent:
                 for i in tool_indexes
                 if is_adaptive_tool_result(i)
                 and len(working[i].content) > MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR
-                and MIDTURN_ELISION_PREFIX not in working[i].content
             ]
 
             # Token estimates round each message independently. Keep the
@@ -4360,33 +4402,29 @@ class Agent:
                         continue
                     msg = working[i]
                     bounded = bound_recent_tool_result(
-                        msg.content,
+                        original(msg),
                         len(msg.content) - reduction,
                     )
                     if bounded == msg.content:
                         continue
                     dropped += len(msg.content) - len(bounded)
-                    working[i] = Message(
-                        role=msg.role,
-                        content=bounded,
-                        tool_calls=msg.tool_calls,
-                        tool_call_id=msg.tool_call_id,
-                        name=msg.name,
-                    )
+                    replace_result(i, bounded)
                     if size() <= target_tokens:
                         break
 
         residual_tokens = max(0, size() - target_tokens)
-        if dropped > 0:
+        if dropped > 0 or (tool_indexes and residual_tokens > 0):
 
             emit(
                 {
                     "type": "decision",
                     "summary": (
-                        "context guard: "
-                        f"reduced {dropped} characters "
-                        "of tool output "
-                        "mid-turn to fit the context window"
+                        (
+                            "context guard: "
+                            f"reduced {dropped} characters of tool output "
+                            "mid-turn to fit the context window"
+                            if dropped > 0 else "context pressure: no reducible tool capacity"
+                        )
                         + (
                             f"; unresolved pressure: {residual_tokens} tokens"
                             if residual_tokens > 0
@@ -4712,7 +4750,9 @@ class Agent:
                 {
                     "tool": tc.function.name,
                     "duration_ms": duration_ms,
-                    "err": err_str,
+                    "err": safe_tool_text(
+                        err_str, "Tool execution error; sanitized details unavailable.",
+                    ),
                 },
             )
 
@@ -4752,13 +4792,31 @@ class Agent:
         emit,
         working: list[Message],
     ) -> None:
+        # Raw ToolCallResult remains available to transient controller processing
+        # and observation bindings. Only event/history/context receive this view.
+        error = safe_tool_text(
+            res.err_str, "Tool execution error; sanitized details unavailable.",
+        ) if res.err_str else ""
+        if res.err_str and res.result == f"ERROR: {res.err_str}":
+            # Our display prefix must not hide a header from the shared
+            # sanitizer's line-anchored patterns (e.g. short Basic credentials).
+            content = f"ERROR: {error}"
+        else:
+            content = safe_tool_text(
+                res.result,
+                f"Tool execution completed with status={res.status}; "
+                f"error_kind={res.error_kind}; HTTP status={res.http_status}; "
+                f"truncated={res.truncated}; "
+                "sanitized output unavailable. This is a representation failure; "
+                "do not repeat the action solely to recover its output.",
+            )
         emit(
             {
                 "type": "tool-result",
                 "id": tc.id,
                 "name": tc.function.name,
-                "result": res.result,
-                "err": res.err_str,
+                "result": content,
+                "err": error,
                 "duration_ms": res.duration_ms,
                 "status": res.status,
                 "error_kind": res.error_kind,
@@ -4792,7 +4850,7 @@ class Agent:
 
         tool_msg = Message(
             role="tool",
-            content=res.result,
+            content=content,
             tool_call_id=tc.id,
             name=tc.function.name,
             tool_status=res.status,
@@ -5369,7 +5427,9 @@ def ensure_system_prompt(
 def format_history_for_compaction(messages: list[Message]) -> str:
     return _compaction.format_history_for_compaction(
         messages,
-        redact_payload=redact_payload,
+        redact_payload=lambda text: safe_tool_text(
+            text, "[Sanitized conversation text unavailable]",
+        ),
     )
 
 
@@ -5530,6 +5590,9 @@ def bounded_history_for_compaction(
         messages,
         input_char_limit=COMPACTION_INPUT_CHAR_LIMIT,
         format_history=format_history_for_compaction,
+        sanitize_content=lambda text: safe_tool_text(
+            text, "[Sanitized conversation text unavailable]",
+        ),
     )
 
 
