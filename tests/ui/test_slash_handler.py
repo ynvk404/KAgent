@@ -61,6 +61,9 @@ class DummyAgent:
     def set_max_steps(self, n: int) -> None:
         self.max_steps = n
 
+    def reset_max_steps(self) -> None:
+        self.max_steps = 20
+
     def thinking_is_enabled(self) -> bool:
         return self.thinking
 
@@ -395,7 +398,62 @@ def test_maxsteps_default_resets_to_agent_default():
     assert handle_slash(cast(KAgent, app), "/maxsteps default")
 
     assert app.agent.get_max_steps() == 20
-    assert last_text(app) == "max steps reset to default (20)"
+    assert last_text(app) == "max steps reset to defaults (20 direct, 40 whole-target)"
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_steps", "expected_reason"),
+    [
+        ("Explain how SQL injection works", 20, "final_response"),
+        ("Perform a whole-target assessment", 40, "max_steps"),
+    ],
+)
+async def test_maxsteps_default_restores_runtime_budgets(
+    prompt: str, expected_steps: int, expected_reason: str,
+):
+    from src.llm.core.types import ChatResponse, Message
+    from src.workflow.state import Candidate, WorkflowState
+    from tests.agent.test_agent import agent_tool_call, tool_batch, whole_target_agent
+    from tests.helpers.agent_fakes import EchoTool, FakeSignal
+
+    class ProgressTool(EchoTool):
+        workflow: WorkflowState | None = None
+
+        async def run(self, args, signal, prompter) -> str:
+            self.calls += 1
+            if self.workflow is not None and self.workflow.objective is not None:
+                objective = self.workflow.objective
+                self.workflow.add_candidate(Candidate(
+                    candidate_class="sql-injection",
+                    target=objective.target_origin,
+                    endpoint=f"/route-{self.calls}",
+                    objective_id=objective.id,
+                ))
+            return "offline progress"
+
+    tool = ProgressTool()
+    responses = [
+        tool_batch(agent_tool_call(f"call-{i}", "echo"))
+        for i in range(expected_steps)
+    ]
+    responses.append(ChatResponse(Message("assistant", "Offline summary."), "stop"))
+    agent, client = whole_target_agent(responses, [tool], max_steps=10)
+    tool.workflow = agent.workflow
+    actions: list[object] = []
+    app = SimpleNamespace(agent=agent, dispatch=actions.append)
+
+    assert handle_slash(cast(KAgent, app), "/maxsteps default")
+    assert agent.get_max_steps() == 20
+    assert agent.get_max_steps_override() is None
+    assert not agent.has_explicit_max_steps()
+
+    events = []
+    await agent.run(prompt, FakeSignal(), events.append)
+
+    assert tool.calls == expected_steps
+    assert len(client.requests) == expected_steps + 1
+    assert client.requests[-1].tools is None
+    assert events[-1].stop_reason == expected_reason
 
 
 def test_maxsteps_invalid_argument_shows_usage():

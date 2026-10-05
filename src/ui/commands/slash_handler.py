@@ -6,7 +6,12 @@ import re
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-from src.agent.agent import DEFAULT_MAX_STEPS, AgentRunOptions, ensure_system_prompt
+from src.agent.agent import (
+    DEFAULT_MAX_STEPS,
+    DEFAULT_WHOLE_TARGET_MAX_STEPS,
+    AgentRunOptions,
+    ensure_system_prompt,
+)
 from src.config.config import Backend
 from src.llm.core.models import list_models
 from src.ui.commands.slash_items import SLASH_ITEMS
@@ -852,12 +857,15 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
         arg = rest[0].lower()
         if arg == "default":
-            agent.set_max_steps(DEFAULT_MAX_STEPS)
+            agent.reset_max_steps()
             dispatch(
                 Append(
                     entry=TranscriptEntry(
                         kind="system",
-                        text=f"max steps reset to default ({DEFAULT_MAX_STEPS})",
+                        text=(
+                            f"max steps reset to defaults ({DEFAULT_MAX_STEPS} direct, "
+                            f"{DEFAULT_WHOLE_TARGET_MAX_STEPS} whole-target)"
+                        ),
                     )
                 )
             )
