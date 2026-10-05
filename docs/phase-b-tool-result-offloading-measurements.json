@@ -1,0 +1,1706 @@
+{
+  "method": "real Agent.run + FileReadTool + current Phase A guard; offline scripted model, no API",
+  "threshold_tokens": 16000,
+  "rows": {
+    "4KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          4155
+        ],
+        "sanitized_chars": [
+          4139
+        ],
+        "immediate_llm_chars": [
+          4139
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 3586,
+            "wire_chars": 14861,
+            "wire_bytes": 14875
+          }
+        ],
+        "pre_turn_trigger_tokens": 3194,
+        "next_turn_request": {
+          "approx_tokens": 3598,
+          "wire_chars": 14986,
+          "wire_bytes": 15000
+        },
+        "resume_request": {
+          "approx_tokens": 3609,
+          "wire_chars": 15103,
+          "wire_bytes": 15117
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 12849,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 12849,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "shell"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          4155
+        ],
+        "sanitized_chars": [
+          4139
+        ],
+        "immediate_llm_chars": [
+          4139
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 3740,
+            "wire_chars": 15478,
+            "wire_bytes": 15492
+          }
+        ],
+        "pre_turn_trigger_tokens": 3348,
+        "next_turn_request": {
+          "approx_tokens": 3752,
+          "wire_chars": 15603,
+          "wire_bytes": 15617
+        },
+        "resume_request": {
+          "approx_tokens": 3763,
+          "wire_chars": 15720,
+          "wire_bytes": 15734
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 13079,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 13079,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "read_tool_result",
+          "shell"
+        ]
+      }
+    },
+    "10KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          10299
+        ],
+        "sanitized_chars": [
+          10283
+        ],
+        "immediate_llm_chars": [
+          10283
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 5122,
+            "wire_chars": 21006,
+            "wire_bytes": 21020
+          }
+        ],
+        "pre_turn_trigger_tokens": 4730,
+        "next_turn_request": {
+          "approx_tokens": 5134,
+          "wire_chars": 21131,
+          "wire_bytes": 21145
+        },
+        "resume_request": {
+          "approx_tokens": 5145,
+          "wire_chars": 21248,
+          "wire_bytes": 21262
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 18994,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 18994,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "shell"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          10299
+        ],
+        "sanitized_chars": [
+          10283
+        ],
+        "immediate_llm_chars": [
+          10283
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 5276,
+            "wire_chars": 21623,
+            "wire_bytes": 21637
+          }
+        ],
+        "pre_turn_trigger_tokens": 4884,
+        "next_turn_request": {
+          "approx_tokens": 5288,
+          "wire_chars": 21748,
+          "wire_bytes": 21762
+        },
+        "resume_request": {
+          "approx_tokens": 5299,
+          "wire_chars": 21865,
+          "wire_bytes": 21879
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 19224,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 19224,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "read_tool_result",
+          "shell"
+        ]
+      }
+    },
+    "40KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          41019
+        ],
+        "sanitized_chars": [
+          41003
+        ],
+        "immediate_llm_chars": [
+          41003
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 12802,
+            "wire_chars": 51726,
+            "wire_bytes": 51740
+          }
+        ],
+        "pre_turn_trigger_tokens": 12410,
+        "next_turn_request": {
+          "approx_tokens": 12814,
+          "wire_chars": 51851,
+          "wire_bytes": 51865
+        },
+        "resume_request": {
+          "approx_tokens": 12825,
+          "wire_chars": 51968,
+          "wire_bytes": 51982
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 49714,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 49714,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "shell"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          41019
+        ],
+        "sanitized_chars": [
+          41003
+        ],
+        "immediate_llm_chars": [
+          41003
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 12956,
+            "wire_chars": 52343,
+            "wire_bytes": 52357
+          }
+        ],
+        "pre_turn_trigger_tokens": 12564,
+        "next_turn_request": {
+          "approx_tokens": 12968,
+          "wire_chars": 52468,
+          "wire_bytes": 52482
+        },
+        "resume_request": {
+          "approx_tokens": 12979,
+          "wire_chars": 52585,
+          "wire_bytes": 52599
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 49944,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 49944,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "read_tool_result",
+          "shell"
+        ]
+      }
+    },
+    "100KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          102459
+        ],
+        "sanitized_chars": [
+          102443
+        ],
+        "immediate_llm_chars": [
+          52511
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63243,
+            "wire_bytes": 63257
+          }
+        ],
+        "pre_turn_trigger_tokens": 27771,
+        "next_turn_request": {
+          "approx_tokens": 2690,
+          "wire_chars": 11167,
+          "wire_bytes": 11173
+        },
+        "resume_request": {
+          "approx_tokens": 2701,
+          "wire_chars": 11284,
+          "wire_bytes": 11290
+        },
+        "auto_compactions": 1,
+        "compaction_input_chars": [
+          22731
+        ],
+        "session_json_bytes_before_next_turn": 111155,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 111155,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 49932 characters of tool output mid-turn to fit the context window"
+        ],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "shell"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          102459
+        ],
+        "sanitized_chars": [
+          102443
+        ],
+        "immediate_llm_chars": [
+          51895
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63284,
+            "wire_bytes": 63298
+          }
+        ],
+        "pre_turn_trigger_tokens": 15364,
+        "next_turn_request": {
+          "approx_tokens": 15768,
+          "wire_chars": 63714,
+          "wire_bytes": 63728
+        },
+        "resume_request": {
+          "approx_tokens": 15779,
+          "wire_chars": 63831,
+          "wire_bytes": 63845
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 62013,
+        "artifact_bytes": 103250,
+        "total_disk_bytes_before_next_turn": 165263,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 425,
+        "preview_envelope_chars": 616,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": {
+          "reply_chars": 456,
+          "approx_reply_tokens": 114,
+          "local_elapsed_ms": 17.838,
+          "argument_chars": 92,
+          "tool_calls": 1
+        },
+        "gap_retrieved": true,
+        "gap_omitted_in_offloaded_previews": [
+          true
+        ],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "read_tool_result",
+          "shell"
+        ]
+      }
+    },
+    "multiple_3x40KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          41019,
+          41019,
+          41019
+        ],
+        "sanitized_chars": [
+          41003,
+          41003,
+          41003
+        ],
+        "immediate_llm_chars": [
+          17447,
+          17447,
+          17447
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63613,
+            "wire_bytes": 63651
+          }
+        ],
+        "pre_turn_trigger_tokens": 32955,
+        "next_turn_request": {
+          "approx_tokens": 2690,
+          "wire_chars": 11167,
+          "wire_bytes": 11173
+        },
+        "resume_request": {
+          "approx_tokens": 2701,
+          "wire_chars": 11284,
+          "wire_bytes": 11290
+        },
+        "auto_compactions": 1,
+        "compaction_input_chars": [
+          22731
+        ],
+        "session_json_bytes_before_next_turn": 132621,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 132621,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          },
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          },
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 70668 characters of tool output mid-turn to fit the context window"
+        ],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "shell"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          41019,
+          41019,
+          41019
+        ],
+        "sanitized_chars": [
+          41003,
+          41003,
+          41003
+        ],
+        "immediate_llm_chars": [
+          17976,
+          17976,
+          15768
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15681,
+            "wire_chars": 63729,
+            "wire_bytes": 63767
+          }
+        ],
+        "pre_turn_trigger_tokens": 15401,
+        "next_turn_request": {
+          "approx_tokens": 15805,
+          "wire_chars": 64308,
+          "wire_bytes": 64346
+        },
+        "resume_request": {
+          "approx_tokens": 15816,
+          "wire_chars": 64425,
+          "wire_bytes": 64463
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 65034,
+        "artifact_bytes": 125454,
+        "total_disk_bytes_before_next_turn": 190488,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 1269,
+        "preview_envelope_chars": 1842,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": {
+          "reply_chars": 455,
+          "approx_reply_tokens": 113,
+          "local_elapsed_ms": 16.991,
+          "argument_chars": 92,
+          "tool_calls": 1
+        },
+        "gap_retrieved": true,
+        "gap_omitted_in_offloaded_previews": [
+          true,
+          true,
+          true
+        ],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          },
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          },
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 22564 characters of tool output mid-turn to fit the context window; unresolved pressure: 1 tokens"
+        ],
+        "residual_pressure": [
+          "context guard: reduced 22564 characters of tool output mid-turn to fit the context window; unresolved pressure: 1 tokens"
+        ],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "read_tool_result",
+          "shell"
+        ]
+      }
+    },
+    "sequential_3x40KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          41019,
+          41019,
+          41019
+        ],
+        "sanitized_chars": [
+          41003,
+          41003,
+          41003
+        ],
+        "immediate_llm_chars": [
+          41003,
+          26185,
+          41003
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 12806,
+            "wire_chars": 51739,
+            "wire_bytes": 51753
+          },
+          {
+            "approx_tokens": 15681,
+            "wire_chars": 63551,
+            "wire_bytes": 63577
+          },
+          {
+            "approx_tokens": 12961,
+            "wire_chars": 52478,
+            "wire_bytes": 52496
+          }
+        ],
+        "pre_turn_trigger_tokens": 12461,
+        "next_turn_request": {
+          "approx_tokens": 12973,
+          "wire_chars": 52603,
+          "wire_bytes": 52621
+        },
+        "resume_request": {
+          "approx_tokens": 12984,
+          "wire_chars": 52720,
+          "wire_bytes": 52738
+        },
+        "auto_compactions": 1,
+        "compaction_input_chars": [
+          22730
+        ],
+        "session_json_bytes_before_next_turn": 50715,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 51144,
+        "context_snapshot_bytes_before_next_turn": 429,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          },
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          },
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 29636 characters of tool output mid-turn to fit the context window; unresolved pressure: 1 tokens"
+        ],
+        "residual_pressure": [
+          "context guard: reduced 29636 characters of tool output mid-turn to fit the context window; unresolved pressure: 1 tokens"
+        ],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "shell"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          41019,
+          41019,
+          41019
+        ],
+        "sanitized_chars": [
+          41003,
+          41003,
+          41003
+        ],
+        "immediate_llm_chars": [
+          41003,
+          20133,
+          41003
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 12960,
+            "wire_chars": 52356,
+            "wire_bytes": 52370
+          },
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63592,
+            "wire_bytes": 63618
+          },
+          {
+            "approx_tokens": 13190,
+            "wire_chars": 53399,
+            "wire_bytes": 53417
+          }
+        ],
+        "pre_turn_trigger_tokens": 12690,
+        "next_turn_request": {
+          "approx_tokens": 13202,
+          "wire_chars": 53524,
+          "wire_bytes": 53542
+        },
+        "resume_request": {
+          "approx_tokens": 13213,
+          "wire_chars": 53641,
+          "wire_bytes": 53659
+        },
+        "auto_compactions": 1,
+        "compaction_input_chars": [
+          22730
+        ],
+        "session_json_bytes_before_next_turn": 51696,
+        "artifact_bytes": 41820,
+        "total_disk_bytes_before_next_turn": 93945,
+        "context_snapshot_bytes_before_next_turn": 429,
+        "reference_metadata_chars": 423,
+        "preview_envelope_chars": 614,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": {
+          "reply_chars": 455,
+          "approx_reply_tokens": 113,
+          "local_elapsed_ms": 14.784,
+          "argument_chars": 92,
+          "tool_calls": 1
+        },
+        "gap_retrieved": true,
+        "gap_omitted_in_offloaded_previews": [
+          true
+        ],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          },
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          },
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 15128 characters of tool output mid-turn to fit the context window"
+        ],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "read_tool_result",
+          "shell"
+        ]
+      }
+    },
+    "core_inventory_40KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          41019
+        ],
+        "sanitized_chars": [
+          41003
+        ],
+        "immediate_llm_chars": [
+          41003
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 14895,
+            "wire_chars": 60099,
+            "wire_bytes": 60115
+          }
+        ],
+        "pre_turn_trigger_tokens": 14503,
+        "next_turn_request": {
+          "approx_tokens": 14907,
+          "wire_chars": 60224,
+          "wire_bytes": 60240
+        },
+        "resume_request": {
+          "approx_tokens": 14918,
+          "wire_chars": 60341,
+          "wire_bytes": 60357
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 49729,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 49729,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GlobTool",
+          "GrepTool",
+          "file_read",
+          "http",
+          "load_skill",
+          "permissions_status",
+          "shell",
+          "web_fetch",
+          "web_search",
+          "workflow"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          41019
+        ],
+        "sanitized_chars": [
+          41003
+        ],
+        "immediate_llm_chars": [
+          41003
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15050,
+            "wire_chars": 60716,
+            "wire_bytes": 60732
+          }
+        ],
+        "pre_turn_trigger_tokens": 14658,
+        "next_turn_request": {
+          "approx_tokens": 15062,
+          "wire_chars": 60841,
+          "wire_bytes": 60857
+        },
+        "resume_request": {
+          "approx_tokens": 15073,
+          "wire_chars": 60958,
+          "wire_bytes": 60974
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 49959,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 49959,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GlobTool",
+          "GrepTool",
+          "file_read",
+          "http",
+          "load_skill",
+          "permissions_status",
+          "read_tool_result",
+          "shell",
+          "web_fetch",
+          "web_search",
+          "workflow"
+        ]
+      }
+    },
+    "near_limit_10KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          10299
+        ],
+        "sanitized_chars": [
+          10283
+        ],
+        "immediate_llm_chars": [
+          3191
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63316,
+            "wire_bytes": 63330
+          }
+        ],
+        "pre_turn_trigger_tokens": 17061,
+        "next_turn_request": {
+          "approx_tokens": 2690,
+          "wire_chars": 11167,
+          "wire_bytes": 11173
+        },
+        "resume_request": {
+          "approx_tokens": 2701,
+          "wire_chars": 11284,
+          "wire_bytes": 11290
+        },
+        "auto_compactions": 1,
+        "compaction_input_chars": [
+          22731
+        ],
+        "session_json_bytes_before_next_turn": 68724,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 68724,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 7092 characters of tool output mid-turn to fit the context window"
+        ],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "shell"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          10299
+        ],
+        "sanitized_chars": [
+          10283
+        ],
+        "immediate_llm_chars": [
+          3191
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63357,
+            "wire_bytes": 63371
+          }
+        ],
+        "pre_turn_trigger_tokens": 15363,
+        "next_turn_request": {
+          "approx_tokens": 15767,
+          "wire_chars": 63786,
+          "wire_bytes": 63800
+        },
+        "resume_request": {
+          "approx_tokens": 15778,
+          "wire_chars": 63903,
+          "wire_bytes": 63917
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 62418,
+        "artifact_bytes": 11098,
+        "total_disk_bytes_before_next_turn": 73516,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 423,
+        "preview_envelope_chars": 614,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": {
+          "reply_chars": 452,
+          "approx_reply_tokens": 113,
+          "local_elapsed_ms": 12.516,
+          "argument_chars": 91,
+          "tool_calls": 1
+        },
+        "gap_retrieved": true,
+        "gap_omitted_in_offloaded_previews": [
+          true
+        ],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "read_tool_result",
+          "shell"
+        ]
+      }
+    },
+    "core_inventory_100KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          102459
+        ],
+        "sanitized_chars": [
+          102443
+        ],
+        "immediate_llm_chars": [
+          44143
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63248,
+            "wire_bytes": 63264
+          }
+        ],
+        "pre_turn_trigger_tokens": 29863,
+        "next_turn_request": {
+          "approx_tokens": 4779,
+          "wire_chars": 19525,
+          "wire_bytes": 19533
+        },
+        "resume_request": {
+          "approx_tokens": 4790,
+          "wire_chars": 19642,
+          "wire_bytes": 19650
+        },
+        "auto_compactions": 1,
+        "compaction_input_chars": [
+          22731
+        ],
+        "session_json_bytes_before_next_turn": 111170,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 111170,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 58300 characters of tool output mid-turn to fit the context window"
+        ],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GlobTool",
+          "GrepTool",
+          "file_read",
+          "http",
+          "load_skill",
+          "permissions_status",
+          "shell",
+          "web_fetch",
+          "web_search",
+          "workflow"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          102459
+        ],
+        "sanitized_chars": [
+          102443
+        ],
+        "immediate_llm_chars": [
+          43523
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63285,
+            "wire_bytes": 63301
+          }
+        ],
+        "pre_turn_trigger_tokens": 15364,
+        "next_turn_request": {
+          "approx_tokens": 15768,
+          "wire_chars": 63715,
+          "wire_bytes": 63731
+        },
+        "resume_request": {
+          "approx_tokens": 15779,
+          "wire_chars": 63832,
+          "wire_bytes": 63848
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 53656,
+        "artifact_bytes": 103265,
+        "total_disk_bytes_before_next_turn": 156921,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 425,
+        "preview_envelope_chars": 616,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": {
+          "reply_chars": 456,
+          "approx_reply_tokens": 114,
+          "local_elapsed_ms": 14.565,
+          "argument_chars": 92,
+          "tool_calls": 1
+        },
+        "gap_retrieved": true,
+        "gap_omitted_in_offloaded_previews": [
+          true
+        ],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GlobTool",
+          "GrepTool",
+          "file_read",
+          "http",
+          "load_skill",
+          "permissions_status",
+          "read_tool_result",
+          "shell",
+          "web_fetch",
+          "web_search",
+          "workflow"
+        ]
+      }
+    },
+    "relaxed_100KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          102459
+        ],
+        "sanitized_chars": [
+          102443
+        ],
+        "immediate_llm_chars": [
+          102443
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 28165,
+            "wire_chars": 113175,
+            "wire_bytes": 113189
+          }
+        ],
+        "pre_turn_trigger_tokens": 27773,
+        "next_turn_request": {
+          "approx_tokens": 28177,
+          "wire_chars": 113300,
+          "wire_bytes": 113314
+        },
+        "resume_request": {
+          "approx_tokens": 28188,
+          "wire_chars": 113417,
+          "wire_bytes": 113431
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 111163,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 111163,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "shell"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          102459
+        ],
+        "sanitized_chars": [
+          102443
+        ],
+        "immediate_llm_chars": [
+          102443
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 28319,
+            "wire_chars": 113792,
+            "wire_bytes": 113806
+          }
+        ],
+        "pre_turn_trigger_tokens": 27927,
+        "next_turn_request": {
+          "approx_tokens": 28331,
+          "wire_chars": 113917,
+          "wire_bytes": 113931
+        },
+        "resume_request": {
+          "approx_tokens": 28342,
+          "wire_chars": 114034,
+          "wire_bytes": 114048
+        },
+        "auto_compactions": 0,
+        "compaction_input_chars": [],
+        "session_json_bytes_before_next_turn": 111393,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 111393,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "read_tool_result",
+          "shell"
+        ]
+      }
+    },
+    "quota_fallback_100KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          102459
+        ],
+        "sanitized_chars": [
+          102443
+        ],
+        "immediate_llm_chars": [
+          52499
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63246,
+            "wire_bytes": 63260
+          }
+        ],
+        "pre_turn_trigger_tokens": 27774,
+        "next_turn_request": {
+          "approx_tokens": 2690,
+          "wire_chars": 11167,
+          "wire_bytes": 11173
+        },
+        "resume_request": {
+          "approx_tokens": 2701,
+          "wire_chars": 11284,
+          "wire_bytes": 11290
+        },
+        "auto_compactions": 1,
+        "compaction_input_chars": [
+          22731
+        ],
+        "session_json_bytes_before_next_turn": 111170,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 111170,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 49944 characters of tool output mid-turn to fit the context window"
+        ],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "shell"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          102459
+        ],
+        "sanitized_chars": [
+          102443
+        ],
+        "immediate_llm_chars": [
+          51883
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63247,
+            "wire_bytes": 63261
+          }
+        ],
+        "pre_turn_trigger_tokens": 27928,
+        "next_turn_request": {
+          "approx_tokens": 2844,
+          "wire_chars": 11784,
+          "wire_bytes": 11790
+        },
+        "resume_request": {
+          "approx_tokens": 2855,
+          "wire_chars": 11901,
+          "wire_bytes": 11907
+        },
+        "auto_compactions": 1,
+        "compaction_input_chars": [
+          22731
+        ],
+        "session_json_bytes_before_next_turn": 111400,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 111400,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 50560 characters of tool output mid-turn to fit the context window"
+        ],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "read_tool_result",
+          "shell"
+        ]
+      }
+    },
+    "write_fallback_100KiB": {
+      "phase_a": {
+        "adapter_retained_chars": [
+          102459
+        ],
+        "sanitized_chars": [
+          102443
+        ],
+        "immediate_llm_chars": [
+          52499
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63246,
+            "wire_bytes": 63260
+          }
+        ],
+        "pre_turn_trigger_tokens": 27774,
+        "next_turn_request": {
+          "approx_tokens": 2690,
+          "wire_chars": 11167,
+          "wire_bytes": 11173
+        },
+        "resume_request": {
+          "approx_tokens": 2701,
+          "wire_chars": 11284,
+          "wire_bytes": 11290
+        },
+        "auto_compactions": 1,
+        "compaction_input_chars": [
+          22731
+        ],
+        "session_json_bytes_before_next_turn": 111170,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 111170,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 0,
+        "read_schema_approx_tokens": 0,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 49944 characters of tool output mid-turn to fit the context window"
+        ],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "shell"
+        ]
+      },
+      "phase_b": {
+        "adapter_retained_chars": [
+          102459
+        ],
+        "sanitized_chars": [
+          102443
+        ],
+        "immediate_llm_chars": [
+          51883
+        ],
+        "immediate_requests": [
+          {
+            "approx_tokens": 15680,
+            "wire_chars": 63247,
+            "wire_bytes": 63261
+          }
+        ],
+        "pre_turn_trigger_tokens": 27928,
+        "next_turn_request": {
+          "approx_tokens": 2844,
+          "wire_chars": 11784,
+          "wire_bytes": 11790
+        },
+        "resume_request": {
+          "approx_tokens": 2855,
+          "wire_chars": 11901,
+          "wire_bytes": 11907
+        },
+        "auto_compactions": 1,
+        "compaction_input_chars": [
+          22731
+        ],
+        "session_json_bytes_before_next_turn": 111400,
+        "artifact_bytes": 0,
+        "total_disk_bytes_before_next_turn": 111400,
+        "context_snapshot_bytes_before_next_turn": 0,
+        "reference_metadata_chars": 0,
+        "preview_envelope_chars": 0,
+        "read_schema_chars": 615,
+        "read_schema_approx_tokens": 153,
+        "reread": null,
+        "gap_retrieved": null,
+        "gap_omitted_in_offloaded_previews": [],
+        "anchor_survival": {
+          "HEAD": true,
+          "MID": true,
+          "TAIL": true
+        },
+        "anchor_survival_per_result": [
+          {
+            "HEAD": true,
+            "MID": true,
+            "TAIL": true
+          }
+        ],
+        "midturn_reductions": [
+          "context guard: reduced 50560 characters of tool output mid-turn to fit the context window"
+        ],
+        "residual_pressure": [],
+        "core_inventory": [
+          "GrepTool",
+          "file_read",
+          "read_tool_result",
+          "shell"
+        ]
+      }
+    }
+  }
+}

@@ -1023,6 +1023,7 @@ async def main() -> int:
     )
 
     agent = Agent(opts)
+    tools = agent.tools
     resume_summary = ""
 
     def report_skill_validation() -> None:

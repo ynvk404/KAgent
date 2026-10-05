@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import asyncio
 from copy import deepcopy
+from collections.abc import Iterator, MutableMapping
 from typing import Any, cast
 
 from src.permission.permission import (
@@ -66,9 +67,45 @@ class _ExecutionPrompter(Prompter):
         if callable(clear):
             clear()
 
+class _ScopedTools(MutableMapping[str, Tool]):
+    """Share live adapters, but reserve one capability for this controller.
+
+    Ordinary registration/replacement still reaches the shared registry. The
+    reserved entry never falls through to another controller's binding, even
+    when that controller has no local capability.
+    """
+
+    def __init__(self, shared: MutableMapping[str, Tool], name: str, tool: Tool | None):
+        self.shared = shared
+        self.name = name
+        self.local = {name: tool} if tool is not None else {}
+
+    def __getitem__(self, key: str) -> Tool:
+        return self.local[key] if key == self.name else self.shared[key]
+
+    def __setitem__(self, key: str, value: Tool) -> None:
+        (self.local if key == self.name else self.shared)[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del (self.local if key == self.name else self.shared)[key]
+
+    def __iter__(self) -> Iterator[str]:
+        yield from (key for key in self.shared if key != self.name)
+        yield from self.local
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
 class Registry:
     def __init__(self) -> None:
-        self.tools: dict[str, Tool] = {}
+        self.tools: MutableMapping[str, Tool] = {}
+
+    def scoped_tool(self, name: str, tool: Tool | None) -> Registry:
+        """Return a live registry view with a controller-owned capability."""
+        view = Registry()
+        view.tools = _ScopedTools(self.tools, name, tool)
+        return view
 
     def register(
         self,

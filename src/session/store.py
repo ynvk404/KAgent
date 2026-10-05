@@ -270,6 +270,13 @@ def _message_from_dict(data: Any) -> Message | None:
     if isinstance(tool_http_status, bool) or not isinstance(tool_http_status, int):
         tool_http_status = None
     tool_truncated = data.get("tool_truncated") is True
+    from src.session.tool_results import load_references
+    references = [dataclasses.asdict(ref) for ref in load_references(data.get("tool_result_refs"))]
+    scope = data.get("tool_result_scope")
+    if not isinstance(scope, dict) or set(scope) != {"generation", "target", "project"} or not all(
+        isinstance(value, str) and len(value) <= 64 for value in scope.values()
+    ):
+        scope = None
 
     return Message(
         role=cast(Role, role),
@@ -285,6 +292,8 @@ def _message_from_dict(data: Any) -> Message | None:
         tool_error_kind=tool_error_kind,
         tool_http_status=tool_http_status,
         tool_truncated=tool_truncated,
+        tool_result_refs=references or None,
+        tool_result_scope=scope,
     )
 
 
@@ -456,6 +465,10 @@ class Store:
                         serialized["tool_http_status"] = msg.tool_http_status
                     if msg.tool_truncated:
                         serialized["tool_truncated"] = True
+                if msg.tool_result_refs:
+                    serialized["tool_result_refs"] = msg.tool_result_refs
+                if msg.tool_result_scope:
+                    serialized["tool_result_scope"] = msg.tool_result_scope
                 serialized_messages.append(serialized)
 
             data = redact_payload({

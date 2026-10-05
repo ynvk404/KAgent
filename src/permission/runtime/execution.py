@@ -266,8 +266,12 @@ class ExecutionPolicy:
                           "src.tools.discovery.content", "src.tools.discovery.service", "src.tools.workflow.workflow_tool",
                           "src.tools.workflow.finding", "src.tools.workflow.coverage", "src.tools.skills.payloads", "src.tools.skills.skill_file",
                           "src.tools.skills.paths", "src.tools.common.ask", "src.tools.common.browser_capture", "src.skills.load_skill",
-                          "src.tools.execution.shell", "src.tools.execution.plugin", "src.tools.mcp.integration", "src.tools.common.permission_status"}:
+                          "src.tools.execution.shell", "src.tools.execution.plugin", "src.tools.mcp.integration", "src.tools.common.permission_status",
+                          "src.tools.common.tool_result"}:
             raise ExecutionBlocked("blocked: enforcement-unavailable; unregistered capability adapter")
+        if module == "src.tools.common.tool_result":
+            from types import SimpleNamespace
+            tool.validate_rights(args, SimpleNamespace(execution_policy=self), receipt=False)
         if module == "src.tools.execution.file":
             self.require_path(args.get("path", ""), write="Read" not in type(tool).__name__)
         elif module == "src.tools.execution.search":

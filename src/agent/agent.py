@@ -348,6 +348,8 @@ class ToolCallResult:
         error_kind: ErrorKind | None = None,
         http_status: int | None = None,
         truncated: bool = False,
+        retention_generation: str | None = None,
+        retention_provenance: dict[str, Any] | None = None,
     ):
         self.result = result
         self.err_str = err_str
@@ -359,6 +361,9 @@ class ToolCallResult:
         self.error_kind = error_kind
         self.http_status = http_status
         self.truncated = truncated
+        # Transient controller provenance, never provider/session data or proof.
+        self.retention_generation = retention_generation
+        self.retention_provenance = retention_provenance
 
 
 @dataclass(frozen=True)
@@ -987,6 +992,15 @@ class Agent:
 
         self._bounded_working: list[Message] | None = None
         self._bounded_results: dict[int, _BoundedToolResult] = {}
+        from .tool_results import ResultRetention
+        from src.tools.common.tool_result import ReadToolResult
+        self.result_retention = ResultRetention(self)
+        existing = self.tools.get("read_tool_result")
+        if existing is not None and type(existing) is not ReadToolResult:
+            self.result_retention.store = None
+        else:
+            reader = ReadToolResult(self.result_retention) if self.result_retention.store is not None else None
+            self.tools = self.tools.scoped_tool("read_tool_result", reader)
         self.turn_executed_tool = False
         self._trace_enabled = False
         self._trace_run_id = ""
@@ -1496,6 +1510,15 @@ class Agent:
                 ok=True,
             )
 
+        if tool_name == "read_tool_result":
+            try:
+                ref = self.result_retention.lookup((args or {}).get("result_ref", ""))
+            except ValueError:
+                return ToolAllowedResult(ok=False, reason="tool result reference unavailable")
+            # Derivative access inherits the active skill's original capability
+            # boundary; generic validation was already checked above.
+            return self.is_tool_allowed(ref.tool_name)
+
         tool = self.tools.get(tool_name)
 
         if tool is None:
@@ -1598,6 +1621,9 @@ class Agent:
         self.engagement_state.http_permissions.reset()
         self.memory = None
         self.workflow.clear()
+        self.result_retention.scope = {}
+        self.result_retention.references.clear()
+        self.result_retention.pending.clear()
         self._clear_permission_cache()
         self.rebuild_system_prompt()
 
@@ -1647,6 +1673,7 @@ class Agent:
 
         if loaded.target is not None:
             self.target.copy_from(loaded.target)
+        self.result_retention.restore(loaded.messages)
 
         self.memory = loaded.memory
         self.workflow.replace_from(loaded.workflow)
@@ -1678,6 +1705,9 @@ class Agent:
     ) -> None:
         if self.store is None:
             return
+
+        if self.history and self.result_retention.store is not None:
+            self.history[0] = self.result_retention.attach(self.history[0])
 
         await self.store.save(
             self.history,
@@ -1743,7 +1773,7 @@ class Agent:
                 workflow=self.workflow,
                 engagement_state=self.engagement_state,
             )
-        )
+        ) + self.result_retention.continuation()
 
     async def set_target_base_url(self, url: str) -> None:
         self.apply_target_base_url(url)
@@ -3183,6 +3213,7 @@ class Agent:
         self.running = True
         self._bounded_working = None
         self._bounded_results.clear()
+        self.result_retention.pending.clear()
         self._reset_llm_call_counts()
         self._turn_client_error = False
         stop_reason = "runtime_error"
@@ -3243,6 +3274,7 @@ class Agent:
 
             self._bounded_working = None
             self._bounded_results.clear()
+            self.result_retention.pending.clear()
             self.running = False
 
             self._trace("terminal", stop_reason=stop_reason)
@@ -4297,6 +4329,10 @@ class Agent:
             key: state for key, state in self._bounded_results.items()
             if key in current_ids
         }
+        self.result_retention.pending = {
+            key: state for key, state in self.result_retention.pending.items()
+            if key in current_ids
+        }
 
         def original(message: Message) -> str:
             state = self._bounded_results.get(id(message))
@@ -4308,6 +4344,11 @@ class Agent:
             self._bounded_results.pop(id(message), None)
             replacement = replace(message, content=content)
             working[index] = replacement
+            pending = self.result_retention.pending.pop(id(message), None)
+            if pending is not None:
+                self.result_retention.pending[id(replacement)] = replace(pending, message=replacement)
+            if message.tool_result_refs:
+                self.history[:] = [replacement if entry is message else entry for entry in self.history]
             self._bounded_results[id(replacement)] = _BoundedToolResult(
                 replacement, source, elided,
             )
@@ -4316,6 +4357,8 @@ class Agent:
             tools_tokens = 0
         else:
             tools_tokens = self.tools_token_estimate()
+
+        self.result_retention.admit(working, tools_tokens)
 
         def size() -> int:
             return tools_tokens + approximate_message_tokens(working)
@@ -4341,6 +4384,12 @@ class Agent:
             return (
                 self.tools.context_reduction_policy(working[index].name)
                 == "adaptive"
+                # A resumed preview has no trusted original in this runtime.
+                # Never re-preview it or hydrate storage inside the guard.
+                and (not working[index].tool_result_refs or (
+                    id(working[index]) in self._bounded_results
+                    and working[index].tool_result_scope == self.result_retention.scope
+                ))
             )
 
         elidable = tool_indexes[
@@ -4372,6 +4421,10 @@ class Agent:
                 f"{MIDTURN_ELISION_PREFIX}"
                 f" — {original_length} bytes dropped]"
             )
+            if msg.tool_result_refs:
+                from .tool_results import reference_header
+                ref = self.result_retention.lookup(msg.tool_result_refs[0]["result_ref"])
+                marker = reference_header(ref) + marker
 
             replace_result(i, marker, elided=True)
 
@@ -4405,6 +4458,10 @@ class Agent:
                         original(msg),
                         len(msg.content) - reduction,
                     )
+                    if msg.tool_result_refs:
+                        from .tool_results import retained_preview
+                        ref = self.result_retention.lookup(msg.tool_result_refs[0]["result_ref"])
+                        bounded = retained_preview(ref, original(msg), len(msg.content) - reduction)
                     if bounded == msg.content:
                         continue
                     dropped += len(msg.content) - len(bounded)
@@ -4686,6 +4743,14 @@ class Agent:
         result = ""
         run_err: Exception | None = None
 
+        self.result_retention.refresh_scope()
+        retention_generation = self.result_retention.scope["generation"]
+        from .tool_results import source_provenance
+        try:
+            retention_provenance = source_provenance(self, tc.function.name, parsed.args)
+        except Exception:
+            retention_provenance = None
+
         if parsed.parse_err is not None:
             run_err = Exception(
                 f"could not parse arguments: "
@@ -4782,6 +4847,8 @@ class Agent:
             error_kind=error_kind,
             http_status=http_status,
             truncated=truncated,
+            retention_generation=retention_generation,
+            retention_provenance=retention_provenance,
         )
 
     def record_tool_result(
@@ -4861,6 +4928,19 @@ class Agent:
 
         self.history.append(tool_msg)
         working.append(tool_msg)
+        self.result_retention.remember(tool_msg, parsed.args, res)
+        # Admission precedes execute_tool_calls' existing session-save boundary.
+        # UI already received the full sanitized event, which is not counted in
+        # the LLM context. Only current, controller-owned originals are eligible.
+        if self._bounded_working is not working:
+            self._bounded_working = working
+            self._bounded_results.clear()
+        if self.result_retention.pending:
+            try:
+                self.result_retention.admit(working, self.tools_token_estimate())
+            except Exception:
+                # Retention/schema/storage failures cannot change tool success.
+                pass
 
     async def chat(
         self,
@@ -5269,6 +5349,9 @@ class Agent:
                 )
             )
 
+        if self.result_retention.references:
+            next_history[0] = self.result_retention.attach(next_history[0])
+
         tokens_before = approximate_message_tokens(history_snap)
         tokens_after = approximate_message_tokens(next_history)
         required_savings = max(
@@ -5307,7 +5390,7 @@ class Agent:
                 workflow=self.workflow,
                 engagement_state=self.engagement_state,
             )
-        )
+        ) + self.result_retention.continuation()
 
 
 def count_memory_items(
@@ -5419,7 +5502,9 @@ def ensure_system_prompt(
         return messages
 
     return [
-        Message(role="system", content=prompt),
+        Message(role="system", content=prompt,
+                tool_result_refs=messages[0].tool_result_refs,
+                tool_result_scope=messages[0].tool_result_scope),
         *messages[1:]
     ]
 
@@ -5586,8 +5671,21 @@ class AgentRuntimeError(RuntimeError):
 def bounded_history_for_compaction(
     messages: list[Message],
 ) -> str:
+    from src.session.tool_results import load_references
+    from .tool_results import reference_header
+    prepared = []
+    for message in messages:
+        refs = load_references(message.tool_result_refs)
+        if message.role == "tool" and refs:
+            # The summary may carry a retrieval pointer, never a second preview
+            # of a preview or a hydrated payload. Pairing and outcome fields stay
+            # on the structured message; the continuation index survives even
+            # if the model omits every pointer from its summary.
+            message = replace(message, content=reference_header(refs[0])
+                              + "[Distributed preview is retained in the session; omitted output requires a gated range read.]")
+        prepared.append(message)
     return _compaction.bounded_history_for_compaction(
-        messages,
+        prepared,
         input_char_limit=COMPACTION_INPUT_CHAR_LIMIT,
         format_history=format_history_for_compaction,
         sanitize_content=lambda text: safe_tool_text(

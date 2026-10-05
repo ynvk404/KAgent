@@ -61,6 +61,9 @@ class Message:
     tool_error_kind: str | None = None
     tool_http_status: int | None = None
     tool_truncated: bool = False
+    # Controller-only token-saving descriptors; never evidence or approval.
+    tool_result_refs: list[dict[str, Any]] | None = None
+    tool_result_scope: dict[str, str] | None = None
     # Internal provenance prevents provider-private state from crossing adapters.
     provider_state_provider: str | None = None
     provider_state_model: str | None = None
