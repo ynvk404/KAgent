@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 import sys
-from typing import Any, TypedDict, cast, IO
+from typing import Any, cast, IO
 
 from rich.console import RenderableType
 from rich.segment import Segment
@@ -30,7 +30,7 @@ from src.agent.mentions import (
     parse_mention_path,
 )
 from src.tools.common.ask import Option, Question
-from src.config.config import ToolingProfile, Backend
+from src.config.config import ToolingProfile
 from src.llm.core.models import list_models
 from src.llm.providers import (
     ANTHROPIC_DEFAULT_BASE_URL,
@@ -54,6 +54,9 @@ from src.skills.template import render_skill_template
 from src.ui.bridges.ask_bridge import AskRequest
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest 
 from src.ui.core.custom_provider_adapter import CustomProviderAdapter
+from src.ui.core.provider_types import ConfigSnapshot, ProviderChange
+from src.ui.render import modal as _modal_formatter
+from src.ui.render.modal import _INPUT_STYLE_MAP
 from src.ui.commands.menu_window import compute_menu_window
 from src.ui.commands.slash_items import SLASH_ITEMS, SlashItem, filter_slash
 from src.ui.commands.slash_handler import (
@@ -133,34 +136,11 @@ class AbortEvent(asyncio.Event):
         if self.is_set():
             raise Exception("aborted")
         
-@dataclass(slots=True)
-class ProviderChange:
-    backend: Backend
-    model: str
-    base_url: str | None = None
-    api_key: str | None = None
-    custom_provider_id: str | None = None
-
-
 ApplyProvider = Callable[[ProviderChange], Awaitable[None]]
 PersistDisabledSkills = Callable[[list[str]], Awaitable[None]]
 UpdateProviderApiKey = Callable[[str, str], Awaitable[None]]
 TestConnection = Callable[[], Awaitable[None]]
 
-
-class ConfigSnapshot(TypedDict):
-    backend: Backend
-    base_url: str
-    api_key: str
-    api_keys: dict[str, str]
-    model: str
-    manual_model: str
-    manual_base_url: str
-    active_provider_name: str
-    active_custom_provider_id: str | None
-    active_custom_provider_base_url: str
-    active_custom_provider_api_key: str
-    active_custom_provider_model: str
 
 @dataclass(slots=True)
 class AppProps:
@@ -244,91 +224,19 @@ class _RichLogWriter:
         else:
             self._log.write(banner, width=width)
 
-_INPUT_STYLE_MAP: dict[str, str] = {
-    "gray": MUTED,
-    "prompt": f"bold {ACCENT}",
-    "text": PRIMARY,
-    "cursor": f"bold {PRIMARY}",
-    "cursor_char": "reverse",
-}
-
-
 def _input_style(name: str | None) -> str:
-    return _INPUT_STYLE_MAP.get(name or "text", name or "")
+    return _modal_formatter._input_style(name, style_map=_INPUT_STYLE_MAP)
 
 
 def _modal_text(modal) -> RenderableType:
-    if isinstance(modal, PermissionModal):
-        return modal.render()
-
-    text = Text()
-    for i, line in enumerate(modal.render()):
-        if i > 0:
-            text.append("\n")
-        if isinstance(modal, TextInputModal) and line.startswith(DEFAULT_PROMPT):
-            text.append(DEFAULT_PROMPT, style=_input_style("prompt"))
-            value = line[len(DEFAULT_PROMPT):]
-            if "▌" in value:
-                before, after = value.split("▌", 1)
-                if before:
-                    text.append(before, style=_input_style("text"))
-                text.append("▌", style=_input_style("cursor"))
-                if after:
-                    text.append(after, style=_input_style("text"))
-            else:
-                text.append(value, style=_input_style("text"))
-        elif isinstance(modal, ProviderPickerModal) and i == 0 and modal.confirming_delete is None:
-            text.append_text(modal.render_header_text())
-        elif isinstance(modal, ProviderPickerModal) and modal.confirming_delete is not None and ("> [ Delete ]" in line or "> [ Cancel ]" in line):
-            if "> [ Delete ]" in line:
-                text.append("> [ Delete ]", style=f"bold {ACCENT}")
-                text.append("   [ Cancel ]")
-            else:
-                text.append("  [ Delete ]   ")
-                text.append("> [ Cancel ]", style=f"bold {ACCENT}")
-        elif isinstance(modal, ProviderPickerModal) and line.startswith("> "):
-            if "● active" in line:
-                prefix_part, _, _ = line.partition("● active")
-                text.append(prefix_part, style=f"bold {ACCENT}")
-                text.append("● active", style=f"bold {SUCCESS}")
-            else:
-                text.append(line, style=f"bold {ACCENT}")
-        elif isinstance(modal, ProviderPickerModal) and "● active" in line:
-            prefix_part, _, _ = line.partition("● active")
-            text.append(prefix_part)
-            text.append("● active", style=f"bold {SUCCESS}")
-        elif isinstance(modal, AskModal) and line.startswith("› "):
-            if " — " in line:
-                head, desc = line.split(" — ", 1)
-                text.append(head, style=f"bold {ACCENT}")
-                text.append(" — ")
-                if "● active" in desc:
-                    d_head, _, _ = desc.partition("● active")
-                    if d_head:
-                        text.append(d_head)
-                    text.append("● active", style=f"bold {SUCCESS}")
-                else:
-                    text.append(desc)
-            else:
-                text.append(line, style=f"bold {ACCENT}")
-        elif isinstance(modal, AskModal) and "● active" in line:
-            head, _, _ = line.partition("● active")
-            text.append(head)
-            text.append("● active", style=f"bold {SUCCESS}")
-        elif isinstance(modal, SkillsModal) and line.startswith("› "):
-            if " — " in line:
-                head, desc = line.split(" — ", 1)
-                text.append(head, style=f"bold {ACCENT}")
-                text.append(" — " + desc)
-            else:
-                text.append(line, style=f"bold {ACCENT}")
-        elif line.strip().startswith("↑ ") or line.strip().startswith("↓ "):
-            text.append(line, style=MUTED)
-        elif line.startswith("error: "):
-            text.append(line, style=BOLD_ERROR)
-        else:
-            text.append(line)
-    return text
+    return _modal_formatter._modal_text(
+        modal,
+        input_style=_input_style,
+        accent_style=ACCENT,
+        success_style=SUCCESS,
+        muted_style=MUTED,
+        error_style=BOLD_ERROR,
+    )
 
 
 def _input_selection_text(value: str, selection: Selection) -> str:

@@ -12,7 +12,7 @@ import ssl
 import httpx
 from pathlib import Path
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import reveal_type
 from typing import (
@@ -28,6 +28,8 @@ from typing import (
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from .mentions import expand_file_mentions
+from . import output_bounds as _output_bounds
+from . import compaction as _compaction
 
 from src.redact.redact import apply as redact, redact_payload
 from src.permission.runtime.invocations import permission_turn
@@ -320,17 +322,7 @@ class IneffectiveCompactionError(RuntimeError):
     pass
 
 
-@dataclass
-class SessionMemoryParsed:
-    objectives: list[str] = field(default_factory=list)
-    plan: list[str] = field(default_factory=list)
-    completed: list[str] = field(default_factory=list)
-    findings: list[str] = field(default_factory=list)
-    tested: list[str] = field(default_factory=list)
-    files: list[str] = field(default_factory=list)
-    commands: list[str] = field(default_factory=list)
-    credentials: list[str] = field(default_factory=list)
-    todos: list[str] = field(default_factory=list)
+SessionMemoryParsed = _compaction.SessionMemoryParsed
 
 
 class ParsedToolCall:
@@ -754,158 +746,51 @@ class WholeTargetStallTracker:
 
 def _weighted_window_lengths(total: int) -> list[int]:
     """Split a source budget deterministically across the five windows."""
-    lengths = [total * weight // 100 for weight in MIDTURN_WINDOW_WEIGHTS]
-    remainder = total - sum(lengths)
-    for index in range(remainder):
-        lengths[index % len(lengths)] += 1
-    return lengths
+    return _output_bounds._weighted_window_lengths(total, MIDTURN_WINDOW_WEIGHTS)
 
 
 def _distributed_window_ranges(source_length: int, budget: int) -> list[tuple[int, int]]:
-    lengths = _weighted_window_lengths(min(source_length, max(0, budget)))
-    anchors = (0.0, 0.25, 0.5, 0.75, 1.0)
-    ranges: list[tuple[int, int]] = []
-
-    for index, (anchor, length) in enumerate(zip(anchors, lengths)):
-        if length <= 0:
-            continue
-        if index == 0:
-            start = 0
-        elif index == len(anchors) - 1:
-            start = source_length - length
-        else:
-            center = round(source_length * anchor)
-            start = center - length // 2
-        start = min(max(0, start), source_length - length)
-        end = start + length
-
-        if ranges and start <= ranges[-1][1]:
-            ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
-        else:
-            ranges.append((start, end))
-
-    return ranges
+    return _output_bounds._distributed_window_ranges(
+        source_length,
+        budget,
+        MIDTURN_WINDOW_WEIGHTS,
+        weighted_window_lengths=_weighted_window_lengths,
+    )
 
 
 def _render_distributed_windows(content: str, source_budget: int) -> str:
-    ranges = _distributed_window_ranges(len(content), source_budget)
-    if not ranges:
-        return ""
-
-    parts: list[str] = []
-    previous_end = 0
-    for start, end in ranges:
-        if start > previous_end:
-            parts.append(
-                "\n"
-                f"{MIDTURN_ELISION_PREFIX}; characters "
-                f"{previous_end}-{start} omitted; original length {len(content)}]"
-                "\n"
-            )
-        parts.append(content[start:end])
-        previous_end = end
-
-    if previous_end < len(content):
-        parts.append(
-            "\n"
-            f"{MIDTURN_ELISION_PREFIX}; characters "
-            f"{previous_end}-{len(content)} omitted; original length {len(content)}]"
-            "\n"
-        )
-    return "".join(parts)
+    return _output_bounds._render_distributed_windows(
+        content,
+        source_budget,
+        weights=MIDTURN_WINDOW_WEIGHTS,
+        elision_prefix=MIDTURN_ELISION_PREFIX,
+        distributed_window_ranges=_distributed_window_ranges,
+    )
 
 
 def _render_distributed_omissions(content: str, omitted: int) -> str:
     """Render four ordered gaps between the five evidence anchor points."""
-    source_length = len(content)
-    anchors = [0, source_length // 4, source_length // 2, source_length * 3 // 4, source_length]
-    capacities = [max(0, anchors[i + 1] - anchors[i] - 2) for i in range(4)]
-    gap_lengths = _proportional_reductions(capacities, omitted)
-    gaps: list[tuple[int, int]] = []
-    for index, gap_length in enumerate(gap_lengths):
-        if gap_length <= 0:
-            continue
-        segment_start = anchors[index] + 1
-        segment_end = anchors[index + 1] - 1
-        start = segment_start + (segment_end - segment_start - gap_length) // 2
-        gaps.append((start, start + gap_length))
-
-    parts: list[str] = []
-    previous_end = 0
-    for start, end in gaps:
-        parts.append(content[previous_end:start])
-        parts.append(
-            "\n"
-            f"{MIDTURN_ELISION_PREFIX}; characters "
-            f"{start}-{end} omitted; original length {source_length}]"
-            "\n"
-        )
-        previous_end = end
-    parts.append(content[previous_end:])
-    return "".join(parts)
+    return _output_bounds._render_distributed_omissions(
+        content,
+        omitted,
+        elision_prefix=MIDTURN_ELISION_PREFIX,
+        proportional_reductions=_proportional_reductions,
+    )
 
 
 def bound_recent_tool_result(content: str, target_length: int) -> str:
     """Bound one LLM-facing result with ordered windows including marker cost."""
-    target_length = max(
-        MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR,
-        min(len(content), target_length),
+    return _output_bounds.bound_recent_tool_result(
+        content,
+        target_length,
+        minimum_retained_length=MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR,
+        elision_prefix=MIDTURN_ELISION_PREFIX,
+        render_windows=_render_distributed_windows,
+        render_omissions=_render_distributed_omissions,
     )
-    if len(content) <= target_length or MIDTURN_ELISION_PREFIX in content:
-        return content
-
-    low = 0
-    high = len(content)
-    best = ""
-    while low <= high:
-        source_budget = (low + high) // 2
-        rendered = _render_distributed_windows(content, source_budget)
-        if len(rendered) <= target_length:
-            if len(rendered) > len(best):
-                best = rendered
-            low = source_budget + 1
-        else:
-            high = source_budget - 1
-
-    # When weighted windows overlap under slight pressure, filling their gaps
-    # can otherwise produce a large representational cliff. A complementary
-    # four-gap search keeps almost all source while retaining the same five
-    # distributed evidence regions.
-    low = 1
-    high = len(content)
-    while low <= high:
-        omitted = (low + high) // 2
-        rendered = _render_distributed_omissions(content, omitted)
-        if len(rendered) <= target_length:
-            if len(rendered) > len(best):
-                best = rendered
-            high = omitted - 1
-        else:
-            low = omitted + 1
-
-    if not best or len(best) >= len(content):
-        return content
-    return best
 
 
-def _proportional_reductions(capacities: list[int], required: int) -> list[int]:
-    """Allocate an integer reduction using stable largest remainders."""
-    total_capacity = sum(capacities)
-    amount = min(max(0, required), total_capacity)
-    if amount == 0 or total_capacity == 0:
-        return [0] * len(capacities)
-
-    reductions = [amount * capacity // total_capacity for capacity in capacities]
-    remainders = [amount * capacity % total_capacity for capacity in capacities]
-    left = amount - sum(reductions)
-    order = sorted(range(len(capacities)), key=lambda i: (-remainders[i], i))
-    for index in order:
-        if left == 0:
-            break
-        if reductions[index] < capacities[index]:
-            reductions[index] += 1
-            left -= 1
-    return reductions
+_proportional_reductions = _output_bounds._proportional_reductions
 
 
 @dataclass(slots=True)
@@ -5407,59 +5292,18 @@ def minimum_compactable_history_tokens(auto_compact_threshold: int) -> int:
 
 def recent_useful_turn(messages: list[Message]) -> list[Message]:
     """Keep the latest raw user request and final answer, not bulky tool payloads."""
-    user_index = next(
-        (index for index in range(len(messages) - 1, -1, -1) if messages[index].role == "user"),
-        None,
+    return _compaction.recent_useful_turn(
+        messages,
+        compact_message=compact_recent_message,
+        recent_message_char_limit=COMPACTION_RECENT_MESSAGE_CHAR_LIMIT,
     )
-    if user_index is None:
-        return []
-
-    recent = [compact_recent_message(messages[user_index])]
-    final_answer = next(
-        (
-            message
-            for message in reversed(messages[user_index + 1 :])
-            if message.role == "assistant" and message.content and not message.tool_calls
-        ),
-        None,
-    )
-    if final_answer is not None:
-        # A clipped assistant answer cannot safely replay its original
-        # provider-private continuation state. The summary already carries
-        # the answer; omit this history step rather than send altered content
-        # without the state required by DeepSeek or Gemini.
-        has_provider_state = (
-            final_answer.reasoning_content is not None
-            or final_answer.gemini_parts is not None
-        )
-        if not (has_provider_state and len(final_answer.content) > COMPACTION_RECENT_MESSAGE_CHAR_LIMIT):
-            recent.append(compact_recent_message(final_answer))
-    return recent
 
 
 def compact_recent_message(message: Message) -> Message:
-    content = message.content or ""
-    if len(content) <= COMPACTION_RECENT_MESSAGE_CHAR_LIMIT:
-        return replace(message)
-    marker_template = "\n[... {omitted} characters summarized during compaction ...]\n"
-    retained = COMPACTION_RECENT_MESSAGE_CHAR_LIMIT
-    for _ in range(10):
-        marker = marker_template.format(omitted=len(content) - retained)
-        next_retained = max(0, COMPACTION_RECENT_MESSAGE_CHAR_LIMIT - len(marker))
-        if next_retained >= retained:
-            break
-        retained = next_retained
-    marker = marker_template.format(omitted=len(content) - retained)
-    head = retained // 2
-    tail = retained - head
-    bounded = (
-        content[:head]
-        + marker
-        + content[-tail:]
-    )
-    return replace(
-        message, content=bounded, reasoning_content=None, tool_calls=None,
-        gemini_parts=None, provider_state_provider=None, provider_state_model=None,
+    return _compaction.compact_recent_message(
+        message,
+        COMPACTION_RECENT_MESSAGE_CHAR_LIMIT,
+        replace_message=replace,
     )
 
 
@@ -5468,24 +5312,10 @@ def remove_workflow_duplicates(
     workflow: WorkflowState,
 ) -> SessionMemory:
     """Do not mirror Candidate-linked facts into prose session memory."""
-    candidate_ids = tuple(workflow.candidates)
-    if not candidate_ids:
-        return memory
-
-    def keep(items: list[str]) -> list[str]:
-        return [item for item in items if not any(value in item for value in candidate_ids)]
-
-    return replace(
+    return _compaction.remove_workflow_duplicates(
         memory,
-        objectives=keep(memory.objectives),
-        plan=keep(memory.plan),
-        completed=keep(memory.completed),
-        findings=keep(memory.findings),
-        tested=keep(memory.tested),
-        files=keep(memory.files),
-        commands=keep(memory.commands),
-        credentials=keep(memory.credentials),
-        todos=keep(memory.todos),
+        workflow,
+        replace_memory=replace,
     )
 
 
@@ -5537,29 +5367,10 @@ def ensure_system_prompt(
 
 
 def format_history_for_compaction(messages: list[Message]) -> str:
-    lines: list[str] = []
-
-    for m in messages:
-        if not m.content and (not m.tool_calls or len(m.tool_calls) == 0):
-            continue
-
-        if m.name:
-            lines.append(f"\n[{m.role}:{m.name}]")
-        else:
-            lines.append(f"\n[{m.role}]")
-
-        if m.content:
-            lines.append(redact_payload(m.content))
-
-        if m.tool_calls:
-            for tc in m.tool_calls:
-                lines.append(
-                    f"tool_call {tc.id} "
-                    f"{tc.function.name} "
-                    f"{redact_payload(tc.function.arguments)}"
-                )
-
-    return "\n".join(lines)
+    return _compaction.format_history_for_compaction(
+        messages,
+        redact_payload=redact_payload,
+    )
 
 
 def err_message(err) -> str:
@@ -5715,32 +5526,10 @@ class AgentRuntimeError(RuntimeError):
 def bounded_history_for_compaction(
     messages: list[Message],
 ) -> str:
-    full = format_history_for_compaction(messages)
-
-    if len(full) <= COMPACTION_INPUT_CHAR_LIMIT:
-        return full
-
-    tail = full[-COMPACTION_INPUT_CHAR_LIMIT:]
-
-    boundary = tail.find("\n[")
-
-    if boundary > 0:
-        trimmed = tail[boundary:]
-    else:
-        trimmed = tail
-
-    return "\n".join(
-        [
-            (
-                "[system]\n"
-                "Older conversation text was omitted because "
-                f"the compaction input exceeded "
-                f"{COMPACTION_INPUT_CHAR_LIMIT} characters. "
-                "Preserve continuity from persistent memory "
-                "and the newest visible context below."
-            ),
-            trimmed,
-        ]
+    return _compaction.bounded_history_for_compaction(
+        messages,
+        input_char_limit=COMPACTION_INPUT_CHAR_LIMIT,
+        format_history=format_history_for_compaction,
     )
 
 
@@ -5814,32 +5603,7 @@ def merge_list(
     next_items: list[str],
     cap: int = 24,
 ) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-
-    for item in (prev or []) + next_items:
-
-        clean = " ".join(item.split()).strip()
-
-        if not clean:
-            continue
-
-        key = clean.lower()
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-
-        if len(clean) > 240:
-            clean = clean[:239] + "…"
-
-        out.append(clean)
-
-    if cap is not None:
-        return out[-cap:]
-
-    return out
+    return _compaction.merge_list(prev, next_items, cap)
 
 
 def empty_memory() -> SessionMemory:
@@ -5865,85 +5629,11 @@ def empty_memory() -> SessionMemory:
 def parse_compaction_summary(
     summary: str,
 ) -> SessionMemoryParsed:
-    sections = split_markdown_sections(summary)
-
-    files_and_commands = section_items(
-        sections,
-        [
-            "files and commands",
-        ],
-    )
-
-    return SessionMemoryParsed(
-        objectives=section_items(
-            sections,
-            [
-                "current objective",
-                "target and scope",
-            ],
-        ),
-
-        plan=section_items(
-            sections,
-            [
-                "plan",
-            ],
-        ),
-
-        completed=section_items(
-            sections,
-            [
-                "completed tasks",
-            ],
-        ),
-
-        findings=section_items(
-            sections,
-            [
-                "findings and evidence",
-            ],
-        ),
-
-        tested=section_items(
-            sections,
-            [
-                "tested surface",
-                "decisions and assumptions",
-            ],
-        ),
-
-        files=[
-            s
-            for s in files_and_commands
-            if re.search(
-                r"(?:^|[\s/])[\w.-]+\.\w+|/|\\",
-                s,
-            )
-        ],
-
-        commands=[
-            s
-            for s in files_and_commands
-            if re.search(
-                r"`[^`]+`|\b(?:curl|npm|git|rg|python|node|ffuf|nuclei|sqlmap|httpx)\b",
-                s,
-            )
-        ],
-
-        credentials=section_items(
-            sections,
-            [
-                "credentials and placeholders",
-            ],
-        ),
-
-        todos=section_items(
-            sections,
-            [
-                "open todos",
-                "next best actions",
-            ],
-        ),
+    return _compaction.parse_compaction_summary(
+        summary,
+        split_sections=split_markdown_sections,
+        get_section_items=section_items,
+        parsed_memory_type=SessionMemoryParsed,
     )
 
 
@@ -5951,68 +5641,22 @@ def section_items(
     sections: dict[str, list[str]],
     names: list[str],
 ) -> list[str]:
-    out: list[str] = []
-
-    for name in map(normalize_heading, names):
-
-        for line in sections.get(name, []):
-
-            item = re.sub(
-                r"^\s*(?:[-*]|\d+[.)])\s+",
-                "",
-                line,
-            ).strip()
-
-            if not item:
-                continue
-
-            if re.match(
-                r"^none\b|^n/a$",
-                item,
-                re.IGNORECASE,
-            ):
-                continue
-
-            out.append(item)
-
-    return out
+    return _compaction.section_items(
+        sections,
+        names,
+        heading_normalizer=normalize_heading,
+    )
 
 
 def normalize_heading(s: str) -> str:
-    return re.sub(
-        r"[:#]",
-        "",
-        s.lower(),
-    ).strip()
+    return _compaction.normalize_heading(s)
 
 
 def split_markdown_sections(text: str) -> dict[str, list[str]]:
-    sections = {}
-    current = "summary"
-
-    for raw in text.replace("\r\n", "\n").split("\n"):
-
-        heading = re.match(
-            r"^#{1,3}\s+(.+?)\s*$",
-            raw
-        )
-
-        if heading and heading.group(1):
-            current = normalize_heading(
-                heading.group(1)
-            )
-
-            if current not in sections:
-                sections[current] = []
-
-            continue
-
-        if current not in sections:
-            sections[current] = []
-
-        sections[current].append(raw)
-
-    return sections
+    return _compaction.split_markdown_sections(
+        text,
+        heading_normalizer=normalize_heading,
+    )
 
 
 def build_turn_learning_text(
