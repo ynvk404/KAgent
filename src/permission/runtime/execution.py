@@ -35,6 +35,7 @@ class ExecutionReceipt:
     revision: tuple[str, int, int, int]
     expires: float
     review_id: str = 'library'
+    validation_binding: tuple[str, str] | None = None
 
 
 _active: ContextVar[tuple["ExecutionPolicy", ExecutionReceipt] | None] = ContextVar("execution_receipt", default=None)
@@ -82,6 +83,7 @@ class ExecutionPolicy:
         self.input_questions: dict[str, str | None] = {}
         self.journal: Path | None = None
         self.worker: Any = None
+        self.generic_validation: Any = None
         from src.permission.runtime.observations import ObservationStore
         self.observations = ObservationStore()
         self.vetted_ips: dict[str, tuple[str, ...]] = {}
@@ -169,6 +171,15 @@ class ExecutionPolicy:
 
     def require_path(self, path: str | Path, *, write: bool = False) -> Path:
         resolved = Path(path).expanduser().resolve()
+        boundary = self.generic_validation
+        if write and boundary is not None and boundary.restricted():
+            candidates = [c for c in boundary.candidates() if c.status == "validating"]
+            if len(candidates) != 1:
+                raise ExecutionBlocked("blocked: generic proof write requires one active candidate")
+            candidate = boundary.require(candidates[0].id)
+            expected = boundary.proof_path(candidate)
+            if Path(path).expanduser().absolute() != expected or resolved != expected:
+                raise ExecutionBlocked("blocked: generic write restricted to candidate proof.md")
         if not resolved.is_relative_to(self.root):
             raise ExecutionBlocked("blocked: file-outside-profile; operator must change resource roots")
         if any(resolved.is_relative_to(p) for p in self.protected):
@@ -235,6 +246,11 @@ class ExecutionPolicy:
 
     def validate(self, tool: Any, args: dict[str, Any]) -> None:
         name = tool.name()
+        if self.generic_validation is not None:
+            try:
+                self.generic_validation.validate_tool(tool, args)
+            except (TypeError, ValueError) as exc:
+                raise ExecutionBlocked(f"blocked: {exc}") from exc
         if "*" in self.revoked or name in self.revoked:
             raise ExecutionBlocked("blocked: tool/session-revoked")
         module = type(tool).__module__
@@ -257,7 +273,7 @@ class ExecutionPolicy:
         elif module == "src.tools.execution.search":
             self.require_path(args.get("path") or self.root)
         elif module == "src.tools.http.http_tool":
-            self.require_network(tool.resolve_url(args.get("url", "")))
+            self.require_network(tool.prepare(args)[0].url)
         elif module == 'src.tools.workflow.finding':
             self.engagement.require_in_scope(args.get('url', ''))
         elif module == "src.tools.http.web":
@@ -288,6 +304,12 @@ class ExecutionPolicy:
         if len(self._receipts) >= 1024:
             raise ExecutionBlocked("pending: receipt-capacity")
         receipt = ExecutionReceipt(uuid.uuid4().hex, digest, self.stamp(), self.clock() + 60, review_id())
+        if (tool.name() == "file_write" and self.generic_validation is not None
+                and self.generic_validation.restricted()):
+            boundary = self.generic_validation
+            candidate = next(c for c in boundary.candidates() if c.status == "validating")
+            from dataclasses import replace
+            receipt = replace(receipt, validation_binding=(candidate.id, boundary.snapshot(candidate.id)))
         self._receipts[receipt.id] = receipt
         self._pending.add(digest)
         return receipt
@@ -302,6 +324,13 @@ class ExecutionPolicy:
 
     def start(self, receipt: ExecutionReceipt, tool: Any, args: dict[str, Any], signal: Any):
         check_cancelled(signal)
+        if receipt.validation_binding is not None:
+            try:
+                if self.generic_validation is None:
+                    raise ValueError("generic runtime restriction unavailable")
+                self.generic_validation.unchanged(*receipt.validation_binding)
+            except ValueError as exc:
+                raise ExecutionBlocked(f"blocked: {exc}") from exc
         self.validate(tool, args)
         digest = invocation_digest(tool, args)
         if receipt.digest != digest:
@@ -326,6 +355,18 @@ class ExecutionPolicy:
         entry = _active.get()
         return (entry is not None and entry[0] is self and entry[1].revision == self.stamp()
                 and entry[1].review_id == review_id())
+
+    def bind_validation_context(self, state, skills, target) -> None:
+        if self.validation_context_matches(state, skills, target):
+            return
+        if self.generic_validation is not None and self.generic_validation.in_flight:
+            raise ExecutionBlocked("blocked: generic validation context changed during probe")
+        from src.permission.runtime.generic_validation import GenericValidationBoundary
+        self.generic_validation = GenericValidationBoundary(self, state, skills, target)
+
+    def validation_context_matches(self, state, skills, target) -> bool:
+        return bool(self.generic_validation is not None
+                    and self.generic_validation.matches(state, skills, target))
 
     def status(self) -> str:
         return (f"Execution profile: {self.root}; YOLO: {self.yolo}; calls: {self.used}/{self.max_calls}; "

@@ -1210,6 +1210,7 @@ class WorkflowState:
         validator_classes: frozenset[str],
         coverage_sync_available: bool,
         invalid_evidence_candidate_ids: frozenset[str] = frozenset(),
+        generic_eligible_candidate_ids: frozenset[str] = frozenset(),
     ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
         """Return status, actionable work, and blockers for the active objective."""
         objective = self.objective
@@ -1279,8 +1280,10 @@ class WorkflowState:
                     f"mutation cleanup requires operator action:{candidate.id}:"
                     f"{result.cleanup_state}"
                 )
-            if candidate.status in {"new", "queued", "validating"}:
-                if candidate.candidate_class in normalized_validators:
+            if (candidate.status in {"new", "queued", "validating"}
+                    or candidate.status == "deferred" and result is None
+                    and candidate.id in generic_eligible_candidate_ids):
+                if candidate.candidate_class in normalized_validators or candidate.id in generic_eligible_candidate_ids:
                     actionable.append(f"candidate:{candidate.id}")
                 else:
                     blockers.append(f"candidate validator unavailable:{candidate.id}")

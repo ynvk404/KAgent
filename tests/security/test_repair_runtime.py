@@ -3,6 +3,7 @@ import json
 import sys
 import shutil
 from decimal import Decimal
+from pathlib import Path
 from urllib.parse import parse_qs
 
 import httpx
@@ -17,6 +18,7 @@ from src.tools.execution.shell import ShellTool
 from src.tools.execution.plugin import CommandPluginTool
 from src.tools.http.http_tool import HTTPTool
 from src.tools.workflow.workflow_tool import WorkflowTool
+from src.skills.registry import Registry as SkillRegistry
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.tools.mcp.integration import discover_mcp_tools
 from src.config.config import PluginConfig, MCPServerConfig
@@ -189,7 +191,9 @@ async def test_boolean_sqli_needs_four_captured_observations_before_terminal_res
         method='GET', parameter='q', location='query',
         objective_id='sqli-assessment', status='validating',
     ))
-    registry.register(WorkflowTool(state, target=Target(origin), evidence_root=tmp_path))
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    registry.register(WorkflowTool(state, target=Target(origin), skills=skills, evidence_root=tmp_path))
     (tmp_path / 'proof.txt').write_text('Bounded SQL boolean proof; no sensitive data.')
     ref = json.loads(await registry.execute('workflow', {
         'action': 'record_evidence', 'candidate_id': candidate.id,

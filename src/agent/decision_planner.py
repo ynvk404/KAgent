@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import ipaddress
 import re
 from typing import Any, List, Optional, TypedDict
@@ -9,6 +9,7 @@ from src.skills.registry import (
     normalize_candidate_class,
 )
 from src.target.target import Target
+from src.workflow.validation_route import ValidationRoute
 
 
 @dataclass
@@ -32,6 +33,7 @@ class PlannerCandidate:
     deferred_reason: str | None = None
     evidence_count: int = 0
     coverage_synced: bool | None = None
+    generic_startable: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,7 @@ class PlannerContext:
     workflow_status: str | None = None
     workflow_blockers: tuple[str, ...] = ()
     phase_completion_readiness: dict[str, Any] | None = None
+    validation_routes: dict[str, ValidationRoute] = field(default_factory=dict)
 
 
 class SkillRecommendation(TypedDict):
@@ -201,15 +204,44 @@ def build_decision_plan(
     if is_purely_informational(normalized):
         return None
 
-    recommended = recommend_skill(normalized, skills, context)
+    # An explicit structured class is intent, not execution authority. Resolve
+    # its stored candidate through the full runtime registry before using broad
+    # prose keywords (e.g. an explanation of authorization) to select an expert.
+    requested_classes = frozenset(normalize_candidate_class(value) for value in
+        re.findall(r"\bcandidate_class\s*=\s*([a-zA-Z0-9_-]+)", text))
+    planner_candidates = context.candidates if context else ()
+    if requested_classes:
+        planner_candidates = tuple(c for c in planner_candidates if c.candidate_class in requested_classes)
+        if len(requested_classes) != 1 or not planner_candidates:
+            return DecisionPlan(
+                None, "explicit candidate class awaits structured workflow resolution",
+                "high" if includes_any(normalized, HIGH_RISK_TERMS) else "normal", [],
+                "Record the supplied hypothesis with workflow(action=record_candidate). "
+                "Use its runtime validator resolution and current candidate ID for the next step. "
+                "Do not select an unrelated expert from explanatory prose. "
+                "This bookkeeping plan grants no generic admission or execution authority.",
+            )
+        recommended = None
+    else:
+        recommended = recommend_skill(normalized, skills, context)
     recommended_skill = next(
         (skill for skill in skills if recommended and skill.name == recommended["name"]),
         None,
     )
     selected = select_candidate(
-        text, context.candidates if context else (), recommended,
+        text, planner_candidates, recommended,
         frozenset(recommended_skill.candidate_classes) if recommended_skill else frozenset(),
     )
+    if selected is None and recommended is None and context is not None:
+        awaiting = [item for item in planner_candidates if item.status == "deferred"
+                    and context.validation_routes.get(item.id, ValidationRoute("unavailable")).kind == "generic"]
+        if awaiting:
+            selected = sorted(awaiting, key=lambda item: item.id)[0]
+    if selected is not None and context is not None and selected.id in context.validation_routes:
+        route = context.validation_routes[selected.id]
+        if route.kind != "expert":
+            return _route_plan(selected, route)
+        recommended = {"name": route.skill_name or "", "reason": f"candidate {selected.id} uses its unique expert"}
     if selected is not None and recommended is None:
         matching = [
             skill for skill in skills
@@ -270,7 +302,13 @@ def build_whole_target_plan(
     skills: List[Skill], context: PlannerContext
 ) -> DecisionPlan | None:
     """Recommend one bounded next step from current structured workflow state."""
-    if context.workflow_status in {"completed", "blocked", "not_applicable"}:
+    if context.workflow_status == "blocked":
+        for candidate in context.candidates:
+            route = context.validation_routes.get(candidate.id)
+            if route is not None and route.kind == "generic":
+                return _route_plan(candidate, route, revalidation=True)
+        return None
+    if context.workflow_status in {"completed", "not_applicable"}:
         return None
 
     phase_skills = (
@@ -375,6 +413,8 @@ def build_whole_target_plan(
             return _unresolved_validator_plan(
                 candidate_id, "unknown", 0, revalidation=True,
             )
+        if candidate.id in context.validation_routes and context.validation_routes[candidate.id].kind != "expert":
+            return _route_plan(candidate, context.validation_routes[candidate.id], revalidation=True)
         matching = _validation_skills_for_class(skills, candidate.candidate_class)
         if len(matching) != 1:
             return _unresolved_validator_plan(
@@ -445,6 +485,7 @@ def build_whole_target_plan(
     actionable = [
         candidate for candidate in context.candidates
         if candidate.status in {"new", "queued", "validating"}
+        or candidate.status == "deferred" and candidate.generic_startable is True
         or candidate.id in context.revalidation_candidate_ids
     ]
     actionable.sort(
@@ -458,6 +499,8 @@ def build_whole_target_plan(
         )
     )
     for candidate in actionable:
+        if candidate.id in context.validation_routes and context.validation_routes[candidate.id].kind != "expert":
+            return _route_plan(candidate, context.validation_routes[candidate.id])
         matching = _validation_skills_for_class(skills, candidate.candidate_class)
         if len(matching) != 1:
             return _unresolved_validator_plan(
@@ -501,6 +544,37 @@ def build_whole_target_plan(
             ),
         )
     return None
+
+
+def _route_plan(candidate: PlannerCandidate, route: ValidationRoute, *, revalidation=False) -> DecisionPlan:
+    startable = candidate.generic_startable if candidate.generic_startable is not None else (
+        candidate.status in {"new", "queued", "validating"} and candidate.latest_outcome is None
+    )
+    ready = route.kind == "generic" and startable and not revalidation
+    if ready:
+        guidance = (
+            f"Candidate {candidate.id}: generic bounded validation. "
+            f"Call workflow(action=start_validation, candidate_id={candidate.id}, probe=<concrete proposal>); do not load or complete a skill. "
+            "Use native http with phase=validation, max_redirects=0 on only the baseline and named input. "
+            "Use only concrete baseline/comparison values with matching controller-verified endpoint/action context. "
+            "A class name, captured request or model safety claim never establishes execution authority. "
+            "Keep baseline/auth context and current origin. GET alone does not establish absence of server effects. "
+            "Only http, workflow, file_write for the candidate proof.md, ask_user, permissions_status and confirm_finding are available. "
+            "Register immutable evidence and record_result with skill_name=generic-bounded-validation. "
+            "Confirmed AND not-confirmed require a trusted verifier or operator /review-result. "
+            "Without trusted proof, record insufficient-evidence and stop; do not infer a conclusion from prose. "
+            "Covered YOLO actions need no extra ask_user permission question or scope restatement. "
+            "Blocked/denied/unavailable actions stop without repeated approval questions; native scheduling handles rate/concurrency. "
+            "Ask only for genuinely missing endpoint/input, credentials/OTP or intent; reuse valid session answers."
+        )
+        reason = f"candidate {candidate.id} admitted for generic bounded validation"
+    else:
+        reason = route.reason or candidate.deferred_reason or "generic work unresolved; explicit proof review or retest required"
+        guidance = (f"Candidate {candidate.id} remains unresolved: {reason}. "
+                    "Retain evidence; use operator /review-result for a proof conclusion when available. "
+                    "Do not restart/probe or repeat permission/review questions while the blocker is unchanged. "
+                    "Do not report the objective completed.")
+    return DecisionPlan(None, reason, "normal", [], guidance, candidate.id)
 
 
 def _validation_skills_for_class(

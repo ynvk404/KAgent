@@ -731,7 +731,7 @@ async def main() -> int:
     tools.register(FileEditToolAlias())
     tools.register(GlobTool())
     tools.register(GrepTool())
-    tools.register(HTTPTool(target, engagement_state, workflow, capture_store))
+    tools.register(HTTPTool(target, engagement_state, workflow, capture_store, validation_registry=skills))
     tools.register(ContentDiscoveryTool(
         target,
         engagement_state,

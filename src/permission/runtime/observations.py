@@ -34,6 +34,10 @@ class Observation:
     body: bytes
     complete: bool
     observed_at: float
+    # Controller metadata for generic observations. Legacy/expert observations
+    # have no such binding and cannot be borrowed by a generic attempt.
+    candidate_id: str | None = None
+    probe_binding: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,11 +105,14 @@ class ObservationStore:
     @staticmethod
     def candidate_identity(candidate) -> str:
         return hashlib.sha256(json.dumps([getattr(candidate, field, None) for field in
-            ("candidate_class", "target", "endpoint", "method", "parameter", "location")], default=str).encode()).hexdigest()
+            ("candidate_class", "target", "endpoint", "method", "parameter", "location",
+             "baseline_request_ref", "auth_context_ref", "content_type", "request_template")], default=str).encode()).hexdigest()
 
-    def capture(self, action, status: int, body: bytes, *, complete: bool) -> str:
+    def capture(self, action, status: int, body: bytes, *, complete: bool,
+                validation_binding: tuple[str, str] | None = None) -> str:
         item = Observation("obs_" + uuid.uuid4().hex, action.epoch, action.method, action.url, action.transport_address,
-                           action.digest, hashlib.sha256(body).hexdigest(), status, body, complete, time.time())
+                           action.digest, hashlib.sha256(body).hexdigest(), status, body, complete, time.time(),
+                           *(validation_binding or (None, None)))
         self._items[item.id] = item
         while len(self._items) > 256:
             del self._items[next(iter(self._items))]
@@ -116,12 +123,17 @@ class ObservationStore:
         """Trusted adapter startup only. This method is not a tool operation."""
         self._verifiers[candidate_class] = verifier
 
-    def verify(self, candidate, references: tuple[str, ...], observation_ids: list[str], epoch: str) -> VerifiedResult | None:
+    def verify(self, candidate, references: tuple[str, ...], observation_ids: list[str], epoch: str,
+               *, validation_binding: tuple[str, str] | None = None) -> VerifiedResult | None:
         verifier = self._verifiers.get(candidate.candidate_class)
         if verifier is None or not observation_ids or len(set(observation_ids)) != len(observation_ids):
             return None
         items = tuple(self._items[key] for key in observation_ids if key in self._items)
         if len(items) != len(observation_ids) or any(not item.complete or item.epoch != epoch for item in items):
+            return None
+        if validation_binding is not None and any(
+            (item.candidate_id, item.probe_binding) != validation_binding for item in items
+        ):
             return None
         endpoint = (candidate.endpoint or "").split(" ")[-1]
         path = urlsplit(endpoint).path
@@ -140,6 +152,17 @@ class ObservationStore:
             self.persist()
             return result
         return None
+
+    def invalidate_result(self, candidate_id: str) -> None:
+        """A new trusted attempt cannot reuse an earlier conclusion certificate."""
+        old_results, old_historical = self._results.copy(), self._historical.copy()
+        self._results.pop(candidate_id, None)
+        self._historical.discard(candidate_id)
+        try:
+            self.persist()
+        except BaseException:
+            self._results, self._historical = old_results, old_historical
+            raise
 
     def result(self, candidate_id: str, references: tuple[str, ...], epoch: str, candidate=None) -> VerifiedResult | None:
         pending = _pending_review.get()

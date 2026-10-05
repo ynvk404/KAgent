@@ -10,6 +10,7 @@ from src.workflow.review import review_snapshot
 from src.redact.redact import apply_evidence
 from src.ui.core.state import Append, TranscriptEntry
 from src.workflow.evidence import verify_evidence_reads
+from src.workflow.validation_route import GENERIC_VALIDATOR, ValidationRoute, resolve_validation_route, generic_admission
 
 
 async def review_result(app: Any, rest: list[str]) -> None:
@@ -36,13 +37,37 @@ async def review_result(app: Any, rest: list[str]) -> None:
         tool = agent.tools.get("workflow")
         if tool is None:
             raise ValueError("workflow tool unavailable")
+        registry = getattr(tool, "skills", None)
+        policy.bind_validation_context(agent.workflow, registry, getattr(tool, "target", None))
+        route = resolve_validation_route(registry, candidate.candidate_class)
+        # Preserve the existing library-only expert review contract. Production
+        # always has a registry/objective. This exception cannot select generic
+        # or import a saved generic result into the compatibility path.
+        legacy_expert = (registry is None and agent.workflow.objective is None
+                         and candidate.objective_id is None
+                         and (latest is None or latest.skill_name != GENERIC_VALIDATOR))
+        if legacy_expert:
+            route = ValidationRoute("expert", candidate.candidate_class)
+        if route.kind not in {"expert", "generic"}:
+            raise ValueError(route.reason)
+        generic = route.kind == "generic"
+        def check_route():
+            if legacy_expert:
+                if agent.workflow.objective is not None or getattr(tool, "skills", None) is not None:
+                    raise ValueError("legacy expert review context changed")
+            elif resolve_validation_route(getattr(tool, "skills", None), candidate.candidate_class) != route:
+                raise ValueError("reviewed validator route changed")
+            if generic:
+                reason = generic_admission(candidate, agent.workflow, getattr(tool, "skills", None),
+                                           getattr(tool, "target", None), policy)
+                if reason:
+                    raise ValueError(reason)
+                policy.generic_validation.idle()
+        check_route()
         args = {**(latest.to_dict() if latest else {}),
                 "action": "record_result", "candidate_id": cid, "outcome": outcome,
-                "evidence_refs": list(refs), "skill_name": candidate.candidate_class,
+                "evidence_refs": list(refs), "skill_name": route.skill_name,
                 "force": True}
-        validators = agent.skills.validators_for_class(candidate.candidate_class)
-        if len(validators) == 1:
-            args["skill_name"] = validators[0].name
         ticket = policy.observations.begin_review(cid)
         snapshot = review_snapshot(agent.workflow, cid)
         receipt = policy.prepare(tool, args)
@@ -51,6 +76,7 @@ async def review_result(app: Any, rest: list[str]) -> None:
         epoch = policy.engagement.http_permissions.epoch
 
         def unchanged(expected: str = snapshot) -> None:
+            check_route()
             if (not policy.observations.review_is_current(cid, ticket)
                     or policy.stamp() != stamp
                     or agent.workflow.candidates.get(cid) is not candidate
@@ -82,6 +108,8 @@ async def review_result(app: Any, rest: list[str]) -> None:
             ticket=ticket, guard=unchanged,
         ) as certificate:
             result = await tool.run(args, None, agent.prompter)
+            if result.startswith("error:"):
+                raise ValueError(result)
             payload = json.loads(result)
             committed = agent.workflow.latest_result(cid)
             if (payload.get("ok") is not True or committed is None

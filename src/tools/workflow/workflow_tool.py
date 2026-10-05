@@ -42,6 +42,10 @@ from src.skills.artifacts import completion_artifact_path, resolve_canonical_art
 
 from src.tools.common.outcome import ToolOutput
 from src.tools.common.types import Tool, arg_bool, arg_number, arg_string
+from src.workflow.validation_route import (
+    GENERIC_VALIDATOR, generic_admission, resolve_validation_route,
+)
+from src.workflow.probe import ProbeProposal
 
 
 ACTIONS = (
@@ -94,14 +98,12 @@ class WorkflowTool(Tool):
 
     def description(self) -> str:
         return (
-            "Manage inputs, candidates, evidence, results, coverage and phase completion. "
-            "Inputs require a whole-target objective. Before recon/enumeration completion, "
-            "account for every coverage dimension: performed is adapter-only; observed is "
-            "unattested review with source/limitation; skipped means omitted and "
-            "not_applicable means irrelevant. Non-performed statuses require reasons; "
-            "retry failed/cancelled work or explain an actual skip. record_evidence stores "
-            "redacted immutable snapshots. record_result needs candidate_id, skill_name "
-            "and outcome. Use compact references, never raw traffic."
+            "Track inputs/candidates/evidence/results/phase completion. "
+            "Inputs need whole-target. Recon/enumeration coverage: "
+            "performed=adapter-only; observed=unattested source/limitation; skipped=omitted; "
+            "not_applicable=irrelevant. Non-performed needs reasons; retry failed/cancelled "
+            "work or explain skips. record_evidence stores immutable redacted proof; "
+            "record_result needs candidate_id, skill_name and outcome. Use compact refs, not raw traffic."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -114,6 +116,7 @@ class WorkflowTool(Tool):
                     "type": "string",
                     "description": "Required for record_evidence, start_validation, and record_result.",
                 },
+                "probe": ProbeProposal.schema(),
                 "input_id": optional_string,
                 "input_type": optional_string,
                 "content_type": {
@@ -128,13 +131,10 @@ class WorkflowTool(Tool):
                 },
                 "disposition": {"type": "string", "enum": sorted(INPUT_DISPOSITIONS)},
                 "disposition_reason": optional_string,
-                "candidate_class": {
-                    "type": "string",
-                    "description": "Required for record_candidate.",
-                },
+                "candidate_class": optional_string,
                 "target": {
                     "type": "string",
-                    "description": "Target for record_candidate; omit for record_input (runtime assigns scope).",
+                    "description": "Candidate target; record_input uses runtime scope.",
                 },
                 "endpoint": optional_string,
                 "method": optional_string,
@@ -150,7 +150,7 @@ class WorkflowTool(Tool):
                     "description": "Existing project proof file.",
                 },
                 "observation_ids": {"type": "array", "items": {"type": "string"},
-                                    "description": "Runtime observation IDs; claims alone are not verification."},
+                                    "description": "Runtime IDs alone never prove a conclusion."},
                 "signals": {"type": "array", "items": {"type": "string"}},
                 "baseline_request_ref": optional_string,
                 "auth_context_ref": optional_string,
@@ -188,8 +188,7 @@ class WorkflowTool(Tool):
                     "type": "string",
                     "enum": sorted(CLEANUP_STATES),
                     "description": (
-                        "Machine-readable cleanup lifecycle. Mutations default to pending; "
-                        "do not infer cleanup authorization from the original write."
+                        "Mutations default pending; cleanup requires separate authority."
                     ),
                 },
                 "deferred_reason": optional_string,
@@ -220,7 +219,7 @@ class WorkflowTool(Tool):
                 },
                 "coverage_reason": {
                     "type": "string",
-                    "description": "Required for observed (source and attestation limitation), skipped, not_applicable, failed, or cancelled.",
+                    "description": "Required for non-performed coverage; observed needs source/limitation.",
                 },
                 "artifact_ref": {
                     "type": "string",
@@ -249,6 +248,9 @@ class WorkflowTool(Tool):
         signal: Any,
         prompter: Prompter,
     ) -> str:
+        policy = policy_for(prompter)
+        if policy is not None:
+            policy.bind_validation_context(self.state, self.skills, self.target)
         action = arg_string(args, "action")
         if action == "record_input":
             result = self._record_input(args)
@@ -257,7 +259,7 @@ class WorkflowTool(Tool):
         elif action == "link_input_candidate":
             result = self._link_input_candidate(args)
         elif action == "record_candidate":
-            result = self._record_candidate(args)
+            result = self._record_candidate(args, policy)
         elif action == "record_evidence":
             result = await self._record_evidence(args, prompter, signal)
         elif action == "start_validation":
@@ -266,6 +268,12 @@ class WorkflowTool(Tool):
             result = await self._record_result(args, prompter, signal)
         elif action == "sync_coverage":
             policy = policy_for(prompter)
+            latest = self.state.latest_result(arg_string(args, "candidate_id"))
+            if latest is not None and latest.skill_name == GENERIC_VALIDATOR:
+                try:
+                    self._require_generic(latest.candidate_id, policy)
+                except ValueError as err:
+                    return self._typed_result(f"error: {err}")
             if policy is not None:
                 latest = self.state.latest_result(arg_string(args, "candidate_id"))
                 if latest is None or policy.observations.result(latest.candidate_id, tuple(latest.evidence_refs),
@@ -312,7 +320,7 @@ class WorkflowTool(Tool):
         elif action == "complete_skill":
             result = self._complete_skill(args)
         elif action == "list":
-            result = self._list(args)
+            result = self._list(args, policy)
         else:
             result = f"error: action must be one of: {', '.join(ACTIONS)}"
         return self._typed_result(result)
@@ -330,7 +338,7 @@ class WorkflowTool(Tool):
             return ToolOutput(result, status="error", error_kind="tool_exception")
         return result
 
-    def _record_candidate(self, args: dict[str, Any]) -> str:
+    def _record_candidate(self, args: dict[str, Any], policy=None) -> str:
         if "objective_id" in args:
             return "error: objective_id is assigned by the runtime"
         candidate_class = arg_string(args, "candidate_class")
@@ -360,13 +368,11 @@ class WorkflowTool(Tool):
         validators = (
             self.skills.validators_for_class(candidate_class) if self.skills else []
         )
+        route = resolve_validation_route(self.skills, candidate_class)
         supported = len(validators) == 1 if self.skills else None
-        validator_resolution = (
-            None if self.skills is None
-            else "unique" if len(validators) == 1
-            else "unavailable" if not validators
-            else "ambiguous"
-        )
+        validator_resolution = "unique" if route.kind == "expert" else route.kind
+        if route.kind == "generic" and objective is not None and objective.mode == "direct":
+            objective_id = objective.id
         endpoint, method, normalization_error = self._normalize_method_endpoint(
             args.get("endpoint"), args.get("method")
         )
@@ -417,6 +423,19 @@ class WorkflowTool(Tool):
                 objective_id=objective_id,
                 status=("deferred" if supported is False else args.get("status", "queued")),
             )
+            reason = route.reason
+            if route.kind == "generic":
+                reason = generic_admission(candidate, self.state, self.skills, self.target, policy)
+                if reason is None:
+                    assert policy is not None
+                    reason = (policy.generic_validation.admission_reason(
+                        policy.generic_validation.http_tool, candidate.id)
+                        if candidate.id in self.state.candidates else
+                        "generic context-needed: concrete proposal and verified endpoint/action context required")
+                supported = reason is None
+                candidate.status = "queued" if supported else "deferred"
+            elif route.kind != "expert" and self.skills is not None:
+                candidate.status = "deferred"
             if candidate.candidate_class == "sql-injection" and any(
                 _SQLI_BOOLEAN_CLAIM_RE.search(signal)
                 for signal in candidate.signals
@@ -433,7 +452,7 @@ class WorkflowTool(Tool):
             if not created and self.skills and self.state.latest_result(stored.id) is None:
                 if supported is False and stored.status in {"new", "queued"}:
                     stored = self.state.set_candidate_status(stored.id, "deferred")
-                elif supported and stored.status == "deferred":
+                elif supported and route.kind == "expert" and stored.status == "deferred":
                     stored = self.state.set_candidate_status(stored.id, "queued")
         except (TypeError, ValueError) as err:
             return f"error: {err}"
@@ -447,7 +466,12 @@ class WorkflowTool(Tool):
                 "candidate": stored.to_dict(),
                 "supported": supported,
                 "validator_resolution": validator_resolution,
+                "validator_reason": reason,
                 "recommended_skills": [skill.name for skill in validators],
+                "proof_source_path": (
+                    str(policy.generic_validation.proof_path(stored).relative_to(policy.root))
+                    if validator_resolution == "generic" and policy is not None else None
+                ),
             },
             indent=2,
         )
@@ -546,12 +570,50 @@ class WorkflowTool(Tool):
         try:
             self._validate_current_objective_candidate(candidate_id)
             objective = self.state.objective
-            candidate = self.state.candidates[candidate_id]
-            if self.skills is not None:
+            candidate = self.state.candidates.get(candidate_id)
+            if candidate is None:
+                raise ValueError(f"unknown candidate: {candidate_id}")
+            policy = policy_for(prompter)
+            if policy is not None:
+                policy.generic_validation.idle()
+                if any(c.id != candidate_id and c.status == "validating"
+                       for c in policy.generic_validation.candidates()):
+                    raise ValueError("another generic validation attempt is active")
+            generic = self._is_generic(candidate)
+            if generic:
+                self._require_generic(candidate_id, policy)
+                assert policy is not None
+                assert objective is not None
+                boundary = policy.generic_validation
+                admitted = boundary.admit_probe(boundary.http_tool, candidate_id, args.get("probe"))
+                if any(c.id != candidate_id and c.status == "validating"
+                       for c in self.state.candidates.values()):
+                    raise ValueError("another validation attempt is active")
+                running_retest = (candidate.status == "validating"
+                    and boundary.started_candidate == candidate.id
+                    and objective is not None and boundary.started_objective == objective.id)
+                needs_retest = (self.state.latest_result(candidate_id) is not None and not running_retest
+                                or candidate.status in {"dismissed", "validated"})
+                if needs_retest:
+                    if objective is None or objective.id not in boundary.retest_objectives:
+                        raise ValueError("generic terminal/deferred candidate requires an explicit candidate retest")
+                if running_retest and boundary.attempt != admitted:
+                    raise ValueError("generic active proposal cannot change without explicit retest")
+                if not running_retest:
+                    policy.observations.invalidate_result(candidate.id)
+                if needs_retest:
+                    boundary.retest_objectives.discard(objective.id)
+                boundary.started_candidate = candidate.id
+                boundary.started_objective = objective.id
+                boundary.attempt = admitted
+                boundary.expert_attempt = None
+            elif self.skills is not None:
                 self._require_unique_validator(candidate.candidate_class)
+            elif policy is not None:
+                raise ValueError("skill registry unavailable for validator resolution")
             latest = self.state.latest_result(candidate_id)
             if (
-                objective is not None
+                not generic and objective is not None
                 and objective.mode == "whole_target"
                 and latest is not None
                 and latest.outcome in {"confirmed", "not-confirmed"}
@@ -574,9 +636,16 @@ class WorkflowTool(Tool):
                         "request an explicit candidate retest or repair its missing/invalid evidence"
                     )
             candidate = self.state.set_candidate_status(candidate_id, "validating")
+            if not generic and policy is not None and objective is not None:
+                policy.generic_validation.select_expert(candidate)
         except ValueError as err:
             return f"error: {err}"
-        return json.dumps({"ok": True, "candidate": candidate.to_dict()}, indent=2)
+        return json.dumps({"ok": True, "candidate": candidate.to_dict(),
+            "validator_resolution": "generic" if generic else "unique",
+            "proof_source_path": (
+                str(policy.generic_validation.proof_path(candidate).relative_to(policy.root))
+                if generic and policy is not None else None
+            )}, indent=2)
 
     async def _record_evidence(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
         candidate_id = arg_string(args, "candidate_id")
@@ -584,6 +653,14 @@ class WorkflowTool(Tool):
             return f"error: unknown candidate: {candidate_id}"
         try:
             self._validate_current_objective_candidate(candidate_id)
+            policy = policy_for(prompter)
+            candidate = self.state.candidates[candidate_id]
+            generic = self._is_generic(candidate)
+            snapshot = None
+            if generic:
+                self._require_generic(candidate_id, policy)
+                assert policy is not None
+                snapshot = policy.generic_validation.snapshot(candidate_id)
         except ValueError as err:
             return f"error: {err}"
         path = arg_string(args, "evidence_path")
@@ -593,11 +670,18 @@ class WorkflowTool(Tool):
             source = self.evidence_root.resolve() / path
             if not source.resolve().is_relative_to(self.evidence_root.resolve()):
                 raise ValueError("evidence path must stay inside the project")
+            if generic:
+                assert policy is not None
+                if source.absolute() != policy.generic_validation.proof_path(candidate):
+                    raise ValueError("generic evidence source restricted to candidate proof.md")
             real = await gate_sensitive_path(prompter, str(source), "read evidence source", signal)
             artifact = EvidenceArtifact.capture_immutable_snapshot(
                 candidate_id, real, self.evidence_root, sensitive_read_approved=True,
                 original_path=str(source),
             )
+            if snapshot is not None:
+                assert policy is not None
+                policy.generic_validation.unchanged(candidate_id, snapshot)
             self.state.add_evidence(artifact)
         except UserControlledRefusal:
             raise
@@ -627,17 +711,30 @@ class WorkflowTool(Tool):
             if candidate is None:
                 raise ValueError(f"unknown candidate: {result.candidate_id}")
             self._validate_current_objective_candidate(result.candidate_id)
-            if result.outcome == "confirmed" and not result.evidence_refs:
+            generic = result.skill_name == GENERIC_VALIDATOR or self._is_generic(candidate)
+            policy = policy_for(prompter)
+            snapshot = None
+            if generic:
+                self._require_generic(candidate.id, policy)
+                assert policy is not None
+                policy.generic_validation.idle()
+                if result.skill_name != GENERIC_VALIDATOR:
+                    raise ValueError("generic result requires reserved validator identifier")
+                if result.mutation_performed:
+                    raise ValueError("generic mutation/impact validation unavailable")
+                snapshot = policy.generic_validation.snapshot(candidate.id)
+            if not generic and result.outcome == "confirmed" and not result.evidence_refs:
                 raise ValueError("confirmed result requires an evidence reference")
             if result.evidence_refs and not self.state.evidence_matches(result.candidate_id, result.evidence_refs):
                 raise ValueError("evidence references must resolve to this candidate")
+            evidence_binding = [self.state.evidence[ref].to_dict() for ref in result.evidence_refs]
             if result.evidence_refs and not await verify_evidence_reads(
                 [self.state.evidence[ref] for ref in result.evidence_refs],
                 self.evidence_root, prompter, signal,
             ):
                 raise ValueError("evidence artifact changed or is unavailable")
             skill = self.skills.get(result.skill_name) if self.skills else None
-            if self.skills is not None:
+            if not generic and self.skills is not None:
                 validator = self._require_unique_validator(candidate.candidate_class)
                 if result.skill_name != validator.name:
                     raise ValueError(
@@ -645,7 +742,6 @@ class WorkflowTool(Tool):
                     )
             elif skill and skill.candidate_classes and candidate.candidate_class not in skill.candidate_classes:
                 raise ValueError("result skill does not handle candidate class")
-            policy = policy_for(prompter)
             if (
                 result.outcome == "confirmed"
                 and candidate.candidate_class == "sql-injection"
@@ -666,6 +762,8 @@ class WorkflowTool(Tool):
                                 and result.confirmation.get("kind") == "boolean-differential")
                         )
                     )
+                    if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
+                        raise ValueError("observation_ids must be a list of strings")
                     if boolean_sqli and len({item for item in ids if isinstance(item, str)}) < 4:
                         raise ValueError(
                             "boolean SQL injection confirmation needs at least four distinct "
@@ -673,9 +771,16 @@ class WorkflowTool(Tool):
                             "forming repeatable pairs; collect the missing evidence and retry "
                             "record_result"
                         )
-                    verified = policy.observations.verify(candidate, tuple(result.evidence_refs), ids,
-                                                          policy.engagement.http_permissions.epoch)
-                if verified is None or verified.outcome != result.outcome:
+                    if generic:
+                        boundary = policy.generic_validation
+                        if boundary.attempt is not None and boundary.started_candidate == candidate.id:
+                            verified = policy.observations.verify(candidate, tuple(result.evidence_refs), ids,
+                                policy.engagement.http_permissions.epoch,
+                                validation_binding=(candidate.id, boundary.probe_identity()))
+                    else:
+                        verified = policy.observations.verify(candidate, tuple(result.evidence_refs), ids,
+                                                              policy.engagement.http_permissions.epoch)
+                if verified is None or verified.outcome != result.outcome or (generic and not result.evidence_refs):
                     result.outcome = "insufficient-evidence"
                     result.deferred_reason = "class-verifier-unavailable-or-proof-unverified; evidence retained, no confirmed/negative claim"
             coverage_status = self._coverage_status(result)
@@ -683,12 +788,30 @@ class WorkflowTool(Tool):
                 result.coverage_synced = False
             if policy is not None:
                 policy.observations.check_pending_review()
+            if snapshot is not None:
+                assert policy is not None
+                policy.generic_validation.idle()
+                policy.generic_validation.unchanged(candidate.id, snapshot)
+                if evidence_binding != [self.state.evidence[ref].to_dict() if ref in self.state.evidence else None
+                                        for ref in result.evidence_refs]:
+                    raise ValueError("generic evidence ownership/identity changed during result verification")
+                if any(not self.state.evidence[ref].is_available_for_resume(self.evidence_root)
+                       for ref in result.evidence_refs):
+                    raise ValueError("generic evidence integrity changed during result verification")
             created = self.state.add_validation_result(
                 result,
                 force=arg_bool(args, "force"),
             )
             stored = self.state.latest_result(result.candidate_id)
             assert stored is not None
+            if generic:
+                assert policy is not None
+                policy.generic_validation.started_candidate = None
+                policy.generic_validation.started_objective = None
+                policy.generic_validation.attempt = None
+            elif (policy is not None and policy.generic_validation.expert_attempt is not None
+                  and policy.generic_validation.expert_attempt[0] == candidate.id):
+                policy.generic_validation.expert_attempt = None
         except (TypeError, ValueError) as err:
             return f"error: {err}"
         sync_error: str | None = None
@@ -1006,6 +1129,8 @@ class WorkflowTool(Tool):
         if not skill_name:
             return "error: complete_skill requires skill_name"
         canonical = normalize_metadata_name(skill_name)[:80]
+        if canonical == GENERIC_VALIDATOR:
+            return "error: generic validator is an internal result identifier, not a skill"
         artifact_ref = arg_string(args, "artifact_ref")
         skill = self.skills.get(canonical) if self.skills else None
         objective = self.state.objective
@@ -1225,14 +1350,32 @@ class WorkflowTool(Tool):
     def _require_unique_validator(self, candidate_class: str) -> Skill:
         if self.skills is None:
             raise ValueError("skill registry is unavailable for validator resolution")
-        validators = self.skills.validators_for_class(candidate_class)
-        if len(validators) != 1:
-            reason = "unavailable" if not validators else "ambiguous"
+        route = resolve_validation_route(self.skills, candidate_class)
+        if route.kind != "expert":
+            reason = "ambiguous" if route.kind == "ambiguous" else "unavailable"
             raise ValueError(
                 f"candidate class {candidate_class} has {reason} validator mapping; "
                 "exactly one enabled validation skill is required"
             )
-        return validators[0]
+        validator = self.skills.get(route.skill_name or "")
+        if validator is None:
+            raise ValueError("resolved expert validator unavailable")
+        return validator
+
+    def _is_generic(self, candidate: Candidate) -> bool:
+        latest = self.state.latest_result(candidate.id)
+        route = resolve_validation_route(self.skills, candidate.candidate_class)
+        return (route.kind == "generic"
+                or bool(latest and latest.skill_name == GENERIC_VALIDATOR))
+
+    def _require_generic(self, candidate_id: str, policy) -> Candidate:
+        candidate = self.state.candidates.get(candidate_id)
+        if candidate is None:
+            raise ValueError(f"unknown candidate: {candidate_id}")
+        reason = generic_admission(candidate, self.state, self.skills, self.target, policy)
+        if reason:
+            raise ValueError(reason)
+        return candidate
 
     @staticmethod
     def _phase_for_skill(canonical: str, skill) -> WorkflowPhase | None:
@@ -1249,7 +1392,7 @@ class WorkflowTool(Tool):
             return ""
         return self.target.base_url() or self.target.name()
 
-    def _list(self, args: dict[str, Any]) -> str:
+    def _list(self, args: dict[str, Any], policy=None) -> str:
         candidate_id = arg_string(args, "candidate_id")
         status = arg_string(args, "status")
         candidate_class = arg_string(args, "candidate_class")
@@ -1265,6 +1408,8 @@ class WorkflowTool(Tool):
         )
 
         candidates = list(self.state.candidates.values())
+        if policy is not None and policy.generic_validation.restricted():
+            candidates = [c for c in candidates if policy.generic_validation.belongs(c)]
         objective = self.state.objective
         if objective is not None and objective.mode == "whole_target" and not candidate_id:
             candidates = list(self.state.objective_candidates())

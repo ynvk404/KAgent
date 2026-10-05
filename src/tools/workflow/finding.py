@@ -21,6 +21,7 @@ from src.workflow.evidence import verify_evidence_reads
 from src.workflow.review import review_snapshot
 from src.skills.registry import normalize_candidate_class
 from src.target.origin import HTTPOrigin
+from src.workflow.validation_route import GENERIC_VALIDATOR
 from src.tools.common.types import Tool, arg_string
 
 SEVERITIES: tuple[Severity, ...] = (
@@ -243,6 +244,29 @@ class ConfirmFindingTool:
         evidence_read_approvals: set[str] = set()
         from src.permission.runtime.execution import policy_for
         policy = policy_for(prompter)
+        generic = latest.skill_name == GENERIC_VALIDATOR
+        def check_generic():
+            if generic:
+                if policy is None or policy.generic_validation is None:
+                    raise ValueError("generic finding requires runtime policy/current objective")
+                policy.generic_validation.require(candidate_id)
+                policy.generic_validation.idle()
+                if self.workflow is not policy.generic_validation.state:
+                    raise ValueError("generic finding workflow context changed")
+        check_generic()
+        generic_snapshot = None
+        if generic:
+            assert policy is not None
+            generic_snapshot = policy.generic_validation.snapshot(candidate_id)
+        def check_generic_snapshot():
+            check_generic()
+            if generic_snapshot is not None:
+                assert policy is not None
+                policy.generic_validation.unchanged(candidate_id, generic_snapshot)
+                certificate = policy.observations.result(candidate_id, tuple(latest.evidence_refs),
+                    policy.engagement.http_permissions.epoch, candidate)
+                if certificate is None or certificate.outcome != "confirmed":
+                    raise ValueError("generic finding trusted certificate changed")
         if policy is not None:
             verified = policy.observations.result(candidate_id, tuple(latest.evidence_refs),
                                                   policy.engagement.http_permissions.epoch, candidate)
@@ -259,6 +283,7 @@ class ConfirmFindingTool:
             raise ValueError("candidate evidence artifact changed or is unavailable")
         if review_snapshot(self.workflow, candidate_id) != result_snapshot:
             raise ValueError("candidate validation result changed during finalization")
+        check_generic_snapshot()
 
         requested_class = arg_string(args, "vuln_class").strip()
         if requested_class and normalize_candidate_class(requested_class) != candidate.candidate_class:
@@ -332,6 +357,7 @@ class ConfirmFindingTool:
             classification_revision=(1 if classification and classification.cwe else 0),
         )
 
+        check_generic_snapshot()
         path = await self.store.save(finding)
 
         # Store.save() may wait on disk while the workflow advances. A report
@@ -339,6 +365,7 @@ class ConfirmFindingTool:
         # announced as matching a result that changed during that wait.
         if review_snapshot(self.workflow, candidate_id) != result_snapshot:
             raise ValueError("candidate validation result changed during finalization")
+        check_generic_snapshot()
         if not await verify_evidence_reads(
             evidence_artifacts, root, prompter, signal,
             approved_paths=evidence_read_approvals,
@@ -346,6 +373,7 @@ class ConfirmFindingTool:
             raise ValueError("candidate evidence artifact changed or is unavailable")
         if review_snapshot(self.workflow, candidate_id) != result_snapshot:
             raise ValueError("candidate validation result changed during finalization")
+        check_generic_snapshot()
 
         # A confirmed ValidationResult and a persisted canonical report are
         # separate workflow facts.  Record the latter only after the atomic

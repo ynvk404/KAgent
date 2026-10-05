@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter, UserControlledRefusal, YoloPrompter
-from src.permission.network.grants import EffectiveHTTP, check_cancelled
+from src.permission.network.grants import EffectiveHTTP, HTTPPending, check_cancelled
 from src.permission.runtime.execution import policy_for
 from src.permission.runtime.invocations import permission_invocation
 from src.permission.network.transport import pin_request
@@ -47,12 +47,14 @@ class HTTPTool(Tool):
     def __init__(self, target: Target, engagement: EngagementState,
                  workflow: WorkflowState | None = None,
                  capture_store: CaptureStore | None = None,
-                 context_store: HTTPContextStore | None = None):
+                 context_store: HTTPContextStore | None = None,
+                 validation_registry=None):
         self.target = target
         self.workflow = workflow
         self.engagement = engagement
         self.capture_store = capture_store
         self.context_store = context_store or HTTPContextStore()
+        self.validation_registry = validation_registry
         self.permissions = engagement.http_permissions
         self.permissions.bind_target(lambda: target.revision)
         self.context_store.sync_target(target.revision, engagement.revision, self.permissions.epoch)
@@ -260,6 +262,42 @@ class HTTPTool(Tool):
             await asyncio.gather(invocation, return_exceptions=True)
 
     async def _run_invocation(self, args, signal, prompter) -> ToolOutput:
+        policy = policy_for(prompter)
+        boundary = policy.generic_validation if policy is not None else None
+        # A restored generic status cannot obtain compatibility-mode HTTP.
+        if policy is None and self.workflow is not None:
+            from src.workflow.validation_route import GENERIC_VALIDATOR, resolve_validation_route
+            objective = self.workflow.objective
+            for candidate in self.workflow.candidates.values():
+                latest = self.workflow.latest_result(candidate.id)
+                belongs = bool(objective and (
+                    candidate.id == objective.candidate_id if objective.mode == 'candidate_validation'
+                    else candidate.objective_id == objective.id))
+                saved_generic = bool(latest and latest.skill_name == GENERIC_VALIDATOR)
+                if ((belongs or objective is None) and saved_generic
+                        or belongs and resolve_validation_route(self.validation_registry, candidate.candidate_class).kind != 'expert'):
+                    raise UserControlledRefusal('blocked: generic runtime policy unavailable')
+        probe = None
+        failure = None
+        if boundary is not None:
+            action, request = self.prepare(args)
+            probe = boundary.begin_http(self, args, action, request)
+        try:
+            return await self._execute_invocation(args, signal, prompter, probe)
+        except HTTPPending:
+            # Bounded scheduler pressure has not sent a request and is not a
+            # terminal denial or vulnerability conclusion.
+            raise
+        except UserControlledRefusal as exc:
+            failure = exc
+            raise
+        finally:
+            if boundary is not None:
+                boundary.end_http(probe)
+                if failure is not None:
+                    boundary.record_blocker(probe, failure)
+
+    async def _execute_invocation(self, args, signal, prompter, generic_probe=None) -> ToolOutput:
         if isinstance(prompter, YoloPrompter):
             prompter.bind_http_permissions(self.permissions)
         args = deepcopy(args)
@@ -289,7 +327,7 @@ class HTTPTool(Tool):
                 action = replace(action, transport_address=address)
             receipt = await self.permissions.authorize(action, prompter, signal, lambda: self.target.revision)
             try:
-                result, location, cookie_updated = await self._dispatch(action, request, receipt, policy, signal, prompter, identity)
+                result, location, cookie_updated = await self._dispatch(action, request, receipt, policy, signal, prompter, identity, generic_probe, args)
             finally:
                 self.permissions.discard_receipt(receipt)
             outputs.append(f'[hop {hop}]\n{result}' if max_redirects else str(result))
@@ -338,7 +376,7 @@ class HTTPTool(Tool):
         return ToolOutput(redact_evidence(prefix + '\n'.join(outputs)), status='observation', http_status=result.http_status,
                           truncated=result.truncated)
 
-    async def _dispatch(self, action, request, receipt, policy, signal, prompter, identity=None) -> tuple[ToolOutput, str | None, bool]:
+    async def _dispatch(self, action, request, receipt, policy, signal, prompter, identity=None, generic_probe=None, generic_args=None) -> tuple[ToolOutput, str | None, bool]:
         # Independent gate: generic Registry approval cannot coalesce this gate.
         try:
             private_reason = await gate_private_request(
@@ -357,6 +395,14 @@ class HTTPTool(Tool):
                 if policy is not None and not policy.nested_allowed():
                     from src.permission.runtime.execution import ExecutionBlocked
                     raise ExecutionBlocked("blocked: policy-changed-before-http-send")
+                if generic_probe is not None:
+                    assert policy is not None
+                    policy.generic_validation.recheck_http(self, generic_args, action, generic_probe)
+                elif policy is not None:
+                    # A deferred generic boundary may become active while an
+                    # expert request awaits DNS/permission/scheduling. Admission
+                    # before those awaits cannot authorize that later send.
+                    policy.validate(self, generic_args)
                 reservation.start()
                 # No suspension between reservation and starting send.
                 response = await client.send(request, stream=True)
@@ -395,7 +441,8 @@ class HTTPTool(Tool):
                 if private_reason:
                     output = f'note: private/internal host independently approved (reason: {private_reason})\n\n' + output
                 if policy is not None:
-                    observation = policy.observations.capture(action, response.status_code, content, complete=not truncated)
+                    observation = policy.observations.capture(action, response.status_code, content, complete=not truncated,
+                        validation_binding=(generic_probe[0], generic_probe[2]) if generic_probe else None)
                     self._attest_phase_coverage(action, response, content, observation)
                     output += f'\n[runtime observation: {observation}]'
                 output = redact_evidence(output)

@@ -71,8 +71,11 @@ class Registry:
     def __init__(self):
         self.skills: dict[str, Skill] = {}
         self.disabled: set[str] = set()
+        self.load_errors: set[str] = set()
 
     def add(self, skill: Skill):
+        if skill.name == "generic-bounded-validation":
+            raise SkillMetadataError("generic-bounded-validation is a reserved internal result identifier")
         self.skills[skill.name] = skill
 
     def get(self, name: str) -> Skill | None:
@@ -115,6 +118,7 @@ class Registry:
 
     def clear(self):
         self.skills.clear()
+        self.load_errors.clear()
 
     def validation_errors(
         self,
@@ -155,6 +159,7 @@ class Registry:
         try:
             entries = sorted(directory.iterdir(), key=lambda item: item.name)
         except OSError:
+            self.load_errors.add(str(directory))
             log.warning(
                 "skills: could not list %s; no skills loaded from it",
                 directory,
@@ -181,6 +186,7 @@ class Registry:
                 skill = parse_skill(skill_file)
                 self.add(skill)
             except Exception:
+                self.load_errors.add(str(skill_file))
                 log.warning("skills: skipping %s", skill_file, exc_info=True)
 
 

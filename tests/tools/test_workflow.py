@@ -215,7 +215,8 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
         None, AlwaysAllow(),
     ))
     assert unsupported["supported"] is False
-    assert unsupported["validator_resolution"] == "unavailable"
+    assert unsupported["validator_resolution"] == "generic"
+    assert "policy unavailable" in unsupported["validator_reason"]
     assert unsupported["recommended_skills"] == []
     assert unsupported["candidate"]["status"] == "deferred"
     forced = json.loads(await tool.run(

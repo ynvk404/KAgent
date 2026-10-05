@@ -84,7 +84,7 @@ from src.skills.registry import (
 
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
-from src.workflow.state import WorkflowObjective, WorkflowState, candidate_origin
+from src.workflow.state import Candidate, WorkflowObjective, WorkflowState, candidate_origin
 from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
 
 from src.tools.common.aliases import canonical_tool_name
@@ -1023,6 +1023,10 @@ class Agent:
 
         self.memory: Optional[SessionMemory] = None
         self.workflow = opts.workflow or WorkflowState()
+        from src.permission.runtime.execution import policy_for
+        execution_policy = policy_for(self.prompter)
+        if execution_policy is not None:
+            execution_policy.bind_validation_context(self.workflow, self.skills, self.target)
         self.engagement_state = opts.engagement_state or EngagementState()
         if not self.target.empty():
             self.engagement_state.add_origin(self.target.base_url())
@@ -1547,6 +1551,29 @@ class Agent:
         tool_name: str,
         args: dict[str, Any] | None = None,
     ) -> ToolAllowedResult:
+        from src.permission.runtime.execution import policy_for
+        execution = policy_for(self.prompter)
+        if execution is None:
+            from src.workflow.validation_route import GENERIC_VALIDATOR, resolve_validation_route
+            objective = self.workflow.objective
+            generic_work = any(
+                objective is not None and (
+                    c.id == objective.candidate_id if objective.mode == "candidate_validation"
+                    else c.objective_id == objective.id
+                ) and (resolve_validation_route(self.skills, c.candidate_class).kind == "generic"
+                       or ((generic_result := self.workflow.latest_result(c.id)) is not None
+                           and generic_result.skill_name == GENERIC_VALIDATOR))
+                for c in self.workflow.candidates.values()
+            )
+            if generic_work and tool_name not in {"workflow", "ask_user", "permissions_status"}:
+                return ToolAllowedResult(ok=False, reason="generic runtime policy unavailable")
+        if execution is not None and execution.generic_validation is not None:
+            tool = self.tools.get(tool_name)
+            if tool is not None:
+                try:
+                    execution.generic_validation.validate_tool(tool, args or {})
+                except (TypeError, ValueError) as exc:
+                    return ToolAllowedResult(ok=False, reason=str(exc))
         if len(self.active_skills) == 0:
             return ToolAllowedResult(
                 ok=True,
@@ -1880,17 +1907,46 @@ class Agent:
         return frozenset(phases)
 
     def _workflow_validator_classes(self) -> frozenset[str]:
-        validators_by_class: dict[str, set[str]] = {}
-        for skill in self.skills.list_enabled():
-            if skill.stage != "validation" or skill.disable_model_invocation:
-                continue
-            for candidate_class in skill.candidate_classes:
-                canonical = normalize_candidate_class(candidate_class)
-                validators_by_class.setdefault(canonical, set()).add(skill.name)
+        from src.workflow.validation_route import resolve_validation_route
         return frozenset(
-            candidate_class
-            for candidate_class, validators in validators_by_class.items()
-            if len(validators) == 1
+            candidate_class for skill in self.skills.list() for candidate_class in skill.candidate_classes
+            if resolve_validation_route(self.skills, candidate_class).kind == "expert"
+        )
+
+    def _validation_routes(self):
+        from src.permission.runtime.execution import policy_for
+        from src.workflow.validation_route import ValidationRoute, generic_admission, resolve_validation_route
+        execution = policy_for(self.prompter)
+        routes = {}
+        for candidate in self.workflow.candidates.values():
+            route = resolve_validation_route(self.skills, candidate.candidate_class)
+            if route.kind == "generic":
+                reason = generic_admission(candidate, self.workflow, self.skills, self.target, execution)
+                if reason is None:
+                    assert execution is not None
+                    reason = execution.generic_validation.admission_reason(self.tools.get("http"), candidate.id)
+                if reason:
+                    # Route consideration and execution readiness are separate.
+                    # In particular, reviewed results need no live proposal.
+                    route = ValidationRoute("generic", route.skill_name, reason)
+            routes[candidate.id] = route
+        return routes
+
+    def _generic_startable(self, candidate: Candidate) -> bool:
+        from src.permission.runtime.execution import policy_for
+        execution = policy_for(self.prompter)
+        objective = self.workflow.objective
+        if execution is None or execution.generic_validation is None or objective is None:
+            return False
+        boundary = execution.generic_validation
+        if boundary.admission_reason(self.tools.get("http"), candidate.id):
+            return False
+        return bool(
+            candidate.status in {"new", "queued", "validating", "deferred"} and self.workflow.latest_result(candidate.id) is None
+            or candidate.status == "validating" and boundary.started_candidate == candidate.id
+               and boundary.started_objective == objective.id
+            or objective.mode == "candidate_validation" and objective.candidate_id == candidate.id
+               and objective.id in boundary.retest_objectives
         )
 
     def _whole_target_state(self) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
@@ -1905,15 +1961,26 @@ class Agent:
             and getattr(workflow_tool, "coverage", None) is not None
         )
         evidence_root = getattr(workflow_tool, "evidence_root", None)
-        invalid_evidence_candidate_ids: frozenset[str] = frozenset()
+        from src.workflow.validation_route import GENERIC_VALIDATOR, generic_admission
+        from src.permission.runtime.execution import policy_for
+        execution = policy_for(self.prompter)
+        routes = self._validation_routes()
+        invalid: set[str] = set()
+        for candidate in self.workflow.objective_candidates():
+            result = self.workflow.latest_result(candidate.id)
+            if result is not None and result.skill_name == GENERIC_VALIDATOR:
+                trusted = (execution.observations.result(candidate.id, tuple(result.evidence_refs),
+                           execution.engagement.http_permissions.epoch, candidate) if execution else None)
+                if (routes[candidate.id].kind != "generic" or execution is None
+                        or generic_admission(candidate, self.workflow, self.skills, self.target, execution)
+                        or not isinstance(evidence_root, Path)
+                        or trusted is None or trusted.outcome != result.outcome):
+                    invalid.add(candidate.id)
         if isinstance(evidence_root, Path):
-            invalid: set[str] = set()
             for candidate in self.workflow.objective_candidates():
                 result = self.workflow.latest_result(candidate.id)
                 if result is None or not result.evidence_refs:
                     continue
-                from src.permission.runtime.execution import policy_for
-                execution = policy_for(self.prompter)
                 if result.outcome in {"confirmed", "not-confirmed"} and execution is not None and execution.observations.result(
                     candidate.id, tuple(result.evidence_refs), execution.engagement.http_permissions.epoch, candidate
                 ) is None:
@@ -1925,13 +1992,16 @@ class Agent:
                     for reference in result.evidence_refs
                 ):
                     invalid.add(candidate.id)
-            invalid_evidence_candidate_ids = frozenset(invalid)
         return self.workflow.whole_target_status(
             target_origin=origin,
             available_phases=self._available_workflow_phases(),
             validator_classes=self._workflow_validator_classes(),
             coverage_sync_available=coverage_sync_available,
-            invalid_evidence_candidate_ids=invalid_evidence_candidate_ids,
+            invalid_evidence_candidate_ids=frozenset(invalid),
+            generic_eligible_candidate_ids=frozenset(
+                cid for cid, route in routes.items() if route.kind == "generic"
+                and self._generic_startable(self.workflow.candidates[cid])
+            ),
         )
 
     def _terminal_candidate_probe_blocker(
@@ -2219,6 +2289,11 @@ class Agent:
             target_origin=origin,
             candidate_id=selected_candidate,
         )
+        if candidate_request:
+            from src.permission.runtime.execution import policy_for
+            execution = policy_for(self.prompter)
+            if execution is not None and execution.generic_validation is not None:
+                execution.generic_validation.retest_objectives.add(self.workflow.objective.id)
 
     def _is_objective_continuation(self, user_msg: str, current: WorkflowObjective) -> bool:
         if current.mode == "whole_target":
@@ -2278,7 +2353,48 @@ class Agent:
                     }
                 )
             )
-        return False
+        return bool(self._generic_completion_blockers())
+
+    def _generic_completion_blockers(self) -> tuple[str, ...]:
+        """Only recorded generic work for this objective; no new goal tracking."""
+        from src.permission.runtime.execution import policy_for
+        from src.workflow.validation_route import GENERIC_VALIDATOR, generic_admission, resolve_validation_route
+        objective = self.workflow.objective
+        if objective is None or objective.mode == "whole_target":
+            return ()
+        policy = policy_for(self.prompter)
+        tool = self.tools.get("workflow")
+        root = getattr(tool, "evidence_root", None)
+        blockers = []
+        for candidate in self.workflow.candidates.values():
+            belongs = (candidate.id == objective.candidate_id if objective.mode == "candidate_validation"
+                       else candidate.objective_id == objective.id)
+            result = self.workflow.latest_result(candidate.id)
+            if not belongs or not (resolve_validation_route(self.skills, candidate.candidate_class).kind == "generic"
+                    or result and result.skill_name == GENERIC_VALIDATOR):
+                continue
+            reason = generic_admission(candidate, self.workflow, self.skills, self.target, policy)
+            if reason is None and policy is not None and (
+                    objective.id in policy.generic_validation.retest_objectives
+                    or candidate.status == "validating"):
+                reason = "explicit generic validation/retest remains pending"
+            if reason is None and (result is None or result.outcome not in {"confirmed", "not-confirmed"}):
+                reason = (result.deferred_reason or result.outcome) if result else "bounded probe/context or trusted proof pending"
+            if reason is None:
+                assert policy is not None and result is not None
+                trusted = policy.observations.result(candidate.id, tuple(result.evidence_refs),
+                        policy.engagement.http_permissions.epoch, candidate)
+                if (trusted is None or trusted.outcome != result.outcome
+                        or not isinstance(root, Path)
+                        or not self.workflow.evidence_matches(candidate.id, result.evidence_refs)
+                        or any(not self.workflow.evidence[ref].is_available_for_resume(root) for ref in result.evidence_refs)
+                        or result.coverage_synced is False):
+                    reason = "evidence/proof or coverage unresolved"
+                elif result.outcome == "confirmed" and not self.workflow.finding_is_persisted(candidate.id):
+                    reason = "confirmed finding persistence pending"
+            if reason is not None:
+                blockers.append(f"{candidate.id}: {reason}")
+        return tuple(blockers)
 
     def _planner_context(self) -> PlannerContext:
         objective = self.workflow.objective
@@ -2321,6 +2437,7 @@ class Agent:
             if f"cleanup:{candidate.id}" in actionable_work
         ) if whole_target else ()
         return PlannerContext(
+            validation_routes=self._validation_routes(),
             active_skills=frozenset(self.active_skills),
             candidate_classes=(
                 frozenset(
@@ -2342,6 +2459,7 @@ class Agent:
                     deferred_reason=(result.deferred_reason if result else None),
                     evidence_count=(len(result.evidence_refs) if result else 0),
                     coverage_synced=(result.coverage_synced if result else None),
+                    generic_startable=self._generic_startable(candidate),
                 )
                 for candidate in candidates
                 for result in [self.workflow.latest_result(candidate.id)]
@@ -2984,7 +3102,7 @@ class Agent:
                 self._refresh_whole_target_guidance(working, expanded_user_msg)
                 stall_tracker.set_phase(self._whole_target_exploration_phase())
             before_facts = self.workflow.progress_facts() if whole_target else frozenset()
-            response_chunks: list[str] | None = [] if whole_target else None
+            response_chunks: list[str] | None = [] if whole_target or self._generic_completion_blockers() else None
 
             req = ChatRequest(
                 model=self.client.model(),
@@ -3061,7 +3179,7 @@ class Agent:
 
             if not malformed_tool_text:
                 await self._record_assistant_response(
-                    resp, streamed, working, emit, emit_text=not whole_target
+                    resp, streamed and response_chunks is None, working, emit, emit_text=not whole_target
                 )
 
             if malformed_tool_text:
@@ -3109,7 +3227,7 @@ class Agent:
                 if opts is None or getattr(opts, "tools", True):
                     retry_req.tools = self.tools.as_llm_tools()
                 self._count_llm_call("agent_loop_llm_calls")
-                retry_chunks: list[str] | None = [] if whole_target else None
+                retry_chunks: list[str] | None = [] if whole_target or self._generic_completion_blockers() else None
                 if retry_chunks is None:
                     resp, streamed = await self._chat_for_turn(
                         retry_req, signal, emit,
@@ -3156,7 +3274,7 @@ class Agent:
                         emit({"type": "assistant-text", "text": warning})
 
                 await self._record_assistant_response(
-                    resp, streamed, working, emit, emit_text=not whole_target
+                    resp, streamed and retry_chunks is None, working, emit, emit_text=not whole_target
                 )
                 response_chunks = retry_chunks
 
@@ -3263,7 +3381,7 @@ class Agent:
                         "learn_intelligence",
                     )
 
-                return "final_response"
+                return "workflow_blocked" if self._generic_completion_blockers() else "final_response"
 
             if whole_target:
                 # Tool-call responses are known to be intermediate once the
@@ -3443,6 +3561,10 @@ class Agent:
         *,
         emit_text: bool = True,
     ) -> None:
+        blockers = self._generic_completion_blockers() if not resp.message.tool_calls else ()
+        if blockers:
+            resp.message.content = "Generic validation remains incomplete: " + "; ".join(blockers)
+            streamed = False
         self.history.append(resp.message)
         working.append(resp.message)
         try:
