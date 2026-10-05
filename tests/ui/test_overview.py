@@ -22,6 +22,7 @@ def _make_app(cols: int = 80, lines: int = 24) -> KAgent:
     agent.is_running.return_value = False
     agent.approx_tokens.return_value = 0
     agent.tools_token_estimate.return_value = 0
+    agent.idle_request_estimate.return_value.estimated_total = 0
     agent.get_auto_compact_threshold.return_value = 0
     agent.get_memory_stats.return_value.items = 0
     agent.target.base_url.return_value = None

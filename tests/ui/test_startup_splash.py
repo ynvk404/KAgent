@@ -483,6 +483,7 @@ def _make_test_kagent(show_splash: bool = False) -> KAgent:
     agent_mock.is_running.return_value = False
     agent_mock.approx_tokens.return_value = 0
     agent_mock.tools_token_estimate.return_value = 0
+    agent_mock.idle_request_estimate.return_value.estimated_total = 0
     agent_mock.get_auto_compact_threshold.return_value = 0
     memory_stats = MagicMock()
     memory_stats.items = 0

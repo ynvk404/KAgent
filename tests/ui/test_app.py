@@ -186,13 +186,14 @@ def test_turn_timer_continues_while_waiting_for_permission_or_user() -> None:
 def test_status_telemetry_separates_history_from_next_request_pressure() -> None:
     app = make_app()
     received = []
+    estimate = SimpleNamespace(estimated_total=14_021)
     app.agent = cast(
         Agent,
         SimpleNamespace(
             target=SimpleNamespace(base_url=lambda: "", name=lambda: "target"),
             get_memory_stats=lambda: SimpleNamespace(items=0),
             approx_tokens=lambda: 9_002,
-            tools_token_estimate=lambda: 5_019,
+            idle_request_estimate=lambda: estimate,
             get_auto_compact_threshold=lambda: 16_000,
         ),
     )
@@ -211,6 +212,10 @@ def test_status_telemetry_separates_history_from_next_request_pressure() -> None
     assert props.ctx_tokens == 9_002
     assert props.request_tokens == 14_021
     assert props.compact_threshold == 16_000
+    # Carried context/schema changes need no transcript append to refresh UI.
+    estimate.estimated_total = 15_000
+    app._sync_status_bar(expand_hint=False)
+    assert received[-1].request_tokens == 15_000
 
 
 def test_done_event_stops_timer_for_normal_refusal_and_abort_completion() -> None:

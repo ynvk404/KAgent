@@ -8,7 +8,7 @@ import re
 from typing import Any, TYPE_CHECKING, cast
 import uuid
 
-from src.llm.core.types import Message
+from src.llm.core.types import ChatRequest, Message
 from src.paths import project_root
 from src.permission.runtime.execution import policy_for, ExecutionBlocked
 from src.session.tool_results import (
@@ -163,6 +163,10 @@ class ResultRetention:
 
     def continuation(self) -> str:
         self.refresh_scope()
+        return self.render_continuation()
+
+    def render_continuation(self) -> str:
+        """Pure snapshot rendering; estimation must not rotate session state."""
         if not self.references:
             return ""
         rows = [f"{ref.tool_name}: {ref.result_ref}; retained characters={ref.char_length}"
@@ -185,14 +189,16 @@ class ResultRetention:
             # Optimization must never change the successful execution outcome.
             return
 
-    def admit(self, working: list[Message], tools_tokens: int) -> None:
-        from .agent import (approximate_message_tokens, MIDTURN_MIN_SAFETY_TOKENS,
+    def admit(self, working: list[Message], tools_tokens: int, *, request: ChatRequest | None = None, threshold: int | None = None) -> None:
+        from .agent import (MIDTURN_MIN_SAFETY_TOKENS,
                             MIDTURN_SAFETY_RATIO, MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR,
                             _proportional_reductions, _BoundedToolResult)
         self.refresh_scope()
         agent = self.agent
-        threshold = agent.auto_compact_threshold
-        total = tools_tokens + approximate_message_tokens(working)
+        from .context_estimate import estimate_request
+        threshold = agent._reduction_threshold() if threshold is None else threshold
+        total = (estimate_request(request, agent.client.name()).estimated_total if request is not None
+                 else estimate_request(agent._request_for_messages(working), agent.client.name()).estimated_total + tools_tokens)
         if self.store is None or threshold <= 0 or total < threshold:
             return
         target = max(0, threshold - max(MIDTURN_MIN_SAFETY_TOKENS, round(threshold * MIDTURN_SAFETY_RATIO)))

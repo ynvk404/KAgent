@@ -139,7 +139,8 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
     pill = tool_pill(p.tool_support)
 
     # The status bar is idle here, so no submitted input exists to estimate.
-    # ``request_tokens`` is therefore history plus the current tool registry.
+    # ``request_tokens`` includes carried observations/catalog/workflow and
+    # actual default tool schemas, without pending input or recall/search.
     # Use a shorter spelling on narrow terminals before dropping telemetry.
     compact_context = width is not None and width < 90
     if history_hint and request_hint:
@@ -154,7 +155,7 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
         context_hint = ""
 
     context_suffix = (
-        f"/{round(p.compact_threshold / 1000)}k {ctx_percent}%"
+        f"/{round(p.compact_threshold / 1000)}k soft {ctx_percent}%"
         if ctx_percent
         else ""
     )

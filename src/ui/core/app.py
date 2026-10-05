@@ -1366,22 +1366,16 @@ class KAgent(App):
         return text
 
     def _sync_status_bar(self, *, expand_hint: bool) -> None:
-        cache_key = (len(self.state.transcript), self.state.busy)
-        if cache_key != self._status_cache_key:
-            self._status_cache_key = cache_key
-            history_tokens = self.agent.approx_tokens()
-            self._status_info = {
-                "target": self.agent.target.base_url() or self.agent.target.name(),
-                "memory_items": self.agent.get_memory_stats().items,
-                "ctx_tokens": history_tokens,
-                # Idle telemetry has no pending user input.  Use the same two
-                # existing estimators that pre-turn compaction combines.
-                "request_tokens": (
-                    history_tokens
-                    + self.agent.tools_token_estimate()
-                ),
-                "compact_threshold": self.agent.get_auto_compact_threshold(),
-            }
+        # Runtime switches, carried state and in-place schema changes can all
+        # change pressure without changing transcript length. This lightweight
+        # estimate does no recall/search; recompute instead of a stale UI cache.
+        self._status_info = {
+            "target": self.agent.target.base_url() or self.agent.target.name(),
+            "memory_items": self.agent.get_memory_stats().items,
+            "ctx_tokens": self.agent.approx_tokens(),
+            "request_tokens": self.agent.idle_request_estimate().estimated_total,
+            "compact_threshold": self.agent.get_auto_compact_threshold(),
+        }
 
         self.status_bar.apply(
             StatusProps(

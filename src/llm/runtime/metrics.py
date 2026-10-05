@@ -24,6 +24,8 @@ class TokenUsage:
     # Gemini candidatesTokenCount excludes thoughts; OpenAI/DeepSeek
     # completion_tokens include reasoning. Never sum these blindly.
     output_includes_reasoning: bool | None = None
+    # Appended to preserve positional compatibility of the existing six fields.
+    cache_creation_input_tokens: int | None = None
 
 
 def openai_chat_usage(raw: Any) -> TokenUsage | None:
@@ -41,6 +43,29 @@ def openai_chat_usage(raw: Any) -> TokenUsage | None:
         reasoning_tokens=_count(completion.get("reasoning_tokens")) if isinstance(completion, dict) else None,
         total_tokens=_count(raw.get("total_tokens")),
         output_includes_reasoning=True,
+    )
+
+
+def anthropic_usage(raw: Any) -> TokenUsage | None:
+    """Anthropic input_tokens excludes both cache reads and cache writes.
+
+    Missing optional cache fields mean caching was absent; malformed supplied
+    fields make full input unknown, rather than inventing a partial total.
+    """
+    if not isinstance(raw, dict):
+        return None
+    uncached = _count(raw.get("input_tokens"))
+    cached = _count(raw.get("cache_read_input_tokens", 0))
+    created = _count(raw.get("cache_creation_input_tokens", 0))
+    full_input = (uncached + cached + created
+                  if uncached is not None and cached is not None and created is not None else None)
+    output = _count(raw.get("output_tokens"))
+    return TokenUsage(
+        input_tokens=full_input,
+        cached_input_tokens=_count(raw.get("cache_read_input_tokens")),
+        output_tokens=output,
+        cache_creation_input_tokens=_count(raw.get("cache_creation_input_tokens")),
+        total_tokens=full_input + output if full_input is not None and output is not None else None,
     )
 
 

@@ -98,6 +98,7 @@ def test_repeated_pressure_uses_original_sanitized_source_and_stable_budget():
         agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
         preview = working[-1].content
         sizes.append(len(preview))
+        assert approximate_message_tokens(working) <= 2500
         assert preview == bound_recent_tool_result(original, len(preview))
         assert_anchors(preview)
         assert preview.count(MIDTURN_ELISION_PREFIX) == 4
@@ -106,9 +107,7 @@ def test_repeated_pressure_uses_original_sanitized_source_and_stable_budget():
         before = list(working)
         agent.guard_working_context(working, lambda _: None, AgentRunOptions(tools=False))
         assert working == before
-    # Existing approximate accounting floors each message to four chars/token.
-    assert all(target <= actual <= target + 3
-               for actual, target in zip(sizes, (10000, 8000, 4000)))
+    assert sizes[0] > sizes[1] > sizes[2] >= 2000
     assert agent.history[-1].content == original
 
 

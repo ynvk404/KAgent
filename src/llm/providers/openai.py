@@ -48,6 +48,19 @@ def _kimi_thinking_requested(req: ChatRequest) -> bool:
     return req.reasoning_level is not None and req.reasoning_level is not ReasoningLevel.OFF
 
 
+def reasoning_replay_eligible(message: Message, req: ChatRequest, provider: str, model: str) -> bool:
+    """Shared with request estimates: exactly the encoder's replay contract."""
+    return (
+        provider in {"deepseek", "kimi"}
+        and message.role == "assistant"
+        and message.reasoning_content is not None
+        and message.provider_state_provider == provider
+        and message.provider_state_model == model
+        and (provider == "deepseek" or model == "kimi-k2.7-code"
+             or (model == "kimi-k2.6" and _kimi_thinking_requested(req)))
+    )
+
+
 class OpenAIClient(StreamingClient):
     def __init__(
         self,
@@ -69,6 +82,7 @@ class OpenAIClient(StreamingClient):
         gen_opts = gen_opts or {}
         self.temperature = gen_opts.get("temperature")
         self.max_tokens = resolve_max_tokens(gen_opts)
+        self.input_token_limit = gen_opts.get("input_token_limit")
 
     def name(self) -> str:
         return self.label
@@ -400,18 +414,7 @@ class OpenAIClient(StreamingClient):
 
             # Replay private state only to the same verified provider/model.
             # Other compatible endpoints often reject this nonstandard field.
-            if (
-                self.label in {"deepseek", "kimi"}
-                and m.role == "assistant"
-                and m.reasoning_content is not None
-                and m.provider_state_provider == self.label
-                and m.provider_state_model == self.model_id
-                and (
-                    self.label == "deepseek"
-                    or self.model_id == "kimi-k2.7-code"
-                    or (self.model_id == "kimi-k2.6" and _kimi_thinking_requested(req))
-                )
-            ):
+            if reasoning_replay_eligible(m, req, self.label, self.model_id):
                 msg["reasoning_content"] = m.reasoning_content
 
             if m.tool_calls:

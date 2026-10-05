@@ -4,6 +4,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from src.llm.core.client import Client, Pinger
+from src.llm.runtime.metrics import anthropic_usage
 from src.llm.transport.errors import classify_backend
 from src.llm.providers import (
     ANTHROPIC_DEFAULT_MAX_TOKENS,
@@ -115,7 +116,8 @@ class AnthropicClient(Client, Pinger):
             if calls:
                 msg.tool_calls = [block_to_tool_call(b) for b in calls]
 
-            return ChatResponse(message=msg, finish_reason=map_finish_reason(out.get("stop_reason")))
+            return ChatResponse(message=msg, finish_reason=map_finish_reason(out.get("stop_reason")),
+                                usage=anthropic_usage(out.get("usage")))
 
 
 def block_to_tool_call(block: Dict[str, Any]) -> ToolCall:
