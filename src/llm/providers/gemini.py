@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict, List, Optional
 from src.logger.logger import get_logger
 
 from src.llm.core.client import Client, Pinger, StreamingClient
+from src.llm.core.tool_schema import normalize_tool_spec
 from src.llm.transport.errors import classify_backend
 from src.llm.transport.retry import RetryOptions, with_retry
 from src.llm.providers import GEMINI_RECOMMENDED_MODELS
@@ -491,6 +492,7 @@ def encode_message(m: Message, model: str | None = None) -> List[Dict[str, Any]]
 
 
 def encode_tool(tool: ToolSpec) -> Dict[str, Any]:
+    tool = normalize_tool_spec(tool)
     return {
         "name": tool.function.name,
         "description": tool.function.description or "",

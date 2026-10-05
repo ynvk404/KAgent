@@ -4,6 +4,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from src.llm.core.client import Client, Pinger
+from src.llm.core.tool_schema import normalize_tool_spec
 from src.llm.runtime.metrics import anthropic_usage
 from src.llm.transport.errors import classify_backend
 from src.llm.providers import (
@@ -216,6 +217,7 @@ def encode_message(m: Message) -> Optional[Dict[str, Any]]:
 
 
 def encode_tool(tool: ToolSpec) -> Dict[str, Any]:
+    tool = normalize_tool_spec(tool)
     return {
         "name": tool.function.name,
         "description": tool.function.description,

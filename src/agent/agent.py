@@ -1007,6 +1007,8 @@ class Agent:
         self.tools_tokens_cache: int = 0
         self.tools_tokens_key: str | None = None
         self._pending_context: _TurnContext | None = None
+        self._tool_checkpoint_request: ChatRequest | None = None
+        self._tool_results_unsaved = False
 
         self._bounded_working: list[Message] | None = None
         self._bounded_results: dict[int, _BoundedToolResult] = {}
@@ -1698,13 +1700,19 @@ class Agent:
         return min(soft, hard) if soft > 0 and hard is not None else (hard if hard is not None else soft)
 
     async def _admit_request(self, req: ChatRequest, emit) -> None:
-        references_before = len(self.result_retention.references)
-        self.guard_working_context(req.messages, emit, request=req)
-        if len(self.result_retention.references) != references_before:
-            try:
-                await self.save()
-            except Exception as err:
-                emit({"type": "error", "err": Exception(f"save session: {err}")})
+        # A completed batch is saved only with the actual next request's mode.
+        # Finish this save even if cancellation arrives while persistence waits.
+        if self._tool_results_unsaved:
+            self._tool_checkpoint_request = req
+            await self._finish_tool_results(emit)
+        else:
+            references_before = len(self.result_retention.references)
+            self.guard_working_context(req.messages, emit, request=req)
+            if len(self.result_retention.references) != references_before:
+                try:
+                    await self.save()
+                except Exception as err:
+                    emit({"type": "error", "err": Exception(f"save session: {err}")})
         estimate = estimate_request(req, self.client.name())
         budget = self.input_budget()
         if budget.input_limit is not None and estimate.estimated_total > budget.input_limit:
@@ -1714,6 +1722,38 @@ class Agent:
             raise ContextCapacityError(estimate.estimated_total, budget,
                                        estimate.estimated_total - reducible)
 
+    async def _finish_tool_results(self, emit=None) -> None:
+        """Dispose controller-owned originals before saving or ending a turn.
+
+        No pending originals or execution rights are serialized. On interruption
+        the checkpoint uses the frozen next-iteration mode (tools-free at the
+        iteration limit); completed workflow gates also select synthesis mode.
+        Normal dispatch replaces this snapshot with its fully assembled request.
+        """
+        req = self._tool_checkpoint_request
+        if req is None or not self._tool_results_unsaved:
+            return
+
+        async def finish() -> None:
+            if emit is None:
+                self.result_retention.admit(req.messages, schema_tokens(req.tools), request=req, strict=True)
+            else:
+                self.guard_working_context(req.messages, emit, request=req, strict_retention=True)
+            await self.save()
+
+        task = asyncio.create_task(finish())
+        cancelled = False
+        # Shield alone would leave an unowned writer after run returns. Join it,
+        # including repeated cancellation, before clearing the transient source.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError()
+
     async def reset(self) -> None:
         self.engagement_state.http_permissions.reset()
         self.memory = None
@@ -1721,6 +1761,8 @@ class Agent:
         self.result_retention.scope = {}
         self.result_retention.references.clear()
         self.result_retention.pending.clear()
+        self._tool_checkpoint_request = None
+        self._tool_results_unsaved = False
         self._clear_permission_cache()
         self.rebuild_system_prompt()
 
@@ -1766,6 +1808,8 @@ class Agent:
 
         self.engagement_state.http_permissions.reset(preserve_denial=True)
         loaded = self.store.load()
+        self._tool_checkpoint_request = None
+        self._tool_results_unsaved = False
         self._clear_permission_cache()
 
         if loaded.target is not None:
@@ -1801,6 +1845,7 @@ class Agent:
         self,
     ) -> None:
         if self.store is None:
+            self._tool_results_unsaved = False
             return
 
         if self.history and self.result_retention.store is not None:
@@ -1813,6 +1858,7 @@ class Agent:
             self.workflow,
             self.engagement_state,
         )
+        self._tool_results_unsaved = False
 
     async def save_context_snapshot(self, reason: str = "periodic") -> str:
         if self.store is None:
@@ -3307,15 +3353,19 @@ class Agent:
         self._trace_run_id = uuid.uuid4().hex[:12] if self._trace_enabled else ""
         self._trace("run_started")
         self.running = True
-        self._bounded_working = None
-        self._bounded_results.clear()
-        self.result_retention.pending.clear()
         self._reset_llm_call_counts()
         self._turn_client_error = False
         self._pending_context = None
         stop_reason = "runtime_error"
 
         try:
+            # Keep runtime switching blocked while a failed checkpoint is
+            # retried, and never discard its originals before the save succeeds.
+            await self._finish_tool_results()
+            self._bounded_working = None
+            self._bounded_results.clear()
+            self.result_retention.pending.clear()
+            self._tool_checkpoint_request = None
             stop_reason = await self.run_inner(
                 user_msg,
                 signal,
@@ -3370,15 +3420,19 @@ class Agent:
             )
 
         finally:
+            try:
+                await self._finish_tool_results()
+            finally:
+                if not self._tool_results_unsaved:
+                    self.result_retention.pending.clear()
+                    self._tool_checkpoint_request = None
+                self._bounded_working = None
+                self._bounded_results.clear()
+                self.running = False
+                self._pending_context = None
 
-            self._bounded_working = None
-            self._bounded_results.clear()
-            self.result_retention.pending.clear()
-            self.running = False
-            self._pending_context = None
-
-            self._trace("terminal", stop_reason=stop_reason)
-            safe_emit(self._done_event(stop_reason))
+                self._trace("terminal", stop_reason=stop_reason)
+                safe_emit(self._done_event(stop_reason))
 
     async def run_inner(
         self,
@@ -3585,7 +3639,6 @@ class Agent:
             if opts is None or getattr(opts, "tools", True):
                 req.tools = actual_tools
 
-            self._count_llm_call("agent_loop_llm_calls")
             if response_chunks is None:
                 resp, streamed = await self._chat_for_turn(
                     req, signal, emit,
@@ -3696,7 +3749,6 @@ class Agent:
                 )
                 if opts is None or getattr(opts, "tools", True):
                     retry_req.tools = actual_tools
-                self._count_llm_call("agent_loop_llm_calls")
                 retry_chunks: list[str] | None = [] if whole_target or requested_goal_run or self._generic_completion_blockers() else None
                 if retry_chunks is None:
                     resp, streamed = await self._chat_for_turn(
@@ -3949,13 +4001,24 @@ class Agent:
                     resp, streamed, response_chunks or [], emit
                 )
 
-            execution_batch = await self.execute_tool_calls(
-                tool_calls,
-                signal,
-                emit,
-                working,
-                defer_admission=True,
+            # Until the next request is assembled, interruption uses the frozen
+            # next-iteration snapshot, never a fresh full-registry estimate.
+            self._tool_checkpoint_request = replace(
+                req, tools=None if step == max_steps - 1 else req.tools,
             )
+            try:
+                execution_batch = await self.execute_tool_calls(
+                    tool_calls,
+                    signal,
+                    emit,
+                    working,
+                    defer_admission=True,
+                )
+            finally:
+                if whole_target:
+                    status, actionable, blockers = self._whole_target_state()
+                    if status == "completed" or (not actionable and blockers):
+                        self._tool_checkpoint_request.tools = None
 
             if execution_batch.all_refused:
                 return "all_tools_refused"
@@ -4090,7 +4153,6 @@ class Agent:
                     reasoning_level=turn_reasoning_level,
                     requested_reasoning_level=turn_requested_level,
                 )
-                self._count_llm_call("final_synthesis_llm_calls")
                 synthesis, synthesis_streamed = await self._chat_for_turn(
                     synthesis_req, signal, emit, purpose="final_synthesis"
                 )
@@ -4205,7 +4267,6 @@ class Agent:
                 reasoning_level=reasoning_level,
                 requested_reasoning_level=requested_reasoning_level,
             )
-            self._count_llm_call("final_synthesis_llm_calls")
             chunks: list[str] = []
             response, streamed = await self._chat_for_turn(
                 request, signal, emit, purpose="final_synthesis", stream_buffer=chunks
@@ -4264,12 +4325,15 @@ class Agent:
         response: ChatResponse | None = None
         status: Literal["success", "error", "cancelled"] = "success"
         await self._admit_request(req, emit)
+        if signal.aborted:
+            raise Exception("aborted")
         self._trace_context_estimate(
             req,
             phase=trace_phase or purpose,
             step=trace_step,
         )
         try:
+            self._count_llm_call("final_synthesis_llm_calls" if purpose == "final_synthesis" else "agent_loop_llm_calls")
             if stream_buffer is None:
                 response, streamed = await self.chat(req, signal, emit)
             else:
@@ -4352,6 +4416,7 @@ class Agent:
         opts=None,
         *,
         request: ChatRequest | None = None,
+        strict_retention: bool = False,
     ) -> None:
         if self._bounded_working is not working:
             self._bounded_working = working
@@ -4390,7 +4455,7 @@ class Agent:
             request = self._request_for_messages(working, tools)
         tools_tokens = schema_tokens(request.tools)
         threshold = self._reduction_threshold()
-        self.result_retention.admit(working, tools_tokens, request=request, threshold=threshold)
+        self.result_retention.admit(working, tools_tokens, request=request, threshold=threshold, strict=strict_retention)
 
         def size() -> int:
             return estimate_request(request, self.client.name()).estimated_total
@@ -4532,6 +4597,10 @@ class Agent:
                 }
             )
 
+    async def _save_tool_batch(self, defer_admission: bool) -> None:
+        if not defer_admission:
+            await self.save()
+
     async def execute_tool_calls(
         self,
         tool_calls: list[ToolCall],
@@ -4592,7 +4661,7 @@ class Agent:
                 ))
 
             try:
-                await self.save()
+                await self._save_tool_batch(defer_admission)
             except Exception as err:
                 emit(
                     {
@@ -4660,7 +4729,7 @@ class Agent:
                 ))
 
             try:
-                await self.save()
+                await self._save_tool_batch(defer_admission)
             except Exception as err:
                 emit(
                     {
@@ -4728,7 +4797,7 @@ class Agent:
             ))
 
         try:
-            await self.save()
+            await self._save_tool_batch(defer_admission)
         except Exception as err:
             emit(
                 {
@@ -4975,6 +5044,7 @@ class Agent:
 
         self.history.append(tool_msg)
         working.append(tool_msg)
+        self._tool_results_unsaved = True
         self.result_retention.remember(tool_msg, parsed.args, res)
         # Standalone tool APIs retain their tool-enabled admission/save boundary.
         # The agent loop defers admission until the actual next request is built.
@@ -5061,6 +5131,9 @@ class Agent:
         self._reset_llm_call_counts()
 
         try:
+            await self._finish_tool_results()
+            self.result_retention.pending.clear()
+            self._tool_checkpoint_request = None
             history_snap = self.get_history()
             elide_persisted_workflow_results(history_snap)
 
@@ -5093,7 +5166,6 @@ class Agent:
                 requested_reasoning_level=ReasoningLevel.OFF,
             )
 
-            self._count_llm_call("compaction_llm_calls")
             resp = await self._chat_for_compaction(req, signal, "manual")
             summary = strip_thinking_tags(
                 resp.message.content
@@ -5285,6 +5357,7 @@ class Agent:
         response: ChatResponse | None = None
         status: Literal["success", "error", "cancelled"] = "success"
         try:
+            self._count_llm_call("compaction_llm_calls")
             response = await self.client.chat(req, signal)
             return response
         except BaseException as err:
@@ -5330,7 +5403,6 @@ class Agent:
             requested_reasoning_level=ReasoningLevel.OFF,
         )
 
-        self._count_llm_call("compaction_llm_calls")
         resp = await self._chat_for_compaction(req, signal, "auto")
 
         summary = strip_thinking_tags(

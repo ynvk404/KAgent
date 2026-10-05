@@ -187,3 +187,158 @@ Documentation:
 - `docs/token-accounting-implementation.md` (this report)
 - `docs/token-accounting-independent-verification.md` (supplied historical audit,
   preserved unchanged)
+
+## Follow-up for verified R1/R2/R3 (2026-10-06)
+
+This follow-up uses `ead3a3b` as its unchanged HEAD baseline. The worktree was
+clean before editing. All three `/tmp` review/evidence files were accessible.
+The historical independent-verification document and the temporary review/repro
+files remain unchanged. Before editing, the offline observation repro bundle
+passed **12 tests in 7.45s**, reproducing all three reported faulty behaviors.
+R1 and R3 are regressions introduced by that baseline; R2 predates it.
+
+### Retention checkpoint and cancellation (R1)
+
+The production agent loop still defers reduction to the fully assembled next
+request. Deferred execution no longer saves a raw batch ahead of that boundary.
+`_admit_request` completes selective Phase B admission and Phase A representation
+in the actual request mode, then saves the result/reference/session checkpoint
+before checking hard capacity or invoking the provider. Tools-free synthesis
+therefore pays zero registry-schema cost. Standalone execution keeps its existing
+record/admission/save boundary.
+
+For an interruption during execution, `run` finalization disposes already
+recorded controller-owned sanitized originals using a frozen next-iteration
+request snapshot. The iteration limit selects tools-free mode; completed or
+blocked whole-target gates also select tools-free mode. An ordinary continuation
+uses the captured actual tool set and turn reasoning settings, not a fresh full
+registry. This interruption checkpoint runs only selective Phase B retention;
+it does not force Phase A elision of a result that could not be retained. Normal
+execution replaces the snapshot with its actual assembled guidance and request.
+No planner/search work is rerun in finalization.
+
+Checkpoint persistence is shielded **and joined**, including repeated task
+cancellation. No checkpoint writer survives `run` returning. Pending sources are
+cleared only once the required disposition/save succeeds. Artifact write or
+checkpoint-save exceptions are visible; unsuccessful checkpoints retain their
+trusted originals for same-controller retry. Manual compaction settles a failed
+checkpoint before assembling its summary request. Already published references are
+not recreated on retry. Explicit reset/resume discards transient checkpoint
+state; loaded history never becomes a trusted pending original. Storage quotas
+can still decline optional retention under the existing store policy; this is
+not a promise of retention when storage is unavailable or exhausted.
+
+Save, abort, cancellation and resume regressions execute real `file_read`, the
+registry, the agent loop, and session storage. They verify readable omitted
+ranges, absence of implicit hydration, consistent references, denial/session/
+target checks, one/two-result batches, interruption between sequential results,
+cancellation before and after disk commit, repeated cancellation, persistence
+failure/retry, hard-capacity rejection after execution, preserved output, and
+below-threshold output. An interrupted partial batch is reconciled on resume by
+the existing synthetic receipt for unfinished calls; that receipt gains no
+retention eligibility. Abrupt process death/power loss before the checkpoint is
+outside cooperative abort/task-cancellation handling.
+
+### Provider tool-schema interoperability (R2)
+
+`src/llm/core/tool_schema.py::normalize_tool_spec` is the shared structural
+validation boundary used by Anthropic and Gemini's `encode_tool`. It accepts
+actual registry dictionaries and existing typed `ToolSpec`/`ToolFunction`
+objects, rejecting malformed outer/function fields with a clear `ValueError`.
+Nested parameter schemas are preserved; Gemini still performs its existing
+recursive provider-specific normalization. Registry permission gates and
+OpenAI encoding are unchanged. Regression transports inspect actual
+Registry -> Agent.run -> Anthropic/Gemini client payloads without network access;
+additional cases cover dict, dataclass, empty tools, nested schemas and malformed
+representations. This validates interoperability, not every vendor JSON-schema
+extension or provider model's remote acceptance.
+
+### Dispatched-call counters (R3)
+
+Callers no longer increment before admission. `_chat_for_turn` and
+`_chat_for_compaction` increment the appropriate category after successful
+admission, immediately before invoking the client. Capacity rejection produces
+no client invocation, dispatched-call count, or synthetic usage record. An
+accepted invocation that fails still counts once and records its existing error
+metric. Provider-internal retries remain part of that one client invocation;
+there is no added counter in transport/retry code. Actual offline Anthropic and
+Gemini transports also exercise a 503 retry followed by success: two HTTP
+attempts, one client invocation, one dispatched-call count and one metric.
+
+Regression tests compare independent client invocation records with counters
+through actual normal/malformed-retry callers, real-tool generic synthesis,
+whole-target and requested-goal synthesis/retry, and manual/automatic compaction.
+Turn and synthesis routes cover streaming and non-streaming; summary requests
+retain their non-streaming production route. Admission errors remain outside
+provider retry and usage-metric collection.
+
+### Follow-up verification and remaining limits
+
+No packages, external inference/token-counting API, live target testing,
+permission-policy changes, session/config migration, commit, amend or push.
+The earlier heuristic-estimation, unknown-model-capacity, fixed search-snapshot,
+optional artifact quota and post-publication compaction-persistence limitations
+still apply. This is not an exhaustive security audit or exact-token proof.
+
+Final focused regressions: **85 passed in 14.31s**:
+
+```bash
+venv-linux/bin/pytest -q \
+  tests/agent/test_accounting_lifecycle_regressions.py \
+  tests/agent/test_dispatched_call_counters.py \
+  tests/llm/test_runtime_tool_schema_interop.py
+```
+
+Final `venv-linux/bin/pyright`: **0 errors, 0 warnings, 0 informations**;
+only the existing newer-version advisory was printed. No update was installed.
+
+An earlier full-suite run was deliberately interrupted after **374 passed**
+(`78.70s`) when final diff review tightened checkpoint-retry lifecycle handling.
+It is not used as the full-suite verification result. New fixtures initially
+needed corrections for the reader's `content` field, registry-wrapped scope
+errors, resume's synthetic unfinished-call receipt, and protocol/type signatures.
+Those corrections changed the new fixtures; existing behavioral expectations,
+collection configuration, skips and xfails were not weakened.
+
+Final responsibility groups: **1185 passed in 111.17s**:
+
+```bash
+venv-linux/bin/pytest -q \
+  tests/agent \
+  tests/state/test_phase_b_store_audit_regressions.py \
+  tests/state/test_tool_result_store.py tests/llm \
+  tests/integration/test_tool_schema_budget.py \
+  tests/integration/test_requested_goal_lifecycle.py \
+  tests/integration/test_whole_target_workflow.py \
+  tests/runtime/test_provider_runtime.py tests/runtime/test_cli_main.py \
+  tests/ui/test_provider_picker.py tests/ui/test_model_picker.py \
+  tests/ui/test_custom_provider_ui.py tests/ui/test_config_provider_adapter.py \
+  tests/ui/test_status_bar.py tests/ui/test_app.py
+```
+
+Changed files for this follow-up (nine files; earlier deliverables above belong
+to the baseline implementation):
+
+- `src/agent/agent.py`
+- `src/agent/tool_results.py`
+- `src/llm/core/tool_schema.py` (new)
+- `src/llm/providers/anthropic.py`
+- `src/llm/providers/gemini.py`
+- `tests/agent/test_accounting_lifecycle_regressions.py` (new)
+- `tests/agent/test_dispatched_call_counters.py` (new)
+- `tests/llm/test_runtime_tool_schema_interop.py` (new)
+- `docs/token-accounting-implementation.md`
+
+Final complete `venv-linux/bin/pytest -q`: **4106 passed, 1 skipped, 2 warnings
+in 325.16s**. The skipped test and configured collection exclusions are unchanged;
+no new skip, xfail or exclusion was added. Both warnings are the existing
+malformed-custom-profile sanitization warnings in `tests/runtime/test_config.py`.
+There are no unexplained failures or observed regressions. The full suite covers
+the existing projection, equivalent compaction comparison, file expansion,
+private replay, schema digest, usage telemetry, reader security, runtime-switch
+and UI-pressure invariants in addition to the 85 new regression cases.
+
+Final handoff checks: `git diff --check`, whitespace checks of new files against
+`/dev/null`, complete diff review (including untracked deliverables), and
+`git status --short`. The historical independent-verification file matches HEAD
+byte-for-byte. Nothing is staged; HEAD remains `ead3a3b`. No commit/amend/push.

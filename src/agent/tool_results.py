@@ -189,7 +189,7 @@ class ResultRetention:
             # Optimization must never change the successful execution outcome.
             return
 
-    def admit(self, working: list[Message], tools_tokens: int, *, request: ChatRequest | None = None, threshold: int | None = None) -> None:
+    def admit(self, working: list[Message], tools_tokens: int, *, request: ChatRequest | None = None, threshold: int | None = None, strict: bool = False) -> None:
         from .agent import (MIDTURN_MIN_SAFETY_TOKENS,
                             MIDTURN_SAFETY_RATIO, MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR,
                             _proportional_reductions, _BoundedToolResult)
@@ -233,6 +233,8 @@ class ResultRetention:
                     error_kind=prototype.error_kind, http_status=prototype.http_status,
                     truncated=prototype.truncated)
             except Exception:
+                if strict:
+                    raise
                 continue
             if ref is None:
                 continue
