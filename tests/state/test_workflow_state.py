@@ -482,7 +482,7 @@ def test_registered_evidence_survives_workflow_serialization(tmp_path):
     old_payload["version"] = 1
     old_payload.pop("evidence")
     migrated = WorkflowState.from_dict(old_payload)
-    assert migrated.version == 6
+    assert migrated.version == 7
     assert not migrated.eligible_for_finding(candidate.id)
 
 

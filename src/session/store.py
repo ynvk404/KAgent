@@ -373,7 +373,11 @@ class Store:
         workflow_data = raw.get("workflow")
         if workflow_data is not None and not isinstance(workflow_data, dict):
             log.warning("session: ignoring malformed workflow state")
-        workflow = WorkflowState.from_dict(workflow_data)
+        from src.workflow.goals import RequestedGoalsLoadError
+        try:
+            workflow = WorkflowState.from_dict(workflow_data)
+        except RequestedGoalsLoadError as err:
+            raise SessionLoadError(f"session: {err}") from err
 
         engagement_data = raw.get("engagement_state")
         if engagement_data is not None and not isinstance(engagement_data, dict):

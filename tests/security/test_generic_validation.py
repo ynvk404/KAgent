@@ -32,6 +32,10 @@ from src.workflow.validation_route import GENERIC_VALIDATOR, resolve_validation_
 from src.workflow.probe import ProbeProposal
 from tests.helpers.workflow import record_completed_phase
 from tests.helpers.agent_fakes import FakeClient
+from tests.helpers.agent_fakes import FakeSignal, collect
+from src.llm.core.client import StreamingClient
+from src.llm.core.types import ChatResponse, Message
+from src.workflow.goals import RequestedGoal
 from tests.security.test_execution_policy import runtime, ORIGIN, REAL_CLIENT
 
 
@@ -40,7 +44,8 @@ def expert(name="expert", cls="open-redirect", manual=False):
                  stage="validation", candidate_classes=[cls])
 
 
-async def setup(runtime, tmp_path, cls="open-redirect", mode: WorkflowMode="direct", skills=None) -> Any:
+async def setup(runtime, tmp_path, cls="open-redirect", mode: WorkflowMode="direct", skills=None,
+                phase_artifact_ref="fixture.md") -> Any:
     registry, prompter, policy, operator, sent, responses, target = runtime
     skills = skills if skills is not None else Skills()
     state = WorkflowState()
@@ -48,7 +53,7 @@ async def setup(runtime, tmp_path, cls="open-redirect", mode: WorkflowMode="dire
     if mode == "whole_target":
         for phase in ("recon", "enumeration", "input_analysis"):
             record_completed_phase(state, phase, objective_id=state.objective.id,
-                                   target_origin=ORIGIN, artifact_ref="fixture.md")
+                                   target_origin=ORIGIN, artifact_ref=phase_artifact_ref)
     coverage = CoverageStore(str(tmp_path / "coverage.json"))
     tool = WorkflowTool(state, target, skills=skills, coverage=coverage, evidence_root=tmp_path)
     registry.register(tool)
@@ -190,7 +195,8 @@ async def test_unique_experts_keep_existing_route_start_and_result(runtime, tmp_
     skills = Skills()
     skills.add(expert(cls, cls))
     env = await setup(runtime, tmp_path, cls=cls, skills=skills)
-    assert env[7]["validator_resolution"] == "unique" and env[5].objective_id is None
+    assert env[7]["validator_resolution"] == "unique"
+    assert env[5].objective_id == env[4].objective.id
     assert json.loads(await start(env))["ok"]
     output = json.loads(await env[0].execute("workflow", {"action": "record_result", "candidate_id": env[5].id,
         "skill_name": cls, "outcome": "blocked"}, None, env[1]))
@@ -520,6 +526,154 @@ def agent_for(env):
     registry, p, policy, _, state, _, tool, _ = env
     return Agent(AgentOptions(client=FakeClient([]), tools=registry, skills=tool.skills,
         prompter=p, store=None, target=tool.target, workflow=state, engagement_state=policy.engagement))
+
+
+class ReviewCompletionStream(StreamingClient):
+    def name(self):
+        return "offline-review-stream"
+
+    def model(self):
+        return "offline-review-stream"
+
+    async def chat(self, request, signal=None):
+        return ChatResponse(Message(role="assistant", content="All complete."), finish_reason="stop")
+
+    async def chat_stream(self, request, on_delta, signal=None):
+        on_delta("All complete.")
+        return await self.chat(request, signal)
+
+
+@pytest.mark.asyncio
+async def test_f11_registry_allows_no_candidate_review_with_generic_records(runtime, tmp_path):
+    env = await setup(runtime, tmp_path, mode="whole_target", phase_artifact_ref="artifacts/input-review.md")
+    goal = env[4].objective.add_requested_goal("xss")
+    marker = env[4].phase_completions[f"{env[4].objective.id}:input_analysis"]
+    path = tmp_path / marker.artifact_ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("Reviewed whole-target input inventory; no XSS candidate.")
+    assert env[2].generic_validation.restricted()
+    payload = json.loads(await env[0].execute("workflow", {
+        "action": "review_no_candidate", "goal_id": goal.id,
+        "artifact_ref": marker.artifact_ref,
+    }, None, env[1]))
+    assert payload["ok"]
+    assert goal.status == "no_candidate"
+    assert payload["class_specific_validation_performed"] is False
+    assert env[4].validation_results == []
+    assert env[4].persisted_findings == {}
+    rejected = await env[0].execute("workflow", {
+        "action": "review_no_candidate", "goal_id": "goal_missing",
+    }, None, env[1])
+    assert rejected.startswith("error:")
+    assert env[4].validation_results == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["target", "phase", "inventory", "artifact", "conflict", "inflight", "cancelled"])
+async def test_f11_registry_review_keeps_existing_prerequisite_gates(runtime, tmp_path, fault):
+    env = await setup(runtime, tmp_path, mode="whole_target", phase_artifact_ref="artifacts/input-review.md")
+    state = env[4]
+    goal = state.objective.add_requested_goal("xss")
+    marker = state.phase_completions[f"{state.objective.id}:input_analysis"]
+    path = tmp_path / marker.artifact_ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("Completed input-analysis inventory.")
+    if fault == "target":
+        env[6].target.set_base_url("https://other.test")
+    elif fault == "phase":
+        state.phase_completions.pop(marker.key)
+    elif fault == "inventory":
+        item, _ = state.add_attack_surface_input(AttackSurfaceInput(
+            state.objective.id, ORIGIN, endpoint="/unreviewed", parameter="q",
+        ))
+        state.set_input_disposition(item.id, "blocked", reason="operator action required")
+    elif fault == "artifact":
+        path.write_text("")
+    elif fault == "conflict":
+        state.add_candidate(Candidate("xss", target=ORIGIN, endpoint="/search", objective_id=state.objective.id))
+    elif fault == "inflight":
+        env[2].generic_validation.in_flight[env[5].id] = 1
+    elif fault == "cancelled":
+        state.set_requested_goal_status(goal, "cancelled")
+    try:
+        rejected = await env[0].execute("workflow", {
+            "action": "review_no_candidate", "goal_id": goal.id, "artifact_ref": marker.artifact_ref,
+        }, None, env[1])
+        assert rejected.startswith("error:")
+    except ExecutionBlocked:
+        assert fault == "inflight"
+    assert goal.status != "no_candidate"
+    assert state.validation_results == []
+    assert state.persisted_findings == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pending,synthesis", [
+    ("finding", False), ("coverage", False), ("none", False), ("finding", True),
+])
+async def test_f02_direct_stream_respects_generic_completion_obligations(runtime, tmp_path, monkeypatch, pending, synthesis):
+    env = await setup(runtime, tmp_path)
+    if synthesis:
+        env[6].skills.add(expert("disabled-xss", "cross-site-scripting"))
+        env[6].skills.set_disabled("disabled-xss", True)
+        assert resolve_validation_route(env[6].skills, "xss").kind == "unavailable"
+    await start(env)
+    ref = await evidence(env, tmp_path)
+    await result(env, refs=[ref])
+    app, _ = app_for(env)
+    await review_result(app, review_args(env[5]))
+    assert certificate(env, ref) is not None
+    if pending != "finding":
+        finding = ConfirmFindingTool(Store(project_directory=tmp_path), workflow=env[4])
+        env[0].register(finding)
+        await env[0].execute("confirm_finding", {
+            "candidate_id": env[5].id, "title": "bounded redirect", "severity": "low",
+            "url": ORIGIN + env[5].endpoint, "observed_impact": "bounded response",
+            "potential_impact": "No additional impact assessed.",
+        }, None, env[1])
+    if pending == "coverage":
+        monkeypatch.setattr(env[6].coverage, "ensure_validation_mark",
+                            AsyncMock(side_effect=OSError("offline coverage write failure")))
+        recorded = json.loads(await result(env, refs=[ref], force=True))
+        assert recorded["coverage_sync"] == "pending"
+        assert env[4].latest_result(env[5].id).coverage_synced is False
+    goal = env[4].objective.add_requested_goal(env[5].candidate_class)
+    env[4].link_requested_goal_candidate(goal.id, env[5].id)
+    agent = agent_for(env)
+    agent.client = ReviewCompletionStream()
+    agent.streaming_enabled = True
+    agent._reconcile_requested_goals()
+    assert goal.status == "tested_confirmed"
+    if synthesis:
+        env[4].objective.add_requested_goal("xss")
+    collector = collect()
+    await agent.run("continue", FakeSignal(), collector["sink"])
+    visible = "".join(e.get("text", "") for e in collector["events"]
+                      if e["type"] in {"assistant-text", "assistant-delta"})
+    if pending == "none":
+        assert visible == "All complete."
+        assert collector["events"][-1]["stop_reason"] == "final_response"
+    else:
+        assert "All complete." not in visible
+        assert "incomplete" in visible
+        assert collector["events"][-1]["stop_reason"] == "workflow_blocked"
+        assert agent.history[-1].content == visible
+        assert all(m.content != "All complete." for m in agent.history if m.role == "assistant")
+
+
+@pytest.mark.asyncio
+async def test_goal_metadata_does_not_invalidate_verified_generic_context(runtime, tmp_path):
+    env = await setup(runtime, tmp_path)
+    boundary = env[2].generic_validation
+    before = boundary.admit_probe(env[0].get("http"), env[5].id)
+    goal = env[4].objective.add_requested_goal(env[5].candidate_class)
+    env[4].link_requested_goal_candidate(goal.id, env[5].id)
+    env[4].set_requested_goal_status(goal, "in_progress", reason="Updated goal summary.")
+    assert boundary.admit_probe(env[0].get("http"), env[5].id) == before
+    assert json.loads(await start(env))["ok"]
+    env[5].endpoint = "/return?next=%2Fhome&keep=2"
+    with pytest.raises(ValueError, match="proposal.*mismatch"):
+        boundary.admit_probe(env[0].get("http"), env[5].id)
 
 
 @pytest.mark.asyncio

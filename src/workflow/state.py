@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeGuard, cast
 
@@ -13,6 +14,7 @@ from src.redact.redact import (
 )
 from src.target.origin import HTTPOrigin
 from .evidence import EvidenceArtifact
+from .goals import GoalStatus, RequestedGoal
 
 
 CandidateStatus = Literal[
@@ -334,6 +336,7 @@ class WorkflowObjective:
     mode: WorkflowMode
     target_origin: str | None
     candidate_id: str | None = None
+    requested_goals: list[RequestedGoal] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.id = _text(self.id, limit=80) or ""
@@ -347,6 +350,22 @@ class WorkflowObjective:
             raise ValueError("whole-target objective requires target_origin")
         if self.mode == "candidate_validation" and not self.candidate_id:
             raise ValueError("candidate-validation objective requires candidate_id")
+        unique_goals: list[RequestedGoal] = []
+        seen_classes: set[str] = set()
+        for goal in self.requested_goals:
+            if goal.candidate_class not in seen_classes:
+                unique_goals.append(goal)
+                seen_classes.add(goal.candidate_class)
+        self.requested_goals = unique_goals
+
+    def add_requested_goal(self, candidate_class: str) -> RequestedGoal:
+        canonical = normalize_candidate_class(candidate_class)
+        for goal in self.requested_goals:
+            if goal.candidate_class == canonical:
+                return goal
+        goal = RequestedGoal(candidate_class=canonical)
+        self.requested_goals.append(goal)
+        return goal
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -354,24 +373,47 @@ class WorkflowObjective:
             "mode": self.mode,
             "target_origin": self.target_origin,
             "candidate_id": self.candidate_id,
+            "requested_goals": [goal.to_dict() for goal in self.requested_goals],
         }
 
     @classmethod
     def from_dict(cls, value: Any) -> WorkflowObjective | None:
         if not isinstance(value, dict):
             return None
+        from src.workflow.goals import RequestedGoalsLoadError
+
+        # Absence is a legacy snapshot; presence must never lose corrupt work.
+        goals: list[RequestedGoal] = []
+        if "requested_goals" in value:
+            raw_goals = value["requested_goals"]
+            if not isinstance(raw_goals, list):
+                raise RequestedGoalsLoadError("malformed requested goals: expected a list")
+            seen_classes: set[str] = set()
+            for raw_goal in raw_goals:
+                goal = RequestedGoal.from_dict(raw_goal)
+                if goal is None:
+                    raise RequestedGoalsLoadError("malformed requested goals: invalid goal record")
+                if goal.candidate_class in seen_classes:
+                    raise RequestedGoalsLoadError("malformed requested goals: duplicate canonical class")
+                seen_classes.add(goal.candidate_class)
+                goals.append(goal)
         try:
             objective_id = value.get("id")
             mode = value.get("mode")
             if not isinstance(objective_id, str) or not isinstance(mode, str):
+                if "requested_goals" in value:
+                    raise RequestedGoalsLoadError("malformed requested goals: invalid owning objective")
                 return None
             return cls(
                 id=objective_id,
                 mode=mode,  # type: ignore[arg-type]
                 target_origin=value.get("target_origin"),
                 candidate_id=value.get("candidate_id"),
+                requested_goals=goals,
             )
         except (TypeError, ValueError):
+            if "requested_goals" in value:
+                raise RequestedGoalsLoadError("malformed requested goals: invalid owning objective") from None
             return None
 
 
@@ -691,6 +733,7 @@ class ValidationResult:
     recorded_at: str | None = None
     session_id: str | None = None
     cleanup_state: CleanupState | None = None
+    objective_id: str | None = None
 
     def __post_init__(self) -> None:
         self.candidate_id = _text(self.candidate_id, limit=80) or ""
@@ -728,6 +771,7 @@ class ValidationResult:
         self.notes = _text(self.notes, limit=_MAX_NOTES_LENGTH)
         self.recorded_at = _text(self.recorded_at, limit=80)
         self.session_id = _text(self.session_id, limit=120)
+        self.objective_id = _text(self.objective_id, limit=80)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -746,6 +790,7 @@ class ValidationResult:
             "coverage_synced": self.coverage_synced,
             "recorded_at": self.recorded_at,
             "session_id": self.session_id,
+            "objective_id": self.objective_id,
         }
 
     @classmethod
@@ -778,6 +823,7 @@ class ValidationResult:
                 coverage_synced=value.get("coverage_synced"),
                 recorded_at=value.get("recorded_at"),
                 session_id=value.get("session_id"),
+                objective_id=value.get("objective_id"),
             )
         except (TypeError, ValueError):
             return None
@@ -861,7 +907,7 @@ def _merge_compatible_context(
 
 @dataclass(slots=True)
 class WorkflowState:
-    version: int = 6
+    version: int = 7
     objective: WorkflowObjective | None = None
     candidates: dict[str, Candidate] = field(default_factory=dict)
     validation_results: list[ValidationResult] = field(default_factory=list)
@@ -919,6 +965,156 @@ class WorkflowState:
             if candidate.objective_id == objective.id
             and candidate_origin(candidate.target) == objective.target_origin
         )
+
+    @staticmethod
+    def candidate_belongs_to_objective(
+        candidate: Candidate, objective: WorkflowObjective,
+    ) -> bool:
+        if objective.mode == "candidate_validation":
+            return candidate.id == objective.candidate_id
+        if candidate.objective_id != objective.id:
+            return False
+        if objective.target_origin is None:
+            return True
+        return candidate_origin(candidate.target) == objective.target_origin
+
+    def link_requested_goal_candidate(
+        self, goal_id: str, candidate_id: str,
+    ) -> RequestedGoal:
+        objective = self.objective
+        if objective is None:
+            raise ValueError("requested goal linkage requires an active objective")
+        goal = next((item for item in objective.requested_goals if item.id == goal_id), None)
+        candidate = self.candidates.get(candidate_id)
+        if goal is None or candidate is None:
+            raise ValueError("requested goal or candidate does not exist")
+        if candidate.candidate_class != goal.candidate_class:
+            raise ValueError("candidate class does not match requested goal")
+        if not self.candidate_belongs_to_objective(candidate, objective):
+            raise ValueError("candidate does not belong to the active objective")
+        if candidate_id not in goal.candidate_ids:
+            goal.candidate_ids.append(candidate_id)
+            if goal.status in {
+                "tested_confirmed", "tested_not_confirmed", "no_candidate", "blocked", "deferred",
+            }:
+                goal.status = "in_progress"
+                goal.reason = "A new matching objective-scoped candidate requires validation."
+            if goal.status != "no_candidate":
+                goal.review_artifact_ref = None
+                goal.review_binding = None
+        if goal.status == "no_candidate":
+            # This also repairs malformed persisted state that retained the
+            # disposition after linkage was added elsewhere.
+            goal.status = "pending"
+            goal.reason = "A matching objective-scoped candidate was added after review."
+            goal.review_artifact_ref = None
+            goal.review_binding = None
+        return goal
+
+    def objective_goal_candidates(self, goal: RequestedGoal) -> tuple[Candidate, ...]:
+        objective = self.objective
+        if objective is None:
+            return ()
+        return tuple(
+            self.candidates[candidate_id]
+            for candidate_id in goal.candidate_ids
+            if candidate_id in self.candidates
+            and self.candidates[candidate_id].candidate_class == goal.candidate_class
+            and self.candidate_belongs_to_objective(self.candidates[candidate_id], objective)
+        )
+
+    def input_inventory_review_error(self) -> str | None:
+        objective = self.objective
+        if objective is None or objective.mode != "whole_target":
+            return "no-candidate review requires an active whole-target objective"
+        marker = self.phase_completions.get(f"{objective.id}:input_analysis")
+        if marker is None or marker.target_origin != objective.target_origin:
+            return "input analysis has not completed for the active objective"
+        if not marker.artifact_ref:
+            return "input analysis completion has no review artifact"
+        inputs = self.objective_inputs()
+        if not inputs and not marker.no_inputs_discovered:
+            return "no-input inventory lacks an explicit input-analysis attestation"
+        if inputs and marker.no_inputs_discovered:
+            return "input analysis attests no inputs but objective-owned inputs exist"
+        for item in inputs:
+            if item.disposition in {"pending", "blocked"}:
+                return f"input {item.id} remains {item.disposition}"
+            if item.disposition == "dropped" and not _dropped_input_reviewable(item):
+                return f"input {item.id} was dropped without a reviewable reason"
+        return None
+
+    def no_candidate_review_prerequisite_error(self, goal: RequestedGoal) -> str | None:
+        objective = self.objective
+        if objective is None or objective.mode != "whole_target":
+            return "no-candidate review requires an active whole-target objective"
+        if goal not in objective.requested_goals:
+            return "requested goal does not belong to the active objective"
+        if goal.status == "cancelled":
+            return "requested goal was cancelled; a new explicit objective is required"
+        inventory_error = self.input_inventory_review_error()
+        if inventory_error:
+            return inventory_error
+        if any(
+            candidate.candidate_class == goal.candidate_class
+            for candidate in self.objective_candidates()
+        ):
+            return "a matching candidate exists; validate or disposition that candidate"
+        return None
+
+    def no_candidate_review_binding(self, goal: RequestedGoal, artifact_digest: str) -> str:
+        """Bind an inventory review to bytes and objective-owned inventory."""
+        objective = self.objective
+        if objective is None:
+            raise ValueError("no-candidate review requires an active objective")
+        marker = self.phase_completions.get(f"{objective.id}:input_analysis")
+        body = {
+            "objective_id": objective.id, "target_origin": objective.target_origin,
+            "goal_id": goal.id, "artifact_digest": artifact_digest,
+            "input_analysis": marker.to_dict() if marker is not None else None,
+            "inputs": [item.to_dict() for item in self.objective_inputs()],
+        }
+        return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    def mark_goal_no_candidate(
+        self, goal_id: str, *, artifact_ref: str, review_binding: str,
+    ) -> RequestedGoal:
+        objective = self.objective
+        if objective is None:
+            raise ValueError("no-candidate review requires an active objective")
+        goal = next((item for item in objective.requested_goals if item.id == goal_id), None)
+        if goal is None:
+            raise ValueError("requested goal does not belong to the active objective")
+        reason = self.no_candidate_review_prerequisite_error(goal)
+        marker = self.phase_completions.get(f"{objective.id}:input_analysis")
+        if reason:
+            raise ValueError(reason)
+        if marker is None or artifact_ref != marker.artifact_ref:
+            raise ValueError("review artifact must match the active input-analysis completion")
+        goal.status = "no_candidate"
+        goal.reason = "No objective-scoped candidate was recorded; class-specific validation was not performed."
+        goal.review_artifact_ref = artifact_ref
+        goal.review_binding = review_binding
+        return goal
+
+    @staticmethod
+    def set_requested_goal_status(
+        goal: RequestedGoal,
+        status: GoalStatus,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        if status not in {
+            "pending", "in_progress", "tested_confirmed", "tested_not_confirmed",
+            "no_candidate", "blocked", "deferred", "unsupported", "cancelled",
+        }:
+            raise ValueError(f"unknown requested goal status: {status}")
+        if status == "no_candidate":
+            raise ValueError("no_candidate requires the explicit workflow review action")
+        goal.status = status
+        goal.reason = reason
+        goal.review_artifact_ref = None
+        goal.review_binding = None
 
     def objective_inputs(self) -> tuple[AttackSurfaceInput, ...]:
         objective = self.objective
@@ -1145,6 +1341,11 @@ class WorkflowState:
         if objective is None or objective.mode != "whole_target":
             return frozenset()
         facts: set[str] = set()
+        for goal in objective.requested_goals:
+            facts.add(
+                f"requested-goal:{goal.id}:{goal.status}:{','.join(sorted(goal.candidate_ids))}:"
+                f"{goal.reason or ''}:{goal.review_artifact_ref or ''}"
+            )
         for item in self.objective_inputs():
             facts.add(f"input:{item.id}")
             facts.update(
@@ -1367,7 +1568,8 @@ class WorkflowState:
         fingerprint = validation_result_fingerprint(result)
         if not force:
             existing = self.latest_result(result.candidate_id)
-            if existing and validation_result_fingerprint(existing) == fingerprint:
+            if (existing and existing.objective_id == result.objective_id
+                    and validation_result_fingerprint(existing) == fingerprint):
                 for field_name in (
                     "cleanup_status", "cleanup_state", "deferred_reason", "notes",
                 ):
@@ -1510,7 +1712,7 @@ class WorkflowState:
             # Version 1 had no registered evidence or independent subcases.
             # Its candidates/results still load, but legacy free-text evidence
             # references do not become finding-eligible without a new proof.
-            state.version = max(6, version)
+            state.version = max(7, version)
 
         state.objective = WorkflowObjective.from_dict(value.get("objective"))
 
@@ -1625,6 +1827,21 @@ class WorkflowState:
         phase = value.get("current_phase")
         if isinstance(phase, str):
             state.current_phase = _text(phase, limit=80)
+        if state.objective is not None:
+            for goal in state.objective.requested_goals:
+                if goal.status not in {"tested_confirmed", "tested_not_confirmed"}:
+                    continue
+                candidates = state.objective_goal_candidates(goal)
+                if not candidates or len(candidates) != len(goal.candidate_ids) or any(
+                    (result := state.latest_result(candidate.id)) is None
+                    or result.objective_id != state.objective.id
+                    or result.outcome not in {"confirmed", "not-confirmed"}
+                    or not state.evidence_matches(candidate.id, result.evidence_refs)
+                    for candidate in candidates
+                ):
+                    state.set_requested_goal_status(
+                        goal, "pending", reason="Persisted terminal goal lacks valid candidate/result linkage.",
+                    )
         return state
 
 
@@ -1635,6 +1852,20 @@ def candidate_origin(value: str | None) -> str | None:
         return HTTPOrigin.from_url(value).as_url()
     except ValueError:
         return None
+
+
+_DROPPED_INPUT_REVIEW_REASON_RE = re.compile(
+    r"\b(?:review(?:ed)?|duplicate|out[- ]of[- ]scope|not in scope|"
+    r"not applicable|no user[- ]controlled|not a valid input|false positive|"
+    r"irrelevant|excluded after review)\b",
+    re.IGNORECASE,
+)
+
+
+def _dropped_input_reviewable(item: AttackSurfaceInput) -> bool:
+    return bool(item.disposition_reason and _DROPPED_INPUT_REVIEW_REASON_RE.search(
+        item.disposition_reason
+    ))
 
 
 def is_candidate_status(value: str) -> TypeGuard[CandidateStatus]:

@@ -326,7 +326,7 @@ async def test_resume_after_real_compaction_persists_context_planner_and_tool_co
 
     planner_events = collect()
     await resumed.run(
-        "test parameter id for sql injection",
+        "continue validation on parameter q",
         FakeSignal(),
         planner_events["sink"],
     )

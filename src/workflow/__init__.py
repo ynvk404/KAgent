@@ -7,6 +7,7 @@ from .state import (
     candidate_fingerprint,
     validation_result_fingerprint,
 )
+from .goals import GoalStatus, RequestedGoal, extract_requested_classes
 
 __all__ = [
     "Candidate",
@@ -16,4 +17,7 @@ __all__ = [
     "WorkflowState",
     "candidate_fingerprint",
     "validation_result_fingerprint",
+    "GoalStatus",
+    "RequestedGoal",
+    "extract_requested_classes",
 ]

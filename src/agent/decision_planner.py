@@ -37,6 +37,17 @@ class PlannerCandidate:
 
 
 @dataclass(frozen=True)
+class PlannerGoal:
+    id: str
+    candidate_class: str
+    status: str
+    candidate_ids: tuple[str, ...] = ()
+    reason: str | None = None
+    review_ready: bool = False
+    review_artifact_ref: str | None = None
+
+
+@dataclass(frozen=True)
 class PlannerContext:
     active_skills: frozenset[str] = frozenset()
     candidate_classes: frozenset[str] = frozenset()
@@ -56,6 +67,8 @@ class PlannerContext:
     workflow_blockers: tuple[str, ...] = ()
     phase_completion_readiness: dict[str, Any] | None = None
     validation_routes: dict[str, ValidationRoute] = field(default_factory=dict)
+    requested_goals: tuple[PlannerGoal, ...] = ()
+    goal_validation_routes: dict[str, ValidationRoute] = field(default_factory=dict)
 
 
 class SkillRecommendation(TypedDict):
@@ -199,6 +212,13 @@ def build_decision_plan(
 
     if context is not None and context.objective_mode == "whole_target":
         return build_whole_target_plan(skills, context)
+
+    if context is not None and context.objective_mode == "direct":
+        goal_plan = _requested_goal_plan(context, skills)
+        if goal_plan is not None:
+            return goal_plan
+        if context.requested_goals:
+            return None
 
     normalized = normalize(text)
     if is_purely_informational(normalized):
@@ -482,6 +502,10 @@ def build_whole_target_plan(
             candidate_id=candidate_id,
         )
 
+    goal_plan = _requested_goal_plan(context, skills, whole_target=True)
+    if goal_plan is not None:
+        return goal_plan
+
     actionable = [
         candidate for candidate in context.candidates
         if candidate.status in {"new", "queued", "validating"}
@@ -541,6 +565,101 @@ def build_whole_target_plan(
                 f"Active objective: whole-target assessment {context.objective_id}.\n"
                 "Use workflow list and current structured state to select remaining "
                 "runtime-known work. Runtime gates remain authoritative."
+            ),
+        )
+    return None
+
+
+def _requested_goal_plan(
+    context: PlannerContext,
+    skills: List[Skill],
+    *,
+    whole_target: bool = False,
+) -> DecisionPlan | None:
+    """Choose the first open user goal in request order."""
+    if not context.requested_goals:
+        return None
+    for goal in context.requested_goals:
+        if goal.status not in {"pending", "in_progress"}:
+            continue
+        candidates = [
+            item for item in context.candidates
+            if item.id in goal.candidate_ids
+        ]
+        if candidates:
+            candidate = next(
+                (item for item in candidates if item.status in {"new", "queued", "validating"}
+                 or item.id in context.revalidation_candidate_ids),
+                None,
+            )
+            if candidate is None and goal.status == "in_progress":
+                candidate = next((item for item in candidates if item.status == "validated"), None)
+            if (candidate is None and context.objective_mode == "candidate_validation"):
+                candidate = next(iter(candidates), None)
+            if candidate is None:
+                continue
+            route = context.validation_routes.get(candidate.id)
+            if route is not None and route.kind != "expert":
+                return _route_plan(candidate, route, revalidation=candidate.id in context.revalidation_candidate_ids)
+            matching = _validation_skills_for_class(skills, candidate.candidate_class)
+            if len(matching) != 1:
+                return _unresolved_validator_plan(
+                    candidate.id, candidate.candidate_class, len(matching),
+                    revalidation=candidate.id in context.revalidation_candidate_ids,
+                )
+            validator = matching[0]
+            return DecisionPlan(
+                recommended_skill=validator.name,
+                reason=f"requested goal {goal.candidate_class} is next in user order",
+                risk="normal",
+                checklist=[
+                    "Validate only this objective-scoped candidate using its skill contract.",
+                    "Record a valid result and required evidence through workflow.",
+                ],
+                guidance=(
+                    "Decision planner guidance for this turn:\n"
+                    f"Next requested goal: {goal.candidate_class}; candidate {candidate.id}.\n"
+                    f"Use {validator.name} and follow its authorization and evidence gates."
+                ),
+                candidate_id=candidate.id,
+            )
+
+        route = context.goal_validation_routes.get(goal.candidate_class)
+        if whole_target:
+            if goal.review_ready and goal.review_artifact_ref:
+                return DecisionPlan(
+                    recommended_skill=None,
+                    reason=f"requested goal {goal.candidate_class} has no candidate after input analysis",
+                    risk="normal",
+                    checklist=["Record only the workflow disposition; do not call this class validated."],
+                    guidance=(
+                        "Decision planner guidance for this turn:\n"
+                        f"Requested goal {goal.candidate_class} has no objective-scoped candidate. "
+                        "Input analysis and input dispositions are complete. Call "
+                        f"workflow(action=review_no_candidate, goal_id={goal.id}, "
+                        f"artifact_ref={goal.review_artifact_ref!r}). This records a workflow "
+                        "disposition only; class-specific validation was not performed."
+                    ),
+                )
+            continue
+
+        if route is not None and route.kind in {"ambiguous", "unavailable"}:
+            continue
+        skill_name = route.skill_name if route is not None and route.kind == "expert" else None
+        return DecisionPlan(
+            recommended_skill=skill_name,
+            reason=f"requested goal {goal.candidate_class} is next in user order",
+            risk="normal",
+            checklist=[
+                "Use only endpoint or request context the operator supplied or already recorded.",
+                "If no bounded candidate context exists, ask for it; do not broaden into discovery.",
+            ],
+            guidance=(
+                "Decision planner guidance for this turn:\n"
+                f"Next requested goal: {goal.candidate_class}. No matching candidate is linked.\n"
+                "Use directly supplied endpoint/request context to record an objective-owned "
+                "candidate before validation. Do not scan broadly to invent a candidate. "
+                "If bounded context is missing, ask the operator for an endpoint or candidate."
             ),
         )
     return None

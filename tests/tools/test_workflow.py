@@ -22,7 +22,132 @@ from src.workflow.state import (
     WorkflowState,
     validation_result_fingerprint,
 )
+from src.workflow.goals import RequestedGoal
 from tests.helpers.workflow import record_completed_phase, record_phase_coverage_for_test
+
+
+@pytest.mark.asyncio
+async def test_no_candidate_review_requires_closed_inventory_and_never_creates_test_records(tmp_path):
+    objective = WorkflowObjective(
+        id="objective-goal-review", mode="whole_target",
+        target_origin="https://target.test",
+        requested_goals=[RequestedGoal("cross-site-scripting")],
+    )
+    state = WorkflowState(objective=objective)
+    for phase in ("recon", "enumeration", "input_analysis"):
+        ref = f"artifacts/{phase}.md"
+        artifact = tmp_path / ref
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("reviewed inventory", encoding="utf-8")
+        record_completed_phase(
+            state, phase, objective_id=objective.id,
+            target_origin="https://target.test", artifact_ref=ref,
+            no_inputs_discovered=phase == "input_analysis",
+        )
+    tool = WorkflowTool(
+        state, Target("https://target.test"), evidence_root=tmp_path,
+    )
+    goal = objective.requested_goals[0]
+    args = {"action": "review_no_candidate", "goal_id": goal.id}
+
+    wrong_artifact = await tool.run({
+        **args, "artifact_ref": "artifacts/wrong.md",
+    }, None, AlwaysAllow())
+    assert "must match the active input-analysis completion" in wrong_artifact
+
+    recorded = json.loads(await tool.run(args, None, AlwaysAllow()))
+    assert recorded["ok"] is True
+    assert recorded["goal"]["status"] == "no_candidate"
+    assert recorded["class_specific_validation_performed"] is False
+    assert state.validation_results == []
+    assert state.evidence == {}
+    assert state.persisted_findings == {}
+    assert goal.review_artifact_ref == "artifacts/input_analysis.md"
+
+    new_candidate = json.loads(await tool.run({
+        "action": "record_candidate", "candidate_class": "xss",
+        "target": "https://target.test", "endpoint": "/search",
+    }, None, AlwaysAllow()))
+    assert new_candidate["ok"] is True
+    assert goal.status == "in_progress"
+    assert goal.review_artifact_ref is None
+    assert goal.candidate_ids == [new_candidate["candidate"]["id"]]
+
+
+@pytest.mark.asyncio
+async def test_dropped_input_needs_review_or_scope_reason_for_no_candidate(tmp_path):
+    objective = WorkflowObjective(
+        id="objective-dropped-input", mode="whole_target",
+        target_origin="https://target.test",
+        requested_goals=[RequestedGoal("cross-site-scripting")],
+    )
+    state = WorkflowState(objective=objective)
+    item, _ = state.add_attack_surface_input(AttackSurfaceInput(
+        objective.id, "https://target.test", endpoint="/search", parameter="q",
+        disposition="dropped", disposition_reason="ignored by analysis",
+    ))
+    for phase in ("recon", "enumeration", "input_analysis"):
+        ref = f"artifacts/{phase}.md"
+        artifact = tmp_path / ref
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("inventory", encoding="utf-8")
+        record_completed_phase(
+            state, phase, objective_id=objective.id,
+            target_origin="https://target.test", artifact_ref=ref,
+        )
+    tool = WorkflowTool(
+        state, Target("https://target.test"), evidence_root=tmp_path,
+    )
+    args = {
+        "action": "review_no_candidate",
+        "goal_id": objective.requested_goals[0].id,
+    }
+    rejected = await tool.run(args, None, AlwaysAllow())
+    assert "dropped without a reviewable reason" in rejected
+    state.set_input_disposition(
+        item.id, "dropped", reason="Reviewed and excluded as out of scope",
+    )
+    accepted = json.loads(await tool.run(args, None, AlwaysAllow()))
+    assert accepted["goal"]["status"] == "no_candidate"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("disposition", "reason_fragment"),
+    [("pending", "remains pending"), ("blocked", "remains blocked")],
+)
+async def test_pending_or_blocked_input_prevents_no_candidate_review(
+    tmp_path, disposition, reason_fragment,
+):
+    objective = WorkflowObjective(
+        id="objective-open-input", mode="whole_target",
+        target_origin="https://target.test",
+        requested_goals=[RequestedGoal("cross-site-scripting")],
+    )
+    state = WorkflowState(objective=objective)
+    input_item, _ = state.add_attack_surface_input(AttackSurfaceInput(
+        objective.id, "https://target.test", endpoint="/search", parameter="q",
+        disposition=disposition,
+        disposition_reason="needs review" if disposition == "blocked" else None,
+    ))
+    for phase in ("recon", "enumeration", "input_analysis"):
+        ref = f"artifacts/{phase}.md"
+        artifact = tmp_path / ref
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("inventory", encoding="utf-8")
+        record_completed_phase(
+            state, phase, objective_id=objective.id,
+            target_origin="https://target.test", artifact_ref=ref,
+        )
+    output = await WorkflowTool(
+        state, Target("https://target.test"), evidence_root=tmp_path,
+    ).run({
+        "action": "review_no_candidate", "goal_id": objective.requested_goals[0].id,
+    }, None, AlwaysAllow())
+    assert output.startswith("error:")
+    assert reason_fragment in output
+    assert input_item.disposition == disposition
+    assert objective.requested_goals[0].status == "pending"
 
 
 def _confirmed_sqli_args() -> dict:

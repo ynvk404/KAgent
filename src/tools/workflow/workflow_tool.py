@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -59,6 +60,7 @@ ACTIONS = (
     "sync_coverage",
     "record_phase_coverage",
     "complete_skill",
+    "review_no_candidate",
     "list",
 )
 DEFAULT_LIST_LIMIT = 8
@@ -115,6 +117,9 @@ class WorkflowTool(Tool):
                 "candidate_id": {
                     "type": "string",
                     "description": "Required for record_evidence, start_validation, and record_result.",
+                },
+                "goal_id": {
+                    "type": "string",
                 },
                 "probe": ProbeProposal.schema(),
                 "input_id": optional_string,
@@ -319,6 +324,8 @@ class WorkflowTool(Tool):
             result = self._record_phase_coverage(args)
         elif action == "complete_skill":
             result = self._complete_skill(args)
+        elif action == "review_no_candidate":
+            result = await self._review_no_candidate(args, prompter, signal)
         elif action == "list":
             result = self._list(args, policy)
         else:
@@ -365,13 +372,20 @@ class WorkflowTool(Tool):
                     or input_item.target_origin != objective.target_origin
                 ):
                     return "error: input does not belong to the active whole-target objective"
+        elif (
+            objective is not None
+            and objective.mode == "direct"
+            and objective.target_origin is not None
+            and candidate_origin(candidate_target) != objective.target_origin
+        ):
+            return "error: candidate target must match the active direct objective origin"
         validators = (
             self.skills.validators_for_class(candidate_class) if self.skills else []
         )
         route = resolve_validation_route(self.skills, candidate_class)
         supported = len(validators) == 1 if self.skills else None
         validator_resolution = "unique" if route.kind == "expert" else route.kind
-        if route.kind == "generic" and objective is not None and objective.mode == "direct":
+        if objective is not None and objective.mode == "direct":
             objective_id = objective.id
         endpoint, method, normalization_error = self._normalize_method_endpoint(
             args.get("endpoint"), args.get("method")
@@ -449,6 +463,10 @@ class WorkflowTool(Tool):
             input_id = arg_string(args, "input_id")
             if input_id:
                 self.state.link_input_candidate(input_id, stored.id)
+            if objective is not None and objective.mode in {"direct", "whole_target"}:
+                for goal in objective.requested_goals:
+                    if goal.candidate_class == stored.candidate_class:
+                        self.state.link_requested_goal_candidate(goal.id, stored.id)
             if not created and self.skills and self.state.latest_result(stored.id) is None:
                 if supported is False and stored.status in {"new", "queued"}:
                     stored = self.state.set_candidate_status(stored.id, "deferred")
@@ -706,6 +724,7 @@ class WorkflowTool(Tool):
                 notes=args.get("notes"),
                 recorded_at=datetime.now(UTC).isoformat(),
                 session_id=self.session_id,
+                objective_id=(self.state.objective.id if self.state.objective else None),
             )
             candidate = self.state.candidates.get(result.candidate_id)
             if candidate is None:
@@ -1202,6 +1221,54 @@ class WorkflowTool(Tool):
             "artifact_ref": self.state.completed_artifacts.get(canonical),
         }, indent=2)
 
+    async def _review_no_candidate(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
+        objective = self.state.objective
+        goal_id = arg_string(args, "goal_id")
+        if objective is None or objective.mode != "whole_target":
+            return "error: review_no_candidate requires an active whole-target objective"
+        goal = next((item for item in objective.requested_goals if item.id == goal_id), None)
+        if goal is None:
+            return "error: review_no_candidate requires a goal_id from the active objective"
+        if self.target is None or self.target.empty() or normalize_target_origin(
+            self.target.base_url()
+        ) != objective.target_origin:
+            return "error: active target does not match the whole-target objective"
+        prerequisite_error = self.state.no_candidate_review_prerequisite_error(goal)
+        if prerequisite_error:
+            return f"error: {prerequisite_error}"
+        marker = self.state.phase_completions.get(f"{objective.id}:input_analysis")
+        if marker is None:
+            return "error: input analysis has not completed for the active objective"
+        supplied_ref = arg_string(args, "artifact_ref")
+        if supplied_ref and supplied_ref != marker.artifact_ref:
+            return "error: artifact_ref must match the active input-analysis completion"
+        try:
+            artifact = resolve_canonical_artifact(self.evidence_root, marker.artifact_ref)
+            if not artifact.is_file() or artifact.stat().st_size <= 0:
+                return "error: input-analysis review artifact is unavailable"
+            await gate_sensitive_path(prompter, str(artifact), "read input-analysis review artifact", signal)
+            if (self.state.objective is not objective or self.target is None
+                    or normalize_target_origin(self.target.base_url()) != objective.target_origin):
+                return "error: objective or target changed during no-candidate review"
+            policy = policy_for(prompter)
+            if policy is not None:
+                policy.generic_validation.idle()
+            with artifact.open("rb") as handle:
+                artifact_digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            if artifact.stat().st_size <= 0:
+                return "error: input-analysis review artifact is unavailable"
+            binding = self.state.no_candidate_review_binding(goal, artifact_digest)
+            reviewed = self.state.mark_goal_no_candidate(
+                goal.id, artifact_ref=marker.artifact_ref, review_binding=binding,
+            )
+        except (OSError, ValueError) as err:
+            return f"error: {err}"
+        return json.dumps({
+            "ok": True,
+            "goal": reviewed.to_dict(),
+            "class_specific_validation_performed": False,
+        }, indent=2)
+
     def phase_completion_readiness(
         self, skill_name: str, *, artifact_ref: str | None = None,
         no_inputs_discovered: bool = False,
@@ -1319,14 +1386,28 @@ class WorkflowTool(Tool):
 
     def _validate_current_objective_candidate(self, candidate_id: str) -> None:
         objective = self.state.objective
-        if objective is not None and objective.mode == "whole_target":
-            candidate = self.state.candidates.get(candidate_id)
+        candidate = self.state.candidates.get(candidate_id)
+        if candidate is None:
             if (
-                candidate is None
-                or candidate.objective_id != objective.id
+                objective is not None
+                and objective.mode == "candidate_validation"
+                and candidate_id == objective.candidate_id
+            ):
+                raise ValueError(
+                    "active candidate-validation objective references an unknown candidate"
+                )
+            raise ValueError("unknown candidate")
+        if objective is not None and objective.mode == "whole_target":
+            if (
+                candidate.objective_id != objective.id
                 or candidate_origin(candidate.target) != objective.target_origin
             ):
                 raise ValueError("candidate does not belong to the active whole-target objective")
+        elif objective is not None and objective.mode == "direct":
+            if candidate.objective_id != objective.id:
+                raise ValueError("candidate lacks provenance for the active direct objective")
+            if objective.target_origin is not None and candidate_origin(candidate.target) != objective.target_origin:
+                raise ValueError("candidate target does not match the active direct objective")
         elif objective is not None and objective.mode == "candidate_validation":
             if candidate_id != objective.candidate_id:
                 raise ValueError(
@@ -1445,6 +1526,9 @@ class WorkflowTool(Tool):
                 "truncated": total > len(selected),
                 "current_phase": self.state.current_phase,
                 "objective": objective.to_dict() if objective else None,
+                "requested_goals": [
+                    goal.to_dict() for goal in objective.requested_goals
+                ] if objective else [],
                 "completed_phases": sorted(self.state.completed_phases()),
                 "phase_coverage": {
                     key: {

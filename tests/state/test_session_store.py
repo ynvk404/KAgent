@@ -25,6 +25,7 @@ from src.workflow.state import (
     WorkflowObjective,
     WorkflowState,
 )
+from src.workflow.goals import RequestedGoal
 from tests.helpers.workflow import record_completed_phase
 from src.workflow.evidence import EvidenceArtifact
 from src.engagement.state import EngagementState
@@ -92,6 +93,40 @@ class TestEngagementPersistence:
 
 
 class TestWorkflowPersistence:
+    @pytest.mark.asyncio
+    async def test_requested_goal_links_and_objective_result_provenance_survive_resume(self, tmp_path):
+        store = Store.new_with_id(tmp_path, "requested-goal-round-trip")
+        objective = WorkflowObjective(
+            id="direct-goals", mode="direct", target_origin="https://target.test",
+            requested_goals=[RequestedGoal("sqli", status="tested_not_confirmed")],
+        )
+        workflow = WorkflowState(objective=objective)
+        candidate, _ = workflow.add_candidate(Candidate(
+            candidate_class="sql-injection", target="https://target.test",
+            endpoint="/search", objective_id=objective.id,
+        ))
+        workflow.link_requested_goal_candidate(objective.requested_goals[0].id, candidate.id)
+        objective.requested_goals[0].status = "tested_not_confirmed"
+        (tmp_path / "resume-proof.md").write_text("Reproducible negative comparison.")
+        artifact = EvidenceArtifact.capture(candidate.id, "resume-proof.md", tmp_path)
+        workflow.add_evidence(artifact)
+        workflow.add_validation_result(ValidationResult(
+            candidate.id, "sql-injection", "not-confirmed",
+            evidence_refs=[artifact.id],
+            objective_id=objective.id,
+        ))
+
+        await store.save([Message(role="user", content="continue")], workflow=workflow)
+        resumed = store.load().workflow
+
+        assert resumed.objective is not None
+        goal = resumed.objective.requested_goals[0]
+        assert goal.status == "tested_not_confirmed"
+        assert goal.candidate_ids == [candidate.id]
+        result = resumed.latest_result(candidate.id)
+        assert result is not None
+        assert result.objective_id == objective.id
+
     @pytest.mark.asyncio
     async def test_whole_target_objective_inventory_and_phase_survive_session_round_trip(self, tmp_path):
         store = Store.new_with_id(tmp_path, "whole-target-round-trip")

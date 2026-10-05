@@ -11,6 +11,7 @@ from src.workflow.state import (
     WorkflowState,
     PHASE_COVERAGE_DIMENSIONS,
 )
+from src.workflow.goals import RequestedGoal
 from tests.helpers.workflow import record_completed_phase
 from src.workflow.evidence import EvidenceArtifact
 from src.agent.system_prompt import (
@@ -24,6 +25,26 @@ from src.agent.system_prompt import (
 )
 
 class TestBuildSystemPrompt:
+    def test_requested_goals_render_compact_untrusted_state(self):
+        goal = RequestedGoal(
+            "xss", status="no_candidate", candidate_ids=["cand_reviewed"],
+            reason="Candidate discovery was reviewed; class-specific validation was not performed.",
+            review_artifact_ref="artifacts/input-analysis.md",
+        )
+        workflow = WorkflowState(objective=WorkflowObjective(
+            id="goal-prompt", mode="whole_target",
+            target_origin="https://target.test", requested_goals=[goal],
+        ))
+
+        rendered = render_workflow(workflow)
+
+        assert "Requested goals (runtime state controls completion)" in rendered
+        assert "class=cross-site-scripting status=no_candidate" in rendered
+        assert "cand_reviewed" in rendered
+        assert "artifacts/input-analysis.md" in rendered
+        assert "class-specific validation was not performed" in rendered
+        assert "not a negative result" in rendered
+
     def test_carried_session_memory_has_a_deterministic_hard_bound(self):
         memory = SessionMemory(
             compactions=2,

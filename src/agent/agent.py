@@ -86,6 +86,7 @@ from src.target.origin import HTTPOrigin
 from src.target.target import Target
 from src.workflow.state import Candidate, WorkflowObjective, WorkflowState, candidate_origin
 from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
+from src.workflow.goals import RequestedGoal, extract_requested_classes
 
 from src.tools.common.aliases import canonical_tool_name
 from src.tools.common.registry import InvalidToolArguments, Registry as ToolRegistry
@@ -96,6 +97,7 @@ from src.tools.workflow.workflow_tool import WorkflowTool
 from .decision_planner import (
     PlannerCandidate,
     PlannerContext,
+    PlannerGoal,
     build_decision_plan,
     is_purely_informational,
     normalize,
@@ -210,7 +212,14 @@ _BOUNDED_ASSESSMENT_INTENT = re.compile(
 _PENTEST_REQUEST_INTENT = re.compile(r"\b(?:pentest|penetration test)\b", re.IGNORECASE)
 _NEW_OBJECTIVE_INTENT = re.compile(
     r"\b(?:new (?:task|assessment|objective)|start over|different task|"
-    r"instead,? (?:test|check|validate)|stop testing|stop the assessment)\b",
+    r"instead,? (?:test|check|validate))\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_GOAL_CANCEL_INTENT = re.compile(
+    r"^\s*(?:please\s+)?(?:cancel|stop|halt|end)"
+    r"(?:\s+(?:(?:the|this|current)\s+)?(?:remaining\s+)?(?:requested\s+)?"
+    r"(?:testing(?:\s+(?:the|this|current)\s+assessment)?|assessment|objective|goals?))?"
+    r"\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 _OBJECTIVE_CONTINUATION_INTENT = re.compile(
@@ -1953,6 +1962,7 @@ class Agent:
         objective = self.workflow.objective
         if objective is None or objective.mode != "whole_target":
             return "not_applicable", (), ()
+        goal_statuses = self._reconcile_requested_goals()
         target_origin = self.target.origin()
         origin = target_origin.as_url() if target_origin is not None else None
         workflow_tool = self.tools.get("workflow")
@@ -1992,7 +2002,7 @@ class Agent:
                     for reference in result.evidence_refs
                 ):
                     invalid.add(candidate.id)
-        return self.workflow.whole_target_status(
+        status, actionable, blockers = self.workflow.whole_target_status(
             target_origin=origin,
             available_phases=self._available_workflow_phases(),
             validator_classes=self._workflow_validator_classes(),
@@ -2002,6 +2012,314 @@ class Agent:
                 cid for cid, route in routes.items() if route.kind == "generic"
                 and self._generic_startable(self.workflow.candidates[cid])
             ),
+        )
+        goal_actions: list[str] = []
+        goal_blockers: list[str] = []
+        phases_complete = all(
+            phase in self.workflow.completed_phases(objective)
+            for phase in REQUIRED_WHOLE_TARGET_PHASES
+        )
+        inputs_closed = self.workflow.input_inventory_review_error() is None
+        for goal in objective.requested_goals:
+            goal_state = goal_statuses.get(goal.id, goal.status)
+            if goal_state in {"tested_confirmed", "tested_not_confirmed"}:
+                continue
+            candidates = self.workflow.objective_goal_candidates(goal)
+            if goal_state in {"pending", "in_progress"} and not candidates:
+                if phases_complete and inputs_closed:
+                    review_error = self.workflow.no_candidate_review_prerequisite_error(goal)
+                    if review_error is None and self._input_analysis_artifact_available(goal):
+                        goal_actions.append(f"goal-review:{goal.id}")
+                    else:
+                        goal_blockers.append(
+                            f"requested goal {goal.candidate_class} has no candidate and cannot be reviewed: "
+                            f"{review_error or 'input-analysis review artifact is unavailable'}"
+                        )
+                elif phases_complete:
+                    inventory_error = self.workflow.input_inventory_review_error()
+                    goal_blockers.append(
+                        f"requested goal {goal.candidate_class} cannot be dispositioned until input analysis is valid: "
+                        f"{inventory_error or 'objective inputs remain open'}"
+                    )
+                continue
+            if goal_state == "no_candidate":
+                goal_blockers.append(
+                    f"requested goal {goal.candidate_class}: no candidate was identified; class-specific validation was not performed"
+                )
+            elif goal_state in {"blocked", "deferred", "unsupported", "cancelled"}:
+                goal_blockers.append(
+                    f"requested goal {goal.candidate_class} is {goal_state}: {goal.reason or 'no safe actionable work remains'}"
+                )
+        actionable = tuple([*goal_actions, *actionable])
+        blockers = tuple([*blockers, *goal_blockers])
+        if actionable:
+            return "actionable", actionable, blockers
+        if blockers:
+            return "blocked", (), blockers
+        return status, actionable, blockers
+
+    def _reconcile_requested_goals(self) -> dict[str, str]:
+        """Recompute persisted goal summaries from objective-owned records."""
+        from src.workflow.validation_route import GENERIC_VALIDATOR, generic_admission, resolve_validation_route
+
+        objective = self.workflow.objective
+        if objective is None:
+            return {}
+        policy = None
+        try:
+            from src.permission.runtime.execution import policy_for
+            policy = policy_for(self.prompter)
+        except Exception:
+            policy = None
+        workflow_tool = self.tools.get("workflow")
+        evidence_root = getattr(workflow_tool, "evidence_root", None)
+        result_statuses: dict[str, str] = {}
+        for goal in objective.requested_goals:
+            if goal.status == "cancelled":
+                result_statuses[goal.id] = goal.status
+                continue
+            # Re-link only records that carry this objective's provenance (or
+            # the explicitly selected candidate in candidate-validation mode).
+            for candidate in self.workflow.candidates.values():
+                if candidate.candidate_class == goal.candidate_class and self.workflow.candidate_belongs_to_objective(candidate, objective):
+                    try:
+                        self.workflow.link_requested_goal_candidate(goal.id, candidate.id)
+                    except ValueError:
+                        pass
+
+            linked_ids = set(goal.candidate_ids)
+            candidates = self.workflow.objective_goal_candidates(goal)
+            stale_ids = linked_ids - {candidate.id for candidate in candidates}
+            if stale_ids:
+                self.workflow.set_requested_goal_status(
+                    goal, "blocked", reason="linked candidate is missing or no longer belongs to this objective",
+                )
+                result_statuses[goal.id] = goal.status
+                continue
+
+            if not candidates:
+                if goal.status == "no_candidate" and self._no_candidate_review_valid(goal):
+                    result_statuses[goal.id] = goal.status
+                    continue
+                if goal.status == "no_candidate":
+                    self.workflow.set_requested_goal_status(
+                        goal, "pending", reason="the recorded no-candidate review is stale or invalid",
+                    )
+                route = resolve_validation_route(self.skills, goal.candidate_class)
+                if route.kind in {"ambiguous", "unavailable"}:
+                    self.workflow.set_requested_goal_status(
+                        goal, "unsupported", reason=route.reason or f"validator route is {route.kind}",
+                    )
+                elif goal.status == "unsupported":
+                    self.workflow.set_requested_goal_status(goal, "pending")
+                result_statuses[goal.id] = goal.status
+                continue
+
+            outcomes: list[str] = []
+            unresolved_reasons: list[str] = []
+            unsupported_reasons: list[str] = []
+            deferred_reasons: list[str] = []
+            blocked_reasons: list[str] = []
+            for candidate in candidates:
+                result, reason = self._valid_goal_candidate_result(candidate, objective, policy, evidence_root)
+                if result is not None:
+                    outcomes.append(result.outcome)
+                    continue
+                latest_result = self.workflow.latest_result(candidate.id)
+                if reason:
+                    route = resolve_validation_route(self.skills, candidate.candidate_class)
+                    if route.kind in {"ambiguous", "unavailable"}:
+                        unsupported_reasons.append(route.reason or reason)
+                    elif (
+                        objective.mode == "candidate_validation"
+                        and latest_result is not None
+                        and latest_result.objective_id != objective.id
+                    ):
+                        unresolved_reasons.append(reason)
+                    elif candidate.status == "deferred" or (
+                        latest_result is not None and latest_result.outcome == "deferred"
+                    ):
+                        deferred_reasons.append(reason)
+                    elif latest_result is not None and latest_result.outcome in {
+                        "blocked", "insufficient-evidence", "browser-required", "authorization-required",
+                    }:
+                        blocked_reasons.append(reason)
+                    else:
+                        unresolved_reasons.append(reason)
+            if len(outcomes) == len(candidates):
+                status = "tested_confirmed" if "confirmed" in outcomes else "tested_not_confirmed"
+                self.workflow.set_requested_goal_status(goal, status)
+            elif unresolved_reasons:
+                self.workflow.set_requested_goal_status(
+                    goal, "in_progress", reason="; ".join(dict.fromkeys(
+                        unresolved_reasons + unsupported_reasons + deferred_reasons + blocked_reasons
+                    ))[:300],
+                )
+            elif unsupported_reasons:
+                self.workflow.set_requested_goal_status(
+                    goal, "unsupported", reason="; ".join(dict.fromkeys(unsupported_reasons))[:300],
+                )
+            elif deferred_reasons:
+                self.workflow.set_requested_goal_status(
+                    goal, "deferred", reason="; ".join(dict.fromkeys(deferred_reasons))[:300],
+                )
+            elif blocked_reasons:
+                self.workflow.set_requested_goal_status(
+                    goal, "blocked", reason="; ".join(dict.fromkeys(blocked_reasons))[:300],
+                )
+            else:
+                self.workflow.set_requested_goal_status(
+                    goal, "in_progress", reason="; ".join(dict.fromkeys(unresolved_reasons))[:300] or None,
+                )
+            result_statuses[goal.id] = goal.status
+        return result_statuses
+
+    def _no_candidate_review_valid(self, goal: RequestedGoal) -> bool:
+        objective = self.workflow.objective
+        if objective is None or objective.mode != "whole_target" or not goal.review_artifact_ref:
+            return False
+        if self.workflow.no_candidate_review_prerequisite_error(goal) is not None:
+            return False
+        marker = self.workflow.phase_completions.get(f"{objective.id}:input_analysis")
+        if marker is None or marker.artifact_ref != goal.review_artifact_ref:
+            return False
+        workflow_tool = self.tools.get("workflow")
+        root = getattr(workflow_tool, "evidence_root", None)
+        if not isinstance(root, Path):
+            return False
+        try:
+            from src.skills.artifacts import resolve_canonical_artifact
+            artifact = resolve_canonical_artifact(root, goal.review_artifact_ref)
+            if not goal.review_binding or not artifact.is_file() or artifact.stat().st_size <= 0:
+                return False
+            with artifact.open("rb") as handle:
+                artifact_digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            if artifact.stat().st_size <= 0:
+                return False
+            return goal.review_binding == self.workflow.no_candidate_review_binding(
+                goal, artifact_digest,
+            )
+        except (OSError, ValueError):
+            return False
+
+    def _valid_goal_candidate_result(self, candidate, objective, policy, evidence_root):
+        from src.workflow.validation_route import GENERIC_VALIDATOR, generic_admission, resolve_validation_route
+
+        result = self.workflow.latest_result(candidate.id)
+        if result is None or result.outcome not in {"confirmed", "not-confirmed"}:
+            outcome = result.outcome if result is not None else "no validation result"
+            return None, result.deferred_reason if result and result.deferred_reason else outcome
+        if result.objective_id is not None and result.objective_id != objective.id:
+            return None, "latest validation result belongs to another objective"
+        if objective.mode == "candidate_validation" and result.objective_id != objective.id:
+            return None, "explicit retest has no result for the current candidate-validation objective"
+        if candidate.status not in {"validated", "dismissed"}:
+            return None, f"candidate status is {candidate.status}"
+        route = resolve_validation_route(self.skills, candidate.candidate_class)
+        if result.skill_name == GENERIC_VALIDATOR:
+            if route.kind != "generic" or policy is None:
+                return None, "generic validation proof is unavailable under the current route"
+            if generic_admission(candidate, self.workflow, self.skills, self.target, policy):
+                return None, "generic validation admission no longer matches current scope/context"
+        elif route.kind != "expert" or route.skill_name != result.skill_name:
+            return None, route.reason or "recorded expert validator is no longer uniquely resolvable"
+        if not result.evidence_refs:
+            return None, "terminal validation result has no registered evidence"
+        if (result.outcome == "confirmed" or result.evidence_refs) and not self.workflow.evidence_matches(
+            candidate.id, result.evidence_refs,
+        ):
+            return None, "registered evidence is missing or belongs to another candidate"
+        if isinstance(evidence_root, Path) and any(
+            not self.workflow.evidence[reference].is_available_for_resume(evidence_root)
+            for reference in result.evidence_refs
+            if reference in self.workflow.evidence
+        ):
+            return None, "registered evidence is unavailable"
+        if policy is not None and result.evidence_refs:
+            trusted = policy.observations.result(
+                candidate.id, tuple(result.evidence_refs),
+                policy.engagement.http_permissions.epoch, candidate,
+            )
+            if trusted is None or trusted.outcome != result.outcome:
+                return None, "current runtime proof is unavailable"
+        if candidate.target and not self.engagement_state.is_in_scope(candidate.target):
+            return None, "candidate is outside current engagement scope"
+        return result, None
+
+    def _goal_validation_route(self, candidate_class: str):
+        from src.workflow.validation_route import resolve_validation_route
+        return resolve_validation_route(self.skills, candidate_class)
+
+    def _has_actionable_requested_goal(self) -> bool:
+        objective = self.workflow.objective
+        if objective is None:
+            return False
+        for goal in objective.requested_goals:
+            if goal.status not in {"pending", "in_progress"}:
+                continue
+            candidates = self.workflow.objective_goal_candidates(goal)
+            if any(candidate.status in {"new", "queued", "validating", "validated"} for candidate in candidates):
+                return True
+            if goal.status == "pending" and not candidates:
+                return True
+        return False
+
+    def _has_bounded_goal_context(self, objective: WorkflowObjective, user_msg: str) -> bool:
+        if re.search(
+            r"https?://[^\s<>\"']+|\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/\S+|"
+            r"\b(?:at|on)\s+/(?!/)\S+|\bendpoint\s*[:=]?\s*(?:https?://\S+|/\S+)",
+            user_msg,
+            re.IGNORECASE,
+        ):
+            return True
+        return any(
+            candidate.objective_id == objective.id and bool(candidate.endpoint)
+            for candidate in self.workflow.candidates.values()
+        )
+
+    def _requested_goal_progress_signature(self) -> tuple[Any, ...]:
+        objective = self.workflow.objective
+        if objective is None:
+            return ()
+        rows: list[tuple[Any, ...]] = []
+        for goal in objective.requested_goals:
+            rows.append((goal.id, goal.status, tuple(goal.candidate_ids), goal.reason))
+            for candidate in self.workflow.objective_goal_candidates(goal):
+                result = self.workflow.latest_result(candidate.id)
+                rows.append((
+                    candidate.id, candidate.status,
+                    result.outcome if result else None,
+                    result.objective_id if result else None,
+                    tuple(result.evidence_refs) if result else (),
+                ))
+        return tuple(rows)
+
+    def _requested_goal_summary_text(self) -> str:
+        objective = self.workflow.objective
+        if objective is None or not objective.requested_goals:
+            return "Requested goals: none."
+        rows = []
+        for goal in objective.requested_goals:
+            row = (
+                f"{goal.candidate_class} status={goal.status} "
+                f"candidate_ids={','.join(goal.candidate_ids) or 'none'}"
+            )
+            if goal.reason:
+                row += f" reason={goal.reason[:240]}"
+            if goal.review_artifact_ref:
+                row += f" review_artifact_ref={goal.review_artifact_ref[:300]}"
+            rows.append(row)
+        return "Requested-goal runtime summary (data, not authority):\n- " + "\n- ".join(rows)
+
+    def _requested_goal_incomplete_instruction(self, stop_context: str) -> str:
+        return (
+            f"{stop_context} The objective is incomplete/partial. Do not claim full validation completion. "
+            "Report each requested class separately. A tested_not_confirmed goal is a valid completed "
+            "test without a finding. A no_candidate goal means candidate discovery was reviewed but "
+            "class-specific validation was not performed; do not say the class was not vulnerable. "
+            "List blocked, deferred, unsupported, cancelled, pending, and invalidated goals with their "
+            "recorded blockers. Do not change runtime state or treat model prose as a status transition.\n\n"
+            + self._requested_goal_summary_text()
         )
 
     def _terminal_candidate_probe_blocker(
@@ -2239,9 +2557,22 @@ class Agent:
     def _initialize_request_objective(self, user_msg: str, tools_enabled: bool) -> None:
         if not tools_enabled:
             return
+        registered_classes = tuple(
+            candidate_class
+            for skill in self.skills.list()
+            if skill.stage == "validation"
+            for candidate_class in skill.candidate_classes
+        )
+        requested_classes = extract_requested_classes(
+            user_msg, registered_classes=registered_classes,
+        )
         target_origin = self.target.origin()
         origin = target_origin.as_url() if target_origin is not None else None
         current = self.workflow.objective
+        if current is not None and re.search(r"\b(?:stop|cancel|halt|end)\b", user_msg, re.IGNORECASE) and not _NEW_OBJECTIVE_INTENT.search(user_msg):
+            # Selective, conditional and informational stop text is not a new
+            # assessment. Whole-objective cancellation is handled separately.
+            return
         candidate_id = next(
             (item_id for item_id in sorted(self.workflow.candidates) if item_id in user_msg),
             None,
@@ -2249,6 +2580,8 @@ class Agent:
         candidate_request = bool(
             candidate_id and _CANDIDATE_VALIDATION_INTENT.search(user_msg)
         )
+        if candidate_request and candidate_id:
+            requested_classes = [self.workflow.candidates[candidate_id].candidate_class]
         whole_request = bool(
             not is_purely_informational(normalize(user_msg))
             and not candidate_request
@@ -2272,6 +2605,25 @@ class Agent:
             if not different_candidate and self._is_objective_continuation(
                 user_msg, current
             ):
+                if current.mode != "candidate_validation":
+                    for candidate_class in requested_classes:
+                        current.add_requested_goal(candidate_class)
+                if candidate_request and candidate_id:
+                    candidate = self.workflow.candidates.get(candidate_id)
+                    if candidate is not None:
+                        goal = current.add_requested_goal(candidate.candidate_class)
+                        try:
+                            self.workflow.link_requested_goal_candidate(goal.id, candidate.id)
+                        except ValueError:
+                            pass
+                self._link_objective_goal_candidates(current)
+                if requested_classes and any(
+                    term in user_msg.lower()
+                    for term in ("http://", "https://", "endpoint", "get /", "post /", "put /", "patch /")
+                ):
+                    for goal in current.requested_goals:
+                        if goal.status in {"blocked", "deferred"}:
+                            self.workflow.set_requested_goal_status(goal, "pending")
                 return
 
         if whole_request and origin:
@@ -2289,11 +2641,55 @@ class Agent:
             target_origin=origin,
             candidate_id=selected_candidate,
         )
+        objective = self.workflow.objective
+        assert objective is not None
+        for candidate_class in requested_classes:
+            objective.add_requested_goal(candidate_class)
+        if candidate_request and candidate_id:
+            candidate = self.workflow.candidates.get(candidate_id)
+            if candidate is not None:
+                goal = objective.add_requested_goal(candidate.candidate_class)
+                self.workflow.link_requested_goal_candidate(goal.id, candidate.id)
+        self._link_objective_goal_candidates(objective)
         if candidate_request:
             from src.permission.runtime.execution import policy_for
             execution = policy_for(self.prompter)
             if execution is not None and execution.generic_validation is not None:
                 execution.generic_validation.retest_objectives.add(self.workflow.objective.id)
+
+    def _cancel_requested_goals(self, user_msg: str, tools_enabled: bool) -> bool:
+        objective = self.workflow.objective
+        if (
+            not tools_enabled
+            or objective is None
+            or not objective.requested_goals
+            or not _EXPLICIT_GOAL_CANCEL_INTENT.search(user_msg)
+        ):
+            return False
+        for goal in objective.requested_goals:
+            if goal.status in {
+                "tested_confirmed", "tested_not_confirmed", "no_candidate", "cancelled",
+            }:
+                continue
+            prior_reason = f" Previous blocker: {goal.reason[:220]}." if goal.reason else ""
+            self.workflow.set_requested_goal_status(
+                goal,
+                "cancelled",
+                reason=f"Operator explicitly cancelled the requested-goal work.{prior_reason}",
+            )
+        return True
+
+    def _link_objective_goal_candidates(self, objective: WorkflowObjective) -> None:
+        for goal in objective.requested_goals:
+            for candidate in self.workflow.candidates.values():
+                if (
+                    candidate.candidate_class == goal.candidate_class
+                    and self.workflow.candidate_belongs_to_objective(candidate, objective)
+                ):
+                    try:
+                        self.workflow.link_requested_goal_candidate(goal.id, candidate.id)
+                    except ValueError:
+                        continue
 
     def _is_objective_continuation(self, user_msg: str, current: WorkflowObjective) -> bool:
         if current.mode == "whole_target":
@@ -2401,8 +2797,11 @@ class Agent:
         whole_target = objective is not None and objective.mode == "whole_target"
         status, actionable_work, blockers = (
             self._whole_target_state()
-            if whole_target else ("not_applicable", (), ())
+            if whole_target
+            else ("not_applicable", (), ())
         )
+        if objective is not None and not whole_target:
+            self._reconcile_requested_goals()
         candidates = (
             self.workflow.objective_candidates()
             if whole_target
@@ -2436,6 +2835,33 @@ class Agent:
             for candidate in candidates
             if f"cleanup:{candidate.id}" in actionable_work
         ) if whole_target else ()
+        input_analysis_completion = (
+            self.workflow.phase_completions.get(f"{objective.id}:input_analysis")
+            if objective is not None and whole_target
+            else None
+        )
+        from src.workflow.validation_route import resolve_validation_route
+        planner_goals = tuple(
+            PlannerGoal(
+                id=goal.id,
+                candidate_class=goal.candidate_class,
+                status=goal.status,
+                candidate_ids=tuple(goal.candidate_ids),
+                reason=goal.reason,
+                review_ready=(
+                    whole_target
+                    and self.workflow.no_candidate_review_prerequisite_error(goal) is None
+                    and self._input_analysis_artifact_available(goal)
+                    and not self.workflow.objective_goal_candidates(goal)
+                ),
+                review_artifact_ref=goal.review_artifact_ref or (
+                    input_analysis_completion.artifact_ref
+                    if input_analysis_completion is not None
+                    else None
+                ),
+            )
+            for goal in (objective.requested_goals if objective is not None else [])
+        )
         return PlannerContext(
             validation_routes=self._validation_routes(),
             active_skills=frozenset(self.active_skills),
@@ -2479,7 +2905,28 @@ class Agent:
             workflow_status=status,
             workflow_blockers=blockers,
             phase_completion_readiness=self._phase_completion_readiness() if whole_target else None,
+            requested_goals=planner_goals,
+            goal_validation_routes={
+                goal.candidate_class: resolve_validation_route(self.skills, goal.candidate_class)
+                for goal in (objective.requested_goals if objective is not None else [])
+            },
         )
+
+    def _input_analysis_artifact_available(self, goal: RequestedGoal) -> bool:
+        objective = self.workflow.objective
+        if objective is None or objective.mode != "whole_target":
+            return False
+        marker = self.workflow.phase_completions.get(f"{objective.id}:input_analysis")
+        workflow_tool = self.tools.get("workflow")
+        root = getattr(workflow_tool, "evidence_root", None)
+        if marker is None or not isinstance(root, Path):
+            return False
+        try:
+            from src.skills.artifacts import resolve_canonical_artifact
+            artifact = resolve_canonical_artifact(root, marker.artifact_ref)
+            return artifact.is_file() and artifact.stat().st_size > 0
+        except (OSError, ValueError):
+            return False
 
     def _phase_completion_readiness(self) -> dict[str, Any] | None:
         objective = self.workflow.objective
@@ -2533,6 +2980,27 @@ class Agent:
                     + "; ".join(blockers)
                 ),
             ))
+
+    def _refresh_requested_goal_guidance(self, working: list[Message], user_msg: str) -> None:
+        objective = self.workflow.objective
+        if objective is None or not objective.requested_goals or objective.mode == "whole_target":
+            return
+        self._reconcile_requested_goals()
+        working[:] = [
+            message for message in working
+            if not (
+                message.role == "system"
+                and message.content.startswith("Decision planner guidance for this turn:")
+            )
+        ]
+        decision = build_decision_plan(
+            user_msg,
+            self.skills.list_enabled(),
+            self.target,
+            self._planner_context(),
+        )
+        if decision is not None:
+            working.append(Message(role="system", content=decision.guidance))
 
     def add_scope_origin(self, url: str) -> tuple[HTTPOrigin, bool]:
         if self.target.empty():
@@ -2895,7 +3363,8 @@ class Agent:
             if turn_resolution.effective is not None
             else turn_thinking
         )
-        if tools_enabled:
+        requested_goals_cancelled = self._cancel_requested_goals(user_msg, tools_enabled)
+        if tools_enabled and not requested_goals_cancelled:
             self.initialize_target_from_user_request(user_msg)
             self._initialize_request_objective(user_msg, tools_enabled)
 
@@ -3066,6 +3535,9 @@ class Agent:
         whole_target = bool(
             tools_enabled and objective is not None and objective.mode == "whole_target"
         )
+        requested_goal_run = bool(
+            tools_enabled and objective is not None and objective.requested_goals
+        )
         run_max_steps = (
             opts.max_steps
             if opts is not None and getattr(opts, "max_steps", None) is not None
@@ -3085,6 +3557,20 @@ class Agent:
             max_steps = self._max_steps
 
         stall_tracker = WholeTargetStallTracker()
+        requested_goal_no_progress = 0
+
+        if requested_goals_cancelled:
+            return await self._whole_target_synthesis(
+                working, signal, emit,
+                thinking_enabled=turn_request_thinking,
+                reasoning_level=turn_reasoning_level,
+                requested_reasoning_level=turn_requested_level,
+                stop_reason="workflow_blocked",
+                instruction=self._requested_goal_incomplete_instruction(
+                    "The operator explicitly cancelled unresolved requested-goal work."
+                ),
+                max_steps=max_steps,
+            )
 
         for step in range(max_steps):
 
@@ -3101,8 +3587,13 @@ class Agent:
             if whole_target:
                 self._refresh_whole_target_guidance(working, expanded_user_msg)
                 stall_tracker.set_phase(self._whole_target_exploration_phase())
+            elif requested_goal_run:
+                self._refresh_requested_goal_guidance(working, expanded_user_msg)
+            before_goal_signature = (
+                self._requested_goal_progress_signature() if requested_goal_run else ()
+            )
             before_facts = self.workflow.progress_facts() if whole_target else frozenset()
-            response_chunks: list[str] | None = [] if whole_target or self._generic_completion_blockers() else None
+            response_chunks: list[str] | None = [] if whole_target or requested_goal_run or self._generic_completion_blockers() else None
 
             req = ChatRequest(
                 model=self.client.model(),
@@ -3179,7 +3670,9 @@ class Agent:
 
             if not malformed_tool_text:
                 await self._record_assistant_response(
-                    resp, streamed and response_chunks is None, working, emit, emit_text=not whole_target
+                    resp, streamed and response_chunks is None, working, emit,
+                    emit_text=not whole_target and not requested_goal_run,
+                    stream_buffer=response_chunks,
                 )
 
             if malformed_tool_text:
@@ -3227,7 +3720,7 @@ class Agent:
                 if opts is None or getattr(opts, "tools", True):
                     retry_req.tools = self.tools.as_llm_tools()
                 self._count_llm_call("agent_loop_llm_calls")
-                retry_chunks: list[str] | None = [] if whole_target or self._generic_completion_blockers() else None
+                retry_chunks: list[str] | None = [] if whole_target or requested_goal_run or self._generic_completion_blockers() else None
                 if retry_chunks is None:
                     resp, streamed = await self._chat_for_turn(
                         retry_req, signal, emit,
@@ -3274,7 +3767,9 @@ class Agent:
                         emit({"type": "assistant-text", "text": warning})
 
                 await self._record_assistant_response(
-                    resp, streamed and retry_chunks is None, working, emit, emit_text=not whole_target
+                    resp, streamed and retry_chunks is None, working, emit,
+                    emit_text=not whole_target and not requested_goal_run,
+                    stream_buffer=retry_chunks,
                 )
                 response_chunks = retry_chunks
 
@@ -3370,6 +3865,88 @@ class Agent:
                     ))
                     continue
 
+                if requested_goal_run:
+                    self._reconcile_requested_goals()
+                    objective = self.workflow.objective
+                    assert objective is not None
+                    if not self._has_bounded_goal_context(objective, user_msg):
+                        for goal in objective.requested_goals:
+                            if goal.status != "pending" or self.workflow.objective_goal_candidates(goal):
+                                continue
+                            route = self._goal_validation_route(goal.candidate_class)
+                            if route.kind not in {"ambiguous", "unavailable"}:
+                                self.workflow.set_requested_goal_status(
+                                    goal,
+                                    "deferred",
+                                    reason=(
+                                        "No objective-scoped candidate or bounded endpoint context is available; "
+                                        "direct mode does not broaden into discovery."
+                                    ),
+                                )
+                    statuses = self._reconcile_requested_goals()
+                    if all(
+                        status in {"tested_confirmed", "tested_not_confirmed"}
+                        for status in statuses.values()
+                    ):
+                        self._emit_buffered_response_text(
+                            resp, streamed, response_chunks or [], emit,
+                        )
+                        if self.turn_executed_tool:
+                            self._spawn_background(
+                                self.learn_intelligence(build_turn_learning_text(user_msg, resp.message.content)),
+                                "learn_intelligence",
+                        )
+                        return "workflow_blocked" if self._generic_completion_blockers() else "final_response"
+                    after_goal_signature = self._requested_goal_progress_signature()
+                    requested_goal_no_progress = (
+                        requested_goal_no_progress + 1
+                        if after_goal_signature == before_goal_signature
+                        else 0
+                    )
+                    if requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
+                        objective = self.workflow.objective
+                        if objective is not None:
+                            for goal in objective.requested_goals:
+                                if goal.status == "pending" and not self.workflow.objective_goal_candidates(goal):
+                                    self.workflow.set_requested_goal_status(
+                                        goal, "deferred",
+                                        reason="Planner guidance produced no structured candidate or validation progress.",
+                                    )
+                        self._reconcile_requested_goals()
+                        return await self._whole_target_synthesis(
+                            working, signal, emit,
+                            thinking_enabled=turn_request_thinking,
+                            reasoning_level=turn_reasoning_level,
+                            requested_reasoning_level=turn_requested_level,
+                            stop_reason="workflow_stalled",
+                            instruction=self._requested_goal_incomplete_instruction(
+                                "The direct objective stalled without structured requested-goal progress."
+                            ),
+                            max_steps=max_steps,
+                        )
+                    if self._has_actionable_requested_goal():
+                        if step < max_steps - 1:
+                            working.append(Message(
+                                role="system",
+                                content=(
+                                    "The preceding assistant text is intermediate. Requested goals remain "
+                                    "actionable in structured runtime state. Continue with the next open "
+                                    "goal in user order; do not imply that all requested classes were tested."
+                                ),
+                            ))
+                            continue
+                    return await self._whole_target_synthesis(
+                        working, signal, emit,
+                        thinking_enabled=turn_request_thinking,
+                        reasoning_level=turn_reasoning_level,
+                        requested_reasoning_level=turn_requested_level,
+                        stop_reason="max_steps" if step == max_steps - 1 else "workflow_blocked",
+                        instruction=self._requested_goal_incomplete_instruction(
+                            "No safe actionable requested-goal work remains in this direct objective."
+                        ),
+                        max_steps=max_steps,
+                    )
+
                 if self.turn_executed_tool:
                     self._spawn_background(
                         self.learn_intelligence(
@@ -3387,6 +3964,10 @@ class Agent:
                 # Tool-call responses are known to be intermediate once the
                 # complete provider response has been parsed, so flush their
                 # buffered text before executing the calls.
+                self._emit_buffered_response_text(
+                    resp, streamed, response_chunks or [], emit
+                )
+            elif requested_goal_run:
                 self._emit_buffered_response_text(
                     resp, streamed, response_chunks or [], emit
                 )
@@ -3505,6 +4086,24 @@ class Agent:
                         max_steps=max_steps,
                     )
 
+            if requested_goal_run and step == max_steps - 1:
+                statuses = self._reconcile_requested_goals()
+                if any(
+                    status not in {"tested_confirmed", "tested_not_confirmed"}
+                    for status in statuses.values()
+                ):
+                    return await self._whole_target_synthesis(
+                        working, signal, emit,
+                        thinking_enabled=turn_request_thinking,
+                        reasoning_level=turn_reasoning_level,
+                        requested_reasoning_level=turn_requested_level,
+                        stop_reason="max_steps",
+                        instruction=self._requested_goal_incomplete_instruction(
+                            f"The hard limit of {max_steps} outer agent iterations was reached."
+                        ),
+                        max_steps=max_steps,
+                    )
+
             if step == max_steps - 1:
                 if self.auto_compact_threshold > 0:
                     self.guard_working_context(working, emit, opts)
@@ -3560,11 +4159,14 @@ class Agent:
         emit,
         *,
         emit_text: bool = True,
+        stream_buffer: list[str] | None = None,
     ) -> None:
         blockers = self._generic_completion_blockers() if not resp.message.tool_calls else ()
         if blockers:
             resp.message.content = "Generic validation remains incomplete: " + "; ".join(blockers)
             streamed = False
+            if stream_buffer is not None:
+                stream_buffer.clear()
         self.history.append(resp.message)
         working.append(resp.message)
         try:
@@ -3599,6 +4201,16 @@ class Agent:
         instruction: str,
         max_steps: int,
     ) -> str:
+        if self.workflow.objective is not None and self.workflow.objective.requested_goals:
+            if stop_reason == "workflow_completed":
+                instruction += (
+                    "\n\nUse this runtime goal summary when describing completion; "
+                    "do not overstate any result:\n" + self._requested_goal_summary_text()
+                )
+            else:
+                instruction += "\n\n" + self._requested_goal_incomplete_instruction(
+                    "Use the runtime summary below to report each requested goal accurately."
+                )
         working.append(Message(role="system", content=instruction))
         if self.auto_compact_threshold > 0:
             self.guard_working_context(working, emit, None)
@@ -3660,7 +4272,7 @@ class Agent:
                 return "invalid_response"
             break
         await self._record_assistant_response(
-            response, streamed, working, emit, emit_text=False
+            response, streamed, working, emit, emit_text=False, stream_buffer=chunks
         )
         self._emit_buffered_response_text(response, streamed, chunks, emit)
         if stop_reason == "max_steps":

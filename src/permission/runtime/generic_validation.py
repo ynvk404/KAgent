@@ -34,6 +34,18 @@ def candidate_context(candidate):
     return raw
 
 
+def objective_context(objective):
+    """Execution-relevant objective identity, excluding workflow annotations."""
+    if objective is None:
+        return None
+    return {
+        "id": objective.id,
+        "mode": objective.mode,
+        "target_origin": objective.target_origin,
+        "candidate_id": objective.candidate_id,
+    }
+
+
 class GenericValidationBoundary:
     def __init__(self, policy, state, skills, target):
         self.policy, self.state, self.skills, self.target = policy, state, skills, target
@@ -99,7 +111,7 @@ class GenericValidationBoundary:
     def expert_binding(self, candidate):
         latest = self.state.latest_result(candidate.id)
         return digest([id(candidate), id(self.state.objective), candidate_context(candidate),
-                       self.state.objective.to_dict(), self.target.revision,
+                       objective_context(self.state.objective), self.target.revision,
                        resolve_validation_route(self.skills, candidate.candidate_class).__dict__,
                        latest.to_dict() if latest else None,
                        sum(r.candidate_id == candidate.id for r in self.state.validation_results)])
@@ -202,7 +214,7 @@ class GenericValidationBoundary:
                 variant, _ = build_captured_request(row, candidate, value,
                     occurrence=proposal.occurrence, input_path=proposal.input_path)
             requests.append(request_signature(variant))
-        context = digest([id(candidate), id(self.state.objective), candidate_context(candidate), self.state.objective.to_dict(),
+        context = digest([id(candidate), id(self.state.objective), candidate_context(candidate), objective_context(self.state.objective),
                           self.target.revision, request_signature(baseline)])
         return BoundProbe(proposal, context, tuple(requests))
 
@@ -232,7 +244,7 @@ class GenericValidationBoundary:
     def snapshot(self, candidate_id):
         candidate = self.require(candidate_id)
         return digest([
-            candidate.to_dict(), self.state.objective.to_dict(), self.target.revision,
+            candidate.to_dict(), objective_context(self.state.objective), self.target.revision,
             self.policy.stamp(),
             [(s.name, s.stage, s.candidate_classes, s.disable_model_invocation,
               self.skills.is_disabled(s.name)) for s in self.skills.list()],
@@ -271,6 +283,12 @@ class GenericValidationBoundary:
                 raise ValueError("generic write restricted to candidate proof.md; symlinks unavailable")
         elif name == "workflow":
             action = args.get("action")
+            if action == "review_no_candidate":
+                self.idle()
+                # This inventory disposition grants no validation proof or
+                # execution capability. The workflow's objective, origin,
+                # inventory, conflict and artifact gates remain authoritative.
+                return
             if (action == "complete_skill" and args.get("skill_name") != GENERIC_VALIDATOR
                     and not any(c.status == "validating" for c in self.candidates())):
                 self.idle()
@@ -421,6 +439,7 @@ class GenericValidationBoundary:
         self.state.add_validation_result(ValidationResult(
             candidate_id=cid, skill_name=GENERIC_VALIDATOR, outcome="blocked",
             evidence_refs=refs, deferred_reason=str(failure),
+            objective_id=(self.state.objective.id if self.state.objective else None),
         ))
         self.started_candidate = self.started_objective = None
         self.attempt = None

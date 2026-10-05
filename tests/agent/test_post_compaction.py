@@ -183,7 +183,7 @@ async def test_complete_post_compaction_planner_and_tool_continuation(tmp_path) 
 
     post_compaction_events = collect()
     await agent.run(
-        "test parameter id for sql injection",
+        "continue validation on parameter id",
         FakeSignal(),
         post_compaction_events["sink"],
     )

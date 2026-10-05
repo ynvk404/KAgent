@@ -552,6 +552,20 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
             f"- Objective: {workflow.objective.id} mode={workflow.objective.mode} "
             f"target_origin={workflow.objective.target_origin or 'none'}"
         )
+        if workflow.objective.requested_goals:
+            lines.append("- Requested goals (runtime state controls completion):")
+            for goal in workflow.objective.requested_goals:
+                linked = ",".join(goal.candidate_ids) or "none"
+                detail = f" class={goal.candidate_class} status={goal.status} candidates={linked}"
+                if goal.reason:
+                    detail += f" reason={_workflow_brief(goal.reason)}"
+                if goal.review_artifact_ref:
+                    detail += f" review_artifact={_workflow_brief(goal.review_artifact_ref)}"
+                lines.append(f"  - {goal.id}:{detail}")
+            lines.append(
+                "  - no_candidate means candidate discovery was reviewed but "
+                "class-specific validation was not performed; it is not a negative result."
+            )
         if workflow.objective.mode == "whole_target":
             lines.append(
                 "- Completed phases: "
