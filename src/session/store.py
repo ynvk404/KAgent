@@ -256,6 +256,9 @@ def _message_from_dict(data: Any) -> Message | None:
     name = data.get("name")
     if name is not None and not isinstance(name, str):
         name = None
+    if role == "tool" and name == "workflow":
+        from src.workflow.validation_context import without_transient_validation_context
+        content = without_transient_validation_context(content, truncated=data.get("tool_truncated") is True)
 
     tool_status = data.get("tool_status")
     if tool_status not in ("success", "observation", "error", "cancelled"):
@@ -432,10 +435,14 @@ class Store:
             self._stage(f"{operation}.serialize_messages")
             serialized_messages = []
             from src.llm.providers.gemini import safe_replay_part
+            from src.workflow.validation_context import without_transient_validation_context
             for msg in messages:
                 serialized: dict[str, Any] = {
                     "role": msg.role,
-                    "content": msg.content,
+                    "content": (
+                        without_transient_validation_context(msg.content, truncated=msg.tool_truncated)
+                        if msg.role == "tool" and msg.name == "workflow" else msg.content
+                    ),
                     "reasoning_content": msg.reasoning_content,
                     "provider_state_provider": msg.provider_state_provider,
                     "provider_state_model": msg.provider_state_model,

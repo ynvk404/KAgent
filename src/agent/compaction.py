@@ -7,6 +7,7 @@ from typing import Any, Callable, Optional
 from src.llm.core.types import Message
 from src.session.store import SessionMemory
 from src.workflow.state import WorkflowState
+from src.workflow.validation_context import without_transient_validation_context
 from .output_bounds import bound_distributed_content, _proportional_reductions
 
 
@@ -136,7 +137,9 @@ def format_history_for_compaction(
             lines.append(f"\n[{message.role}]")
 
         if message.content:
-            lines.append(redact_payload(message.content))
+            content = (without_transient_validation_context(message.content, truncated=message.tool_truncated)
+                       if message.role == "tool" and message.name == "workflow" else message.content)
+            lines.append(redact_payload(content))
 
         if message.tool_calls:
             for tool_call in message.tool_calls:
@@ -158,7 +161,9 @@ def bounded_history_for_compaction(
 ) -> str:
     # Sanitize before sampling: a window must not cut a credential away from
     # the field/header that identifies it. Provider-private fields stay opaque.
-    safe_messages = [replace(message, content=sanitize_content(message.content))
+    safe_messages = [replace(message, content=sanitize_content(
+                         without_transient_validation_context(message.content, truncated=message.tool_truncated)
+                         if message.role == "tool" and message.name == "workflow" else message.content))
                      for message in messages]
     blocks = [format_history([message]) for message in safe_messages]
     full = "\n".join(block for block in blocks if block)

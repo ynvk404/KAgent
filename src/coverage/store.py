@@ -12,6 +12,8 @@ from typing import Literal
 from src.logger.logger import get_logger
 from src.logger.hang_diagnostics import HangDiagnostics
 from src.skills.registry import normalize_candidate_class
+from src.coverage.context import CoverageContext, normalize_contextual_endpoint
+from src.redact.redact import apply as redact
 
 log = get_logger("coverage.store")
 
@@ -40,6 +42,9 @@ class CoverageEntry:
     lastSeen: int
     notes: str | None = None
     observationIds: list[str] | None = None
+    context: CoverageContext | None = None
+    # Fingerprints are dedup aliases, not request/provenance data.
+    resultIds: list[str] | None = None
 
 
 @dataclass
@@ -129,7 +134,15 @@ class CoverageStore:
         ):
             for item in parsed["entries"]:
                 if _is_valid_entry(item):
-                    entry = CoverageEntry(**item)
+                    item = dict(item)
+                    raw_context = item.get("context")
+                    try:
+                        item["context"] = CoverageContext.parse(raw_context) if raw_context is not None else None
+                        entry = CoverageEntry(**item)
+                        if entry.context is not None:
+                            entry.endpoint = normalize_contextual_endpoint(entry.endpoint, entry.context)
+                    except (TypeError, ValueError):
+                        continue
                     entry.endpoint = _normalize_endpoint(entry.endpoint)
                     entry.param = entry.param.strip()
                     entry.vulnClass = normalize_candidate_class(entry.vulnClass)
@@ -138,6 +151,7 @@ class CoverageStore:
                             entry.endpoint,
                             entry.param,
                             entry.vulnClass,
+                            entry.context,
                         )
                     ] = entry
 
@@ -192,11 +206,13 @@ class CoverageStore:
         status: CoverageStatus,
         notes: str | None = None,
         observation_id: str | None = None,
+        context: CoverageContext | None = None,
     ) -> CoverageEntry:
 
         await self.load()
 
-        endpoint = _normalize_endpoint(endpoint)
+        endpoint = (normalize_contextual_endpoint(endpoint, context)
+                    if context is not None else _normalize_endpoint(endpoint))
         param = param.strip()
         vulnClass = normalize_candidate_class(vulnClass)
 
@@ -209,6 +225,7 @@ class CoverageStore:
             endpoint,
             param,
             vulnClass,
+            context,
         )
 
         now = int(time.time() * 1000)
@@ -236,8 +253,10 @@ class CoverageStore:
             count=(prev.count if prev else 0) + 1,
             firstSeen=prev.firstSeen if prev else now,
             lastSeen=now,
-            notes=notes if notes is not None else (prev.notes if prev else None),
+            notes=redact(notes) if notes is not None else (prev.notes if prev else None),
             observationIds=next_ids or None,
+            context=context,
+            resultIds=prev.resultIds if prev else None,
         )
 
         self.entries[key] = merged
@@ -252,15 +271,31 @@ class CoverageStore:
         self, *, endpoint: str, param: str, vulnClass: str,
         status: CoverageStatus, notes: str, observation_id: str,
         legacy_observation_ids: tuple[str, ...] = (),
+        context: CoverageContext | None = None,
     ) -> CoverageEntry:
         """Persist the current logical observation without counting retries."""
         await self.load()
-        key = _key_of(
-            _normalize_endpoint(endpoint), param.strip(),
-            normalize_candidate_class(vulnClass),
-        )
+        endpoint = normalize_contextual_endpoint(endpoint, context) if context is not None else _normalize_endpoint(endpoint)
+        # An observation already bound to richer canonical context must not be
+        # downgraded by a sparse resumed record. Conflicts are separate variants.
+        if context is not None:
+            compatible = [entry for entry in self.entries.values()
+                          if entry.context is not None and observation_id in (entry.observationIds or [])
+                          and entry.param == param.strip()
+                          and entry.vulnClass == normalize_candidate_class(vulnClass)
+                          and all(value is None or value == getattr(entry.context, name)
+                                  for name, value in asdict(context).items())
+                          and normalize_contextual_endpoint(endpoint, entry.context) == entry.endpoint]
+            if len(compatible) > 1:
+                raise ValueError("ambiguous existing coverage observation context")
+            if compatible:
+                context = compatible[0].context
+                assert context is not None
+                endpoint = normalize_contextual_endpoint(endpoint, context)
+        key = _key_of(endpoint, param.strip(), normalize_candidate_class(vulnClass), context)
         existing = self.entries.get(key)
         existing_ids = list(existing.observationIds or []) if existing else []
+        notes = redact(notes)
         legacy_ids = set(legacy_observation_ids)
         matched_legacy_ids = [item for item in existing_ids if item in legacy_ids]
         if existing and matched_legacy_ids:
@@ -291,23 +326,28 @@ class CoverageStore:
         else:
             existing = await self.mark(
                 endpoint=endpoint, param=param, vulnClass=vulnClass,
-                status=status, notes=notes, observation_id=observation_id,
+                status=status, notes=notes, observation_id=observation_id, context=context,
             )
+        if context is not None:
+            existing.resultIds = sorted(set(existing.resultIds or []) | legacy_ids)[-20:] or None
+            self._queue_save()
         await self.flush()
         if self.last_save_error is not None:
             raise OSError("coverage store could not be persisted") from self.last_save_error
         return existing
 
     async def get(
-        self, *, endpoint: str, param: str, vulnClass: str
+        self, *, endpoint: str, param: str, vulnClass: str,
+        context: CoverageContext | None = None,
     ) -> CoverageEntry | None:
-        """Return one normalized tuple without mutating its observation count."""
+        """Exact identity only; omitted context selects a legacy/unspecified row."""
         await self.load()
         return self.entries.get(
             _key_of(
-                _normalize_endpoint(endpoint),
+                normalize_contextual_endpoint(endpoint, context) if context is not None else _normalize_endpoint(endpoint),
                 param.strip(),
                 normalize_candidate_class(vulnClass),
+                context,
             )
         )
 
@@ -318,9 +358,15 @@ class CoverageStore:
         param: str | None = None,
         vulnClass: str | None = None,
         status: CoverageStatus | None = None,
+        context: CoverageContext | None = None,
     ) -> list[CoverageEntry]:
 
         await self.load()
+
+        exact_endpoint = (
+            normalize_contextual_endpoint(endpoint, context)
+            if endpoint and context is not None else None
+        )
 
         rows = sorted(
             self.entries.values(),
@@ -336,7 +382,9 @@ class CoverageStore:
 
         for e in rows:
 
-            if endpoint and endpoint not in e.endpoint:
+            if exact_endpoint is not None and e.endpoint != exact_endpoint:
+                continue
+            if exact_endpoint is None and endpoint and endpoint not in e.endpoint:
                 continue
 
             if param and e.param != param:
@@ -348,52 +396,36 @@ class CoverageStore:
             if status and e.status != status:
                 continue
 
+            if context is not None and e.context != context:
+                continue
             result.append(e)
 
         return result
 
 
     async def untested(
-        self,
-        candidates: list[dict[str, str]],
-        vulnClasses: list[str],
-    ) -> list[dict[str, str]]:
-
+        self, candidates: list[dict], vulnClasses: list[str],
+    ) -> list[dict]:
+        """Unknown/legacy and explicit context queries never match siblings."""
         await self.load()
-
-        out: dict[tuple[str, str, str], dict[str, str]] = {}
-
+        out: dict[str, dict] = {}
         for candidate in candidates:
-
-            ep = _normalize_endpoint(
-                candidate["endpoint"]
-            )
-
+            raw_context = candidate.get("context")
+            context = CoverageContext.parse(raw_context) if raw_context is not None else None
+            ep = (normalize_contextual_endpoint(candidate["endpoint"], context)
+                  if context is not None else _normalize_endpoint(candidate["endpoint"]))
             param = candidate["param"].strip()
-
             if not ep or not param:
                 continue
-
             for vuln in vulnClasses:
-
                 vuln = normalize_candidate_class(vuln)
-
                 if not vuln:
                     continue
-
-                key = _key_of(
-                    ep,
-                    param,
-                    vuln,
-                )
-
+                key = _key_of(ep, param, vuln, context)
                 if key not in self.entries:
-                    out[(ep, param, vuln)] = {
-                        "endpoint": ep,
-                        "param": param,
-                        "vulnClass": vuln,
-                    }
-
+                    out[key] = {"endpoint": ep, "param": param, "vulnClass": vuln}
+                    if context is not None:
+                        out[key]["context"] = asdict(context)
         return [out[key] for key in sorted(out)]
 
 
@@ -411,7 +443,14 @@ class CoverageStore:
 
         by_vuln: dict[str, int] = {}
 
-        for entry in self.entries.values():
+        # A legacy row can mirror the same results as a contextual row. Keep
+        # it intact on disk/list, but count its known observations only once.
+        covered_ids = {identity for entry in self.entries.values() if entry.context is not None
+                       for identity in [*(entry.observationIds or []), *(entry.resultIds or [])]}
+        rows = [entry for entry in self.entries.values()
+                if entry.context is not None or not entry.observationIds
+                or not set(entry.observationIds).issubset(covered_ids)]
+        for entry in rows:
 
             by_status[entry.status] += 1
 
@@ -424,7 +463,7 @@ class CoverageStore:
             )
 
         return CoverageSummary(
-            total=len(self.entries),
+            total=len(rows),
             byStatus=by_status,
             byVulnClass=by_vuln,
         )
@@ -565,12 +604,14 @@ def _key_of(
     endpoint: str,
     param: str,
     vulnClass: str,
+    context: CoverageContext | None = None,
 ) -> str:
 
+    suffix = "\0context:" + json.dumps(asdict(context), sort_keys=True, separators=(",", ":")) if context is not None else ""
     return (
         f"{endpoint}\0"
         f"{param}\0"
-        f"{vulnClass}"
+        f"{vulnClass}{suffix}"
     )
 
 
@@ -608,6 +649,10 @@ def _is_valid_entry(
     if not all(key in value for key in required):
         return False
 
+    for name in ("observationIds", "resultIds"):
+        ids = value.get(name)
+        if ids is not None and (not isinstance(ids, list) or not all(isinstance(item, str) and item for item in ids)):
+            return False
     observation_ids = value.get("observationIds")
     return (
         all(

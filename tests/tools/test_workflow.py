@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.coverage.store import CoverageStore
+from src.coverage.context import CoverageContext
 from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry, Skill, SkillTriggers
 from src.target.target import Target
@@ -585,6 +586,7 @@ async def test_legacy_attempt_observations_collapse_to_candidate_identity(tmp_pa
             endpoint="POST /feedback", param="comment",
             vulnClass="cross-site-scripting", status="passed",
             observation_id=validation_result_fingerprint(result),
+            context=CoverageContext(target_origin="https://target.test", method="POST"),
         )
     before = await coverage.list()
     assert before[0].count == 2
@@ -684,6 +686,7 @@ async def test_result_coverage_sync_failure_is_retryable(tmp_path):
         "action": "mark", "endpoint": "GET /search", "param": "q",
         "vuln_class": "sql-injection", "status": "failed",
         "notes": "duplicate manual mark after workflow sync",
+        "context": {"target_origin": "https://target.test", "method": "GET"},
     }, None, AlwaysAllow()))
     assert duplicate["entry"]["count"] == 1
     assert duplicate["created"] is False
@@ -701,6 +704,7 @@ async def test_manual_coverage_mark_before_workflow_sync_is_adopted(tmp_path):
         vulnClass="sql-injection",
         status="failed",
         notes="manual finding mark",
+        context=CoverageContext(target_origin="https://target.test", method="GET"),
     )
     state = WorkflowState()
     candidate, _ = state.add_candidate(Candidate(

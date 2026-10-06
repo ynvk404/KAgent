@@ -657,6 +657,7 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                 + ", ".join(dict.fromkeys(pending_findings))
             )
     if workflow.objective is not None and workflow.objective.mode == "whole_target":
+        lines.append("- Input rows are summaries; use workflow(action=get_input, input_id=...) for the full canonical sanitized sample.")
         for item in workflow.objective_inputs()[:12]:
             lines.append(
                 f"- Input {item.id}: {item.method or '*'} {item.endpoint or '*'} "

@@ -3204,10 +3204,9 @@ class Agent:
                     "matching set; has_more/next_cursor describe continuation."
                 ),
                 (
-                    "Use this coverage state to choose next tests. "
-                    "Prefer untested endpoint/parameter/vulnerability-class "
-                    "combinations. Do not repeat entries already marked "
-                    "passed or failed unless the objective explicitly asks for retesting. "
+                    "Use exact contextual coverage to choose next variants. "
+                    "Legacy tuples and summaries do not prove sibling variants tested. "
+                    "Canonical candidates/results determine completion; pending work stays outstanding. "
                     "A blocked/deferred candidate may be revisited only when its blocker changes."
                 ),
             ]
@@ -5577,9 +5576,11 @@ def remove_workflow_duplicates(
 
 def elide_persisted_workflow_results(messages: list[Message]) -> None:
     """Drop successful prior-turn workflow payloads once state is injected."""
+    from src.workflow.validation_context import without_transient_validation_context
     for message in messages:
         if message.role != "tool" or message.name != "workflow":
             continue
+        message.content = without_transient_validation_context(message.content, truncated=message.tool_truncated)
         try:
             payload = json.loads(message.content)
         except (TypeError, json.JSONDecodeError):

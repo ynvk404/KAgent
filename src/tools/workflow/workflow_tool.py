@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urljoin
 
 from src.paths import project_root
 from src.permission.permission import Prompter, UserControlledRefusal
@@ -13,6 +15,7 @@ from src.permission.runtime.execution import policy_for
 from src.tools.execution.file import gate_sensitive_path
 from src.redact.redact import apply as redact
 from src.coverage.store import CoverageStore, CoverageStatus
+from src.coverage.context import project_candidate_coverage
 from src.target.target import Target
 from src.workflow.state import (
     CANDIDATE_STATUSES,
@@ -47,9 +50,12 @@ from src.workflow.validation_route import (
     GENERIC_VALIDATOR, generic_admission, resolve_validation_route,
 )
 from src.workflow.probe import ProbeProposal
+from src.workflow.validation_context import resolve_validation_context
+from src.tools.http.http_tool import HTTPTool
 
 
 ACTIONS = (
+    "get_input",
     "record_input",
     "set_input_disposition",
     "link_input_candidate",
@@ -87,6 +93,7 @@ class WorkflowTool(Tool):
         skills: SkillRegistry | None = None,
         evidence_root: Path | None = None,
         session_id: str | None = None,
+        http_tool: HTTPTool | None = None,
     ) -> None:
         self.state = state
         self.target = target
@@ -94,18 +101,21 @@ class WorkflowTool(Tool):
         self.skills = skills
         self.evidence_root = evidence_root or project_root()
         self.session_id = session_id
+        self.http_tool = http_tool
 
     def name(self) -> str:
         return "workflow"
 
     def description(self) -> str:
         return (
-            "Track inputs/candidates/evidence/results/phase completion. "
-            "Inputs need whole-target. Recon/enumeration coverage: "
+            "get_input(input_id): full sanitized input; list summarizes. "
+            "start_validation: transient validation_context; sample != template/baseline. "
+            "Inputs: whole-target. Recon/enumeration: "
             "performed=adapter-only; observed=unattested source/limitation; skipped=omitted; "
             "not_applicable=irrelevant. Non-performed needs reasons; retry failed/cancelled "
-            "work or explain skips. record_evidence stores immutable redacted proof; "
-            "record_result needs candidate_id, skill_name and outcome. Use compact refs, not raw traffic."
+            "work or explain skips. record_evidence: immutable redacted proof. "
+            "record_result needs candidate_id, skill_name and outcome. "
+            "Compact refs only; no raw traffic."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -257,7 +267,9 @@ class WorkflowTool(Tool):
         if policy is not None:
             policy.bind_validation_context(self.state, self.skills, self.target)
         action = arg_string(args, "action")
-        if action == "record_input":
+        if action == "get_input":
+            result = self._get_input(args)
+        elif action == "record_input":
             result = self._record_input(args)
         elif action == "set_input_disposition":
             result = self._set_input_disposition(args)
@@ -494,6 +506,26 @@ class WorkflowTool(Tool):
             indent=2,
         )
 
+    def _get_input(self, args: dict[str, Any]) -> str:
+        input_id = arg_string(args, "input_id")
+        if not input_id:
+            return "error: get_input requires exact input_id"
+        item = self.state.attack_surface_inputs.get(input_id)
+        if item is None:
+            return f"error: unknown input: {input_id}"
+        objective = self.state.objective
+        if objective is None or item.objective_id != objective.id:
+            return "error: input does not belong to the active objective"
+        active_origin = candidate_origin(self._active_target())
+        if (item.target_origin != objective.target_origin
+                or active_origin is None or item.target_origin != active_origin):
+            return "error: input does not belong to the active target origin"
+        if item.endpoint and candidate_origin(urljoin(item.target_origin + "/", item.endpoint)) != active_origin:
+            return "error: input endpoint does not belong to the active target origin"
+        # Constructors enforce canonical redaction and the 4000-character
+        # sample bound. This opt-in read never hydrates runtime captures.
+        return json.dumps({"ok": True, "input": item.to_dict()}, indent=2)
+
     def _record_input(self, args: dict[str, Any]) -> str:
         objective = self.state.objective
         if objective is None or objective.mode != "whole_target":
@@ -617,14 +649,6 @@ class WorkflowTool(Tool):
                         raise ValueError("generic terminal/deferred candidate requires an explicit candidate retest")
                 if running_retest and boundary.attempt != admitted:
                     raise ValueError("generic active proposal cannot change without explicit retest")
-                if not running_retest:
-                    policy.observations.invalidate_result(candidate.id)
-                if needs_retest:
-                    boundary.retest_objectives.discard(objective.id)
-                boundary.started_candidate = candidate.id
-                boundary.started_objective = objective.id
-                boundary.attempt = admitted
-                boundary.expert_attempt = None
             elif self.skills is not None:
                 self._require_unique_validator(candidate.candidate_class)
             elif policy is not None:
@@ -640,25 +664,73 @@ class WorkflowTool(Tool):
                 evidence_required = latest.outcome == "confirmed" or bool(
                     latest.evidence_refs
                 )
-                evidence_invalid = evidence_required and (
-                    not self.state.evidence_matches(candidate_id, latest.evidence_refs)
-                    or not await verify_evidence_reads([
+                evidence_invalid = evidence_required and not self.state.evidence_matches(
+                    candidate_id, latest.evidence_refs,
+                )
+                if evidence_required and not evidence_invalid:
+                    # Evidence permission can yield. Do not commit against the
+                    # pre-await records if canonical state or runtime ownership
+                    # changed. Capture/auth availability is read only afterwards.
+                    before = deepcopy(self.state.to_dict())
+                    target_revision = self.target.revision if self.target is not None else None
+                    route = resolve_validation_route(self.skills, candidate.candidate_class)
+                    evidence_invalid = not await verify_evidence_reads([
                         self.state.evidence[reference]
                         for reference in latest.evidence_refs
                         if reference in self.state.evidence
                     ], self.evidence_root, prompter, signal)
-                )
+                    if (self.state.objective is not objective
+                            or self.state.candidates.get(candidate_id) is not candidate
+                            or self.state.to_dict() != before
+                            or (self.target.revision if self.target is not None else None) != target_revision
+                            or resolve_validation_route(self.skills, candidate.candidate_class) != route
+                            or policy_for(prompter) is not policy):
+                        raise ValueError("validation state changed during evidence read; retry start_validation")
                 if not evidence_invalid:
                     raise ValueError(
                         "terminal candidate cannot be reopened during whole-target continuation; "
                         "request an explicit candidate retest or repair its missing/invalid evidence"
                     )
+            # No await from the final checks/observation through bookkeeping
+            # and response serialization. This is an event-loop boundary, not
+            # a turn-wide lock or a guarantee for the later HTTP invocation.
+            self._validate_current_objective_candidate(candidate_id)
+            if policy is not None:
+                if not policy.validation_context_matches(self.state, self.skills, self.target):
+                    raise ValueError("validation runtime context changed during evidence read")
+                policy.generic_validation.idle()
+                if any(c.id != candidate_id and c.status == "validating"
+                       for c in policy.generic_validation.candidates()):
+                    raise ValueError("another generic validation attempt is active")
+            runtime_http = self.http_tool or (policy.generic_validation.http_tool if policy is not None else None)
+            context = resolve_validation_context(
+                self.state, candidate_id, target=self._active_target() or None, http_tool=runtime_http,
+            ).to_dict()
+            if generic:
+                assert policy is not None
+                assert objective is not None
+                context["probe_intent"] = {
+                    "observation": admitted.proposal.observation,
+                    "capture": admitted.proposal.capture,
+                    "stop": admitted.proposal.stop,
+                    "input_path": admitted.proposal.input_path,
+                    "occurrence": admitted.proposal.occurrence,
+                }
+                if not running_retest:
+                    policy.observations.invalidate_result(candidate.id)
+                if needs_retest:
+                    boundary.retest_objectives.discard(objective.id)
+                boundary.started_candidate = candidate.id
+                boundary.started_objective = objective.id
+                boundary.attempt = admitted
+                boundary.expert_attempt = None
             candidate = self.state.set_candidate_status(candidate_id, "validating")
             if not generic and policy is not None and objective is not None:
                 policy.generic_validation.select_expert(candidate)
         except ValueError as err:
             return f"error: {err}"
         return json.dumps({"ok": True, "candidate": candidate.to_dict(),
+            "validation_context": context,
             "validator_resolution": "generic" if generic else "unique",
             "proof_source_path": (
                 str(policy.generic_validation.proof_path(candidate).relative_to(policy.root))
@@ -1099,15 +1171,11 @@ class WorkflowTool(Tool):
         status = self._coverage_status(result)
         if status is None:
             return
-        if not candidate.endpoint:
-            raise ValueError("coverage sync requires a candidate endpoint")
-        endpoint = (
-            f"{candidate.method} {candidate.endpoint}"
-            if candidate.method else candidate.endpoint
-        )
-        parameter = candidate.parameter or "(request)"
-        if candidate.test_case:
-            parameter = f"{parameter} [subcase: {candidate.test_case}]"
+        endpoint, parameter, context = project_candidate_coverage(self.state, candidate, result)
+        active_origin = candidate_origin(self._active_target())
+        if active_origin is not None and context.target_origin not in (None, active_origin):
+            raise ValueError("coverage candidate differs from active target origin")
+        target_revision = self.target.revision if self.target is not None else None
         fingerprint = validation_result_fingerprint(result)
         legacy_observation_ids = tuple(
             validation_result_fingerprint(previous)
@@ -1122,7 +1190,15 @@ class WorkflowTool(Tool):
             notes=f"result={fingerprint[:20]}",
             observation_id=f"candidate:{candidate.id}",
             legacy_observation_ids=legacy_observation_ids,
+            context=context,
         )
+        # Loading/flushing the projection may yield. A durable historical row
+        # cannot mark a replaced or changed canonical outcome/context synced.
+        if (self.state.latest_result(candidate.id) is not result
+                or validation_result_fingerprint(result) != fingerprint
+                or project_candidate_coverage(self.state, candidate, result) != (endpoint, parameter, context)
+                or (self.target.revision if self.target is not None else None) != target_revision):
+            raise ValueError("canonical coverage context changed during persistence; retry sync")
         result.coverage_synced = True
 
     async def _sync_coverage_action(self, args: dict[str, Any]) -> str:

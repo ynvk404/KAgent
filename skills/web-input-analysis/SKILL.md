@@ -76,6 +76,13 @@ rather than re-deriving endpoints here.
 
 ## 1. Load and triage the inventory
 
+Workflow list and prompt input rows are bounded summaries. Retrieve a selected
+canonical record with `workflow(action="get_input", input_id="...")` when its
+full sanitized sample is needed. This lookup reads stored context only; it
+does not retrieve raw captures or live credentials. Marker-free samples remain
+samples: do not automatically insert `{INJECTION_POINT}` or treat a sanitized
+sample as an executable mutation template or captured replay baseline.
+
 Read every entry. Drop entries that are clearly not worth analyzing:
 
 - static assets with no parameters (images, fonts, plain CSS/JS with no

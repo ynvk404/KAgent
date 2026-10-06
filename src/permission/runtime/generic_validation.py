@@ -293,7 +293,7 @@ class GenericValidationBoundary:
                     and not any(c.status == "validating" for c in self.candidates())):
                 self.idle()
                 return  # Existing expert completion/phase gates remain authoritative.
-            if action not in {"list", "start_validation", "record_evidence", "record_result",
+            if action not in {"list", "get_input", "start_validation", "record_evidence", "record_result",
                               "sync_coverage", "record_candidate", "record_input", "set_input_disposition",
                               "link_input_candidate"}:
                 raise ValueError("generic workflow action unavailable")

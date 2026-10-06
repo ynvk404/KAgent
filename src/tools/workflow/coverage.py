@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 from dataclasses import asdict
 from src.coverage.store import CoverageStore, CoverageStatus
+from src.coverage.context import CoverageContext, normalize_contextual_endpoint
 from src.permission.permission import Prompter
 from src.tools.common.types import Tool, PermissionHints, arg_string
 
@@ -43,62 +44,64 @@ class CoverageTool(Tool):
 
     def description(self) -> str:
         return (
-            "Track tested endpoint/parameter/class tuples across resumes. Mark "
-            "meaningful tests and query untested tuples before more work. "
-            "Class aliases normalize. list/untested paginate: reuse filters with next_cursor; complete=true "
-            "means the full set fit in one response."
+            "Progress projection, never proof/completion. context selects exact variants; "
+            "omit for legacy unspecified mark/untested. list shows context. "
+            "Summaries do not prove siblings tested. Classes normalize. "
+            "list/untested paginate via next_cursor; complete=true means full set."
         )
 
     def schema(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
+                "context": self._context_schema(),
                 "action": {
                     "type": "string",
                     "enum": list(ACTIONS),
                     "description": (
-                        "mark, list, untested, summary; clear erases coverage after permission."
+                        "clear erases coverage after permission."
                     ),
                 },
                 "endpoint": {
                     "type": "string",
                     "description": (
-                        "For mark/list, e.g. GET /api/users/{id}; query strings are stripped."
+                        "mark/list: GET /api/users/{id}; strips query."
                     ),
                 },
                 "param": {
                     "type": "string",
                     "description": (
-                        "Parameter for mark or exact list filter."
+                        "mark/exact list parameter."
                     ),
                 },
                 "vuln_class": {
                     "type": "string",
                     "description": (
-                        "Canonical vulnerability class or alias."
+                        "Class or alias."
                     ),
                 },
                 "status": {
                     "type": "string",
                     "enum": list(STATUSES),
                     "description": (
-                        "Result: tried, passed, failed, waf-blocked, or skipped."
+                        "Test status."
                     ),
                 },
                 "notes": {
                     "type": "string",
-                    "description": "Optional short note (payload class, reason).",
+                    "description": "Short note.",
                 },
                 "candidates": {
                     "type": "array",
                     "description": (
-                        "For untested: endpoint/param pairs crossed with vuln_classes."
+                        "untested: endpoint/param/context crossed with vuln_classes."
                     ),
                     "items": {
                         "type": "object",
                         "properties": {
                             "endpoint": {"type": "string"},
                             "param": {"type": "string"},
+                            "context": {"type": "object"},
                         },
                         "required": ["endpoint", "param"],
                     },
@@ -106,7 +109,7 @@ class CoverageTool(Tool):
                 "vuln_classes": {
                     "type": "array",
                     "description": (
-                        "For untested, classes checked for every candidate."
+                        "untested classes."
                     ),
                     "items": {"type": "string"},
                 },
@@ -120,8 +123,7 @@ class CoverageTool(Tool):
                 "cursor": {
                     "type": "string",
                     "description": (
-                        "For list/untested: next_cursor offset. Omit initially; "
-                        "reuse the same filters/candidates to continue."
+                        "list/untested: next_cursor offset; reuse filters."
                     ),
                 },
             },
@@ -202,8 +204,14 @@ class CoverageTool(Tool):
                 f"status must be one of: {', '.join(STATUSES)}",
             )
 
+        try:
+            context = CoverageContext.parse(args["context"]) if "context" in args else None
+            if context is not None:
+                normalize_contextual_endpoint(endpoint, context)
+        except ValueError as err:
+            return self._error("mark", str(err))
         previous = await self.store.get(
-            endpoint=endpoint, param=param, vulnClass=vuln_class,
+            endpoint=endpoint, param=param, vulnClass=vuln_class, context=context,
         )
         previous_count = previous.count if previous else 0
         entry = await self.store.mark(
@@ -212,6 +220,7 @@ class CoverageTool(Tool):
             vulnClass=vuln_class,
             status=status,
             notes=notes,
+            context=context,
         )
 
         entry_dict = asdict(entry)
@@ -257,11 +266,18 @@ class CoverageTool(Tool):
         if not status:
             status = None
 
+        try:
+            context = CoverageContext.parse(args["context"]) if "context" in args else None
+            if endpoint and context is not None:
+                normalize_contextual_endpoint(endpoint, context)
+        except ValueError as err:
+            return self._error("list", str(err))
         rows = await self.store.list(
             endpoint=endpoint,
             param=param,
             vulnClass=vuln_class,
             status=status,
+            context=context,
         )
 
         out: list[dict[str, Any]] = []
@@ -273,6 +289,8 @@ class CoverageTool(Tool):
                     "param": self._brief(e.param),
                     "vuln_class": self._brief(e.vulnClass),
                     "status": e.status,
+                    "context": asdict(e.context) if e.context is not None else None,
+                    "view": "contextual" if e.context is not None else "legacy-unspecified",
                     "count": e.count,
                     "first_seen": datetime.fromtimestamp(
                         e.firstSeen / 1000
@@ -290,6 +308,10 @@ class CoverageTool(Tool):
         self,
         args: dict[str, Any],
     ) -> str:
+        try:
+            default_context = CoverageContext.parse(args["context"]) if "context" in args else None
+        except ValueError as err:
+            return self._error("untested", str(err))
         raw_candidates = args.get("candidates", [])
         raw_vuln_classes = args.get("vuln_classes", [])
 
@@ -320,12 +342,12 @@ class CoverageTool(Tool):
             param = param.strip()
 
             if endpoint and param:
-                pairs.append(
-                    {
-                        "endpoint": endpoint,
-                        "param": param,
-                    }
-                )
+                pair: dict[str, Any] = {"endpoint": endpoint, "param": param}
+                if "context" in c:
+                    pair["context"] = c["context"]
+                elif default_context is not None:
+                    pair["context"] = asdict(default_context)
+                pairs.append(pair)
 
         classes = [
             v.strip()
@@ -341,16 +363,17 @@ class CoverageTool(Tool):
                 "list of strings)",
             )
 
-        out = await self.store.untested(
-            pairs,
-            classes,
-        )
+        try:
+            out = await self.store.untested(pairs, classes)
+        except ValueError as err:
+            return self._error("untested", str(err))
 
         bounded = [
             {
                 "endpoint": self._brief(item["endpoint"]),
                 "param": self._brief(item["param"]),
                 "vulnClass": self._brief(item["vulnClass"]),
+                **({"context": item["context"]} if "context" in item else {}),
             }
             for item in out
         ]
@@ -368,6 +391,8 @@ class CoverageTool(Tool):
                 "ok": True,
                 "action": "summary",
                 "total": summary.total,
+                "view": "projection-summary",
+                "variant_proof": False,
                 "byStatus": summary.byStatus,
                 "vulnClassCount": len(ordered_classes),
                 "returnedVulnClassCount": len(selected),
@@ -382,6 +407,16 @@ class CoverageTool(Tool):
             },
             indent=2,
         )
+
+    @staticmethod
+    def _context_schema() -> dict[str, Any]:
+        return {
+            "type": "object",
+            "description": (
+                "Identity strings/null: objective_id, target_origin, method, location, media_type, "
+                "auth_context_ref, test_case. Missing=unknown. Also in untested candidates. No credentials."
+            ),
+        }
 
     @staticmethod
     def _brief(

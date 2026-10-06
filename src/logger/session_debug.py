@@ -104,6 +104,12 @@ class FileSessionDebugLog(SessionDebugLog):
         payload: dict[str, Any] = {}
         if data:
             payload.update(data)
+        if payload.get("type") == "tool-result" and payload.get("name") == "workflow":
+            from src.workflow.validation_context import without_transient_validation_context
+            if isinstance(payload.get("result"), str):
+                payload["result"] = without_transient_validation_context(
+                    payload["result"], truncated=payload.get("truncated") is True,
+                )
         # Event metadata identifies the actual persisted record and must not
         # be forgeable through the public data payload.
         payload.update(metadata)

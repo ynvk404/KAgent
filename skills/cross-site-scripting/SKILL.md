@@ -45,6 +45,18 @@ allowed-tools:
 
 ## Structured workflow contract
 
+`start_validation` returns the Candidate plus a transient `validation_context`:
+linked canonical input samples in whole-target mode, Candidate context in
+direct mode, and explicit baseline/auth availability and limitations. Keep
+`sample_payload` separate from an explicit `request_template`; a sanitized
+sample is not a captured replay baseline or executable mutation instruction.
+Do not infer missing method/body or fabricate injection markers. Resolve
+ambiguity before exact requests; unavailable baseline/auth needs recapture or
+live session repair through the existing gates. Availability grants no scope,
+permission or proof. Workflow list/prompt rows are summaries; use
+`workflow(action="get_input", input_id="...")` for a selected full canonical
+sanitized input, including after resume or compaction.
+
 Before recording a `confirmed` result, save a minimal redacted proof artifact,
 call `workflow(action="record_evidence", candidate_id="...",
 evidence_path="...")`, and use the returned `ev_...` ID in `evidence_refs`.

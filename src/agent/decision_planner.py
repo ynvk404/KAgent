@@ -1149,7 +1149,7 @@ def build_checklist(
         )
 
     out.append(
-        "use coverage to avoid repeating endpoint/parameter/vulnerability tests"
+        "use exact contextual coverage to avoid repeating variants; aggregate rows do not prove siblings tested"
     )
 
     out.append(
@@ -1187,7 +1187,7 @@ def render_guidance(
         f"- Risk level: {risk}.",
         "- If the recommended skill is present and not already active, call load_skill before other tools.",
         "- If scope, authorization, credentials, or testing depth is ambiguous, ask one concise question before active testing.",
-        "- Use coverage(action='untested') when endpoint/parameter candidates are known, then coverage(action='mark') after meaningful tests.",
+        "- Use coverage(action='untested') with exact canonical context; unspecified tuples and summaries do not close sibling variants. Workflow results determine completion and sync coverage.",
         "- Call confirm_finding only for a workflow Candidate whose latest result is confirmed and whose registered evidence remains valid; observed_impact states what that evidence demonstrates and potential_impact keeps untested consequences conditional.",
         "- Checklist:",
     ]

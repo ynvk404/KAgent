@@ -731,7 +731,8 @@ async def main() -> int:
     tools.register(FileEditToolAlias())
     tools.register(GlobTool())
     tools.register(GrepTool())
-    tools.register(HTTPTool(target, engagement_state, workflow, capture_store, validation_registry=skills))
+    http_tool = HTTPTool(target, engagement_state, workflow, capture_store, validation_registry=skills)
+    tools.register(http_tool)
     tools.register(ContentDiscoveryTool(
         target,
         engagement_state,
@@ -794,6 +795,7 @@ async def main() -> int:
     tools.register(WorkflowTool(
         workflow, target, coverage_store, skills,
         evidence_root=project_root(), session_id=session_id,
+        http_tool=http_tool,
     ))
 
     for plugin in cfg.plugins:
