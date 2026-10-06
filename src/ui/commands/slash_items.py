@@ -74,6 +74,8 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
         args="[objective]",
         description="coverage-driven next test suggestions",
     ),
+    SlashItem(name="/report", args="[filename.pdf]",
+              description="export the current assessment snapshot as PDF"),
     SlashItem(name="/review-result", args="<candidate-id> <outcome> <severity> <impact>",
               description="operator review of immutable proof; does not grant tool execution"),
     SlashItem(name="/enrich-cwe", args="<candidate-id>",

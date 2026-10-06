@@ -15,7 +15,7 @@ def test_menu_orders_help_first_then_related_commands():
         "/help",
         "/provider", "/model", "/thinking", "/maxsteps",
         "/target", "/scope", "/permissions", "/yolo",
-        "/plan", "/next", "/review-result", "/enrich-cwe", "/skills", "/burp",
+        "/plan", "/next", "/report", "/review-result", "/enrich-cwe", "/skills", "/burp",
         "/memory", "/compact", "/snapshot",
         "/clear", "/reset", "/exit",
     ]
@@ -48,7 +48,7 @@ def test_prefix_matches_command_names():
     assert [
         s.name for s in filter_slash("/re")
     ] == [
-        "/review-result", "/reset"
+        "/report", "/review-result", "/reset"
     ]
 
 

@@ -858,3 +858,17 @@ def test_next_turn_disables_agent_tools():
         assert opts.run_options.tools is False
 
     asyncio.run(run())
+
+
+def test_report_is_discoverable_in_workflow_help_and_tab_menu():
+    from src.ui.commands.slash_items import filter_slash
+    text = build_help_text(cast(Agent, HelpAgent()), lambda: {"backend": "openrouter", "model": "model"})
+    assert "/report [filename.pdf]" in text.split("Workflow", 1)[1].split("Advanced", 1)[0]
+    assert filter_slash("/rep")[0].name == "/report"
+
+
+def test_invalid_report_is_handled_without_agent_turn():
+    app = DummyApp()
+    assert handle_slash(cast(KAgent, app), "/report a.pdf b.pdf") is True
+    assert not app.turns
+    assert "Use /report" in cast(Append, app.actions[0]).entry.text

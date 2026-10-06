@@ -439,7 +439,12 @@ def read_report(path: Path) -> Finding:
     This never calls taxonomy: changing the catalog cannot reclassify a report.
     Fenced evidence is not parsed as report metadata or section headings.
     """
-    lines = path.read_text(encoding="utf-8").splitlines()
+    return read_report_bytes(path.read_bytes(), slug=path.stem)
+
+
+def read_report_bytes(raw: bytes, *, slug: str) -> Finding:
+    """Parse one caller-owned byte snapshot with canonical Markdown semantics."""
+    lines = raw.decode("utf-8").splitlines()
     if not lines or not lines[0].startswith("# "):
         raise ValueError("persisted finding report has no title")
     metadata: dict[str, list[str]] = {}
@@ -491,7 +496,7 @@ def read_report(path: Path) -> Finding:
         remediation=body("Remediation"), vulnerabilityType=value("Vulnerability Type"),
         cwe=(value("CWE") or "").split(", ") if value("CWE") else None,
         owasp=(value("OWASP") or "").split(", ") if value("OWASP") else None,
-        createdAt=value("Reported at") or "", slug=path.stem,
+        createdAt=value("Reported at") or "", slug=slug,
         candidate_id=value("Candidate ID"), evidence_refs=metadata.get("Evidence"),
         canonical_class=value("Canonical class"), confirmation_binding=value("Confirmation binding"),
         classification_provenance=_read_provenance(value("Classification provenance")),

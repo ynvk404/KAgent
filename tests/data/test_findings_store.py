@@ -379,3 +379,21 @@ async def test_cancelled_store_write_holds_lock_until_background_write_finishes(
     path = await retry
     assert retry_finding.title == 'Original'
     assert list(store.dir.glob('*.md')) == [Path(path)]
+
+
+@pytest.mark.parametrize("name", ["current-with-headings.md", "legacy-single-impact.md"])
+def test_byte_parser_matches_path_parser(name):
+    from src.findings.store import read_report, read_report_bytes
+    path = Path(__file__).parent / "fixtures" / "findings" / name
+    assert read_report_bytes(path.read_bytes(), slug=path.stem) == read_report(path)
+
+
+def test_byte_parser_uses_supplied_snapshot_and_slug():
+    from src.findings.store import read_report_bytes
+    raw = render(make_finding(payload="## Impact\n- **Severity:** critical")).encode()
+    parsed = read_report_bytes(raw, slug="detached")
+    assert parsed.slug == "detached"
+    assert parsed.severity == "high"
+    assert parsed.payload == "## Impact\n- **Severity:** critical"
+    with pytest.raises(UnicodeDecodeError):
+        read_report_bytes(b"\xff", slug="bad")

@@ -49,7 +49,7 @@ _KEYBINDINGS: list[tuple[str, str]] = [
 
 _COMMAND_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     ("Everyday", ("/help", "/target", "/scope", "/plan", "/provider", "/model", "/clear", "/reset", "/exit")),
-    ("Workflow", ("/next", "/review-result", "/enrich-cwe", "/compact", "/memory", "/skills", "/snapshot")),
+    ("Workflow", ("/report", "/next", "/review-result", "/enrich-cwe", "/compact", "/memory", "/skills", "/snapshot")),
     ("Advanced", ("/permissions", "/burp", "/maxsteps", "/thinking", "/yolo")),
 ]
 
@@ -264,6 +264,11 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
     agent = app.agent
     dispatch = app.dispatch
+
+    if cmd == "/report":
+        from src.ui.commands.report_handler import start_report
+        start_report(app, rest)
+        return True
 
     if cmd == "/review-result":
         from src.ui.commands.result_review import review_result
