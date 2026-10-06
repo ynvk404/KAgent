@@ -32,7 +32,7 @@ def make_tool(url="http://target.test"):
 
 
 def capture_json(capture):
-    capture.ingest({
+    ingested = capture.ingest({
         "id": "baseline-1", "method": "POST", "url": "http://target.test/api",
         "authContextRef": "user",
         "requestHeaders": [{"name": "User-Agent", "value": "Captured/1"},
@@ -41,7 +41,13 @@ def capture_json(capture):
                            {"name": "X-CSRF-Token", "value": "csrf-private"}],
         "requestBody": '{"q":"old","csrf":"csrf-private","items":[1,2]}',
     })
-    return "wr:baseline-1"
+    return ingested["baseline_request_ref"]
+
+
+def baseline_ref(capture, external_id):
+    row = capture.get_request(external_id)
+    assert row is not None and row.baseline_request_ref
+    return row.baseline_request_ref
 
 
 def add_candidate(workflow, ref, identity="user"):
@@ -122,7 +128,7 @@ def test_http_replay_rejects_same_reference_after_oversize_update():
                "rawRequestB64": "A" * (MAX_RAW_REQUEST_B64 + 1),
                "requestHeaders": [{"name": "Content-Type", "value": "text/plain"}],
                "requestBody": "old"}
-    ref = capture.ingest(payload)["id"]
+    ref = capture.ingest(payload)["baseline_request_ref"]
     candidate = add_candidate(workflow, ref)
     capture.ingest({key: value for key, value in payload.items() if key != "rawRequestB64"})
 
@@ -303,7 +309,7 @@ def test_replay_identity_binding_and_runtime_cookie_rotation():
                     "requestHeaders": [{"name": "Content-Type", "value": "application/json"},
                                        {"name": "Cookie", "value": "sid=opaque"}],
                     "requestBody": '{"q":"old"}'})
-    unbound = add_candidate(workflow, "wr:unbound")
+    unbound = add_candidate(workflow, baseline_ref(capture, "wr:unbound"))
     with pytest.raises(ValueError, match="identity binding"):
         tool.prepare({"phase": "validation", "candidate_id": unbound.id, "mutation_value": "new"})
     capture.ingest({"id": "spoofed", "method": "POST", "url": "http://target.test/api",
@@ -311,7 +317,7 @@ def test_replay_identity_binding_and_runtime_cookie_rotation():
                     "requestHeaders": [{"name": "Content-Type", "value": "application/json"},
                                        {"name": "Cookie", "value": "sid=admin"}],
                     "requestBody": '{"q":"old"}'})
-    spoofed = add_candidate(workflow, "wr:spoofed", "admin")
+    spoofed = add_candidate(workflow, baseline_ref(capture, "wr:spoofed"), "admin")
     with pytest.raises(ValueError, match="runtime session cookie"):
         tool.prepare({"phase": "validation", "candidate_id": spoofed.id, "mutation_value": "new"})
 
@@ -324,12 +330,12 @@ def test_same_input_user_admin_candidates_and_replay_are_isolated():
                         "requestHeaders": [{"name": "Content-Type", "value": "application/json"},
                                            {"name": "Cookie", "value": f"sid={identity}"}],
                         "requestBody": '{"q":"old"}'})
-    user = add_candidate(workflow, "wr:user", "user")
-    admin = add_candidate(workflow, "wr:admin", "admin")
+    user = add_candidate(workflow, baseline_ref(capture, "wr:user"), "user")
+    admin = add_candidate(workflow, baseline_ref(capture, "wr:admin"), "admin")
     bind_cookie(tool, "user", "user")
     bind_cookie(tool, "admin", "admin")
     assert user.id != admin.id
-    assert add_candidate(workflow, "wr:user", "user") is user
+    assert add_candidate(workflow, baseline_ref(capture, "wr:user"), "user") is user
     assert workflow.from_dict(workflow.to_dict()).candidates[admin.id].auth_context_ref == "admin"
     for candidate, identity in ((user, "user"), (admin, "admin")):
         _, request = tool.prepare({"phase": "validation", "candidate_id": candidate.id, "mutation_value": "new"})
@@ -343,7 +349,7 @@ def test_captured_authorization_requires_matching_runtime_identity():
                     "requestHeaders": [{"name": "Content-Type", "value": "application/json"},
                                        {"name": "Authorization", "value": "Bearer user"}],
                     "requestBody": '{"q":"old"}'})
-    candidate = add_candidate(workflow, "wr:auth")
+    candidate = add_candidate(workflow, baseline_ref(capture, "wr:auth"))
     args = {"phase": "validation", "candidate_id": candidate.id, "mutation_value": "new"}
     with pytest.raises(ValueError, match="runtime authorization"):
         tool.prepare(args)

@@ -459,7 +459,7 @@ class WorkflowTool(Tool):
                     "repeated validation evidence; record only the observed "
                     "candidate signal here"
                 )
-            stored, created = self.state.add_candidate(candidate)
+            stored, created = self.state.add_candidate(candidate, input_id=requested_input_id or None)
             input_id = arg_string(args, "input_id")
             if input_id:
                 self.state.link_input_candidate(input_id, stored.id)

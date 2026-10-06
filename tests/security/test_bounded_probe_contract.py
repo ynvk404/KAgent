@@ -57,13 +57,13 @@ async def custom_env(runtime, tmp_path, shape="json", mode: WorkflowMode="direct
         headers.append({"name": "Content-Type", "value": content_type})
     if shape == "header":
         headers.append({"name": parameter, "value": "base"})
-    capture.ingest({"id": "custom-baseline", "method": method, "url": ORIGIN + endpoint,
+    ingested = capture.ingest({"id": "custom-baseline", "method": method, "url": ORIGIN + endpoint,
                     "requestHeaders": headers, "requestBody": body or None})
     http.capture_store = capture
     recorded = json.loads(await registry.execute("workflow", {
         "action": "record_candidate", "candidate_class": cls, "endpoint": endpoint,
         "method": method, "parameter": parameter, "location": shape,
-        "content_type": content_type or None, "baseline_request_ref": "wr:custom-baseline",
+        "content_type": content_type or None, "baseline_request_ref": ingested["baseline_request_ref"],
         "source_skill": "web-input-analysis"}, None, p))
     c = state.candidates[recorded["candidate"]["id"]]
     assert c.endpoint and c.method and c.location and c.parameter and state.objective.target_origin
@@ -418,7 +418,7 @@ async def test_get_capture_lab_grant_and_model_claims_do_not_prove_safe_effects(
 async def test_unsupported_encoding_and_capabilities_fail_closed(runtime, tmp_path, fault):
     env, probe = await custom_env(runtime, tmp_path, "header" if fault == "header-framing" else "form")
     http = env[0].get("http")
-    row = http.capture_store.get_request(env[5].baseline_request_ref)
+    row = http.capture_store.get_request("wr:custom-baseline")
     assert row is not None
     if fault in {"multipart", "charset"}:
         for header in row.request_headers or []:

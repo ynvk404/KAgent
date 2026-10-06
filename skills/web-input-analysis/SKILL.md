@@ -269,9 +269,20 @@ raw request/response bodies or credentials. The returned
 Candidate ID is the handoff key for the validation skill. The workflow tool
 deduplicates the same semantic target/method/endpoint/input/class tuple, so do
 not manufacture alternate IDs. When an input record exists, pass its
-`input_id` to link the candidate to that input. Weak/noisy observations that do
-not meet the candidate-list bar must not be recorded. Inspect `supported` and
-`recommended_skills` in the tool result before naming the next skill. For
+`input_id` to link the candidate to that input. Known method, endpoint,
+parameter, location, media type, baseline and auth bindings must remain
+compatible with the linked input; record the correct input variant before
+proposing a different request shape. JSON and form media types are distinct;
+charset and multipart boundary parameters do not create media identities.
+Use the capture tool's `baseline_request_ref` for replay, rather than its
+external retrieval `id`. Baselines are runtime-bound: after restart, clear or
+loss of capture, an unavailable or legacy unbound reference requires recapture.
+Completed `no_inputs_discovered` attests only that pass. Late inputs still need
+valid dispositions before another no-candidate review; they do not reopen the
+completed phase, and inventory changes invalidate an earlier review.
+Weak/noisy observations that do not meet the candidate-list bar must not be
+recorded. Inspect `supported` and `recommended_skills` in the tool result before
+naming the next skill. For
 multiple independent suspected classes, record one Candidate per class and
 retain each returned ID; do not collapse them into one result.
 

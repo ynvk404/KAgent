@@ -201,9 +201,9 @@ class HTTPTool(Tool):
         if 'mutation_value' not in args or not isinstance(args['mutation_value'], str):
             raise ValueError('captured replay requires mutation_value')
         ref = candidate.baseline_request_ref
-        row = self.capture_store.get_request(ref) or self.capture_store.get_burp_task(ref)
+        row = self.capture_store.resolve_baseline(ref)
         if row is None:
-            raise ValueError('captured baseline is unavailable; validation is inconclusive')
+            raise ValueError('captured baseline is unavailable or unbound; recapture required; validation is inconclusive')
         self._require_scope(row.url or '')
         if candidate.target is None or HTTPOrigin.from_url(row.url or '') != HTTPOrigin.from_url(candidate.target):
             raise ValueError('captured baseline origin differs from candidate')

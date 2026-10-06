@@ -85,7 +85,7 @@ def runtime(monkeypatch):
             head+=b'\r\nContent-Length: '+str(len(body)).encode()
             payload['rawRequestB64']=base64.b64encode(head+b'\r\n\r\n'+body).decode()
         else: payload['requestBody']=body
-        ref=capture.ingest(payload)['id']
+        ref=capture.ingest(payload)['baseline_request_ref']
         item,_=workflow.add_candidate(Candidate(candidate_class='sql-injection',target=origin,method='POST',endpoint='/input',parameter='q',location=location,content_type=content_type,baseline_request_ref=ref))
         return {'phase':'validation','candidate_id':item.id,'mutation_value':'new'}
     async def send(args):

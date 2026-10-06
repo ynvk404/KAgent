@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeGuard, cast
+from urllib.parse import urljoin, urlsplit
 
 from src.skills.registry import normalize_candidate_class, normalize_metadata_name
 from src.redact.redact import (
@@ -149,6 +151,11 @@ def normalize_target_origin(value: Any) -> str | None:
         raise ValueError("target_origin must be an HTTP origin") from exc
 
 
+def normalize_media_type(value: str | None) -> str | None:
+    """Request shape uses the base media type, never inferred from a body."""
+    return value.split(";", 1)[0].strip().lower() or None if value else None
+
+
 def _identity_payload(
     *,
     target: str | None,
@@ -185,6 +192,7 @@ def candidate_fingerprint(
     objective_id: str | None = None,
     auth_context_ref: str | None = None,
     baseline_request_ref: str | None = None,
+    content_type: str | None = None,
 ) -> str:
     payload = _identity_payload(
         target=target,
@@ -201,6 +209,9 @@ def candidate_fingerprint(
         payload["auth_context_ref"] = auth_context_ref.strip()
     if baseline_request_ref:
         payload["baseline_request_ref"] = baseline_request_ref.strip()
+    media_type = normalize_media_type(content_type)
+    if media_type:
+        payload["media_type"] = media_type
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:20]
@@ -225,6 +236,9 @@ class Candidate:
     objective_id: str | None = None
     status: CandidateStatus = "new"
     content_type: str | None = None
+    # None derives identity for new records; "" pins legacy/unknown IDs even
+    # when compatible request context is later enriched. Never rekey links.
+    identity_media_type: str | None = None
     request_template: str | None = None
     source_ref: str | None = None
 
@@ -244,6 +258,14 @@ class Candidate:
         self.baseline_request_ref = _text(self.baseline_request_ref)
         self.auth_context_ref = _text(self.auth_context_ref)
         self.content_type = _text(self.content_type, limit=200)
+        if self.identity_media_type is None:
+            self.identity_media_type = normalize_media_type(self.content_type) or ""
+        elif not isinstance(self.identity_media_type, str):
+            raise ValueError("identity_media_type must be a string")
+        else:
+            self.identity_media_type = normalize_media_type(self.identity_media_type) or ""
+        if self.identity_media_type and self.identity_media_type != normalize_media_type(self.content_type):
+            raise ValueError("media identity conflicts with content_type")
         self.request_template = _request_context(
             self.request_template, self.content_type
         )
@@ -266,6 +288,7 @@ class Candidate:
             objective_id=self.objective_id,
             auth_context_ref=self.auth_context_ref,
             baseline_request_ref=self.baseline_request_ref,
+            content_type=self.identity_media_type,
         )
         if self.id and self.id != stable_id:
             legacy_id = candidate_fingerprint(
@@ -274,8 +297,16 @@ class Candidate:
                 candidate_class=self.candidate_class, test_case=self.test_case,
                 objective_id=self.objective_id,
             )
-            if self.id != legacy_id:
+            bound_legacy_id = candidate_fingerprint(
+                target=self.target, method=self.method, endpoint=self.endpoint,
+                parameter=self.parameter, location=self.location,
+                candidate_class=self.candidate_class, test_case=self.test_case,
+                objective_id=self.objective_id, auth_context_ref=self.auth_context_ref,
+                baseline_request_ref=self.baseline_request_ref,
+            )
+            if self.id not in {legacy_id, bound_legacy_id}:
                 raise ValueError("candidate id does not match its semantic fingerprint")
+            self.identity_media_type = ""
             return
         self.id = stable_id
 
@@ -294,6 +325,7 @@ class Candidate:
             "baseline_request_ref": self.baseline_request_ref,
             "auth_context_ref": self.auth_context_ref,
             "content_type": self.content_type,
+            "identity_media_type": self.identity_media_type,
             "request_template": self.request_template,
             "source_ref": self.source_ref,
             "source_skill": self.source_skill,
@@ -320,6 +352,7 @@ class Candidate:
                 baseline_request_ref=value.get("baseline_request_ref"),
                 auth_context_ref=value.get("auth_context_ref"),
                 content_type=value.get("content_type"),
+                identity_media_type=value.get("identity_media_type", ""),
                 request_template=value.get("request_template"),
                 source_ref=value.get("source_ref"),
                 source_skill=value.get("source_skill"),
@@ -428,6 +461,7 @@ def attack_surface_input_fingerprint(
     input_type: str | None,
     auth_context_ref: str | None = None,
     baseline_request_ref: str | None = None,
+    content_type: str | None = None,
 ) -> str:
     payload = {
         "objective_id": objective_id.strip(),
@@ -442,6 +476,9 @@ def attack_surface_input_fingerprint(
         payload["auth_context_ref"] = auth_context_ref.strip()
     if baseline_request_ref:
         payload["baseline_request_ref"] = baseline_request_ref.strip()
+    media_type = normalize_media_type(content_type)
+    if media_type:
+        payload["media_type"] = media_type
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:20]
@@ -463,6 +500,9 @@ class AttackSurfaceInput:
     disposition_transitions: list[str] = field(default_factory=list)
     id: str = ""
     content_type: str | None = None
+    # None derives identity for new records; "" pins legacy/unknown IDs even
+    # when compatible request context is later enriched. Never rekey links.
+    identity_media_type: str | None = None
     sample_payload: str | None = None
     baseline_request_ref: str | None = None
     auth_context_ref: str | None = None
@@ -485,6 +525,14 @@ class AttackSurfaceInput:
         if self.input_type:
             self.input_type = self.input_type.lower()
         self.content_type = _text(self.content_type, limit=200)
+        if self.identity_media_type is None:
+            self.identity_media_type = normalize_media_type(self.content_type) or ""
+        elif not isinstance(self.identity_media_type, str):
+            raise ValueError("identity_media_type must be a string")
+        else:
+            self.identity_media_type = normalize_media_type(self.identity_media_type) or ""
+        if self.identity_media_type and self.identity_media_type != normalize_media_type(self.content_type):
+            raise ValueError("media identity conflicts with content_type")
         self.sample_payload = _request_context(self.sample_payload, self.content_type)
         self.baseline_request_ref = _text(self.baseline_request_ref)
         self.auth_context_ref = _text(self.auth_context_ref)
@@ -508,6 +556,7 @@ class AttackSurfaceInput:
             input_type=self.input_type,
             auth_context_ref=self.auth_context_ref,
             baseline_request_ref=self.baseline_request_ref,
+            content_type=self.identity_media_type,
         )
         if self.id and self.id != stable_id:
             legacy_id = attack_surface_input_fingerprint(
@@ -515,8 +564,15 @@ class AttackSurfaceInput:
                 method=self.method, endpoint=self.endpoint, parameter=self.parameter,
                 location=self.location, input_type=self.input_type,
             )
-            if self.id != legacy_id:
+            bound_legacy_id = attack_surface_input_fingerprint(
+                objective_id=self.objective_id, target_origin=self.target_origin,
+                method=self.method, endpoint=self.endpoint, parameter=self.parameter,
+                location=self.location, input_type=self.input_type,
+                auth_context_ref=self.auth_context_ref, baseline_request_ref=self.baseline_request_ref,
+            )
+            if self.id not in {legacy_id, bound_legacy_id}:
                 raise ValueError("input id does not match its semantic fingerprint")
+            self.identity_media_type = ""
             return
         self.id = stable_id
 
@@ -531,6 +587,7 @@ class AttackSurfaceInput:
             "location": self.location,
             "input_type": self.input_type,
             "content_type": self.content_type,
+            "identity_media_type": self.identity_media_type,
             "sample_payload": self.sample_payload,
             "baseline_request_ref": self.baseline_request_ref,
             "auth_context_ref": self.auth_context_ref,
@@ -560,6 +617,7 @@ class AttackSurfaceInput:
                 location=value.get("location"),
                 input_type=value.get("input_type"),
                 content_type=value.get("content_type"),
+                identity_media_type=value.get("identity_media_type", ""),
                 sample_payload=value.get("sample_payload"),
                 baseline_request_ref=value.get("baseline_request_ref"),
                 auth_context_ref=value.get("auth_context_ref"),
@@ -883,7 +941,8 @@ def _merge_compatible_context(
     if any(
         getattr(existing, field_name) is not None
         and getattr(incoming, field_name) is not None
-        and getattr(existing, field_name) != getattr(incoming, field_name)
+        and (normalize_media_type(getattr(existing, field_name)) != normalize_media_type(getattr(incoming, field_name))
+             if field_name == "content_type" else getattr(existing, field_name) != getattr(incoming, field_name))
         for field_name in fields
     ):
         return False
@@ -893,7 +952,8 @@ def _merge_compatible_context(
     incoming_has_context = any(
         getattr(incoming, field_name) is not None for field_name in fields
     )
-    if existing_has_context and incoming_has_context and not any(
+    fills_context = any(getattr(existing, name) is None and getattr(incoming, name) is not None for name in fields)
+    if fills_context and existing_has_context and incoming_has_context and not any(
         getattr(existing, field_name) is not None
         and getattr(existing, field_name) == getattr(incoming, field_name)
         for field_name in anchors
@@ -921,9 +981,39 @@ class WorkflowState:
     persisted_findings: dict[str, str] = field(default_factory=dict)
     current_phase: str | None = None
 
-    def add_candidate(self, candidate: Candidate) -> tuple[Candidate, bool]:
+    @staticmethod
+    def _media_enrichment_match(existing: Any, incoming: Any, *, candidate: bool) -> bool:
+        fields = ("objective_id", "method", "endpoint", "parameter", "location",
+                  "baseline_request_ref", "auth_context_ref")
+        fields += ("target", "candidate_class", "test_case") if candidate else ("target_origin", "input_type")
+        return (
+            all(getattr(existing, name) == getattr(incoming, name) for name in fields)
+            and not existing.identity_media_type
+            and bool(incoming.identity_media_type)
+            and normalize_media_type(existing.content_type) in (None, incoming.identity_media_type)
+            and any(getattr(existing, name) is not None and getattr(existing, name) == getattr(incoming, name)
+                    for name in ("baseline_request_ref", "source_ref", "request_template" if candidate else "sample_payload"))
+        )
+
+    def add_candidate(self, candidate: Candidate, *, input_id: str | None = None) -> tuple[Candidate, bool]:
+        if input_id is not None:
+            self.validate_input_candidate(input_id, candidate)
         existing = self.candidates.get(candidate.id)
+        if existing is None:
+            existing = next((row for row in self.candidates.values()
+                             if self._media_enrichment_match(row, candidate, candidate=True)), None)
         if existing is not None:
+            # Check the prospective merge against all existing links before
+            # context, signals, status or goal linkage can change.
+            prospective = deepcopy(existing)
+            for name in ("content_type", "request_template", "baseline_request_ref", "auth_context_ref", "source_ref"):
+                if getattr(prospective, name) is None:
+                    setattr(prospective, name, getattr(candidate, name))
+            if input_id is not None:
+                self.validate_input_candidate(input_id, prospective)
+            for item in self.attack_surface_inputs.values():
+                if existing.id in item.candidate_ids:
+                    self.validate_input_candidate(item.id, prospective)
             merged = _merge_compatible_context(
                 existing,
                 candidate,
@@ -936,8 +1026,7 @@ class WorkflowState:
                 ),
                 anchors=("baseline_request_ref", "auth_context_ref", "source_ref"),
             )
-            if not merged and any(getattr(candidate, name) is not None for name in
-                                  ("request_template", "baseline_request_ref", "auth_context_ref", "source_ref")):
+            if not merged:
                 raise ValueError("candidate request context conflicts with existing candidate")
             existing.signals = list(dict.fromkeys([*existing.signals, *candidate.signals]))[
                 :_MAX_SIGNALS
@@ -1035,8 +1124,6 @@ class WorkflowState:
         inputs = self.objective_inputs()
         if not inputs and not marker.no_inputs_discovered:
             return "no-input inventory lacks an explicit input-analysis attestation"
-        if inputs and marker.no_inputs_discovered:
-            return "input analysis attests no inputs but objective-owned inputs exist"
         for item in inputs:
             if item.disposition in {"pending", "blocked"}:
                 return f"input {item.id} remains {item.disposition}"
@@ -1205,6 +1292,19 @@ class WorkflowState:
         records[dimension] = marker
         return True
 
+    def _inventory_signature(self) -> str:
+        return json.dumps([item.to_dict() for item in self.objective_inputs()], sort_keys=True)
+
+    def _invalidate_inventory_reviews(self, previous: str) -> None:
+        if self.objective is None or previous == self._inventory_signature():
+            return
+        for goal in self.objective.requested_goals:
+            if goal.status == "no_candidate":
+                goal.status = "pending"
+                goal.reason = "Objective input inventory changed; a new review is required."
+                goal.review_artifact_ref = None
+                goal.review_binding = None
+
     def add_attack_surface_input(
         self, item: AttackSurfaceInput
     ) -> tuple[AttackSurfaceInput, bool]:
@@ -1216,7 +1316,21 @@ class WorkflowState:
             or item.target_origin != objective.target_origin
         ):
             raise ValueError("input must belong to the active whole-target objective")
+        previous = self._inventory_signature()
         existing = self.attack_surface_inputs.get(item.id)
+        if existing is None:
+            existing = next((row for row in self.attack_surface_inputs.values()
+                             if self._media_enrichment_match(row, item, candidate=False)), None)
+        prospective = deepcopy(existing or item)
+        if existing is not None:
+            for name in ("content_type", "sample_payload", "baseline_request_ref", "auth_context_ref", "source_ref"):
+                if getattr(prospective, name) is None:
+                    setattr(prospective, name, getattr(item, name))
+        for candidate_id in dict.fromkeys([*prospective.candidate_ids, *item.candidate_ids]):
+            candidate = self.candidates.get(candidate_id)
+            if candidate is None:
+                raise ValueError(f"unknown candidate: {candidate_id}")
+            self._validate_input_candidate(prospective, candidate)
         if existing is not None:
             if existing.objective_id != item.objective_id:
                 raise ValueError("input identity belongs to a different objective")
@@ -1226,14 +1340,15 @@ class WorkflowState:
                 ("content_type", "sample_payload", "baseline_request_ref", "auth_context_ref", "source_ref"),
                 anchors=("sample_payload", "baseline_request_ref", "source_ref"),
             )
-            if not merged and any(getattr(item, name) is not None for name in
-                                  ("sample_payload", "baseline_request_ref", "auth_context_ref", "source_ref")):
+            if not merged:
                 raise ValueError("input request context conflicts with existing input")
             for candidate_id in item.candidate_ids:
                 if candidate_id not in existing.candidate_ids:
                     existing.candidate_ids.append(candidate_id)
+            self._invalidate_inventory_reviews(previous)
             return existing, False
         self.attack_surface_inputs[item.id] = item
+        self._invalidate_inventory_reviews(previous)
         return item, True
 
     def set_input_disposition(
@@ -1261,36 +1376,62 @@ class WorkflowState:
             raise ValueError(f"{disposition} disposition requires a reason")
         if item.disposition in {"analyzed", "dropped"} and disposition != item.disposition:
             raise ValueError("analyzed and dropped inputs are terminal")
+        previous = self._inventory_signature()
         if item.disposition == disposition:
             if normalized_reason:
                 item.disposition_reason = normalized_reason
+            self._invalidate_inventory_reviews(previous)
             return item
         transition = f"{item.disposition}>{disposition}"
         if transition not in item.disposition_transitions:
             item.disposition_transitions.append(transition)
         item.disposition = disposition
         item.disposition_reason = normalized_reason
+        self._invalidate_inventory_reviews(previous)
         return item
 
-    def link_input_candidate(self, input_id: str, candidate_id: str) -> AttackSurfaceInput:
+    def validate_input_candidate(self, input_id: str, candidate: Candidate) -> AttackSurfaceInput:
+        """Canonical, read-only compatibility boundary for creation and linkage."""
         item = self.attack_surface_inputs.get(input_id)
-        candidate = self.candidates.get(candidate_id)
-        objective = self.objective
         if item is None:
             raise ValueError(f"unknown input: {input_id}")
-        if candidate is None:
-            raise ValueError(f"unknown candidate: {candidate_id}")
-        if (
-            objective is None
-            or objective.mode != "whole_target"
-            or item.objective_id != objective.id
-            or candidate.objective_id != objective.id
-        ):
+        self._validate_input_candidate(item, candidate)
+        return item
+
+    def _validate_input_candidate(self, item: AttackSurfaceInput, candidate: Candidate) -> None:
+        objective = self.objective
+        if (objective is None or objective.mode != "whole_target"
+                or item.objective_id != objective.id or candidate.objective_id != objective.id):
             raise ValueError("input and candidate must belong to the active objective")
         if item.target_origin != objective.target_origin or candidate_origin(candidate.target) != objective.target_origin:
             raise ValueError("input and candidate must match the active target origin")
+        for name in ("method", "parameter", "location", "content_type", "baseline_request_ref", "auth_context_ref"):
+            left, right = getattr(item, name), getattr(candidate, name)
+            if name == "content_type":
+                left, right = normalize_media_type(left), normalize_media_type(right)
+            elif name == "location":
+                left, right = (left.lower() if left else None), (right.lower() if right else None)
+            if left is not None and (right is not None or name in {"baseline_request_ref", "auth_context_ref"}) and left != right:
+                raise ValueError(f"candidate {name} conflicts with input")
+        def geometry(endpoint: str) -> tuple[str, str, str]:
+            url = urljoin(item.target_origin + "/", endpoint)
+            parts = urlsplit(url)
+            return HTTPOrigin.from_url(url).as_url(), parts.path or "/", parts.query
+        for endpoint in (item.endpoint, candidate.endpoint):
+            if endpoint and geometry(endpoint)[0] != item.target_origin:
+                raise ValueError("endpoint origin conflicts with input")
+        if item.endpoint is not None and candidate.endpoint is not None and geometry(item.endpoint) != geometry(candidate.endpoint):
+            raise ValueError("candidate endpoint conflicts with input")
+
+    def link_input_candidate(self, input_id: str, candidate_id: str) -> AttackSurfaceInput:
+        candidate = self.candidates.get(candidate_id)
+        if candidate is None:
+            raise ValueError(f"unknown candidate: {candidate_id}")
+        item = self.validate_input_candidate(input_id, candidate)
+        previous = self._inventory_signature()
         if candidate_id not in item.candidate_ids:
             item.candidate_ids.append(candidate_id)
+        self._invalidate_inventory_reviews(previous)
         return item
 
     def record_phase_completion(
@@ -1722,9 +1863,19 @@ class WorkflowState:
         saved_statuses: dict[str, CandidateStatus] = {}
         if isinstance(raw_candidates, list):
             for raw in raw_candidates:
+                if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not raw["id"]:
+                    # A persisted record without an ID cannot be hydrated without
+                    # inventing an identity and losing its original linkages.
+                    continue
                 candidate = Candidate.from_dict(raw)
                 if candidate is not None:
-                    state.add_candidate(candidate)
+                    # Hydration restores accepted identities; runtime enrichment
+                    # may merge distinct media IDs and invalidate persisted links.
+                    if candidate.id in state.candidates:
+                        raise ValueError(f"duplicate persisted candidate id: {candidate.id}")
+                    state.candidates[candidate.id] = candidate
+                    if candidate.status in {"new", "queued", "validating"}:
+                        state.active_candidate_ids.add(candidate.id)
                     if isinstance(raw, dict) and "status" in raw:
                         saved_statuses[candidate.id] = candidate.status
 
@@ -1738,12 +1889,13 @@ class WorkflowState:
         raw_inputs = value.get("attack_surface_inputs", [])
         if isinstance(raw_inputs, list):
             for raw in raw_inputs:
+                if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not raw["id"]:
+                    continue
                 item = AttackSurfaceInput.from_dict(raw)
                 if item is not None:
-                    try:
-                        state.attack_surface_inputs[item.id] = item
-                    except (TypeError, ValueError):
-                        continue
+                    if item.id in state.attack_surface_inputs:
+                        raise ValueError(f"duplicate persisted input id: {item.id}")
+                    state.attack_surface_inputs[item.id] = item
         raw_phases = value.get("phase_completions", [])
         allow_legacy_coverage = (
             not isinstance(version, bool)

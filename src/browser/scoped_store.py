@@ -35,6 +35,12 @@ class ScopedCaptureStore(CaptureStore):
             raise ExecutionBlocked('blocked: capture-origin-outside-profile-or-revoked')
         return row
 
+    def resolve_baseline(self, ref):
+        row = self.source.resolve_baseline(ref)
+        if row is not None and not self.allowed(row.url or ''):
+            raise ExecutionBlocked('blocked: capture-origin-outside-profile-or-revoked')
+        return row
+
     def list_endpoints(self, url_substr=None, method=None):
         return [row for row in self.source.list_endpoints(url_substr, method) if self.allowed(row.url)]
 

@@ -5,6 +5,8 @@ import hashlib
 import json
 import threading
 import time
+import uuid
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 from urllib.parse import parse_qsl, urlsplit
@@ -46,6 +48,7 @@ class CapturedRequest:
     time_start: Optional[float] = None
     time_end: Optional[float] = None
     elapsed_ms: Optional[float] = None
+    baseline_request_ref: Optional[str] = None
 
 
 @dataclass
@@ -84,6 +87,7 @@ class BurpTask:
     raw_request_b64: Optional[str] = None
     raw_request_oversize: bool = False
     notes: Optional[str] = None
+    baseline_request_ref: Optional[str] = None
 
 
 @dataclass
@@ -177,6 +181,7 @@ class CaptureStore:
         self.burp_issues: dict[str, BurpIssue] = {}
         self.max_entries = max(100, max_entries if max_entries is not None else 5000)
         self._next_seq = 1
+        self._generation = uuid.uuid4().hex
         self.last_activity_at = 0
 
     def _next_id(self) -> int:
@@ -250,6 +255,13 @@ class CaptureStore:
             )
 
             existing = self.requests.get(id_)
+            request_fields = {"requestBody", "reqBody", "requestHeaders", "reqHeaders", "rawRequestB64", "authContextRef"}
+            if (existing is not None and not request_fields.intersection(obj)
+                    and existing.url == entry.url and ("method" not in obj or existing.method == entry.method)):
+                # Browser response events can arrive without request fields.
+                entry.method = existing.method
+                for name in ("request_body", "request_headers", "raw_request_b64", "raw_request_oversize", "auth_context_ref"):
+                    setattr(entry, name, deepcopy(getattr(existing, name)))
             # An update without raw bytes cannot establish that a previously
             # oversize baseline is now complete enough to replay.
             if existing is not None and existing.raw_request_oversize and entry.raw_request_b64 is None:
@@ -257,12 +269,21 @@ class CaptureStore:
             if existing is not None and self._request_signature(existing) != self._request_signature(entry):
                 id_ = f"{id_}#{self._request_signature(entry)[:20]}"
                 entry.id = id_
+            # The external-ID row only selects the variant. Binding belongs to
+            # the destination row, including when this variant is updated later.
+            destination = self.requests.get(id_)
+            signature = self._request_signature(entry)
             self.requests.pop(id_, None)
+            entry.baseline_request_ref = (destination.baseline_request_ref
+                if destination is not None and self._request_signature(destination) == signature
+                and destination.baseline_request_ref is not None
+                and destination.baseline_request_ref.rsplit(":", 1)[-1] == signature
+                else self._baseline_ref(entry))
             self.requests[id_] = entry
-            self._record_endpoint(method, url, entry.request_body, self._query_params(url))
+            self._record_endpoint(entry.method, url, entry.request_body, self._query_params(url))
             self._prune_if_needed()
             self.last_activity_at = _now_ms()
-            return {"ok": True, "id": id_}
+            return {"ok": True, "id": id_, "baseline_request_ref": entry.baseline_request_ref}
 
     @staticmethod
     def _request_signature(row: CapturedRequest) -> str:
@@ -271,6 +292,29 @@ class CaptureStore:
                     [(header.name, header.value) for header in row.request_headers or []],
                     row.request_body]
         return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode()).hexdigest()
+
+    def _baseline_ref(self, row: CapturedRequest | BurpTask) -> str:
+        # Runtime generation + per-ingest nonce prevents resurrection after
+        # restart, eviction or scoped clear; the digest also detects mutation.
+        return f"baseline:{self._generation}:{uuid.uuid4().hex}:{self._baseline_signature(row)}"
+
+    @staticmethod
+    def _baseline_signature(row: CapturedRequest | BurpTask) -> str:
+        if isinstance(row, CapturedRequest):
+            return CaptureStore._request_signature(row)
+        material = [row.method, row.url, row.host, row.target,
+                    row.raw_request_b64, row.raw_request_oversize]
+        return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
+
+    def resolve_baseline(self, ref: str) -> CapturedRequest | BurpTask | None:
+        """Only bound references are replayable; external IDs are retrieval-only."""
+        with self._lock:
+            if not ref.startswith(f"baseline:{self._generation}:"):
+                return None
+            for row in itertools.chain(self.requests.values(), self.burp_tasks):
+                if row.baseline_request_ref == ref and ref.rsplit(":", 1)[-1] == self._baseline_signature(row):
+                    return deepcopy(row)
+        return None
 
     def ingest_snapshot(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
@@ -373,6 +417,7 @@ class CaptureStore:
 
     def clear(self) -> None:
         with self._lock:
+            self._generation = uuid.uuid4().hex
             self.requests.clear()
             self.endpoints.clear()
             self.snapshots.clear()
@@ -402,11 +447,12 @@ class CaptureStore:
                 source="burp",
                 created_at=_now_ms(),
             )
+            task.baseline_request_ref = self._baseline_ref(task)
             self.burp_tasks.append(task)
             if len(self.burp_tasks) > 1000:
                 del self.burp_tasks[: len(self.burp_tasks) - 1000]
             self.last_activity_at = _now_ms()
-        return {"ok": True, "id": task.id}
+        return {"ok": True, "id": task.id, "baseline_request_ref": task.baseline_request_ref}
 
     def list_burp_tasks(self) -> list[BurpTask]:
         with self._lock:

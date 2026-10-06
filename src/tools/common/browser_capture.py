@@ -142,10 +142,9 @@ class BrowserCaptureRequestsTool(BaseCaptureTool):
 
     def description(self) -> str:
         return (
-            "List recent captured requests (most-recent first), with id, "
-            "method, url, and status. Use the returned id with "
-            "browser_capture_get to retrieve full headers + body for a "
-            "specific request."
+            "List captured requests, newest first, with method, URL and status. "
+            "Use id with browser_capture_get for details; "
+            "use baseline_request_ref for HTTP replay."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -181,6 +180,7 @@ class BrowserCaptureRequestsTool(BaseCaptureTool):
         slim = [
             {
                 "id": r.id,
+                "baseline_request_ref": r.baseline_request_ref,
                 "method": r.method,
                 "url": apply_evidence(r.url),
                 "status": r.status,
@@ -322,9 +322,8 @@ class BrowserCaptureBurpTasksTool(BaseCaptureTool):
 
     def description(self) -> str:
         return (
-            "List scan / plan / scope tasks queued from the KAgent "
-            "Burp extension. Use this after the user sends requests from "
-            "Burp to decide what to scan or plan next."
+            "List Burp scan/plan/scope tasks after the user sends requests. "
+            "Use baseline_request_ref for HTTP replay; id is retrieval-only."
         )
 
     def schema(self) -> dict[str, Any]:

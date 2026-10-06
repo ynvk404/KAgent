@@ -988,11 +988,11 @@ async def test_generic_captured_replay_uses_existing_input_builder(runtime, tmp_
     from src.browser.store import CaptureStore
     env = await setup(runtime, tmp_path)
     capture = CaptureStore()
-    capture.ingest({"id": "redirect-baseline", "method": "GET", "url": ORIGIN + env[5].endpoint,
+    ingested = capture.ingest({"id": "redirect-baseline", "method": "GET", "url": ORIGIN + env[5].endpoint,
         "requestHeaders": [{"name": "User-Agent", "value": "Fixture/1"}, {"name": "X-Keep", "value": "unchanged"}]})
     tool = env[0].get("http")
     tool.capture_store = capture
-    env[5].baseline_request_ref = "wr:redirect-baseline"
+    env[5].baseline_request_ref = ingested["baseline_request_ref"]
     bind_context(env)
     await start(env)
     output = await env[0].execute("http", {"candidate_id": env[5].id, "mutation_value": "https://example.com/",
@@ -1001,3 +1001,31 @@ async def test_generic_captured_replay_uses_existing_input_builder(runtime, tmp_
     assert runtime[4][0].url.params["next"] == "https://example.com/"
     assert runtime[4][0].url.params["keep"] == "1" and runtime[4][0].headers["X-Keep"] == "unchanged"
     assert not env[3].requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loss", ["fresh", "clear", "legacy"])
+async def test_generic_baseline_cannot_resurrect_from_reused_external_id(runtime, tmp_path, loss):
+    from src.browser.store import CaptureStore
+    env = await setup(runtime, tmp_path)
+    capture = CaptureStore()
+    payload = {"id": "reused", "method": "GET", "url": ORIGIN + env[5].endpoint,
+               "requestHeaders": [{"name": "X-Keep", "value": "original"}]}
+    ingested = capture.ingest(payload)
+    tool = env[0].get("http")
+    tool.capture_store = capture
+    candidate = env[5]
+    candidate.baseline_request_ref = ingested["baseline_request_ref"]
+    boundary = env[2].generic_validation
+    assert boundary.baseline(tool, candidate).headers["X-Keep"] == "original"
+    if loss == "fresh":
+        tool.capture_store = CaptureStore()
+    elif loss == "clear":
+        capture.clear()
+    else:
+        candidate.baseline_request_ref = ingested["id"]
+    # Same geometry and external ID cannot prove a replayable baseline binding.
+    tool.capture_store.ingest({**payload, "requestHeaders": [{"name": "X-Keep", "value": "changed"}]})
+    with pytest.raises(ValueError, match="baseline unavailable or unbound; recapture required"):
+        boundary.baseline(tool, candidate)
+    assert not runtime[4] and not env[3].requests

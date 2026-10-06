@@ -83,11 +83,12 @@ def test_request_context_round_trips_with_identity_scoped_ids():
     restored_candidate = Candidate.from_dict(enriched.to_dict())
     assert restored_candidate == enriched
 
-    legacy_candidate = enriched.to_dict()
+    legacy_candidate = make_candidate(auth_context_ref="captures/auth-context.md").to_dict()
+    legacy_candidate.pop("identity_media_type")
     legacy_candidate.pop("content_type")
     legacy_candidate.pop("request_template")
     old_candidate = Candidate.from_dict(legacy_candidate)
-    assert old_candidate is not None and old_candidate.id == enriched.id
+    assert old_candidate is not None and old_candidate.id == legacy_candidate["id"]
     assert old_candidate.content_type is None and old_candidate.request_template is None
 
     old_input = AttackSurfaceInput(
@@ -110,17 +111,18 @@ def test_request_context_round_trips_with_identity_scoped_ids():
         content_type="application/json",
         sample_payload='{"email":"user@example.test","password":"example-secret"}',
     )
-    assert rich_input.id == old_input.id
+    assert rich_input.id != old_input.id
     assert rich_input.sample_payload is not None
     assert "example-secret" not in rich_input.sample_payload
     restored_input = AttackSurfaceInput.from_dict(rich_input.to_dict())
     assert restored_input == rich_input
 
-    legacy_input = rich_input.to_dict()
+    legacy_input = old_input.to_dict()
+    legacy_input.pop("identity_media_type")
     legacy_input.pop("content_type")
     legacy_input.pop("sample_payload")
     old_input = AttackSurfaceInput.from_dict(legacy_input)
-    assert old_input is not None and old_input.id == rich_input.id
+    assert old_input is not None and old_input.id == legacy_input["id"]
     assert old_input.content_type is None and old_input.sample_payload is None
 
 
@@ -172,7 +174,7 @@ def test_request_context_redacts_common_body_formats(
         sample_payload=payload,
     )
 
-    assert candidate.id == make_candidate().id
+    assert candidate.id == make_candidate(content_type=content_type).id
     assert item.id == AttackSurfaceInput(
         objective_id="objective-current",
         target_origin="https://target.test",
@@ -181,6 +183,7 @@ def test_request_context_redacts_common_body_formats(
         parameter="username",
         location="body",
         input_type="string",
+        content_type=content_type,
     ).id
     for context in (candidate.request_template, item.sample_payload):
         assert context is not None
@@ -214,8 +217,10 @@ def test_context_merge_keeps_conflicting_request_context_together():
         sample_payload="username={INJECTION_POINT}",
     )
     stored_input, _ = state.add_attack_surface_input(first_input)
-    with pytest.raises(ValueError, match="conflicts"):
-        state.add_attack_surface_input(conflicting_input)
+    other_input, created = state.add_attack_surface_input(conflicting_input)
+    assert created and other_input.id != stored_input.id
+    assert other_input.content_type == "application/x-www-form-urlencoded"
+    assert other_input.sample_payload == "username={INJECTION_POINT}"
     assert stored_input.content_type == "application/json"
     assert stored_input.sample_payload == '{"admin":"{INJECTION_POINT}"}'
 
@@ -252,6 +257,7 @@ def test_request_context_dedup_fills_only_missing_context_fields():
         parameter="email",
         location="body",
         input_type="string",
+        source_ref="inventory/login-form",
     )
     enriched_input = AttackSurfaceInput(
         objective_id="objective-current",
@@ -261,6 +267,7 @@ def test_request_context_dedup_fills_only_missing_context_fields():
         parameter="email",
         location="body",
         input_type="string",
+        source_ref="inventory/login-form",
         content_type="application/json",
         sample_payload='{"email":"{INJECTION_POINT}"}',
     )

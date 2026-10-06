@@ -124,7 +124,7 @@ async def test_localhost_wire_capture_and_approval_invariant(monkeypatch):
                 key.encode() + b": " + value.encode() for key, value in headers)
             head += b"\r\nContent-Length: " + str(len(body)).encode()
             payload["rawRequestB64"] = base64.b64encode(head + b"\r\n\r\n" + body).decode()
-        ref = capture.ingest(payload)["id"]
+        ref = capture.ingest(payload)["baseline_request_ref"]
         kind = "form" if "urlencoded" in content_type else "body"
         candidate, _ = workflow.add_candidate(Candidate(
             candidate_class="sql-injection", target=origin, method="POST", endpoint=path,

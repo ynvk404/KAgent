@@ -318,10 +318,9 @@ class GenericValidationBoundary:
         if candidate.baseline_request_ref:
             from src.tools.http.request_builder import _raw_capture, origin_headers
             store = tool.capture_store
-            row = ((store.get_request(candidate.baseline_request_ref)
-                    or store.get_burp_task(candidate.baseline_request_ref)) if store else None)
+            row = store.resolve_baseline(candidate.baseline_request_ref) if store else None
             if row is None:
-                raise ValueError("generic captured baseline unavailable")
+                raise ValueError("generic captured baseline unavailable or unbound; recapture required")
             method, url, headers, body = _raw_capture(row)
             headers = origin_headers(headers)
             if len({key.lower() for key, _ in headers}) != len(headers):
