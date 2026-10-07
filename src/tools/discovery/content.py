@@ -15,7 +15,7 @@ import httpx
 
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter
-from src.redact.redact import apply as redact
+from src.redaction.redact import apply as redact
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
 from src.tools.common.capabilities import CapabilityInventory

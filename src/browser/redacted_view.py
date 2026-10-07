@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any, cast
 
-from src.redact.redact import apply_evidence, redact_payload, redact_request_context
+from src.redaction.redact import apply_evidence, redact_payload, redact_request_context
 
 
 def _record(value: Any) -> dict[str, Any]:

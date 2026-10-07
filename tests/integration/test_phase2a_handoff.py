@@ -409,7 +409,7 @@ async def test_resolver_and_start_do_not_create_permission_proof_or_generic_acti
 async def test_actual_tool_transcript_does_not_persist_transient_view_or_feed_compaction(tmp_path):
     from src.agent.compaction import format_history_for_compaction
     from src.llm.core.types import Message
-    from src.redact.redact import redact_payload
+    from src.redaction.redact import redact_payload
 
     state, registry, _, _ = runtime(tmp_path)
     _, candidate = await linked(registry, sample_payload='{"q":"safe"}')

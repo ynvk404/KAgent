@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from src.redact.redact import apply
+from src.redaction.redact import apply
 
 _VALUE = r'''(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|]+)'''
 _SECRET_FLAGS = re.compile(

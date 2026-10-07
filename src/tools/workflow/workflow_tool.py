@@ -13,7 +13,7 @@ from src.paths import project_root
 from src.permission.permission import Prompter, UserControlledRefusal
 from src.permission.runtime.execution import policy_for
 from src.tools.execution.file import gate_sensitive_path
-from src.redact.redact import apply as redact, redact_payload
+from src.redaction.redact import apply as redact, redact_payload
 from src.coverage.store import CoverageStore, CoverageStatus
 from src.coverage.context import project_candidate_coverage
 from src.target.target import Target

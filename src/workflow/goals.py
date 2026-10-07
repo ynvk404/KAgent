@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from src.redact.redact import apply as redact
+from src.redaction.redact import apply as redact
 from src.skills.registry import normalize_candidate_class
 from src.vulnerability.taxonomy import CANDIDATE_CLASS_ALIASES, VULNERABILITIES
 

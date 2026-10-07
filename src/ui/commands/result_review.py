@@ -15,7 +15,7 @@ from src.workflow.assessment import accepted_result, seal, resolve_sources, cand
 from src.workflow.state import ValidationResult, ValidationOutcome, validation_result_fingerprint
 from src.coverage.context import project_candidate_coverage
 from src.tools.workflow.workflow_tool import WorkflowTool
-from src.redact.redact import apply_evidence
+from src.redaction.redact import apply_evidence
 from src.ui.core.state import Append, TranscriptEntry
 from src.workflow.evidence import verify_evidence_reads
 from src.workflow.validation_route import GENERIC_VALIDATOR, ValidationRoute, resolve_validation_route, generic_admission

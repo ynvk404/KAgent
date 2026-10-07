@@ -5,7 +5,7 @@ from dataclasses import dataclass, fields
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
-from src.redact.redact import apply as redact
+from src.redaction.redact import apply as redact
 from src.workflow.state import (
     Candidate, ValidationResult, WorkflowState, candidate_origin,
     normalize_media_type, normalize_target_origin,

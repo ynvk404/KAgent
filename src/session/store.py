@@ -23,7 +23,7 @@ from src.llm.core.types import (
 )
 from src.logger.logger import get_logger
 from src.paths import user_data_root
-from src.redact.redact import redact_payload
+from src.redaction.redact import redact_payload
 from src.engagement.state import EngagementState
 from src.target.target import Target
 from src.workflow.state import WorkflowState

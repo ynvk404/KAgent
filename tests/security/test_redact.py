@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from src.redact.redact import apply, redact_payload
+from src.redaction.redact import apply, redact_payload
 
 
 def test_redacts_json_style_quoted_api_key_assignment():

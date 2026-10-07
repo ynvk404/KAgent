@@ -19,7 +19,7 @@ from src.agent.tool_results import source_provenance
 from src.llm.core.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import AlwaysAllow, Decision, YoloPrompter
 from src.permission.runtime.execution import ExecutionPolicy
-from src.redact.redact import redact_payload
+from src.redaction.redact import redact_payload
 from src.session.store import Store
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.evidence import EvidenceArtifact

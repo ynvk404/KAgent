@@ -310,7 +310,7 @@ def scrub_control(s: str, max_len: int = 512) -> str:
 
 
 def event_text(path: str, parsed: Any) -> str:
-    from src.redact.redact import apply_evidence
+    from src.redaction.redact import apply_evidence
     if not isinstance(parsed, dict):
         return "Burp bridge: received event"
 

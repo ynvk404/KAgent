@@ -17,7 +17,7 @@ from src.agent.agent import (
 from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import AlwaysAllow
 from src.permission.runtime.observations import ObservationStore
-from src.redact.redact import redact_payload
+from src.redaction.redact import redact_payload
 from src.session.store import Store
 from src.skills.registry import Registry as Skills
 from src.target.target import Target

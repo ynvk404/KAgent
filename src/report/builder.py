@@ -14,7 +14,7 @@ from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
 from src.coverage.store import _is_valid_entry
 from src.findings.store import MAX_REPORT_BYTES, _REPORT_SECTIONS, Finding, read_report_bytes
-from src.redact.redact import _is_secret_field, apply, apply_evidence
+from src.redaction.redact import _is_secret_field, apply, apply_evidence
 from src.report.model import (
     MAX_COVERAGE, MAX_COVERAGE_BYTES, MAX_DOCUMENT, MAX_FINDINGS, MAX_ID,
     MAX_INTAKE, MAX_PROSE, MAX_REASON, MAX_RECORDS, MAX_REFS, MAX_RESULTS,

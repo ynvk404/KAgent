@@ -160,7 +160,7 @@ class MCPSession:
             # fileno(), not a TextIOBase writer with only write().
             errlog = tempfile.TemporaryFile(mode='w+', encoding='utf-8')
             def close_stderr():
-                from src.redact.redact import apply_evidence
+                from src.redaction.redact import apply_evidence
                 errlog.seek(0)
                 text = apply_evidence(errlog.read(65536))
                 if text:
@@ -417,7 +417,7 @@ class MCPTool:
         return {"noSessionCache": True, "riskTier": "high-impact"}
 
     def summarize(self, args: dict[str, Any]) -> dict[str, str]:
-        from src.redact.redact import redact_payload
+        from src.redaction.redact import redact_payload
 
         return {
             "summary": f"mcp: {self._session.server_name}/{self._remote_name}",

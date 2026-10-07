@@ -36,7 +36,7 @@ from src.llm.runtime.context_budget import ContextCapacityError, InputBudget, re
 from . import output_bounds as _output_bounds
 from . import compaction as _compaction
 
-from src.redact.redact import apply as redact, redact_payload
+from src.redaction.redact import apply as redact, redact_payload
 from src.permission.runtime.invocations import permission_turn
 
 from src.llm.core.client import (

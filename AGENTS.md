@@ -229,7 +229,7 @@ but contributors must still preserve scope in tool and workflow changes.
   and `src/browser/`.
 
 - Durable memory/intelligence/redaction/path policy: `src/memory/`,
-  `src/intelligence/`, `src/redact/`, `src/engagement/`, and `src/paths.py`.
+  `src/intelligence/`, `src/redaction/`, `src/engagement/`, and `src/paths.py`.
 
 - Provider/config/runtime integration: `src/config/`, `src/llm/`,
   `src/llm/core/`, `src/llm/providers/`, `src/llm/runtime/`,

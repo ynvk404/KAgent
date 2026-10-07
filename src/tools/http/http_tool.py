@@ -23,7 +23,7 @@ from src.tools.common.outcome import ToolOutput
 from src.tools.http.context import HTTPContextStore
 from src.tools.http.request_builder import NATIVE_USER_AGENT, RequestDiff, build_captured_request, origin_headers, validate_host
 from src.browser.store import CaptureStore
-from src.redact.redact import apply_evidence as redact_evidence
+from src.redaction.redact import apply_evidence as redact_evidence
 
 RESPONSE_BYTE_CAP = 16 * 1024
 MAX_RESPONSE_BYTE_CAP = 64 * 1024

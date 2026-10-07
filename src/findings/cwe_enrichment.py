@@ -23,7 +23,7 @@ from src.findings.store import Finding, Store, read_report, report_bytes, classi
 from src.target.origin import HTTPOrigin
 from src.permission.permission import Decision, PermissionRequest
 from src.permission.runtime.execution import policy_for
-from src.redact.redact import apply_evidence
+from src.redaction.redact import apply_evidence
 from src.tools.common.registry import Registry
 from src.tools.mcp.integration import MCPTool
 from src.tools.mcp.cwe_deployment import (

@@ -85,7 +85,7 @@ class ObservationStore:
     def persist(self) -> None:
         if self.storage is None:
             return
-        from src.redact.redact import apply_evidence
+        from src.redaction.redact import apply_evidence
         self.storage.parent.mkdir(parents=True, exist_ok=True)
         rows = []
         for item in self._items.values():
@@ -125,7 +125,7 @@ class ObservationStore:
                 validation_binding: tuple[str, str] | None = None, owner: Any = _OWNER_UNSET,
                 response_headers=(), elapsed_ms=None, source_kind="native-http",
                 producer="http", execution_status="completed", truncated=None, source_details=None) -> str:
-        from src.redact.redact import apply_evidence
+        from src.redaction.redact import apply_evidence
         from src.workflow.assessment import digest, source_row
         # Owner is snapshotted before execution, never assigned from proof prose.
         owner = self.owner_provider() if owner is _OWNER_UNSET else owner

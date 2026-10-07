@@ -111,7 +111,7 @@ from src.skills.registry import Registry as SkillRegistry
 from src.tools.execution.plugin import CommandPluginTool
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.tools.common.registry import Registry as ToolRegistry
-from src.redact.redact import apply as redact
+from src.redaction.redact import apply as redact
 from src.tools.execution.shell import BashTool, ShellTool
 from src.tools.http.http_tool import HTTPTool
 from src.tools.common.capabilities import CapabilityInventory

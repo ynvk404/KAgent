@@ -14,7 +14,7 @@ from src.logger import logger
 from src.version import VERSION
 from .server import start_ingest_server, IngestServerOptions
 from .store import CaptureStore
-from src.redact.redact import apply_evidence
+from src.redaction.redact import apply_evidence
 
 log: Any = logger
 

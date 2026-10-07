@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.paths import user_data_root
-from src.redact.redact import redact_payload
+from src.redaction.redact import redact_payload
 
 MAX_LOG_BYTES = 4 * 1024 * 1024
 MAX_LOG_GENERATIONS = 3

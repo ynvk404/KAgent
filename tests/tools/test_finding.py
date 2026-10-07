@@ -7,7 +7,7 @@ import pytest
 from src.findings.store import Finding, Store, slugify
 from src.findings.classification import classify
 from src.permission.permission import AlwaysAllow
-from src.redact.redact import apply as redact
+from src.redaction.redact import apply as redact
 from src.tools.workflow.finding import (
     SEVERITIES,
     ConfirmFindingTool,

@@ -11,7 +11,7 @@ from typing import Any
 
 from src.logger.logger import get_logger
 from src.paths import user_data_root
-from src.redact.redact import redact_payload
+from src.redaction.redact import redact_payload
 
 log = get_logger("session_debug")
 DEBUG_DIR_MODE = 0o700

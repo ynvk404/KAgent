@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from src.redact.redact import apply_evidence as redact
+from src.redaction.redact import apply_evidence as redact
 from src.tools.execution.sensitive import is_sensitive_path
 from src.permission.permission import Prompter, UserControlledRefusal
 

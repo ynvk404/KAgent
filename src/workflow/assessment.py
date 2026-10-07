@@ -150,11 +150,11 @@ def start_attempt(state, candidate, session_id, epoch, *, requests=None, criteri
             raise ValueError("related request outside exact target origin")
         if "required" in request and not isinstance(request["required"], bool):
             raise ValueError("related request required must be boolean")
-        from src.redact.redact import apply_evidence
+        from src.redaction.redact import apply_evidence
         normalized.append({"role": request["role"], "method": request["method"].upper(), "url": apply_evidence(url),
                            "required": request.get("required", request["role"] != "cleanup")})
     request_associations({"related_requests": normalized})
-    from src.redact.redact import redact_payload
+    from src.redaction.redact import redact_payload
     if criteria is not None and (not isinstance(criteria, dict) or len(json.dumps(criteria)) > 6000):
         raise ValueError("attempt assessment criteria must be a bounded object")
     origin = target_origin or candidate.target or (state.objective.target_origin if state.objective else None)

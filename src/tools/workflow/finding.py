@@ -14,7 +14,7 @@ from src.findings.store import (
 )
 from src.findings.classification import classify
 from src.permission.permission import Prompter
-from src.redact.redact import apply as redact, apply_evidence
+from src.redaction.redact import apply as redact, apply_evidence
 from src.logger.logger import get_logger
 from src.workflow.state import WorkflowState
 from src.workflow.evidence import verify_evidence_reads

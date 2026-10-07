@@ -124,7 +124,7 @@ def test_sentinel_secrets_absent_from_pdf_text_and_metadata(tmp_path):
 def test_multiline_labelled_secret_bodies_never_reach_pdf(tmp_path, already_redacted):
     from tests.report.test_builder import finding_fixture, source, resources
     from src.findings.store import render
-    from src.redact.redact import apply
+    from src.redaction.redact import apply
     state, _, _, finding, path = finding_fixture(tmp_path)
     finding.observed_impact = "session_token: |\n  SESSION_BODY_SENTINEL\n  SESSION_CONTINUATION_SENTINEL"
     finding.potential_impact = "csrf_token: >-\n  CSRF_BODY_SENTINEL"

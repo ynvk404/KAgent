@@ -13,7 +13,7 @@ from src.logger.logger import get_logger
 from src.logger.hang_diagnostics import HangDiagnostics
 from src.skills.registry import normalize_candidate_class
 from src.coverage.context import CoverageContext, normalize_contextual_endpoint
-from src.redact.redact import apply as redact
+from src.redaction.redact import apply as redact
 
 log = get_logger("coverage.store")
 

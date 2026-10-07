@@ -10,7 +10,7 @@ from typing import Any, Literal, TypeGuard, cast
 from urllib.parse import urljoin, urlsplit
 
 from src.skills.registry import normalize_candidate_class, normalize_metadata_name
-from src.redact.redact import (
+from src.redaction.redact import (
     apply as redact,
     redact_payload,
     redact_request_context,
