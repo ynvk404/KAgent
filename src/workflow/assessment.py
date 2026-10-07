@@ -88,6 +88,10 @@ def usable_source(row) -> bool:
             and row.get("execution_status") == "completed")
 
 
+class EvidenceAdmissibilityError(ValueError):
+    """A manifest repair error, distinct from a missing validation step."""
+
+
 def check_source_requirements(candidate, attempt, rows, *, terminal):
     associations = request_associations(attempt)
     for entry in rows:
@@ -96,7 +100,24 @@ def check_source_requirements(candidate, attempt, rows, *, terminal):
         if row.get("role") != role or row.get("required", True) is not required:
             raise ValueError("primary source association mismatch")
         if terminal and required and not usable_source(row):
-            raise ValueError("terminal assessment requires completed usable primary evidence; submit unresolved")
+            reasons = []
+            if row.get("truncated") is True:
+                reasons.append("truncated")
+            if row.get("complete") is not True:
+                reasons.append("incomplete")
+            if row.get("execution_status") != "completed":
+                reasons.append("execution unfinished")
+            # Only a controller-produced opaque ID and fixed reason strings;
+            # never response text, request values or credential-bearing URLs.
+            raise EvidenceAdmissibilityError(
+                f"evidence-admissibility: source {row['id']} unusable ({', '.join(reasons)}). "
+                "Terminal assessment requires completed usable primary evidence. "
+                "Read this rejection; select only usable observations supporting the assessment. "
+                "Retry at most once using existing evidence, repairing derived artifacts if needed. "
+                "Do not add probes just to repair a manifest when existing evidence suffices. "
+                "If evidence is insufficient, submit insufficient-evidence; continue validation only "
+                "for a separately identified missing validation step."
+            )
     if terminal:
         for key, request in associations.items():
             if request.get("required", True) and not any(

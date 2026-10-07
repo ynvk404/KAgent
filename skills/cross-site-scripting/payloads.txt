@@ -73,6 +73,12 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
 # candidate's marker — visible proof of execution that reads nothing
 # sensitive and sends nothing off-session. Replace {MARKER} with the same
 # value used in Phase 1 for that candidate so the result is traceable.
+# text/html fragments need no html/body wrappers. Raw reflection alone is
+# not complete executable proof. If evidence shows deterministic removal of
+# one trailing character, SKILL.md permits one same-context close variant:
+# append one inert trailing character to the selected marker, then inspect
+# the returned complete syntax. This replaces any other close variant; no
+# additional phase, spray, encoding trick or browser simulation is allowed.
 
 # --- HTML body context --------------------------------------------------
 <script>document.title='xsspoc-{MARKER}'</script>

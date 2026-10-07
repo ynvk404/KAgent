@@ -57,6 +57,7 @@ class Probe:
     # for html_body / html_attribute: did the payload come back unescaped
     # in a position the browser will parse as executable?
     payload_reflected_unescaped: bool = False
+    payload_complete: bool = True
 
     # for js_string: does the response evidence deterministically show the
     # break-out landing in an executable position (not just "the marker
@@ -94,14 +95,14 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
     ):
         # deterministic browser parsing context: HTTP-level evidence of
         # unescaped reflection is sufficient for `confirmed`.
-        if probe.payload_reflected_unescaped:
+        if probe.payload_reflected_unescaped and probe.payload_complete:
             return Outcome.CONFIRMED
         return Outcome.NOT_CONFIRMED
 
     if probe.context == ReflectionContext.JS_STRING:
         if not probe.payload_reflected_unescaped:
             return Outcome.NOT_CONFIRMED
-        if probe.js_breakout_deterministic:
+        if probe.js_breakout_deterministic and probe.payload_complete:
             return Outcome.CONFIRMED
         # reflected, but whether the break-out actually lands in an
         # executable position can't be established from HTTP evidence
@@ -345,3 +346,37 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_fragment_transformation_requires_complete_same_context_variant():
+    # Executable specification of the prose playbook; no browser/LLM is simulated.
+    from pathlib import Path
+    import asyncio
+    from src.skills.registry import Registry
+    from src.skills.load_skill import LoadSkillTool
+    from src.tools.skills.payloads import ReadPayloadsTool
+    from src.permission.permission import AlwaysAllow
+
+    skills = Registry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
+    loaded = asyncio.run(LoadSkillTool(skills).run({'name': 'cross-site-scripting'}))
+    prose = ' '.join(loaded.split())
+    for rule in ('neither `<html>` nor `<body>` wrappers are required',
+                 'An incomplete executable payload must not be confirmed',
+                 'at most one bounded same-context close variant',
+                 'This consumes the close variant allowance'):
+        assert rule in prose
+    corpus = asyncio.run(ReadPayloadsTool(skills).run(
+        {'skill': 'cross-site-scripting', 'file': 'payloads.txt'}, None, AlwaysAllow()))
+    assert 'append one inert trailing character' in ' '.join(corpus.split())
+    assert 'BenchmarkTest' not in loaded + corpus
+
+    payload = "<script>document.title='marker'</script>"
+    response = payload[:-1]  # text/html with raw reflection and no wrappers
+    assert '<html>' not in response and '<body>' not in response
+    assert classify_xss_outcome(Probe(ReflectionContext.HTML_BODY,
+        payload_reflected_unescaped=True, payload_complete=False)) != Outcome.CONFIRMED
+    variant_response = (payload + 'x')[:-1]
+    assert variant_response == payload
+    assert classify_xss_outcome(Probe(ReflectionContext.HTML_BODY,
+        payload_reflected_unescaped=True, payload_complete=True)) == Outcome.CONFIRMED

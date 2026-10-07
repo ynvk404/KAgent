@@ -518,3 +518,68 @@ async def test_closed_other_candidate_selector_allows_unstarted_unresolved_only(
     assert payload["result"]["attempt_id"] is None and payload["result"]["evidence_manifest"] == []
     assert state.latest_result(first.id) is prior and accepted_result(state, first, prior, policy)
     assert tool.coverage is not None and len(await tool.coverage.list()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('changes,reasons', [
+    ({'truncated': True}, ['truncated']),
+    ({'complete': False}, ['incomplete']),
+    ({'execution_status': 'failed'}, ['execution unfinished']),
+    ({'truncated': True, 'complete': False, 'execution_status': 'running'},
+     ['truncated', 'incomplete', 'execution unfinished']),
+])
+async def test_unusable_source_identified_and_good_manifest_not_salvaged(runtime, tmp_path, changes, reasons):
+    state, candidate, _, args, good_id = await setup(runtime, tmp_path)
+    registry, p, policy, *_ = runtime
+    await registry.execute('http', {'url': '/fixture?q=second', 'phase': 'validation'}, None, p)
+    bad_id = next(reversed(policy.observations._items))
+    bad = replace(policy.observations._items[bad_id], **changes)
+    policy.observations._items[bad_id] = replace(bad, retained_hash=digest(source_row(bad)))
+    args['observation_ids'] = [good_id, bad_id]
+    rejected = await registry.execute('workflow', args, None, p)
+    assert rejected.startswith('error: evidence-admissibility:')
+    assert bad_id in rejected
+    assert all(reason in rejected for reason in reasons)
+    assert 'Retry at most once' in rejected
+    assert not state.validation_results and not state.eligible_for_finding(candidate.id)
+    args['observation_ids'] = [good_id]
+    assert json.loads(await registry.execute('workflow', args, None, p))['ok']
+    latest = state.latest_result(candidate.id)
+    assert accepted_result(state, candidate, latest, policy)
+    assert latest is not None
+    assert [row['source']['id'] for row in latest.evidence_manifest] == [good_id]
+
+
+@pytest.mark.asyncio
+async def test_metadata_only_capture_is_still_truncated_and_unusable(runtime, tmp_path):
+    state, _, _, args, _ = await setup(runtime, tmp_path)
+    registry, p, policy, *_ = runtime
+    await registry.execute('http', {'url': '/fixture?q=second', 'phase': 'validation',
+        'max_response_bytes': 0, 'evidence_mode': 'metadata-only'}, None, p)
+    oid = next(reversed(policy.observations._items))
+    observation = policy.observations._items[oid]
+    assert observation.body == b'' and observation.truncated and not observation.complete
+    args['observation_ids'] = [oid]
+    assert oid in await registry.execute('workflow', args, None, p)
+    assert not state.validation_results
+
+
+@pytest.mark.asyncio
+async def test_observed_baseline_write_keeps_cleanup_pending_when_unresolved(runtime, tmp_path, monkeypatch):
+    import httpx
+    from tests.security.test_execution_policy import REAL_CLIENT
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: REAL_CLIENT(
+        transport=httpx.MockTransport(lambda req: httpx.Response(200, content=b'Update complete', request=req)), **kwargs))
+    state, candidate, _, args, _ = await setup(runtime, tmp_path, candidate_class='sqli')
+    registry, p, *_ = runtime
+    payload = json.loads(await registry.execute('workflow', {**args,
+        'outcome': 'insufficient-evidence', 'mutation_performed': True,
+        'cleanup_status': 'operator action required: target isolation unavailable',
+        'assessment': {**ASSESSMENT, 'observed_impact': 'Server reports Update complete; affected rows/readback unverified.'},
+    }, None, p))
+    assert payload['result']['mutation_performed'] is True
+    assert payload['result']['cleanup_state'] == 'requires-user-action'
+    latest = state.latest_result(candidate.id)
+    assert latest is not None and latest.outcome == 'insufficient-evidence'
+    assert b'Update complete' in bytes.fromhex(latest.evidence_manifest[0]['source']['body'])
+    assert not state.eligible_for_finding(candidate.id)

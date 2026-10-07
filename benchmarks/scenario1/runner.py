@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import uuid
+from importlib.metadata import distributions
 
 from benchmarks.common.contracts import (CaseExecution, OperationalCaseInput, RunManifest,
                                         RuntimeSettings, decode, digest, file_hash, write_new, read_json)
@@ -22,19 +23,31 @@ def reproducibility() -> dict:
     def git(*args):
         proc = subprocess.run(['git', '-C', str(REPO), *args], capture_output=True, text=True)
         return proc.stdout.strip() if proc.returncode == 0 else None
-    return {'kagent_commit': git('rev-parse', 'HEAD'), 'kagent_dirty': bool(git('status', '--porcelain')),
+    dirty = git('status', '--porcelain')
+    return {'kagent_commit': git('rev-parse', 'HEAD'), 'kagent_dirty': bool(dirty) if dirty is not None else None,
             'python': platform.python_version(), 'platform': platform.platform(),
             'skills': {str(p.relative_to(REPO)): file_hash(p)
                        for cls in ('sql-injection', 'cross-site-scripting')
                        for p in sorted((REPO / 'skills' / cls).rglob('*')) if p.is_file()},
+            'source_snapshot_version': 1,
+            'runtime_files': {str(p.relative_to(REPO)): file_hash(p)
+                              for p in sorted({
+                                  *REPO.joinpath('src').rglob('*.py'),
+                                  *REPO.joinpath('benchmarks/common').rglob('*.py'),
+                                  *REPO.joinpath('benchmarks/scenario1').rglob('*.py'),
+                                  *(REPO / name for name in ('pyproject.toml', 'requirements.txt', 'pyrightconfig.json')),
+                              }) if p.is_file() and not p.is_symlink()},
+            'dependencies': sorted((d.metadata['Name'], d.version) for d in distributions()
+                                   if d.metadata['Name']),
             'capability_profile': CAPABILITY}
 
 
 def validate_runtime(manifest: RunManifest, settings: RuntimeSettings):
     if not settings.authorized_lab:
         raise ValueError('explicit --authorized-lab declaration required')
-    if manifest.dataset.get('state_mutating_cases') and settings.target_state != 'external-reset':
-        raise ValueError('selected servlets mutate target state; require --target-state external-reset and operator snapshots/resets')
+    if manifest.dataset.get('state_mutating_cases'):
+        raise ValueError('selected servlets mutate target state; HTTP-only profile has no verified per-case '
+                         'isolation/readback/cleanup. external-reset is only a declaration; selection must exclude these cases')
 
 
 def envelope(op: dict, settings: RuntimeSettings, run_id: str, execution_id: str, workspace: Path, output: Path) -> dict:

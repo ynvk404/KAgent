@@ -71,6 +71,10 @@ class HTTPTool(Tool):
             'Relative paths use /target. TLS verification is disabled. Redirects require '
             'max_redirects and separate approval per hop; cross-origin redirects stop. '
             'Use candidate_id with mutation_value to replay one captured input.'
+            ' Body/content/size comparisons need a positive response cap; omit it for the default. '
+            'Terminal evidence needs a cap fitting the complete response within configured limits, not just a marker prefix. '
+            'Truncated observations cannot support terminal evidence. Select complete observations '
+            'already captured rather than adding truncated sources to a sufficient manifest.'
         )
 
     def schema(self) -> dict:
@@ -94,7 +98,13 @@ class HTTPTool(Tool):
                 'browser_user_agent': {'type': 'string'},
                 'max_redirects': {'type': 'integer', 'minimum': 0, 'maximum': 5},
                 'max_response_bytes': {'type': 'integer', 'minimum': 0, 'maximum': MAX_RESPONSE_BYTE_CAP,
-                                       'description': f'Decoded byte cap; default {RESPONSE_BYTE_CAP}.'},
+                                       'default': RESPONSE_BYTE_CAP,
+                                       'description': f'Decoded byte cap; default {RESPONSE_BYTE_CAP}. Zero requires '
+                                       'evidence_mode=metadata-only and cannot supply body/content/size comparisons. '
+                                       'Any truncated capture is unusable for terminal evidence.'},
+                'evidence_mode': {'type': 'string', 'enum': ['body', 'metadata-only'],
+                                  'default': 'body', 'description': 'Evidence needed by this probe. Body includes '
+                                  'content/size comparisons and timing probes requiring response content.'},
             },
             'required': ['phase'],
         }
@@ -110,6 +120,7 @@ class HTTPTool(Tool):
         cap = args.get('max_response_bytes', RESPONSE_BYTE_CAP)
         if isinstance(cap, bool) or not isinstance(cap, int) or not 0 <= cap <= MAX_RESPONSE_BYTE_CAP:
             raise ValueError(f'max_response_bytes must be an integer from 0 to {MAX_RESPONSE_BYTE_CAP}')
+        self._validate_capture_mode(args, cap)
         if arg_string(args, 'candidate_id'):
             self._resolve_baseline(args)
         else:
@@ -122,11 +133,20 @@ class HTTPTool(Tool):
     def permission_hints(self, args: dict) -> PermissionHints:
         return {'noSessionCache': True, 'riskTier': 'high-impact', 'yoloAutoApprove': False}
 
+    @staticmethod
+    def _validate_capture_mode(args: dict, cap: int) -> None:
+        mode = args.get('evidence_mode', 'body')
+        if not isinstance(mode, str) or mode not in {'body', 'metadata-only'}:
+            raise ValueError('evidence_mode must be body or metadata-only')
+        if cap == 0 and mode == 'body':
+            raise ValueError('body-dependent evidence requires max_response_bytes > 0; omit it for the default')
+
     def prepare(self, args: dict) -> tuple[EffectiveHTTP, httpx.Request]:
         action, request, _ = self._prepare_with_diff(args)
         return action, request
 
     def _prepare_with_diff(self, args: dict) -> tuple[EffectiveHTTP, httpx.Request, RequestDiff | None]:
+        self._validate_capture_mode(args, args.get('max_response_bytes', RESPONSE_BYTE_CAP))
         self.permissions.sync_target()
         self.context_store.sync_target(self.target.revision, self.engagement.revision, self.permissions.epoch)
         if arg_string(args, 'candidate_id'):

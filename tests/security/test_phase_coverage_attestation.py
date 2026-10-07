@@ -64,7 +64,7 @@ async def test_http_attests_core_dimensions_only_after_observed_response(runtime
         assert result.status == 'error' and 'execution adapter observation' in result
         assert state.phase_coverage_record('recon', dimension) is None
     result = await registry.execute('http', {'url': '/', 'phase': 'recon',
-                                           'max_response_bytes': 0}, None, p)
+                                           'max_response_bytes': 0, 'evidence_mode': 'metadata-only'}, None, p)
     assert result.truncated and len(sent) == 1
     observations = policy.observations._items
     assert len(observations) == 1

@@ -589,3 +589,25 @@ async def test_http_no_note_when_host_is_public():
         )
 
     assert not out.startswith("note:")
+
+
+@pytest.mark.parametrize('mode', [None, 'body'])
+def test_body_evidence_rejects_zero_capture_before_preparation(mode):
+    tool = scoped_tool()
+    args = {'url': 'http://example.test', 'phase': 'validation', 'max_response_bytes': 0}
+    if mode:
+        args['evidence_mode'] = mode
+    with pytest.raises(ValueError, match='body-dependent evidence'):
+        tool.validate_args(args)
+    with pytest.raises(ValueError, match='body-dependent evidence'):
+        tool.prepare(args)
+
+
+def test_capture_default_and_explicit_metadata_mode():
+    tool = scoped_tool()
+    args: dict = {'url': 'http://example.test', 'phase': 'validation'}
+    assert tool.schema()['properties']['max_response_bytes']['default'] == RESPONSE_BYTE_CAP
+    assert tool.prepare(args)[0].response_cap == RESPONSE_BYTE_CAP
+    args.update(max_response_bytes=0, evidence_mode='metadata-only')
+    tool.validate_args(args)
+    assert tool.prepare(args)[0].response_cap == 0

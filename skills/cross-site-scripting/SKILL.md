@@ -243,6 +243,14 @@ curl -ksS "$TARGET/search?q=${MARKER}\"'<>" \
 
 Classify what you see around the marker:
 
+Check the response Content-Type as well as the surrounding syntax. A
+`Content-Type: text/html` response may be an HTML fragment: neither `<html>`
+nor `<body>` wrappers are required for HTML parsing. Raw, unencoded reflection
+in such a fragment is HTML context, not context=none just because wrappers
+are absent. Distinguish raw HTML reflection from a complete executable payload
+and from execution that still requires browser proof. Inspect enclosing
+comments, attributes, inert elements and CSP before choosing the proof.
+
 - **HTML body context** — the marker sits between tags and is not
   HTML-encoded.
 - **HTML attribute context** — the marker sits inside a quoted attribute
@@ -316,6 +324,9 @@ Interpret the result according to the observed context:
 - Never claim browser execution solely because a payload string appears in
   an HTTP response when the observed context does not make execution
   deterministic from that response alone.
+- An incomplete executable payload must not be confirmed, even when reflected
+  raw in text/html. Missing delimiters or an unfinished tag are not execution
+  proof; examine the complete returned syntax, not just a matching substring.
 
 Keep the proof non-destructive and scoped to your own session:
 
@@ -357,8 +368,18 @@ access-control issue outside this skill's scope).
 Do not retry blocked probes with encoding tricks, alternate payloads, or
 filter-bypass techniques. That is outside this skill's scope.
 
+If the response shows a clear deterministic transformation, such as removing
+exactly one trailing character, allow at most one bounded same-context close
+variant compensating for that observed transformation. For trailing-character
+removal, append one inert trailing character to the same execution marker and
+inspect whether the returned payload is now complete. This consumes the close
+variant allowance; do not also spray alternate vectors. It is not a new fuzzing
+or filter-bypass phase. Confirm only if the returned complete executable syntax
+and context meet the existing deterministic HTTP proof threshold; otherwise
+retain browser-required when execution remains browser-dependent.
+
 If the first payload for the observed context doesn't execute, try at most
-one or two close variants for that same context (e.g. a different quote
+one close variant for that same context (e.g. a different quote
 style, or — for HTML body/attribute contexts specifically — an
 event-handler-based marker if the `<script>` variant specifically appears
 stripped while other tags/attributes pass through unescaped). Both are

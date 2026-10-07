@@ -95,6 +95,14 @@ one selected source must show mutation of the designated component. A same-origi
 request to another route, a different parameter/location/component, or evidence
 owned by another Candidate is an invalid result and receives no TP/TN/FP/FN.
 Payload mutation is allowed, so evidence need not reproduce the fixture bytes.
+The harness also checks prepared requests before sending: value-tainted cases
+may change only the designated value. All unrelated query/body/header/cookie
+fields must match the fixture. Name-tainted cases retain single-name replacement
+and exact baseline provenance requirements. Generated Content-Length follows
+the body. This check uses operational fixtures without truth or sink hints.
+Scenario 1 does not follow redirects: `max_redirects > 0` is rejected before
+traffic. Omit it or use `0`; a valid fixture's 3xx response is captured normally
+without following `Location`. Production HTTP redirect support is unchanged.
 
 Only bounded confirmation is requested; optional deeper impact is not requested.
 XSS outcomes requiring unavailable browser proof remain `browser-required`.
@@ -102,16 +110,43 @@ Production playbook semantics and assessment authority are unchanged.
 
 Process/storage isolation does **not** reset the target application. The selected
 set may contain SQL servlets that perform INSERT or other writes even with a
-legitimate baseline. Such selections require `--target-state external-reset`.
+legitimate baseline. Runtime now rejects known state-mutating selections under
+both state declarations: this HTTP-only profile has no verified per-case
+isolation, readback or cleanup. `external-reset` remains a settings value but
+does not prove freshness or admit known writes.
 The operator owns application/database snapshots and resets outside this harness.
 The harness does not execute reset commands, validate snapshot freshness, or
 guarantee equivalent target state between cases. Sequential selected-manifest
 runs can accumulate application state unless an external lab orchestrator keeps
 it controlled. Record the strategy/build information in `--deployment-metadata`;
-for an initial smoke pilot choose a read-only single case. `confirmation-only`
-means no intended persistent exploitation; it is rejected for statically detected
-mutating servlets. Static mutation detection is conservative, not a complete
-application-side-effect analysis.
+for an initial smoke pilot choose a reviewed read-only single case.
+
+Automatic default/reduced/smoke exclusion is blocked on trustworthy dataset-wide
+state metadata. The existing regex is a positive write indicator, not a verified
+negative classification: batch/large-update calls and helper-mediated writes can
+escape it. Selection and quotas/ranking remain unchanged; known writes fail
+closed at runtime rather than being replaced to fill quotas. The smallest
+follow-up is a reviewed parent-only versioned state-effects catalog bound to
+dataset source hashes, including unknown entries. Selection could then exclude
+writes/unknowns before ranking, fail with the deficient stratum if a quota cannot
+be met, and record exclusions. A catalog/isolation adapter is outside this change;
+absence of a regex match does not prove a stateless endpoint.
+
+Reproducibility snapshots retain commit/dirty state and skill hashes and now
+also pin SHA-256 of Python runtime/harness sources and static dependency/type
+configuration, plus installed distribution names/versions. RuntimeSettings in
+the manifest pins invocation budgets and target settings. No credentials or
+configuration contents are copied. Dirty development smoke remains supported;
+there is no official-mode clean-tree requirement. These hashes identify the
+startup file snapshot, not an immutable checkout or attestation of target state,
+provider configuration, imported modules, or source changes during execution.
+
+Evidence-admissibility errors identify rejected opaque source IDs and fixed
+reasons. The Agent permits one retry and at most three repair turns (to
+rewrite/register proof and resubmit). Repeated rejection or a probe-only repair
+loop closes the attempt as insufficient-evidence through the normal workflow
+gate. A distinct missing declared validation step retains its normal workflow
+error and may continue. Budgets, evidence checks and scoring rules are unchanged.
 
 ## Execution, freeze and authority
 

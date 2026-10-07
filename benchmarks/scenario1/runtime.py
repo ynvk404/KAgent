@@ -169,11 +169,72 @@ def prompt(candidate_id: str, op: OperationalCaseInput) -> str:
             'This exact target is an explicitly authorized local/private lab. '
             'Use the supplied legitimate request fixture and the production skill. '
             f'The designated input component is {op.input_component}. '
+            f'The designated input name is {op.input_name!r}, location {op.input_location!r}. '
+            + ('Mutate only the VALUE of that designated input; keep its name and location fixed. '
+               if op.input_component == 'value' else
+               'This name-tainted fixture permits only the designated name replacement, preserving its baseline value. ')
+            + 'Preserve every other field in the request template at baseline, including username, password, email, '
+            'cookies, headers, query parameters and non-candidate body fields. '
+            'Do not probe other fields for this candidate or cite requests that mutate another input as its evidence. '
             'Only bounded confirmation is requested. Do not perform optional deeper impact validation, '
             'persistent exploit changes, reconnaissance, enumeration, or other candidates. '
             'Native HTTP is the only network capability; shell, MCP, plugins, browser and research are unavailable. '
             'Record the native structured outcome and stop according to the skill. '
             'Retain browser-required when browser proof is needed. No answers to ask_user are available headlessly.')
+
+
+def _check_designated_request(request, baseline, op: OperationalCaseInput) -> None:
+    """Harness-only fixture discipline, before traffic, without truth or sink hints."""
+    if request.method != baseline.method or request.url.copy_with(query=None) != baseline.url.copy_with(query=None):
+        raise ValueError('supplied-input request must preserve fixture method and route')
+
+    def unchanged(pairs, expected, location):
+        if op.input_location != location:
+            return pairs == expected
+        normalize = str.lower if location == 'header' else lambda s: s
+        name = normalize(op.input_name)
+        expected_slots = [(k, v) for k, v in expected if normalize(k) == name]
+        slots = [(k, v) for k, v in pairs if normalize(k) == name]
+        if len(expected_slots) != 1:
+            return False
+        if op.input_component == 'name' and not slots:
+            # Exact name-replacement provenance still requires an observed
+            # baseline; canonical.py retains that independent requirement.
+            names = {normalize(k) for k, _ in expected}
+            slots = [(k, v) for k, v in pairs if normalize(k) not in names and v == expected_slots[0][1]]
+        if len(slots) != 1:
+            return False
+        if op.input_component == 'name' and slots[0][1] != expected_slots[0][1]:
+            return False
+        return ([p for p in pairs if p != slots[0]]
+                == [p for p in expected if normalize(p[0]) != name])
+
+    def cookies(req):
+        pairs = []
+        for item in req.headers.get('cookie', '').split(';'):
+            key, sep, value = item.strip().partition('=')
+            if sep:
+                pairs.append((key, value))
+        return pairs
+
+    def headers(req):
+        # Generated length changes with the permitted mutation; Cookie is
+        # compared by individual fields, not by its aggregate header string.
+        return [(k, v) for k, v in req.headers.multi_items() if k not in {'content-length', 'cookie'}]
+
+    try:
+        valid = (
+            unchanged(parse_qsl(request.url.query.decode(), keep_blank_values=True),
+                      parse_qsl(baseline.url.query.decode(), keep_blank_values=True), 'query')
+            and unchanged(parse_qsl(request.content.decode(), keep_blank_values=True),
+                          parse_qsl(baseline.content.decode(), keep_blank_values=True), 'body')
+            and unchanged(cookies(request), cookies(baseline), 'cookie')
+            and unchanged(headers(request), headers(baseline), 'header')
+        )
+    except UnicodeDecodeError:
+        valid = False
+    if not valid:
+        raise ValueError('supplied-input request must mutate only the designated component and preserve all unrelated fields at baseline')
 
 
 class HeadlessPermissions:
@@ -247,6 +308,18 @@ def build_agent(op: OperationalCaseInput, settings: RuntimeSettings, root: Path,
     tools = Registry()
     workflow = WorkflowState()
     http = HTTPTool(target, engagement)
+    prepare = http._prepare_with_diff
+
+    def prepare_designated(args):
+        if args.get('max_redirects', 0) > 0:
+            raise ValueError('Scenario 1 does not support follow redirects; omit max_redirects or use 0')
+        prepared = prepare(args)
+        baseline = prepare(request_fixture(op, settings))[1]
+        _check_designated_request(prepared[1], baseline, op)
+        return prepared
+
+    # Keep the registered production adapter identity and all permission gates.
+    http._prepare_with_diff = prepare_designated
     engagement.http_permissions.activate(settings.target, HTTPLimits(seconds=settings.timeout_seconds,
         requests=settings.http_requests, rate=3, burst=3, concurrency=2), activation='manual')
     prompter = HeadlessPermissions(policy, target)

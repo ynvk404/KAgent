@@ -343,6 +343,26 @@ first — finish, record, then move to the next.
 
 ## Phase 1: Detection / baseline
 
+### State-changing endpoints
+
+Baseline and confirmation requests can themselves cause target writes. A
+successful write acknowledgement such as `Update complete` is evidence that
+the server reports a write, even if no optional impact exploit was intended.
+Record this observation in the narrative; never assert that no data was written
+when the response reports successful write execution. `mutation_performed`
+tracks mutation during the validation attempt and drives cleanup bookkeeping;
+use true when target state mutation was caused/observed, including baseline
+writes, with honest cleanup status. An acknowledgement does not independently
+verify affected rows or persistent state: state those limits explicitly.
+
+If writes are observed or the endpoint is known to be state-changing, stop
+further stateful probes unless the profile has valid isolation and cleanup.
+An operator declaration of external reset does not establish per-case reset
+freshness. Write-only INSERT without isolated readback may remain
+insufficient-evidence/deferred. Do not force confirmed or not-confirmed from
+syntax sensitivity or a write acknowledgement alone; the SQLI-2 confirmation
+threshold remains unchanged. This guard also applies to second-order storage.
+
 ### 1a. Establish a clean baseline
 
 Before sending anything syntax-sensitive, capture a normal response to
@@ -603,8 +623,20 @@ as `[REDACTED_TOKEN]`.
 Never copy an opaque cookie, JWT, or CSRF value by hand between tool calls. If a
 single bounded request chain genuinely requires one, extract and consume it in
 the same scoped command without printing it, then persist only a redacted marker.
-For native HTTP probes, set `max_response_bytes` to the smallest body needed for
-the evidence; use `0` for status/header-only checks.
+For native HTTP probes, choose `max_response_bytes` to retain a complete response
+within configured limits, or omit it for the default capture. A short prefix
+containing a marker is not complete terminal evidence. Body/content/size comparisons
+and timing comparisons requiring content must retain a positive byte cap; never
+request `0` for those probes. `0` requires explicit `evidence_mode: metadata-only`
+for status/header-only checks; a nonempty discarded body is still truncated
+and cannot be cited as terminal evidence. Prefer complete usable observations
+already available and cite only sources on which the assessment actually relies.
+Do not append truncated/incomplete/unfinished sources to an otherwise sufficient
+manifest. After an evidence-admissibility rejection, read the source ID/reason,
+retry at most once with usable existing evidence (repair linked proof if needed),
+and submit insufficient-evidence if it is insufficient. Do not generate fresh
+probes just to repair the manifest; continue validation only for a separately
+identified missing validation step.
 
 If Phase 2 never produces a clear, repeatable signal — including when 2d
 was unavailable and therefore not attempted — that's a valid outcome:

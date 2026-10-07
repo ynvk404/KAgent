@@ -198,7 +198,8 @@ class WorkflowTool(Tool):
                 "confirmation": {
                     "type": "object",
                 },
-                "mutation_performed": {"type": "boolean"},
+                "mutation_performed": {"type": "boolean", "description":
+                    "Target state mutation caused/observed during this validation attempt, including baseline writes; drives cleanup state."},
                 "cleanup_status": optional_string,
                 "cleanup_state": {
                     "type": "string",

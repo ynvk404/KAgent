@@ -824,3 +824,15 @@ class TestOutcomeResolution:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_stateful_and_evidence_repair_contract(skill_text):
+    prose = _norm(skill_text)
+    for rule in ('`Update complete`', 'including baseline writes',
+                 'stop further stateful probes', 'valid isolation and cleanup',
+                 'insufficient-evidence/deferred', 'SQLI-2 confirmation threshold remains unchanged',
+                 'never assert that no data was written',
+                 'retry at most once with usable existing evidence',
+                 'Do not generate fresh probes just to repair the manifest'):
+        assert rule in prose
+    assert 'BenchmarkTest' not in skill_text

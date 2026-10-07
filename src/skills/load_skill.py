@@ -106,6 +106,11 @@ class LoadSkillTool:
                       "permission questions. Missing accounts/OTP remain real input questions. Runtime validates source "
                       "provenance, integrity, ownership and scope; Agent/skill assesses vulnerability meaning. "
                       "Start validation, cite primary observation_ids and immutable evidence_refs for both terminal outcomes. "
+                      "Select complete, non-truncated, completed observations supporting the assessment; do not add unusable sources. "
+                      "Body/content/size comparisons require positive response capture, never max_response_bytes=0. "
+                      "After evidence-admissibility rejection read the source ID/reason and retry at most once using usable existing evidence. "
+                      "Repair derived artifacts if needed; do not add probes merely to repair a sufficient manifest. "
+                      "If evidence is insufficient, submit insufficient-evidence unless a distinct missing validation step is identified. "
                       "Declare bounded hypothesis, criteria, limitations, observed_impact, severity and completed_attempt for negatives. "
                       "A proof file alone cannot establish target traffic. Operator /review-result optionally reviews a proof "
                       "conclusion; that human review is never autonomous verification or tool authorization.\n\n")
