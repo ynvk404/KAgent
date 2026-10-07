@@ -424,12 +424,16 @@ async def execute_case(op: OperationalCaseInput, settings: RuntimeSettings, root
     canonical = freeze(run_id, op.case_id, execution_id, session_id, candidate_id, agent.workflow, policy, agent.target)
     tools['executed'] = policy.used - 1  # Native policy.start; exclude harness Candidate creation.
     admitted = sum(b.used for b in policy.engagement.http_permissions._budgets.values())
+    from src.tools.http.http_tool import HTTPTool
+    http_tool = agent.tools.get('http')
+    assert isinstance(http_tool, HTTPTool)
     metadata = {'capability_profile': CAPABILITY, 'yolo': False, 'provider': client.name(), 'model': client.model(),
                 'thinking_enabled': thinking, 'generation': generation,
                 'permission_decisions': cast(HeadlessPermissions, agent.prompter).decisions, 'session_id': session_id,
                 'candidate_id': candidate_id, 'objective_id': canonical['objective_id']}
     metrics = RuntimeMetrics(execution_end - execution_start, execution_start - setup_start,
                              time.monotonic() - execution_end, first,
-                             llm_metrics(agent.request_metrics.records, done), tools, admitted)
+                             llm_metrics(agent.request_metrics.records, done), tools, admitted,
+                             http_tool.dispatch_attempts)
     return CaseExecution(run_id, op.case_id, execution_id, status, done.get('stop_reason') if done else None,
                          canonical, asdict(metrics), metadata, ','.join(errors[:12]) or None)

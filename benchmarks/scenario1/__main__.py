@@ -40,6 +40,7 @@ def parser():
     running.add_argument('--agent-calls', type=int, default=24)
     running.add_argument('--dry-run', action='store_true')
     running.add_argument('--fail-fast', action='store_true')
+    running.add_argument('--run-kind', choices=['development', 'official'], default='development')
     running.add_argument('--output', type=Path)
     evaluation = commands.add_parser('evaluate')
     evaluation.add_argument('--run', required=True, type=Path)
@@ -77,14 +78,15 @@ def main(argv=None) -> int:
         settings = RuntimeSettings(args.target, args.context_path, args.authorized_lab, args.target_state,
                                    args.timeout, args.http_requests, args.tool_calls, args.agent_calls,
                                    args.deployment_metadata)
-        from .runner import run, validate_runtime
+        from .runner import run, validate_run_kind, validate_runtime
         validate_runtime(manifest, settings)
+        validate_run_kind(manifest, args.run_kind)
         if args.dry_run:
             print(json.dumps({'dry_run': True, 'cases': manifest.execution_order, 'runtime': asdict(settings),
                               'mapping_version': manifest.mapping_version, 'dataset_version': dataset.version}, indent=2))
             return 0
         destination = args.output or Path('artifacts/benchmarks') / manifest.run_id
-        run(manifest, settings, destination, fail_fast=args.fail_fast)
+        run(manifest, settings, destination, run_kind=args.run_kind, fail_fast=args.fail_fast)
         from .evaluate import evaluate
         report = evaluate(destination)
         print(json.dumps({'artifacts': str(destination), **report['metrics']['overall']}, indent=2))

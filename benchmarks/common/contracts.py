@@ -70,7 +70,10 @@ T = TypeVar("T")
 
 
 def decode(cls: type[T], raw: dict) -> T:
-    if not isinstance(raw, dict) or set(raw) != {f.name for f in fields(cls)}:  # type: ignore[arg-type]
+    expected = {f.name for f in fields(cls)}  # type: ignore[arg-type]
+    if cls is RuntimeMetrics and isinstance(raw, dict) and set(raw) == expected - {'http_dispatch_attempts'}:
+        raw = {**raw, 'http_dispatch_attempts': None}
+    if not isinstance(raw, dict) or set(raw) != expected:
         raise ValueError(f"malformed {cls.__name__} fields")
     if raw.get("schema_version") != SCHEMA or type(raw.get("schema_version")) is not int:
         raise ValueError("unsupported schema version")
@@ -221,6 +224,7 @@ class RuntimeMetrics:
     llm: dict
     tools: dict
     http_admitted: int | None
+    http_dispatch_attempts: int | None = None
     schema_version: int = SCHEMA
 
     def __post_init__(self):
@@ -229,6 +233,8 @@ class RuntimeMetrics:
                 raise ValueError('invalid runtime duration')
         if self.first_terminal_seconds is not None and (self.agent_seconds is None or self.first_terminal_seconds > self.agent_seconds):
             raise ValueError('terminal time outside execution interval')
+        if self.http_dispatch_attempts is not None and (type(self.http_dispatch_attempts) is not int or self.http_dispatch_attempts < 0):
+            raise ValueError('invalid HTTP transport dispatch attempts')
 
 
 @dataclass(frozen=True)
@@ -292,6 +298,8 @@ class CaseExecution:
             decode(CanonicalResultExport, self.result)
         if self.metrics is not None:
             decode(RuntimeMetrics, self.metrics)
+            if 'http_dispatch_attempts' not in self.metrics:
+                object.__setattr__(self, 'metrics', {**self.metrics, 'http_dispatch_attempts': None})
 
 
 @dataclass(frozen=True)

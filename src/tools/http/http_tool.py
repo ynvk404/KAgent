@@ -50,6 +50,7 @@ class HTTPTool(Tool):
                  context_store: HTTPContextStore | None = None,
                  validation_registry=None):
         self.evidence_store: Any = None
+        self.dispatch_attempts = 0
         self.target = target
         self.workflow = workflow
         self.engagement = engagement
@@ -430,6 +431,9 @@ class HTTPTool(Tool):
                 evidence_store = policy.observations if policy else getattr(self, "evidence_store", None)
                 source_owner = evidence_store.owner_provider() if evidence_store else None
                 sent_at = time.monotonic()
+                # This is the native transport handoff. Retries and followed
+                # redirects each enter here again; failed sends still count.
+                self.dispatch_attempts += 1
                 response = await client.send(request, stream=True)
                 check_cancelled(signal)
                 self.permissions.sync_target()

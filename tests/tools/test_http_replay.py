@@ -179,6 +179,7 @@ async def test_redirect_semantics_and_per_hop_approval(monkeypatch, status, expe
                              "headers": {"Content-Type": "application/x-www-form-urlencoded"}, "max_redirects": 2},
                             None, prompter)
     assert len(seen) == 2
+    assert tool.dispatch_attempts == 2
     assert len(prompter.requests) == 2
     assert seen[1].method == expected_method
     assert seen[1].content == (b"q=one" if expected_method == "POST" else b"")
@@ -201,6 +202,7 @@ async def test_cross_origin_redirect_never_forwards_credentials(monkeypatch):
                              "max_redirects": 3}, None, Allow())
     assert len(seen) == 1
     assert "cross-origin redirect not followed" in output
+    assert tool.dispatch_attempts == 1
     assert "private" not in output
 
 
@@ -253,6 +255,7 @@ async def test_redirect_loop_stops_with_bounded_hops(monkeypatch):
     output = await tool.run({"phase": "recon", "url": "/loop", "max_redirects": 5}, None, Allow())
     assert len(seen) == 1
     assert "redirect loop stopped" in output
+    assert tool.dispatch_attempts == 1
 
 
 @pytest.mark.asyncio

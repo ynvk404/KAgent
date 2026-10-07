@@ -263,8 +263,31 @@ Tool proposals count ToolCallEvent; executed invocations count successful
 production `policy.start` entries, excluding harness Candidate admission. They
 are not HTTP sends or successful tools. Blocked/failed counts use ToolResultEvent
 status/error_kind. `http_admitted` counts production HTTP reservations charged
-to the exact grant (including redirects), not inferred tool proposals. No metric
-is called an LLM "step".
+to the exact grant (including redirects), not inferred tool proposals.
+`http_dispatch_attempts` counts native HTTP transport dispatch attempts: each
+handoff to the production transport counts once, including each actual retry or
+followed redirect hop. A failure after handoff still counts. A reservation that
+stops before handoff does not. Scenario 1 disallows following redirects, so its
+cases have no followed hops. Neither counter proves delivery to the server,
+successful response, packet count, or confirmed target interaction. Older case
+artifacts without `http_dispatch_attempts` decode as null/NA, never zero. No
+metric is called an LLM "step".
+
+## Run designation
+
+`run --run-kind {development,official}` declares the run classification;
+`development` is the default and `official` requires the explicit option.
+Smoke selections cannot be declared official. After writing and reading the
+final `manifest.json`, the runner writes a separate, collision-safe
+`run-classification.json` before launching any worker. Its versioned record
+contains the run ID, declared classification, SHA-256 of the final manifest's
+raw on-disk bytes, and the semantic manifest identity used by lifecycle events.
+The record is never updated after a run begins and contains no ground truth
+rows. This is operator-declared metadata, not a cryptographic signature or
+proof of protocol compliance, a clean environment, or scientific validity.
+For old runs without a record, the reader interprets smoke mode as
+`development/smoke`; other modes have unknown classification, meaning official
+status was not declared. Existing artifacts are not migrated.
 
 ## Commands
 
@@ -281,6 +304,7 @@ venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmark
 venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-selection.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --dry-run
 venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --case BenchmarkTest00013 --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state confirmation-only --output artifacts/benchmarks/single-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-selection.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --fail-fast --output artifacts/benchmarks/run-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-selection.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --run-kind official --output artifacts/benchmarks/official-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/run-UNIQUE
 ```
 
@@ -291,6 +315,7 @@ and finite `--timeout`, `--http-requests`, `--tool-calls`, `--agent-calls` (defa
 180 seconds / 24 / 80 / 24). Exit codes: 0 command completed, 2 input/integrity
 error, 3 incomplete offline run, 4 recorded execution failures. Unresolved labels
 do not make a completed execution fail. Artifacts include `manifest.json`,
+`run-classification.json`,
 `events.jsonl`, `results/<case>.json`, `workspaces/<execution-id>/`, and immutable
 `evaluation-<identity>.json` containing per-case records and all metrics.
 

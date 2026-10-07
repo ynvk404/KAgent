@@ -16,6 +16,7 @@ from importlib.metadata import distributions
 from benchmarks.common.contracts import (CaseExecution, OperationalCaseInput, RunManifest,
                                         RuntimeSettings, decode, digest, file_hash, write_new, read_json)
 from benchmarks.common.recorder import Recorder
+from .classification import RunKind, write_run_classification
 from .runtime import CAPABILITY, REPO
 
 
@@ -50,6 +51,13 @@ def validate_runtime(manifest: RunManifest, settings: RuntimeSettings):
                          'isolation/readback/cleanup. external-reset is only a declaration; selection must exclude these cases')
 
 
+def validate_run_kind(manifest: RunManifest, kind: RunKind):
+    if kind not in {'development', 'official'}:
+        raise ValueError('run kind must be development or official')
+    if manifest.mode == 'smoke' and kind == 'official':
+        raise ValueError('smoke run cannot be official')
+
+
 def envelope(op: dict, settings: RuntimeSettings, run_id: str, execution_id: str, workspace: Path, output: Path) -> dict:
     decode(OperationalCaseInput, op)
     return {'operational': op, 'settings': asdict(settings), 'run_id': run_id, 'execution_id': execution_id,
@@ -81,19 +89,22 @@ def launch_worker(envelope: dict, seconds: float) -> tuple[int, bool]:
         raise
 
 
-def run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, fail_fast=False, launcher=launch_worker) -> Path:
+def run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, run_kind: RunKind = 'development',
+        fail_fast=False, launcher=launch_worker) -> Path:
     validate_runtime(manifest, settings)
+    validate_run_kind(manifest, run_kind)
     destination = destination.resolve()
     if destination.exists():
         raise ValueError('run directory already exists; history cannot be overwritten or resumed')
     destination.mkdir(parents=True, mode=0o700)
     bound = replace(manifest, runtime=asdict(settings), reproducibility=reproducibility())
     write_new(destination / 'manifest.json', asdict(bound))
+    classification = write_run_classification(destination, run_kind)
     recorder = Recorder(destination / 'events.jsonl', manifest.run_id)
     operations = {o['case_id']: o for o in manifest.operational}
     for case_id in manifest.execution_order:
         recorder.append('scheduled', case_id, 'scheduled', data={'operational_hash': digest(operations[case_id]),
-                                                               'manifest_hash': digest(asdict(bound))})
+                                                               'manifest_hash': classification.manifest_identity})
     for case_id in manifest.execution_order:
         execution_id = uuid.uuid4().hex
         output = destination / 'results' / f'{case_id}.json'
