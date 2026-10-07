@@ -21,16 +21,32 @@ from tests.helpers.agent_fakes import FakeClient
 from tests.security.test_repair_runtime import lab
 
 
+@pytest.fixture
+def cli_runtime(tmp_path, monkeypatch):
+    # Patch the module owning main()'s globals, not the lazy entrypoint facade.
+    cli = importlib.import_module('src.cli.runtime')
+    home = tmp_path / 'home'
+    # Explicit cwd also disables legacy reads from the real working directory.
+    intelligence = cli.IntelligenceStore(cwd=tmp_path, home=home)
+    memory = cli.MemoryStore(cwd=str(tmp_path), home=str(home))
+    engagement = cli.EngagementStore(cwd=tmp_path, home=home)
+    monkeypatch.setattr(cli, 'IntelligenceStore', lambda: intelligence)
+    monkeypatch.setattr(cli, 'MemoryStore', lambda: memory)
+    monkeypatch.setattr(cli, 'EngagementStore', lambda: engagement)
+    return cli
+
+
 @pytest.mark.asyncio
-async def test_cli_tui_real_factory_evidence_network_off_and_revoke(lab, tmp_path, monkeypatch):
-    cli = importlib.import_module('src.cli.main')
+async def test_cli_tui_real_factory_evidence_network_off_and_revoke(lab, tmp_path, monkeypatch, cli_runtime):
+    cli = cli_runtime
     _, _, _, _, origin, requests = lab
     cfg = Config(backend=Backend.DEEPSEEK, model='deepseek-flash', api_keys={'deepseek':'FAKE_TEST_ONLY'},
                  skills_dirs=[str(Path(__file__).resolve().parents[2] / 'skills')],
                  streaming_enabled=False, tooling_profile=ToolingProfile.MINIMAL)
     monkeypatch.setattr(cli.config, 'load', lambda:cfg)
     monkeypatch.setattr(cli.llm_factory, 'new_from_config', lambda config:FakeClient([]))
-    monkeypatch.setattr(cli, 'probe_tool_support', AsyncMock(return_value=ProbeResult('yes')))
+    probe = AsyncMock(return_value=ProbeResult('yes'))
+    monkeypatch.setattr(cli, 'probe_tool_support', probe)
     monkeypatch.setattr(cli.sys, 'argv', ['kagent','--target',origin,'--yolo','--no-stream'])
     monkeypatch.setenv('KAGENT_PROJECT_ROOT', str(tmp_path))
     monkeypatch.setattr(cli.session_store, 'dir_from_path', lambda _:tmp_path / '.kagent/sessions')
@@ -75,13 +91,14 @@ async def test_cli_tui_real_factory_evidence_network_off_and_revoke(lab, tmp_pat
 
     monkeypatch.setattr(cli.KAgent, 'run_async', run_app)
     assert await cli.main() == 0 and checked
+    probe.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('cancel', [False, True])
-async def test_cli_file_then_shell_slow_inspection_ui_and_escape(tmp_path, monkeypatch, cancel):
+async def test_cli_file_then_shell_slow_inspection_ui_and_escape(tmp_path, monkeypatch, cancel, cli_runtime):
     """Reproduce the manual checklist with the CLI policy and a scripted model."""
-    cli = importlib.import_module('src.cli.main')
+    cli = cli_runtime
     cfg = Config(backend=Backend.DEEPSEEK, model='deepseek-flash', api_keys={'deepseek':'FAKE_TEST_ONLY'},
         skills_dirs=[str(Path(__file__).resolve().parents[2] / 'skills')],
         streaming_enabled=False, tooling_profile=ToolingProfile.MINIMAL)
@@ -97,7 +114,8 @@ async def test_cli_file_then_shell_slow_inspection_ui_and_escape(tmp_path, monke
     fake = FakeClient(scripted)
     monkeypatch.setattr(cli.config, 'load', lambda:cfg)
     monkeypatch.setattr(cli.llm_factory, 'new_from_config', lambda config:fake)
-    monkeypatch.setattr(cli, 'probe_tool_support', AsyncMock(return_value=ProbeResult('yes')))
+    probe = AsyncMock(return_value=ProbeResult('yes'))
+    monkeypatch.setattr(cli, 'probe_tool_support', probe)
     monkeypatch.setattr(cli.sys, 'argv', ['kagent','--yolo','--no-stream'])
     monkeypatch.setenv('KAGENT_PROJECT_ROOT', str(tmp_path))
     monkeypatch.setattr(cli.session_store, 'dir_from_path', lambda _:tmp_path / '.kagent/sessions')
@@ -164,3 +182,4 @@ async def test_cli_file_then_shell_slow_inspection_ui_and_escape(tmp_path, monke
 
     monkeypatch.setattr(cli.KAgent, 'run_async', run_app)
     assert await cli.main() == 0 and checked
+    probe.assert_awaited_once()
