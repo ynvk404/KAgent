@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.workflow import run_workflow_fixture
 from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
@@ -30,11 +31,12 @@ NEW_VALIDATION_SKILLS = (
 async def test_new_skill_accepts_candidate_and_records_validation(
     skill_name: str,
     candidate_class: str,
+    tmp_path,
 ):
     skills = SkillRegistry()
     skills.load_dir(REPO_ROOT / "skills")
     state = WorkflowState()
-    tool = WorkflowTool(state, Target("https://target.test"), skills=skills)
+    tool = WorkflowTool(state, Target("https://target.test"), skills=skills, evidence_root=tmp_path)
 
     candidate_output = await tool.run(
         {
@@ -64,12 +66,17 @@ async def test_new_skill_accepts_candidate_and_records_validation(
     ))
     assert started["candidate"]["status"] == "validating"
 
-    recorded = json.loads(await tool.run(
+    (tmp_path / "bounded-proof.md").write_text("Analysis of the offline controller response fixture")
+    proof_id = json.loads(await tool.run({
+        "action": "record_evidence", "candidate_id": candidate_id, "evidence_path": "bounded-proof.md",
+    }, None, AlwaysAllow()))["evidence"]["id"]
+    recorded = json.loads(await run_workflow_fixture(tool,
         {
             "action": "record_result",
             "candidate_id": candidate_id,
             "skill_name": skill_name,
             "outcome": "not-confirmed",
+            "evidence_refs": [proof_id],
             "techniques": ["bounded-runtime-regression"],
             "notes": "Regression test only; no target request was sent.",
         },

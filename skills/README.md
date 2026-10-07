@@ -95,3 +95,14 @@ Just drop a `<name>/SKILL.md` into one of these — no config needed. Skills
 
 Shipped skill handoffs, help examples, and payload references are validated
 by `tests/skills/test_conformance.py`, so stale runtime references fail CI.
+
+## Evidence and conclusion authority
+
+Validation skills guide the Agent's interpretation of genuine primary evidence.
+Start a durable attempt, link runtime observation IDs and immutable proof refs,
+and submit a structured assessment. Runtime checks provenance, identity and
+execution completeness; skill controls, repeatability, impact and stop conditions
+remain the Agent's responsibility. A bounded completed negative does not prove
+universal absence. Optional operator review creates its own revision. See the
+[workflow contract](../docs/agent-assessed-evidence.md) for source/import, related
+request, excerpt, resume and legacy rules.

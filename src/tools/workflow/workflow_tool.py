@@ -13,7 +13,7 @@ from src.paths import project_root
 from src.permission.permission import Prompter, UserControlledRefusal
 from src.permission.runtime.execution import policy_for
 from src.tools.execution.file import gate_sensitive_path
-from src.redact.redact import apply as redact
+from src.redact.redact import apply as redact, redact_payload
 from src.coverage.store import CoverageStore, CoverageStatus
 from src.coverage.context import project_candidate_coverage
 from src.target.target import Target
@@ -36,6 +36,9 @@ from src.workflow.state import (
     validation_result_fingerprint,
 )
 from src.workflow.evidence import EvidenceArtifact, verify_evidence_reads
+from src.workflow.assessment import (start_attempt, references, resolve_sources, candidate_binding,
+                                     seal, accepted_result, check_excerpts)
+import uuid
 from src.skills.registry import (
     Registry as SkillRegistry,
     Skill,
@@ -74,12 +77,7 @@ MAX_LIST_LIMIT = 25
 MAX_LIST_COMPLETED_SKILLS = 20
 LIST_TEXT_LIMIT = 200
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
-_SQLI_BOOLEAN_CLAIM_RE = re.compile(
-    r"\bboolean\s+differential\b|"
-    r"\btrue\b.{0,100}\breturns?\b.{0,60}\b(?:rows?|results?|data)\b|"
-    r"\bfalse\b.{0,100}\b(?:empty|zero\s+rows?|no\s+rows?)\b",
-    re.IGNORECASE,
-)
+
 
 
 class WorkflowTool(Tool):
@@ -102,20 +100,21 @@ class WorkflowTool(Tool):
         self.evidence_root = evidence_root or project_root()
         self.session_id = session_id
         self.http_tool = http_tool
+        from src.permission.runtime.observations import ObservationStore
+        self.observations = ObservationStore()
+        self.active_attempt = None
+        self.evidence_epoch = "epoch_" + uuid.uuid4().hex
+        if http_tool is not None:
+            http_tool.evidence_store = self.observations
 
     def name(self) -> str:
         return "workflow"
 
     def description(self) -> str:
         return (
-            "get_input(input_id): full sanitized input; list summarizes. "
-            "start_validation: transient validation_context; sample != template/baseline. "
-            "Inputs: whole-target. Recon/enumeration: "
-            "performed=adapter-only; observed=unattested source/limitation; skipped=omitted; "
-            "not_applicable=irrelevant. Non-performed needs reasons; retry failed/cancelled "
-            "work or explain skips. record_evidence: immutable redacted proof. "
-            "record_result needs candidate_id, skill_name and outcome. "
-            "Compact refs only; no raw traffic."
+            "get_input: sanitized details. start_validation declares attempt. "
+            "record_result needs candidate_id, skill_name and outcome with primary IDs and assessment. "
+            "record_evidence: immutable redacted proof. Performed phases need adapter; other states need reasons."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -132,6 +131,10 @@ class WorkflowTool(Tool):
                     "type": "string",
                 },
                 "probe": ProbeProposal.schema(),
+                "attempt_id": optional_string,
+                "related_requests": {"type": "array", "maxItems": 16, "items": {"type": "object"},
+                    "description": "At start: role (baseline/control/trigger/readback/cleanup/auxiliary), method, url, optional required."},
+                "assessment": {"type": "object", "description": "Bounded hypothesis, criteria, limitations, completed_attempt, observed_impact and severity."},
                 "input_id": optional_string,
                 "input_type": optional_string,
                 "content_type": {
@@ -165,7 +168,7 @@ class WorkflowTool(Tool):
                     "description": "Existing project proof file.",
                 },
                 "observation_ids": {"type": "array", "items": {"type": "string"},
-                                    "description": "Runtime IDs alone never prove a conclusion."},
+                                    "description": "Primary runtime source IDs."},
                 "signals": {"type": "array", "items": {"type": "string"}},
                 "baseline_request_ref": optional_string,
                 "auth_context_ref": optional_string,
@@ -183,7 +186,6 @@ class WorkflowTool(Tool):
                 },
                 "skill_name": {
                     "type": "string",
-                    "description": "Required for record_result and complete_skill.",
                 },
                 "outcome": {
                     "type": "string",
@@ -195,7 +197,6 @@ class WorkflowTool(Tool):
                 "repeatable": {"type": "boolean"},
                 "confirmation": {
                     "type": "object",
-                    "description": "Structured SQL injection proof.",
                 },
                 "mutation_performed": {"type": "boolean"},
                 "cleanup_status": optional_string,
@@ -257,7 +258,11 @@ class WorkflowTool(Tool):
         """Keep same-turn workflow mutations intact for the next LLM call."""
         return "preserve"
 
-    async def run(
+    async def run(self, args, signal, prompter):
+        async with self.state.mutation_lock:
+            return await self._run(args, signal, prompter)
+
+    async def _run(
         self,
         args: dict[str, Any],
         signal: Any,
@@ -267,6 +272,9 @@ class WorkflowTool(Tool):
         if policy is not None:
             policy.bind_validation_context(self.state, self.skills, self.target)
         action = arg_string(args, "action")
+        if (policy is not None and policy.session_id is not None and self.session_id != policy.session_id
+                and action in {"start_validation", "record_evidence", "record_result"}):
+            return "error: workflow/runtime session identity mismatch"
         if action == "get_input":
             result = self._get_input(args)
         elif action == "record_input":
@@ -291,12 +299,18 @@ class WorkflowTool(Tool):
                     self._require_generic(latest.candidate_id, policy)
                 except ValueError as err:
                     return self._typed_result(f"error: {err}")
-            if policy is not None:
-                latest = self.state.latest_result(arg_string(args, "candidate_id"))
-                if latest is None or policy.observations.result(latest.candidate_id, tuple(latest.evidence_refs),
-                                                               policy.engagement.http_permissions.epoch,
-                                                               self.state.candidates.get(latest.candidate_id)) is None:
-                    return self._typed_result("error: unverified result cannot sync tested coverage")
+            latest = self.state.latest_result(arg_string(args, "candidate_id"))
+            candidate = self.state.candidates.get(arg_string(args, "candidate_id"))
+            if candidate is None or not accepted_result(self.state, candidate, latest, policy):
+                return self._typed_result("error: inadmissible result cannot sync tested coverage")
+            assert latest is not None
+            before = deepcopy(self.state.to_dict())
+            stamp = policy.stamp() if policy else None
+            if not await verify_evidence_reads([self.state.evidence[ref] for ref in latest.evidence_refs],
+                    self.evidence_root, prompter, signal):
+                return self._typed_result("error: coverage evidence changed/unavailable")
+            if self.state.to_dict() != before or (policy and policy.stamp() != stamp):
+                return self._typed_result("error: coverage submission changed during evidence read")
             result = await self._sync_coverage_action(args)
         elif action == "record_phase_coverage":
             if policy_for(prompter) is not None:
@@ -462,15 +476,6 @@ class WorkflowTool(Tool):
                 candidate.status = "queued" if supported else "deferred"
             elif route.kind != "expert" and self.skills is not None:
                 candidate.status = "deferred"
-            if candidate.candidate_class == "sql-injection" and any(
-                _SQLI_BOOLEAN_CLAIM_RE.search(signal)
-                for signal in candidate.signals
-            ):
-                return (
-                    "error: boolean differential claims require structured, "
-                    "repeated validation evidence; record only the observed "
-                    "candidate signal here"
-                )
             stored, created = self.state.add_candidate(candidate, input_id=requested_input_id or None)
             input_id = arg_string(args, "input_id")
             if input_id:
@@ -706,6 +711,16 @@ class WorkflowTool(Tool):
             context = resolve_validation_context(
                 self.state, candidate_id, target=self._active_target() or None, http_tool=runtime_http,
             ).to_dict()
+            attempt = start_attempt(self.state, candidate, self.session_id,
+                policy.engagement.http_permissions.epoch if policy else self.evidence_epoch,
+                requests=args.get("related_requests"), criteria=args.get("assessment"), target_origin=self._active_target() or None, target_revision=self.target.revision if self.target else None)
+            self.active_attempt = attempt["id"]
+            from src.workflow.assessment import attempt_owner
+            self.observations.owner_provider = lambda: attempt_owner(self.state, self.active_attempt,
+                self.evidence_epoch, self.target.revision if self.target else None, self.session_id)
+            if policy is not None:
+                policy.generic_validation.durable_attempt = attempt["id"]
+            context["attempt_id"] = attempt["id"]
             if generic:
                 assert policy is not None
                 assert objective is not None
@@ -716,8 +731,6 @@ class WorkflowTool(Tool):
                     "input_path": admitted.proposal.input_path,
                     "occurrence": admitted.proposal.occurrence,
                 }
-                if not running_retest:
-                    policy.observations.invalidate_result(candidate.id)
                 if needs_retest:
                     boundary.retest_objectives.discard(objective.id)
                 boundary.started_candidate = candidate.id
@@ -745,6 +758,11 @@ class WorkflowTool(Tool):
             self._validate_current_objective_candidate(candidate_id)
             policy = policy_for(prompter)
             candidate = self.state.candidates[candidate_id]
+            identity = candidate_binding(candidate)
+            objective = self.state.objective
+            target_revision = self.target.revision if self.target else None
+            route = resolve_validation_route(self.skills, candidate.candidate_class)
+            policy_stamp = policy.stamp() if policy else None
             generic = self._is_generic(candidate)
             snapshot = None
             if generic:
@@ -765,6 +783,12 @@ class WorkflowTool(Tool):
                 if source.absolute() != policy.generic_validation.proof_path(candidate):
                     raise ValueError("generic evidence source restricted to candidate proof.md")
             real = await gate_sensitive_path(prompter, str(source), "read evidence source", signal)
+            if (self.state.candidates.get(candidate_id) is not candidate
+                    or candidate_binding(candidate) != identity or self.state.objective is not objective
+                    or (self.target.revision if self.target else None) != target_revision
+                    or resolve_validation_route(self.skills, candidate.candidate_class) != route
+                    or policy_for(prompter) is not policy or (policy and policy.stamp() != policy_stamp)):
+                raise ValueError("candidate/objective/route/policy changed during evidence read")
             artifact = EvidenceArtifact.capture_immutable_snapshot(
                 candidate_id, real, self.evidence_root, sensitive_read_approved=True,
                 original_path=str(source),
@@ -772,20 +796,41 @@ class WorkflowTool(Tool):
             if snapshot is not None:
                 assert policy is not None
                 policy.generic_validation.unchanged(candidate_id, snapshot)
+            if "source_kind" in args or "assessment_source" in args:
+                raise ValueError("proof file provenance cannot be promoted by model labels")
+            ids = references(args.get("observation_ids", []), "observation_ids")
+            aid = policy.generic_validation.durable_attempt if policy else self.active_attempt
+            selected = resolve_sources(policy, self.state, candidate, self.state.attempts.get(aid) if aid is not None else None, ids,
+                terminal=False, negative=False, store=self.observations) if ids else []
+            if ids:
+                previous = self.state.evidence_sources.get(artifact.id)
+                if previous is not None and previous != ids:
+                    raise ValueError("immutable derived evidence source association changed")
             self.state.add_evidence(artifact)
+            if ids:
+                self.state.evidence_sources[artifact.id] = ids
+            for entry in selected:
+                self.state.selected_sources[entry["source"]["id"]] = entry
+            while len(self.state.selected_sources) > 256 or len(json.dumps(self.state.selected_sources)) > 16 * 1024 * 1024:
+                del self.state.selected_sources[next(iter(self.state.selected_sources))]
         except UserControlledRefusal:
             raise
         except (OSError, ValueError) as err:
             return f"error: {err}"
-        return json.dumps({"ok": True, "evidence": artifact.to_dict()}, indent=2)
+        return json.dumps({"ok": True, "evidence": artifact.to_dict(), "evidence_kind": "derived", "primary_parents": ids}, indent=2)
 
     async def _record_result(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
         try:
+            for reserved in ("assessment_source", "assessment_contract_version", "result_id", "assessment_binding", "evidence_manifest", "candidate_binding", "source_kind", "session_id", "objective_id"):
+                if reserved in args:
+                    raise ValueError("assessment authority/identity fields are controller-owned")
+            refs = references(args.get("evidence_refs", []), "evidence_refs", 16)
+            ids = references(args.get("observation_ids", []), "observation_ids")
             result = ValidationResult(
                 candidate_id=arg_string(args, "candidate_id"),
                 skill_name=arg_string(args, "skill_name"),
                 outcome=arg_string(args, "outcome"),  # type: ignore[arg-type]
-                evidence_refs=args.get("evidence_refs", []),
+                evidence_refs=refs,
                 techniques=args.get("techniques", []),
                 repeatable=args.get("repeatable"),
                 confirmation=args.get("confirmation"),
@@ -804,6 +849,11 @@ class WorkflowTool(Tool):
             self._validate_current_objective_candidate(result.candidate_id)
             generic = result.skill_name == GENERIC_VALIDATOR or self._is_generic(candidate)
             policy = policy_for(prompter)
+            before = deepcopy(self.state.to_dict())
+            candidate_object = candidate
+            target_revision = self.target.revision if self.target else None
+            route_before = resolve_validation_route(self.skills, candidate.candidate_class)
+            policy_stamp = policy.stamp() if policy else None
             snapshot = None
             if generic:
                 self._require_generic(candidate.id, policy)
@@ -833,52 +883,102 @@ class WorkflowTool(Tool):
                     )
             elif skill and skill.candidate_classes and candidate.candidate_class not in skill.candidate_classes:
                 raise ValueError("result skill does not handle candidate class")
-            if (
-                result.outcome == "confirmed"
-                and candidate.candidate_class == "sql-injection"
-                and policy is None
-            ):
-                result.confirmation = self._validate_sqli_confirmation(result)
-            if policy is not None and result.outcome in {"confirmed", "not-confirmed"}:
-                ids = args.get("observation_ids", [])
-                verified = policy.observations.result(candidate.id, tuple(result.evidence_refs),
-                                                      policy.engagement.http_permissions.epoch, candidate)
-                if verified is None:
-                    boolean_sqli = (
-                        result.outcome == "confirmed"
-                        and candidate.candidate_class == "sql-injection"
-                        and (
-                            any("boolean" in technique.lower() for technique in result.techniques)
-                            or (isinstance(result.confirmation, dict)
-                                and result.confirmation.get("kind") == "boolean-differential")
-                        )
-                    )
-                    if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
-                        raise ValueError("observation_ids must be a list of strings")
-                    if boolean_sqli and len({item for item in ids if isinstance(item, str)}) < 4:
-                        raise ValueError(
-                            "boolean SQL injection confirmation needs at least four distinct "
-                            "captured runtime observation IDs: two TRUE and two FALSE requests "
-                            "forming repeatable pairs; collect the missing evidence and retry "
-                            "record_result"
-                        )
-                    if generic:
-                        boundary = policy.generic_validation
-                        if boundary.attempt is not None and boundary.started_candidate == candidate.id:
-                            verified = policy.observations.verify(candidate, tuple(result.evidence_refs), ids,
-                                policy.engagement.http_permissions.epoch,
-                                validation_binding=(candidate.id, boundary.probe_identity()))
-                    else:
-                        verified = policy.observations.verify(candidate, tuple(result.evidence_refs), ids,
-                                                              policy.engagement.http_permissions.epoch)
-                if verified is None or verified.outcome != result.outcome or (generic and not result.evidence_refs):
-                    result.outcome = "insufficient-evidence"
-                    result.deferred_reason = "class-verifier-unavailable-or-proof-unverified; evidence retained, no confirmed/negative claim"
+            terminal = result.outcome in {"confirmed", "not-confirmed"}
+            aid = policy.generic_validation.durable_attempt if policy is not None else self.active_attempt
+            attempt = self.state.attempts.get(aid) if aid is not None else None
+            # A closed selector is retained for same-revision retries. It is
+            # not an execution owner for a different, unstarted Candidate.
+            if (attempt is not None and attempt.get("candidate_id") != candidate.id
+                    and attempt.get("status") != "active"
+                    and args.get("attempt_id") is None and not ids):
+                aid, attempt = None, None
+            if attempt is not None and (
+                    attempt.get("candidate_binding") != candidate_binding(candidate)
+                    or attempt.get("session_id") != self.session_id
+                    or attempt.get("objective_id") != result.objective_id
+                    or attempt.get("epoch") != (policy.engagement.http_permissions.epoch if policy else self.evidence_epoch)
+                    or attempt.get("target_revision") != (self.target.revision if self.target else None)
+                    or (attempt.get("status") == "active" and attempt.get("result_position") != sum(r.candidate_id == candidate.id for r in self.state.validation_results))):
+                raise ValueError("stale active attempt ownership/epoch/target/result position")
+            if args.get("attempt_id") is not None and args["attempt_id"] != aid:
+                raise ValueError("stale/wrong attempt identity")
+            latest = self.state.latest_result(candidate.id)
+            # A transport retry/cleanup update preserves the exact revision.
+            # An explicit new start has a different attempt and never dedups.
+            retry_fields = ("outcome", "skill_name", "evidence_refs", "techniques", "repeatable",
+                            "confirmation", "mutation_performed")
+            if (latest is not None and latest.assessment_contract_version >= 2
+                    and not arg_bool(args, "force")
+                    and latest.session_id == self.session_id and latest.objective_id == result.objective_id
+                    and latest.candidate_binding == candidate_binding(candidate)
+                    and latest.attempt_id == aid and (attempt is None or attempt.get("status") != "active")
+                    and all(getattr(latest, key) == getattr(result, key) for key in retry_fields)):
+                expected_ids = [entry["source"]["id"] for entry in latest.evidence_manifest]
+                expected_assessment = {k: v for k, v in latest.assessment.items() if k not in {"artifacts", "artifact_sources", "attempt"}}
+                if ids != expected_ids or args.get("assessment", {}) != expected_assessment:
+                    raise ValueError("closed attempt assessment changed; start an explicit retest")
+                if self.state.to_dict() != before or latest.assessment_binding != seal(latest):
+                    raise ValueError("stale retry assessment")
+                if terminal and not accepted_result(self.state, candidate, latest, policy):
+                    raise ValueError("retry assessment evidence unavailable")
+                latest.cleanup_status, latest.cleanup_state = result.cleanup_status, result.cleanup_state
+                self.state.set_candidate_status(candidate.id, "validated" if terminal else "deferred")
+                if latest.coverage_synced is False:
+                    await self._sync_coverage(candidate, latest)
+                return json.dumps({"ok": True, "created": False, "result": latest.public_dict(),
+                    "eligible_for_confirm_finding": self.state.eligible_for_finding(candidate.id),
+                    "coverage_sync": "synced" if latest.coverage_synced else "not-pending"})
+            if terminal and (not attempt or attempt.get("status") != "active"):
+                raise ValueError("terminal assessment requires successful start_validation")
+            assessment = args.get("assessment", {})
+            if not isinstance(assessment, dict) or len(json.dumps(assessment)) > 6000:
+                raise ValueError("assessment must be a bounded object")
+            if set(assessment) & {"artifacts", "artifact_sources", "attempt", "assessment_source", "assessment_binding"}:
+                raise ValueError("assessment provenance/binding fields are controller-owned")
+            if terminal:
+                if not refs:
+                    raise ValueError("both terminal outcomes require registered evidence")
+                if not all(isinstance(assessment.get(key), str) and assessment[key].strip()
+                           for key in ("hypothesis", "criteria", "limitations", "observed_impact", "severity")):
+                    raise ValueError("terminal assessment requires hypothesis, criteria, limitations, observed_impact, severity")
+                if assessment["severity"] not in {"info", "low", "medium", "high", "critical"}:
+                    raise ValueError("invalid assessment severity")
+                if result.outcome == "not-confirmed" and assessment.get("completed_attempt") is not True:
+                    raise ValueError("negative assessment requires declared completed bounded attempt")
+                if generic and (attempt is None or not isinstance(attempt.get("criteria"), dict)
+                        or not all(isinstance(attempt["criteria"].get(k), str) and attempt["criteria"][k].strip()
+                                   for k in ("hypothesis", "criteria", "limitations"))):
+                    raise ValueError("generic fallback lacks declared criteria; submit unresolved")
+            manifest = resolve_sources(policy, self.state, candidate, attempt, ids,
+                terminal=terminal, negative=result.outcome == "not-confirmed", store=self.observations)
+            check_excerpts(assessment, manifest)
+            if terminal and not any(e["source"]["source_kind"] in {"native-http", "imported-capture"}
+                    and e["source"].get("complete") and not e["source"].get("truncated")
+                    and e["source"].get("execution_status") == "completed" for e in manifest):
+                raise ValueError("tool output claims alone cannot establish target request/response evidence")
+            if (self.state.to_dict() != before or self.state.candidates.get(candidate.id) is not candidate_object
+                    or (self.target.revision if self.target else None) != target_revision
+                    or resolve_validation_route(self.skills, candidate.candidate_class) != route_before
+                    or policy_for(prompter) is not policy or (policy and policy.stamp() != policy_stamp)):
+                raise ValueError("candidate/objective/route/policy changed during result submission")
+            if any(not self.state.evidence[ref].is_available_for_resume(self.evidence_root) for ref in refs):
+                raise ValueError("evidence integrity changed during result submission")
+            if any(parent not in ids for ref in refs for parent in self.state.evidence_sources.get(ref, [])):
+                raise ValueError("derived evidence requires its declared primary source parents")
+            # Sources are checked again after every evidence permission await.
+            result.assessment_contract_version = 2
+            result.assessment_source = "agent"
+            result.result_id = "result_" + uuid.uuid4().hex
+            result.attempt_id = aid
+            result.candidate_binding = candidate_binding(candidate)
+            result.evidence_manifest = manifest
+            result.assessment = {**cast(dict, redact_payload(assessment)), "artifacts": evidence_binding,
+                                 "artifact_sources": {ref: list(self.state.evidence_sources.get(ref, [])) for ref in refs},
+                                 "attempt": {k:v for k,v in attempt.items() if k != "status"} if attempt else None}
+            result.assessment_binding = seal(result)
             coverage_status = self._coverage_status(result)
             if self.coverage is not None and coverage_status:
                 result.coverage_synced = False
-            if policy is not None:
-                policy.observations.check_pending_review()
             if snapshot is not None:
                 assert policy is not None
                 policy.generic_validation.idle()
@@ -889,6 +989,8 @@ class WorkflowTool(Tool):
                 if any(not self.state.evidence[ref].is_available_for_resume(self.evidence_root)
                        for ref in result.evidence_refs):
                     raise ValueError("generic evidence integrity changed during result verification")
+            if attempt is not None:
+                attempt["status"] = "completed" if terminal else "unresolved"
             created = self.state.add_validation_result(
                 result,
                 force=arg_bool(args, "force"),
@@ -923,233 +1025,10 @@ class WorkflowTool(Tool):
                     "synced" if stored.coverage_synced else "not-applicable"
                 ),
                 "coverage_error": sync_error,
-                "result": stored.to_dict(),
+                "result": stored.public_dict(),
             },
             indent=2,
         )
-
-    @staticmethod
-    def _validate_sqli_confirmation(
-        result: ValidationResult,
-    ) -> dict[str, Any] | None:
-        """Enforce the reproducible Phase-2 contract at the state boundary."""
-        confirmation = result.confirmation
-        techniques = {item.strip().lower() for item in result.techniques}
-        claims_boolean = any("boolean" in item for item in techniques)
-        claims_time = any("time" in item for item in techniques)
-        if not claims_boolean and not claims_time:
-            if confirmation is None:
-                # Preserve error-based and legacy SQLi result compatibility;
-                # structured enforcement applies to differential claims.
-                return None
-            raise ValueError(
-                "structured SQL injection confirmation requires a matching technique"
-            )
-        if result.repeatable is not True:
-            raise ValueError(
-                "differential SQL injection confirmation requires repeatable=true"
-            )
-        if not isinstance(confirmation, dict):
-            raise ValueError(
-                "differential SQL injection requires structured confirmation evidence"
-            )
-        kind = confirmation.get("kind")
-        if claims_time and not claims_boolean:
-            if kind != "time-differential":
-                raise ValueError(
-                    "time-based SQL injection requires time-differential evidence"
-                )
-            return WorkflowTool._validate_sqli_time_confirmation(
-                confirmation, techniques
-            )
-        if kind != "boolean-differential":
-            raise ValueError(
-                "boolean-based SQL injection requires boolean-differential evidence"
-            )
-        template = confirmation.get("request_template")
-        true_predicate = confirmation.get("true_predicate")
-        false_predicate = confirmation.get("false_predicate")
-        if not isinstance(template, str) or "{predicate}" not in template:
-            raise ValueError("boolean confirmation request_template must contain {predicate}")
-        if (
-            not isinstance(true_predicate, str)
-            or not true_predicate.strip()
-            or not isinstance(false_predicate, str)
-            or not false_predicate.strip()
-            or true_predicate.strip() == false_predicate.strip()
-        ):
-            raise ValueError("boolean confirmation requires distinct TRUE and FALSE predicates")
-        if re.search(r"\bunion\s+select\b", true_predicate, re.IGNORECASE) or re.search(
-            r"\bunion\s+select\b", false_predicate, re.IGNORECASE
-        ):
-            raise ValueError(
-                "UNION success/error observations are not a boolean differential; "
-                "record the actual union/error technique without boolean confirmation"
-            )
-        pairs = confirmation.get("pairs")
-        if not isinstance(pairs, list) or len(pairs) < 2:
-            raise ValueError("boolean confirmation requires at least two paired repetitions")
-        size_tolerance = confirmation.get("size_tolerance", 0)
-        if (
-            not isinstance(size_tolerance, int)
-            or isinstance(size_tolerance, bool)
-            or not 0 <= size_tolerance <= 4096
-        ):
-            raise ValueError("boolean confirmation size_tolerance must be 0 to 4096 bytes")
-
-        normalized_pairs: list[dict[str, Any]] = []
-        true_signatures: list[tuple[int, int, str]] = []
-        false_signatures: list[tuple[int, int, str]] = []
-        seen_repetitions: set[int] = set()
-        for raw_pair in pairs[:8]:
-            if not isinstance(raw_pair, dict):
-                raise ValueError("boolean confirmation pairs must be objects")
-            repetition = raw_pair.get("repetition")
-            if (
-                not isinstance(repetition, int)
-                or isinstance(repetition, bool)
-                or repetition < 1
-                or repetition in seen_repetitions
-            ):
-                raise ValueError("boolean confirmation repetitions must be unique positive integers")
-            seen_repetitions.add(repetition)
-            sides: dict[str, dict[str, Any]] = {}
-            for side in ("true", "false"):
-                raw = raw_pair.get(side)
-                if not isinstance(raw, dict):
-                    raise ValueError(f"boolean confirmation pair requires {side} observation")
-                status = raw.get("status")
-                size = raw.get("size")
-                marker = raw.get("marker", "")
-                if (
-                    not isinstance(status, int)
-                    or isinstance(status, bool)
-                    or status < 100
-                    or status > 599
-                ):
-                    raise ValueError("boolean confirmation status must be an HTTP status integer")
-                if (
-                    not isinstance(size, int)
-                    or isinstance(size, bool)
-                    or size < 0
-                ):
-                    raise ValueError("boolean confirmation size must be a non-negative integer")
-                if not isinstance(marker, str):
-                    raise ValueError("boolean confirmation marker must be a string")
-                marker = redact(marker.strip())[:200]
-                sides[side] = {"status": status, "size": size, "marker": marker}
-            true_signature = (
-                sides["true"]["status"], sides["true"]["size"], sides["true"]["marker"]
-            )
-            false_signature = (
-                sides["false"]["status"], sides["false"]["size"], sides["false"]["marker"]
-            )
-            if (
-                sides["true"]["status"] == sides["false"]["status"]
-                and sides["true"]["marker"] == sides["false"]["marker"]
-                and abs(sides["true"]["size"] - sides["false"]["size"])
-                <= size_tolerance
-            ):
-                raise ValueError("boolean TRUE and FALSE observations must differ")
-            true_signatures.append(true_signature)
-            false_signatures.append(false_signature)
-            normalized_pairs.append({"repetition": repetition, **sides})
-
-        def stable(signatures: list[tuple[int, int, str]]) -> bool:
-            statuses = {status for status, _, _ in signatures}
-            markers = {marker for _, _, marker in signatures}
-            sizes = [size for _, size, _ in signatures]
-            return (
-                len(statuses) == 1
-                and len(markers) == 1
-                and max(sizes) - min(sizes) <= size_tolerance
-            )
-
-        if not stable(true_signatures) or not stable(false_signatures):
-            raise ValueError("boolean confirmation differential is not reproducible")
-        return {
-            "kind": kind,
-            "request_template": redact(template.strip())[:500],
-            "true_predicate": redact(true_predicate.strip())[:200],
-            "false_predicate": redact(false_predicate.strip())[:200],
-            "size_tolerance": size_tolerance,
-            "pairs": normalized_pairs,
-        }
-
-    @staticmethod
-    def _validate_sqli_time_confirmation(
-        confirmation: dict[str, Any], techniques: set[str]
-    ) -> dict[str, Any]:
-        if not any("time" in item for item in techniques):
-            raise ValueError(
-                "time-differential confirmation requires a time-based technique"
-            )
-        template = confirmation.get("request_template")
-        expected_delay_ms = confirmation.get("expected_delay_ms")
-        pairs = confirmation.get("pairs")
-        if not isinstance(template, str) or "{probe}" not in template:
-            raise ValueError("time confirmation request_template must contain {probe}")
-        if (
-            not isinstance(expected_delay_ms, int)
-            or isinstance(expected_delay_ms, bool)
-            or expected_delay_ms < 1000
-        ):
-            raise ValueError("time confirmation requires expected_delay_ms >= 1000")
-        if not isinstance(pairs, list) or len(pairs) < 2:
-            raise ValueError("time confirmation requires at least two paired repetitions")
-
-        normalized: list[dict[str, Any]] = []
-        seen_repetitions: set[int] = set()
-        for raw_pair in pairs[:8]:
-            if not isinstance(raw_pair, dict):
-                raise ValueError("time confirmation pairs must be objects")
-            repetition = raw_pair.get("repetition")
-            if (
-                not isinstance(repetition, int)
-                or isinstance(repetition, bool)
-                or repetition < 1
-                or repetition in seen_repetitions
-            ):
-                raise ValueError("time confirmation repetitions must be unique positive integers")
-            seen_repetitions.add(repetition)
-            sides: dict[str, dict[str, int]] = {}
-            for side in ("control", "probe"):
-                raw = raw_pair.get(side)
-                if not isinstance(raw, dict):
-                    raise ValueError(f"time confirmation pair requires {side} observation")
-                status = raw.get("status")
-                size = raw.get("size")
-                elapsed_ms = raw.get("elapsed_ms")
-                if (
-                    not isinstance(status, int)
-                    or isinstance(status, bool)
-                    or not 100 <= status <= 599
-                    or not isinstance(size, int)
-                    or isinstance(size, bool)
-                    or size < 0
-                    or not isinstance(elapsed_ms, int)
-                    or isinstance(elapsed_ms, bool)
-                    or elapsed_ms < 0
-                ):
-                    raise ValueError(
-                        "time confirmation observations require integer status, "
-                        "size, and elapsed_ms"
-                    )
-                sides[side] = {
-                    "status": status, "size": size, "elapsed_ms": elapsed_ms,
-                }
-            if (
-                sides["probe"]["elapsed_ms"] - sides["control"]["elapsed_ms"]
-                < int(expected_delay_ms * 0.8)
-            ):
-                raise ValueError("time confirmation delay is not reproducible")
-            normalized.append({"repetition": repetition, **sides})
-        return {
-            "kind": "time-differential",
-            "request_template": redact(template.strip())[:500],
-            "expected_delay_ms": expected_delay_ms,
-            "pairs": normalized,
-        }
 
     @staticmethod
     def _coverage_status(result: ValidationResult) -> CoverageStatus | None:
@@ -1162,10 +1041,10 @@ class WorkflowTool(Tool):
     async def _sync_coverage(self, candidate: Candidate, result: ValidationResult) -> None:
         from src.permission.runtime.execution import current_policy
         policy = current_policy()
-        if policy is not None and result.outcome in {'confirmed', 'not-confirmed'} and policy.observations.result(
-            candidate.id, tuple(result.evidence_refs), policy.engagement.http_permissions.epoch, candidate
-        ) is None:
-            raise ValueError('unverified: legacy result has no current proof certificate; revalidate or operator review')
+        if not accepted_result(self.state, candidate, result, policy):
+            raise ValueError("inadmissible current assessment; coverage remains pending")
+        if any(not self.state.evidence[ref].is_available_for_resume(self.evidence_root) for ref in result.evidence_refs):
+            raise ValueError("coverage evidence integrity unavailable; coverage remains pending")
         if self.coverage is None:
             return
         status = self._coverage_status(result)
@@ -1177,6 +1056,12 @@ class WorkflowTool(Tool):
             raise ValueError("coverage candidate differs from active target origin")
         target_revision = self.target.revision if self.target is not None else None
         fingerprint = validation_result_fingerprint(result)
+        previous = deepcopy(await self.coverage.get(endpoint=endpoint, param=parameter,
+            vulnClass=candidate.candidate_class, context=context))
+        if (self.state.latest_result(candidate.id) is not result
+                or not accepted_result(self.state, candidate, result, policy)
+                or any(not self.state.evidence[ref].is_available_for_resume(self.evidence_root) for ref in result.evidence_refs)):
+            raise ValueError("canonical assessment changed before coverage persistence")
         legacy_observation_ids = tuple(
             validation_result_fingerprint(previous)
             for previous in self.state.validation_results
@@ -1197,7 +1082,12 @@ class WorkflowTool(Tool):
         if (self.state.latest_result(candidate.id) is not result
                 or validation_result_fingerprint(result) != fingerprint
                 or project_candidate_coverage(self.state, candidate, result) != (endpoint, parameter, context)
-                or (self.target.revision if self.target is not None else None) != target_revision):
+                or (self.target.revision if self.target is not None else None) != target_revision
+                or not accepted_result(self.state, candidate, result, policy)
+                or any(not self.state.evidence[ref].is_available_for_resume(self.evidence_root) for ref in result.evidence_refs)):
+            await self.coverage.rollback_validation_projection(endpoint=endpoint, param=parameter,
+                vulnClass=candidate.candidate_class, context=context,
+                expected_notes=f"result={fingerprint[:20]}", previous=previous)
             raise ValueError("canonical coverage context changed during persistence; retry sync")
         result.coverage_synced = True
 
@@ -1692,12 +1582,17 @@ class WorkflowTool(Tool):
             "candidate_ids": list(item.candidate_ids),
         }
 
-    @staticmethod
-    def _result_summary(result: ValidationResult) -> dict[str, Any]:
+    def _result_summary(self, result: ValidationResult) -> dict[str, Any]:
+        from src.workflow.assessment import assessment_provenance
+        from src.permission.runtime.execution import current_policy
+        candidate = self.state.candidates[result.candidate_id]
         return {
             "candidate_id": result.candidate_id,
             "skill_name": result.skill_name,
             "outcome": result.outcome,
+            "assessment_provenance": assessment_provenance(self.state, candidate, result, current_policy()),
+            "result_id": result.result_id,
+            "attempt_id": result.attempt_id,
             "evidence_refs": [
                 WorkflowTool._brief(item) for item in result.evidence_refs[:3]
             ],

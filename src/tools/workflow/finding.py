@@ -18,7 +18,8 @@ from src.redact.redact import apply as redact, apply_evidence
 from src.logger.logger import get_logger
 from src.workflow.state import WorkflowState
 from src.workflow.evidence import verify_evidence_reads
-from src.workflow.review import review_snapshot
+from src.workflow.review import review_snapshot, confirmation_binding
+from src.workflow.assessment import accepted_result
 from src.skills.registry import normalize_candidate_class
 from src.target.origin import HTTPOrigin
 from src.workflow.validation_route import GENERIC_VALIDATOR
@@ -190,6 +191,8 @@ class ConfirmFindingTool:
         if not url:
             raise Exception("url is required")
 
+        if not is_severity(severity):
+            raise ValueError("severity must be one of: " + ", ".join(SEVERITIES))
         if not candidate_id:
             raise ValueError("candidate_id is required and must be a non-empty string")
 
@@ -263,18 +266,24 @@ class ConfirmFindingTool:
             if generic_snapshot is not None:
                 assert policy is not None
                 policy.generic_validation.unchanged(candidate_id, generic_snapshot)
-                certificate = policy.observations.result(candidate_id, tuple(latest.evidence_refs),
-                    policy.engagement.http_permissions.epoch, candidate)
-                if certificate is None or certificate.outcome != "confirmed":
-                    raise ValueError("generic finding trusted certificate changed")
-        if policy is not None:
-            verified = policy.observations.result(candidate_id, tuple(latest.evidence_refs),
-                                                  policy.engagement.http_permissions.epoch, candidate)
-            if verified is None or verified.outcome != "confirmed":
-                raise ValueError("unverified: trusted class verifier required; raw evidence/candidate remain available")
-            observed_impact = verified.observed_impact
-            severity = verified.severity
-            response_excerpt = verified.response_excerpt
+                if not accepted_result(self.workflow, candidate, latest, policy):
+                    raise ValueError("generic finding assessment evidence changed")
+        if not accepted_result(self.workflow, candidate, latest, policy):
+            raise ValueError("current accepted confirmed assessment with intact primary evidence required")
+        if latest.assessment_contract_version >= 2:
+            observed_impact = latest.assessment["observed_impact"]
+            severity = latest.assessment["severity"]
+            response_excerpt = latest.assessment.get("response_excerpt", "")
+        else:
+            assert policy is not None
+            legacy = policy.observations.result(candidate_id, tuple(latest.evidence_refs),
+                                               policy.engagement.http_permissions.epoch, candidate)
+            assert legacy is not None
+            observed_impact, severity, response_excerpt = legacy.observed_impact, legacy.severity, legacy.response_excerpt
+        if _UNBOUNDED_OBSERVED_IMPACT.search(observed_impact):
+            raise ValueError("adopted observed impact contains an unverified broad-impact claim")
+        if re.search(r"\b(?:every\s+row|full\s+table)\b", response_excerpt, re.I):
+            raise ValueError("adopted response excerpt contains an unverified broad-impact claim")
         root = self.store.project_dir
         if not await verify_evidence_reads(
             evidence_artifacts, root, prompter, signal,
@@ -325,6 +334,9 @@ class ConfirmFindingTool:
 
         classification = classify(candidate.candidate_class)
         redacted_title = redact(title)
+        from src.workflow.assessment import assessment_provenance
+        provenance = assessment_provenance(self.workflow, candidate, latest, policy)
+        source_label = latest.assessment_source if latest.assessment_contract_version >= 2 else provenance["source"]
 
         finding = Finding(
             # Finding reports are durable evidence artifacts.  Preserve the
@@ -349,7 +361,11 @@ class ConfirmFindingTool:
             candidate_id=candidate_id,
             evidence_refs=evidence_refs,
             canonical_class=candidate.candidate_class,
-            confirmation_binding=result_snapshot,
+            confirmation_binding=confirmation_binding(self.workflow, candidate_id),
+            assessment_source=source_label,
+            assessment_result_id=latest.result_id,
+            assessment_attempt_id=latest.attempt_id,
+            binding_version=latest.assessment_contract_version,
             classification_provenance=(
                 {"origin": "verified-local", "selected_cwe": classification.cwe[0], "revision": 1}
                 if classification and classification.cwe else None
@@ -359,6 +375,14 @@ class ConfirmFindingTool:
 
         check_generic_snapshot()
         path = await self.store.save(finding)
+        if review_snapshot(self.workflow, candidate_id) != result_snapshot:
+            raise ValueError("candidate validation result changed during finalization")
+        if (finding.confirmation_binding != confirmation_binding(self.workflow, candidate_id)
+                or finding.binding_version != latest.assessment_contract_version
+                or finding.assessment_result_id != latest.result_id
+                or (latest.assessment_contract_version >= 2 and finding.assessment_source != source_label)
+                or finding.evidence_refs != latest.evidence_refs):
+            raise ValueError("historical report does not match current assessment revision; Finding remains pending")
 
         # Store.save() may wait on disk while the workflow advances. A report
         # may already have been written, but it must not be finalized or
@@ -375,6 +399,8 @@ class ConfirmFindingTool:
             raise ValueError("candidate validation result changed during finalization")
         check_generic_snapshot()
 
+        if not accepted_result(self.workflow, candidate, latest, policy):
+            raise ValueError("assessment evidence changed during Finding persistence")
         # A confirmed ValidationResult and a persisted canonical report are
         # separate workflow facts.  Record the latter only after the atomic
         # store write (or idempotent candidate lookup) has succeeded so a

@@ -1,7 +1,8 @@
 # Generic bounded validation contract
 
 Generic fallback is vulnerability-class agnostic at admission, but execution
-remains capability/action bounded and conclusions remain verifier/review gated.
+remains capability/action bounded. The Agent assesses admissible primary evidence;
+operator conclusion review is optional.
 This does not mean every vulnerability or request shape is supported.
 
 ```text
@@ -14,7 +15,8 @@ Full registry + candidate class
        ↓ transient attempt binding + exact prepared request comparison
        ↓ native receipt/private-host/grant/budget/scheduler → recheck → send
        ↓ native observation + candidate proof → immutable redacted evidence
-       ↓ existing result → trusted verifier OR human ALLOW_ONCE review
+       ↓ provenance/integrity/ownership checks → structured Agent assessment
+       ↓ optional human ALLOW_ONCE → separate operator revision
        ↓ coverage → existing confirmed finding store
 ```
 
@@ -161,23 +163,23 @@ path/size/hash/integrity restrictions. Proof writes only target the candidate's
 proof source path, with existing symlink/hardlink/control-plane checks. Request
 input variation does not mark persistent mutation or require invented cleanup.
 
-Both confirmed and not-confirmed require the existing trusted certificate or
-observations.verify adapter. There is no new universal verifier; the existing
-production adapter registry currently registers SQL boolean JSON verification.
-The four custom-class fixtures have no production verifier and first record
-insufficient-evidence with no terminal negative coverage, then exercise human
-review. LLM notes, repeatability, observation IDs and force do not confer proof.
+Both confirmed and not-confirmed require current Agent-assessed structured results
+with admissible primary source references, immutable proof artifacts, durable
+attempt ownership and bounded declared criteria. A proof file or process output
+claim alone does not establish target request/response evidence. Without explicit
+criteria, generic fallback remains unresolved. Runtime has no mandatory class
+verifier; the Agent applies the playbook and evaluates semantic sufficiency.
 
-Human review retains ALLOW_ONCE through the operator prompter, no session cache,
-task-local staging, review tickets and overlapping-review protection. Result,
-coverage and session save precede certificate publication. Existing stale,
-decline, cancellation, evidence and failure guards remain authoritative.
-Findings require the latest confirmed result, current binding and matching
-certificate; store success precedes the persisted marker. Pure finding
-eligibility has no runtime/disk checks added.
+Optional human review requires ALLOW_ONCE, no session cache, current snapshots
+and review tickets. A private operator revision is checkpointed before publication;
+failed or cancelled checkpoints preserve the prior canonical result. Coverage is
+reconciled from that result. Findings bind the exact accepted revision; historical
+report mismatches leave the current Finding pending, with the old file preserved.
 
-Proposals and verified action contexts are transient. Candidate/ValidationResult
-and session version/JSON formats are unchanged. Fresh boundaries and in-place
+Proposals, permissions and verified action contexts remain transient. Workflow
+schema v8 adds durable attempts and versioned assessment manifests. Legacy v1
+fingerprints/review bindings remain unchanged; missing authority stays unknown.
+Fresh boundaries and in-place
 session replacement invalidate probe context; saved status, route, plan or
 proposal-like text cannot reconstruct it. Stored evidence can still undergo
 human review without a live proposal; that review cannot grant new probe

@@ -63,6 +63,7 @@ class GenericValidationBoundary:
         # select an executor. Only a successful structured expert start may
         # temporarily select independent expert work in this objective.
         self.expert_attempt: tuple[str, str] | None = None
+        self.durable_attempt: str | None = None
 
     def matches(self, state, skills, target):
         return self.state is state and self.skills is skills and self.target is target

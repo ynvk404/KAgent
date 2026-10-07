@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.helpers.workflow import run_workflow_fixture
 
 from src.agent.agent import Agent, AgentOptions
 from src.coverage.context import CoverageContext
@@ -51,12 +52,13 @@ def media(entry: CoverageEntry) -> str | None:
 
 
 async def call(tool, action, **args):
-    return json.loads(await tool.run({"action": action, **args}, None, AlwaysAllow()))
+    output = await run_workflow_fixture(tool, {"action": action, **args}, None, AlwaysAllow())
+    return {"ok": False, "error": output} if output.startswith("error:") else json.loads(output)
 
 
-async def record(tool: WorkflowTool, candidate: Candidate, outcome="not-confirmed", **args):
+async def record(tool: WorkflowTool, candidate: Candidate, outcome="not-confirmed", expect_error=False, **args):
     refs = []
-    if outcome == "confirmed":
+    if outcome in {"confirmed", "not-confirmed"}:
         path = tool.evidence_root / (candidate.id + ".txt")
         path.write_text("Reproducible bounded offline fixture evidence", encoding="utf8")
         artifact = await call(tool, "record_evidence", candidate_id=candidate.id, evidence_path=path.name)
@@ -64,7 +66,7 @@ async def record(tool: WorkflowTool, candidate: Candidate, outcome="not-confirme
         refs = [artifact["evidence"]["id"]]
     response = await call(tool, "record_result", candidate_id=candidate.id, skill_name="cross-site-scripting",
                           outcome=outcome, evidence_refs=refs, repeatable=True, **args)
-    assert response["ok"], response
+    assert response["ok"] is not expect_error, response
     return response
 
 
@@ -159,13 +161,10 @@ async def test_origin_and_objective_isolation_in_shared_projection(tmp_path):
 async def test_cross_origin_absolute_endpoint_fails_before_projection_mutation(tmp_path, foreign):
     state, store, tool = runtime(tmp_path)
     c = add(state, endpoint=foreign)
-    response = await record(tool, c)
-    assert response["coverage_sync"] == "pending"
-    assert "origin" in response["coverage_error"]
+    response = await record(tool, c, expect_error=True)
+    assert "origin mismatch" in response["error"]
     assert await store.list() == []
-    latest = state.latest_result(c.id)
-    assert latest is not None and latest.coverage_synced is False
-    assert c.status == "validated"  # The canonical outcome was not rewritten.
+    assert state.latest_result(c.id) is None  # invalid identity publishes nothing
 
 
 @pytest.mark.asyncio
@@ -319,12 +318,9 @@ async def test_known_legacy_result_mirror_is_counted_once_without_rewriting_lega
     legacy = await store.mark(endpoint="POST /search", param="q", vulnClass="xss", status="passed",
                               observation_id=validation_result_fingerprint(result))
     before = deepcopy(legacy)
-    assert (await call(tool, "sync_coverage", candidate_id=c.id))["coverage_sync"] == "synced"
-    assert len(await store.list()) == 2
-    assert await store.get(endpoint="POST /search", param="q", vulnClass="xss") == before
+    assert not (await call(tool, "sync_coverage", candidate_id=c.id))["ok"]
+    assert await store.list() == [before]
     assert (await store.summary()).total == 1
-    assert (await store.summary()).byStatus["passed"] == 1
-    assert (await CoverageStore(str(store.path)).summary()).total == 1
 
 
 @pytest.mark.asyncio
@@ -399,7 +395,7 @@ async def test_foreign_ownership_sync_is_rejected(tmp_path, change):
     else:
         state.objective = WorkflowObjective("other" if change == "objective" else "f7", "direct",
                                             "https://foreign.test" if change == "origin" else ORIGIN)
-    payload = await tool.run({"action": "sync_coverage", "candidate_id": c.id}, None, AlwaysAllow())
+    payload = await run_workflow_fixture(tool, {"action": "sync_coverage", "candidate_id": c.id}, None, AlwaysAllow())
     assert "error" in payload
     assert await store.list() == [] and result.coverage_synced is False
 
@@ -625,7 +621,7 @@ async def test_linked_whole_target_explicit_retest_sync_and_finding(tmp_path, mo
     assert retest.count == 1 and retest.observationIds == [f"candidate:{cid}"]
     # Identical negative outcomes share a fingerprint across objectives; the
     # context still separates their rows and the aliases remain deduplicated.
-    assert len(retest.resultIds or []) == len(set(retest.resultIds or [])) == (2 if outcome == "confirmed" else 1)
+    assert len(retest.resultIds or []) == len(set(retest.resultIds or [])) == 2  # distinct durable attempts never collapse by outcome
     assert c.id == cid and c.objective_id == "f7"
     assert state.attack_surface_inputs == inputs
     assert state.validation_results[:2] == initial_results
@@ -656,11 +652,10 @@ async def test_linked_whole_target_explicit_retest_missing_endpoint_stays_pendin
     # A persisted sparse Candidate cannot borrow the historical inventory's
     # endpoint under the new objective; no separate historical resolver exists.
     c.endpoint = None
-    response = await record(tool, c)
-    assert response["coverage_sync"] == "pending"
-    assert response["coverage_error"] == "coverage sync requires a candidate endpoint"
-    latest = state.latest_result(c.id)
-    assert latest is not None and latest.coverage_synced is False
+    rejected = await tool.run({"action":"record_result", "candidate_id":c.id,
+        "skill_name":"cross-site-scripting", "outcome":"not-confirmed"}, None, AlwaysAllow())
+    assert "stale active attempt" in rejected
+    assert len(state.validation_results) == len(_)
     assert await CoverageStore(str(store.path)).list() == historical
     assert state.attack_surface_inputs == inputs and c.objective_id == "f7"
     assert client.requests == []
@@ -761,7 +756,10 @@ async def test_changed_canonical_context_during_flush_cannot_be_marked_synced(tm
     result = state.latest_result(c.id)
     assert result is not None and result.coverage_synced is False
     monkeypatch.setattr(store, "_persist", persist)
-    assert (await call(tool, "sync_coverage", candidate_id=c.id))["coverage_sync"] == "synced"
+    assert not (await call(tool, "sync_coverage", candidate_id=c.id))["ok"]
+    await record(tool, c, force=True)
     rows = await store.list()
-    assert {media(e) for e in rows} == {None, "application/json"}
+    # The invalid in-flight projection was rolled back; only the fresh
+    # assessment for the enriched identity can remain tested.
+    assert {media(e) for e in rows} == {"application/json"}
     assert all(e.count == 1 for e in rows)

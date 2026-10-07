@@ -32,3 +32,10 @@ def review_snapshot(state: WorkflowState, candidate_id: str) -> str:
         "position": sum(r.candidate_id == candidate_id for r in state.validation_results),
         "evidence": [state.evidence[ref].to_dict() if ref in state.evidence else None for ref in refs],
     })
+
+
+def confirmation_binding(state: WorkflowState, candidate_id: str) -> str:
+    result = state.latest_result(candidate_id)
+    if result is not None and result.assessment_contract_version >= 2:
+        return result.assessment_binding or ""
+    return review_snapshot(state, candidate_id)

@@ -89,13 +89,13 @@ user explicitly requests a retest or the request/input materially changed.
 Only an outcome of `confirmed` is eligible for `confirm_finding`; pass the
 Candidate ID to that tool. All other outcomes stop without confirming.
 
-For a boolean-based confirmed result, `record_result` also requires structured
+For a boolean-based confirmed result under this playbook, include structured
 `confirmation` evidence. Use `kind: boolean-differential`, one shared
 `request_template` containing `{predicate}`, distinct `true_predicate` and
 `false_predicate` values, and at least two `pairs`. Each pair records its
 repetition number plus the HTTP `status`, byte `size`, and a compact content
-`marker` for both `true` and `false`. The runtime rejects identical sides,
-one-pass claims, and non-reproducible pairs. Do not set `repeatable: true` from
+`marker` for both `true` and `false`. The Agent must reject identical sides,
+one-pass claims, and non-reproducible pairs under this playbook. Do not set `repeatable: true` from
 prose or from a baseline-versus-comment comparison.
 In a live run, include at least four distinct `observation_ids` from the HTTP
 tool: two actually executed and captured TRUE requests and two actually
@@ -112,8 +112,8 @@ difference.
 For time-based SQLI-2, use `kind: time-differential`, a shared
 `request_template` containing `{probe}`, `expected_delay_ms`, and at least two
 paired `control`/`probe` observations with integer status, size, and elapsed
-milliseconds. The runtime verifies that each observed delay is close to the
-declared delay. OOB confirmation remains unavailable in the current runtime.
+milliseconds. The Agent assesses controls, repeatability and whether each observed delay supports the
+declared delay; cite real adapter timing observations. Runtime checks source integrity, not SQLi semantics. OOB confirmation remains unavailable in the current runtime.
 
 You have one or more concrete candidates, usually from
 `artifacts/web-input-analysis/<target>/candidates.md` with

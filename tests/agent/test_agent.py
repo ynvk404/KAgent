@@ -1,3 +1,4 @@
+from tests.helpers.workflow import adopt_fixture_assessment
 from src.llm.core.reasoning import ReasoningLevel
 import logging
 from types import SimpleNamespace
@@ -3025,9 +3026,9 @@ def terminal_whole_target_with_evidence(
         candidate.id, "proof.md", tmp_path,
     )
     state.add_evidence(artifact)
-    state.add_validation_result(ValidationResult(
+    state.add_validation_result(adopt_fixture_assessment(state, ValidationResult(
         candidate.id, candidate_class, "confirmed", evidence_refs=[artifact.id],
-    ))
+    )))
     return state, candidate, artifact
 
 
@@ -3535,14 +3536,13 @@ async def test_whole_target_retries_pending_finding_after_malformed_call(tmp_pat
         candidate_class="xss", target="https://target.test", endpoint="/search",
         method="GET", parameter="q", objective_id="objective-finding",
     ))
-    proof = EvidenceArtifact(
-        "ev_proof", candidate.id, "artifacts/proof.md", "a" * 64, 1,
-    )
+    (tmp_path / "proof.md").write_text("Bounded fixture interpretation")
+    proof = EvidenceArtifact.capture_immutable_snapshot(candidate.id, "proof.md", tmp_path)
     state.add_evidence(proof)
-    state.add_validation_result(ValidationResult(
+    state.add_validation_result(adopt_fixture_assessment(state, ValidationResult(
         candidate.id, "cross-site-scripting", "confirmed",
         evidence_refs=[proof.id], coverage_synced=True,
-    ))
+    )))
     finding_tool = PersistFindingTool(state)
     finding_args = {
         "candidate_id": candidate.id,
@@ -3569,7 +3569,7 @@ async def test_whole_target_retries_pending_finding_after_malformed_call(tmp_pat
             message=Message(role="assistant", content="Assessment complete."),
             finish_reason="stop",
         ),
-    ], [finding_tool], workflow=state)
+    ], [finding_tool, WorkflowTool(state, Target("https://target.test"), evidence_root=tmp_path)], workflow=state)
     collector = collect()
 
     await asyncio.wait_for(
@@ -5723,9 +5723,9 @@ async def test_confirm_finding_success_and_path_reach_immediate_next_request(tmp
     proof_path.write_text("Reflected script execution proof", encoding="utf-8")
     proof = EvidenceArtifact.capture(candidate.id, proof_path.name, tmp_path)
     workflow.add_evidence(proof)
-    workflow.add_validation_result(ValidationResult(
+    workflow.add_validation_result(adopt_fixture_assessment(workflow, ValidationResult(
         candidate.id, "cross-site-scripting", "confirmed", evidence_refs=[proof.id],
-    ))
+    )))
     tool = ConfirmFindingTool(
         FindingsStore(str(tmp_path / "findings")), workflow=workflow,
     )

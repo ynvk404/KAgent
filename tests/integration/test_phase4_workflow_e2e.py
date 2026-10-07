@@ -1,3 +1,4 @@
+from tests.helpers.workflow import run_workflow_fixture
 import json
 from pathlib import Path
 
@@ -29,7 +30,7 @@ def shipped_skills() -> Registry:
 async def register_proof(workflow, candidate_id, tmp_path, name):
     path = tmp_path / name
     path.write_text("Observed request and response differential", encoding="utf-8")
-    response = json.loads(await workflow.run({
+    response = json.loads(await run_workflow_fixture(workflow, {
         "action": "record_evidence", "candidate_id": candidate_id,
         "evidence_path": name,
     }, None, AlwaysAllow()))
@@ -88,7 +89,7 @@ async def test_offline_request_to_confirmed_workflow_handoff(
         "signals": ["offline deterministic signal"],
     }
     recorded = json.loads(
-        await workflow.run(
+        await run_workflow_fixture(workflow,
             candidate_args,
             None,
             AlwaysAllow(),
@@ -96,11 +97,11 @@ async def test_offline_request_to_confirmed_workflow_handoff(
     )
     candidate_id = recorded["candidate"]["id"]
     duplicate_candidate = json.loads(
-        await workflow.run(candidate_args, None, AlwaysAllow())
+        await run_workflow_fixture(workflow, candidate_args, None, AlwaysAllow())
     )
     assert duplicate_candidate["created"] is False
     assert duplicate_candidate["candidate"]["id"] == candidate_id
-    await workflow.run(
+    await run_workflow_fixture(workflow,
         {"action": "start_validation", "candidate_id": candidate_id},
         None,
         AlwaysAllow(),
@@ -122,7 +123,7 @@ async def test_offline_request_to_confirmed_workflow_handoff(
             endpoint, parameter
         )
     result = json.loads(
-        await workflow.run(
+        await run_workflow_fixture(workflow,
             result_args,
             None,
             AlwaysAllow(),
@@ -133,14 +134,14 @@ async def test_offline_request_to_confirmed_workflow_handoff(
     assert state.eligible_for_finding(candidate_id) is True
 
     duplicate = json.loads(
-        await workflow.run(
+        await run_workflow_fixture(workflow,
             {**result_args, "notes": "same result, different prose"},
             None,
             AlwaysAllow(),
         )
     )
     retest = json.loads(
-        await workflow.run(
+        await run_workflow_fixture(workflow,
             {**result_args, "force": True},
             None,
             AlwaysAllow(),
@@ -166,17 +167,19 @@ def test_offline_direct_validation_and_informational_control():
 @pytest.mark.asyncio
 async def test_offline_resume_preserves_existing_candidate_and_result(tmp_path):
     state = WorkflowState()
-    workflow = WorkflowTool(state, Target("https://target.test"))
+    workflow = WorkflowTool(state, Target("https://target.test"), evidence_root=tmp_path)
     recorded = json.loads(
-        await workflow.run(
+        await run_workflow_fixture(workflow,
             {"action": "record_candidate", "candidate_class": "idor", "endpoint": "/orders/1"},
             None,
             AlwaysAllow(),
         )
     )
     candidate_id = recorded["candidate"]["id"]
-    await workflow.run(
+    proof = await register_proof(workflow, candidate_id, tmp_path, "negative-proof.txt")
+    await run_workflow_fixture(workflow,
         {
+            "evidence_refs": [proof],
             "action": "record_result",
             "candidate_id": candidate_id,
             "skill_name": "access-control",
@@ -219,7 +222,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
         session_id="e2e-session",
     )
     recorded = json.loads(
-        await workflow.run(
+        await run_workflow_fixture(workflow,
             {
                 "action": "record_candidate",
                 "candidate_class": "sqli",
@@ -236,7 +239,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     candidate_id = recorded["candidate"]["id"]
 
     started = json.loads(
-        await workflow.run(
+        await run_workflow_fixture(workflow,
             {"action": "start_validation", "candidate_id": candidate_id},
             None,
             AlwaysAllow(),
@@ -256,7 +259,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
         tmp_path,
         "artifacts/sql-injection/target-test-8443/results.md",
     )
-    repeated_evidence_id = json.loads(await workflow.run(
+    repeated_evidence_id = json.loads(await run_workflow_fixture(workflow,
         {
             "action": "record_evidence",
             "candidate_id": candidate_id,
@@ -274,7 +277,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     assert state.evidence[evidence_id].is_resolvable(tmp_path)
 
     result = json.loads(
-        await workflow.run(
+        await run_workflow_fixture(workflow,
             {
                 "action": "record_result",
                 "candidate_id": candidate_id,
@@ -307,7 +310,8 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
             "parameter": "id",
             "observed_impact": "Database query manipulation was demonstrated.",
             "potential_impact": "Account takeover was not demonstrated or assessed.",
-            "response_excerpt": "authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYWRtaW4ifQ.signature",
+            "payload": "authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYWRtaW4ifQ.signature",
+            "response_excerpt": "Caller excerpt is superseded by the accepted assessment.",
             "vuln_class": "sqli",
         },
         None,
@@ -323,7 +327,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     assert "eyJhbGciOiJIUzI1NiJ9" not in report
     assert "[REDACTED" in report
     assert len(state.validation_results) == 1
-    completed = json.loads(await workflow.run(
+    completed = json.loads(await run_workflow_fixture(workflow,
         {"action": "complete_skill", "skill_name": "sql-injection"},
         None,
         AlwaysAllow(),

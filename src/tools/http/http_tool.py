@@ -49,6 +49,7 @@ class HTTPTool(Tool):
                  capture_store: CaptureStore | None = None,
                  context_store: HTTPContextStore | None = None,
                  validation_registry=None):
+        self.evidence_store: Any = None
         self.target = target
         self.workflow = workflow
         self.engagement = engagement
@@ -405,6 +406,10 @@ class HTTPTool(Tool):
                     policy.validate(self, generic_args)
                 reservation.start()
                 # No suspension between reservation and starting send.
+                import time
+                evidence_store = policy.observations if policy else getattr(self, "evidence_store", None)
+                source_owner = evidence_store.owner_provider() if evidence_store else None
+                sent_at = time.monotonic()
                 response = await client.send(request, stream=True)
                 check_cancelled(signal)
                 self.permissions.sync_target()
@@ -440,9 +445,11 @@ class HTTPTool(Tool):
                     output += f'\n[response body truncated at {action.response_cap} decoded bytes]'
                 if private_reason:
                     output = f'note: private/internal host independently approved (reason: {private_reason})\n\n' + output
-                if policy is not None:
-                    observation = policy.observations.capture(action, response.status_code, content, complete=not truncated,
-                        validation_binding=(generic_probe[0], generic_probe[2]) if generic_probe else None)
+                if evidence_store is not None:
+                    observation = evidence_store.capture(action, response.status_code, content, complete=not truncated,
+                        validation_binding=(generic_probe[0], generic_probe[2]) if generic_probe else None,
+                        owner=source_owner or {}, response_headers=response.headers.items(),
+                        elapsed_ms=(time.monotonic() - sent_at) * 1000)
                     self._attest_phase_coverage(action, response, content, observation)
                     output += f'\n[runtime observation: {observation}]'
                 output = redact_evidence(output)

@@ -15,7 +15,7 @@ scope, protected paths, explicit revocation, receipts or execution limits.
 | Local stdio MCP, compatible operator configuration | Auto-approve, fresh isolated server per invocation | Exact ordinary review | Offline startup discovery; actual call uses isolated worker/broker. Persistent server state and environment export unsupported |
 | ffuf HTTP adapter | Auto-approve within full tooling profile/runtime discovery gap | Ordinary review | Worker + explicit proxy + shared accounting; no raw network; 4 GiB AS, GOMAXPROCS 2, real-UID NPROC 1024 |
 | nmap, CONNECT/raw TCP, remote MCP, missing worker/adapter | Blocked with reason | Blocked with reason | No ambient fallback; not positive acceptance |
-| Confirmed/negative results and canonical findings | Class contract or separate operator proof review | Same proof requirement | Shipped narrow SQL boolean/JSON contract; other proofs need trusted adapter or /review-result. Human review is never autonomous verification |
+| Confirmed/negative results and canonical findings | Agent assessment of admissible evidence | Same evidence contract | Runtime checks provenance/identity/completeness; Agent applies the skill. Optional /review-result creates operator authority, independently of YOLO |
 | Outside profile, revoked, invalid/expired/replayed receipt | Blocked | Blocked | Approval cannot extend authority |
 
 The operator accepts unknown server effects on the declared disposable lab.
@@ -115,17 +115,16 @@ provenance or all proxy/browser/MCP routing.
 Observations attest captured bytes, not vulnerability truth. Up to 256 observations
 and result bindings persist in protected `.kagent/observations/<session-id>.json`.
 Narratives/body/URL are redacted; opaque IDs/hashes retain their controller binding.
-Historical certificates restore facts only, never execution rights or receipts.
-The shipped SQL contract supports repeated query boolean predicates with stable
-JSON row/no-row results. It is neither every SQLi technique nor a proof against
-a deceptive target. All other class results require a trusted adapter or explicit
-`/review-result <candidate-id> <confirmed|not-confirmed> <severity> <observed impact>`.
-The operator reviews exact immutable proof and a labeled human conclusion even
-in YOLO; this is not an execution permission dialog. Canonical finding impact and
-severity come from that certificate, not a model overclaim. Imported proof is
-unverified until reviewed. Browser views filter current scope/revokes, but do not
-authenticate an actor or turn imported payloads into runtime execution proof.
-Autonomous multi-class and whole-target completion remain release blockers.
+Historical certificates remain compatibility records, never execution rights or receipts.
+New durable attempts and versioned source manifests bind actual execution/import
+provenance. Agent assessments need no class certificate; canonical Finding impact
+and severity come from the latest accepted structured assessment. Optional
+`/review-result <candidate-id> <confirmed|not-confirmed> <severity> <observed impact>`
+requires real human review even in YOLO and creates a distinct operator revision.
+Browser views filter current scope/revokes; imports retain their bridge provenance
+and unknown original ownership. They do not authenticate actors or attest native
+execution. See [Agent-assessed evidence](agent-assessed-evidence.md) for the current
+result, persistence, compatibility and completion contract.
 
 Summary, recalled memory catalog and workflow values are supplied as untrusted
 turn data; automatic learning writes project observations rather than personal

@@ -351,6 +351,31 @@ class CoverageStore:
             )
         )
 
+    async def rollback_validation_projection(
+        self, *, endpoint: str, param: str, vulnClass: str, context: CoverageContext,
+        expected_notes: str, previous: CoverageEntry | None,
+    ) -> None:
+        """Undo only this failed revision's projection, preserving other rows.
+
+        A newer mark has different notes and must not be overwritten by a
+        delayed rollback. Callers serialize canonical workflow mutations.
+        """
+        await self.load()
+        key = _key_of(normalize_contextual_endpoint(endpoint, context), param.strip(),
+                      normalize_candidate_class(vulnClass), context)
+        current = self.entries.get(key)
+        if current is None or current.notes != expected_notes:
+            return
+        if previous is None:
+            self.entries.pop(key, None)
+        else:
+            from copy import deepcopy
+            self.entries[key] = deepcopy(previous)
+        self._queue_save()
+        await self.flush()
+        if self.last_save_error is not None:
+            raise OSError("coverage rollback could not be persisted") from self.last_save_error
+
     async def list(
         self,
         *,

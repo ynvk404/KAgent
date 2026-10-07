@@ -92,6 +92,9 @@ async def test_marker_free_samples_and_explicit_templates_stay_separate(tmp_path
     template = sample.replace("safe", "{INJECTION_POINT}")
     candidate = await record(registry, "record_candidate", candidate_class="xss", input_id=item["id"], request_template=template,
                              test_case="explicit-template")
+    previous = next(c for c in state.candidates.values() if c.status == "validating")
+    await call(registry, "record_result", candidate_id=previous.id, skill_name="cross-site-scripting",
+               outcome="deferred", deferred_reason="context-only fixture, no execution")
     context = (await start(registry, candidate))["validation_context"]
     assert context["sample_payload"] == sample
     assert context["request_template"] == template

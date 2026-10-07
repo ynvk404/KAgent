@@ -1,6 +1,7 @@
 """Simulated single-agent skill handoff with no network or model calls."""
 
 from __future__ import annotations
+from tests.helpers.workflow import run_workflow_fixture
 
 import json
 from pathlib import Path
@@ -57,7 +58,7 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
     inventory = tmp_path / "artifacts/web-enumeration/target-test/inventory.md"
     inventory.parent.mkdir(parents=True)
     inventory.write_text("GET /search?q; GET /product?id; POST /fetch?url", encoding="utf-8")
-    await tool.run({
+    await run_workflow_fixture(tool, {
         "action": "complete_skill", "skill_name": "web-enumeration",
         "artifact_ref": inventory.relative_to(tmp_path).as_posix(),
         "current_phase": "analysis",
@@ -68,7 +69,7 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
         ("sql-injection", "/product", "id", "medium"),
         ("ssrf", "/fetch", "url", "low"),
     ):
-        response = json.loads(await tool.run({
+        response = json.loads(await run_workflow_fixture(tool, {
             "action": "record_candidate", "candidate_class": candidate_class,
             "method": "GET", "endpoint": endpoint, "parameter": parameter,
             "priority": priority, "signals": ["inventory observation"],
@@ -89,11 +90,11 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
     xss_proof.write_text(
         "GET /search?q=marker => executable marker in HTML body", encoding="utf-8",
     )
-    proof = json.loads(await tool.run({
+    proof = json.loads(await run_workflow_fixture(tool, {
         "action": "record_evidence", "candidate_id": first.candidate_id,
         "evidence_path": xss_proof.relative_to(tmp_path).as_posix(),
     }, None, allow))["evidence"]["id"]
-    confirmed = json.loads(await tool.run({
+    confirmed = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": first.candidate_id,
         "skill_name": first.recommended_skill, "outcome": "confirmed",
         "evidence_refs": [proof], "repeatable": True,
@@ -114,16 +115,21 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
 
     second = _plan(state, skills, "next validation")
     assert second is not None and second.candidate_id == ids["sql-injection"]
-    negative = json.loads(await tool.run({
+    negative_proof = json.loads(await tool.run({
+        "action": "record_evidence", "candidate_id": second.candidate_id,
+        "evidence_path": xss_proof.relative_to(tmp_path).as_posix(),
+    }, None, allow))["evidence"]["id"]
+    negative = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": second.candidate_id,
         "skill_name": "sql-injection", "outcome": "not-confirmed",
         "techniques": ["bounded differential"],
+        "evidence_refs": [negative_proof],
     }, None, allow))
     assert negative["coverage_sync"] == "synced"
 
     third = _plan(state, skills, "next validation")
     assert third is not None and third.candidate_id == ids["ssrf"]
-    waiting = json.loads(await tool.run({
+    waiting = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": third.candidate_id,
         "skill_name": "ssrf", "outcome": "authorization-required",
         "deferred_reason": "internal destination not approved",

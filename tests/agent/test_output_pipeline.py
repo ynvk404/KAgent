@@ -251,7 +251,8 @@ def test_representation_does_not_mutate_authoritative_observation_or_bindings():
     execution = ToolCallResult(body.decode(), '', 0, status='observation', http_status=403)
     agent.record_tool_result(ToolCall('opaque-call', FunctionCall('http', '{}')), ParsedToolCall({}, '{}'), execution, lambda _: None, [])
     assert observations._items[ref] is observation
-    assert observation.body == body and observation.response_hash == hashlib.sha256(body).hexdigest()
+    assert SECRET.encode() not in observation.body
+    assert observation.response_hash == hashlib.sha256(body).hexdigest()
     assert (observation.candidate_id, observation.probe_binding, observation.request_hash) == ('candidate', 'probe', action.digest)
     assert execution.result == body.decode()
     assert SECRET not in agent.history[-1].content
@@ -358,7 +359,7 @@ async def test_authoritative_capture_in_execution_survives_representation_bounda
     batch = await agent.execute_tool_calls([ToolCall('opaque', FunctionCall('fixture', '{}'))],
                                           FakeSignal(), lambda _: None, [])
     observation = observations._items[tool.ref]
-    assert observation.body == body
+    assert SECRET.encode() not in observation.body
     assert observation.response_hash == hashlib.sha256(body).hexdigest()
     assert (observation.candidate_id, observation.probe_binding) == ('candidate-id', 'probe-id')
     assert batch.calls[0].result.result == body.decode()
@@ -397,7 +398,7 @@ async def test_production_http_capture_receipts_and_bindings_survive_live_view(r
     used_before = policy.used
     events, working = [], []
     agent.record_tool_result(call, parsed, execution, events.append, working)
-    assert observation.body == body and observation.complete
+    assert SECRET.encode() not in observation.body and observation.complete
     assert observation.response_hash == hashlib.sha256(body).hexdigest()
     assert next(iter(policy.observations._items.values())) is observation
     assert observation.id in working[0].content

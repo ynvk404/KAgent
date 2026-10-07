@@ -23,7 +23,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 @pytest.mark.parametrize("entrypoint", [
     "src.permission.permission",
     "src.permission.runtime.execution",
-    "src.permission.runtime.verifiers",
     "src.permission.network.grants",
     "src.permission.network.transport",
     "src.permission.worker.worker",
@@ -38,7 +37,7 @@ import importlib
 import sys
 
 importlib.import_module(sys.argv[1])
-from src.permission.runtime import execution, invocations, observations, verifiers
+from src.permission.runtime import execution, invocations, observations
 from src.permission.network import grants, transport
 from src.permission.worker import worker, broker
 from src.engagement.state import EngagementState
@@ -52,7 +51,6 @@ assert http_tool.policy_for is registry.policy_for is execution.policy_for
 assert registry.permission_invocation is invocations.permission_invocation
 assert broker.current_policy is transport.current_policy is execution.current_policy
 assert scoped_store.ExecutionPolicy is execution.ExecutionPolicy
-assert verifiers.VerifiedResult is observations.VerifiedResult
 assert 'mcp' not in sys.modules
 assert 'src.tools.mcp.integration' not in sys.modules
 
@@ -63,7 +61,7 @@ prompter.bind_execution_policy(policy)
 assert execution.policy_for(prompter) is policy
 assert isinstance(state.http_permissions, grants.HTTPPermissions)
 assert isinstance(policy.observations, observations.ObservationStore)
-assert policy.observations._verifiers['sql-injection'] is verifiers.sql_boolean
+assert not policy.observations._verifiers  # legacy diagnostics are never auto-registered
 assert worker.ExecutionBlocked is execution.ExecutionBlocked
 """
     subprocess.run(
@@ -110,7 +108,6 @@ assert 'mcp' not in sys.modules
     ("src.permission.runtime.invocations", "ReviewTurn"),
     ("src.permission.runtime.observations", "ObservationStore"),
     ("src.permission.runtime.observations", "VerifiedResult"),
-    ("src.permission.runtime.verifiers", "register_production_verifiers"),
     ("src.permission.network.control", "parse_lab_spec"),
     ("src.permission.network.grants", "HTTPPermissions"),
     ("src.permission.network.transport", "pin_request"),

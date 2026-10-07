@@ -67,6 +67,10 @@ class Finding:
     evidence_refs: list[str] | None = None
     canonical_class: str | None = None
     confirmation_binding: str | None = None
+    assessment_source: str | None = None
+    assessment_result_id: str | None = None
+    assessment_attempt_id: str | None = None
+    binding_version: int = 1
     classification_provenance: dict[str, Any] | None = None
     classification_revision: int = 0
 
@@ -361,6 +365,11 @@ def render(
         lines.append(f"- **Canonical class:** {_inline(f.canonical_class)}")
     if f.confirmation_binding:
         lines.append(f"- **Confirmation binding:** {f.confirmation_binding}")
+    if f.binding_version >= 2:
+        lines.append(f"- **Assessment source:** {f.assessment_source or 'legacy/unknown'}")
+        lines.append(f"- **Assessment result:** {f.assessment_result_id or ''}")
+        lines.append(f"- **Assessment attempt:** {f.assessment_attempt_id or ''}")
+        lines.append(f"- **Binding version:** {f.binding_version}")
     if f.classification_provenance is not None:
         lines.append(f"- **Classification provenance:** {json.dumps(f.classification_provenance, sort_keys=True, separators=(',', ':'))}")
     if f.classification_revision:
@@ -499,6 +508,8 @@ def read_report_bytes(raw: bytes, *, slug: str) -> Finding:
         createdAt=value("Reported at") or "", slug=slug,
         candidate_id=value("Candidate ID"), evidence_refs=metadata.get("Evidence"),
         canonical_class=value("Canonical class"), confirmation_binding=value("Confirmation binding"),
+        assessment_source=value("Assessment source"), assessment_result_id=value("Assessment result"),
+        assessment_attempt_id=value("Assessment attempt"), binding_version=int(value("Binding version") or "1"),
         classification_provenance=_read_provenance(value("Classification provenance")),
         classification_revision=_read_revision(value("Classification revision")),
     )

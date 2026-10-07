@@ -26,6 +26,7 @@ from src.workflow.validation_route import GENERIC_VALIDATOR
 from tests.helpers.agent_fakes import FakeSignal, FakeClient
 from tests.helpers.workflow import record_completed_phase
 from tests.security.test_execution_policy import runtime, ORIGIN
+from tests.security.test_agent_assessment import ASSESSMENT
 from tests.security.test_generic_validation import app_for, review_args, result, certificate, agent_for, expert
 
 
@@ -80,7 +81,7 @@ def bind(env, probe):
 
 async def start(env, probe):
     return await env[0].execute("workflow", {"action": "start_validation", "candidate_id": env[5].id,
-        "probe": probe}, None, env[1])
+        "probe": probe, "assessment": ASSESSMENT}, None, env[1])
 
 
 def http_args(env, value=None):
@@ -129,14 +130,16 @@ async def test_custom_shapes_native_evidence_human_review_and_result(runtime, tm
     proof.write_text("changed mutable source")
     assert (tmp_path / artifact.path).read_text() == original
     unverified = json.loads(await result(env, refs=[ref], repeatable=True, force=True))
-    assert unverified["result"]["outcome"] == "insufficient-evidence"
+    assert unverified["result"]["outcome"] == "confirmed"
     assert not unverified["result"]["mutation_performed"]  # Input variation is not persistent mutation.
-    assert await env[6].coverage.list() == [] and certificate(env, ref) is None
+    assert (await env[6].coverage.list())[0].status == "failed" and certificate(env, ref) is not None
     app, output = app_for(env)
-    app.agent.save.side_effect = lambda: None
+    app.agent.save.side_effect = lambda **kwargs: None
     await review_result(app, review_args(env[5], reviewed_outcome))
     assert output[-1].entry.kind == "system", output[-1]
-    assert certificate(env, ref).outcome == reviewed_outcome
+    trusted = certificate(env, ref)
+    assert trusted is not None
+    assert trusted.outcome == reviewed_outcome
     assert [r.tool for r in env[3].requests] == ["review_result"]
     assert env[5].source_skill == "web-input-analysis" and env[5].objective_id == env[4].objective.id
     assert GENERIC_VALIDATOR not in env[4].completed_skills
@@ -335,7 +338,9 @@ async def test_resume_evidence_review_without_proposal_does_not_restore_executio
     app, output = app_for(env)
     await review_result(app, review_args(env[5], "not-confirmed"))
     assert output[-1].entry.kind == "system", output[-1]
-    assert certificate(env, ref).outcome == "not-confirmed"
+    trusted = certificate(env, ref)
+    assert trusted is not None
+    assert trusted.outcome == "not-confirmed"
     assert agent_for(env)._generic_completion_blockers() == ()
     with pytest.raises((ExecutionBlocked, ValueError)):
         await env[0].execute("http", http_args(env, "Lab-A"), None, env[1])

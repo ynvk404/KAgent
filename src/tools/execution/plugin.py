@@ -89,6 +89,10 @@ async def run_plugin(
     args: dict[str, Any],
     signal: Any,
 ) -> str:
+    from src.permission.runtime.execution import current_policy
+    from src.tools.common.outcome import ToolOutput
+    policy = current_policy()
+    source_owner = policy.observations.owner_provider() if policy else None
     proc = await asyncio.create_subprocess_exec(
         command,
         *argv,
@@ -187,10 +191,13 @@ async def run_plugin(
     stderr = truncate(stderr, totals[1])
 
     if proc.returncode == 0:
-        if stderr:
-            return f"{stdout}\nstderr:\n{stderr}"
-
-        return stdout
+        output = f"{stdout}\nstderr:\n{stderr}" if stderr else stdout
+        truncated = any(total > MAX_OUTPUT_BYTES for total in totals)
+        if policy is not None:
+            key = policy.observations.capture_output("command-plugin", output, owner=source_owner,
+                                                    truncated=truncated)
+            output += f"\n[runtime observation: {key}]"
+        return ToolOutput(output, truncated=truncated)
 
     sig_suffix = ""
 

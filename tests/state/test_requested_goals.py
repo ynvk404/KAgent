@@ -62,7 +62,7 @@ def test_objective_owns_deduplicated_goals_and_old_payloads_load_empty():
         },
     })
     assert old.objective is not None and old.objective.requested_goals == []
-    assert old.version == 7
+    assert old.version == 8
 
 
 def test_direct_objective_provenance_changes_new_candidate_id_without_rewriting_old_ids():

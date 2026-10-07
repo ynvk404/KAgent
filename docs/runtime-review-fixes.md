@@ -1,5 +1,11 @@
 # Runtime review/report fixes retained after removing semantic variants
 
+This is a historical implementation record. Its certificate staging/publication
+and unchanged-schema descriptions below are superseded by the current
+[Agent-assessed evidence contract](agent-assessed-evidence.md), which uses private
+operator revisions, serialized checkpoints and canonical coverage reconciliation.
+The earlier test counts below describe that earlier revision.
+
 The semantic-variant Phase 2 implementation was removed before commit at the user's request. Its previous acceptance report is superseded by this record. Phase 1 remains the deterministic local taxonomy; a future external CWE fallback/review phase is not implemented here.
 
 ## Removed

@@ -9,11 +9,13 @@ evidence, proof authority, routing, coverage, or finding eligibility.
 
 ## Audited baseline
 
-`Candidate` identity/fingerprint and `ValidationResult` remain unchanged.
+`Candidate` identity and legacy result fingerprints remain compatible. New
+assessments use versioned result/attempt/source bindings; see
+[Agent-assessed evidence](agent-assessed-evidence.md).
 `WorkflowState.eligible_for_finding` still requires the latest confirmed result,
 registered matching evidence, and no failed coverage synchronization.
-`ConfirmFindingTool` still validates endpoint/origin/method/parameter, the trusted
-verification certificate where a policy is bound, and evidence integrity before
+`ConfirmFindingTool` still validates endpoint/origin/method/parameter, the latest accepted
+assessment and its exact source/result binding, and evidence integrity before
 saving or notifying. The existing result-review tickets, complete review
 snapshots, evidence gates and write-once/retry behavior remain intact.
 

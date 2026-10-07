@@ -25,6 +25,8 @@ from src.config.config import PluginConfig, MCPServerConfig
 from src.coverage.store import CoverageStore
 from src.findings.store import Store as FindingsStore
 from src.target.target import Target
+from src.workflow.assessment import accepted_result
+from tests.security.test_agent_assessment import ASSESSMENT
 from src.workflow.state import Candidate, WorkflowObjective, WorkflowState
 from src.llm.runtime.validation_budget import ValidationBudget, ValidationBudgetExceeded, BudgetTransport
 
@@ -155,7 +157,10 @@ async def test_production_sqli_chain_and_protected_certificate_resume(lab, tmp_p
     workflow = WorkflowState()
     candidate, _ = workflow.add_candidate(Candidate(candidate_class='sql-injection', target=origin, endpoint='/search', method='GET', parameter='q', location='query'))
     coverage = CoverageStore(str(tmp_path / '.kagent/coverage.json'))
-    registry.register(WorkflowTool(workflow, target=Target(origin), coverage=coverage, evidence_root=tmp_path))
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
+    registry.register(WorkflowTool(workflow, target=Target(origin), skills=skills, coverage=coverage, evidence_root=tmp_path, session_id="repair-session"))
+    assert json.loads(await registry.execute('workflow', {'action':'start_validation','candidate_id':candidate.id}, None, p))['ok']
     registry.register(ConfirmFindingTool(FindingsStore(project_directory=tmp_path), workflow=workflow))
     for predicate in ['1=1', '1=2', '1=1', '1=2']:
         url = str(httpx.URL(origin + '/search', params={'q': f"fixture')) OR ({predicate})--"}))
@@ -163,7 +168,7 @@ async def test_production_sqli_chain_and_protected_certificate_resume(lab, tmp_p
     ids = list(policy.observations._items)
     (tmp_path / 'proof.txt').write_text('Synthetic repeated SQL boolean observations; no sensitive data.')
     ref = json.loads(await registry.execute('workflow', {'action':'record_evidence', 'candidate_id':candidate.id, 'evidence_path':'proof.txt'}, None, p))['evidence']['id']
-    result = json.loads(await registry.execute('workflow', {'action':'record_result', 'candidate_id':candidate.id, 'skill_name':'sql-injection', 'outcome':'confirmed', 'evidence_refs':[ref], 'observation_ids':ids}, None, p))
+    result = json.loads(await registry.execute('workflow', {'action':'record_result', 'candidate_id':candidate.id, 'skill_name':'sql-injection', 'outcome':'confirmed', 'evidence_refs':[ref], 'observation_ids':ids, 'assessment':ASSESSMENT}, None, p))
     assert result['eligible_for_confirm_finding'] and (await coverage.list())[0].status == 'failed'
     found = await registry.execute('confirm_finding', {'candidate_id':candidate.id, 'title':'Synthetic boolean fixture', 'url':origin+'/search', 'severity':'critical', 'observed_impact':'MODEL OVERCLAIM', 'potential_impact':'No additional impact assessed.'}, None, p)
     assert 'written to' in found and workflow.finding_is_persisted(candidate.id)
@@ -172,16 +177,16 @@ async def test_production_sqli_chain_and_protected_certificate_resume(lab, tmp_p
     assert 'MODEL OVERCLAIM' not in reports[0].read_text()
     restored = default_execution_policy(policy.engagement, tmp_path)
     restored.load_journal(journal)
-    certificate = restored.observations.result(candidate.id, (ref,), 'new-resume-epoch', candidate)
-    assert certificate is not None and certificate.verification_source.startswith('runtime:')
+    resumed = WorkflowState.from_dict(workflow.to_dict())
+    assert accepted_result(resumed, resumed.candidates[candidate.id], resumed.latest_result(candidate.id), restored)
     assert not restored._receipts and restored.used == policy.used
     candidate.parameter = 'changed'
-    assert restored.observations.result(candidate.id, (ref,), 'new-resume-epoch', candidate) is None
+    assert not accepted_result(workflow, candidate, workflow.latest_result(candidate.id), restored)
     assert len(requests) == 4 and operator.calls == 0
 
 
 @pytest.mark.asyncio
-async def test_boolean_sqli_needs_four_captured_observations_before_terminal_result(lab, tmp_path):
+async def test_boolean_sqli_runtime_admits_sources_without_four_observation_semantic_gate(lab, tmp_path):
     registry, p, policy, _, origin, requests = lab
     state = WorkflowState(objective=WorkflowObjective(
         id='sqli-assessment', mode='whole_target', target_origin=origin,
@@ -200,6 +205,7 @@ async def test_boolean_sqli_needs_four_captured_observations_before_terminal_res
         'evidence_path': 'proof.txt',
     }, None, p))['evidence']['id']
 
+    assert json.loads(await registry.execute('workflow', {'action':'start_validation','candidate_id':candidate.id}, None, p))['ok']
     async def probe(predicate):
         url = str(httpx.URL(origin + '/search', params={'q': f"fixture')) OR ({predicate})--"}))
         await registry.execute('http', {'url': url, 'phase': 'validation'}, None, p)
@@ -210,27 +216,18 @@ async def test_boolean_sqli_needs_four_captured_observations_before_terminal_res
         'action': 'record_result', 'candidate_id': candidate.id,
         'skill_name': 'sql-injection', 'outcome': 'confirmed',
         'techniques': ['boolean-based'], 'evidence_refs': [ref],
-        'observation_ids': list(policy.observations._items),
+        'observation_ids': list(policy.observations._items), 'assessment':ASSESSMENT,
     }
-    premature = await registry.execute('workflow', args, None, p)
-    assert 'at least four distinct captured runtime observation IDs' in premature
-    assert 'two TRUE and two FALSE' in premature
-    assert not state.validation_results
-    assert candidate.status == 'validating'
-    assert candidate.id in state.active_candidate_ids
-
-    await probe('1=2')
-    args['observation_ids'] = list(policy.observations._items)
     result = json.loads(await registry.execute('workflow', args, None, p))
     assert result['result']['outcome'] == 'confirmed'
     assert result['eligible_for_confirm_finding']
-    assert candidate.status == 'validated'
-    assert len(requests) == 4
+    assert candidate.status == 'validated' and len(requests) == 3
+    assert not policy.observations._verifiers
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('technique', ['error-based', 'time-based'])
-async def test_other_sqli_techniques_keep_existing_verifier_fallback(lab, tmp_path, technique):
+async def test_other_sqli_techniques_without_sources_reject_terminal(lab, tmp_path, technique):
     registry, p, _, _, origin, _ = lab
     state = WorkflowState()
     candidate, _ = state.add_candidate(Candidate(
@@ -243,14 +240,14 @@ async def test_other_sqli_techniques_keep_existing_verifier_fallback(lab, tmp_pa
         'action': 'record_evidence', 'candidate_id': candidate.id,
         'evidence_path': 'proof.txt',
     }, None, p))['evidence']['id']
-    result = json.loads(await registry.execute('workflow', {
+    result = await registry.execute('workflow', {
         'action': 'record_result', 'candidate_id': candidate.id,
         'skill_name': 'sql-injection', 'outcome': 'confirmed',
         'techniques': [technique], 'evidence_refs': [ref],
         'observation_ids': [],
-    }, None, p))
-    assert result['result']['outcome'] == 'insufficient-evidence'
-    assert candidate.status == 'deferred'
+    }, None, p)
+    assert result.startswith('error:') and not state.validation_results
+    assert candidate.status == 'validating'
 
 
 def test_budget_persists_limits_and_never_resets_on_resume(tmp_path):

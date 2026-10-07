@@ -15,7 +15,12 @@ from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
 from src.tools.common.registry import Registry as ToolRegistry
-from src.tools.workflow.workflow_tool import WorkflowTool
+from src.tools.workflow.workflow_tool import WorkflowTool as ProductionWorkflowTool
+from tests.helpers.workflow import FixtureWorkflowToolMixin
+
+
+class WorkflowTool(FixtureWorkflowToolMixin, ProductionWorkflowTool):
+    pass
 from src.workflow.goals import RequestedGoal
 from src.workflow.evidence import EvidenceArtifact
 from src.workflow.state import (
@@ -23,7 +28,7 @@ from src.workflow.state import (
     WorkflowObjective, WorkflowState,
 )
 from tests.helpers.agent_fakes import FakeSignal, collect
-from tests.helpers.workflow import record_completed_phase
+from tests.helpers.workflow import record_completed_phase, adopt_fixture_assessment
 
 
 class GoalLifecycleClient(Client):
@@ -531,10 +536,10 @@ async def test_whole_target_requested_goals_keep_phase_order_and_gate_completion
     proof.write_text("deterministic SQL comparison showed no class-specific signal", encoding="utf-8")
     artifact = EvidenceArtifact.capture(candidate.id, "goal-proof.md", tmp_path)
     state.add_evidence(artifact)
-    state.add_validation_result(ValidationResult(
+    state.add_validation_result(adopt_fixture_assessment(state, ValidationResult(
         candidate.id, "sql-injection", "not-confirmed",
         evidence_refs=[artifact.id], objective_id=objective.id,
-    ))
+    )))
     phase_agent._reconcile_requested_goals()
     status, actionable, blockers = phase_agent._whole_target_state()
     assert status == "blocked"

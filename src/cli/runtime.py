@@ -759,12 +759,13 @@ async def main() -> int:
                 id=f"finding:{finding.slug}",
                 title=finding.title,
                 severity=finding.severity,
-                confidence="Certain",
+                confidence="Firm" if finding.assessment_source == "operator" else "Tentative",
                 url=finding.url,
                 method=finding.method,
                 parameter=finding.parameter,
                 detail="\n".join(
                     [
+                        f"Assessment source: {finding.assessment_source or 'legacy/unknown'}; reproduction request is derived.\n"
                         f"Observed impact: {finding.observed_impact}\n"
                         f"Potential impact: {finding.potential_impact}",
                         (

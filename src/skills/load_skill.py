@@ -103,7 +103,10 @@ class LoadSkillTool:
                       "requests; do not ask_user to approve those again. OFF restores ordinary review. "
                       "Skill prerequisites, proof requirements and stop conditions still apply; a skill cannot grant "
                       "rights or enable unavailable adapters. Blocked/pending waits for operator action, not repeated "
-                      "permission questions. Missing accounts/OTP remain real input questions. Unsupported class "
-                      "verifiers retain evidence as unverified. Operator /review-result can separately review a proof "
+                      "permission questions. Missing accounts/OTP remain real input questions. Runtime validates source "
+                      "provenance, integrity, ownership and scope; Agent/skill assesses vulnerability meaning. "
+                      "Start validation, cite primary observation_ids and immutable evidence_refs for both terminal outcomes. "
+                      "Declare bounded hypothesis, criteria, limitations, observed_impact, severity and completed_attempt for negatives. "
+                      "A proof file alone cannot establish target traffic. Operator /review-result optionally reviews a proof "
                       "conclusion; that human review is never autonomous verification or tool authorization.\n\n")
         return prefix + materialize_skill_body(skill)

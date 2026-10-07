@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -792,6 +793,15 @@ class ValidationResult:
     session_id: str | None = None
     cleanup_state: CleanupState | None = None
     objective_id: str | None = None
+    assessment_source: str | None = None
+    assessment_contract_version: int = 1
+    result_id: str | None = None
+    attempt_id: str | None = None
+    candidate_binding: str | None = None
+    evidence_manifest: list[dict[str, Any]] = field(default_factory=list)
+    assessment: dict[str, Any] = field(default_factory=dict)
+    assessment_binding: str | None = None
+    supersedes: str | None = None
 
     def __post_init__(self) -> None:
         self.candidate_id = _text(self.candidate_id, limit=80) or ""
@@ -800,6 +810,15 @@ class ValidationResult:
             raise ValueError("candidate_id and skill_name are required")
         if not is_validation_outcome(self.outcome):
             raise ValueError(f"unknown validation outcome: {self.outcome}")
+        if (not isinstance(self.assessment_contract_version, int) or isinstance(self.assessment_contract_version, bool)
+                or self.assessment_contract_version not in {1, 2}):
+            raise ValueError("unsupported assessment contract version")
+        if self.assessment_source not in {None, "agent", "operator", "legacy-verifier"}:
+            raise ValueError("invalid assessment source")
+        if (not isinstance(self.evidence_manifest, list) or len(self.evidence_manifest) > 32
+                or not isinstance(self.assessment, dict)
+                or len(json.dumps(self.evidence_manifest)) > 2 * 1024 * 1024):
+            raise ValueError("invalid bounded assessment manifest")
         self.evidence_refs = _strings(self.evidence_refs, maximum=_MAX_REFS)
         self.techniques = _strings(self.techniques, maximum=_MAX_TECHNIQUES)
         if self.repeatable is not None and not isinstance(self.repeatable, bool):
@@ -849,7 +868,22 @@ class ValidationResult:
             "recorded_at": self.recorded_at,
             "session_id": self.session_id,
             "objective_id": self.objective_id,
+            **({key: getattr(self, key) for key in (
+                "assessment_source", "assessment_contract_version", "result_id", "attempt_id",
+                "candidate_binding", "evidence_manifest", "assessment", "assessment_binding", "supersedes",
+            )} if self.assessment_contract_version >= 2 else {}),
         }
+
+    def public_dict(self) -> dict[str, Any]:
+        """Expose compact evidence handles; retained traffic stays in bounded storage."""
+        row = self.to_dict()
+        if self.assessment_contract_version >= 2:
+            row["evidence_manifest"] = [
+                {"hash": entry["hash"], "source": {key: value for key, value in entry["source"].items()
+                 if key in {"id", "source_kind", "producer", "role", "required", "method", "url", "status", "complete",
+                            "truncated", "execution_status", "elapsed_ms", "attempt_id", "response_cap", "source_details"}}}
+                for entry in self.evidence_manifest]
+        return row
 
     @classmethod
     def from_dict(cls, value: Any) -> ValidationResult | None:
@@ -882,6 +916,10 @@ class ValidationResult:
                 recorded_at=value.get("recorded_at"),
                 session_id=value.get("session_id"),
                 objective_id=value.get("objective_id"),
+                **{key: value[key] for key in (
+                    "assessment_source", "assessment_contract_version", "result_id", "attempt_id",
+                    "candidate_binding", "evidence_manifest", "assessment", "assessment_binding", "supersedes",
+                ) if key in value},
             )
         except (TypeError, ValueError):
             return None
@@ -898,6 +936,9 @@ def validation_result_fingerprint(result: ValidationResult) -> str:
         "confirmation": result.confirmation,
         "mutation_performed": result.mutation_performed,
     }
+    if result.assessment_contract_version >= 2:
+        semantic_identity["assessment_binding"] = result.assessment_binding
+        semantic_identity["result_id"] = result.result_id
     body = json.dumps(semantic_identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
@@ -967,7 +1008,7 @@ def _merge_compatible_context(
 
 @dataclass(slots=True)
 class WorkflowState:
-    version: int = 7
+    version: int = 8
     objective: WorkflowObjective | None = None
     candidates: dict[str, Candidate] = field(default_factory=dict)
     validation_results: list[ValidationResult] = field(default_factory=list)
@@ -980,6 +1021,10 @@ class WorkflowState:
     completed_artifacts: dict[str, str] = field(default_factory=dict)
     persisted_findings: dict[str, str] = field(default_factory=dict)
     current_phase: str | None = None
+    attempts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    selected_sources: dict[str, dict[str, Any]] = field(default_factory=dict)
+    evidence_sources: dict[str, list[str]] = field(default_factory=dict)
+    mutation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
 
     @staticmethod
     def _media_enrichment_match(existing: Any, incoming: Any, *, candidate: bool) -> bool:
@@ -1756,6 +1801,11 @@ class WorkflowState:
 
     def eligible_for_finding(self, candidate_id: str) -> bool:
         result = self.latest_result(candidate_id)
+        if result is not None and result.assessment_contract_version >= 2:
+            from src.workflow.assessment import accepted_result
+            candidate = self.candidates.get(candidate_id)
+            if candidate is None or not accepted_result(self, candidate, result):
+                return False
         return (
             result is not None
             and result.outcome == "confirmed"
@@ -1785,6 +1835,9 @@ class WorkflowState:
 
     def clear(self) -> None:
         self.objective = None
+        self.attempts.clear()
+        self.selected_sources.clear()
+        self.evidence_sources.clear()
         self.candidates.clear()
         self.validation_results.clear()
         self.evidence.clear()
@@ -1798,6 +1851,9 @@ class WorkflowState:
         self.current_phase = None
 
     def replace_from(self, other: WorkflowState) -> None:
+        self.attempts = deepcopy(other.attempts)
+        self.selected_sources = deepcopy(other.selected_sources)
+        self.evidence_sources = deepcopy(other.evidence_sources)
         self.version = other.version
         self.objective = other.objective
         self.candidates = dict(other.candidates)
@@ -1817,6 +1873,9 @@ class WorkflowState:
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
+            "attempts": deepcopy(self.attempts),
+            "selected_sources": deepcopy(self.selected_sources),
+            "evidence_sources": deepcopy(self.evidence_sources),
             "objective": self.objective.to_dict() if self.objective else None,
             "candidates": [self.candidates[key].to_dict() for key in sorted(self.candidates)],
             "validation_results": [result.to_dict() for result in self.validation_results],
@@ -1853,8 +1912,18 @@ class WorkflowState:
             # Version 1 had no registered evidence or independent subcases.
             # Its candidates/results still load, but legacy free-text evidence
             # references do not become finding-eligible without a new proof.
-            state.version = max(7, version)
+            state.version = max(8, version)
 
+        selected = value.get("selected_sources", {})
+        if isinstance(selected, dict) and len(selected) <= 256 and len(json.dumps(selected)) <= 16 * 1024 * 1024:
+            state.selected_sources = deepcopy(selected)
+        raw_attempts = value.get("attempts", {})
+        if isinstance(raw_attempts, dict):
+            state.attempts = deepcopy({key: row for key, row in raw_attempts.items()
+                                      if isinstance(key, str) and isinstance(row, dict)})
+            for row in state.attempts.values():
+                if row.get("status") == "active":
+                    row["status"] = "interrupted"
         state.objective = WorkflowObjective.from_dict(value.get("objective"))
 
         raw_candidates = value.get("candidates", [])
@@ -1887,6 +1956,11 @@ class WorkflowState:
                 if artifact is not None and artifact.candidate_id in state.candidates:
                     state.add_evidence(artifact)
         raw_inputs = value.get("attack_surface_inputs", [])
+        parents = value.get("evidence_sources", {})
+        if isinstance(parents, dict):
+            state.evidence_sources = {key: list(ids) for key, ids in parents.items()
+                if key in state.evidence and isinstance(ids, list) and len(ids) <= 32
+                and all(isinstance(x, str) for x in ids) and len(set(ids)) == len(ids)}
         if isinstance(raw_inputs, list):
             for raw in raw_inputs:
                 if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not raw["id"]:

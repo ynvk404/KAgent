@@ -280,6 +280,12 @@ def _finding_matches(f: Finding, candidate: Record, result: Record, target: str)
         len(set(f.evidence_refs)) != len(f.evidence_refs) or
         not f.confirmation_binding or f.confirmation_binding != result.get("binding")):
         return False
+    if result.get("assessment_contract_version", 1) >= 2 and (
+            f.assessment_source != result.get("assessment_source")
+            or f.assessment_result_id != result.get("result_id")
+            or f.assessment_attempt_id != result.get("attempt_id")
+            or f.binding_version != result.get("assessment_contract_version")):
+        return False
     if candidate.get("method") and (f.method or "").upper() != candidate.get("method"):
         return False
     if candidate.get("parameter") and f.parameter != candidate.get("parameter"):
@@ -593,7 +599,7 @@ def build_report(source: SourceSnapshot, resources: Resources) -> ReportDocument
         f"parameter: {clean.text(i.get('parameter'))}; location: {clean.text(i.get('location'))}; "
         f"media type: {clean.text(i.get('content_type'))}; auth context: {clean.text(i.get('auth_context_ref'))}; "
         f"disposition: {clean.text(i.get('disposition'))}; reason: {clean.text(i.get('disposition_reason'), MAX_REASON)}") for i in inputs))
-    validations = tuple(sorted((clean.text(cid), f"Latest outcome: {clean.text(r.get('outcome'))}; "
+    validations = tuple(sorted((clean.text(cid), f"Latest outcome: {clean.text(r.get('outcome'))}; assessment source: {clean.text((r.get('assessment_provenance') or {}).get('source') or r.get('assessment_source') or 'legacy/unknown')}; "
         f"skill: {clean.text(r.get('skill_name'))}; techniques: {clean.text(', '.join(r.get('techniques', ())))}; "
         f"reason: {clean.text(r.get('deferred_reason'), MAX_REASON)}; notes: {clean.text(r.get('notes'), MAX_REASON)}; "
         f"cleanup: {clean.text(r.get('cleanup_state'))}; coverage sync: {r.get('coverage_synced')}; "

@@ -23,7 +23,7 @@ from src.tools.mcp.integration import MCPSession, MCPTool
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.ui.commands.cwe_enrichment import enrich_cwe
 from src.ui.commands.result_review import review_result
-from src.workflow.review import review_snapshot
+from src.workflow.review import review_snapshot, confirmation_binding
 from tests.security.test_execution_policy import runtime, ORIGIN
 from tests.security.test_operator_review import setup_review, command
 
@@ -531,7 +531,7 @@ async def test_new_phase1_provenance_only_when_local_path_assigns_cwe(tmp_path, 
     assert tool.workflow is not None
     cid = next(iter(tool.workflow.candidates))
     saved = read_report(store.report_for_candidate(cid))
-    assert saved.confirmation_binding == review_snapshot(tool.workflow, cid)
+    assert saved.confirmation_binding == confirmation_binding(tool.workflow, cid)
     if expected:
         assert saved.classification_provenance is not None
         assert saved.classification_provenance['origin'] == expected

@@ -35,7 +35,8 @@ from src.tools.mcp.cwe_deployment import (
 )
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.evidence import verify_evidence_reads
-from src.workflow.review import digest, review_snapshot
+from src.workflow.review import digest, review_snapshot, confirmation_binding
+from src.workflow.assessment import accepted_result
 
 SEARCH_TOOL = 'mcp_cwe_catalog_search_cwe'
 GET_TOOL = 'mcp_cwe_catalog_get_cwe'
@@ -237,6 +238,7 @@ class Enrichment:
         result = state.latest_result(self.cid)
         if (candidate is not self.candidate or result is not self.result
                 or not state.eligible_for_finding(self.cid)
+                or not accepted_result(state, candidate, result, self.policy)
                 or review_snapshot(state, self.cid) != self.binding
                 or self.policy.stamp() != self.stamp
                 or not self.policy.observations.review_is_current('cwe:'+self.cid, self.ticket)):
@@ -272,10 +274,17 @@ class Enrichment:
         self.candidate = state.candidates.get(self.cid)
         self.result = state.latest_result(self.cid)
         if (self.candidate is None or self.result is None or not state.eligible_for_finding(self.cid)
+                or not accepted_result(state, self.candidate, self.result, self.policy)
                 or self.finding.canonical_class != self.candidate.candidate_class
                 or self.finding.evidence_refs != self.result.evidence_refs
-                or self.finding.confirmation_binding != review_snapshot(state, self.cid)):
+                or self.finding.confirmation_binding != confirmation_binding(state, self.cid)):
             raise ValueError('persisted finding cannot be bound to current confirmed result/evidence')
+        if self.result.assessment_contract_version >= 2 and (
+                self.finding.assessment_source != self.result.assessment_source
+                or self.finding.assessment_result_id != self.result.result_id
+                or self.finding.assessment_attempt_id != self.result.attempt_id
+                or self.finding.binding_version != self.result.assessment_contract_version):
+            raise ValueError('persisted finding assessment revision differs from current result')
         if self.candidate.target and HTTPOrigin.from_url(self.finding.url) != HTTPOrigin.from_url(self.candidate.target):
             raise ValueError('persisted finding target differs from Candidate')
         if self.candidate.endpoint:

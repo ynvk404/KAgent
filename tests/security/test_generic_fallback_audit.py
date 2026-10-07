@@ -106,7 +106,8 @@ async def test_matching_generic_observations_still_verify_and_persist(runtime, t
         "not-confirmed", "Fixture comparison", "info", tuple(i.id for i in items)))
     payload = json.loads(await result(env, "not-confirmed", refs=[ref], observation_ids=ids))
     assert payload["result"]["outcome"] == "not-confirmed"
-    assert certificate(env, ref).observation_ids == tuple(ids)
+    trusted = certificate(env, ref)
+    assert trusted is not None and trusted.observation_ids == tuple(ids)
     # Old observation records remain readable, but lack attempt attestation.
     raw = json.loads(storage.read_text())
     for row in raw["observations"]:
@@ -141,7 +142,7 @@ async def test_cancelled_generic_wait_releases_guards_without_sending(runtime, t
     assert env[4].latest_result(env[5].id) is None
 
 
-async def test_failed_certificate_invalidation_cannot_publish_retest(runtime, tmp_path, monkeypatch):
+async def test_new_attempt_does_not_depend_on_legacy_certificate_invalidation(runtime, tmp_path, monkeypatch):
     env = await setup(runtime, tmp_path)
     await start(env)
     ref = await evidence(env, tmp_path)
@@ -152,12 +153,13 @@ async def test_failed_certificate_invalidation_cannot_publish_retest(runtime, tm
     agent_for(env)._initialize_request_objective(f"Retest candidate {env[5].id}", True)
     bind_context(env)
     monkeypatch.setattr(env[2].observations, "persist", lambda: (_ for _ in ()).throw(OSError("fixture failure")))
-    with pytest.raises(OSError, match="fixture failure"):
-        await start(env)
-    assert certificate(env, ref) == previous
-    assert env[5].status == "validated" and env[2].generic_validation.attempt is None
-    assert env[4].objective.id in env[2].generic_validation.retest_objectives
-    assert not runtime[4]
+    response = await start(env)
+    assert json.loads(response)["ok"]
+    assert env[4].latest_result(env[5].id).assessment_source == "operator"
+    assert certificate(env, ref) is None  # prior objective remains historical
+    assert env[5].status == "validating" and env[2].generic_validation.attempt is not None
+    assert env[4].objective.id not in env[2].generic_validation.retest_objectives
+    assert len(runtime[4]) == 1
 
 
 @pytest.mark.parametrize("candidate_class", ["input-canonicalization", "new-future-class"])
@@ -211,10 +213,10 @@ async def test_generic_verifier_cannot_borrow_another_attempt_observations(runti
     ref = await evidence(env, tmp_path)
     env[2].observations.register_verifier(env[5].candidate_class, lambda _, items: VerifiedResult(
         "confirmed", "Fixture comparison", "low", tuple(i.id for i in items)))
-    payload = json.loads(await result(env, refs=[ref], observation_ids=ids))
-    assert payload["result"]["outcome"] == "insufficient-evidence"
+    rejected = await result(env, refs=[ref], observation_ids=ids)
+    assert rejected.startswith("error:")
     assert not env[4].eligible_for_finding(env[5].id)
-    assert len(runtime[4]) == 1  # Only the earlier expert request was sent.
+    assert len(runtime[4]) == 2  # Earlier expert response and current owned fixture response remain distinct.
 
 
 async def test_explicit_generic_retest_cannot_reuse_old_certificate_or_complete_early(runtime, tmp_path):
@@ -231,7 +233,7 @@ async def test_explicit_generic_retest_cannot_reuse_old_certificate_or_complete_
     bind_context(env)
     assert json.loads(await start(env))["ok"]
     assert certificate(env, ref) is None
-    payload = json.loads(await result(env, "not-confirmed", refs=[ref]))
-    assert payload["result"]["outcome"] == "insufficient-evidence"
+    rejected = await result(env, "not-confirmed", refs=[ref])
+    assert rejected.startswith("error:")
     assert agent._generic_completion_blockers()
-    assert not runtime[4]
+    assert len(runtime[4]) == 1

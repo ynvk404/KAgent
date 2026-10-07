@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.helpers.workflow import run_workflow_fixture
 
 import json
 from pathlib import Path
@@ -105,7 +106,7 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
     await record_phase_coverage_for_test(workflow_tool, "recon")
     ready_recon = build_decision_plan("continue", skills.list_enabled(), target, agent._planner_context())
     assert ready_recon is not None and f'artifact_ref="{recon_ref}"' in ready_recon.guidance
-    await workflow_tool.run({"action": "complete_skill", "skill_name": "recon"}, None, AlwaysAllow())
+    await run_workflow_fixture(workflow_tool, {"action": "complete_skill", "skill_name": "recon"}, None, AlwaysAllow())
     enumeration_plan = build_decision_plan(
         "continue", skills.list_enabled(), target, agent._planner_context()
     )
@@ -125,7 +126,7 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
     unresolved_plan = build_decision_plan("continue", skills.list_enabled(), target, agent._planner_context())
     assert unresolved_plan is not None
     assert 'action="complete_skill"' not in unresolved_plan.guidance
-    assert "unresolved failed/cancelled" in await workflow_tool.run(
+    assert "unresolved failed/cancelled" in await run_workflow_fixture(workflow_tool,
         {"action": "complete_skill", "skill_name": "web-enumeration"}, None, AlwaysAllow()
     )
     state.record_phase_coverage("enumeration", "active_content_discovery", "skipped",
@@ -134,10 +135,10 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
     ready_enumeration = build_decision_plan("continue", skills.list_enabled(), target, agent._planner_context())
     assert ready_enumeration is not None
     assert f'skill_name="web-enumeration", artifact_ref="{enumeration_ref}"' in ready_enumeration.guidance
-    await workflow_tool.run(
+    await run_workflow_fixture(workflow_tool,
         {"action": "complete_skill", "skill_name": "web-enumeration"}, None, AlwaysAllow()
     )
-    input_result = json.loads(await workflow_tool.run({
+    input_result = json.loads(await run_workflow_fixture(workflow_tool, {
         "action": "record_input", "method": "POST", "endpoint": "/api/v1/search",
         "parameter": "filter", "location": "body", "input_type": "string",
         "content_type": "application/json",
@@ -149,7 +150,7 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
     assert analysis_plan is not None
     assert analysis_plan.recommended_skill == "web-input-analysis"
 
-    candidate_result = json.loads(await workflow_tool.run({
+    candidate_result = json.loads(await run_workflow_fixture(workflow_tool, {
         "action": "record_candidate", "candidate_class": "sql-injection",
         "source_skill": "web-input-analysis", "method": "POST",
         "endpoint": "/api/v1/search", "parameter": "filter", "location": "body",
@@ -170,13 +171,13 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
         "captures/search-baseline.json"
     )
     assert state.candidates[candidate_id].auth_context_ref == "captures/auth-context.md"
-    await workflow_tool.run({
+    await run_workflow_fixture(workflow_tool, {
         "action": "set_input_disposition", "input_id": input_result["input"]["id"],
         "disposition": "analyzed",
     }, None, AlwaysAllow())
     analysis_ref = "artifacts/web-input-analysis/target-test/candidates.md"
     _artifact(tmp_path, analysis_ref)
-    await workflow_tool.run(
+    await run_workflow_fixture(workflow_tool,
         {"action": "complete_skill", "skill_name": "web-input-analysis"}, None, AlwaysAllow()
     )
     validator_plan = build_decision_plan(
@@ -186,10 +187,16 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
     assert validator_plan.recommended_skill == "sql-injection"
     assert validator_plan.candidate_id == candidate_id
 
-    await workflow_tool.run({
+    await run_workflow_fixture(workflow_tool, {
         "action": "start_validation", "candidate_id": candidate_id,
     }, None, AlwaysAllow())
-    result = json.loads(await workflow_tool.run({
+    (tmp_path / "negative-proof.md").write_text("Bounded fixture analysis")
+    proof_id = json.loads(await workflow_tool.run({
+        "action": "record_evidence", "candidate_id": candidate_id,
+        "evidence_path": "negative-proof.md",
+    }, None, AlwaysAllow()))["evidence"]["id"]
+    result = json.loads(await run_workflow_fixture(workflow_tool, {
+        "evidence_refs": [proof_id],
         "action": "record_result", "candidate_id": candidate_id,
         "skill_name": "sql-injection", "outcome": "not-confirmed",
     }, None, AlwaysAllow()))
@@ -291,11 +298,11 @@ async def test_whole_target_revalidates_when_immutable_proof_disappears(tmp_path
     ))
 
     (tmp_path / "results.md").write_text("redacted proof\n", encoding="utf-8")
-    evidence = json.loads(await workflow_tool.run({
+    evidence = json.loads(await run_workflow_fixture(workflow_tool, {
         "action": "record_evidence", "candidate_id": candidate.id,
         "evidence_path": "results.md",
     }, None, AlwaysAllow()))["evidence"]
-    await workflow_tool.run({
+    await run_workflow_fixture(workflow_tool, {
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting", "outcome": "confirmed",
         "evidence_refs": [evidence["id"]], "repeatable": True,

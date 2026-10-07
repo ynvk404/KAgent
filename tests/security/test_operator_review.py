@@ -11,6 +11,7 @@ from src.coverage.store import CoverageStore
 from src.findings.store import Store, read_report
 from src.permission.permission import Decision
 from src.permission.runtime.observations import ObservationStore
+from src.workflow.assessment import accepted_result
 from src.skills.registry import Registry as Skills
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.tools.workflow.workflow_tool import WorkflowTool
@@ -21,7 +22,7 @@ from tests.security.test_execution_policy import runtime, ORIGIN
 
 
 async def setup_review(runtime, tmp_path, *, coverage=None):
-    registry, prompter, _, operator, _, _, _ = runtime
+    registry, prompter, policy, operator, _, _, target = runtime
     state = WorkflowState()
     candidate, _ = state.add_candidate(Candidate(
         candidate_class='access-control', target=ORIGIN,
@@ -29,7 +30,7 @@ async def setup_review(runtime, tmp_path, *, coverage=None):
     ))
     skills = Skills()
     skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
-    tool = WorkflowTool(state, skills=skills, evidence_root=tmp_path, coverage=coverage)
+    tool = WorkflowTool(state, target, skills=skills, evidence_root=tmp_path, coverage=coverage)
     registry.register(tool)
     source = tmp_path / 'proof.txt'
     source.write_text('Designated private fixture resource returned to a principal without access; authorized and no-session controls recorded. No credentials retained.')
@@ -37,10 +38,14 @@ async def setup_review(runtime, tmp_path, *, coverage=None):
         'action': 'record_evidence', 'candidate_id': candidate.id, 'evidence_path': source.name,
     }, None, prompter)
     ref = json.loads(result)['evidence']['id']
-    state.add_validation_result(ValidationResult(
-        candidate.id, 'access-control', 'insufficient-evidence',
-        evidence_refs=[ref], repeatable=True, notes='Original review context.',
-    ))
+    assert json.loads(await registry.execute('workflow', {'action': 'start_validation', 'candidate_id': candidate.id}, None, prompter))['ok']
+    await registry.execute('http', {'url': '/fixture', 'phase': 'validation'}, None, prompter)
+    oid = next(reversed(policy.observations._items))
+    assert json.loads(await registry.execute('workflow', {
+        'action': 'record_result', 'candidate_id': candidate.id, 'skill_name': 'access-control',
+        'outcome': 'insufficient-evidence', 'evidence_refs': [ref], 'observation_ids': [oid],
+        'repeatable': True, 'notes': 'Original review context.',
+    }, None, prompter))['ok']
     output = []
     app = SimpleNamespace(agent=SimpleNamespace(
         prompter=prompter, workflow=state, tools=registry, skills=skills, save=AsyncMock(),
@@ -54,7 +59,9 @@ def command(candidate, outcome='confirmed', severity='low'):
 
 
 def certificate(policy, candidate, ref):
-    return policy.observations.result(candidate.id, (ref,), policy.engagement.http_permissions.epoch, candidate)
+    state = policy.generic_validation.state
+    result = state.latest_result(candidate.id)
+    return result if result and result.assessment_source == 'operator' and accepted_result(state, candidate, result, policy) else None
 
 
 @pytest.mark.asyncio
@@ -65,8 +72,11 @@ async def test_certificate_published_only_after_workflow_and_session_commit(runt
     path = tmp_path / 'observations.json'
     policy.observations.attach_storage(path)
 
-    async def save():
-        latest = state.latest_result(candidate.id)
+    async def save(*, workflow_override=None, _workflow_locked=False):
+        previous = state.latest_result(candidate.id)
+        assert previous is not None and previous.outcome == 'insufficient-evidence'
+        assert workflow_override is not None
+        latest = workflow_override.latest_result(candidate.id)
         assert latest is not None and latest.outcome == outcome
         assert latest.notes == 'Original review context.'
         assert candidate.id not in policy.observations._results
@@ -79,12 +89,11 @@ async def test_certificate_published_only_after_workflow_and_session_commit(runt
     assert [r.tool for r in operator.requests] == ['review_result']
     assert operator.requests[0].no_session_cache
     assert 'Exact result:' in operator.requests[0].detail
-    assert not policy.observations._reviews and policy.active == 0 and not sent
-    raw = json.loads(path.read_text())
-    assert set(raw) == {'observations', 'results'}
-    restored = ObservationStore()
-    restored.attach_storage(path)
-    assert restored.result(candidate.id, (ref,), 'resumed-epoch', candidate) == trusted
+    assert not policy.observations._reviews and policy.active == 0 and len(sent) == 1
+    restored_state = WorkflowState.from_dict(state.to_dict())
+    assert accepted_result(restored_state, restored_state.candidates[candidate.id],
+                           restored_state.latest_result(candidate.id), policy)
+    assert not policy.observations._results  # canonical provenance lives in workflow
 
 
 @pytest.mark.asyncio
@@ -94,13 +103,13 @@ async def test_review_failure_never_publishes_new_certificate(runtime, tmp_path,
     coverage = CoverageStore(str(tmp_path / 'coverage.json')) if failure == 'coverage-error' else None
     app, _, candidate, tool, ref, output = await setup_review(runtime, tmp_path, coverage=coverage)
     if failure == 'record-error':
-        monkeypatch.setattr(tool, 'run', AsyncMock(return_value='error: record failed'))
+        monkeypatch.setattr('src.ui.commands.result_review.accepted_result', lambda *a: False)
     elif failure == 'coverage-error':
-        monkeypatch.setattr(tool, '_sync_coverage', AsyncMock(side_effect=OSError('coverage failed')))
+        monkeypatch.setattr(WorkflowTool, '_sync_coverage', AsyncMock(side_effect=OSError('coverage failed')))
     elif failure == 'save-error':
         app.agent.save.side_effect = OSError('session failed')
     elif failure == 'persist-error':
-        monkeypatch.setattr(policy.observations, 'persist', lambda: (_ for _ in ()).throw(OSError('owner failed')))
+        app.agent.save.side_effect = OSError('canonical checkpoint failed')
     elif failure == 'denied':
         operator.decision = Decision.DENY
     else:
@@ -192,14 +201,17 @@ async def test_cancellation_during_save_does_not_leak_staged_certificate(runtime
     _, _, policy, _, _, _, _ = runtime
     app, _, candidate, _, ref, _ = await setup_review(runtime, tmp_path)
     saving = asyncio.Event()
-    async def save():
-        saving.set()
-        await asyncio.Event().wait()
+    release = asyncio.Event()
+    async def save(**kwargs):
+        if kwargs.get('workflow_override') is not None:
+            saving.set()
+            await release.wait()
     app.agent.save = save
     task = asyncio.create_task(review_result(app, command(candidate)))
     await asyncio.wait_for(saving.wait(), 2)
     assert certificate(policy, candidate, ref) is None
     task.cancel()
+    release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
     assert certificate(policy, candidate, ref) is None
@@ -210,7 +222,7 @@ async def test_cancellation_during_save_does_not_leak_staged_certificate(runtime
 async def test_new_result_during_record_result_proof_read_is_not_overwritten(runtime, tmp_path, monkeypatch):
     _, _, policy, _, _, _, _ = runtime
     app, state, candidate, _, ref, output = await setup_review(runtime, tmp_path)
-    import src.tools.workflow.workflow_tool as workflow_module
+    import src.ui.commands.result_review as workflow_module
     original = workflow_module.verify_evidence_reads
     reading, release = asyncio.Event(), asyncio.Event()
     async def delayed(*args, **kwargs):
@@ -232,7 +244,7 @@ async def test_new_result_during_record_result_proof_read_is_not_overwritten(run
 async def test_new_result_during_session_save_prevents_certificate_publish(runtime, tmp_path):
     _, _, policy, _, _, _, _ = runtime
     app, state, candidate, _, ref, output = await setup_review(runtime, tmp_path)
-    async def save():
+    async def save(**kwargs):
         state.add_validation_result(ValidationResult(candidate.id, 'access-control', 'deferred', evidence_refs=[ref]), force=True)
     app.agent.save.side_effect = save
     await review_result(app, command(candidate))
@@ -246,7 +258,7 @@ async def test_failed_owner_commit_preserves_previous_certificate(runtime, tmp_p
     await review_result(app, command(candidate, 'not-confirmed'))
     old = certificate(policy, candidate, ref)
     assert old is not None and old.outcome == 'not-confirmed'
-    monkeypatch.setattr(policy.observations, 'persist', lambda: (_ for _ in ()).throw(OSError('owner failed')))
+    app.agent.save.side_effect = OSError('canonical checkpoint failed')
     await review_result(app, command(candidate, 'confirmed'))
     assert output[-1].entry.kind == 'error'
     assert certificate(policy, candidate, ref) == old
@@ -277,8 +289,9 @@ async def test_finding_retry_uses_persisted_snapshot_for_notifier_and_tool_resul
     await review_result(app, command(candidate, severity='high'))
     import src.tools.workflow.finding as finding_module
     monkeypatch.setattr(finding_module, 'classify', lambda _: SimpleNamespace(type='Changed taxonomy', cwe=['CWE-999'], owasp=[]))
-    retry = await registry.execute('confirm_finding', {**args, 'title': 'New proposed title'}, None, prompter)
-    assert retry == first and 'Original finding' in retry and 'CWE: none' in retry
+    with pytest.raises(ValueError, match='historical report'):
+        await registry.execute('confirm_finding', {**args, 'title': 'New proposed title'}, None, prompter)
+    assert not state.finding_is_persisted(candidate.id)
     assert notified[-1][0] == persisted and Path(notified[-1][1]).read_text() == content
     assert len(list(Path(notified[-1][1]).parent.glob('*.md'))) == 1
 

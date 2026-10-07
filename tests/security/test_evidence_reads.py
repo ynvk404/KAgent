@@ -207,7 +207,8 @@ async def test_finding_denial_precedes_evidence_read_and_report_write(tmp_path):
     tool, cid = workflow(tmp_path)
     (tmp_path / ".env").write_text("FAKE_CANARY")
     ev = await snapshot(tool, cid, ".env", AlwaysAllow())
-    result = await tool.run({"action": "record_result", "candidate_id": cid,
+    from tests.helpers.workflow import run_workflow_fixture
+    result = await run_workflow_fixture(tool, {"action": "record_result", "candidate_id": cid,
                             "skill_name": "xxe", "outcome": "confirmed", "evidence_refs": [ev["id"]]},
                            None, AlwaysAllow())
     assert json.loads(result)["ok"]

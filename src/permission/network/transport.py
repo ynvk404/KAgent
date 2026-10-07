@@ -10,6 +10,7 @@ from dataclasses import replace
 from contextlib import asynccontextmanager
 import ipaddress
 import socket
+import time
 from typing import Any
 import httpx
 
@@ -65,6 +66,8 @@ async def governed_send(client: httpx.AsyncClient, request: httpx.Request, promp
             raise ExecutionBlocked("blocked: policy-changed-before-network-send")
         policy.require_network(action.url, research=research)
         reservation.start()
+        source_owner = policy.observations.owner_provider() or {}
+        sent_at = time.monotonic()
         response = await client.send(pinned, stream=True)
     except BaseException:
         reservation.release()
@@ -97,6 +100,8 @@ async def governed_send(client: httpx.AsyncClient, request: httpx.Request, promp
                 released = True
                 response.extensions["runtime_observation_id"] = policy.observations.capture(
                     action, response.status_code, b"".join(chunks), complete=complete,
+                    owner=source_owner, response_headers=response.headers.items(),
+                    elapsed_ms=(time.monotonic() - sent_at) * 1000,
                 )
                 reservation.release()
 

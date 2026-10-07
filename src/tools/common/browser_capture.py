@@ -236,6 +236,12 @@ class BrowserCaptureGetTool(BaseCaptureTool):
             "responseBody": response_body,
             "receivedAt": _iso(r.received_at),
         }
+        from src.permission.runtime.execution import policy_for
+        policy = policy_for(prompter)
+        if policy is not None and policy.observations.owner_provider() is not None:
+            trimmed["runtime_observation_id"] = policy.observations.import_capture(
+                r, owner=policy.observations.owner_provider())
+            trimmed["evidence_source_kind"] = "imported-capture"
         return json.dumps(trimmed, indent=2)
 
 class BrowserCaptureSnapshotTool(BaseCaptureTool):

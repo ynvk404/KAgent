@@ -27,6 +27,8 @@ from src.tools.execution.shell import ShellTool
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.ui.commands.result_review import review_result
+from src.workflow.assessment import accepted_result
+from tests.security.test_agent_assessment import ASSESSMENT
 from src.workflow.state import AttackSurfaceInput, Candidate, ValidationResult, WorkflowMode, WorkflowObjective, WorkflowState
 from src.workflow.validation_route import GENERIC_VALIDATOR, resolve_validation_route
 from src.workflow.probe import ProbeProposal
@@ -95,7 +97,7 @@ def bind_context(env):
 
 async def start(env):
     registry, p, _, _, _, c, _, _ = env
-    return await registry.execute("workflow", {"action": "start_validation", "candidate_id": c.id}, None, p)
+    return await registry.execute("workflow", {"action": "start_validation", "candidate_id": c.id, "assessment": ASSESSMENT}, None, p)
 
 
 def request(candidate, marker=False):
@@ -108,6 +110,13 @@ def request(candidate, marker=False):
 
 async def evidence(env, tmp_path):
     registry, p, policy, _, _, c, _, _ = env
+    # Optional review fixtures now retain a genuine native response before
+    # writing derived interpretation; a proof file alone has no authority.
+    if policy.generic_validation.started_candidate == c.id and not any(
+            item.attempt_id == policy.generic_validation.durable_attempt for item in policy.observations._items.values()):
+        baseline = policy.generic_validation.baseline(registry.get("http"), c)
+        await registry.execute("http", {"url": str(baseline.url), "method": baseline.method,
+            "headers": dict(baseline.headers), "body": baseline.content.decode(), "phase": "validation"}, None, p)
     path = policy.generic_validation.proof_path(c)
     await registry.execute("file_write", {"path": str(path), "content":
         "HTTP 302 Location: https://example.com/\nAuthorization: Bearer fake-secret-token\nCookie: session=secret-session-value"}, None, p)
@@ -116,7 +125,11 @@ async def evidence(env, tmp_path):
 
 
 async def result(env, outcome="confirmed", refs=(), **extra):
-    registry, p, _, _, _, c, _, _ = env
+    registry, p, policy, _, state, c, _, _ = env
+    extra.setdefault("assessment", ASSESSMENT.copy())
+    if refs and "observation_ids" not in extra:
+        extra["observation_ids"] = [item.id for item in policy.observations._items.values()
+                                   if item.attempt_id == policy.generic_validation.durable_attempt]
     return await registry.execute("workflow", {"action": "record_result", "candidate_id": c.id,
         "skill_name": GENERIC_VALIDATOR, "outcome": outcome, "evidence_refs": list(refs), **extra}, None, p)
 
@@ -135,8 +148,16 @@ def review_args(candidate, outcome="confirmed"):
 
 
 def certificate(env, ref):
-    _, _, policy, _, _, c, _, _ = env
-    return policy.observations.result(c.id, (ref,), policy.engagement.http_permissions.epoch, c)
+    _, _, policy, _, state, c, _, _ = env
+    result = state.latest_result(c.id)
+    if not accepted_result(state, c, result, policy):
+        return None
+    if result.assessment_contract_version < 2:
+        return policy.observations.result(c.id, (ref,), policy.engagement.http_permissions.epoch, c)
+    return SimpleNamespace(outcome=result.outcome, observed_impact=result.assessment['observed_impact'],
+        severity=result.assessment['severity'], observation_ids=tuple(e['source']['id'] for e in result.evidence_manifest),
+        verification_source='operator-reviewed' if result.assessment_source == 'operator' else 'agent')
+
 
 
 @pytest.mark.parametrize("mapping,expected", [("none", "generic"), ("unique", "expert"),
@@ -223,8 +244,9 @@ async def test_generic_lifecycle_preserves_native_limits_and_zero_extra_question
     assert artifact.candidate_id == candidate.id and artifact.is_resolvable(tmp_path)
     proof = (tmp_path / artifact.path).read_text()
     assert "fake-secret-token" not in proof and "secret-session-value" not in proof
-    response = json.loads(await result(env, refs=[ref], repeatable=True, force=True, observation_ids=["obs_forged"]))
-    assert response["result"]["outcome"] == "insufficient-evidence"
+    rejected = await result(env, refs=[ref], repeatable=True, force=True, observation_ids=["obs_forged"])
+    assert rejected.startswith("error:") and not state.validation_results
+    await result(env, "insufficient-evidence", refs=[ref])
     assert candidate.status == "deferred" and not state.eligible_for_finding(candidate.id)
     assert await env[6].coverage.list() == []
     assert not operator.requests
@@ -240,8 +262,8 @@ async def test_generic_lifecycle_preserves_native_limits_and_zero_extra_question
 async def test_both_terminal_outcomes_require_linked_trusted_proof(runtime, tmp_path, outcome):
     env = await setup(runtime, tmp_path)
     await start(env)
-    response = json.loads(await result(env, outcome, force=True, repeatable=True, confirmation={"kind": "model-claim"}))
-    assert response["result"]["outcome"] == "insufficient-evidence"
+    rejected = await result(env, outcome, force=True, repeatable=True, confirmation={"kind": "model-claim"})
+    assert rejected.startswith("error:") and not env[4].validation_results
     assert await env[6].coverage.list() == []
 
 
@@ -264,7 +286,7 @@ async def test_generic_admission_fails_closed(runtime, tmp_path, change):
         p.execution_policy = None
     else:
         tool.skills = None
-    output = await tool.run({"action": "start_validation", "candidate_id": c.id}, None, p)
+    output = await tool.run({"action": "start_validation", "candidate_id": c.id, "assessment": ASSESSMENT}, None, p)
     assert output.startswith("error:") and c.status == "deferred"
     assert not runtime[4]
 
@@ -358,13 +380,19 @@ async def test_human_review_commit_precedes_certificate_even_yolo(runtime, tmp_p
     ref = await evidence(env, tmp_path)
     await result(env, refs=[ref])
     app, output = app_for(env)
-    async def save():
-        assert env[4].latest_result(env[5].id).outcome == outcome
+    async def save(*, workflow_override=None, _workflow_locked=False):
+        latest = env[4].latest_result(env[5].id)
+        assert latest is not None and latest.assessment_source == "agent"
+        assert workflow_override is not None
+        staged_result = workflow_override.latest_result(env[5].id)
+        assert staged_result is not None and staged_result.outcome == outcome
         assert env[5].id not in env[2].observations._results
     app.agent.save.side_effect = save
     await review_result(app, review_args(env[5], outcome))
     assert output[-1].entry.kind == "system", output[-1]
-    assert certificate(env, ref).outcome == outcome
+    trusted = certificate(env, ref)
+    assert trusted is not None
+    assert trusted.outcome == outcome
     assert [r.tool for r in env[3].requests] == ["review_result"]
     assert env[3].requests[0].no_session_cache
     assert (await env[6].coverage.list())[0].status == ("failed" if outcome == "confirmed" else "passed")
@@ -385,9 +413,9 @@ async def test_failed_review_never_publishes_certificate(runtime, tmp_path, monk
     elif fault == "save":
         app.agent.save.side_effect = OSError("fixture save failure")
     elif fault == "record-error":
-        monkeypatch.setattr(env[6], "run", AsyncMock(return_value="error: actual workflow failure"))
+        monkeypatch.setattr("src.ui.commands.result_review.accepted_result", lambda *args: False)
     elif fault == "persist":
-        monkeypatch.setattr(env[2].observations, "persist", lambda: (_ for _ in ()).throw(OSError("fixture persistence failure")))
+        app.agent.save.side_effect = OSError("canonical workflow persistence failure")
     else:
         async def ask(*_):
             if fault == "objective":
@@ -403,8 +431,9 @@ async def test_failed_review_never_publishes_certificate(runtime, tmp_path, monk
         await review_result(app, review_args(env[5]))
         assert output[-1].entry.kind == "error"
         if fault == "record-error":
-            assert "actual workflow failure" in output[-1].entry.text
-    assert certificate(env, ref) is None and not env[2].observations._reviews
+            assert "inadmissible primary evidence" in output[-1].entry.text
+    assert env[4].latest_result(env[5].id).assessment_source == "agent"
+    assert not env[2].observations._reviews
     assert env[2].active == 0
 
 
@@ -507,7 +536,7 @@ async def test_planner_whole_target_feedback_and_resume(runtime, tmp_path):
     await start(env)
     ref = await evidence(env, tmp_path)
     await result(env, refs=[ref])
-    assert state.whole_target_status(**kwargs)[0] == "blocked"
+    assert state.whole_target_status(**kwargs)[0] == "actionable"  # confirmed Finding remains pending
     before = state.completed_phases()
     output = await env[0].execute("workflow", {"action": "record_input", "endpoint": "/new", "method": "GET",
         "parameter": "q", "location": "query", "source": "validation-feedback"}, None, env[1])
@@ -516,7 +545,7 @@ async def test_planner_whole_target_feedback_and_resume(runtime, tmp_path):
     restored_result = restored.latest_result(c.id)
     assert restored_result is not None and restored_result.skill_name == GENERIC_VALIDATOR
     assert restored.evidence[ref].is_resolvable(tmp_path)
-    assert restored.candidates[c.id].status == "deferred"
+    assert restored.candidates[c.id].status == "validated"
     legacy = Candidate.from_dict({"candidate_class": "sqli", "target": ORIGIN})
     assert legacy is not None and legacy.objective_id is None
     assert ValidationResult.from_dict({"candidate_id": legacy.id, "skill_name": "sql-injection", "outcome": "blocked"})
@@ -634,7 +663,8 @@ async def test_f02_direct_stream_respects_generic_completion_obligations(runtime
     if pending == "coverage":
         monkeypatch.setattr(env[6].coverage, "ensure_validation_mark",
                             AsyncMock(side_effect=OSError("offline coverage write failure")))
-        recorded = json.loads(await result(env, refs=[ref], force=True))
+        env[4].latest_result(env[5].id).coverage_synced = False
+        recorded = json.loads(await env[0].execute("workflow", {"action": "sync_coverage", "candidate_id": env[5].id}, None, env[1]))
         assert recorded["coverage_sync"] == "pending"
         assert env[4].latest_result(env[5].id).coverage_synced is False
     goal = env[4].objective.add_requested_goal(env[5].candidate_class)
@@ -713,10 +743,13 @@ async def test_fixture_verifier_cannot_use_forged_or_incomplete_observations(run
         store._items[ids[0]] = replace(store._items[ids[0]], epoch="old")
     elif fault == "truncated":
         store._items[ids[0]] = replace(store._items[ids[0]], complete=False)
-    response = json.loads(await result(env, refs=[ref], observation_ids=ids))
-    assert response["result"]["outcome"] == "insufficient-evidence"
-    assert await env[6].coverage.list() == []
-    assert not env[4].eligible_for_finding(env[5].id)
+    response = await result(env, refs=[ref], observation_ids=ids)
+    if fault == "wrong-outcome":
+        assert json.loads(response)["result"]["outcome"] == "confirmed"  # diagnostic callback has no authority
+        assert env[4].eligible_for_finding(env[5].id)
+    else:
+        assert response.startswith("error:") and not env[4].validation_results
+        assert await env[6].coverage.list() == []
 
 
 @pytest.mark.asyncio
@@ -752,7 +785,7 @@ async def test_verified_finding_pipeline_and_save_failures(runtime, tmp_path, mo
         reports = list((tmp_path / "artifacts/findings").glob("*.md"))
         assert len(reports) == 1
         text = reports[0].read_text()
-        assert "Operator-reviewed:" in text and "critical" not in text and "model claim" not in text
+        assert "**Assessment source:** operator" in text and "critical" not in text and "model claim" not in text
     else:
         with pytest.raises((ValueError, ExecutionBlocked, OSError)):
             await env[0].execute("confirm_finding", args, None, env[1])
@@ -772,7 +805,7 @@ async def test_restored_generic_result_is_not_a_certificate_or_execution_right(r
     env[4].replace_from(restored)
     env[2].observations._results.clear()
     agent = agent_for(env)
-    assert agent._whole_target_state()[0] == "blocked"
+    assert agent._whole_target_state()[0] == "completed"
     assert (await start(env)).startswith("error:")
     env[1].execution_policy = None
     assert not agent.is_tool_allowed("shell", {"command": "echo fixture"}).ok
@@ -920,7 +953,9 @@ async def test_overlapping_generic_reviews_only_publish_current_ticket(runtime, 
     await review_result(app, review_args(env[5], "not-confirmed"))
     release.set()
     await first
-    assert certificate(env, ref).outcome == "not-confirmed"
+    trusted = certificate(env, ref)
+    assert trusted is not None
+    assert trusted.outcome == "not-confirmed"
     assert env[4].latest_result(env[5].id).outcome == "not-confirmed"
     assert any(item.entry.kind == "error" for item in output)
     assert not env[2].observations._reviews and env[2].active == 0

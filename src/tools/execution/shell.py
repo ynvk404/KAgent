@@ -320,6 +320,17 @@ async def run_with_capture(
     timeout_seconds: float,
     abort_signal: Any,
 ) -> ToolOutput:
+    from src.permission.runtime.execution import current_policy
+    policy = current_policy()
+    source_owner = policy.observations.owner_provider() if policy else None
+    def recorded(output):
+        output.truncated = stdout_buf.total > MAX_OUTPUT_BYTES or stderr_buf.total > MAX_OUTPUT_BYTES
+        if policy is not None:
+            key = policy.observations.capture_output("shell", output, owner=source_owner,
+                completed=output.status == "success", truncated=output.truncated)
+            return ToolOutput(str(output) + f"\n[runtime observation: {key}]", status=output.status,
+                              error_kind=output.error_kind, truncated=output.truncated)
+        return output
     if _is_aborted(abort_signal):
         raise RuntimeError("aborted")
 
@@ -414,17 +425,17 @@ async def run_with_capture(
     stderr = stderr_buf.render()
 
     if abort_requested or _is_aborted(abort_signal):
-        return ToolOutput(
+        return recorded(ToolOutput(
             f"exit: cancelled\nstdout:\n{stdout}\nstderr:\n{stderr}",
             status="cancelled",
             error_kind="cancelled",
-        )
+        ))
 
     if timed_out:
-        return ToolOutput(
+        return recorded(ToolOutput(
             f"exit: timeout after {timeout_seconds}s\nstdout:\n{stdout}\nstderr:\n{stderr}",
             status="error", error_kind="timeout",
-        )
+        ))
 
     code = proc.returncode or 0
     exit_code = code if code >= 0 else 128 - code
@@ -433,8 +444,8 @@ async def run_with_capture(
     if stderr:
         result += f"\nstderr:\n{stderr}"
     if exit_code != 0 or FATAL_PARSE_STDERR_RE.search(stderr):
-        return ToolOutput(result, status="error", error_kind="tool_exception")
-    return ToolOutput(result, status="success")
+        return recorded(ToolOutput(result, status="error", error_kind="tool_exception"))
+    return recorded(ToolOutput(result, status="success"))
 
 def _is_aborted(signal: Any) -> bool:
     return signal is not None and getattr(signal, "aborted", False)

@@ -16,6 +16,7 @@ from src.tools.workflow.finding import (
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
 from src.workflow.evidence import EvidenceArtifact
+from tests.helpers.workflow import adopt_fixture_assessment, run_workflow_fixture
 
 
 def _tool(tmp_path, notifier=None, *, candidate_class="xss"):
@@ -23,9 +24,9 @@ def _tool(tmp_path, notifier=None, *, candidate_class="xss"):
     workflow = WorkflowState()
     candidate, _ = workflow.add_candidate(Candidate(candidate_class=candidate_class))
     proof = _linked_proof(workflow, candidate, tmp_path)
-    workflow.add_validation_result(ValidationResult(
+    workflow.add_validation_result(adopt_fixture_assessment(workflow, ValidationResult(
         candidate.id, "test-skill", "confirmed", evidence_refs=[proof],
-    ))
+    )))
     return ConfirmFindingTool(store, notifier=notifier, workflow=workflow), store
 
 
@@ -74,7 +75,7 @@ async def test_structured_non_confirmed_results_are_not_eligible(tmp_path, outco
         Candidate(candidate_class="xss", endpoint="/search", parameter="q")
     )
     workflow.add_validation_result(
-        ValidationResult(candidate.id, "cross-site-scripting", outcome)
+        adopt_fixture_assessment(workflow, ValidationResult(candidate.id, "cross-site-scripting", outcome))
     )
     tool = ConfirmFindingTool(
         Store(str(tmp_path / "findings")),
@@ -108,12 +109,12 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
     )
     proof = _linked_proof(workflow, candidate, tmp_path)
     workflow.add_validation_result(
-        ValidationResult(
+        adopt_fixture_assessment(workflow, ValidationResult(
             candidate.id,
             "sql-injection",
             "confirmed",
             evidence_refs=[proof],
-        )
+        ))
     )
     tool = ConfirmFindingTool(
         Store(str(tmp_path / "findings")),
@@ -136,7 +137,7 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
     report = next((tmp_path / "findings").glob("*.md")).read_text(encoding="utf-8")
     assert f"- **Candidate ID:** {candidate.id}" in report
     assert f"- **Evidence:** {proof}" in report
-    assert "## Observed impact\n\nDatabase query manipulation was demonstrated." in report
+    assert "## Observed impact\n\nThe linked evidence demonstrates the behavior." in report
     assert "## Potential impact\n\nFurther database access was not assessed." in report
     assert "- **Method:** GET" in report
     assert "- **Parameter:** id" in report
@@ -207,9 +208,9 @@ async def test_canonical_finding_resolves_legacy_evidence_from_project_root(tmp_
         candidate.id, "sql-injection/target/results.md", tmp_path
     )
     workflow.add_evidence(artifact)
-    workflow.add_validation_result(ValidationResult(
+    workflow.add_validation_result(adopt_fixture_assessment(workflow, ValidationResult(
         candidate.id, "sql-injection", "confirmed", evidence_refs=[artifact.id],
-    ))
+    )))
     restored = WorkflowState.from_dict(workflow.to_dict())
     store = Store(project_directory=tmp_path)
     await ConfirmFindingTool(store, workflow=restored).run({
@@ -250,9 +251,9 @@ async def test_legacy_nested_cwd_evidence_resumes_without_rewriting(
     restored = WorkflowState.from_dict(workflow.to_dict())
     monkeypatch.chdir(old_cwd)
 
-    result = json.loads(await WorkflowTool(
+    result = json.loads(await run_workflow_fixture(WorkflowTool(
         restored, evidence_root=tmp_path
-    ).run({
+    ), {
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "sql-injection", "outcome": "confirmed",
         "evidence_refs": [artifact.id], "repeatable": True,
@@ -306,9 +307,9 @@ async def test_finding_rejects_candidate_identity_mismatch(tmp_path, override, e
         method="GET", endpoint="/product", parameter="id",
     ))
     proof = _linked_proof(workflow, candidate, tmp_path)
-    workflow.add_validation_result(ValidationResult(
+    workflow.add_validation_result(adopt_fixture_assessment(workflow, ValidationResult(
         candidate.id, "sql-injection", "confirmed", evidence_refs=[proof],
-    ))
+    )))
     tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
     args = {
         "candidate_id": candidate.id, "title": "SQL injection in product",
@@ -329,9 +330,9 @@ async def test_finding_rechecks_evidence_artifact_before_writing(tmp_path):
         candidate_class="xss", endpoint="/search",
     ))
     proof = _linked_proof(workflow, candidate, tmp_path)
-    workflow.add_validation_result(ValidationResult(
+    workflow.add_validation_result(adopt_fixture_assessment(workflow, ValidationResult(
         candidate.id, "cross-site-scripting", "confirmed", evidence_refs=[proof],
-    ))
+    )))
     (tmp_path / f"proof-{candidate.id}.txt").unlink()
     tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
     with pytest.raises(ValueError, match="changed or is unavailable"):
@@ -377,10 +378,10 @@ async def test_finding_rejects_evidence_registered_to_another_candidate(tmp_path
         candidate_class="sqli", endpoint="/search",
     ))
     other_proof = _linked_proof(workflow, other, tmp_path)
-    workflow.add_validation_result(ValidationResult(
+    workflow.add_validation_result(adopt_fixture_assessment(workflow, ValidationResult(
         candidate.id, "cross-site-scripting", "confirmed",
         evidence_refs=[other_proof],
-    ))
+    )))
     tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
 
     with pytest.raises(Exception, match="latest ValidationResult"):
@@ -400,9 +401,9 @@ async def test_finding_rejects_evidence_artifact_with_changed_hash(tmp_path):
         candidate_class="xss", endpoint="/search",
     ))
     proof = _linked_proof(workflow, candidate, tmp_path)
-    workflow.add_validation_result(ValidationResult(
+    workflow.add_validation_result(adopt_fixture_assessment(workflow, ValidationResult(
         candidate.id, "cross-site-scripting", "confirmed", evidence_refs=[proof],
-    ))
+    )))
     (tmp_path / f"proof-{candidate.id}.txt").write_text(
         "Changed evidence after validation", encoding="utf-8",
     )
@@ -452,7 +453,7 @@ async def test_same_candidate_creates_one_official_report(tmp_path):
     )
     proof = _linked_proof(workflow, candidate, tmp_path)
     workflow.add_validation_result(
-        ValidationResult(candidate.id, "sql-injection", "confirmed", evidence_refs=[proof])
+        adopt_fixture_assessment(workflow, ValidationResult(candidate.id, "sql-injection", "confirmed", evidence_refs=[proof]))
     )
     tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
     args = {
@@ -586,13 +587,13 @@ async def test_run_persists_finding_and_notifies(tmp_path):
     assert len(written) == 1
     body = written[0].read_text(encoding="utf-8")
     assert "# Reflected XSS in search" in body
-    assert "- **Severity:** high" in body  # severity lowercased
+    assert "- **Severity:** medium" in body  # adopted structured severity wins
     candidate = next(iter(_workflow(tool).candidates.values()))
     assert f"- **Candidate ID:** {candidate.id}" in body
 
     assert len(seen) == 1
     finding, path = seen[0]
-    assert finding.severity == "high"
+    assert finding.severity == "medium"
     assert finding.candidate_id
     assert finding.evidence_refs
     assert "## Observed impact" in body
@@ -721,7 +722,7 @@ async def test_access_control_report_is_broad_and_retains_candidate_id(
     )
     proof = _linked_proof(workflow, candidate, tmp_path)
     workflow.add_validation_result(
-        ValidationResult(candidate.id, "access-control", "confirmed", evidence_refs=[proof])
+        adopt_fixture_assessment(workflow, ValidationResult(candidate.id, "access-control", "confirmed", evidence_refs=[proof]))
     )
     tool = ConfirmFindingTool(Store(str(tmp_path / "findings")), workflow=workflow)
 

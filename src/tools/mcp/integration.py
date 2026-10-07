@@ -445,6 +445,7 @@ class MCPTool:
             from src.permission.worker.broker import broker_directory
             # Fresh isolated server per invocation prevents background RPCs
             # from retaining a completed request's network authority.
+            source_owner = policy.observations.owner_provider()
             async with broker_directory(signal) as broker:
                 session = await MCPSession.open(self._server, worker=policy.worker, broker=broker, signal=signal)
                 try:
@@ -457,7 +458,16 @@ class MCPTool:
                     await session.close()
             if result['isError']:
                 raise RuntimeError(format_mcp_error(self._tool_name, self._remote_name, result['content']))
-            return truncate_string(json.dumps(bound_content(result['content'], MCP_RESULT_CHAR_CAP), default=str), MCP_RESULT_CHAR_CAP)
+            bounded = bound_content(result['content'], MCP_RESULT_CHAR_CAP)
+            encoded = json.dumps(bounded, default=str)
+            truncated = bounded != result['content'] or len(encoded) > MCP_RESULT_CHAR_CAP
+            output = truncate_string(encoded, MCP_RESULT_CHAR_CAP)
+            key = policy.observations.capture_output(
+                "mcp:" + self._server.name + ":" + self._remote_name, output,
+                owner=source_owner, truncated=truncated)
+            # Preserve structured library/catalog responses outside a validation
+            # attempt; only an owned validation capture needs a model-facing ID.
+            return output + (f"\n[runtime observation: {key}]" if source_owner else "")
         evt = cancel_event if cancel_event is not None else (signal if isinstance(signal, asyncio.Event) else None)
         result = await self._session.call_tool(self._remote_name, args, evt)
         if result["isError"]:

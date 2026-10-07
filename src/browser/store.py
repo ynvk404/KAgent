@@ -49,6 +49,7 @@ class CapturedRequest:
     time_end: Optional[float] = None
     elapsed_ms: Optional[float] = None
     baseline_request_ref: Optional[str] = None
+    response_complete: Optional[bool] = None
 
 
 @dataclass
@@ -248,6 +249,8 @@ class CaptureStore:
                                      and len(obj["rawRequestB64"]) > MAX_RAW_REQUEST_B64,
                 auth_context_ref=_str_or_none(obj.get("authContextRef")),
                 response_body=cap_string(response_body_str) if response_body_str is not None else None,
+                response_complete=(False if response_body_str is not None and len(response_body_str) > BODY_STRING_CAP
+                                   else _bool_or_none(obj.get("responseComplete"))),
                 time_start=_float_or_none(obj.get("timeStart")),
                 time_end=_float_or_none(obj.get("timeEnd")),
                 elapsed_ms=_float_or_none(obj.get("elapsedMs")),

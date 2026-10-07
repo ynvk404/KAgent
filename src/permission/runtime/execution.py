@@ -82,6 +82,7 @@ class ExecutionPolicy:
         self._pending: set[str] = set()
         self.input_questions: dict[str, str | None] = {}
         self.journal: Path | None = None
+        self.session_id: str | None = None
         self.worker: Any = None
         self.generic_validation: Any = None
         from src.permission.runtime.observations import ObservationStore
@@ -127,6 +128,7 @@ class ExecutionPolicy:
     def load_journal(self, path: Path) -> None:
         """Trusted controller storage only, never loaded from memory/summary."""
         self.journal = path
+        self.session_id = path.stem
         path.parent.mkdir(parents=True, exist_ok=True)
         self.observations.attach_storage(path.parent.parent / "observations" / path.name)
         if path.exists():
@@ -367,6 +369,8 @@ class ExecutionPolicy:
             raise ExecutionBlocked("blocked: generic validation context changed during probe")
         from src.permission.runtime.generic_validation import GenericValidationBoundary
         self.generic_validation = GenericValidationBoundary(self, state, skills, target)
+        from src.workflow.assessment import source_owner
+        self.observations.owner_provider = lambda: source_owner(self)
 
     def validation_context_matches(self, state, skills, target) -> bool:
         return bool(self.generic_validation is not None

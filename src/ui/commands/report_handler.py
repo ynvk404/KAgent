@@ -17,8 +17,9 @@ from src.report.model import (
 from src.report.output import StagedReport, default_filename, stage_report, validate_filename
 from src.ui.core.state import Append, TranscriptEntry
 from src.version import VERSION
-from src.workflow.review import review_snapshot
+from src.workflow.review import review_snapshot, confirmation_binding
 from src.workflow.state import WorkflowState, validation_result_fingerprint
+from src.workflow.assessment import assessment_provenance
 
 _IN_FLIGHT: dict[int, asyncio.Task] = {}
 
@@ -27,7 +28,7 @@ def _record(obj: Any, names: tuple[str, ...], **extra: Any) -> Record:
     return freeze({**{name: getattr(obj, name, None) for name in names}, **extra})
 
 
-def capture_workflow(state: WorkflowState, target: str) -> dict[str, Any]:
+def capture_workflow(state: WorkflowState, target: str, policy=None) -> dict[str, Any]:
     """Capture allowlisted primitives and opaque joins; never copy specimens."""
     if len(state.candidates) + len(state.attack_surface_inputs) > MAX_RECORDS or len(state.validation_results) > MAX_RESULTS:
         raise ReportError("Assessment snapshot exceeds report record limits; reduce recorded resources and retry.")
@@ -42,7 +43,7 @@ def capture_workflow(state: WorkflowState, target: str) -> dict[str, Any]:
     selected = {cid: c for cid, c in selected.items() if endpoint_matches_origin(c.endpoint, origin(target))}
     results = [r for r in state.validation_results if obj and r.objective_id == obj.id and r.candidate_id in selected]
     global_latest = {r.candidate_id: r for r in state.validation_results}
-    bindings = {cid: review_snapshot(state, cid) for cid in selected if cid in global_latest}
+    bindings = {cid: confirmation_binding(state, cid) for cid in selected if cid in global_latest}
     projections = {}
     for r in results:
         try:
@@ -54,7 +55,7 @@ def capture_workflow(state: WorkflowState, target: str) -> dict[str, Any]:
     candidate_fields = ("id", "target", "objective_id", "candidate_class", "endpoint", "method", "parameter",
                         "location", "content_type", "auth_context_ref", "test_case", "status")
     result_fields = ("candidate_id", "objective_id", "outcome", "evidence_refs", "skill_name", "techniques",
-                     "cleanup_state", "cleanup_status", "coverage_synced", "deferred_reason", "notes", "recorded_at", "session_id")
+                     "cleanup_state", "cleanup_status", "coverage_synced", "deferred_reason", "notes", "recorded_at", "session_id", "assessment_source", "assessment_contract_version", "result_id", "attempt_id", "assessment_binding")
     input_fields = ("id", "objective_id", "target_origin", "endpoint", "method", "parameter", "location", "content_type",
                     "auth_context_ref", "disposition", "disposition_reason", "candidate_ids")
     inputs = [i for i in state.attack_surface_inputs.values() if obj and i.objective_id == obj.id and origin(i.target_origin) == origin(target)]
@@ -76,6 +77,7 @@ def capture_workflow(state: WorkflowState, target: str) -> dict[str, Any]:
             requested_goals=[{k: getattr(g, k) for k in ("id", "candidate_class", "status", "candidate_ids", "reason")} for g in obj.requested_goals]) if obj else Record(),
         "candidates": tuple(_record(c, candidate_fields, persisted=state.persisted_findings.get(cid)) for cid, c in selected.items()),
         "results": tuple(_record(r, result_fields, fingerprint=validation_result_fingerprint(r),
+            assessment_provenance=assessment_provenance(state, selected[r.candidate_id], r, policy),
             binding=bindings[r.candidate_id] if global_latest.get(r.candidate_id) is r else "", projection=projections[id(r)]) for r in results),
         "inputs": tuple(_record(i, input_fields) for i in inputs),
         "evidence": tuple(_record(e, ("id", "candidate_id", "path", "sha256", "size", "source_path"))
@@ -106,7 +108,8 @@ def capture(app: Any, exported_at: str) -> tuple[SourceSnapshot, Resources, tupl
     store = getattr(finding_tool, "store", None)
     if store is None:
         raise ReportError("Finding resources unavailable. Start KAgent with its normal report stores.")
-    data = capture_workflow(agent.workflow, target)
+    from src.permission.runtime.execution import policy_for
+    data = capture_workflow(agent.workflow, target, policy_for(getattr(agent, "prompter", None)))
     coverage_store = getattr(workflow_tool, "coverage", None)
     coverage = None
     coverage_paths = ()

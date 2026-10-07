@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from tests.helpers.workflow import run_workflow_fixture
 
 from src.permission.permission import AlwaysAllow
 from src.target.target import Target
@@ -28,14 +29,19 @@ def make_xss_workflow():
     ("outcome", "expected_status"),
     [("browser-required", "deferred"), ("not-confirmed", "validated")],
 )
-async def test_record_result_accepts_canonical_xss_outcomes(outcome, expected_status):
+async def test_record_result_accepts_canonical_xss_outcomes(outcome, expected_status, tmp_path):
     state, candidate, tool = make_xss_workflow()
+    tool.evidence_root = tmp_path
+    (tmp_path / "bounded-proof.md").write_text("Bounded offline response interpretation")
+    ref = json.loads(await tool.run({"action": "record_evidence", "candidate_id": candidate.id,
+        "evidence_path": "bounded-proof.md"}, None, AlwaysAllow()))["evidence"]["id"]
 
-    output = await tool.run({
+    output = await run_workflow_fixture(tool, {
         "action": "record_result",
         "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting",
         "outcome": outcome,
+        "evidence_refs": [ref],
     }, None, AlwaysAllow())
 
     response = json.loads(output)
@@ -54,7 +60,7 @@ async def test_record_result_accepts_canonical_xss_outcomes(outcome, expected_st
 async def test_record_result_rejects_legacy_noncanonical_xss_outcomes(outcome):
     state, candidate, tool = make_xss_workflow()
 
-    output = await tool.run({
+    output = await run_workflow_fixture(tool, {
         "action": "record_result",
         "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting",

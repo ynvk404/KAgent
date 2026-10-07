@@ -1,13 +1,7 @@
-"""Runtime observations and explicit verifier contracts, never model assertions.
-
-Observations attest captured bytes, not vulnerability truth. Unsupported class
-verifiers remain unavailable. Raw artifacts remain usable as unverified proof.
-"""
+"""Producer-recorded redacted evidence; legacy verifier readers are compatibility only."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from contextlib import contextmanager
-from contextvars import ContextVar
+from dataclasses import dataclass, asdict, replace
 import hashlib
 import json
 import time
@@ -17,7 +11,7 @@ import uuid
 from pathlib import Path
 import os
 
-_pending_review: ContextVar[Any] = ContextVar("pending_operator_result", default=None)
+_OWNER_UNSET = object()
 
 
 
@@ -38,6 +32,20 @@ class Observation:
     # have no such binding and cannot be borrowed by a generic attempt.
     candidate_id: str | None = None
     probe_binding: str | None = None
+    source_kind: str | None = None
+    producer: str | None = None
+    session_id: str | None = None
+    objective_id: str | None = None
+    attempt_id: str | None = None
+    candidate_binding: str | None = None
+    retained_hash: str | None = None
+    response_headers: tuple[tuple[str, str], ...] = ()
+    elapsed_ms: float | None = None
+    execution_status: str | None = None
+    truncated: bool | None = None
+    response_cap: int | None = None
+    invocation_id: str | None = None
+    source_details: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -58,8 +66,7 @@ class ObservationStore:
         self.storage: Path | None = None
         self._historical: set[str] = set()
         self._reviews: dict[str, str] = {}
-        from src.permission.runtime.verifiers import register_production_verifiers
-        register_production_verifiers(self)
+        self.owner_provider: Callable[[], dict | None] = lambda: None
 
     def attach_storage(self, path: Path) -> None:
         self.storage = path
@@ -67,6 +74,7 @@ class ObservationStore:
             raw = json.loads(path.read_text())
             for row in raw.get("observations", [])[-256:]:
                 row["body"] = bytes.fromhex(row["body"])
+                row["response_headers"] = tuple(tuple(x) for x in row.get("response_headers", []))
                 item = Observation(**row)
                 self._items[item.id] = item
             for key, row in raw.get("results", {}).items():
@@ -84,8 +92,13 @@ class ObservationStore:
             row = asdict(item)
             # Persist minimum redacted proof, never credentials/headers. Hash of
             # original response remains separate from this redacted derivative.
-            row["url"] = apply_evidence(row["url"])
-            row["body"] = apply_evidence(item.body.decode(errors="replace")).encode().hex()
+            if item.retained_hash is None:
+                row["url"] = apply_evidence(row["url"])
+                row["body"] = apply_evidence(item.body.decode(errors="replace")).encode().hex()
+            else:
+                # Preserve the exact already-redacted envelope that was hashed
+                # at capture. Re-redaction must not change its resume identity.
+                row["body"] = item.body.hex()
             rows.append(row)
         results = {key: [epoch, refs, asdict(result), identity]
                    for key, (epoch, refs, result, identity) in self._results.items()}
@@ -109,18 +122,81 @@ class ObservationStore:
              "baseline_request_ref", "auth_context_ref", "content_type", "request_template")], default=str).encode()).hexdigest()
 
     def capture(self, action, status: int, body: bytes, *, complete: bool,
-                validation_binding: tuple[str, str] | None = None) -> str:
-        item = Observation("obs_" + uuid.uuid4().hex, action.epoch, action.method, action.url, action.transport_address,
-                           action.digest, hashlib.sha256(body).hexdigest(), status, body, complete, time.time(),
-                           *(validation_binding or (None, None)))
+                validation_binding: tuple[str, str] | None = None, owner: Any = _OWNER_UNSET,
+                response_headers=(), elapsed_ms=None, source_kind="native-http",
+                producer="http", execution_status="completed", truncated=None, source_details=None) -> str:
+        from src.redact.redact import apply_evidence
+        from src.workflow.assessment import digest, source_row
+        # Owner is snapshotted before execution, never assigned from proof prose.
+        owner = self.owner_provider() if owner is _OWNER_UNSET else owner
+        owner = owner or {}
+        allowed_headers = {"location", "content-type", "content-length", "content-encoding",
+                           "content-security-policy", "x-frame-options", "x-content-type-options",
+                           "access-control-allow-origin", "access-control-allow-credentials",
+                           "access-control-allow-methods", "vary", "cache-control"}
+        headers = tuple((str(k).lower(), apply_evidence(str(v))[:2000])
+                        for k, v in response_headers if str(k).lower() in allowed_headers)[:24]
+        retained_body = apply_evidence(body.decode(errors="replace")).encode()
+        retained_truncated = len(retained_body) > 65536
+        complete = complete and not retained_truncated
+        item = Observation("obs_" + uuid.uuid4().hex, action.epoch, action.method,
+            apply_evidence(action.url), action.transport_address, action.digest,
+            hashlib.sha256(body).hexdigest(), status,
+            retained_body[:65536], complete, time.time(),
+            owner.get("candidate_id") or (validation_binding or (None, None))[0],
+            (validation_binding or (None, None))[1], source_kind, producer,
+            owner.get("session_id"), owner.get("objective_id"), owner.get("id"),
+            owner.get("candidate_binding"), None, headers, elapsed_ms, execution_status,
+            (not complete if truncated is None else truncated) or retained_truncated, getattr(action, "response_cap", None),
+            getattr(action, "invocation_id", None), source_details)
+        item = replace(item, retained_hash=digest(source_row(item)))
         self._items[item.id] = item
         while len(self._items) > 256:
             del self._items[next(iter(self._items))]
         self.persist()
         return item.id
 
+    def capture_output(self, producer, output, *, owner, completed=True, truncated=False) -> str:
+        from types import SimpleNamespace
+        from src.permission.runtime.execution import _active
+        active = _active.get()
+        receipt = active[1] if active else None
+        owner = owner or {}
+        truncated = truncated or len(str(output).encode()) > 65536
+        action = SimpleNamespace(epoch=owner.get("epoch", ""), method="OUTPUT", url="",
+                                 transport_address="process", digest=receipt.digest if receipt else "",
+                                 response_cap=65536, invocation_id=receipt.id if receipt else None)
+        key = self.capture(action, 0, str(output).encode()[:65536], complete=completed and not truncated
+                           and len(str(output).encode()) <= 65536,
+                           owner=owner, source_kind="tool-output", producer=producer,
+                           execution_status="completed" if completed else "failed", truncated=truncated)
+        return key
+
+    def import_capture(self, capture, *, owner) -> str:
+        """Selected scoped bridge capture: import association, never native execution."""
+        from types import SimpleNamespace
+        from src.browser.redacted_view import request_view
+        from src.workflow.assessment import digest
+        view = request_view(capture)
+        body = (view.get("response_body") or "").encode()[:65536]
+        action = SimpleNamespace(epoch=(owner or {}).get("epoch", ""), method=capture.method,
+            url=capture.url, transport_address="import", digest=digest({"method": capture.method,
+                "url": view.get("url"), "request_body": view.get("request_body")}), response_cap=65536)
+        details = {"import_id": "import_" + uuid.uuid4().hex, "capture_id": capture.id,
+            "bridge_source": capture.source, "received_at": capture.received_at,
+            "time_basis": "local-import", "reported_elapsed_ms": capture.elapsed_ms,
+            "original_owner": None, "receipt_id": None,
+            "original_request_hash": None, "original_response_hash": None,
+            "hash_basis": "selected-redacted-import",
+            "completeness": "source-reported" if capture.response_complete is not None else "unknown"}
+        return self.capture(action, capture.status or 0, body,
+            complete=capture.response_complete is True and capture.status is not None and len(body) < 65536,
+            owner=owner or {}, source_kind="imported-capture", producer="scoped-capture-bridge",
+            response_headers=[(h.name, h.value) for h in capture.response_headers or []],
+            source_details=details)
+
     def register_verifier(self, candidate_class: str, verifier: Callable) -> None:
-        """Trusted adapter startup only. This method is not a tool operation."""
+        """Explicit legacy/diagnostic adapter use; never a new result admission gate."""
         self._verifiers[candidate_class] = verifier
 
     def verify(self, candidate, references: tuple[str, ...], observation_ids: list[str], epoch: str,
@@ -165,10 +241,6 @@ class ObservationStore:
             raise
 
     def result(self, candidate_id: str, references: tuple[str, ...], epoch: str, candidate=None) -> VerifiedResult | None:
-        pending = _pending_review.get()
-        if pending is not None and pending[:4] == (self, candidate_id, references, epoch):
-            if candidate is not None and pending[4] == self.candidate_identity(candidate):
-                return pending[5]
         entry = self._results.get(candidate_id)
         if entry is None or (entry[0] != epoch and candidate_id not in self._historical) or entry[1] != references:
             return None
@@ -190,47 +262,3 @@ class ObservationStore:
     def finish_review(self, candidate_id: str, ticket: str) -> None:
         if self.review_is_current(candidate_id, ticket):
             self._reviews.pop(candidate_id)
-
-    @contextmanager
-    def _staged_operator_result(self, candidate, references, outcome, severity, impact, epoch, *, ticket, guard):
-        """Task-local certificate used during workflow commit; never persisted here."""
-        if not self.review_is_current(candidate.id, ticket):
-            raise ValueError("operator review is stale or superseded")
-        if guard is None:
-            raise ValueError("operator review must include its current-state guard")
-        guard()
-        result = self._operator_certificate(references, outcome, severity, impact)
-        token = _pending_review.set((self, candidate.id, tuple(references), epoch,
-                                     self.candidate_identity(candidate), result, guard))
-        try:
-            yield result
-        finally:
-            _pending_review.reset(token)
-
-    def check_pending_review(self) -> None:
-        pending = _pending_review.get()
-        if pending is not None and pending[0] is self and pending[6] is not None:
-            pending[6]()
-
-    def _commit_review(self, state, candidate, references, result, ticket):
-        """Publish the existing broad certificate after workflow/session commit."""
-        latest = state.latest_result(candidate.id)
-        if (not self.review_is_current(candidate.id, ticket) or latest is None
-                or tuple(latest.evidence_refs) != tuple(references)
-                or latest.outcome != result.outcome or latest.coverage_synced is False):
-            raise ValueError("review has no consistent committed validation result")
-        old_results, old_historical = self._results.copy(), self._historical.copy()
-        self._results[candidate.id] = ("operator-reviewed", tuple(references), result, self.candidate_identity(candidate))
-        self._historical.add(candidate.id)
-        try:
-            self.persist()
-        except BaseException:
-            self._results, self._historical = old_results, old_historical
-            raise
-        self.finish_review(candidate.id, ticket)
-
-    @staticmethod
-    def _operator_certificate(references, outcome, severity, impact):
-        if outcome not in {"confirmed", "not-confirmed"} or not references or not impact.strip():
-            raise ValueError("review requires proof, outcome and observed impact")
-        return VerifiedResult(outcome, "Operator-reviewed: " + impact, severity, (), "Operator reviewed linked immutable evidence.", "operator-reviewed")

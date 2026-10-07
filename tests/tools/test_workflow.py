@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from tests.helpers.workflow import run_workflow_fixture
 
 from src.coverage.store import CoverageStore
 from src.coverage.context import CoverageContext
@@ -51,12 +52,12 @@ async def test_no_candidate_review_requires_closed_inventory_and_never_creates_t
     goal = objective.requested_goals[0]
     args = {"action": "review_no_candidate", "goal_id": goal.id}
 
-    wrong_artifact = await tool.run({
+    wrong_artifact = await run_workflow_fixture(tool, {
         **args, "artifact_ref": "artifacts/wrong.md",
     }, None, AlwaysAllow())
     assert "must match the active input-analysis completion" in wrong_artifact
 
-    recorded = json.loads(await tool.run(args, None, AlwaysAllow()))
+    recorded = json.loads(await run_workflow_fixture(tool, args, None, AlwaysAllow()))
     assert recorded["ok"] is True
     assert recorded["goal"]["status"] == "no_candidate"
     assert recorded["class_specific_validation_performed"] is False
@@ -65,7 +66,7 @@ async def test_no_candidate_review_requires_closed_inventory_and_never_creates_t
     assert state.persisted_findings == {}
     assert goal.review_artifact_ref == "artifacts/input_analysis.md"
 
-    new_candidate = json.loads(await tool.run({
+    new_candidate = json.loads(await run_workflow_fixture(tool, {
         "action": "record_candidate", "candidate_class": "xss",
         "target": "https://target.test", "endpoint": "/search",
     }, None, AlwaysAllow()))
@@ -103,12 +104,12 @@ async def test_dropped_input_needs_review_or_scope_reason_for_no_candidate(tmp_p
         "action": "review_no_candidate",
         "goal_id": objective.requested_goals[0].id,
     }
-    rejected = await tool.run(args, None, AlwaysAllow())
+    rejected = await run_workflow_fixture(tool, args, None, AlwaysAllow())
     assert "dropped without a reviewable reason" in rejected
     state.set_input_disposition(
         item.id, "dropped", reason="Reviewed and excluded as out of scope",
     )
-    accepted = json.loads(await tool.run(args, None, AlwaysAllow()))
+    accepted = json.loads(await run_workflow_fixture(tool, args, None, AlwaysAllow()))
     assert accepted["goal"]["status"] == "no_candidate"
 
 
@@ -190,10 +191,10 @@ async def test_record_result_accepts_every_canonical_outcome(outcome, tmp_path):
         evidence_root=tmp_path,
     )
     evidence_refs: list[str] = []
-    if outcome == "confirmed":
+    if outcome in {"confirmed", "not-confirmed"}:
         proof = tmp_path / "proof.txt"
         proof.write_text("Harmless external entity marker observed", encoding="utf-8")
-        evidence_output = json.loads(await tool.run(
+        evidence_output = json.loads(await run_workflow_fixture(tool,
             {
                 "action": "record_evidence",
                 "candidate_id": candidate.id,
@@ -204,7 +205,7 @@ async def test_record_result_accepts_every_canonical_outcome(outcome, tmp_path):
         ))
         evidence_refs.append(evidence_output["evidence"]["id"])
 
-    output = await tool.run(
+    output = await run_workflow_fixture(tool,
         {
             "action": "record_result",
             "candidate_id": candidate.id,
@@ -277,7 +278,7 @@ async def test_workflow_semantic_failure_has_typed_error_status():
 
 
 @pytest.mark.asyncio
-async def test_candidate_rejects_unstructured_boolean_differential_claim():
+async def test_candidate_signal_never_establishes_confirmation():
     state = WorkflowState()
     output = await WorkflowTool(state, Target("https://target.test")).run(
         {
@@ -293,10 +294,9 @@ async def test_candidate_rejects_unstructured_boolean_differential_claim():
         AlwaysAllow(),
     )
 
-    assert isinstance(output, ToolOutput)
-    assert output.status == "error"
-    assert "structured, repeated validation evidence" in output
-    assert state.candidates == {}
+    assert json.loads(output)["ok"]
+    assert state.candidates and not state.validation_results
+    assert not state.eligible_for_finding(next(iter(state.candidates)))
 
 
 @pytest.mark.asyncio
@@ -323,7 +323,7 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
         ("xxe", "xxe"),
     )
     for index, (candidate_class, validator) in enumerate(cases):
-        response = json.loads(await tool.run(
+        response = json.loads(await run_workflow_fixture(tool,
             {
                 "action": "record_candidate",
                 "candidate_class": candidate_class,
@@ -336,7 +336,7 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
         assert response["recommended_skills"] == [validator]
         assert response["candidate"]["status"] == "queued"
 
-    unsupported = json.loads(await tool.run(
+    unsupported = json.loads(await run_workflow_fixture(tool,
         {"action": "record_candidate", "candidate_class": "unhandled-class", "endpoint": "/redirect"},
         None, AlwaysAllow(),
     ))
@@ -345,7 +345,7 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
     assert "policy unavailable" in unsupported["validator_reason"]
     assert unsupported["recommended_skills"] == []
     assert unsupported["candidate"]["status"] == "deferred"
-    forced = json.loads(await tool.run(
+    forced = json.loads(await run_workflow_fixture(tool,
         {"action": "record_candidate", "candidate_class": "unhandled-class",
          "endpoint": "/redirect-2", "status": "queued"},
         None, AlwaysAllow(),
@@ -353,7 +353,7 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
     assert forced["candidate"]["status"] == "deferred"
 
     skills.set_disabled("ssrf", True)
-    disabled = json.loads(await tool.run(
+    disabled = json.loads(await run_workflow_fixture(tool,
         {"action": "record_candidate", "candidate_class": "ssrf", "endpoint": "/input/5"},
         None, AlwaysAllow(),
     ))
@@ -361,7 +361,7 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
     assert disabled["created"] is False
     assert disabled["candidate"]["status"] == "deferred"
     skills.set_disabled("ssrf", False)
-    restored = json.loads(await tool.run(
+    restored = json.loads(await run_workflow_fixture(tool,
         {"action": "record_candidate", "candidate_class": "ssrf", "endpoint": "/input/5"},
         None, AlwaysAllow(),
     ))
@@ -387,7 +387,7 @@ async def test_candidate_handoff_and_start_validation_fail_closed_for_duplicate_
     state = WorkflowState()
     tool = WorkflowTool(state, Target("https://target.test"), skills=skills)
 
-    response = json.loads(await tool.run({
+    response = json.loads(await run_workflow_fixture(tool, {
         "action": "record_candidate",
         "candidate_class": "sql-injection",
         "endpoint": "/search",
@@ -397,13 +397,13 @@ async def test_candidate_handoff_and_start_validation_fail_closed_for_duplicate_
     assert response["validator_resolution"] == "ambiguous"
     assert response["recommended_skills"] == ["first-validator", "second-validator"]
     assert response["candidate"]["status"] == "deferred"
-    assert "ambiguous validator mapping" in await tool.run({
+    assert "ambiguous validator mapping" in await run_workflow_fixture(tool, {
         "action": "start_validation",
         "candidate_id": response["candidate"]["id"],
     }, None, AlwaysAllow())
     assert state.candidates[response["candidate"]["id"]].status == "deferred"
 
-    result = await tool.run({
+    result = await run_workflow_fixture(tool, {
         "action": "record_result",
         "candidate_id": response["candidate"]["id"],
         "skill_name": "first-validator",
@@ -421,7 +421,7 @@ async def test_direct_input_can_have_multiple_independent_candidate_classes():
     tool = WorkflowTool(state, Target("https://target.test"), skills=skills)
     ids = []
     for candidate_class in ("cross-site-scripting", "ssti"):
-        response = json.loads(await tool.run(
+        response = json.loads(await run_workflow_fixture(tool,
             {
                 "action": "record_candidate", "candidate_class": candidate_class,
                 "method": "GET", "endpoint": "/render", "parameter": "template",
@@ -440,21 +440,21 @@ async def test_confirmed_requires_registered_candidate_evidence(tmp_path):
     second, _ = state.add_candidate(Candidate(candidate_class="xss", target="https://target.test", endpoint="/b"))
     tool = WorkflowTool(state, evidence_root=tmp_path)
     (tmp_path / "proof.txt").write_text("Request and response", encoding="utf-8")
-    evidence = json.loads(await tool.run(
+    evidence = json.loads(await run_workflow_fixture(tool,
         {"action": "record_evidence", "candidate_id": first.id, "evidence_path": "proof.txt"},
         None, AlwaysAllow(),
     ))["evidence"]["id"]
     base = {"action": "record_result", "candidate_id": second.id,
             "skill_name": "cross-site-scripting", "outcome": "confirmed"}
-    assert "requires an evidence reference" in await tool.run(base, None, AlwaysAllow())
-    assert "must resolve to this candidate" in await tool.run(
+    assert "requires an evidence reference" in await run_workflow_fixture(tool, base, None, AlwaysAllow())
+    assert "must resolve to this candidate" in await run_workflow_fixture(tool,
         {**base, "evidence_refs": [evidence]}, None, AlwaysAllow(),
     )
-    assert "must resolve" in await tool.run(
+    assert "must resolve" in await run_workflow_fixture(tool,
         {**base, "evidence_refs": ["ev_invented"]}, None, AlwaysAllow(),
     )
     (tmp_path / state.evidence[evidence].path).unlink()
-    assert "changed or is unavailable" in await tool.run(
+    assert "changed or is unavailable" in await run_workflow_fixture(tool,
         {**base, "candidate_id": first.id, "evidence_refs": [evidence]}, None, AlwaysAllow(),
     )
     assert state.validation_results == []
@@ -476,7 +476,7 @@ async def test_record_evidence_snapshots_mutable_shared_artifact_per_candidate(t
         encoding="utf-8",
     )
 
-    first_result = json.loads(await tool.run({
+    first_result = json.loads(await run_workflow_fixture(tool, {
         "action": "record_evidence", "candidate_id": first.id,
         "evidence_path": "results.md",
     }, None, AlwaysAllow()))
@@ -488,7 +488,7 @@ async def test_record_evidence_snapshots_mutable_shared_artifact_per_candidate(t
     assert first_snapshot.parent.stat().st_mode & 0o077 == 0
 
     aggregate.write_text("Candidate B proof, independently captured\n", encoding="utf-8")
-    second_result = json.loads(await tool.run({
+    second_result = json.loads(await run_workflow_fixture(tool, {
         "action": "record_evidence", "candidate_id": second.id,
         "evidence_path": "results.md",
     }, None, AlwaysAllow()))
@@ -515,11 +515,11 @@ async def test_validation_attempts_share_one_logical_coverage_observation(tmp_pa
     aggregate = tmp_path / "results.md"
 
     aggregate.write_text("First attempt: no execution marker\n", encoding="utf-8")
-    first_evidence = json.loads(await tool.run({
+    first_evidence = json.loads(await run_workflow_fixture(tool, {
         "action": "record_evidence", "candidate_id": candidate.id,
         "evidence_path": "results.md",
     }, None, AlwaysAllow()))["evidence"]["id"]
-    first = json.loads(await tool.run({
+    first = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting", "outcome": "not-confirmed",
         "evidence_refs": [first_evidence], "techniques": ["baseline"],
@@ -527,14 +527,14 @@ async def test_validation_attempts_share_one_logical_coverage_observation(tmp_pa
     assert first["coverage_sync"] == "synced"
 
     aggregate.write_text("Second attempt: reproducible execution marker\n", encoding="utf-8")
-    second_evidence = json.loads(await tool.run({
+    second_evidence = json.loads(await run_workflow_fixture(tool, {
         "action": "record_evidence", "candidate_id": candidate.id,
         "evidence_path": "results.md",
     }, None, AlwaysAllow()))["evidence"]["id"]
-    await tool.run({
+    await run_workflow_fixture(tool, {
         "action": "start_validation", "candidate_id": candidate.id,
     }, None, AlwaysAllow())
-    second = json.loads(await tool.run({
+    second = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting", "outcome": "confirmed",
         "evidence_refs": [second_evidence], "techniques": ["reflected marker"],
@@ -592,15 +592,9 @@ async def test_legacy_attempt_observations_collapse_to_candidate_identity(tmp_pa
     assert before[0].count == 2
 
     tool = WorkflowTool(state, coverage=coverage)
-    synced = json.loads(await tool.run({
-        "action": "sync_coverage", "candidate_id": candidate.id,
-    }, None, AlwaysAllow()))
-
-    assert synced == {"ok": True, "coverage_sync": "synced"}
-    after = await coverage.list()
-    assert len(after) == 1
-    assert after[0].count == 1
-    assert after[0].observationIds == [f"candidate:{candidate.id}"]
+    rejected = await tool.run({"action": "sync_coverage", "candidate_id": candidate.id}, None, AlwaysAllow())
+    assert rejected.startswith("error:")
+    assert await coverage.list() == before  # legacy history is readable, not newly certified
 
 
 @pytest.mark.asyncio
@@ -613,12 +607,12 @@ async def test_cleanup_lifecycle_updates_without_creating_a_new_validation_attem
     tool = WorkflowTool(state, evidence_root=tmp_path)
     proof = tmp_path / "proof.md"
     proof.write_text("Bounded proof for the confirmed behavior.", encoding="utf-8")
-    evidence = json.loads(await tool.run({
+    evidence = json.loads(await run_workflow_fixture(tool, {
         "action": "record_evidence", "candidate_id": candidate.id,
         "evidence_path": "proof.md",
     }, None, AlwaysAllow()))["evidence"]["id"]
 
-    pending = json.loads(await tool.run({
+    pending = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting", "outcome": "confirmed",
         "evidence_refs": [evidence], "mutation_performed": True,
@@ -627,7 +621,7 @@ async def test_cleanup_lifecycle_updates_without_creating_a_new_validation_attem
     assert pending["result"]["cleanup_state"] == "pending"
     assert pending["eligible_for_confirm_finding"] is True
 
-    succeeded = json.loads(await tool.run({
+    succeeded = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting", "outcome": "confirmed",
         "evidence_refs": [evidence], "mutation_performed": True,
@@ -660,11 +654,11 @@ async def test_result_coverage_sync_failure_is_retryable(tmp_path):
     ))
     tool = WorkflowTool(state, coverage=coverage, evidence_root=tmp_path)
     (tmp_path / "proof.txt").write_text("Differential request and response", encoding="utf-8")
-    evidence = json.loads(await tool.run(
+    evidence = json.loads(await run_workflow_fixture(tool,
         {"action": "record_evidence", "candidate_id": candidate.id, "evidence_path": "proof.txt"},
         None, AlwaysAllow(),
     ))["evidence"]["id"]
-    recorded = json.loads(await tool.run({
+    recorded = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "sql-injection", "outcome": "confirmed", "evidence_refs": [evidence],
         **_confirmed_sqli_args(),
@@ -673,7 +667,7 @@ async def test_result_coverage_sync_failure_is_retryable(tmp_path):
     assert recorded["eligible_for_confirm_finding"] is False
     latest = state.latest_result(candidate.id)
     assert latest is not None and latest.coverage_synced is False
-    retried = json.loads(await tool.run(
+    retried = json.loads(await run_workflow_fixture(tool,
         {"action": "sync_coverage", "candidate_id": candidate.id}, None, AlwaysAllow(),
     ))
     assert retried == {"ok": True, "coverage_sync": "synced"}
@@ -717,13 +711,13 @@ async def test_manual_coverage_mark_before_workflow_sync_is_adopted(tmp_path):
     proof = tmp_path / "proof.txt"
     proof.write_text("repeatable paired evidence", encoding="utf-8")
     tool = WorkflowTool(state, coverage=coverage, evidence_root=tmp_path)
-    evidence = json.loads(await tool.run({
+    evidence = json.loads(await run_workflow_fixture(tool, {
         "action": "record_evidence",
         "candidate_id": candidate.id,
         "evidence_path": "proof.txt",
     }, None, AlwaysAllow()))["evidence"]["id"]
 
-    output = json.loads(await tool.run({
+    output = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result",
         "candidate_id": candidate.id,
         "skill_name": "sql-injection",
@@ -751,13 +745,13 @@ async def test_error_based_sqli_confirmation_remains_backward_compatible(tmp_pat
     proof = tmp_path / "proof.txt"
     proof.write_text("database parser error evidence", encoding="utf-8")
     tool = WorkflowTool(state, evidence_root=tmp_path)
-    evidence = json.loads(await tool.run({
+    evidence = json.loads(await run_workflow_fixture(tool, {
         "action": "record_evidence",
         "candidate_id": candidate.id,
         "evidence_path": "proof.txt",
     }, None, AlwaysAllow()))["evidence"]["id"]
 
-    output = json.loads(await tool.run({
+    output = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result",
         "candidate_id": candidate.id,
         "skill_name": "sql-injection",
@@ -792,7 +786,7 @@ async def test_error_based_sqli_confirmation_remains_backward_compatible(tmp_pat
         ),
     ],
 )
-async def test_confirmed_sqli_rejects_unrepeated_or_contradictory_boolean_evidence(
+async def test_runtime_preserves_agent_sqli_analysis_without_semantic_classifier(
     tmp_path, mutate, expected,
 ):
     state = WorkflowState()
@@ -803,22 +797,23 @@ async def test_confirmed_sqli_rejects_unrepeated_or_contradictory_boolean_eviden
     proof = tmp_path / "proof.txt"
     proof.write_text("bounded request/response observations", encoding="utf-8")
     tool = WorkflowTool(state, evidence_root=tmp_path)
-    evidence = json.loads(await tool.run({
+    evidence = json.loads(await run_workflow_fixture(tool, {
         "action": "record_evidence", "candidate_id": candidate.id,
         "evidence_path": proof.name,
     }, None, AlwaysAllow()))["evidence"]["id"]
     contract = _confirmed_sqli_args()
     mutate(contract["confirmation"])
 
-    output = await tool.run({
+    output = await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "sql-injection", "outcome": "confirmed",
         "evidence_refs": [evidence], **contract,
     }, None, AlwaysAllow())
 
-    assert isinstance(output, ToolOutput) and output.status == "error"
-    assert expected in output
-    assert state.validation_results == []
+    assert json.loads(output)["result"]["assessment_source"] == "agent"
+    latest = state.latest_result(candidate.id)
+    assert latest is not None and latest.confirmation == contract["confirmation"]
+    # Correctness of these weak/contradictory controls is evaluator-owned.
 
 
 def test_confirmed_sqli_accepts_repeated_time_differential_contract():
@@ -840,7 +835,7 @@ def test_confirmed_sqli_accepts_repeated_time_differential_contract():
         },
     )
 
-    normalized = WorkflowTool._validate_sqli_confirmation(result)
+    normalized = result.confirmation  # analysis is preserved, not independently classified
 
     assert normalized is not None
     assert normalized["kind"] == "time-differential"
@@ -852,14 +847,17 @@ async def test_coverage_keeps_candidate_subcases_separate(tmp_path):
     coverage = CoverageStore(str(tmp_path / "coverage.json"))
     state = WorkflowState()
     tool = WorkflowTool(state, coverage=coverage, evidence_root=tmp_path)
+    (tmp_path / "bounded-proof.md").write_text("Bounded transport fixture notes")
     for role in ("viewer", "admin"):
         candidate, _ = state.add_candidate(Candidate(
             candidate_class="access-control", target="https://target.test",
             endpoint="/objects/1", method="GET", parameter="id", test_case=role,
         ))
-        result = json.loads(await tool.run({
+        result = json.loads(await run_workflow_fixture(tool, {
             "action": "record_result", "candidate_id": candidate.id,
             "skill_name": "access-control", "outcome": "not-confirmed",
+            "evidence_refs": [json.loads(await tool.run({"action":"record_evidence", "candidate_id": candidate.id,
+                "evidence_path":"bounded-proof.md"}, None, AlwaysAllow()))["evidence"]["id"]],
         }, None, AlwaysAllow()))
         assert result["coverage_sync"] == "synced"
     rows = await coverage.list()
@@ -878,7 +876,7 @@ async def test_non_terminal_validation_outcomes_remain_revisitable(tmp_path):
         candidate, _ = state.add_candidate(Candidate(
             candidate_class="xss", endpoint=f"/input/{index}", target="https://target.test",
         ))
-        response = json.loads(await tool.run({
+        response = json.loads(await run_workflow_fixture(tool, {
             "action": "record_result", "candidate_id": candidate.id,
             "skill_name": "cross-site-scripting", "outcome": outcome,
             "deferred_reason": "condition not available",
@@ -905,7 +903,7 @@ async def test_start_validation_rejects_terminal_whole_target_candidate_without_
     ))
     tool = WorkflowTool(state, Target("https://target.test"))
 
-    blocked = await tool.run({
+    blocked = await run_workflow_fixture(tool, {
         "action": "start_validation", "candidate_id": candidate.id,
     }, None, AlwaysAllow())
 
@@ -914,7 +912,7 @@ async def test_start_validation_rejects_terminal_whole_target_candidate_without_
 
     # A prior structured requeue is an explicit workflow state transition.
     state.set_candidate_status(candidate.id, "queued")
-    reopened = await tool.run({
+    reopened = await run_workflow_fixture(tool, {
         "action": "start_validation", "candidate_id": candidate.id,
     }, None, AlwaysAllow())
     assert json.loads(reopened)["candidate"]["status"] == "validating"
@@ -924,7 +922,7 @@ async def test_start_validation_rejects_terminal_whole_target_candidate_without_
         id="explicit-retest", mode="candidate_validation",
         target_origin="https://target.test", candidate_id=candidate.id,
     )
-    explicit_retest = await tool.run({
+    explicit_retest = await run_workflow_fixture(tool, {
         "action": "start_validation", "candidate_id": candidate.id,
     }, None, AlwaysAllow())
     assert json.loads(explicit_retest)["candidate"]["status"] == "validating"
@@ -952,7 +950,7 @@ async def test_start_validation_allows_broken_terminal_evidence_to_be_repaired(t
         state, Target("https://target.test"), evidence_root=tmp_path,
     )
 
-    reopened = await tool.run({
+    reopened = await run_workflow_fixture(tool, {
         "action": "start_validation", "candidate_id": candidate.id,
     }, None, AlwaysAllow())
 
@@ -963,8 +961,8 @@ async def test_start_validation_allows_broken_terminal_evidence_to_be_repaired(t
 @pytest.mark.parametrize("outcome,final_status", [
     ("not-confirmed", "validated"), ("deferred", "deferred"),
 ])
-async def test_duplicate_result_finishes_restarted_validation_without_new_history(
-    outcome, final_status,
+async def test_explicit_restart_keeps_a_distinct_attempt_revision(
+    tmp_path, outcome, final_status,
 ):
     state = WorkflowState()
     candidate, _ = state.add_candidate(Candidate(
@@ -975,17 +973,22 @@ async def test_duplicate_result_finishes_restarted_validation_without_new_histor
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting", "outcome": outcome,
     }
-    first = json.loads(await tool.run(args, None, AlwaysAllow()))
+    tool.evidence_root = tmp_path
+    if outcome == "not-confirmed":
+        (tmp_path / "proof.md").write_text("Bounded fixture proof")
+        args["evidence_refs"] = [json.loads(await tool.run({"action":"record_evidence", "candidate_id": candidate.id,
+            "evidence_path":"proof.md"}, None, AlwaysAllow()))["evidence"]["id"]]
+    first = json.loads(await run_workflow_fixture(tool, args, None, AlwaysAllow()))
     assert first["created"] is True
     assert candidate.status == final_status
 
-    await tool.run({"action": "start_validation", "candidate_id": candidate.id},
+    await run_workflow_fixture(tool, {"action": "start_validation", "candidate_id": candidate.id},
                    None, AlwaysAllow())
     assert candidate.status == "validating"
-    repeated = json.loads(await tool.run(args, None, AlwaysAllow()))
+    repeated = json.loads(await run_workflow_fixture(tool, args, None, AlwaysAllow()))
 
-    assert repeated["created"] is False
-    assert len(state.validation_results) == 1
+    assert repeated["created"] is True
+    assert len(state.validation_results) == 2
     assert candidate.status == final_status
     assert candidate.id not in state.active_candidate_ids
 
@@ -1031,26 +1034,26 @@ async def test_structured_candidate_to_validation_handoff_and_dedup(tmp_path):
         "source_skill": "web-input-analysis",
         "signals": ["syntax differential"],
     }
-    first = json.loads(await tool.run(args, None, AlwaysAllow()))
-    second = json.loads(await tool.run(args, None, AlwaysAllow()))
+    first = json.loads(await run_workflow_fixture(tool, args, None, AlwaysAllow()))
+    second = json.loads(await run_workflow_fixture(tool, args, None, AlwaysAllow()))
     candidate_id = first["candidate"]["id"]
 
     assert first["created"] is True
     assert second["created"] is False
     assert state.relevant_candidate_classes() == frozenset({"sql-injection"})
 
-    await tool.run(
+    await run_workflow_fixture(tool,
         {"action": "start_validation", "candidate_id": candidate_id},
         None,
         AlwaysAllow(),
     )
     (tmp_path / "sql-proof.txt").write_text("Request and response differential", encoding="utf-8")
-    evidence = json.loads(await tool.run(
+    evidence = json.loads(await run_workflow_fixture(tool,
         {"action": "record_evidence", "candidate_id": candidate_id, "evidence_path": "sql-proof.txt"},
         None, AlwaysAllow(),
     ))["evidence"]["id"]
     result = json.loads(
-        await tool.run(
+        await run_workflow_fixture(tool,
             {
                 "action": "record_result",
                 "candidate_id": candidate_id,
@@ -1083,11 +1086,11 @@ async def test_candidate_uses_active_target_when_argument_is_omitted():
         "parameter": "id",
     }
 
-    first = json.loads(await tool.run(args, None, AlwaysAllow()))
+    first = json.loads(await run_workflow_fixture(tool, args, None, AlwaysAllow()))
     target.set_base_url("https://b.example")
-    second = json.loads(await tool.run(args, None, AlwaysAllow()))
+    second = json.loads(await run_workflow_fixture(tool, args, None, AlwaysAllow()))
     explicit = json.loads(
-        await tool.run(
+        await run_workflow_fixture(tool,
             {**args, "target": "https://explicit.example"},
             None,
             AlwaysAllow(),
@@ -1136,10 +1139,10 @@ async def test_list_is_bounded_prioritized_and_supports_specific_lookup():
     tool = WorkflowTool(state, Target("https://target.test"))
 
     listed = json.loads(
-        await tool.run({"action": "list"}, None, AlwaysAllow())
+        await run_workflow_fixture(tool, {"action": "list"}, None, AlwaysAllow())
     )
     specific = json.loads(
-        await tool.run(
+        await run_workflow_fixture(tool,
             {"action": "list", "candidate_id": candidates[-2].id},
             None,
             AlwaysAllow(),
@@ -1163,7 +1166,7 @@ async def test_skill_completion_is_explicit():
     tool = WorkflowTool(state)
 
     output = json.loads(
-        await tool.run(
+        await run_workflow_fixture(tool,
             {
                 "action": "complete_skill", "skill_name": "web_input_analysis",
                 "artifact_ref": "web-input-analysis/target/candidates.md",
@@ -1195,7 +1198,7 @@ async def test_sqli_completion_requires_and_reuses_canonical_artifact(tmp_path):
         evidence_root=tmp_path,
     )
 
-    missing = await tool.run(
+    missing = await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "sql-injection"},
         None,
         AlwaysAllow(),
@@ -1206,7 +1209,7 @@ async def test_sqli_completion_requires_and_reuses_canonical_artifact(tmp_path):
     legacy_path = tmp_path / "sql-injection/juice-lab-3000/results.md"
     legacy_path.parent.mkdir(parents=True)
     legacy_path.write_text("legacy result", encoding="utf-8")
-    legacy_only = await tool.run(
+    legacy_only = await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "sql-injection"},
         None,
         AlwaysAllow(),
@@ -1217,7 +1220,7 @@ async def test_sqli_completion_requires_and_reuses_canonical_artifact(tmp_path):
     result_path = tmp_path / "artifacts/sql-injection/juice-lab-3000/results.md"
     result_path.parent.mkdir(parents=True)
     result_path.touch()
-    empty = await tool.run(
+    empty = await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "sql-injection"},
         None,
         AlwaysAllow(),
@@ -1225,7 +1228,7 @@ async def test_sqli_completion_requires_and_reuses_canonical_artifact(tmp_path):
     assert "requires artifacts/sql-injection/juice-lab-3000/results.md" in empty
     assert "sql-injection" not in state.completed_skills
     result_path.write_text("confirmed SQLi result", encoding="utf-8")
-    wrong = await tool.run(
+    wrong = await run_workflow_fixture(tool,
         {
             "action": "complete_skill",
             "skill_name": "sql-injection",
@@ -1236,7 +1239,7 @@ async def test_sqli_completion_requires_and_reuses_canonical_artifact(tmp_path):
     )
     assert "requires artifacts/sql-injection/juice-lab-3000/results.md" in wrong
 
-    completed = json.loads(await tool.run(
+    completed = json.loads(await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "sql-injection"},
         None,
         AlwaysAllow(),
@@ -1268,7 +1271,7 @@ async def test_recon_and_web_enumeration_completion_artifacts(tmp_path):
     target = Target("http://juice.lab:3000")
     tool = WorkflowTool(state, target, skills=skills, evidence_root=tmp_path)
 
-    missing_recon = await tool.run(
+    missing_recon = await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "recon"},
         None,
         AlwaysAllow(),
@@ -1278,7 +1281,7 @@ async def test_recon_and_web_enumeration_completion_artifacts(tmp_path):
     recon_path = tmp_path / "artifacts/recon/juice-lab-3000/summary.md"
     recon_path.parent.mkdir(parents=True, exist_ok=True)
     recon_path.write_text("", encoding="utf-8")
-    empty_recon = await tool.run(
+    empty_recon = await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "recon"},
         None,
         AlwaysAllow(),
@@ -1286,7 +1289,7 @@ async def test_recon_and_web_enumeration_completion_artifacts(tmp_path):
     assert "requires artifacts/recon/juice-lab-3000/summary.md" in empty_recon
 
     recon_path.write_text("# Recon Summary\nReconnaissance done.", encoding="utf-8")
-    wrong_recon = await tool.run(
+    wrong_recon = await run_workflow_fixture(tool,
         {
             "action": "complete_skill",
             "skill_name": "recon",
@@ -1297,7 +1300,7 @@ async def test_recon_and_web_enumeration_completion_artifacts(tmp_path):
     )
     assert "requires artifacts/recon/juice-lab-3000/summary.md" in wrong_recon
 
-    completed_recon = json.loads(await tool.run(
+    completed_recon = json.loads(await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "recon"},
         None,
         AlwaysAllow(),
@@ -1307,7 +1310,7 @@ async def test_recon_and_web_enumeration_completion_artifacts(tmp_path):
     assert "recon" in state.completed_skills
     assert state.completed_artifacts["recon"] == expected_recon
 
-    missing_enum = await tool.run(
+    missing_enum = await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "web-enumeration"},
         None,
         AlwaysAllow(),
@@ -1317,7 +1320,7 @@ async def test_recon_and_web_enumeration_completion_artifacts(tmp_path):
     enum_path = tmp_path / "artifacts/web-enumeration/juice-lab-3000/inventory.md"
     enum_path.parent.mkdir(parents=True, exist_ok=True)
     enum_path.write_text("", encoding="utf-8")
-    empty_enum = await tool.run(
+    empty_enum = await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "web-enumeration"},
         None,
         AlwaysAllow(),
@@ -1325,7 +1328,7 @@ async def test_recon_and_web_enumeration_completion_artifacts(tmp_path):
     assert "requires artifacts/web-enumeration/juice-lab-3000/inventory.md" in empty_enum
 
     enum_path.write_text("# Inventory\nEndpoints found.", encoding="utf-8")
-    completed_enum = json.loads(await tool.run(
+    completed_enum = json.loads(await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "web-enumeration"},
         None,
         AlwaysAllow(),
@@ -1408,7 +1411,7 @@ async def test_phase_readiness_matches_completion_gate_for_artifact_coverage_and
     async def rejected(expected: str) -> None:
         readiness = tool.phase_completion_readiness("web-enumeration")
         assert readiness["ready"] is False and expected in readiness["reason"]
-        output = await tool.run({"action": "complete_skill", "skill_name": "web-enumeration"}, None, AlwaysAllow())
+        output = await run_workflow_fixture(tool, {"action": "complete_skill", "skill_name": "web-enumeration"}, None, AlwaysAllow())
         assert expected in output
 
     await rejected("requires " + ref)
@@ -1439,11 +1442,11 @@ async def test_phase_readiness_matches_completion_gate_for_artifact_coverage_and
     assert readiness["prerequisites"] == ("recon",)
     assert set(readiness["required_coverage"]) == set(state.phase_coverage["objective-active:enumeration"])
     assert readiness["artifact_ref"] == ref
-    assert "requires " + ref in (await tool.run({
+    assert "requires " + ref in (await run_workflow_fixture(tool, {
         "action": "complete_skill", "skill_name": "web-enumeration",
         "artifact_ref": "artifacts/wrong.md",
     }, None, AlwaysAllow()))
-    completed = json.loads(await tool.run({
+    completed = json.loads(await run_workflow_fixture(tool, {
         "action": "complete_skill", "skill_name": "web-enumeration",
         "artifact_ref": ref,
     }, None, AlwaysAllow()))
@@ -1470,19 +1473,19 @@ async def test_input_analysis_readiness_requires_input_resolution_or_explicit_no
         "web-input-analysis")["reason"]
     readiness = tool.phase_completion_readiness("web-input-analysis", no_inputs_discovered=True)
     assert readiness["ready"] is True and readiness["artifact_ref"] == ref
-    item = json.loads(await tool.run({
+    item = json.loads(await run_workflow_fixture(tool, {
         "action": "record_input", "method": "GET", "endpoint": "/search",
         "parameter": "q", "location": "query",
     }, None, AlwaysAllow()))["input"]
     assert "pending or blocked" in tool.phase_completion_readiness("web-input-analysis")["reason"]
-    await tool.run({"action": "set_input_disposition", "input_id": item["id"],
+    await run_workflow_fixture(tool, {"action": "set_input_disposition", "input_id": item["id"],
                     "disposition": "blocked", "disposition_reason": "fixture blocker"},
                    None, AlwaysAllow())
     assert "pending or blocked" in tool.phase_completion_readiness("web-input-analysis")["reason"]
-    await tool.run({"action": "set_input_disposition", "input_id": item["id"],
+    await run_workflow_fixture(tool, {"action": "set_input_disposition", "input_id": item["id"],
                     "disposition": "analyzed"}, None, AlwaysAllow())
     assert tool.phase_completion_readiness("web-input-analysis")["ready"] is True
-    result = json.loads(await tool.run({"action": "complete_skill", "skill_name": "web-input-analysis",
+    result = json.loads(await run_workflow_fixture(tool, {"action": "complete_skill", "skill_name": "web-input-analysis",
                                         "artifact_ref": ref}, None, AlwaysAllow()))
     assert result["phase"] == "input_analysis"
 
@@ -1502,15 +1505,15 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
         "content_type": "application/json",
         "sample_payload": '{"email":"user@example.test","password":"example-secret"}',
     })
-    first = json.loads(await tool.run(input_args, None, AlwaysAllow()))
-    duplicate = json.loads(await tool.run(input_args, None, AlwaysAllow()))
+    first = json.loads(await run_workflow_fixture(tool, input_args, None, AlwaysAllow()))
+    duplicate = json.loads(await run_workflow_fixture(tool, input_args, None, AlwaysAllow()))
     assert first["created"] is True and duplicate["created"] is False
     input_id = first["input"]["id"]
     assert first["input"]["content_type"] == "application/json"
     assert "example-secret" not in first["input"]["sample_payload"]
     assert duplicate["input"]["sample_payload"] == first["input"]["sample_payload"]
 
-    candidate = json.loads(await tool.run({
+    candidate = json.loads(await run_workflow_fixture(tool, {
         "action": "record_candidate", "candidate_class": "xss",
         "target": "https://TARGET.test:443/any-path", "input_id": input_id,
         "request_template": '{"email":"{INJECTION_POINT}","password":"example-secret"}',
@@ -1534,7 +1537,7 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
     assert restored_candidate.request_template == candidate["candidate"]["request_template"]
     assert restored_candidate.baseline_request_ref == "captures/login-baseline.json"
     assert restored_candidate.auth_context_ref == "captures/auth-context.md"
-    listed = json.loads(await tool.run({"action": "list"}, None, AlwaysAllow()))
+    listed = json.loads(await run_workflow_fixture(tool, {"action": "list"}, None, AlwaysAllow()))
     listed_input = listed["attack_surface_inputs"][0]
     listed_candidate = listed["candidates"][0]
     assert listed_input["content_type"] == "application/json"
@@ -1543,22 +1546,22 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
     assert listed_candidate["request_template"] == candidate["candidate"]["request_template"]
     assert listed_candidate["baseline_request_ref"] == "captures/login-baseline.json"
     assert listed_candidate["auth_context_ref"] == "captures/auth-context.md"
-    assert "objective_id is assigned" in await tool.run({
+    assert "objective_id is assigned" in await run_workflow_fixture(tool, {
         "action": "record_candidate", "candidate_class": "xss",
         "objective_id": "some-other-objective",
     }, None, AlwaysAllow())
-    assert "must match the active whole-target origin" in await tool.run({
+    assert "must match the active whole-target origin" in await run_workflow_fixture(tool, {
         "action": "record_candidate", "candidate_class": "xss",
         "target": "https://other.test",
     }, None, AlwaysAllow())
-    assert "assigned by the runtime" in await tool.run({
+    assert "assigned by the runtime" in await run_workflow_fixture(tool, {
         **input_args, "objective_id": "some-other-objective",
     }, None, AlwaysAllow())
     old_candidate, _ = state.add_candidate(Candidate(
         candidate_class="xss", target="https://target.test", endpoint="/old",
         objective_id="objective-old",
     ))
-    assert "active objective" in await tool.run({
+    assert "active objective" in await run_workflow_fixture(tool, {
         "action": "link_input_candidate", "input_id": input_id,
         "candidate_id": old_candidate.id,
     }, None, AlwaysAllow())
@@ -1569,7 +1572,7 @@ async def test_workflow_result_and_list_use_redacted_form_context():
     state = whole_target_tool_state()
     tool = WorkflowTool(state, Target("https://target.test"))
     body = "username=alice&password=demo-pass&q={INJECTION_POINT}"
-    recorded = json.loads(await tool.run({
+    recorded = json.loads(await run_workflow_fixture(tool, {
         "action": "record_input",
         "method": "POST",
         "endpoint": "/search",
@@ -1585,13 +1588,13 @@ async def test_workflow_result_and_list_use_redacted_form_context():
     assert "password=[REDACTED]" in recorded["input"]["sample_payload"]
     assert "q={INJECTION_POINT}" in recorded["input"]["sample_payload"]
 
-    candidate = json.loads(await tool.run({
+    candidate = json.loads(await run_workflow_fixture(tool, {
         "action": "record_candidate",
         "candidate_class": "xss",
         "input_id": recorded["input"]["id"],
         "request_template": body,
     }, None, AlwaysAllow()))
-    listed = json.loads(await tool.run({"action": "list"}, None, AlwaysAllow()))
+    listed = json.loads(await run_workflow_fixture(tool, {"action": "list"}, None, AlwaysAllow()))
     assert "demo-pass" not in json.dumps(candidate)
     assert "demo-pass" not in json.dumps(listed)
     assert "q={INJECTION_POINT}" in candidate["candidate"]["request_template"]
@@ -1602,14 +1605,14 @@ async def test_workflow_result_and_list_use_redacted_form_context():
 async def test_workflow_request_context_fields_require_strings():
     state = whole_target_tool_state()
     tool = WorkflowTool(state, Target("https://target.test"))
-    bad_input = await tool.run({
+    bad_input = await run_workflow_fixture(tool, {
         "action": "record_input", "method": "POST", "endpoint": "/login",
         "content_type": 17,
     }, None, AlwaysAllow())
     assert isinstance(bad_input, ToolOutput) and bad_input.status == "error"
     assert state.attack_surface_inputs == {}
 
-    bad_candidate = await tool.run({
+    bad_candidate = await run_workflow_fixture(tool, {
         "action": "record_candidate", "candidate_class": "xss",
         "endpoint": "/login", "request_template": {"email": "{INJECTION_POINT}"},
     }, None, AlwaysAllow())
@@ -1629,7 +1632,7 @@ async def test_selecting_candidate_returns_full_bounded_request_template():
     ))
     tool = WorkflowTool(state, Target("https://target.test"))
 
-    listed = json.loads(await tool.run({
+    listed = json.loads(await run_workflow_fixture(tool, {
         "action": "list", "candidate_id": candidate.id,
     }, None, AlwaysAllow()))
 
@@ -1653,42 +1656,42 @@ async def test_whole_target_phase_completion_checks_order_and_inventory(tmp_path
 
     enum_ref = "artifacts/web-enumeration/target-test/inventory.md"
     create_artifact(enum_ref)
-    assert "recon must complete" in await tool.run({
+    assert "recon must complete" in await run_workflow_fixture(tool, {
         "action": "complete_skill", "skill_name": "web-enumeration",
     }, None, AlwaysAllow())
 
     recon_ref = "artifacts/recon/target-test/summary.md"
     create_artifact(recon_ref)
     await record_phase_coverage_for_test(tool, "recon")
-    recon = json.loads(await tool.run({
+    recon = json.loads(await run_workflow_fixture(tool, {
         "action": "complete_skill", "skill_name": "recon",
     }, None, AlwaysAllow()))
     assert recon["phase"] == "recon"
     await record_phase_coverage_for_test(tool, "enumeration")
-    enumeration = json.loads(await tool.run({
+    enumeration = json.loads(await run_workflow_fixture(tool, {
         "action": "complete_skill", "skill_name": "web-enumeration",
     }, None, AlwaysAllow()))
     assert enumeration["phase"] == "enumeration"
 
     analysis_ref = "artifacts/web-input-analysis/target-test/candidates.md"
     create_artifact(analysis_ref)
-    assert "requires at least one recorded input" in await tool.run({
+    assert "requires at least one recorded input" in await run_workflow_fixture(tool, {
         "action": "complete_skill", "skill_name": "web-input-analysis",
     }, None, AlwaysAllow())
 
-    input_result = json.loads(await tool.run({
+    input_result = json.loads(await run_workflow_fixture(tool, {
         "action": "record_input", "method": "GET", "endpoint": "/search",
         "parameter": "q", "location": "query",
     }, None, AlwaysAllow()))
-    assert "pending or blocked" in await tool.run({
+    assert "pending or blocked" in await run_workflow_fixture(tool, {
         "action": "complete_skill", "skill_name": "web-input-analysis",
     }, None, AlwaysAllow())
-    disposition = await tool.run({
+    disposition = await run_workflow_fixture(tool, {
         "action": "set_input_disposition", "input_id": input_result["input"]["id"],
         "disposition": "analyzed",
     }, None, AlwaysAllow())
     assert json.loads(disposition)["input"]["disposition"] == "analyzed"
-    analysis = json.loads(await tool.run({
+    analysis = json.loads(await run_workflow_fixture(tool, {
         "action": "complete_skill", "skill_name": "web-input-analysis",
     }, None, AlwaysAllow()))
     assert analysis["phase"] == "input_analysis"
@@ -1710,13 +1713,13 @@ async def test_whole_target_recon_completion_requires_explicit_resolved_coverage
     artifact.parent.mkdir(parents=True, exist_ok=True)
     artifact.write_text("recon summary", encoding="utf-8")
 
-    missing = await tool.run(
+    missing = await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "recon"}, None, AlwaysAllow()
     )
     assert "requires explicit coverage" in missing
     assert state.completed_phases() == frozenset()
 
-    no_reason = await tool.run({
+    no_reason = await run_workflow_fixture(tool, {
         "action": "record_phase_coverage", "phase": "recon",
         "coverage_dimension": "service_discovery", "coverage_status": "skipped",
     }, None, AlwaysAllow())
@@ -1724,23 +1727,23 @@ async def test_whole_target_recon_completion_requires_explicit_resolved_coverage
     assert "requires a reason" in no_reason
 
     await record_phase_coverage_for_test(tool, "recon")
-    await tool.run({
+    await run_workflow_fixture(tool, {
         "action": "record_phase_coverage", "phase": "recon",
         "coverage_dimension": "reachability", "coverage_status": "failed",
         "coverage_reason": "temporary DNS failure",
     }, None, AlwaysAllow())
-    unresolved = await tool.run(
+    unresolved = await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "recon"}, None, AlwaysAllow()
     )
     assert "unresolved failed/cancelled coverage" in unresolved
     assert state.completed_phases() == frozenset()
 
-    await tool.run({
+    await run_workflow_fixture(tool, {
         "action": "record_phase_coverage", "phase": "recon",
         "coverage_dimension": "reachability", "coverage_status": "skipped",
         "coverage_reason": "target unavailable after bounded retry",
     }, None, AlwaysAllow())
-    completed = json.loads(await tool.run(
+    completed = json.loads(await run_workflow_fixture(tool,
         {"action": "complete_skill", "skill_name": "recon"}, None, AlwaysAllow()
     ))
     assert completed["phase"] == "recon"
@@ -1772,13 +1775,13 @@ async def test_whole_target_explicit_no_input_completion_is_persisted(tmp_path):
 
     for skill_name in ("recon", "web-enumeration"):
         await record_phase_coverage_for_test(tool, "recon" if skill_name == "recon" else "enumeration")
-        output = await tool.run(
+        output = await run_workflow_fixture(tool,
             {"action": "complete_skill", "skill_name": skill_name},
             None,
             AlwaysAllow(),
         )
         assert json.loads(output)["ok"] is True
-    analysis = await tool.run(
+    analysis = await run_workflow_fixture(tool,
         {
             "action": "complete_skill",
             "skill_name": "web-input-analysis",
@@ -1827,31 +1830,32 @@ async def test_candidate_validation_objective_scopes_validation_mutations(tmp_pa
         evidence_root=tmp_path,
     )
 
-    started = json.loads(await tool.run({
+    started = json.loads(await run_workflow_fixture(tool, {
         "action": "start_validation", "candidate_id": candidate_a.id,
     }, None, AlwaysAllow()))
     assert started["ok"] is True
-    assert "candidate does not match the active candidate-validation objective" in await tool.run({
+    assert "candidate does not match the active candidate-validation objective" in await run_workflow_fixture(tool, {
         "action": "start_validation", "candidate_id": candidate_b.id,
     }, None, AlwaysAllow())
 
     (tmp_path / "proof.txt").write_text("Observed request and response", encoding="utf-8")
-    evidence = json.loads(await tool.run({
+    evidence = json.loads(await run_workflow_fixture(tool, {
         "action": "record_evidence", "candidate_id": candidate_a.id,
         "evidence_path": "proof.txt",
     }, None, AlwaysAllow()))
     assert evidence["ok"] is True
-    assert "candidate does not match the active candidate-validation objective" in await tool.run({
+    assert "candidate does not match the active candidate-validation objective" in await run_workflow_fixture(tool, {
         "action": "record_evidence", "candidate_id": candidate_b.id,
         "evidence_path": "proof.txt",
     }, None, AlwaysAllow())
 
-    result = json.loads(await tool.run({
+    result = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": candidate_a.id,
         "skill_name": "sql-injection", "outcome": "not-confirmed",
+        "evidence_refs": [evidence["evidence"]["id"]],
     }, None, AlwaysAllow()))
     assert result["ok"] is True
-    assert "candidate does not match the active candidate-validation objective" in await tool.run({
+    assert "candidate does not match the active candidate-validation objective" in await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": candidate_b.id,
         "skill_name": "sql-injection", "outcome": "not-confirmed",
     }, None, AlwaysAllow())
@@ -1859,16 +1863,8 @@ async def test_candidate_validation_objective_scopes_validation_mutations(tmp_pa
     state.add_validation_result(ValidationResult(
         candidate_a.id, "sql-injection", "not-confirmed", coverage_synced=False,
     ), force=True)
-    synced = json.loads(await tool.run({
-        "action": "sync_coverage", "candidate_id": candidate_a.id,
-    }, None, AlwaysAllow()))
-    assert synced["coverage_sync"] == "synced"
-    state.add_validation_result(ValidationResult(
-        candidate_b.id, "sql-injection", "not-confirmed", coverage_synced=False,
-    ))
-    assert "candidate does not match the active candidate-validation objective" in await tool.run({
-        "action": "sync_coverage", "candidate_id": candidate_b.id,
-    }, None, AlwaysAllow())
+    rejected = await tool.run({"action": "sync_coverage", "candidate_id": candidate_a.id}, None, AlwaysAllow())
+    assert rejected.startswith("error:")  # resultless legacy proof does not gain new coverage authority
 
 
 @pytest.mark.asyncio
@@ -1889,7 +1885,7 @@ async def test_candidate_validation_objective_rejects_missing_candidate(tmp_path
 async def test_capture_context_handoff_survives_workflow_resume(tmp_path):
     state = whole_target_tool_state()
     tool = WorkflowTool(state, Target("https://target.test"), evidence_root=tmp_path)
-    recorded = json.loads(await tool.run({
+    recorded = json.loads(await run_workflow_fixture(tool, {
         "action": "record_input", "method": "POST", "endpoint": "/api/search",
         "parameter": "q", "location": "body", "input_type": "string",
         "content_type": "application/json",
@@ -1897,7 +1893,7 @@ async def test_capture_context_handoff_survives_workflow_resume(tmp_path):
         "baseline_request_ref": "wr:captured-1", "auth_context_ref": "user-identity",
         "source_ref": "browser:tab-1",
     }, None, AlwaysAllow()))["input"]
-    candidate = json.loads(await tool.run({
+    candidate = json.loads(await run_workflow_fixture(tool, {
         "action": "record_candidate", "candidate_class": "sql-injection",
         "input_id": recorded["id"],
     }, None, AlwaysAllow()))["candidate"]

@@ -17,6 +17,7 @@ from src.engagement.state import EngagementState
 from src.tools.common.registry import Registry
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.tools.workflow.finding import ConfirmFindingTool
+from tests.helpers.workflow import adopt_fixture_assessment
 from src.workflow.state import Candidate, WorkflowState
 from src.coverage.store import CoverageStore
 from src.findings.store import Store as FindingsStore
@@ -106,6 +107,13 @@ async def test_operator_proof_review_separate_from_yolo_tool_approval(lab, tmp_p
     with pytest.raises(Exception, match='not eligible'):
         await registry.execute('confirm_finding', finding_args, None, p)
     assert not state.finding_is_persisted(candidate.id) and operator.calls == 0
+    from src.workflow.state import ValidationResult
+    from src.workflow.assessment import seal
+    policy.bind_validation_context(state, None, None)
+    prior = adopt_fixture_assessment(state, ValidationResult(candidate.id, kind, 'confirmed', evidence_refs=[ref]), policy=policy)
+    prior.outcome = 'insufficient-evidence'
+    prior.assessment_binding = seal(prior)
+    state.add_validation_result(prior)
     output = []
     agent = SimpleNamespace(prompter=p, workflow=state, tools=registry, skills=skills, save=AsyncMock())
     app = SimpleNamespace(agent=agent, dispatch=output.append)
@@ -117,8 +125,8 @@ async def test_operator_proof_review_separate_from_yolo_tool_approval(lab, tmp_p
         await asyncio.sleep(.01)
     latest = state.latest_result(candidate.id)
     assert output and latest is not None and latest.outcome == 'confirmed', output
-    result = policy.observations.result(candidate.id, (ref,), policy.engagement.http_permissions.epoch, candidate)
-    assert result.verification_source == 'operator-reviewed'
+    latest = state.latest_result(candidate.id)
+    assert latest is not None and latest.assessment_source == 'operator'
     assert operator.calls == 1  # conclusion review even in YOLO, not a tool dialog
     assert (await coverage.list())[0].status == 'failed'
     found = await registry.execute('confirm_finding', finding_args, None, p)

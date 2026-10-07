@@ -1,3 +1,4 @@
+from src.workflow.assessment import accepted_result
 import traceback
 import asyncio
 import hashlib
@@ -1841,9 +1842,14 @@ class Agent:
             )
         )
 
-    async def save(
-        self,
-    ) -> None:
+    async def save(self, *, workflow_override=None, _workflow_locked=False) -> None:
+        if not _workflow_locked:
+            async with self.workflow.mutation_lock:
+                await self._save_unlocked(workflow_override)
+            return
+        await self._save_unlocked(workflow_override)
+
+    async def _save_unlocked(self, workflow_override=None) -> None:
         if self.store is None:
             self._tool_results_unsaved = False
             return
@@ -1855,7 +1861,7 @@ class Agent:
             self.history,
             self.target,
             self.memory,
-            self.workflow,
+            workflow_override if workflow_override is not None else self.workflow,
             self.engagement_state,
         )
         self._tool_results_unsaved = False
@@ -2059,22 +2065,22 @@ class Agent:
         invalid: set[str] = set()
         for candidate in self.workflow.objective_candidates():
             result = self.workflow.latest_result(candidate.id)
+            if (result is not None and result.outcome in {"confirmed", "not-confirmed"}
+                    and not accepted_result(self.workflow, candidate, result, execution)):
+                invalid.add(candidate.id)
             if result is not None and result.skill_name == GENERIC_VALIDATOR:
-                trusted = (execution.observations.result(candidate.id, tuple(result.evidence_refs),
-                           execution.engagement.http_permissions.epoch, candidate) if execution else None)
+                trusted = accepted_result(self.workflow, candidate, result, execution)
                 if (routes[candidate.id].kind != "generic" or execution is None
                         or generic_admission(candidate, self.workflow, self.skills, self.target, execution)
                         or not isinstance(evidence_root, Path)
-                        or trusted is None or trusted.outcome != result.outcome):
+                        or not trusted):
                     invalid.add(candidate.id)
         if isinstance(evidence_root, Path):
             for candidate in self.workflow.objective_candidates():
                 result = self.workflow.latest_result(candidate.id)
                 if result is None or not result.evidence_refs:
                     continue
-                if result.outcome in {"confirmed", "not-confirmed"} and execution is not None and execution.observations.result(
-                    candidate.id, tuple(result.evidence_refs), execution.engagement.http_permissions.epoch, candidate
-                ) is None:
+                if result.outcome in {"confirmed", "not-confirmed"} and not accepted_result(self.workflow, candidate, result, execution):
                     invalid.add(candidate.id)
                     continue
                 if any(
@@ -2316,13 +2322,8 @@ class Agent:
             if reference in self.workflow.evidence
         ):
             return None, "registered evidence is unavailable"
-        if policy is not None and result.evidence_refs:
-            trusted = policy.observations.result(
-                candidate.id, tuple(result.evidence_refs),
-                policy.engagement.http_permissions.epoch, candidate,
-            )
-            if trusted is None or trusted.outcome != result.outcome:
-                return None, "current runtime proof is unavailable"
+        if not accepted_result(self.workflow, candidate, result, policy):
+            return None, "current accepted assessment is unavailable"
         if candidate.target and not self.engagement_state.is_in_scope(candidate.target):
             return None, "candidate is outside current engagement scope"
         return result, None
@@ -2859,9 +2860,8 @@ class Agent:
                 reason = (result.deferred_reason or result.outcome) if result else "bounded probe/context or trusted proof pending"
             if reason is None:
                 assert policy is not None and result is not None
-                trusted = policy.observations.result(candidate.id, tuple(result.evidence_refs),
-                        policy.engagement.http_permissions.epoch, candidate)
-                if (trusted is None or trusted.outcome != result.outcome
+                trusted = accepted_result(self.workflow, candidate, result, policy)
+                if (not trusted
                         or not isinstance(root, Path)
                         or not self.workflow.evidence_matches(candidate.id, result.evidence_refs)
                         or any(not self.workflow.evidence[ref].is_available_for_resume(root) for ref in result.evidence_refs)
