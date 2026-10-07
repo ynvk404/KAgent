@@ -306,7 +306,104 @@ venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJa
 venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-selection.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --fail-fast --output artifacts/benchmarks/run-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-selection.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --run-kind official --output artifacts/benchmarks/official-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/run-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 report --run artifacts/benchmarks/run-UNIQUE
 ```
+
+`report` reads an existing manifest, evaluation, case results, lifecycle events,
+and optional run classification; it does not run the evaluator, worker, Agent,
+provider, or target. It writes `report.json`, `summary.csv`, `partitions.csv`,
+`per-case.csv`, an abnormal-analysis template, and five static SVG chart types under
+`<run>/report/`. Use `--evaluation evaluation-<identity>.json` when the run has
+multiple evaluation artifacts. `--output` may select another new directory
+inside the same run. An existing output directory is rejected without overwrite.
+Only evaluable cases enter the confusion matrix. CSV and the class-rate chart
+include explicit numerators and denominators; a zero denominator is NA. The
+per-case final status comes from the parent `runtime-finished` event, while the
+result artifact's status is kept separately as worker diagnostics. Missing
+transport dispatch counts and incomplete token totals remain blank. The report
+exports a restricted presentation model without target origins, request fixtures,
+evidence, provider configuration, or raw messages. Legacy smoke runs without a
+declaration
+are labeled `Development / smoke`; other legacy runs have undeclared official
+status. A smoke report is for exporter validation, not a thesis result.
+
+The loader recomputes the existing evaluator v1 identity from the semantic
+manifest, non-evaluated lifecycle rows, partial-tail flag and (when present)
+orphan diagnostic bindings. Scheduled hashes, result inventory/references and
+run/case/execution bindings are checked separately. Recorded evaluations must
+agree, with the original fail-fast exception. Missing or unusable diagnostics
+can become NA only in invalid-result/execution-failed cases; identity conflicts
+fail even there. Orphans never establish completion or contribute worker metrics.
+Counts are cross-checked against records, truth and parent lifecycle, including
+overall/class totals and supplied strata; rates retain the evaluator's
+zero-denominator null semantics. Reporting validates consistency; it does not rerun
+workflow acceptance/scoring or attest that the Agent's assessment is correct.
+
+Raw run/case identifiers, provider/model labels and commit identifiers are kept
+internally for validation, then presented as deterministic pseudonyms:
+`<kind>-SHA256(compact sorted-key JSON ["scenario1-report-<kind>-v1", raw])`.
+Kinds are `run`, `case`, `provider`, `model`, and `commit`. This permits offline
+joins to original artifacts without exporting those arbitrary strings. Metadata
+exports use fixed vocabularies, booleans/numbers, the recognized dataset version
+`1.2`, a bounded Python version format and the fixed capability-profile name;
+unrecognized labels and known fixture-value aliases are omitted. Reasons use a
+closed vocabulary. CLI argument/input/output errors and success messages do not
+echo artifact text, URLs or filesystem paths. These restrictions prevent raw
+opaque labels/credentials from being copied; they are not anonymization or an
+absolute secret detector. Unsalted pseudonyms/hashes permit correlation and
+possible dictionary guessing; allowed structured fields and numeric metrics
+remain observable. Inspect exports before public release of sensitive artifacts.
+
+Output reserves the entire root namespaces `manifest.json`, `events.jsonl`,
+`run-classification.json`, `evaluation-*`, `results`, `workspaces` and writer
+staging names, even when absent. A new nested report directory elsewhere inside
+the run is allowed. All validation/rendering finishes before output creation.
+Files are written/fsynced in a private sibling staging directory (directories
+0700, files 0600), then published with Linux `renameat2(RENAME_NOREPLACE)`.
+Publication is an atomic directory move and rejects even concurrent empty-directory
+collisions; unsupported platforms/filesystems fail rather than using an overwrite
+fallback. WSL DrvFS mounts that reject `RENAME_NOREPLACE` cannot publish through
+this CLI; use a Linux filesystem for the run. A synchronous write failure or
+interruption cleans only owned staging;
+retry can use the same destination. There is no asynchronous/offloaded writer.
+Readers see either no destination or the complete rendered report. Held directory
+handles, no-follow traversal and inode/path rechecks detect parent/staging
+substitution. A process with permission to rename directories can still race the
+last recheck; this is a residual TOCTOU limitation, not a filesystem sandbox.
+An externally moved/substituted staging directory is not blindly deleted. A hard
+process kill can leave private staging; power-loss durability of the final rename
+is not guaranteed. Partition SVGs include all five labeled counts (including
+zeros), patterned segments and a count table, with text outside small segments.
+
+The main report figures are `charts/class-metrics.svg`,
+`charts/evaluation-partitions.svg`, `charts/processing-time.svg` and
+`charts/total-tokens.svg`; `charts/confusion-matrix.svg` is an appendix figure.
+All figures share Arial, title/classification/subtitle placement, typography,
+borders and number formatting. Accepted/evaluable results use green; unresolved
+uses ochre, failures red, invalid results purple and unrun cases gray. Partition
+patterns and explicit counts, metric labels, class labels and NA text preserve
+meaning without color. SQLi/XSS colors are consistent across both case charts.
+
+Processing time uses the worker's measured `agent_seconds`, excluding setup,
+freeze/teardown and parent overhead. It includes available retained intervals
+from unsuccessful executions, marked `*`; it is not end-to-end latency or a
+completed-only timing distribution. Missing intervals are NA, not zero.
+Resource usage uses `total_tokens` only when `total_tokens_complete` is true;
+incomplete/unavailable totals are NA and observed partial sums are never plotted.
+The token figure states complete-total coverage. This metric is preferred because
+the existing smoke artifact has complete totals for every case, while its legacy
+HTTP dispatch counts are absent. LLM call counts would be a less direct measure
+of token consumption. No HTTP or LLM-call figure is added.
+
+Both case figures preserve manifest execution order, identical to `per-case.csv`
+row order, with run-local labels `Case 01`, `Case 02`, etc. The SVG observation's
+`data-case` attribute retains the full sanitized case pseudonym for audit joins;
+the ordinal is a display aid, not a new canonical case identity. Each page shows
+at most 20 observations, with a shared scale across pages of the same metric.
+Additional pages use `processing-time-02.svg`, `total-tokens-02.svg`, etc.; all
+are listed in `report.json`. Insert pages individually in Word to keep labels
+readable. Values use one decimal for seconds and integer token totals; large
+values use scientific notation. CSV field names and schemas remain unchanged.
 
 Dry-run only parses/maps/selects/verifies source hashes and local runtime settings;
 it creates no Agent/client/worker, performs no provider probe/target health check,

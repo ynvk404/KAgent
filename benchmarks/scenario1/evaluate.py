@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import asdict
-import json
 from pathlib import Path
 
 from benchmarks.common.contracts import (CaseExecution, CLASSES, EvaluationRecord, GroundTruth,
@@ -12,8 +11,7 @@ from benchmarks.common.metrics import distribution
 from benchmarks.common.recorder import Recorder, read_records, validate_lifecycle
 from .canonical import inspect_case_evidence, inspect_export
 from .runtime import candidate_arguments
-
-EVALUATOR = 'offline-agent-assessment-v1'
+from .bindings import EVALUATOR, evaluation_identity, orphan_binding, validate_recorded_evaluations
 
 
 def confusion(vulnerable: bool, outcome: str) -> str:
@@ -82,19 +80,9 @@ def evaluate(directory: Path, *, publish=True) -> dict:
             if start and (path.exists() or path.is_symlink()):
                 # Export precedes the parent's completion append. A torn export
                 # is diagnostic only; complete exports must match the start.
-                try:
-                    raw = read_json(path)
-                except (json.JSONDecodeError, UnicodeError):
-                    export_state = 'incomplete'
-                else:
-                    orphan = decode(CaseExecution, raw)
-                    if (orphan.run_id, orphan.case_id, orphan.execution_id) != (manifest.run_id, cid, start['execution_id']):
-                        raise ValueError('orphan execution export identity mismatch')
-                    export_state = 'diagnostic'
+                binding = orphan_binding(directory, cid, manifest.run_id, start['execution_id'])
                 expected_results.add(path)
-                orphan_exports.append({'case_id': cid, 'execution_id': start['execution_id'],
-                    'result_ref': str(path.relative_to(directory)), 'result_sha256': file_hash(path),
-                    'export_state': export_state})
+                orphan_exports.append(binding)
                 # No orphan enters executions: neither scoring nor timing can
                 # infer a completed execution from an uncommitted export.
             previous_eval = next((e for e in events if e['kind'] == 'evaluated'), None)
@@ -152,20 +140,8 @@ def evaluate(directory: Path, *, publish=True) -> dict:
         records.append(asdict(record))
     if set((directory / 'results').glob('*.json')) - expected_results:
         raise ValueError('unexpected/duplicate final execution export')
-    identity_input = [EVALUATOR, asdict(manifest), [e for e in rows if e['kind'] != 'evaluated'], partial]
-    if orphan_exports:
-        identity_input.append(orphan_exports)
-    identity = digest(identity_input)
-    for record in records:
-        previous = next((e for e in histories[record['case_id']] if e['kind'] == 'evaluated'), None)
-        if previous:
-            data = previous['data']
-            if data.get('evaluation_identity') not in {identity, 'fail-fast-v1'}:
-                raise ValueError('conflicting evaluation identity/version')
-            if data.get('partition') != record['partition'] or data.get('reason') != record['reason']:
-                raise ValueError('conflicting recorded evaluation')
-            if data.get('evaluation_identity') != 'fail-fast-v1' and any(data.get(k) != v for k, v in record.items()):
-                raise ValueError('conflicting evaluation record fields')
+    identity = evaluation_identity(manifest, rows, partial, orphan_exports)
+    validate_recorded_evaluations(records, histories, identity)
     report = {'schema_version': 1, 'evaluator_version': EVALUATOR, 'evaluation_identity': identity,
               'run_id': manifest.run_id, 'incomplete': partial or any(not any(e['kind'] == 'runtime-finished' for e in h) for h in histories.values()),
               'partial_tail_ignored': partial, 'records': records,

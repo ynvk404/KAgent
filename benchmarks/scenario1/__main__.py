@@ -12,8 +12,17 @@ from benchmarks.common.contracts import DEFAULT_SEED, RunManifest, RuntimeSettin
 from .dataset import Dataset, select
 
 
+class _BenchmarkParser(argparse.ArgumentParser):
+    reporting_errors = False
+
+    def error(self, message):
+        if self.reporting_errors or self.prog.endswith(' report'):
+            self.exit(2, 'benchmark report error: invalid arguments\n')
+        super().error(message)
+
+
 def parser():
-    p = argparse.ArgumentParser(description='KAgent Scenario 1 supplied-input SQLi/XSS benchmark')
+    p = _BenchmarkParser(description='KAgent Scenario 1 supplied-input SQLi/XSS benchmark')
     commands = p.add_subparsers(dest='command', required=True)
     listing = commands.add_parser('list')
     listing.add_argument('--dataset', required=True, type=Path)
@@ -44,11 +53,28 @@ def parser():
     running.add_argument('--output', type=Path)
     evaluation = commands.add_parser('evaluate')
     evaluation.add_argument('--run', required=True, type=Path)
+    reporting = commands.add_parser('report', help='export tables and SVG charts from existing artifacts')
+    reporting.add_argument('--run', required=True, type=Path)
+    reporting.add_argument('--output', type=Path)
+    reporting.add_argument('--evaluation', type=Path)
     return p
 
 
 def main(argv=None) -> int:
-    args = parser().parse_args(argv)
+    invocation = list(argv) if argv is not None else sys.argv[1:]
+    cli = parser()
+    cli.reporting_errors = 'report' in invocation
+    args = cli.parse_args(invocation)
+    if args.command == 'report':
+        from .reporting import write_report
+        try:
+            write_report(args.run, args.output, args.evaluation)
+        except (ValueError, OSError, KeyError, TypeError, AttributeError, UnicodeError, OverflowError):
+            # Artifact text, malformed URLs and filesystem paths are untrusted.
+            print('benchmark report error: invalid input or output; inspect artifacts locally', file=sys.stderr)
+            return 2
+        print('Benchmark report exported.')
+        return 0
     try:
         if args.command == 'evaluate':
             from .evaluate import evaluate
