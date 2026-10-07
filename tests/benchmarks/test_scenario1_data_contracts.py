@@ -68,7 +68,9 @@ async def test_per_case_dispatch_metric_serializes_and_legacy_is_na(
     assert execution.metrics['http_dispatch_attempts'] == len(mock_http) == 2
     path = tmp_path / 'result.json'
     write_new(path, asdict(execution))
-    assert decode(CaseExecution, json.loads(path.read_text())).metrics['http_dispatch_attempts'] == 2
+    restored = decode(CaseExecution, json.loads(path.read_text()))
+    assert restored.metrics is not None
+    assert restored.metrics['http_dispatch_attempts'] == 2
     legacy = asdict(execution)
     del legacy['metrics']['http_dispatch_attempts']
     decoded = decode(CaseExecution, legacy)

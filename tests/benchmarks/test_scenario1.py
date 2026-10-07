@@ -812,7 +812,7 @@ async def test_only_exact_case_evidence_is_scoreable(tmp_path, monkeypatch, op, 
     candidate_args = candidate_arguments(op, settings)
 
     if tamper == 'endpoint':
-        def edit(sources, result, workflow):
+        def edit_endpoint(sources, result, workflow):
             urls = []
             for source in sources:
                 source['url'] = source['url'].replace('/benchmark/fixture', '/benchmark/other')
@@ -826,7 +826,7 @@ async def test_only_exact_case_evidence_is_scoreable(tmp_path, monkeypatch, op, 
             attempt = workflow['attempts'][result['attempt_id']]
             attempt['related_requests'] = urls
             result['assessment']['attempt'] = {key: value for key, value in attempt.items() if key != 'status'}
-        exported = rewrite_result_sources(execution.result, edit)
+        exported = rewrite_result_sources(execution.result, edit_endpoint)
         _, production_error = inspect_export(exported, run_id='run', case_id=op.case_id, execution_id='ex',
             candidate_args=candidate_args, target=ORIGIN + '/benchmark')
         assert production_error is None  # Same-origin auxiliary evidence passes production admission.
@@ -834,26 +834,26 @@ async def test_only_exact_case_evidence_is_scoreable(tmp_path, monkeypatch, op, 
         exported = rewrite_result_sources(execution.result,
             lambda sources, _result, _workflow: [s['source_details']['scenario1_case_binding'].__setitem__('input_components', []) for s in sources])
     elif tamper == 'location':
-        def edit(sources, _result, _workflow):
+        def edit_location(sources, _result, _workflow):
             for source in sources:
                 for row in source['source_details']['scenario1_case_binding']['input_components']:
                     row['location'] = 'body'
-        exported = rewrite_result_sources(execution.result, edit)
+        exported = rewrite_result_sources(execution.result, edit_location)
     elif tamper == 'component':
-        def edit(sources, _result, _workflow):
+        def edit_component(sources, _result, _workflow):
             for source in sources:
                 for row in source['source_details']['scenario1_case_binding']['input_components']:
                     row['component'] = 'name'
-        exported = rewrite_result_sources(execution.result, edit)
+        exported = rewrite_result_sources(execution.result, edit_component)
     else:
-        def edit(sources, _result, _workflow):
+        def edit_candidate(sources, _result, _workflow):
             for source in sources:
                 source['candidate_id'] = 'cand_' + '0' * 20
                 source['candidate_binding'] = 'a' * 64
                 details = source['source_details']['scenario1_case_binding']
                 details['candidate_id'] = source['candidate_id']
                 details['candidate_binding'] = source['candidate_binding']
-        exported = rewrite_result_sources(execution.result, edit)
+        exported = rewrite_result_sources(execution.result, edit_candidate)
 
     if tamper != 'endpoint':
         _, production_error = inspect_export(exported, run_id='run', case_id=op.case_id, execution_id='ex',
