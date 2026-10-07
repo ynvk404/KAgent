@@ -40,7 +40,6 @@ def _make_app(cols: int = 80, lines: int = 24) -> KAgent:
             agent=cast(Agent, agent),
             banner_data=banner,
             parent_signal=asyncio.Event(),
-            show_splash=False,
             read_config=lambda: make_test_config_snapshot(
                 backend=cast(Backend, "openai"),
                 model="deepseek-chat",
@@ -64,6 +63,30 @@ def _render_obj(panel: Any, width: int = 76) -> str:
 def _get_panel(app: KAgent) -> Any:
     rendered = cast(Any, app.overview_static.render())
     return getattr(rendered, "_renderable", rendered)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [(45, 24), (100, 30)])
+@pytest.mark.parametrize("resume_summary", [None, "Restored saved conversation."])
+async def test_startup_shows_workspace_and_accepts_first_key(
+    size: tuple[int, int], resume_summary: str | None,
+) -> None:
+    app = _make_app()
+    app.resume_summary = resume_summary
+
+    async with app.run_test(size=size) as pilot:
+        assert app.transcript_panel.display
+        assert app.input_static.display
+        assert app.status_bar.display
+        assert "Welcome to KAgent" in _render_obj(_get_panel(app), width=size[0])
+        if resume_summary:
+            assert sum(
+                entry.kind == "system" and entry.text == resume_summary
+                for entry in app.state.transcript
+            ) == 1
+
+        await pilot.press("h")
+        assert app.input.value == "h"
 
 
 @pytest.mark.asyncio

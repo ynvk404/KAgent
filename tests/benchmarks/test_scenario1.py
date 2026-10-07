@@ -15,7 +15,7 @@ from benchmarks.common.contracts import (CaseExecution, GroundTruth, Operational
     RuntimeMetrics, RuntimeSettings, decode, digest, file_hash, write_new)
 from benchmarks.common.metrics import distribution, llm_metrics
 from benchmarks.common.recorder import Recorder, read_records
-from benchmarks.scenario1.canonical import inspect_export
+from benchmarks.scenario1.canonical import inspect_case_evidence, inspect_export
 from benchmarks.scenario1.dataset import Dataset, MappingError, parse_truth, select
 from benchmarks.scenario1.evaluate import confusion, evaluate
 from benchmarks.scenario1.runner import envelope, run
@@ -94,6 +94,7 @@ def test_selection_versions_hashes_and_no_replacement(tmp_path):
     assert select(d, 'run', 'reduced') == first
     assert select(d, 'run', 'reduced', seed=5).execution_order != first.execution_order
     assert decode(RunManifest, asdict(first)) == first
+    d.verify(first)
     with pytest.raises(ValueError):
         decode(RunManifest, {**asdict(first), 'schema_version': 2})
     with pytest.raises(ValueError):
@@ -105,6 +106,84 @@ def test_selection_versions_hashes_and_no_replacement(tmp_path):
         d.verify(first)
     with pytest.raises(MappingError, match=chosen):
         select(Dataset(tmp_path), 'run', 'reduced')
+
+
+def test_smoke_selection_is_balanced_and_deterministic(tmp_path):
+    d = make_dataset(tmp_path)
+    manifest = select(d, 'smoke-run', 'smoke', seed=91)
+    assert len(manifest.truth) == 12
+    assert {key: sum(row['vulnerability_class'] == cls and row['expected_vulnerable'] is vulnerable
+                     for row in manifest.truth)
+            for key, (cls, vulnerable) in {
+                'sqli/vulnerable': ('sql-injection', True), 'sqli/safe': ('sql-injection', False),
+                'xss/vulnerable': ('cross-site-scripting', True), 'xss/safe': ('cross-site-scripting', False),
+            }.items()} == {'sqli/vulnerable': 3, 'sqli/safe': 3, 'xss/vulnerable': 3, 'xss/safe': 3}
+    assert select(d, 'smoke-run', 'smoke', seed=91) == manifest
+    changed_seed = select(d, 'smoke-run', 'smoke', seed=92)
+    assert changed_seed.execution_order != manifest.execution_order
+    d.verify(manifest)
+
+
+def test_manifest_verification_reloads_authoritative_truth(tmp_path):
+    d = make_dataset(tmp_path)
+    manifest = select(d, 'run', 'reduced')
+    changed_id = manifest.truth[0]['case_id']
+    truth_path = tmp_path / 'expectedresults-1.2.csv'
+    lines = truth_path.read_text().splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith(changed_id + ','):
+            fields = line.split(',')
+            fields[2] = 'false' if fields[2] == 'true' else 'true'
+            lines[index] = ','.join(fields)
+            break
+    else:
+        raise AssertionError('selected truth row not found')
+    truth_path.write_text('\n'.join(lines) + '\n')
+    with pytest.raises(ValueError):
+        d.verify(manifest)
+
+
+@pytest.mark.parametrize('tamper,reason', [
+    ('selection', 'truth rows'), ('order', 'execution order'), ('truth', 'truth rows'),
+    ('operational', 'operational rows'), ('artifact-hash', 'artifact changed or omitted'),
+    ('artifact-set', 'artifact changed or omitted'), ('mutation-safety', 'derived metadata'),
+    ('dataset-counts', 'derived metadata'), ('dataset-version', 'dataset identity'),
+])
+def test_manifest_verification_reconstructs_selection_and_metadata(tmp_path, tamper, reason):
+    d = make_dataset(tmp_path)
+    manifest = select(d, 'run', 'reduced')
+    raw = deepcopy(asdict(manifest))
+    if tamper == 'selection':
+        selected = {row['case_id'] for row in raw['truth']}
+        other = next(row for row in d.truth if row.case_id not in selected
+                     and row.vulnerability_class == 'sql-injection' and row.expected_vulnerable)
+        replaced_id = raw['truth'][0]['case_id']
+        raw['truth'][0] = asdict(other)
+        raw['operational'][0] = asdict(d.map(other))
+        raw['execution_order'] = [other.case_id if case_id == replaced_id else case_id
+                                  for case_id in raw['execution_order']]
+    elif tamper == 'order':
+        raw['execution_order'].reverse()
+    elif tamper == 'truth':
+        raw['truth'][0]['source_ref'] = 'expectedresults-1.2.csv:999'
+    elif tamper == 'operational':
+        location = raw['operational'][0]['input_location']
+        pairs = raw['operational'][0][location]
+        pairs[0][1] = 'hand-edited'
+    elif tamper == 'artifact-hash':
+        ref = next(iter(raw['dataset']['artifacts']))
+        raw['dataset']['artifacts'][ref] = 'f' * 64
+    elif tamper == 'artifact-set':
+        raw['dataset']['artifacts'].pop(next(iter(raw['dataset']['artifacts'])))
+    elif tamper == 'mutation-safety':
+        raw['dataset']['state_mutating_cases'] = ['BenchmarkTest99999']
+    elif tamper == 'dataset-counts':
+        raw['dataset']['counts']['sql-injection/vulnerable'] += 1
+    elif tamper == 'dataset-version':
+        raw['dataset']['version'] = '9.9'
+    edited = decode(RunManifest, raw)
+    with pytest.raises(ValueError, match=reason):
+        d.verify(edited)
 
 
 def test_insufficient_strata(tmp_path):
@@ -259,9 +338,10 @@ ASSESSMENT = {'hypothesis': 'Marker reaches an executable response position',
 
 class ScriptedClient(Client):
     """Fake only model I/O. Extract opaque IDs from actual production context/results."""
-    def __init__(self, outcome='confirmed', mode='normal', skill='cross-site-scripting'):
+    def __init__(self, outcome='confirmed', mode='normal', skill='cross-site-scripting', name_case=None):
         self.outcome, self.mode = outcome, mode
         self.skill = skill
+        self.name_case = name_case
         self.step = 0
         self.requests = []
         self.candidate = None
@@ -308,8 +388,14 @@ class ScriptedClient(Client):
         if self.step == 2:
             return self.tool('workflow', {'action': 'start_validation', 'candidate_id': self.candidate, 'assessment': ASSESSMENT})
         if self.step in (3, 4):
-            value = 'baseline' if self.step == 3 else '%27' if self.skill == 'sql-injection' else '%3Cscript%3Edocument.title%3D%22marker%22%3C/script%3E'
-            return self.tool('http', {'method': 'GET', 'url': ORIGIN + '/benchmark/fixture?q=' + value, 'phase': 'validation'})
+            if self.name_case == 'replacement':
+                name, value = ('q', 'bar') if self.step == 3 else ('q_mutated', 'bar')
+            elif self.name_case == 'unrelated':
+                name, value = 'other', 'bar'
+            else:
+                name = 'q'
+                value = 'baseline' if self.step == 3 else '%27' if self.skill == 'sql-injection' else '%3Cscript%3Edocument.title%3D%22marker%22%3C/script%3E'
+            return self.tool('http', {'method': 'GET', 'url': ORIGIN + '/benchmark/fixture?' + name + '=' + value, 'phase': 'validation'})
         if self.step == 5:
             return self.tool('file_write', {'path': 'artifacts/proof.md', 'content': 'Bounded baseline and harmless executable marker response compared.'})
         if self.step == 6:
@@ -367,6 +453,8 @@ async def test_real_agent_native_assessment(tmp_path, monkeypatch, op, settings,
     value, error = inspect_export(exported, run_id='run', case_id=op.case_id, execution_id='ex',
                                  candidate_args=candidate_arguments(op, settings), target=ORIGIN + '/benchmark')
     assert error is None and value == outcome
+    if outcome in {'confirmed', 'not-confirmed'}:
+        assert inspect_case_evidence(exported, op=op, candidate_args=candidate_arguments(op, settings)) is None
     assert exported['accepted_at_freeze'] == (outcome in {'confirmed', 'not-confirmed'})
     assert execution.metrics['agent_seconds'] > 0 and execution.metrics['setup_seconds'] >= 0
     assert execution.metrics['first_terminal_seconds'] is None or execution.metrics['first_terminal_seconds'] <= execution.metrics['agent_seconds']
@@ -378,6 +466,35 @@ async def test_real_agent_native_assessment(tmp_path, monkeypatch, op, settings,
     assert report['records'][0]['partition'] == ('evaluable' if outcome in {'confirmed', 'not-confirmed'} else 'unresolved')
     if outcome == 'not-confirmed':
         assert report['metrics']['overall']['FN'] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('name_case', 'partition'), [
+    ('replacement', 'evaluable'),
+    ('unrelated', 'invalid-result'),
+])
+async def test_name_component_requires_recorded_baseline_replacement(
+        tmp_path, monkeypatch, settings, mock_http, name_case, partition):
+    op_name = OperationalCaseInput('BenchmarkTest00001', 'cross-site-scripting', 'GET', '/fixture',
+                                    [['q', 'bar']], [], {}, {}, 'query', 'q', 'name')
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    execution = await execute_case(op_name, settings, workspace, 'run', 'ex',
+                                   ScriptedClient(skill='cross-site-scripting', name_case=name_case))
+    assert execution.result is not None and execution.result['accepted_at_freeze']
+    root = tmp_path / f'run-{name_case}'
+    recorded_run(root, single_manifest(op_name, settings), execution)
+    report = evaluate(root)
+    assert report['records'][0]['partition'] == partition
+    if name_case == 'unrelated':
+        assert report['records'][0]['reason'] == 'evidence-case-binding:missing-name-mutation-semantics'
+    else:
+        result = execution.result['workflow']['validation_results'][-1]
+        bindings = [entry['source']['source_details']['scenario1_case_binding']
+                    for entry in result['evidence_manifest'] if entry['source']['source_kind'] == 'native-http']
+        assert any(binding.get('name_mutation', {}).get('field_name_sha256')
+                   for binding in bindings)
 
 
 @pytest.mark.asyncio
@@ -459,6 +576,29 @@ def recorded_run(root, manifest, ex):
     rec.append('started', ex.case_id, 'started', execution_id=ex.execution_id)
     rec.append('runtime-finished', ex.case_id, ex.status, execution_id=ex.execution_id,
                data={'result_ref': str(p.relative_to(root)), 'result_sha256': file_hash(p)})
+
+
+def rewrite_result_sources(exported, edit):
+    """Re-seal synthetic frozen evidence while preserving production contracts."""
+    from src.workflow.assessment import digest as source_digest, seal
+    from src.workflow.state import ValidationResult
+    raw = deepcopy(exported)
+    workflow = raw['workflow']
+    result_index = next(i for i, row in enumerate(workflow['validation_results'])
+                        if row['result_id'] == raw['result_id'])
+    result = workflow['validation_results'][result_index]
+    sources = [entry['source'] for entry in result['evidence_manifest']]
+    edit(sources, result, workflow)
+    for entry in result['evidence_manifest']:
+        row = deepcopy(entry['source'])
+        row.pop('role', None)
+        row.pop('required', None)
+        entry['hash'] = source_digest(row)
+    validation = ValidationResult.from_dict(result)
+    assert validation is not None
+    validation.assessment_binding = seal(validation)
+    workflow['validation_results'][result_index] = validation.to_dict()
+    return raw
 
 
 def schedule_run(root, manifest):
@@ -655,6 +795,97 @@ async def test_offline_join_invalid_bindings_and_revisions(tmp_path, monkeypatch
     no_result = replace(ex, result=None)
     recorded_run(tmp_path / 'missing', manifest, no_result)
     assert evaluate(tmp_path / 'missing')['records'][0]['reason'] == 'missing-canonical-result'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('tamper,reason', [
+    ('endpoint', 'wrong-route'), ('parameter', 'wrong-input-name'),
+    ('location', 'wrong-input-location'), ('component', 'wrong-input-component'),
+    ('candidate', 'candidate ownership mismatch'),
+])
+async def test_only_exact_case_evidence_is_scoreable(tmp_path, monkeypatch, op, settings, mock_http, tamper, reason):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    execution = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient())
+    assert execution.result is not None and execution.result['accepted_at_freeze']
+    candidate_args = candidate_arguments(op, settings)
+
+    if tamper == 'endpoint':
+        def edit(sources, result, workflow):
+            urls = []
+            for source in sources:
+                source['url'] = source['url'].replace('/benchmark/fixture', '/benchmark/other')
+                source['request_hash'] = digest(source['url'])
+                details = source['source_details']['scenario1_case_binding']
+                details['route'] = '/benchmark/other'
+                details['request_hash'] = source['request_hash']
+                source['role'] = 'auxiliary'
+                source['required'] = True
+                urls.append({'role': 'auxiliary', 'method': source['method'], 'url': source['url'], 'required': True})
+            attempt = workflow['attempts'][result['attempt_id']]
+            attempt['related_requests'] = urls
+            result['assessment']['attempt'] = {key: value for key, value in attempt.items() if key != 'status'}
+        exported = rewrite_result_sources(execution.result, edit)
+        _, production_error = inspect_export(exported, run_id='run', case_id=op.case_id, execution_id='ex',
+            candidate_args=candidate_args, target=ORIGIN + '/benchmark')
+        assert production_error is None  # Same-origin auxiliary evidence passes production admission.
+    elif tamper == 'parameter':
+        exported = rewrite_result_sources(execution.result,
+            lambda sources, _result, _workflow: [s['source_details']['scenario1_case_binding'].__setitem__('input_components', []) for s in sources])
+    elif tamper == 'location':
+        def edit(sources, _result, _workflow):
+            for source in sources:
+                for row in source['source_details']['scenario1_case_binding']['input_components']:
+                    row['location'] = 'body'
+        exported = rewrite_result_sources(execution.result, edit)
+    elif tamper == 'component':
+        def edit(sources, _result, _workflow):
+            for source in sources:
+                for row in source['source_details']['scenario1_case_binding']['input_components']:
+                    row['component'] = 'name'
+        exported = rewrite_result_sources(execution.result, edit)
+    else:
+        def edit(sources, _result, _workflow):
+            for source in sources:
+                source['candidate_id'] = 'cand_' + '0' * 20
+                source['candidate_binding'] = 'a' * 64
+                details = source['source_details']['scenario1_case_binding']
+                details['candidate_id'] = source['candidate_id']
+                details['candidate_binding'] = source['candidate_binding']
+        exported = rewrite_result_sources(execution.result, edit)
+
+    if tamper != 'endpoint':
+        _, production_error = inspect_export(exported, run_id='run', case_id=op.case_id, execution_id='ex',
+            candidate_args=candidate_args, target=ORIGIN + '/benchmark')
+        if tamper == 'candidate':
+            assert production_error and 'ownership' in production_error
+        else:
+            assert production_error is None
+    altered_execution = replace(execution, result=exported)
+    root = tmp_path / f'run-{tamper}'
+    recorded_run(root, single_manifest(op, settings), altered_execution)
+    report = evaluate(root)
+    assert report['records'][0]['partition'] == 'invalid-result'
+    assert reason in report['records'][0]['reason']
+
+
+@pytest.mark.asyncio
+async def test_wrong_http_method_is_not_case_scoreable(tmp_path, monkeypatch, op, settings, mock_http):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    execution = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient())
+    assert execution.result is not None
+
+    def edit_method(sources, _result, _workflow):
+        for source in sources:
+            source['method'] = 'POST'
+            source['source_details']['scenario1_case_binding']['method'] = 'POST'
+
+    altered = rewrite_result_sources(execution.result, edit_method)
+    error = inspect_case_evidence(altered, op=op, candidate_args=candidate_arguments(op, settings))
+    assert error == 'evidence-case-binding:wrong-http-method'
 
 
 def test_parent_crash_and_partial_accounting(tmp_path, op, settings):

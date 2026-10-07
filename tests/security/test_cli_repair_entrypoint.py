@@ -54,8 +54,7 @@ async def test_cli_tui_real_factory_evidence_network_off_and_revoke(lab, tmp_pat
 
     async def run_app(app):
         async with app.run_test(size=(120,40)):
-            assert app.startup_splash is None
-            assert app.input_static.display and app.transcript_panel.display
+            assert app.input_static.display and app.transcript_panel.display and app.status_bar.display
             agent = app.agent
             policy = agent.prompter.execution_policy
             assert tmp_path / '.kagent' in policy.protected

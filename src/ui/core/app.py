@@ -109,7 +109,6 @@ from src.ui.widgets.permission_modal import PermissionModal
 from src.ui.widgets.provider_picker_modal import ProviderPickerModal
 from src.ui.widgets.skills_modal import SkillsModal
 from src.ui.widgets.skills_modal import SKILLS_MODAL_VISIBLE_CAP, SkillsModal
-from src.ui.widgets.startup_splash import SplashProps, StartupPhase, StartupSplash
 from src.ui.widgets.text_input_modal import TextInputModal, TextInputRequest
 from src.ui.widgets.slash_menu import SlashMenu
 from src.ui.widgets.status_bar import StatusBar, StatusProps
@@ -179,10 +178,6 @@ class AppProps:
         Callable[[], Awaitable[BurpBridgeResult]] | None
     ) = None
     resume_summary: str | None = None
-    splash_has_target: bool = False
-    splash_has_model_override: bool = False
-    splash_has_integrations: bool = False
-    show_splash: bool = False
 
 @dataclass(slots=True)
 class RunAgentOptions:
@@ -444,18 +439,6 @@ class KAgent(App):
         scrollbar-gutter: auto;
     }}
 
-    #splash-container {{
-        width: 100%;
-        height: 1fr;
-        align: center middle;
-    }}
-
-    #startup-splash {{
-        width: 100%;
-        height: auto;
-        content-align: center middle;
-        align: center middle;
-    }}
     """
 
     def __init__(self, props: AppProps):
@@ -487,13 +470,6 @@ class KAgent(App):
         self.close_burp_bridge = props.close_burp_bridge
         self.burp_bridge_status = props.burp_bridge_status
         self.resume_summary = props.resume_summary
-        self.splash_has_target = props.splash_has_target
-        self.splash_has_model_override = props.splash_has_model_override
-        self.splash_has_integrations = props.splash_has_integrations
-        self.show_splash = props.show_splash
-        self.startup_splash: StartupSplash | None = None
-        self.splash_container: Vertical | None = None
-        self.startup_task: asyncio.Task | None = None
         self.state = initial_state(
             "",
             self.banner_data,
@@ -562,43 +538,6 @@ class KAgent(App):
 
 
     def compose(self) -> ComposeResult:
-        if self.show_splash:
-            skill_cnt = None
-            if hasattr(self.agent, "skills") and hasattr(self.agent.skills, "list_enabled"):
-                try:
-                    skill_cnt = len(self.agent.skills.list_enabled())
-                except Exception:
-                    pass
-            tool_cnt = None
-            tools_obj = getattr(self.agent, "tools", None)
-            if tools_obj is not None:
-                try:
-                    if hasattr(tools_obj, "tools") and isinstance(getattr(tools_obj, "tools"), dict):
-                        tool_cnt = len(getattr(tools_obj, "tools"))
-                    elif hasattr(tools_obj, "names") and callable(getattr(tools_obj, "names")):
-                        tool_cnt = len(tools_obj.names())
-                    elif isinstance(tools_obj, (list, dict, set, tuple)):
-                        tool_cnt = len(tools_obj)
-                except Exception:
-                    pass
-
-            self.startup_splash = StartupSplash(
-                props=SplashProps(
-                    provider=self.banner_data.provider if hasattr(self, "banner_data") and self.banner_data else None,
-                    model=self.banner_data.model if hasattr(self, "banner_data") and self.banner_data else None,
-                    skill_count=skill_cnt,
-                    tool_count=tool_cnt,
-                    resumed=bool(self.resume_summary),
-                    resume_summary=self.resume_summary,
-                    has_target=self.splash_has_target,
-                    has_model_override=self.splash_has_model_override,
-                    has_integrations=self.splash_has_integrations,
-                ),
-            )
-            self.splash_container = Vertical(id="splash-container")
-            with self.splash_container:
-                yield self.startup_splash
-
         self.transcript_panel = Vertical(id="transcript-panel")
         self.transcript_panel.border_title = "Transcript"
         with self.transcript_panel:
@@ -632,11 +571,6 @@ class KAgent(App):
 
         self.status_bar = StatusBar()
         yield self.status_bar
-
-        if self.show_splash:
-            self.transcript_panel.display = False
-            self.input_static.display = False
-            self.status_bar.display = False
 
         self._render_input()
 
@@ -899,13 +833,6 @@ class KAgent(App):
         if event.button != 1:
             return
 
-        if self.startup_splash is not None and self.startup_splash.display:
-            if self.startup_task is not None and not self.startup_task.done():
-                self.startup_task.cancel()
-            self._finish_splash()
-            event.stop()
-            return
-
         modal = self._get_active_modal()
         if modal is not None:
             region = self.overlay_text_static.region
@@ -977,12 +904,6 @@ class KAgent(App):
             if self.run_abort_event is not None:
                 self.run_abort_event.set()
             self.exit()
-            return
-
-        if self.startup_splash is not None and self.startup_splash.display:
-            if self.startup_task is not None and not self.startup_task.done():
-                self.startup_task.cancel()
-            self._finish_splash()
             return
 
         if key == "escape" and self.state.busy:
@@ -1347,10 +1268,7 @@ class KAgent(App):
             self.overlay_text_static.update("")
             self.overlay_static.display = False
 
-        if self.startup_splash is not None and self.startup_splash.display:
-            self.input_static.display = False
-        else:
-            self.input_static.display = modal is None
+        self.input_static.display = modal is None
 
     def _menu_lines_to_text(self, lines) -> Text:
         text = Text()
@@ -1781,11 +1699,6 @@ class KAgent(App):
             self._snapshot_loop()
         )
 
-        if self.show_splash:
-            self.startup_task = asyncio.create_task(
-                self._run_startup_sequence()
-            )
-
     def start_cwe_enrichment(self, rest: list[str]) -> None:
         from src.ui.commands.cwe_enrichment import enrich_cwe
         if self._cwe_enrichment_closing:
@@ -1806,9 +1719,6 @@ class KAgent(App):
         if self.hang_diagnostics is not None:
             await self.hang_diagnostics.stop()
 
-        if self.startup_task is not None and not self.startup_task.done():
-            self.startup_task.cancel()
-
         if self.snapshot_task:
             self.snapshot_task.cancel()
 
@@ -1817,41 +1727,6 @@ class KAgent(App):
 
         if self.ping_task is not None:
             await self.ping_task.stop()
-
-    def _advance_splash(self, phase: StartupPhase, error: str | None = None) -> None:
-        if self.startup_splash is not None:
-            self.startup_splash.set_phase(phase, error)
-            self.refresh()
-
-    def _finish_splash(self) -> None:
-        if self.startup_splash is not None and self.startup_splash.display:
-            self.startup_splash.display = False
-            if self.splash_container is not None:
-                self.splash_container.display = False
-            self.transcript_panel.display = True
-            self.input_static.display = True
-            self.status_bar.display = True
-            if hasattr(self, "overview_static") and self.overview_static is not None and hasattr(self, "state") and self.state.banner_data:
-                width = self.transcript_log.transcript_content_width if self.transcript_log.transcript_content_width > 1 else max(1, self.cols - 5)
-                self.overview_static.update(Banner(self.state.banner_data, width=width).render_panel())
-            self._render_input()
-            self.refresh()
-
-    async def _run_startup_sequence(self) -> None:
-        try:
-            self._advance_splash("identity")
-            rows = self.startup_splash.readiness_rows() if self.startup_splash else []
-            # Runtime initialization already completed before Textual started.
-            # Show its real state without making input wait for animation.
-            for phase, _label in rows:
-                self._advance_splash(phase)
-            self._advance_splash("ready")
-        except asyncio.CancelledError:
-            return
-        except Exception as err:
-            self._advance_splash("failed", error=str(err))
-            return
-        self._finish_splash()
 
     async def _save_snapshot(self) -> None:
         if self.agent.is_running():

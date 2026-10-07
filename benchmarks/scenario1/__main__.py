@@ -20,7 +20,7 @@ def parser():
     listing.add_argument('--map', action='store_true', help='also validate all operational mappings')
     selection = commands.add_parser('select')
     selection.add_argument('--dataset', required=True, type=Path)
-    selection.add_argument('--mode', choices=['default', 'reduced'], default='default')
+    selection.add_argument('--mode', choices=['default', 'reduced', 'smoke'], default='default')
     selection.add_argument('--seed', type=int, default=DEFAULT_SEED)
     selection.add_argument('--case')
     selection.add_argument('--output', required=True, type=Path)

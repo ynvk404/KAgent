@@ -1289,7 +1289,6 @@ async def main() -> int:
             banner_data=banner_data,
             parent_signal=root_ctl,
             yolo_initial=flags.yolo,
-            show_splash=False,
 
             bind_perm_publisher=lambda publish:
                 perm_holder.update({"publish": publish}),
@@ -1304,9 +1303,6 @@ async def main() -> int:
                 notice_holder.bind(publish),
 
             resume_summary=resume_summary,
-            splash_has_target=bool(target.base_url()),
-            splash_has_model_override=bool(flags.model),
-            splash_has_integrations=bool(mcp_sessions or ingest_handle or cfg.plugins),
 
             session_debug=session_debug,
             hang_diagnostics=hang_diagnostics,

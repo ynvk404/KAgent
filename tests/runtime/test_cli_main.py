@@ -153,7 +153,7 @@ def test_target_flag_rejects_invalid_urls(url):
         parse_flags(["--target", url])
 
 
-def test_cli_target_replaces_previous_origin_and_scope_before_splash():
+def test_cli_target_replaces_previous_origin_and_scope_before_tui():
     agent = Agent(AgentOptions(
         client=FakeClient([]),
         tools=ToolRegistry(),

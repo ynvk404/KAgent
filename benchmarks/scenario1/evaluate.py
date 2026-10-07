@@ -10,7 +10,7 @@ from benchmarks.common.contracts import (CaseExecution, CLASSES, EvaluationRecor
     OperationalCaseInput, PARTITIONS, RunManifest, RuntimeSettings, decode, digest, file_hash, write_new, read_json)
 from benchmarks.common.metrics import distribution
 from benchmarks.common.recorder import Recorder, read_records, validate_lifecycle
-from .canonical import inspect_export
+from .canonical import inspect_case_evidence, inspect_export
 from .runtime import candidate_arguments
 
 EVALUATOR = 'offline-agent-assessment-v1'
@@ -135,6 +135,9 @@ def evaluate(directory: Path, *, publish=True) -> dict:
         outcome, error = inspect_export(ex.result, run_id=manifest.run_id, case_id=cid, execution_id=ex.execution_id,
                             candidate_args=candidate_arguments(ops[cid], settings),
                             target=settings.target.rstrip('/') + settings.context_path.rstrip('/'))
+        if not error and outcome in {'confirmed', 'not-confirmed'}:
+            error = inspect_case_evidence(ex.result, op=ops[cid],
+                                          candidate_args=candidate_arguments(ops[cid], settings))
         for key in ('session_id', 'candidate_id', 'objective_id'):
             if ex.runtime_metadata.get(key) != ex.result.get(key):
                 error = f'runtime/{key} mismatch'

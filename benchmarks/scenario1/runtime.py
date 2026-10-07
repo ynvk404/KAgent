@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
+import hashlib
 from pathlib import Path
 import json
 import os
 import time
 from types import SimpleNamespace
 from typing import cast
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from benchmarks.common.contracts import CaseExecution, OperationalCaseInput, RuntimeMetrics, RuntimeSettings
 from benchmarks.common.metrics import llm_metrics
@@ -43,6 +44,124 @@ def candidate_arguments(op: OperationalCaseInput, settings: RuntimeSettings) -> 
             'parameter': op.input_name, 'location': op.input_location, 'content_type': op.content_type,
             'request_template': json.dumps(fixture, sort_keys=True, separators=(',', ':')),
             'source_ref': 'operator-supplied-input'}
+
+
+def _input_components(action, op: OperationalCaseInput) -> list[dict]:
+    """Describe the designated slot without retaining request values or payloads."""
+    fields: dict[str, list[tuple[str, str]]] = {'query': [], 'body': [], 'header': [], 'cookie': []}
+    try:
+        fields['query'] = parse_qsl(urlsplit(action.url).query, keep_blank_values=True)
+    except (TypeError, ValueError):
+        pass
+    try:
+        fields['body'] = parse_qsl(action.body.decode('utf-8'), keep_blank_values=True)
+    except (AttributeError, UnicodeDecodeError, ValueError):
+        pass
+    for name, value in getattr(action, 'headers', ()):
+        if isinstance(name, bytes):
+            name = name.decode('ascii', errors='ignore')
+        if isinstance(value, bytes):
+            value = value.decode('latin-1', errors='replace')
+        fields['header'].append((str(name), str(value)))
+        if str(name).lower() == 'cookie':
+            for item in str(value).split(';'):
+                key, sep, val = item.strip().partition('=')
+                if sep and key:
+                    fields['cookie'].append((key, val))
+
+    baseline_pairs = {'query': op.query, 'body': op.body,
+                      'header': list(op.headers.items()), 'cookie': list(op.cookies.items())}
+    expected_name = op.input_name.lower() if op.input_location == 'header' else op.input_name
+    baseline = next((value for name, value in baseline_pairs[op.input_location]
+                     if (name.lower() if op.input_location == 'header' else name) == expected_name), None)
+    components: dict[tuple[str, str], list[str]] = {}
+    named_fields = []
+    for location, pairs in fields.items():
+        location_name = op.input_name.lower() if location == 'header' else op.input_name
+        named_fields.extend((location, name, value) for name, value in pairs
+                            if (name.lower() if location == 'header' else name) == location_name)
+    if named_fields:
+        slots = [(location, 'baseline' if baseline is not None and value == baseline else 'value', name)
+                 for location, name, value in named_fields]
+    else:
+        # A changed name is only a candidate when it is new relative to the
+        # fixture. The capture wrapper separately links it to an observed
+        # baseline request before the evaluator treats it as a mutation.
+        baseline_names = {}
+        for location, pairs in baseline_pairs.items():
+            baseline_names[location] = {
+                name.lower() if location == 'header' else name for name, _value in pairs}
+        slots = [(location, 'name', name) for location, pairs in fields.items()
+                 for name, value in pairs
+                 if baseline is not None and value == baseline
+                 and (name.lower() if location == 'header' else name) not in baseline_names[location]]
+    for location, component, name in slots:
+        key = (location, component)
+        components.setdefault(key, []).append(name)
+    return [
+        {'location': location, 'component': component, 'count': len(names),
+         **({'field_name_sha256': hashlib.sha256(names[0].encode()).hexdigest()}
+            if component == 'name' and len(names) == 1 else {})}
+        for (location, component), names in sorted(components.items())]
+
+
+def _bind_benchmark_evidence(policy, op: OperationalCaseInput) -> None:
+    """Bind captured live request semantics into the sealed production source row."""
+    store = policy.observations
+    capture = store.capture
+    baseline_requests: dict[tuple, str] = {}
+
+    def capture_with_case_binding(action, status, body, **kwargs):
+        if getattr(action, 'method', None) != 'OUTPUT':
+            owner = kwargs.get('owner') or {}
+            details = dict(kwargs.get('source_details') or {})
+            method = str(getattr(action, 'method', '')).upper()
+            route = urlsplit(str(getattr(action, 'url', ''))).path
+            request_hash = getattr(action, 'digest', None)
+            input_components = _input_components(action, op)
+            binding = {
+                'version': 1,
+                'case_id': op.case_id,
+                'candidate_id': owner.get('candidate_id'),
+                'candidate_binding': owner.get('candidate_binding'),
+                'request_hash': request_hash,
+                'method': method,
+                'route': route,
+                'input_name_sha256': hashlib.sha256(op.input_name.encode()).hexdigest(),
+                'input_location': op.input_location,
+                'input_component': op.input_component,
+                'input_components': input_components,
+            }
+            owner_key = (method, route, owner.get('candidate_id'),
+                         owner.get('candidate_binding'), owner.get('id'))
+            if op.input_component == 'name' and any(
+                    row['location'] == op.input_location and row['component'] == 'name'
+                    and row['count'] == 1 for row in input_components):
+                field = next(row for row in input_components
+                             if row['location'] == op.input_location and row['component'] == 'name'
+                             and row['count'] == 1)
+                prior_hash = baseline_requests.get(owner_key)
+                if prior_hash is not None:
+                    binding['name_mutation'] = {
+                        'version': 1,
+                        'from_request_hash': prior_hash,
+                        'input_name_sha256': binding['input_name_sha256'],
+                        'field_name_sha256': field['field_name_sha256'],
+                        'input_location': op.input_location,
+                    }
+            details['scenario1_case_binding'] = binding
+            kwargs['source_details'] = details
+            source_id = capture(action, status, body, **kwargs)
+            if kwargs.get('source_kind', 'native-http') == 'native-http' and (
+                    len(input_components) == 1
+                    and input_components[0] == {'location': op.input_location,
+                                                'component': 'baseline', 'count': 1}
+                    and request_hash is not None):
+                baseline_requests[owner_key] = request_hash
+            return source_id
+        return capture(action, status, body, **kwargs)
+
+    store.capture = capture_with_case_binding
 
 
 def prompt(candidate_id: str, op: OperationalCaseInput) -> str:
@@ -177,6 +296,7 @@ async def execute_case(op: OperationalCaseInput, settings: RuntimeSettings, root
     except Exception as err:
         raise BenchmarkSetupError(type(err).__name__) from err
     candidate_id = payload['candidate']['id']
+    _bind_benchmark_evidence(policy, op)
     done = None
     errors: list[str] = []
     tools = {'proposed': 0, 'result_events': 0, 'blocked': 0, 'failed': 0, 'executed': None}

@@ -203,16 +203,42 @@ class Dataset:
                 'state_mutating_cases': sorted(k for k, v in self.state_effects.items() if v)}
 
     def verify(self, manifest: RunManifest):
-        if manifest.dataset['version'] != self.version:
-            raise ValueError('dataset version changed')
-        for ref, expected in manifest.dataset['artifacts'].items():
-            if file_hash(self.root / ref) != expected:
-                raise ValueError(f'dataset artifact changed: {ref}')
-        by_id = {t.case_id: t for t in self.truth}
-        for truth, op in zip(manifest.truth, manifest.operational):
-            current = by_id[truth['case_id']]
-            if asdict(current) != truth or asdict(self.map(current)) != op:
-                raise ValueError('manifest differs from dataset mapping/truth')
+        """Rebuild the complete declared selection and compare its derived state."""
+        authoritative = Dataset(self.root)
+        try:
+            if manifest.mode == 'single':
+                if len(manifest.truth) != 1:
+                    raise ValueError('single manifest requires one case')
+                expected = select(authoritative, manifest.run_id, seed=manifest.seed,
+                                  case_id=manifest.truth[0].get('case_id'))
+            else:
+                expected = select(authoritative, manifest.run_id, mode=manifest.mode, seed=manifest.seed)
+        except MappingError as err:
+            raise ValueError(f'dataset artifact changed or mapping invalid: {err}') from err
+
+        # The runtime/reproducibility snapshots are added by the runner. All
+        # selection, dataset identity, mapping, and schedule fields are derived
+        # again here from the authoritative dataset.
+        for field in ('dataset', 'truth', 'operational', 'execution_order', 'seed', 'mode',
+                      'selection_version', 'mapping_version', 'protocol_version', 'scenario',
+                      'schema_version'):
+            if getattr(manifest, field) != getattr(expected, field):
+                if field == 'dataset':
+                    current_artifacts = expected.dataset.get('artifacts', {})
+                    declared_artifacts = manifest.dataset.get('artifacts', {})
+                    for ref, current_hash in current_artifacts.items():
+                        if declared_artifacts.get(ref) != current_hash:
+                            raise ValueError(f'dataset artifact changed or omitted: {ref}')
+                    if set(declared_artifacts) != set(current_artifacts):
+                        raise ValueError('dataset artifact set differs from authoritative selection')
+                    raise ValueError('dataset identity or derived metadata differs from authoritative dataset')
+                if field == 'execution_order':
+                    raise ValueError('manifest deterministic execution order differs from declared selection')
+                if field == 'truth':
+                    raise ValueError('manifest truth rows differ from declared selection')
+                if field == 'operational':
+                    raise ValueError('manifest operational rows differ from authoritative mapping')
+                raise ValueError(f'manifest {field} differs from declared selection')
 
 
 def select(dataset: Dataset, run_id: str, mode='default', seed=DEFAULT_SEED, case_id: str | None = None) -> RunManifest:
@@ -226,9 +252,9 @@ def select(dataset: Dataset, run_id: str, mode='default', seed=DEFAULT_SEED, cas
             raise ValueError('unknown or unsupported case ID')
         mode = 'single'
     else:
-        if mode not in {'default', 'reduced'}:
+        if mode not in {'default', 'reduced', 'smoke'}:
             raise ValueError('unknown selection mode')
-        n = 20 if mode == 'default' else 10
+        n = {'default': 20, 'reduced': 10, 'smoke': 3}[mode]
         selected = []
         for cls in CLASSES:
             for vulnerable in (True, False):

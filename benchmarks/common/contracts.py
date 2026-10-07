@@ -188,7 +188,7 @@ class RunManifest:
         identifier(self.run_id)
         if (self.selection_version, self.mapping_version, self.protocol_version, self.scenario) != (SELECTION, MAPPING, PROTOCOL, SCENARIO):
             raise ValueError("unsupported manifest protocol")
-        if self.mode not in {"default", "reduced", "single"} or type(self.seed) is not int:
+        if self.mode not in {"default", "reduced", "smoke", "single"} or type(self.seed) is not int:
             raise ValueError("invalid selection settings")
         truths = [decode(GroundTruth, r) for r in self.truth]
         ops = [decode(OperationalCaseInput, r) for r in self.operational]
@@ -198,7 +198,7 @@ class RunManifest:
         if [o.case_id for o in ops] != ids or any(t.vulnerability_class != o.vulnerability_class for t, o in zip(truths, ops)):
             raise ValueError("operational/truth identity mismatch")
         if self.mode != "single":
-            n = 20 if self.mode == "default" else 10
+            n = {"default": 20, "reduced": 10, "smoke": 3}[self.mode]
             if any(sum(t.vulnerability_class == c and t.expected_vulnerable == v for t in truths) != n for c in CLASSES for v in (True, False)):
                 raise ValueError("manifest strata counts mismatch")
         elif len(ids) != 1:

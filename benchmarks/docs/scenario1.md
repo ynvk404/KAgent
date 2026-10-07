@@ -27,7 +27,10 @@ The inspected local dataset is version 1.2, commit
 XSS 246 vulnerable / 209 safe. These counts are derived from the CSV; each
 manifest records the current counts, dataset commit/dirty state and SHA-256 of
 truth, crawler and all servlet/HTML/helper artifacts actually used. The mapping
-protocol is `benchmarkjava-request-v1`. Execution verifies the pinned files again.
+protocol is `benchmarkjava-request-v1`. Before execution, manifest verification
+reconstructs the declared selection from the current dataset and seed, then
+compares its complete dataset identity, hashes, selected rows, safety metadata
+and schedule with the manifest.
 Java/HTML sources and sink annotations never reach the Agent. They are inspected
 only in the parent for request plumbing and the target state requirement.
 
@@ -37,13 +40,16 @@ Selection protocol `sha256-rank-v1`, default seed **1729**:
 2. Rank each stratum by SHA-256 of compact, sorted-key JSON encoding of
    `["sha256-rank-v1", seed, "select", class, vulnerable_boolean, case_id]`;
    break hash ties lexicographically by case ID.
-3. Take 20 per stratum (`default`, 80), or 10 (`reduced`, 40). Fail if insufficient.
+3. Take 20 per stratum (`default`, 80), 10 (`reduced`, 40), or 3 (`smoke`, 12).
+   Smoke is a balanced development subset, not the final benchmark. Fail if a
+   stratum is too small.
 4. Store selected truth/operational rows sorted by case ID. Execution order ranks
    IDs by the same hash encoding of `["sha256-rank-v1", seed, "order", case_id]`.
 
-Single selections contain exactly one ID. A run schedules an ID once; repeat
-trials require separate run directories. Deterministic selection does not make
-LLM behavior deterministic.
+Single selections contain exactly one ID. Smoke uses the same rank formula and
+one manifest, run ID, runner, worker isolation, evaluator and report as the
+other modes. A run schedules an ID once; repeat trials require separate run
+directories. Deterministic selection does not make LLM behavior deterministic.
 
 ## Runtime and authorization
 
@@ -78,6 +84,17 @@ cache key and routine generated-artifact writes/edits under this workspace.
 Other permission requests are denied. Missing `ask_user` input raises a real
 refusal; no answer or approval is fabricated. Cross-origin requests and redirects
 keep production behavior. These grants are session-specific, never durable policy.
+
+For each captured native HTTP request, the benchmark adds a compact semantic
+binding to the sealed evidence source: Candidate ownership, method, route, and
+which location/component carried the designated input. It records no mutated
+input value. Offline scoring requires the same method and route as the selected
+case, its designated input location and name/value component, and matching
+Candidate ownership. Baseline requests can remain supporting evidence; at least
+one selected source must show mutation of the designated component. A same-origin
+request to another route, a different parameter/location/component, or evidence
+owned by another Candidate is an invalid result and receives no TP/TN/FP/FN.
+Payload mutation is allowed, so evidence need not reproduce the fixture bytes.
 
 Only bounded confirmation is requested; optional deeper impact is not requested.
 XSS outcomes requiring unavailable browser proof remain `browser-required`.
@@ -223,8 +240,11 @@ execute a pilot.
 ```bash
 venv-linux/bin/python -m benchmarks.scenario1 list --dataset /path/to/BenchmarkJava
 venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode reduced --output /tmp/scenario1-selection.json
+venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode smoke --seed 1729 --output /tmp/scenario1-smoke.json
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-smoke.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --output artifacts/benchmarks/smoke-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/smoke-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-selection.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --dry-run
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --case BenchmarkTest00013 --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state confirmation-only --output artifacts/benchmarks/smoke-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --case BenchmarkTest00013 --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state confirmation-only --output artifacts/benchmarks/single-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-selection.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --fail-fast --output artifacts/benchmarks/run-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/run-UNIQUE
 ```
