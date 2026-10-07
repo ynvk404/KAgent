@@ -8,6 +8,7 @@ import math
 from benchmarks.common.contracts import CLASSES, PARTITIONS
 from .aggregate import rate_parts
 from .model import ReportModel
+from .thesis_charts import render_thesis_charts
 
 # One palette for outcomes, metrics and vulnerability classes. Text/marks also
 # convey meaning: color is never the only way to identify a value.
@@ -245,7 +246,8 @@ def _case_charts(model: ReportModel, *, metric: str, stem: str, title: str, axis
 
 
 def render_charts(model: ReportModel) -> dict[str, bytes]:
-    return {'charts/confusion-matrix.svg': confusion_matrix(model),
+    return {**render_thesis_charts(model),
+            'charts/confusion-matrix.svg': confusion_matrix(model),
             'charts/class-metrics.svg': class_metrics(model),
             'charts/evaluation-partitions.svg': evaluation_partitions(model),
             **_case_charts(model, metric='agent_seconds', stem='processing-time',

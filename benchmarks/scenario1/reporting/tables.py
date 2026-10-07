@@ -1,4 +1,4 @@
-"""Deterministic CSV tables with empty cells for unavailable values."""
+"""Canonical CSV tables and a separate deterministic thesis presentation."""
 from __future__ import annotations
 
 import csv
@@ -7,6 +7,7 @@ from io import StringIO
 from benchmarks.common.contracts import PARTITIONS
 from .aggregate import COUNTS, RATES, partition_rows, summary_rows
 from .model import ReportModel
+from .thesis import render_thesis_tables
 
 CASE_FIELDS = (
     'case_id', 'vulnerability_class', 'expected_vulnerable', 'agent_outcome',
@@ -34,6 +35,7 @@ def render_tables(model: ReportModel) -> dict[str, bytes]:
                  'reason': case['evaluator_reason'], 'manual_root_cause': ''}
                 for case in model.cases if case['evaluator_partition'] != 'evaluable']
     return {
+        'thesis-tables.md': render_thesis_tables(model),
         'summary.csv': csv_bytes(summary_fields, summary_rows(model)),
         'partitions.csv': csv_bytes(partition_fields, partition_rows(model)),
         'per-case.csv': csv_bytes(CASE_FIELDS, list(model.cases)),

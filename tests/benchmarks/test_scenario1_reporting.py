@@ -7,6 +7,7 @@ import hashlib
 from io import StringIO
 import json
 from pathlib import Path
+from typing import Any
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -20,6 +21,9 @@ from benchmarks.scenario1.reporting.aggregate import partition_rows, summary_row
 from benchmarks.scenario1.reporting.charts import render_charts
 from benchmarks.scenario1.reporting.loader import load_report, presentation_id
 from benchmarks.scenario1.reporting.tables import render_tables
+from benchmarks.scenario1.reporting.thesis import (class_cases, format_decimal,
+    render_thesis_tables, resource_summary)
+from benchmarks.scenario1.reporting.thesis_charts import FIGURE_NAMES, render_thesis_charts
 from benchmarks.scenario1.reporting.writer import write_report
 from tests.benchmarks.test_scenario1 import op, settings, single_manifest
 
@@ -1108,6 +1112,9 @@ def test_case_chart_pagination_inventory_and_common_scale(count):
     assert charts == render_charts(model)
     pages = max(1, (count + 19) // 20)
     expected = {'charts/class-metrics.svg', 'charts/evaluation-partitions.svg', 'charts/confusion-matrix.svg'}
+    expected.update({'charts/scenario1-validation-quality.svg',
+                     'charts/scenario1-processing-time-median.svg',
+                     'charts/scenario1-total-tokens-median.svg'})
     for stem in ('processing-time', 'total-tokens'):
         names = [f'charts/{stem}.svg', *[f'charts/{stem}-{p:02d}.svg' for p in range(2, pages + 1)]]
         expected.update(names)
@@ -1139,7 +1146,9 @@ def test_chart_visual_language_metric_casing_and_class_colors():
     from benchmarks.scenario1.reporting.charts import COLORS
     charts = render_charts(_chart_model([_chart_case(0), _chart_case(1)]))
     styles = []
-    for contents in charts.values():
+    for name, contents in charts.items():
+        if name.startswith('charts/scenario1-'):
+            continue  # Selected thesis typography is checked separately below.
         tree = ET.fromstring(contents)
         styles.append(_element(tree, 's:style').text)
         texts = tree.findall('s:text', SVG_NS)
@@ -1216,3 +1225,314 @@ def test_class_metrics_bar_lengths_and_displayed_fractions_use_canonical_rates()
     assert [float(r.attrib['width']) for r in filled] == pytest.approx([470 * r for r in (.75, .6, 2 / 6, 10 / 12)] * 2, abs=.001)
     text = _svg_text(data)
     assert all(text.count(fraction) == 2 for fraction in ('75.0% (3/4)', '60.0% (3/5)', '33.3% (2/6)', '83.3% (10/12)'))
+
+
+def _thesis_case(index, **changes):
+    from benchmarks.scenario1.reporting.tables import CASE_FIELDS
+    case: dict[str, Any] = {field: None for field in CASE_FIELDS}
+    case.update(_chart_case(index), expected_vulnerable=True, agent_outcome='confirmed',
+                evaluator_partition='evaluable', evaluator_reason='accepted-agent-assessment',
+                confusion='TP', worker_status='completed', llm_calls=2, tool_executed=3,
+                http_dispatch_attempts=4, http_admitted=999)
+    case.update(changes)
+    return case
+
+
+def _thesis_model(cases):
+    model = _chart_model(cases)
+    records = [{'partition': c['evaluator_partition'], 'confusion': c['confusion']} for c in cases]
+    model.metrics['overall'] = _group(records)
+    model.metrics['classes'] = {cls: _group([r for r, c in zip(records, cases)
+        if c['vulnerability_class'] == cls]) for cls in CLASSES}
+    return model
+
+
+def _md_rows(contents, panel):
+    section = contents.decode().split(f'## {panel} — ', 1)[1].split('\n## ', 1)[0]
+    return [[cell.strip() for cell in line.strip('|').split('|')]
+            for line in section.splitlines() if line.startswith('|')][2:]
+
+
+def _thesis_values(contents):
+    tree = ET.fromstring(contents)
+    groups = tree.findall('s:g[@data-class]', SVG_NS)
+    return [_element(g, 's:text[@class="right number"]').text for g in groups]
+
+
+def test_thesis_quality_canonical_fractions_geometry_and_zero_denominator():
+    model = _thesis_model([])
+    model.metrics['classes'][CLASSES[0]] = {'TP': 3, 'FN': 1, 'FP': 2, 'TN': 4,
+        'evaluable': 10, 'scheduled': 12, 'recall': .75, 'precision': .6,
+        'fpr': 2 / 6, 'evaluability': 10 / 12}
+    data = render_thesis_charts(model)['charts/scenario1-validation-quality.svg']
+    tree = ET.fromstring(data)
+    groups = tree.findall('s:g', SVG_NS)
+    assert [(g.get('data-class'), g.get('data-metric')) for g in groups] == [
+        (cls, rate) for cls in CLASSES for rate in ('recall', 'precision', 'fpr', 'evaluability')]
+    widths = [float(r.attrib['width']) for r in tree.findall('.//s:rect[@class="filled"]', SVG_NS)]
+    assert widths == pytest.approx([295 * r for r in (.75, .6, 2 / 6, 10 / 12)], abs=.001)
+    assert len(tree.findall('.//s:rect[@class="track"]', SVG_NS)) == 8
+    text = _svg_text(data)
+    assert all(label in text for label in ('75,0% (3/4)', '60,0% (3/5)', '33,3% (2/6)', '83,3% (10/12)'))
+    assert text.count('NA (0/0)') == 4
+    zero = _thesis_model([_thesis_case(0, confusion='TN', expected_vulnerable=False)])
+    text = _svg_text(render_thesis_charts(zero)['charts/scenario1-validation-quality.svg'])
+    assert '0,0% (0/1)' in text and 'NA (0/0)' in text
+    assert all(text.count(label) == 2 for label in ('Recall', 'Precision', 'FPR', 'Evaluability'))
+
+
+def test_thesis_parent_completed_cohort_includes_unresolved_invalid_and_retains_failures():
+    cases = [_thesis_case(0, agent_seconds=10, total_tokens=1000),
+             _thesis_case(2, agent_seconds=20, total_tokens=2000,
+                          evaluator_partition='unresolved', confusion=None),
+             _thesis_case(4, agent_seconds=30, total_tokens=3000,
+                          evaluator_partition='invalid-result', confusion=None),
+             _thesis_case(6, final_status='budget-exhausted', agent_seconds=1000,
+                          total_tokens=8000, evaluator_partition='execution-failed', confusion=None),
+             _thesis_case(1, final_status='crashed', agent_seconds=0, total_tokens=0,
+                          evaluator_partition='execution-failed', confusion=None)]
+    model = _thesis_model(cases)
+    charts = render_thesis_charts(model)
+    assert _thesis_values(charts[f'charts/{FIGURE_NAMES[1]}.svg']) == ['20,0', 'NA']
+    assert _thesis_values(charts[f'charts/{FIGURE_NAMES[2]}.svg']) == ['2,0', 'NA']
+    md = render_thesis_tables(model)
+    assert _md_rows(md, 'T2A')[0] == ['SQLi', '3/3', '20,0', '20,0', '30,0', '10,0–30,0']
+    assert _md_rows(md, 'T2C') == [
+        ['SQLi / Hết ngân sách', '1', '1000,0<br>1/1', '8,0<br>1/1'],
+        ['XSS / Sự cố', '1', '0,0<br>1/1', '0,0<br>1/1']]
+    assert _md_rows(md, 'T3')[0] == ['SQLi', '14.000<br>4/4', '8<br>4/4', '12<br>4/4', '16<br>4/4']
+    assert 'Execution chưa hoàn tất xem T2C.' in md.decode()
+
+
+def test_thesis_metric_specific_coverage_fractional_median_pooled_and_shared_p95():
+    from benchmarks.common.metrics import distribution
+    cases = [_thesis_case(0, agent_seconds=None, total_tokens=100),
+             _thesis_case(2, agent_seconds=10, total_tokens=101),
+             _thesis_case(1, agent_seconds=100, total_tokens=300, total_tokens_complete=False),
+             _thesis_case(3, agent_seconds=200, total_tokens=None)]
+    model = _thesis_model(cases)
+    sql = class_cases(model, CLASSES[0], completed=True)
+    assert resource_summary(sql, 'total_tokens').median == 100.5
+    md = render_thesis_tables(model)
+    assert _md_rows(md, 'T2A')[0][1:] == ['1/2', '10,0', '10,0', '10,0', '10,0–10,0']
+    assert _md_rows(md, 'T2B')[0][1:] == ['2/2', '0,1', '0,1', '0,1', '0,1–0,1']
+    pooled = resource_summary(class_cases(model, None, completed=True), 'agent_seconds')
+    assert (pooled.median, pooled.mean, pooled.p95) == (100, 310 / 3, 200)
+    assert _md_rows(md, 'T2A')[2][1:] == ['3/4', '100,0', '103,3', '200,0', '10,0–200,0']
+    # 20 values distinguish nearest-rank from interpolation and max.
+    stats = resource_summary([_thesis_case(i, agent_seconds=i + 1) for i in range(20)], 'agent_seconds')
+    assert (stats.median, stats.p95) == (10.5, distribution(list(range(1, 21)))['p95'])
+    assert stats.p95 == 19
+    fractional = _thesis_model([_thesis_case(0, total_tokens=1050), _thesis_case(2, total_tokens=1051)])
+    assert resource_summary(fractional.cases, 'total_tokens').median == 1050.5
+    assert _thesis_values(render_thesis_charts(fractional)[f'charts/{FIGURE_NAMES[2]}.svg'])[0] == '1,1'
+
+
+@pytest.mark.parametrize('metric', ['total_tokens', 'llm_calls', 'tool_executed', 'http_dispatch_attempts'])
+@pytest.mark.parametrize('bad', [None, True, -1, 1.5, '2'])
+def test_thesis_all_workload_metrics_require_complete_schedule(metric, bad):
+    cases = [_thesis_case(0), _thesis_case(2, **{metric: bad}), _thesis_case(1)]
+    model = _thesis_model(cases)
+    stats = resource_summary(class_cases(model, CLASSES[0]), metric)
+    assert (stats.available, stats.eligible, stats.total) == (1, 2, None)
+    position = ('total_tokens', 'llm_calls', 'tool_executed', 'http_dispatch_attempts').index(metric) + 1
+    rows = _md_rows(render_thesis_tables(model), 'T3')
+    assert rows[0][position] == 'NA<br>1/2'
+    assert rows[2][position] == 'NA<br>2/3'
+    assert all(rows[0][i] != 'NA<br>1/2' for i in range(1, 5) if i != position)
+
+
+@pytest.mark.parametrize('complete', [False, None, 'true', 1])
+def test_thesis_partial_tokens_and_admissions_never_substitute(complete):
+    case = _thesis_case(0, total_tokens=8888, total_tokens_complete=complete,
+                        input_tokens=8000, output_tokens=888, http_dispatch_attempts=None,
+                        observed_sum=8888)
+    model = _thesis_model([case])
+    md = render_thesis_tables(model)
+    assert _md_rows(md, 'T3')[0] == ['SQLi', 'NA<br>0/1', '2<br>1/1', '3<br>1/1', 'NA<br>0/1']
+    assert _thesis_values(render_thesis_charts(model)[f'charts/{FIGURE_NAMES[2]}.svg']) == ['NA', 'NA']
+
+
+def test_thesis_noncompleted_status_groups_have_independent_availability():
+    cases = [_thesis_case(0, final_status='timeout', agent_seconds=5, total_tokens_complete=False),
+             _thesis_case(2, final_status='timeout', agent_seconds=None, total_tokens=2000),
+             _thesis_case(4, final_status='crashed', agent_seconds=40, total_tokens=4000)]
+    md = render_thesis_tables(_thesis_model(cases))
+    assert _md_rows(md, 'T2C') == [['SQLi / Sự cố', '1', '40,0<br>1/1', '4,0<br>1/1'],
+                                ['SQLi / Quá thời gian', '2', '5,0<br>1/2', '2,0<br>1/2']]
+
+
+def test_thesis_missing_final_status_ledger_preserves_partitions_and_source():
+    cases = [_thesis_case(0, final_status=None, evaluator_partition='execution-failed', confusion=None,
+                          agent_seconds=None, total_tokens=None),
+             _thesis_case(2, final_status=None, evaluator_partition='not-run', confusion=None,
+                          agent_seconds=None, total_tokens=None)]
+    model = _thesis_model(cases)
+    before = json.dumps(model.cases, sort_keys=True)
+    md = render_thesis_tables(model)
+    assert _md_rows(md, 'T1A')[0] == ['SQLi', '2', '0', '0', '1', '0', '1']
+    assert _md_rows(md, 'Ledger') == [
+        ['SQLi', 'Lỗi thực thi', '1', 'NA<br>0/1', 'NA<br>0/1'],
+        ['SQLi', 'Chưa chạy', '1', 'NA<br>0/1', 'NA<br>0/1']]
+    assert _md_rows(md, 'T2A')[0][1] == '0/0'
+    assert _md_rows(md, 'T3')[0][1] == 'NA<br>0/2'
+    assert '## T2C' not in md.decode() and 'Case thiếu trạng thái kết thúc xem Ledger.' in md.decode()
+    assert json.dumps(model.cases, sort_keys=True) == before
+    assert all(c['final_status'] is None for c in model.cases)
+
+
+@pytest.mark.parametrize('started', [True, False])
+def test_thesis_no_finish_and_not_run_bound_loader_integration(tmp_path, op, settings, started):
+    root, _ = _evaluated_run(tmp_path, op, settings, started=started, finish=False, result=started)
+    model = load_report(root)
+    md = render_thesis_tables(model)
+    partition_label = 'Lỗi thực thi' if started else 'Chưa chạy'
+    assert _md_rows(md, 'Ledger')[0][1:3] == [partition_label, '1']
+    assert model.cases[0]['final_status'] is None
+    assert model.cases[0]['agent_seconds'] is None  # Unbound orphan cannot supply resources.
+    assert _md_rows(md, 'T3')[2][1:] == ['NA<br>0/1'] * 4
+
+
+def test_thesis_parent_precedence_bound_loader_integration(tmp_path, op, settings):
+    root, _ = _fixture(tmp_path, single_manifest(op, settings), parent_status='crashed', worker_status='completed')
+    model = load_report(root)
+    assert _md_rows(render_thesis_tables(model), 'T2A')[2][1:] == ['0/0', 'NA', 'NA', 'NA', 'NA']
+    assert _md_rows(render_thesis_tables(model), 'T2C')[0][1:] == ['1', '1,2<br>1/1', 'NA<br>0/1']
+
+
+@pytest.mark.parametrize('mode', ['empty', 'zero', 'missing'])
+def test_thesis_empty_all_na_and_measured_zero_render_without_fake_marks(mode):
+    cases = [] if mode == 'empty' else [_thesis_case(0, agent_seconds=0 if mode == 'zero' else None,
+        total_tokens=0 if mode == 'zero' else None, llm_calls=0 if mode == 'zero' else None,
+        tool_executed=0 if mode == 'zero' else None, http_dispatch_attempts=0 if mode == 'zero' else None)]
+    model = _thesis_model(cases)
+    md = render_thesis_tables(model)
+    assert _md_rows(md, 'T3')[0][1:] == [
+        '0<br>1/1' if mode == 'zero' else 'NA<br>0/0' if mode == 'empty' else 'NA<br>0/1'] * 4
+    charts = render_thesis_charts(model)
+    for name in FIGURE_NAMES[1:]:
+        data = charts[f'charts/{name}.svg']
+        assert _thesis_values(data) == (['0,0', 'NA'] if mode == 'zero' else ['NA', 'NA'])
+        assert not ET.fromstring(data).findall('.//s:rect[@class="filled"]', SVG_NS)
+        assert '0' in _svg_text(data)
+        if name == FIGURE_NAMES[2]:
+            assert '0,25' in _svg_text(data) and '0,75' in _svg_text(data)
+
+
+@pytest.mark.parametrize('value,expected', [(0, '0,0'), (.0001, '<0,1'), (.05, '<0,1'), (.1, '0,1')])
+def test_thesis_small_positive_rounding_does_not_claim_zero(value, expected):
+    assert format_decimal(value) == expected
+    model = _thesis_model([_thesis_case(0, agent_seconds=value)])
+    assert _thesis_values(render_thesis_charts(model)[f'charts/{FIGURE_NAMES[1]}.svg'])[0] == expected
+
+
+def test_thesis_visible_text_physical_size_typography_and_colors():
+    import re
+    cases = [_thesis_case(0, agent_seconds=20, total_tokens=200000),
+             _thesis_case(1, agent_seconds=40, total_tokens=400000)]
+    charts = render_thesis_charts(_thesis_model(cases))
+    assert set(charts) == {f'charts/{name}.svg' for name in FIGURE_NAMES}
+    resource_colors = []
+    for name, contents in charts.items():
+        tree = ET.fromstring(contents)
+        validation = name.endswith('validation-quality.svg')
+        assert tree.attrib['width'] == '16.5cm'
+        assert tree.attrib['height'] == ('11cm' if validation else '5cm')
+        assert tree.attrib['viewBox'] == ('0 0 660 440' if validation else '0 0 660 200')
+        style = _element(tree, 's:style').text or ''
+        assert 'Arial,sans-serif' in style
+        printed_fonts = [float(s) * 16.5 / 2.54 * 72 / 660 for s in re.findall(r'font-size:([\d.]+)px', style)]
+        assert min(printed_fonts) >= 10 and 10.5 <= printed_fonts[0] <= 11
+        assert 11 <= printed_fonts[1] <= 12
+        assert _element(tree, 's:title').text and _element(tree, 's:desc').text
+        visible = _svg_text(contents)
+        assert all(label in visible for label in ('SQLi', 'XSS'))
+        forbidden = ('Overall', 'Tổng', 'Development', 'smoke', 'completed', 'retained',
+                     'agent_seconds', 'total_tokens', 'provider', 'model', 'scenario1-',
+                     'report', 'Ledger', 'canonical', 'data-', 'Case ', 'latency', 'QA', 'T2')
+        assert not any(word in visible for word in forbidden)
+        assert not re.search(r'[0-9a-f]{32,}|\b\d+[a-f][0-9a-f]{15,}', visible)
+        assert all(c['case_id'] not in visible for c in cases)
+        # Hidden accessibility metadata is intentionally allowed to mention cohorts.
+        if not validation:
+            assert 'Parent-completed' in (_element(tree, 's:desc').text or '')
+            resource_colors.append([r.attrib['fill'] for r in tree.findall('.//s:rect[@class="filled"]', SVG_NS)])
+            assert len(resource_colors[-1]) == 2
+        assert not tree.findall('.//s:circle', SVG_NS) and not tree.findall('.//s:path', SVG_NS)
+    assert resource_colors == [['#285c79', '#6b5b83']] * 2
+    assert 'Trung vị thời gian (s)' in _svg_text(charts[f'charts/{FIGURE_NAMES[1]}.svg'])
+    assert 'Trung vị tổng token (nghìn)' in _svg_text(charts[f'charts/{FIGURE_NAMES[2]}.svg'])
+
+
+@pytest.mark.parametrize('count', [40, 80])
+def test_thesis_large_schedule_accounting_determinism_and_csv_preservation(count):
+    from benchmarks.scenario1.reporting.tables import CASE_FIELDS, csv_bytes
+    cases = [_thesis_case(i, agent_seconds=i + 1, total_tokens=(i + 1) * 1000,
+                          evaluator_partition=PARTITIONS[i % 5],
+                          confusion='TP' if i % 5 == 0 else None,
+                          final_status='completed' if i % 5 < 3 else 'timeout' if i % 5 == 3 else None)
+             for i in range(count)]
+    model = _thesis_model(cases)
+    before = json.dumps({'cases': model.cases, 'metrics': model.metrics}, sort_keys=True)
+    files = {**render_tables(model), **render_charts(model)}
+    assert files == {**render_tables(model), **render_charts(model)}
+    assert files['per-case.csv'] == csv_bytes(CASE_FIELDS, cases)
+    assert list(_csv(files['per-case.csv'])[0]) == list(CASE_FIELDS)
+    assert _csv(files['summary.csv']) == [{k: '' if v is None else str(v) for k, v in r.items()} for r in summary_rows(model)]
+    assert _csv(files['partitions.csv']) == [{k: str(v) for k, v in r.items()} for r in partition_rows(model)]
+    expected_abnormal = [{'case_id': c['case_id'], 'partition': c['evaluator_partition'],
+                         'reason': c['evaluator_reason'], 'manual_root_cause': ''}
+                        for c in cases if c['evaluator_partition'] != 'evaluable']
+    assert _csv(files['abnormal-analysis-template.csv']) == expected_abnormal
+    md = files['thesis-tables.md']
+    for row in _md_rows(md, 'T1A'):
+        assert sum(map(int, row[2:])) == int(row[1])
+    assert _md_rows(md, 'T1A')[2][1:] == [str(count), *[str(count // 5)] * 5]
+    assert _md_rows(md, 'T1B')[2][1:] == [str(count // 5), '0', '0', '0']
+    assert int(_md_rows(md, 'T2A')[2][1].split('/')[1]) + sum(int(r[1]) for r in _md_rows(md, 'T2C')) + sum(int(r[2]) for r in _md_rows(md, 'Ledger')) == count
+    assert _md_rows(md, 'T3')[2][1:] == [f'{count * (count + 1) // 2 * 1000:,}'.replace(',', '.') + f'<br>{count}/{count}',
+                                       f'{count * 2}<br>{count}/{count}', f'{count * 3}<br>{count}/{count}', f'{count * 4}<br>{count}/{count}']
+    assert json.dumps({'cases': model.cases, 'metrics': model.metrics}, sort_keys=True) == before
+
+
+def test_thesis_writer_new_inventory_and_repeatable_bytes(tmp_path, op, settings):
+    root, _ = _fixture(tmp_path, single_manifest(op, settings))
+    first = write_report(root)
+    inventory = json.loads((first / 'report.json').read_text())['output_files']
+    assert inventory == sorted(str(p.relative_to(first)) for p in first.rglob('*') if p.is_file())
+    assert len(inventory) == 14 and 'thesis-tables.md' in inventory
+    assert all(f'charts/{name}.svg' in inventory for name in FIGURE_NAMES)
+    second = write_report(root, root / 'thesis-again')
+    assert all((first / name).read_bytes() == (second / name).read_bytes() for name in inventory)
+
+
+@pytest.mark.parametrize('classification,qualifier,label', [
+    ('development', 'smoke', 'Development / smoke'), ('development', None, 'Development'),
+    ('official', None, 'Official — phân loại do người vận hành'),
+    ('unknown', None, 'Chưa khai báo trạng thái Official')])
+def test_thesis_companion_classification_and_captions(classification, qualifier, label):
+    model = _thesis_model([])
+    model.metadata.update(classification=classification, classification_qualifier=qualifier)
+    md = render_thesis_tables(model).decode()
+    assert label in md
+    assert all(f'**F{i} — ' in md for i in (1, 2, 3))
+    if qualifier == 'smoke':
+        assert 'không phải kết quả luận văn chính thức' in md
+
+
+def test_thesis_large_integer_tokens_keep_exact_fractional_median_and_finite_geometry():
+    from decimal import Decimal
+    a = 2 ** 54
+    cases = [_thesis_case(0, total_tokens=a), _thesis_case(2, total_tokens=a + 1)]
+    assert resource_summary(cases, 'total_tokens').median == Decimal(a) + Decimal('.5')
+    huge = 10 ** 400
+    stats = resource_summary([_thesis_case(0, total_tokens=huge),
+                              _thesis_case(2, total_tokens=huge + 1)], 'total_tokens')
+    assert stats.median == Decimal(str(huge) + '.5')
+    model = _thesis_model([_thesis_case(0, total_tokens=huge, agent_seconds=1e308),
+                          _thesis_case(2, total_tokens=huge + 1, agent_seconds=1e308)])
+    charts = render_thesis_charts(model)
+    for name in FIGURE_NAMES[1:]:
+        data = charts[f'charts/{name}.svg']
+        assert 'inf' not in _svg_text(data).lower()
+        assert all(0 <= float(r.attrib['width']) <= 400 for r in ET.fromstring(data).findall('.//s:rect[@class="filled"]', SVG_NS))

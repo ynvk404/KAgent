@@ -312,7 +312,7 @@ venv-linux/bin/python -m benchmarks.scenario1 report --run artifacts/benchmarks/
 `report` reads an existing manifest, evaluation, case results, lifecycle events,
 and optional run classification; it does not run the evaluator, worker, Agent,
 provider, or target. It writes `report.json`, `summary.csv`, `partitions.csv`,
-`per-case.csv`, an abnormal-analysis template, and five static SVG chart types under
+`per-case.csv`, an abnormal-analysis template, `thesis-tables.md`, and eight static SVG chart types under
 `<run>/report/`. Use `--evaluation evaluation-<identity>.json` when the run has
 multiple evaluation artifacts. `--output` may select another new directory
 inside the same run. An existing output directory is rejected without overwrite.
@@ -375,10 +375,10 @@ process kill can leave private staging; power-loss durability of the final renam
 is not guaranteed. Partition SVGs include all five labeled counts (including
 zeros), patterned segments and a count table, with text outside small segments.
 
-The main report figures are `charts/class-metrics.svg`,
+The compatibility report figures are `charts/class-metrics.svg`,
 `charts/evaluation-partitions.svg`, `charts/processing-time.svg` and
 `charts/total-tokens.svg`; `charts/confusion-matrix.svg` is an appendix figure.
-All figures share Arial, title/classification/subtitle placement, typography,
+These compatibility figures share Arial, title/classification/subtitle placement, typography,
 borders and number formatting. Accepted/evaluable results use green; unresolved
 uses ochre, failures red, invalid results purple and unrun cases gray. Partition
 patterns and explicit counts, metric labels, class labels and NA text preserve
@@ -401,9 +401,75 @@ row order, with run-local labels `Case 01`, `Case 02`, etc. The SVG observation'
 the ordinal is a display aid, not a new canonical case identity. Each page shows
 at most 20 observations, with a shared scale across pages of the same metric.
 Additional pages use `processing-time-02.svg`, `total-tokens-02.svg`, etc.; all
-are listed in `report.json`. Insert pages individually in Word to keep labels
+are listed in `report.json`. If selected as supplementary figures, insert pages individually to keep labels
 readable. Values use one decimal for seconds and integer token totals; large
 values use scientific notation. CSV field names and schemas remain unchanged.
+
+### Selected thesis presentation
+
+The default thesis selection is exactly three separate, full-width figures:
+
+| Figure | File under `charts/` | Quantity |
+|---|---|---|
+| F1 | `scenario1-validation-quality.svg` | Recall, Precision, FPR, Evaluability in SQLi then XSS blocks |
+| F2 | `scenario1-processing-time-median.svg` | Median available Agent interval for parent-completed cases, seconds |
+| F3 | `scenario1-total-tokens-median.svg` | Median complete total tokens for parent-completed cases, thousands |
+
+`thesis-tables.md` is a deterministic presentation projection with suggested
+captions and classification context, T1A outcomes, T1B evaluable-only confusion
+counts, T2A time, T2B tokens, conditional T2C non-completed resources, a separate
+missing-final-status ledger when needed, and T3 workload for the entire schedule.
+Table row order is SQLi/XSS/Tổng. Existing CSV schemas, canonical metrics,
+per-case ordering/identifiers and compatibility SVG behavior are preserved.
+New exports list these four additions in `report.json.output_files`; an existing
+smoke report is never migrated or overwritten. A 12-case export now has 14 files;
+larger schedules retain compatibility pagination and three fixed thesis SVGs.
+
+F1 uses canonical rates and fractions on a fixed 0–100% scale. A zero denominator
+is `NA (0/0)`; a measured zero is `0,0% (0/d)`. No overall/composite score is drawn.
+F2/F3 use parent `final_status=completed`, including unresolved/invalid-result
+cases with usable measurements. Worker status cannot override parent status.
+Token totals require completeness true and a valid nonnegative integer, retaining
+fractional medians before formatting. Time/token availability is independent;
+unavailable values are NA and measured zero is `0,0`, with no artificial marks.
+Linear axes start at zero and are rounded from the displayed class medians.
+
+T2 gives median, mean, nearest-rank-ceiling p95 and min–max, with available/eligible
+coverage for each metric. Overall statistics are recomputed from pooled cases.
+T2C groups each actual non-completed parent status separately, keeps retained
+intervals and complete tokens with independent n/N availability, and does not
+call those intervals time-to-completion. Cases without a final status stay in a
+separate ledger grouped by class and evaluator partition. Its display label
+“Không có trạng thái kết thúc” never becomes a canonical status; not-run stays
+in evaluation/scheduled accounting and is not described as an executed case.
+The ledger does not infer start/finish information from worker diagnostics.
+Resource captions reference T2C/ledger when present.
+
+Every T3 metric (complete total tokens, logical LLM invocations, policy-started
+tool invocations, native HTTP dispatch attempts) requires N>0 and valid measured
+consumption for all N scheduled cases to display a full aggregate. Otherwise it
+shows NA and n/N; missing is never zero and known-case sums are not full totals.
+Valid non-completed consumption is included. HTTP dispatch is always a column;
+legacy missing counts remain NA (0/N), never backfilled from admission. Tool calls
+are not successful-tool counts, and HTTP attempts do not prove delivery/success.
+No Agent interval sum is presented as elapsed benchmark time.
+
+Insert selected SVGs at 16–17 cm wide (target 16.5 cm) on A4 portrait; F1 is
+16.5×11 cm, F2/F3 each 16.5×5 cm. Do not place the resource figures side by side
+at half-page width. The 660-unit viewBox uses Arial/sans-serif: body/value 15 units
+(about 10.6 pt), class labels 16 (11.3 pt), ticks 14.2 (10.1 pt). Only labels,
+units, ticks and values are visible; title/desc accessibility metadata is hidden.
+Captions, cohort definitions, availability and smoke/development classification
+stay in the companion Markdown. Smoke illustrations are not official results.
+
+Resource colors are SQLi `#285c79`, XSS `#6b5b83`; F1 uses blue Recall, green
+Precision, red FPR and neutral gray Evaluability. Class/metric text preserves
+meaning in grayscale. White backgrounds, solid bars and light grids have no
+decorative effects. Vietnamese numeric labels use a decimal comma and one
+decimal place; tiny positive values that would round to zero display `<0,1`.
+T3 exact counts use a dot thousands separator. CSV numeric precision is unchanged.
+Physical readability/color/grayscale QA is separate from regression correctness;
+actual Word import/font substitution must be checked on a Word host.
 
 Dry-run only parses/maps/selects/verifies source hashes and local runtime settings;
 it creates no Agent/client/worker, performs no provider probe/target health check,
