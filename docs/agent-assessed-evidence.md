@@ -6,9 +6,9 @@ loaded skill to interpret controls, repeatability, alternative explanations,
 impact and severity. Admissible evidence does not establish vulnerability truth.
 
 `workflow.record_result` accepts both terminal outcomes without calling a class
-verifier. The built-in SQLi verifier module has been retired. The legacy
-`VerifiedResult` and certificate readers in `observations.py` remain available
-for compatibility; new assessments do not depend on them.
+verifier. Production startup does not register SQLi verifiers. The legacy
+`VerifiedResult`, verifier functions and certificate readers remain available for
+compatibility and explicit diagnostics; new assessments do not depend on them.
 
 ## Attempt and submission contract
 
@@ -29,9 +29,11 @@ for compatibility; new assessments do not depend on them.
    `completed_attempt=true` for the declared bounded scope.
 
 `related_requests` declares up to 16 exact method/URL/role associations on the
-same origin: baseline, control, trigger, readback, cleanup or auxiliary. Required
-steps need completed sources in a terminal manifest; cleanup defaults optional
-and still needs separate action authority. Runtime checks that the required
+same origin: baseline, control, trigger, readback, cleanup or auxiliary.
+Associations must be unambiguous: duplicate method/URL declarations are rejected
+before an attempt opens, and persisted ambiguous declarations are inadmissible.
+Required steps need completed sources in a terminal manifest; cleanup defaults
+optional and still needs separate action authority. Runtime checks that the required
 execution exists, while the Agent judges whether the controls are meaningful.
 Optional excerpts bind a primary source ID, byte range and SHA256 of that range
 in its retained redacted body. They cannot substitute for their parent source.
@@ -87,9 +89,11 @@ Coverage, requested goals and production completion resolve accepted structured
 assessments. `ConfirmFindingTool` requires the latest accepted confirmed revision,
 intact artifact/source bindings, current request identity, and completed coverage
 synchronization. It adopts assessed severity/impact rather than caller prose.
-Reports bind result ID, attempt ID, source and version. Retrying a historical
-Candidate report against a new revision cannot mark that report as the new
-Finding. Collision-safe storage and same-revision retries retain existing paths
+Reports bind result ID, attempt ID, source and version. Exporting a historical
+report cannot treat a stale structural binding as a current Finding; export
+records structural admissibility without opening proof contents. Retrying a
+historical Candidate report against a new revision cannot mark that report as
+the new Finding. Collision-safe storage and same-revision retries retain existing paths
 and modes. CWE classification remains a separate responsibility.
 
 Selected source storage is bounded to 256 entries / 16 MiB. Each result manifest

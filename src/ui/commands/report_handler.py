@@ -19,7 +19,7 @@ from src.ui.core.state import Append, TranscriptEntry
 from src.version import VERSION
 from src.workflow.review import review_snapshot, confirmation_binding
 from src.workflow.state import WorkflowState, validation_result_fingerprint
-from src.workflow.assessment import assessment_provenance
+from src.workflow.assessment import accepted_result, assessment_provenance
 
 _IN_FLIGHT: dict[int, asyncio.Task] = {}
 
@@ -45,7 +45,12 @@ def capture_workflow(state: WorkflowState, target: str, policy=None) -> dict[str
     global_latest = {r.candidate_id: r for r in state.validation_results}
     bindings = {cid: confirmation_binding(state, cid) for cid in selected if cid in global_latest}
     projections = {}
+    admissibility = {id(r): accepted_result(state, selected[r.candidate_id], r, policy)
+                     for r in results if r.assessment_contract_version >= 2}
     for r in results:
+        if admissibility.get(id(r)) is False:
+            projections[id(r)] = None
+            continue
         try:
             endpoint, parameter, context = project_candidate_coverage(state, selected[r.candidate_id], r)
             projections[id(r)] = {"endpoint": endpoint, "param": parameter,
@@ -77,6 +82,7 @@ def capture_workflow(state: WorkflowState, target: str, policy=None) -> dict[str
             requested_goals=[{k: getattr(g, k) for k in ("id", "candidate_class", "status", "candidate_ids", "reason")} for g in obj.requested_goals]) if obj else Record(),
         "candidates": tuple(_record(c, candidate_fields, persisted=state.persisted_findings.get(cid)) for cid, c in selected.items()),
         "results": tuple(_record(r, result_fields, fingerprint=validation_result_fingerprint(r),
+            current_admissible=admissibility.get(id(r)),
             assessment_provenance=assessment_provenance(state, selected[r.candidate_id], r, policy),
             binding=bindings[r.candidate_id] if global_latest.get(r.candidate_id) is r else "", projection=projections[id(r)]) for r in results),
         "inputs": tuple(_record(i, input_fields) for i in inputs),

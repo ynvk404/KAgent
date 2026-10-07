@@ -45,6 +45,67 @@ def source_row(item) -> dict[str, Any]:
     return json.loads(json.dumps(row))
 
 
+def request_associations(attempt) -> dict[tuple[str, str], dict[str, Any]]:
+    """One exact method/URL has one role and requirement, including on resume."""
+    related = attempt.get("related_requests", [])
+    if not isinstance(related, list) or len(related) > 16:
+        raise ValueError("related_requests must be a bounded list")
+    associations = {}
+    for request in related:
+        if (not isinstance(request, dict) or not {"role", "method", "url"} <= set(request)
+                or set(request) - {"role", "method", "url", "required"}
+                or request["role"] not in {"baseline", "control", "trigger", "readback", "cleanup", "auxiliary"}
+                or request["method"] not in {"GET", "POST", "HEAD", "OPTIONS", "PUT", "PATCH", "DELETE"}
+                or not isinstance(request["url"], str)
+                or not isinstance(request.get("required", True), bool)):
+            raise ValueError("invalid related request association")
+        key = (request["method"], request["url"])
+        if key in associations:
+            raise ValueError("ambiguous duplicate related request method/URL association")
+        associations[key] = request
+    return associations
+
+
+def source_association(candidate, attempt, row, associations):
+    if row.get("source_kind") == "tool-output":
+        return "process-output", False
+    if row.get("source_kind") not in {"native-http", "imported-capture"}:
+        raise ValueError("unsupported primary source kind")
+    if HTTPOrigin.from_url(row["url"]) != HTTPOrigin.from_url(candidate.target or attempt.get("target_origin")):
+        raise ValueError("primary evidence origin mismatch")
+    path = urlsplit((candidate.endpoint or "").split(" ")[-1]).path
+    direct = (not path or urlsplit(row["url"]).path == path) and (not candidate.method or candidate.method == row["method"])
+    request = associations.get((row["method"], row["url"]))
+    if request is None and not direct:
+        raise ValueError("undeclared primary request identity/role mismatch")
+    if request is not None:
+        return request["role"], request.get("required", True)
+    return ("imported" if row["source_kind"] == "imported-capture" else "probe"), True
+
+
+def usable_source(row) -> bool:
+    return (row.get("complete") is True and row.get("truncated") is not True
+            and row.get("execution_status") == "completed")
+
+
+def check_source_requirements(candidate, attempt, rows, *, terminal):
+    associations = request_associations(attempt)
+    for entry in rows:
+        row = entry["source"]
+        role, required = source_association(candidate, attempt, row, associations)
+        if row.get("role") != role or row.get("required", True) is not required:
+            raise ValueError("primary source association mismatch")
+        if terminal and required and not usable_source(row):
+            raise ValueError("terminal assessment requires completed usable primary evidence; submit unresolved")
+    if terminal:
+        for key, request in associations.items():
+            if request.get("required", True) and not any(
+                    entry["source"].get("source_kind") in {"native-http", "imported-capture"}
+                    and (entry["source"].get("method"), entry["source"].get("url")) == key
+                    and usable_source(entry["source"]) for entry in rows):
+                raise ValueError("declared required request lacks completed evidence; submit unresolved")
+
+
 def start_attempt(state, candidate, session_id, epoch, *, requests=None, criteria=None, target_origin=None, target_revision=None):
     related = requests or []
     if not isinstance(related, list) or len(related) > 16:
@@ -71,6 +132,7 @@ def start_attempt(state, candidate, session_id, epoch, *, requests=None, criteri
         from src.redact.redact import apply_evidence
         normalized.append({"role": request["role"], "method": request["method"].upper(), "url": apply_evidence(url),
                            "required": request.get("required", request["role"] != "cleanup")})
+    request_associations({"related_requests": normalized})
     from src.redact.redact import redact_payload
     if criteria is not None and (not isinstance(criteria, dict) or len(json.dumps(criteria)) > 6000):
         raise ValueError("attempt assessment criteria must be a bounded object")
@@ -129,6 +191,7 @@ def attempt_owner(state, aid, epoch, target_revision, session_id=None):
 
 def resolve_sources(policy, state, candidate, attempt, ids, *, terminal, negative, store=None):
     rows = []
+    associations = request_associations(attempt) if attempt else {}
     for key in references(ids, "observation_ids"):
         source_store = policy.observations if policy else store
         item = source_store._items.get(key) if source_store is not None else None
@@ -150,15 +213,7 @@ def resolve_sources(policy, state, candidate, attempt, ids, *, terminal, negativ
                               ("candidate_id", "candidate_binding", "session_id", "objective_id", "epoch", "attempt_id")):
             raise ValueError("source session/epoch/candidate/objective/attempt ownership mismatch")
         if item.source_kind in {"native-http", "imported-capture"}:
-            if HTTPOrigin.from_url(item.url) != HTTPOrigin.from_url(candidate.target or attempt.get("target_origin")):
-                raise ValueError("primary evidence origin mismatch")
-            path = urlsplit((candidate.endpoint or "").split(" ")[-1]).path
-            direct = (not path or urlsplit(item.url).path == path) and (not candidate.method or candidate.method == item.method)
-            related = [r for r in attempt["related_requests"] if r["url"] == item.url and r["method"] == item.method]
-            if not direct and not related:
-                raise ValueError("undeclared primary request identity/role mismatch")
-            row["role"] = related[0]["role"] if related else "imported" if item.source_kind == "imported-capture" else "probe"
-            row["required"] = related[0].get("required", True) if related else True
+            row["role"], row["required"] = source_association(candidate, attempt, row, associations)
             boundary = policy.generic_validation if policy else None
             if item.source_kind == "native-http" and boundary is not None and boundary.started_candidate == candidate.id and item.probe_binding != boundary.probe_identity():
                 raise ValueError("generic probe binding mismatch")
@@ -167,14 +222,9 @@ def resolve_sources(policy, state, candidate, attempt, ids, *, terminal, negativ
             row["required"] = False
         else:
             raise ValueError("unsupported primary source kind")
-        if terminal and row["required"] and (not item.complete or item.truncated is True or row.get("execution_status") != "completed"):
-            raise ValueError("terminal assessment requires completed usable primary evidence; submit an unresolved outcome")
         rows.append({"source": row, "hash": item.retained_hash})
-    if terminal and attempt:
-        for request in attempt["related_requests"]:
-            if request.get("required", True) and not any(entry["source"]["url"] == request["url"]
-                    and entry["source"]["method"] == request["method"] for entry in rows):
-                raise ValueError("declared required request lacks completed evidence; submit unresolved")
+    if attempt:
+        check_source_requirements(candidate, attempt, rows, terminal=terminal)
     if terminal and not rows:
         raise ValueError("terminal assessment requires usable primary evidence")
     if len(json.dumps(rows)) > MAX_MANIFEST_BYTES:
@@ -239,6 +289,10 @@ def accepted_result(state, candidate, result, policy=None) -> bool:
             item = policy.observations._items.get(row.get("id"))
             if item is not None and digest(source_row(item)) != entry["hash"]:
                 return False
+    try:
+        check_source_requirements(candidate, attempt, manifest, terminal=True)
+    except (ValueError, TypeError, KeyError):
+        return False
     if not any(entry["source"].get("source_kind") in {"native-http", "imported-capture"}
             and entry["source"].get("complete") and not entry["source"].get("truncated")
             and entry["source"].get("execution_status") == "completed" for entry in manifest):

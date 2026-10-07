@@ -272,7 +272,15 @@ def _reports(resources: Resources, selected: set[str]):
     return matches, uncertain
 
 
+def _current_admissible(result: Record) -> bool:
+    # V1 export preserves its historical matching contract. V2 needs the
+    # captured structural resolver decision, never a saved binding alone.
+    return result.get("assessment_contract_version", 1) < 2 or result.get("current_admissible") is True
+
+
 def _finding_matches(f: Finding, candidate: Record, result: Record, target: str) -> bool:
+    if not _current_admissible(result):
+        return False
     if (f.candidate_id != candidate.get("id") or origin(f.url) != target or
         f.canonical_class != candidate.get("candidate_class") or
         sorted(f.evidence_refs or []) != sorted(result.get("evidence_refs", ())) or
@@ -417,6 +425,8 @@ def _coverage(source: SourceSnapshot, resources: Resources, clean: Sanitizer, li
         ep = re.sub(r"^[A-Z]+\s+", "", row.get("endpoint", ""))
         linked = []
         for result in latest_results.values():
+            if not _current_admissible(result):
+                continue
             projection = result.get("projection")
             if (exact and isinstance(projection, Record) and projection.get("endpoint") == row.get("endpoint") and
                 projection.get("param") == row.get("param") and projection.get("vulnClass") == row.get("vulnClass") and
@@ -486,6 +496,7 @@ def build_report(source: SourceSnapshot, resources: Resources) -> ReportDocument
         r, c = latest.get(cid), candidates[cid]
         refs = r.get("evidence_refs", ()) if r else ()
         eligible = bool(r and r.get("outcome") == "confirmed" and r.get("coverage_synced") is not False and
+                        _current_admissible(r) and
                         c.get("persisted") == r.get("fingerprint") and refs and len(refs) <= MAX_REFS and
                         all(ref in evidence and _valid_evidence(evidence[ref], ref, cid) for ref in refs))
         records = matches.get(cid, [])
@@ -536,7 +547,7 @@ def build_report(source: SourceSnapshot, resources: Resources) -> ReportDocument
     goals = objective.get("requested_goals", ())
     phases = [p for p in source.phases if owner and p.get("objective_id") == owner and origin(p.get("target_origin")) == target]
     all_closed = bool(owner and not endpoint_conflicts and all(
-        r and candidates[cid].get("status") in {"validated", "dismissed"} and r.get("outcome") in {"confirmed", "not-confirmed"} and r.get("coverage_synced") is not False and
+        r and _current_admissible(r) and candidates[cid].get("status") in {"validated", "dismissed"} and r.get("outcome") in {"confirmed", "not-confirmed"} and r.get("coverage_synced") is not False and
         r.get("cleanup_state") in {"not-required", "succeeded"} and
         (not r.get("evidence_refs") or all(ref in evidence and _valid_evidence(evidence[ref], ref, cid) for ref in r.get("evidence_refs"))) and
         (r.get("outcome") != "confirmed" or cid in included_ids)
@@ -547,7 +558,7 @@ def build_report(source: SourceSnapshot, resources: Resources) -> ReportDocument
     for goal in goals:
         linked = [latest.get(cid) for cid in goal.get("candidate_ids", ()) if cid in candidates and candidates[cid].get("candidate_class") == goal.get("candidate_class")]
         expected = {"tested_confirmed": "confirmed", "tested_not_confirmed": "not-confirmed"}.get(goal.get("status"))
-        if not expected or not linked or len(linked) != len(goal.get("candidate_ids", ())) or not any(r and r.get("outcome") == expected for r in linked):
+        if not expected or not linked or len(linked) != len(goal.get("candidate_ids", ())) or not any(r and _current_admissible(r) and r.get("outcome") == expected for r in linked):
             all_closed = False
     mode = objective.get("mode")
     if mode == "whole_target":
@@ -576,6 +587,10 @@ def build_report(source: SourceSnapshot, resources: Resources) -> ReportDocument
         status = "Partial assessment snapshot — recorded work remains outstanding."
     if not all_closed:
         limitations.append("Completion status not recorded; displayed progress is a report projection.")
+    invalid_current = {cid for cid, r in latest.items()
+                       if r.get("assessment_contract_version", 1) >= 2 and not _current_admissible(r)}
+    if invalid_current:
+        limitations.append(f"{len(invalid_current)} latest assessments lack current structural admissibility; historical outcomes do not establish current closure or Finding eligibility.")
     if any(r.get("outcome") not in {"confirmed", "not-confirmed"} or r.get("cleanup_state") in {"pending", "failed", "requires-user-action"} for r in latest.values()):
         limitations.append("Partial assessment — unresolved validation or operational limitations recorded.")
     if source.restored:
@@ -600,6 +615,7 @@ def build_report(source: SourceSnapshot, resources: Resources) -> ReportDocument
         f"media type: {clean.text(i.get('content_type'))}; auth context: {clean.text(i.get('auth_context_ref'))}; "
         f"disposition: {clean.text(i.get('disposition'))}; reason: {clean.text(i.get('disposition_reason'), MAX_REASON)}") for i in inputs))
     validations = tuple(sorted((clean.text(cid), f"Latest outcome: {clean.text(r.get('outcome'))}; assessment source: {clean.text((r.get('assessment_provenance') or {}).get('source') or r.get('assessment_source') or 'legacy/unknown')}; "
+        f"current structural admissibility: {'invalid/unavailable' if cid in invalid_current else 'accepted' if r.get('assessment_contract_version', 1) >= 2 else 'historical contract'}; "
         f"skill: {clean.text(r.get('skill_name'))}; techniques: {clean.text(', '.join(r.get('techniques', ())))}; "
         f"reason: {clean.text(r.get('deferred_reason'), MAX_REASON)}; notes: {clean.text(r.get('notes'), MAX_REASON)}; "
         f"cleanup: {clean.text(r.get('cleanup_state'))}; coverage sync: {r.get('coverage_synced')}; "

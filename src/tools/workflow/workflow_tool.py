@@ -677,6 +677,7 @@ class WorkflowTool(Tool):
                     # pre-await records if canonical state or runtime ownership
                     # changed. Capture/auth availability is read only afterwards.
                     before = deepcopy(self.state.to_dict())
+                    policy_stamp = policy.stamp() if policy else None
                     target_revision = self.target.revision if self.target is not None else None
                     route = resolve_validation_route(self.skills, candidate.candidate_class)
                     evidence_invalid = not await verify_evidence_reads([
@@ -689,8 +690,11 @@ class WorkflowTool(Tool):
                             or self.state.to_dict() != before
                             or (self.target.revision if self.target is not None else None) != target_revision
                             or resolve_validation_route(self.skills, candidate.candidate_class) != route
-                            or policy_for(prompter) is not policy):
+                            or policy_for(prompter) is not policy
+                            or (policy and policy.stamp() != policy_stamp)):
                         raise ValueError("validation state changed during evidence read; retry start_validation")
+                if latest.assessment_contract_version >= 2:
+                    evidence_invalid = evidence_invalid or not accepted_result(self.state, candidate, latest, policy)
                 if not evidence_invalid:
                     raise ValueError(
                         "terminal candidate cannot be reopened during whole-target continuation; "
