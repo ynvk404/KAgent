@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.findings.cwe_enrichment import Enrichment, plain_data
 from src.findings.store import ClassificationCommittedError
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.ui.core.state import Append, TranscriptEntry
@@ -14,6 +13,19 @@ async def enrich_cwe(app: Any, rest: list[str]) -> None:
     try:
         if len(rest) != 1:
             raise ValueError('usage: /enrich-cwe <candidate-id>')
+        # Optional component imports must stay inside the command's error
+        # boundary: older editable installs may only expose the src package.
+        try:
+            from src.findings.cwe_enrichment import Enrichment, plain_data
+        except ModuleNotFoundError as exc:
+            if exc.name in {'components', 'components.cwe_mcp', 'components.cwe_mcp.contract'}:
+                raise ValueError(
+                    'CWE component is unavailable in this Python environment. '
+                    'From the repository root, reinstall KAgent using the Python '
+                    'environment that runs it: python -m pip install --no-deps -e . '
+                    'Then restart KAgent.'
+                ) from None
+            raise
         finding_tool = app.agent.tools.get('confirm_finding')
         if type(finding_tool) is not ConfirmFindingTool:
             raise ValueError('persisted finding store unavailable')
