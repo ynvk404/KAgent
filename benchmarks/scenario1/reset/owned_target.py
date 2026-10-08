@@ -164,7 +164,7 @@ def wait_ready(state: Path):
             if (result.get('nonce') == nonce and result.get('source_commit') == COMMIT
                     and result.get('war_sha256') == value['base_war_sha256']
                     and result.get('reset_source_sha256') == value['reset_source_sha256']
-                    and result.get('verified') is True and result.get('state') == 'CLOSED'):
+                    and result.get('verified') is True and result.get('state') == 'IDLE'):
                 print('Owned target ready; runner must still reset and independently verify before admission.')
                 return
             raise ValueError('target reported invalid readiness')

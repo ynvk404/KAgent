@@ -30,11 +30,12 @@ existing audit to a new run. No default audit file is required.
 |---|---|
 | `java/CatalogBaseline.java` | Independent seed/column/key/procedure oracle; immutable DDL, complete rows and metadata; exact named constraints; SQL restoration and independent readback |
 | `java/ResetLifecycle.java` | Rollback/close static JDBC, JNDI and Spring pools, normal/classic sessions and factories; restore both catalogs; replace pools/factories without eager Spring borrow |
-| `java/ResetGate.java` | Closed-by-default route admission, finite lease, active request drain, tracked session invalidation, authenticated nonce/generation receipts and permanent failure state |
+| `java/ResetGate.java` | Verified idle access; closed benchmark admission, finite per-case lease, request drain, session invalidation, nonce/generation receipts and permanent failure state |
 | `java/InstallProbe.java` | Live Tomcat container hierarchy, classloader, original filter instance and lifecycle listener assertions |
 | `install.py` | Compile into a copy of the cached WAR and install the first filter/lifecycle listener; retain the original initializer and filters |
 | `run-target.sh` | Start the owned HSQLDB server and cached Tomcat; apply Javassist `--add-opens` to the actual JVM |
-| `owned_target.py` | Create/readiness/cleanup of ownership-labelled disposable targets, internal networks and fixed-upstream ingress proxy |
+| `owned_target.py` | Optional legacy/test tooling for disposable targets; not required by normal CLI execution |
+| `operator_target.py`, `docker_access.py` | Existing-container inspection/control, exact URL/source/bootstrap/JVM binding; no Docker lifecycle operations |
 | `client.py` | Parent-only strict control verification, target/source attestation, exclusive runner lock and durable reset receipts |
 | `verify.py`, `tests/ResetProbe.java` | Fixed, model-free focused reproduction and mutations; production targets do not install probes |
 | `../core/runner.py`, `../__main__.py` | CLI and sequential worker lifecycle integration |
@@ -61,11 +62,40 @@ and `external_effects_restoration_verified=false`. Reset receipts also record
 that their verification covers database catalogs and application lifecycle,
 without certifying restoration of filesystem, LDAP or other external effects.
 
+After successful startup baseline capture, `IDLE` allows ordinary browser and
+KAgent TUI HTTP requests, including requests that change target state. The reset
+control endpoint still requires the existing parent-only credential. No extra
+request credentials or manual commands are needed for normal access.
+
+Under the existing exclusive target lock, the runner first records `block`,
+closing admission before identity checks. Active requests may finish; the existing
+`before` reset drains them, invalidates idle sessions and restores/verifies both
+catalogs and JDBC/Hibernate lifecycle before authorizing the first testcase.
+For operator targets, closure goes directly to the selected container's JVM,
+so a failed published-port or source check cannot leave idle admission open.
+Only the initial identity check may observe draining requests/sessions; it does
+not certify clean state. The `before` reset must still prove zero active requests
+and sessions. Subsequent cases retain the existing before/authorize/after sequence.
+
+The final successful `after` reset is also the final run reset. The new `idle`
+receipt independently verifies the installed filter/lifecycle, quiescence,
+baseline, boot and generation before restoring normal access while still holding
+the target lock. Worker errors can return to idle after verified cleanup; reset,
+identity or idle-transition errors and interruptions remain closed. Expired
+testcase leases or a crashed runner never automatically reopen idle access.
+An uncertain result is a blocker, not a reason to publish idle from `finally`.
+
+The updated Java gate requires one controlled deployment restart; source edits
+do not modify the gate already loaded in a running JVM. See
+[operator-setup.md](operator-setup.md#deploying-the-idle-access-update) for the
+approval-gated operation. There are no restarts between testcase executions.
+
 ## Supported modes and limits
 
 | Mode | Status |
 |---|---|
-| Owned exact-target logical reset | Implemented; regenerate focused verification with `verify.py` |
+| Operator-managed exact-target logical reset | Admission implemented; requires separately prepared compatible instrumentation and isolation |
+| Owned exact-target logical reset | Retained for optional legacy/test tooling; regenerate focused verification with `verify.py` |
 | All 504 SQLi cases | Eligible with exact source/target identity and verified logical reset; no historical allowlist admission gate |
 | 455 XSS cases | Preserved and eligible under the existing native HTTP boundary; focused response samples do not certify all 455 |
 | 272 historically SQL-controlled cases | Eligible for logical reset; effects outside databases remain an accepted limitation |
@@ -108,33 +138,20 @@ and private state are removed during owned cleanup. Docker Desktop/Drvfs can
 invalidate the caller's directory inode during bind mounts; the resource wrapper
 reacquires the same working-directory path after Docker operations.
 
-## Locked 12-case smoke command for the next session
+## Operator-managed target and locked 12-case smoke
 
-After cleanup, recreate the deterministic smoke selection before using its
-manifest. The commands below include SQL-controlled cases.
-Every case uses logical reset; failure, timeout, incomplete readback or unknown
-outcome still stops the run. Scope remains PARTIAL for effects outside databases.
-The smoke commands were not run here.
+See [operator setup and exact CLI commands](operator-setup.md). The normal runner
+uses `--target`, `--container`, `--reset-war`, and an existing `--ingress-container`
+when needed. The operator manages Docker lifecycle through Docker Desktop.
+Logical SQL/DDL reset, admission/draining, session invalidation, baseline checks,
+protocol receipts and all stop conditions are unchanged. Legacy `--reset-state`
+remains available for existing tooling; no creation or cleanup helper is needed
+for the normal run.
 
-```bash
-venv-linux/bin/python -m benchmarks.scenario1 select \
-  --dataset /mnt/d/DOANTOTNGHIEP/benchmark-targets/BenchmarkJava \
-  --mode smoke --seed 1729 \
-  --output artifacts/benchmarks/scenario1-smoke-1729/manifest.json
-venv-linux/bin/python -m benchmarks.scenario1.reset.owned_target create \
-  --state artifacts/benchmarks/smoke-target-private.json \
-  --war /home/khainguyen/.cache/kagent-s1-build-62da4de4df96/benchmark-offline.war --port 18080
-venv-linux/bin/python -m benchmarks.scenario1.reset.owned_target wait-ready \
-  --state artifacts/benchmarks/smoke-target-private.json
-venv-linux/bin/python -m benchmarks.scenario1 run \
-  --dataset /mnt/d/DOANTOTNGHIEP/benchmark-targets/BenchmarkJava \
-  --manifest artifacts/benchmarks/scenario1-smoke-1729/manifest.json \
-  --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab \
-  --target-state external-reset --reset-state artifacts/benchmarks/smoke-target-private.json \
-  --output artifacts/benchmarks/scenario1-locked-smoke-NEW
-venv-linux/bin/python -m benchmarks.scenario1.reset.owned_target cleanup \
-  --state artifacts/benchmarks/smoke-target-private.json
-```
+The existing `owasp-benchmark` container was inspected read-only and lacks the
+supported reset installation and isolation. It was not modified. Setup is a
+separate operator action; missing prerequisites fail closed. Real verification
+of the new admission path is pending a prepared operator-selected target.
 
 For interruption recovery, use the same manifest, a new output path, and
 `--resume-from artifacts/benchmarks/OLD-RUN`. All selected cases are replayed;

@@ -54,8 +54,12 @@ def validation_quality(model: ReportModel) -> bytes:
             value = group[rate]
             body.append(f'<g data-class="{cls}" data-metric="{rate}" '
                         f'data-available="{str(denominator > 0).lower()}">')
-            body += [_text(32, y + 5, 'FPR' if rate == 'fpr' else rate.capitalize()),
-                     _rect(145, y - 9, 295, 18, '#f1f3f5', 'track')]
+            if rate == 'evaluability':
+                body.append(f'<text x="32" y="{y + 5}"><tspan x="32" dy="-8">Tỷ lệ đánh giá</tspan>'
+                            '<tspan x="32" dy="17">được</tspan></text>')
+            else:
+                body.append(_text(32, y + 5, 'FPR' if rate == 'fpr' else rate.capitalize()))
+            body.append(_rect(145, y - 9, 295, 18, '#f1f3f5', 'track'))
             if denominator and value is not None and value > 0:
                 body.append(_rect(145, y - 9, round(295 * value, 4), 18, color, 'filled'))
             displayed = 'NA' if not denominator or value is None else format_decimal(value * 100) + '%'

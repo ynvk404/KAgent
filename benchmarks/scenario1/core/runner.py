@@ -100,20 +100,33 @@ def run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, 
         resume_from: Path | None = None) -> Path:
     ownership = reset_controller.ownership() if reset_controller is not None else nullcontext()
     with ownership:
-        return _run(manifest, settings, destination, run_kind=run_kind, fail_fast=fail_fast, launcher=launcher,
-                    reset_controller=reset_controller, reset_audit=reset_audit, resume_from=resume_from)
+        try:
+            return _run(manifest, settings, destination, run_kind=run_kind, fail_fast=fail_fast, launcher=launcher,
+                        reset_controller=reset_controller, reset_audit=reset_audit, resume_from=resume_from)
+        except BaseException:
+            if reset_controller is not None:
+                reset_controller.block()
+            raise
 
 
 def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, run_kind: RunKind,
          fail_fast, launcher, reset_controller, reset_audit, resume_from) -> Path:
     validate_runtime(manifest, settings, verified_reset=reset_controller is not None)
     if launcher is launch_worker and reset_controller is None:
-        raise ResetBlocked('production execution requires --reset-state and verified clean target')
+        raise ResetBlocked('production execution requires --reset-state or --container with verified logical reset')
     validate_run_kind(manifest, run_kind)
     destination = destination.resolve()
     if destination.exists():
         raise ValueError('run directory already exists; history cannot be overwritten or resumed')
     destination.mkdir(parents=True, mode=0o700)
+    admission_error = None
+    if reset_controller is not None:
+        try:
+            persist(destination, manifest.execution_order[0], 'block', reset_controller.begin)
+        except BaseException as err:
+            # Retain the normal immutable manifest/scheduled history and blocker
+            # even when initial closure fails; no worker will be admitted.
+            admission_error = err
     bound = replace(manifest, runtime=asdict(settings), reproducibility=reproducibility())
     write_new(destination / 'manifest.json', asdict(bound))
     classification = write_run_classification(destination, run_kind)
@@ -142,14 +155,20 @@ def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *,
     for case_id in manifest.execution_order:
         if reset_controller is not None:
             try:
-                reset_controller.check_identity(manifest, settings)
+                if admission_error is not None:
+                    raise admission_error
+                if hasattr(reset_controller, 'identity_verified'):
+                    persist(destination, case_id, 'identity', lambda: reset_controller.check_identity(manifest, settings))
+                else:
+                    reset_controller.check_identity(manifest, settings)
                 if reset_audit and file_hash(reset_audit) != audit_hash:
                     raise ResetBlocked('historical audit evidence changed during run')
                 persist(destination, case_id, 'before', reset_controller.reset)
                 persist(destination, case_id, 'authorize', lambda: reset_controller.authorize(operations[case_id], settings))
             except BaseException as err:
                 reset_controller.block()
-                block_run(destination, recorder, manifest, case_id, 'admission', type(err).__name__)
+                block_run(destination, recorder, manifest, case_id, 'admission', type(err).__name__,
+                          detail=str(err) if isinstance(err, ResetBlocked) else None)
                 if not isinstance(err, Exception):
                     raise
                 break
@@ -218,12 +237,23 @@ def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *,
                 recorder.append('evaluated', skipped, 'not-run', data={'partition': 'not-run', 'reason': 'fail-fast',
                                                                       'evaluation_identity': 'fail-fast-v1'})
             break
+    if reset_controller is not None and not (destination / 'blocked.json').exists():
+        try:
+            # The last case's verified 'after' reset is the final reset. Never
+            # publish idle from a finally block or after uncertain execution.
+            persist(destination, case_id, 'idle', reset_controller.idle)
+        except BaseException as err:
+            reset_controller.block()
+            block_run(destination, recorder, manifest, None, 'idle', type(err).__name__)
+            if not isinstance(err, Exception):
+                raise
     return destination
 
 
-def block_run(destination, recorder, manifest, next_case, phase, error):
+def block_run(destination, recorder, manifest, next_case, phase, error, *, detail=None):
     write_new(destination / 'blocked.json', {'status': 'blocked', 'phase': phase, 'error': error,
-                                            'next_case': next_case, 'reason': 'unverified target state or boundary'})
+                                            'next_case': next_case, 'reason': 'unverified target state or boundary',
+                                            'detail': detail})
     if next_case is not None:
         for case_id in manifest.execution_order[manifest.execution_order.index(next_case):]:
             # An interrupted case remains started, retaining the evaluator's

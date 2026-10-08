@@ -42,7 +42,7 @@ def ready(config, *, reference=False):
                 with urllib.request.urlopen(config['target'] + '/benchmark/__kagent_probe?action=inspect', timeout=3) as r:
                     return json.load(r)
             result = raw_control(config, 'status')
-            if result.get('verified') is True and result.get('state') == 'CLOSED':
+            if result.get('verified') is True and result.get('state') == 'IDLE':
                 return result
             raise ResetBlocked('startup reported failure')
         except (urllib.error.URLError, TimeoutError):
@@ -125,7 +125,8 @@ def verify(dataset: Path, war: Path, destination: Path, image: str, port: int) -
         state, config = target('logical', 0)
         control = ResetController(state)
         original_start = json.loads(docker('inspect', config['container_id']))[0]['State']['StartedAt']
-        check('initial_gate_closed', _http_status(config['target'] + '/benchmark/') == 503)
+        check('initial_idle_access', _http_status(config['target'] + '/benchmark/') == 200)
+        raw_control(config, 'block')
         authorize(config)
         fresh = probe(config, 'inspect')
         raw_control(config, 'block')
@@ -217,7 +218,8 @@ def verify(dataset: Path, war: Path, destination: Path, image: str, port: int) -
                           reset_controller=ResetController(production_state))
             receipts = [json.loads(p.read_text()) for p in (run_dir / 'reset-evidence').glob('*.json')]
             check('production_runner_' + case_id, launched == [case_id]
-                  and len(receipts) == 3 and all(r['status'] == 'verified' for r in receipts)
+                  and {r['phase'] for r in receipts} == {'block', 'before', 'authorize', 'after', 'idle'}
+                  and all(r['status'] == 'verified' for r in receipts)
                   and not (run_dir / 'blocked.json').exists())
         # A timeout and an unaccounted transaction poison separate owned targets.
         for failure, offset in (('drain-timeout', 2), ('unaccounted-transaction', 3), ('unknown-client-outcome', 4)):

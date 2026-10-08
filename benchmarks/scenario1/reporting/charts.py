@@ -17,13 +17,13 @@ COLORS = {
     'invalid': '#6b5b83', 'neutral': '#666666', 'empty': '#f1f3f5',
     'blue': '#285c79',
 }
-PARTITION_LABELS = ('Evaluable', 'Unresolved', 'Execution failed', 'Invalid result', 'Not run')
+PARTITION_LABELS = ('Đánh giá được', 'Chưa có kết luận', 'Lỗi thực thi', 'Kết quả không hợp lệ', 'Chưa chạy')
 PARTITION_COLORS = tuple(COLORS[key] for key in ('positive', 'warning', 'failure', 'invalid', 'neutral'))
 CLASS_STYLES = (('SQLi', CLASSES[0], COLORS['blue']), ('XSS', CLASSES[1], COLORS['invalid']))
 METRIC_STYLES = (('recall', 'Recall', COLORS['blue']),
                  ('precision', 'Precision', COLORS['positive']),
                  ('fpr', 'FPR', COLORS['failure']),
-                 ('evaluability', 'Evaluability', COLORS['positive']))
+                 ('evaluability', 'Tỷ lệ đánh giá được', COLORS['positive']))
 WIDTH = 920
 CASES_PER_PAGE = 20
 STYLE = (
@@ -93,7 +93,7 @@ def confusion_matrix(model: ReportModel) -> bytes:
 
 def class_metrics(model: ReportModel) -> bytes:
     body = _header(model, 'Validation metrics by vulnerability class',
-                   'Recall, precision and FPR use evaluable cases; evaluability covers all scheduled cases.')
+                   'Recall, Precision, FPR dùng các case đánh giá được; Tỷ lệ đánh giá được dùng toàn bộ case đã lên lịch.')
     for class_index, (label, cls, _) in enumerate(CLASS_STYLES):
         group = model.metrics['classes'][cls]
         top = 150 + class_index * 208
@@ -104,7 +104,12 @@ def class_metrics(model: ReportModel) -> bytes:
             y = top + 18 + index * 38
             numerator, denominator = rate_parts(group, rate)
             value = group[rate]
-            body += [_text(48, y + 17, display_label), _rect(190, y, 470, 24, COLORS['empty'])]
+            if rate == 'evaluability':
+                body.append(f'<text x="48" y="{y + 17}"><tspan x="48" dy="-8">Tỷ lệ đánh giá</tspan>'
+                            '<tspan x="48" dy="17">được</tspan></text>')
+            else:
+                body.append(_text(48, y + 17, display_label))
+            body.append(_rect(190, y, 470, 24, COLORS['empty']))
             if value is not None and value > 0:
                 body.append(_rect(190, y, round(470 * value, 4), 24, color))
             displayed = 'NA' if value is None else f'{value * 100:.1f}%'
@@ -156,7 +161,7 @@ def evaluation_partitions(model: ReportModel) -> bytes:
             text = _text(162 + part_index * 155, y, f'{group[part]:,}', 'center number')
             body.append(text.replace('<text ', f'<text data-class="{cls}" data-partition="{part}" '))
     body += [_text(32, 406, 'Counts include zeros and sum to N scheduled in each class.', 'small'),
-             _text(32, 428, 'Unresolved, failed, invalid and unrun cases are not negative labels.', 'small')]
+             _text(32, 428, 'Chưa có kết luận, lỗi thực thi, kết quả không hợp lệ và chưa chạy không được tính vào TN/FN.', 'small')]
     return _svg(450, body)
 
 

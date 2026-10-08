@@ -114,7 +114,10 @@ Only bounded confirmation is requested; optional deeper impact is not requested.
 XSS outcomes requiring unavailable browser proof remain `browser-required`.
 Production playbook semantics and assessment authority are unchanged.
 
-Production execution requires an owned exact-dataset target and `--reset-state`.
+Production execution requires a verified exact-dataset target. Use `--container`
+and trusted `--reset-war` for an existing operator-managed deployment, plus
+`--ingress-container` when a fixed ingress is needed. The optional legacy
+`--reset-state` remains supported. See [separate operator setup](../scenario1/reset/operator-setup.md).
 The parent closes admission, logically restores both HSQLDB catalogs and verifies
 complete relevant state before authorizing each worker and after collecting its
 result. Reset receipts and durations are separate from worker/Agent metrics.
@@ -310,12 +313,12 @@ execute a pilot.
 venv-linux/bin/python -m benchmarks.scenario1 list --dataset /path/to/BenchmarkJava
 venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode reduced --output artifacts/benchmarks/scenario1-selection.json
 venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode smoke --seed 1729 --output artifacts/benchmarks/scenario1-smoke.json
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-smoke.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --reset-state artifacts/benchmarks/target-private.json --output artifacts/benchmarks/smoke-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-smoke.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --output artifacts/benchmarks/smoke-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/smoke-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --reset-state artifacts/benchmarks/target-private.json --dry-run
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --case BenchmarkTest00013 --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --reset-state artifacts/benchmarks/target-private.json --output artifacts/benchmarks/single-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --reset-state artifacts/benchmarks/target-private.json --fail-fast --output artifacts/benchmarks/run-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --reset-state artifacts/benchmarks/target-private.json --run-kind official --output artifacts/benchmarks/official-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --dry-run
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --case BenchmarkTest00013 --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --output artifacts/benchmarks/single-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --fail-fast --output artifacts/benchmarks/run-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --run-kind official --output artifacts/benchmarks/official-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/run-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 report --run artifacts/benchmarks/run-UNIQUE
 ```
@@ -422,7 +425,7 @@ The default thesis selection is exactly three separate, full-width figures:
 
 | Figure | File under `charts/` | Quantity |
 |---|---|---|
-| F1 | `scenario1-validation-quality.svg` | Recall, Precision, FPR, Evaluability in SQLi then XSS blocks |
+| F1 | `scenario1-validation-quality.svg` | Recall, Precision, FPR, Tỷ lệ đánh giá được (Evaluability) in SQLi then XSS blocks |
 | F2 | `scenario1-processing-time-median.svg` | Median available Agent interval for parent-completed cases, seconds |
 | F3 | `scenario1-total-tokens-median.svg` | Median complete total tokens for parent-completed cases, thousands |
 
@@ -438,6 +441,31 @@ larger schedules retain compatibility pagination and three fixed thesis SVGs.
 
 F1 uses canonical rates and fractions on a fixed 0–100% scale. A zero denominator
 is `NA (0/0)`; a measured zero is `0,0% (0/d)`. No overall/composite score is drawn.
+
+Nhãn **Tỷ lệ đánh giá được** (Evaluability) trong F1 và `class-metrics.svg` biểu thị
+số case đánh giá được / tổng case đã lên lịch.
+Chỉ số này biểu thị mức bao phủ, không phải độ đúng. Recall = TP/(TP+FN) là tỷ lệ
+xác nhận đúng trong các case có lỗ hổng theo nhãn chuẩn; Precision = TP/(TP+FP)
+là tỷ lệ xác nhận đúng trong các case Agent xác nhận có lỗ hổng; FPR = FP/(FP+TN)
+là tỷ lệ xác nhận nhầm trong các case không có lỗ hổng theo nhãn chuẩn. Ba tỷ lệ
+này chỉ dùng các case đánh giá được; tỷ lệ có kết quả đánh giá thấp có thể gây
+thiên lệch do chỉ đánh giá được một phần các case. Giữ nguyên Recall, Precision,
+FPR, TP/TN/FP/FN và NA, bảng màu, kích thước và bố cục; chỉ ngắt dòng nhãn dài
+trong vùng nhãn có sẵn. Dùng chú thích trong `thesis-tables.md` để giải thích đầy đủ.
+
+“Đánh giá được” (Evaluable) nghĩa là lần chạy hoàn tất và có kết luận hợp lệ để
+đối chiếu với nhãn chuẩn. “Chưa có kết luận” (Unresolved) bao gồm thiếu kết luận,
+thiếu bằng chứng (`insufficient-evidence`) hoặc còn bị chặn/trì hoãn. “Kết quả
+không hợp lệ” (Invalid result) là tệp kết quả của lần chạy thiếu/hỏng hoặc kết luận
+không đạt kiểm tra tính hợp lệ. “Lỗi thực thi” (Execution failed) và “Chưa chạy”
+(Not run) được giữ riêng. Bốn nhóm này không đủ điều kiện đưa vào TP/TN/FP/FN;
+không coi là TN hoặc FN. `not-confirmed` là kết luận hợp lệ “không xác nhận lỗ
+hổng”, được tính TN/FN theo nhãn chuẩn, khác với “chưa có kết luận”. Không dùng
+“chưa xác nhận” để thay thế cả hai. “Đạt giới hạn tài nguyên” (`budget-exhausted`)
+là chạm giới hạn lời gọi, yêu cầu HTTP hoặc dung lượng ngữ cảnh, không phải hết
+tiền; “Lỗi dịch vụ LLM” (`provider-error`) và “Tiến trình gặp sự cố” (`crashed`)
+vẫn là các trạng thái riêng. Các mã trong CSV/JSON giữ nguyên.
+
 F2/F3 use parent `final_status=completed`, including unresolved/invalid-result
 cases with usable measurements. Worker status cannot override parent status.
 Token totals require completeness true and a valid nonnegative integer, retaining
@@ -455,6 +483,16 @@ separate ledger grouped by class and evaluator partition. Its display label
 in evaluation/scheduled accounting and is not described as an executed case.
 The ledger does not infer start/finish information from worker diagnostics.
 Resource captions reference T2C/ledger when present.
+
+NA được giải thích theo chỉ số: mẫu số bằng 0 đối với tỷ lệ; không có số đo hợp
+lệ đối với trung vị/trung bình/p95; thiếu số đo ở bất kỳ case nào đối với tổng
+toàn bộ ở T3. Tổng token chưa được ghi nhận đầy đủ cũng là NA; NA không phải 0.
+Trong T2 và chú thích F2/F3, n/N là số case có số đo hợp lệ / số case hoàn tất,
+tính riêng cho thời gian và token. Trong T2C/Ledger, mẫu số là số case trong đúng
+nhóm; trong T3 là toàn bộ case đã lên lịch. Thời gian dùng giây, chỉ đo Agent và
+công việc nền còn lại, không gồm khởi tạo, xuất kết quả hay chi phí điều phối.
+F3/T2B dùng nghìn token (1 = 1.000 token), T3 dùng token; token là đơn vị văn bản
+mà mô hình xử lý. Chỉ dùng tổng token được ghi nhận đầy đủ cho mọi yêu cầu LLM.
 
 Every T3 metric (complete total tokens, logical LLM invocations, policy-started
 tool invocations, native HTTP dispatch attempts) requires N>0 and valid measured
@@ -474,7 +512,7 @@ Captions, cohort definitions, availability and smoke/development classification
 stay in the companion Markdown. Smoke illustrations are not official results.
 
 Resource colors are SQLi `#285c79`, XSS `#6b5b83`; F1 uses blue Recall, green
-Precision, red FPR and neutral gray Evaluability. Class/metric text preserves
+Precision, red FPR and gray Tỷ lệ đánh giá được (Evaluability). Class/metric text preserves
 meaning in grayscale. White backgrounds, solid bars and light grids have no
 decorative effects. Vietnamese numeric labels use a decimal comma and one
 decimal place; tiny positive values that would round to zero display `<0,1`.
@@ -494,8 +532,10 @@ do not make a completed execution fail. Artifacts include `manifest.json`,
 `events.jsonl`, `results/<case>.json`, `workspaces/<execution-id>/`, and immutable
 `evaluation-<identity>.json` containing per-case records and all metrics.
 
-Execution is sequential, Linux/POSIX (process groups/advisory locks). The owned
-target helper creates and cleans disposable containers/networks. Logical reset
+Execution is sequential, Linux/POSIX (process groups/advisory locks). The operator
+starts and manages prepared targets in Docker Desktop; the runner only reads
+Docker identity/configuration. The owned target helper remains optional legacy/test
+tooling. Logical reset
 does not restart Tomcat/Docker. `--resume-from` requires the same locked selection,
 a new output directory and a new verified reset; it replays the full selection
 without appending to previous history. There is no automatic retry or parallel runner.

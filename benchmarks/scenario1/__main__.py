@@ -43,7 +43,11 @@ def parser():
     running.add_argument('--authorized-lab', action='store_true')
     running.add_argument('--target-state', required=True, choices=['confirmation-only', 'external-reset'])
     running.add_argument('--deployment-metadata')
-    running.add_argument('--reset-state', type=Path, help='private owned-target control state; never sent to KAgent')
+    reset = running.add_mutually_exclusive_group()
+    reset.add_argument('--container', help='exact existing operator-managed Docker container name or ID')
+    reset.add_argument('--reset-state', type=Path, help='legacy optional private owned-target control state')
+    running.add_argument('--ingress-container', help='existing fixed nginx ingress for the selected internal target')
+    running.add_argument('--reset-war', type=Path, help='trusted compatible offline WAR; required with --container')
     running.add_argument('--reset-audit', type=Path,
                          help='optional historical audit provenance; does not exclude cases')
     running.add_argument('--resume-from', type=Path, help='reverify and rerun exact selection into a new immutable run')
@@ -109,7 +113,11 @@ def main(argv=None) -> int:
                                    args.timeout, args.http_requests, args.tool_calls, args.agent_calls,
                                    args.deployment_metadata)
         from .core.runner import run, validate_run_kind, validate_runtime
-        validate_runtime(manifest, settings, verified_reset=args.reset_state is not None)
+        if args.container and not args.reset_war:
+            raise ValueError('--container requires trusted --reset-war for build identity')
+        if not args.container and (args.reset_war or args.ingress_container):
+            raise ValueError('--reset-war and --ingress-container require --container')
+        validate_runtime(manifest, settings, verified_reset=args.reset_state is not None or args.container is not None)
         validate_run_kind(manifest, args.run_kind)
         if args.dry_run:
             print(json.dumps({'dry_run': True, 'cases': manifest.execution_order, 'runtime': asdict(settings),
@@ -117,7 +125,12 @@ def main(argv=None) -> int:
             return 0
         destination = args.output or Path('artifacts/benchmarks') / manifest.run_id
         from .reset.client import ResetController
-        controller = ResetController(args.reset_state) if args.reset_state else None
+        if args.container:
+            from .reset.operator_target import OperatorResetController
+            controller = OperatorResetController(args.container, args.reset_war, settings,
+                                                 ingress_container=args.ingress_container)
+        else:
+            controller = ResetController(args.reset_state) if args.reset_state else None
         run(manifest, settings, destination, run_kind=args.run_kind, fail_fast=args.fail_fast,
             reset_controller=controller, reset_audit=args.reset_audit if controller else None, resume_from=args.resume_from)
         from .core.evaluate import evaluate

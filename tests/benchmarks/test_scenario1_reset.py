@@ -26,6 +26,14 @@ class Controller:
     def check_identity(self, *_):
         self.calls.append('identity')
 
+    def begin(self):
+        self.calls.append('begin')
+        return {'verified': True, 'state': 'CLOSED'}
+
+    def idle(self):
+        self.calls.append('idle')
+        return {'verified': True, 'state': 'IDLE'}
+
     def reset(self):
         self.calls.append('reset')
         self.resets += 1
@@ -62,9 +70,9 @@ def test_reset_before_after_and_separate_evidence(tmp_path, op, settings):
 
     root = run(manifest, settings, tmp_path / 'run', launcher=worker, reset_controller=control)
     assert len(called) == 1
-    assert control.calls == ['identity', 'reset', 'authorize', 'reset']
+    assert control.calls == ['begin', 'identity', 'reset', 'authorize', 'reset', 'idle']
     receipts = [json.loads(p.read_text()) for p in (root / 'reset-evidence').glob('*.json')]
-    assert {r['phase'] for r in receipts} == {'before', 'authorize', 'after'}
+    assert {r['phase'] for r in receipts} == {'block', 'before', 'authorize', 'after', 'idle'}
     assert all(r['status'] == 'verified' and r['end_to_end_seconds'] >= 0 for r in receipts)
     events = [json.loads(row) for row in (root / 'events.jsonl').read_text().splitlines()]
     assert events[-1]['kind'] == 'runtime-finished'
@@ -80,6 +88,7 @@ def test_unknown_reset_blocks_every_next_worker(tmp_path, settings, failure, lau
                reset_controller=control, reset_audit=audit_for(tmp_path, manifest))
     assert len(workers) == launched
     assert (root / 'blocked.json').exists()
+    assert 'idle' not in control.calls
     events = [json.loads(row) for row in (root / 'events.jsonl').read_text().splitlines()]
     untouched = [row for row in events if row['kind'] == 'evaluated']
     assert len(untouched) == 12 - launched
@@ -126,8 +135,9 @@ def test_interruption_resume_requires_new_verified_reset(tmp_path, op, settings)
     second = Controller()
     run(manifest, settings, tmp_path / 'resumed', launcher=lambda *_: (-9, False),
         reset_controller=second, resume_from=original)
-    assert second.calls == ['identity', 'reset', 'authorize', 'reset']
-    assert first.calls[-2:] == ['reset', 'block']
+    assert second.calls == ['begin', 'identity', 'reset', 'authorize', 'reset', 'idle']
+    assert first.calls[-3:] == ['reset', 'block', 'block']
+    assert 'idle' not in first.calls
     assert (original / 'events.jsonl').read_bytes() == history
 
 
@@ -241,3 +251,115 @@ def test_reset_seconds_are_excluded_from_worker_wall_time(tmp_path, op, settings
     reset_time = sum(r['end_to_end_seconds'] for r in receipts if r['phase'] in {'before', 'after'})
     assert reset_time >= .1
     assert event['data']['wall_seconds'] < reset_time
+
+
+def test_idle_transition_is_inside_exclusive_target_lock(tmp_path, op, settings):
+    from contextlib import contextmanager
+    control = Controller()
+    locked = False
+    @contextmanager
+    def ownership():
+        nonlocal locked
+        locked = True
+        try:
+            yield
+        finally:
+            assert control.calls[-1] == 'idle'
+            locked = False
+    control.ownership = ownership
+    for name in ('begin', 'check_identity', 'reset', 'authorize', 'idle'):
+        original = getattr(control, name)
+        def checked(*args, original=original):
+            assert locked
+            return original(*args)
+        setattr(control, name, checked)
+    root = run(single_manifest(op, settings), settings, tmp_path / 'run',
+               launcher=lambda *_: (-9, False), reset_controller=control)
+    assert not locked and not (root / 'blocked.json').exists()
+    assert control.calls == ['begin', 'identity', 'reset', 'authorize', 'reset', 'idle']
+
+
+@pytest.mark.parametrize('phase', ['begin', 'identity', 'before', 'authorize', 'worker', 'after', 'idle'])
+@pytest.mark.parametrize('cancel', [False, True])
+def test_interruption_at_every_transition_stays_closed(tmp_path, op, settings, phase, cancel):
+    from asyncio import CancelledError
+    error = CancelledError if cancel else KeyboardInterrupt
+    control = Controller()
+    method = {'identity': 'check_identity', 'before': 'reset', 'after': 'reset'}.get(phase, phase)
+    def worker(*_):
+        if phase == 'worker':
+            raise error()
+        return -9, False
+    if phase != 'worker':
+        original = getattr(control, method)
+        attempts = 0
+        def interrupted(*args):
+            nonlocal attempts
+            attempts += 1
+            if attempts == (2 if phase == 'after' else 1):
+                raise error()
+            return original(*args)
+        setattr(control, method, interrupted)
+    with pytest.raises(error):
+        run(single_manifest(op, settings), settings, tmp_path / 'run',
+            launcher=worker, reset_controller=control)
+    assert control.calls[-1] == 'block'
+    assert 'idle' not in control.calls
+    assert (tmp_path / 'run' / 'blocked.json').exists()
+
+
+@pytest.mark.parametrize('phase', ['begin', 'identity', 'idle'])
+def test_failed_transition_reports_blocker_and_does_not_reopen(tmp_path, op, settings, phase):
+    control = Controller()
+    def rejected(*_):
+        raise ResetBlocked('transition not verified')
+    setattr(control, 'check_identity' if phase == 'identity' else phase, rejected)
+    workers = []
+    root = run(single_manifest(op, settings), settings, tmp_path / 'run',
+               launcher=lambda *_: (workers.append(True) or (-9, False)), reset_controller=control)
+    assert len(workers) == (phase == 'idle')
+    assert control.calls[-1] == 'block' and 'idle' not in control.calls
+    assert json.loads((root / 'blocked.json').read_text())['phase'] == ('idle' if phase == 'idle' else 'admission')
+
+
+def test_block_can_precede_drain_but_idle_requires_clean_receipt(tmp_path, monkeypatch):
+    config = {'target': 'http://127.0.0.1:8080', 'context_path': '/benchmark', 'token': 'test-control',
+              'base_war_sha256': 'a' * 64, 'reset_source_sha256': 'b' * 64}
+    control = ResetController(tmp_path / 'target.json', config=config)
+    generation = 0
+    dirty = True
+    class Opener:
+        def open(self, request, **_):
+            nonlocal generation, dirty
+            action = json.loads(request.data)['action']
+            if action == 'reset':
+                generation += 1
+                dirty = False
+            return Response({'protocol': 'kagent-logical-reset-v1', 'nonce': json.loads(request.data)['nonce'],
+                'source_commit': COMMIT, 'hsqldb': '2.7.4', 'tomcat': '9.0.122', 'jdk': '17',
+                'war_sha256': 'a' * 64, 'reset_source_sha256': 'b' * 64, 'verified': True,
+                'state': 'IDLE' if action == 'idle' else 'CLOSED', 'active_requests': int(dirty),
+                'tracked_sessions': int(dirty), 'internal_seconds': .01,
+                'catalogs': {'server': 'c' * 64, 'embedded': 'd' * 64}, 'generation': generation, 'boot_id': 'boot'})
+    monkeypatch.setattr(control, 'opener', Opener())
+    assert control.begin()['active_requests'] == 1 and control.starting
+    with pytest.raises(ResetBlocked):
+        control.idle()
+    assert control.reset()['generation'] == 1 and not control.starting
+    assert control.idle()['state'] == 'IDLE' and control.generation == 1
+    dirty = True
+    with pytest.raises(ResetBlocked):
+        control.idle()
+
+
+def test_startup_write_failure_after_closure_stays_closed(tmp_path, op, settings, monkeypatch):
+    import benchmarks.scenario1.core.runner as module
+    control = Controller()
+    def failed_write(*_):
+        assert control.calls == ['begin']
+        raise OSError('fixed manifest write failure')
+    monkeypatch.setattr(module, 'write_new', failed_write)
+    with pytest.raises(OSError):
+        run(single_manifest(op, settings), settings, tmp_path / 'run',
+            launcher=lambda *_: pytest.fail('worker launched'), reset_controller=control)
+    assert control.calls == ['begin', 'block']

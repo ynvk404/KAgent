@@ -9,7 +9,7 @@ import javax.servlet.*;
 import javax.servlet.http.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-/** Control traffic terminates before the original filters. Requests are closed by default. */
+/** Control traffic terminates before the original filters. Unverified transitions stay closed. */
 public final class ResetGate implements Filter, HttpSessionListener {
     public static final String COMMIT="8b67a88d73b2594570fc21150705283de884620b";
     private static final Object monitor=new Object();
@@ -33,7 +33,7 @@ public final class ResetGate implements Filter, HttpSessionListener {
             if(!System.getProperty("java.specification.version").equals("17")) throw new IllegalStateException("JDK mismatch");
             if(!config.getServletContext().getServerInfo().equals("Apache Tomcat/9.0.122")) throw new IllegalStateException("Tomcat mismatch");
             if(!config.getServletContext().getClassLoader().equals(getClass().getClassLoader())) throw new IllegalStateException("application classloader mismatch");
-            lifecycle.capture(); initialized=true;
+            lifecycle.capture(); initialized=true; state="IDLE";
         } catch(Exception e) { state="FAILED"; throw new ServletException("baseline capture failed",e); }
     }
     @Override public void sessionCreated(HttpSessionEvent e) { sessions.add(e.getSession()); }
@@ -74,7 +74,7 @@ public final class ResetGate implements Filter, HttpSessionListener {
         String path=request.getRequestURI().substring(request.getContextPath().length());
         if(path.equals("/__kagent_reset")) { control(request,response); return; }
         synchronized(monitor) {
-            if(!state.equals("OPEN") || System.nanoTime()>deadline || !path.equals(route)) {
+            if(!state.equals("IDLE") && (!state.equals("OPEN") || System.nanoTime()>deadline || !path.equals(route))) {
                 response.sendError(503,"testcase admission closed");return;
             }
             active++;
@@ -97,6 +97,7 @@ public final class ResetGate implements Filter, HttpSessionListener {
             if(nonce==null || !nonce.matches("[a-f0-9]{32}")) throw new IllegalArgumentException("invalid nonce");
             String action=(String)input.get("action");
             if(!initialized || state.equals("FAILED")) throw new IllegalStateException("reset permanently blocked");
+            Map<String,Object> receipt=null;
             if(action.equals("block")) closeGate();
             else if(action.equals("reset")) {
                 InstallProbe.assertInstalled(servletContext);
@@ -113,8 +114,14 @@ public final class ResetGate implements Filter, HttpSessionListener {
                 if(requested==null || !(testRoute || requested.matches("/(?:sqli|xss)-[0-9]{2}/BenchmarkTest[0-9]{5}")) || seconds<1 || seconds>3600)
                     throw new IllegalArgumentException("invalid case lease");
                 synchronized(monitor) { route=requested;deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(seconds);state="OPEN"; }
+            } else if(action.equals("idle")) {
+                if(!state.equals("CLOSED") || generation==0 || active!=0 || !sessions.isEmpty())
+                    throw new IllegalStateException("idle requires a completed reset");
+                InstallProbe.assertInstalled(servletContext);
+                lifecycle.verify();
+                synchronized(monitor) { state="IDLE";receipt=evidence(nonce,started); }
             } else if(!action.equals("status")) throw new IllegalArgumentException("unknown action");
-            resp.setContentType("application/json");json.writeValue(resp.getOutputStream(),evidence(nonce,started));
+            resp.setContentType("application/json");json.writeValue(resp.getOutputStream(),receipt==null?evidence(nonce,started):receipt);
         } catch(Exception failure) {
             servletContext.log("logical reset failed; admission remains closed",failure);
             synchronized(monitor) { state="FAILED";route=null;deadline=0; }

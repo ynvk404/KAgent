@@ -876,9 +876,10 @@ def test_partition_chart_counts_patterns_and_geometry(counts):
     assert all(mark is not None for mark in marks)
     assert len({ET.tostring(mark) for mark in marks if mark is not None}) == len(PARTITIONS)
     text = ' '.join(t.text or '' for t in tree.findall('s:text', namespace))
-    assert all(label in text for label in ('Evaluable', 'Unresolved', 'Execution failed', 'Invalid result', 'Not run'))
+    assert all(label in text for label in ('Đánh giá được', 'Chưa có kết luận', 'Lỗi thực thi',
+                                         'Kết quả không hợp lệ', 'Chưa chạy'))
     assert 'Development / smoke' in text and 'N scheduled' in text
-    assert 'sum to N scheduled' in text and 'not negative labels' in text
+    assert 'sum to N scheduled' in text and 'không được tính vào TN/FN' in text
     style = tree.find('s:style', namespace)
     assert style is not None and 'fill:#171717' in (style.text or '')
 
@@ -1049,7 +1050,7 @@ def _observations(contents):
 
 
 def _svg_text(contents):
-    return ' '.join(t.text or '' for t in ET.fromstring(contents).iterfind('.//s:text', SVG_NS))
+    return ' '.join(' '.join(t.itertext()) for t in ET.fromstring(contents).iterfind('.//s:text', SVG_NS))
 
 
 def _element(parent, query):
@@ -1278,7 +1279,10 @@ def test_thesis_quality_canonical_fractions_geometry_and_zero_denominator():
     zero = _thesis_model([_thesis_case(0, confusion='TN', expected_vulnerable=False)])
     text = _svg_text(render_thesis_charts(zero)['charts/scenario1-validation-quality.svg'])
     assert '0,0% (0/1)' in text and 'NA (0/0)' in text
-    assert all(text.count(label) == 2 for label in ('Recall', 'Precision', 'FPR', 'Evaluability'))
+    assert all(text.count(label) == 2 for label in ('Recall', 'Precision', 'FPR', 'Tỷ lệ đánh giá được'))
+    assert 'Evaluability' not in text and 'Có kết quả' not in text
+    compatibility = _svg_text(render_charts(zero)['charts/class-metrics.svg'])
+    assert compatibility.count('Tỷ lệ đánh giá được') == 3  # Subtitle and the two class labels.
 
 
 def test_thesis_parent_completed_cohort_includes_unresolved_invalid_and_retains_failures():
@@ -1298,10 +1302,10 @@ def test_thesis_parent_completed_cohort_includes_unresolved_invalid_and_retains_
     md = render_thesis_tables(model)
     assert _md_rows(md, 'T2A')[0] == ['SQLi', '3/3', '20,0', '20,0', '30,0', '10,0–30,0']
     assert _md_rows(md, 'T2C') == [
-        ['SQLi / Hết ngân sách', '1', '1000,0<br>1/1', '8,0<br>1/1'],
-        ['XSS / Sự cố', '1', '0,0<br>1/1', '0,0<br>1/1']]
+        ['SQLi / Đạt giới hạn tài nguyên', '1', '1000,0<br>1/1', '8,0<br>1/1'],
+        ['XSS / Tiến trình gặp sự cố', '1', '0,0<br>1/1', '0,0<br>1/1']]
     assert _md_rows(md, 'T3')[0] == ['SQLi', '14.000<br>4/4', '8<br>4/4', '12<br>4/4', '16<br>4/4']
-    assert 'Execution chưa hoàn tất xem T2C.' in md.decode()
+    assert 'Các lần chạy chưa hoàn tất xem T2C.' in md.decode()
 
 
 def test_thesis_metric_specific_coverage_fractional_median_pooled_and_shared_p95():
@@ -1358,8 +1362,50 @@ def test_thesis_noncompleted_status_groups_have_independent_availability():
              _thesis_case(2, final_status='timeout', agent_seconds=None, total_tokens=2000),
              _thesis_case(4, final_status='crashed', agent_seconds=40, total_tokens=4000)]
     md = render_thesis_tables(_thesis_model(cases))
-    assert _md_rows(md, 'T2C') == [['SQLi / Sự cố', '1', '40,0<br>1/1', '4,0<br>1/1'],
+    assert _md_rows(md, 'T2C') == [['SQLi / Tiến trình gặp sự cố', '1', '40,0<br>1/1', '4,0<br>1/1'],
                                 ['SQLi / Quá thời gian', '2', '5,0<br>1/2', '2,0<br>1/2']]
+
+
+def test_thesis_notes_distinguish_unscored_cases_na_and_metric_denominators():
+    cases = [_thesis_case(i * 2, evaluator_partition=part,
+                         confusion='TP' if part == 'evaluable' else None,
+                         final_status=None if part == 'not-run' else 'completed')
+             for i, part in enumerate(PARTITIONS)]
+    data = render_thesis_tables(_thesis_model(cases))
+    md = data.decode()
+    assert _md_rows(data, 'T1A')[0][1:] == ['5', '1', '1', '1', '1', '1']
+    assert _md_rows(data, 'T1B')[0][1:] == ['1', '0', '0', '0']
+    assert all(label in md for label in ('Evaluable', 'Unresolved', 'Execution failed',
+                                        'Invalid result', 'Not run'))
+    assert 'Bốn nhóm sau không đủ điều kiện đưa vào TP/TN/FP/FN' in md
+    assert 'Kết luận hợp lệ “không xác nhận lỗ hổng” khác với “chưa có kết luận”' in md
+    assert all(formula in md for formula in ('Recall = TP/(TP+FN)', 'Precision = TP/(TP+FP)',
+                                           'FPR = FP/(FP+TN)'))
+    assert 'Tỷ lệ đánh giá được (Evaluability) = số case đánh giá được / tổng case đã lên lịch' in md
+    assert 'mức bao phủ, không phải độ đúng' in md
+    assert 'n case có số đo hợp lệ, N case hoàn tất' in md
+    assert 'n case có số đo hợp lệ, N case đã lên lịch' in md
+    assert all(reason in md for reason in ('mẫu số bằng 0', 'không có số đo hợp lệ',
+                                          'thiếu số đo để tính tổng toàn bộ',
+                                          'Tổng token chưa được ghi nhận đầy đủ'))
+    assert '1 = 1.000 token' in md and 'Đơn vị giây' in md
+    assert 'không phải thời gian toàn bộ benchmark' in md
+    assert '4/5 case hoàn tất / đã lên lịch; 4/4 case có số đo hợp lệ / hoàn tất' in md
+    assert 'không khả dụng' not in md
+
+
+def test_thesis_resource_limit_provider_failure_and_crash_remain_separate():
+    statuses = ('budget-exhausted', 'provider-error', 'crashed', 'runtime-error')
+    cases = [_thesis_case(i * 2, final_status=status, evaluator_partition='execution-failed',
+                         confusion=None, agent_seconds=i + 1, total_tokens=(i + 1) * 1000)
+             for i, status in enumerate(statuses)]
+    md = render_thesis_tables(_thesis_model(cases))
+    rows = _md_rows(md, 'T2C')
+    assert [r[0] for r in rows] == ['SQLi / Đạt giới hạn tài nguyên',
+                                  'SQLi / Tiến trình gặp sự cố', 'SQLi / Lỗi dịch vụ LLM',
+                                  'SQLi / Lỗi thực thi']
+    assert [r[2] for r in rows] == ['1,0<br>1/1', '3,0<br>1/1', '2,0<br>1/1', '4,0<br>1/1']
+    assert [case['final_status'] for case in cases] == list(statuses)
 
 
 def test_thesis_missing_final_status_ledger_preserves_partitions_and_source():
