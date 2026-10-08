@@ -8,8 +8,8 @@ import time
 import pytest
 
 from benchmarks.common.contracts import write_new
-from benchmarks.scenario1.dataset import select
-from benchmarks.scenario1.runner import run
+from benchmarks.scenario1.core.dataset import select
+from benchmarks.scenario1.core.runner import run
 from benchmarks.scenario1.reset.client import ResetBlocked, ResetController
 from benchmarks.scenario1.reset.install import COMMIT
 from tests.benchmarks.test_scenario1 import make_dataset, op, settings, single_manifest
@@ -85,7 +85,7 @@ def test_unknown_reset_blocks_every_next_worker(tmp_path, settings, failure, lau
     assert len(untouched) == 12 - launched
     assert all(r['status'] == 'not-run' and r['data']['partition'] == 'not-run' for r in untouched)
     assert any(json.loads(p.read_text())['status'] == 'blocked' for p in (root / 'reset-evidence').glob('*.json'))
-    from benchmarks.scenario1.evaluate import evaluate
+    from benchmarks.scenario1.core.evaluate import evaluate
     from benchmarks.scenario1.reporting.loader import load_report
     evaluation = evaluate(root)
     assert evaluation['metrics']['overall']['not-run'] == 12 - launched
@@ -108,7 +108,7 @@ def test_verified_reset_admits_all_synthetic_cases_sequentially(tmp_path, settin
     assert workers == manifest.execution_order
     assert control.resets == 2 * len(workers)
     assert not (root / 'blocked.json').exists()
-    from benchmarks.scenario1.evaluate import evaluate
+    from benchmarks.scenario1.core.evaluate import evaluate
     assert evaluate(root)['metrics']['overall']['execution-failed'] == len(workers)
 
 
@@ -182,7 +182,7 @@ class Response:
     {'source_commit': 'wrong'}, {'hsqldb': '2.7.2'}, {'tomcat': '9.0.121'}, {'jdk': '21'},
     {'war_sha256': 'wrong'}, {'active_requests': 1}, {'tracked_sessions': 1}, {'generation': None},
 ])
-def test_http_200_is_not_cleanliness_proof(tmp_path, changed):
+def test_http_200_is_not_cleanliness_proof(tmp_path, changed, monkeypatch):
     config = {'target': 'http://127.0.0.1:8080', 'context_path': '/benchmark', 'token': 'secret-test-value',
               'base_war_sha256': 'a' * 64, 'reset_source_sha256': 'b' * 64}
     state = tmp_path / 'state.json'
@@ -197,7 +197,7 @@ def test_http_200_is_not_cleanliness_proof(tmp_path, changed):
                 'active_requests': 0, 'tracked_sessions': 0, 'internal_seconds': .1,
                 'catalogs': {'server': 'c' * 64, 'embedded': 'd' * 64}, 'generation': 1, 'boot_id': 'boot', **changed}
             return Response(result)
-    controller.opener = Opener()
+    monkeypatch.setattr(controller, 'opener', Opener())
     with pytest.raises(ResetBlocked):
         controller.reset()
 

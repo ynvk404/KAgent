@@ -17,9 +17,9 @@ import uuid
 
 from benchmarks.common.contracts import RuntimeSettings, write_new
 from benchmarks.common.contracts import OperationalCaseInput, decode
-from benchmarks.scenario1.dataset import Dataset
-from benchmarks.scenario1.dataset import select
-from benchmarks.scenario1.runtime import request_fixture
+from benchmarks.scenario1.core.dataset import Dataset
+from benchmarks.scenario1.core.dataset import select
+from benchmarks.scenario1.core.runtime import request_fixture
 from .client import ResetController, ResetBlocked, _NoRedirect
 from .install import source_hash
 from .owned_target import create, cleanup, docker
@@ -130,7 +130,8 @@ def verify(dataset: Path, war: Path, destination: Path, image: str, port: int) -
         fresh = probe(config, 'inspect')
         raw_control(config, 'block')
         reset(control)
-        check('both_catalogs_exact_baseline', len(control.baseline) == 2)
+        baseline = control.baseline
+        check('both_catalogs_exact_baseline', baseline is not None and len(baseline) == 2)
         authorize(config)
         before = probe(config, 'inspect')
         raw_control(config, 'block')
@@ -203,7 +204,7 @@ def verify(dataset: Path, war: Path, destination: Path, image: str, port: int) -
         # Real controller/runner integration on a production installation. The
         # injected launcher makes fixed HTTP fixture calls only, with no model.
         production_state, production = target('runner-production', 5, test_probes=False)
-        from benchmarks.scenario1.runner import run
+        from benchmarks.scenario1.core.runner import run
         production_settings = RuntimeSettings(production['target'], '/benchmark', True, 'external-reset')
         for case_id in ('BenchmarkTest00113', xss_ids[0]):
             manifest = select(Dataset(dataset), 'focused-' + case_id, case_id=case_id)
@@ -213,8 +214,7 @@ def verify(dataset: Path, war: Path, destination: Path, image: str, port: int) -
                 response(production, decode(OperationalCaseInput, payload['operational']))
                 return -9, False  # Deliberate model-free worker failure; never scored TP/TN.
             run_dir = run(manifest, production_settings, destination / ('runner-' + case_id), launcher=launcher,
-                          reset_controller=ResetController(production_state),
-                          reset_audit=Path(__file__).parent / 'evidence/source-boundary.json')
+                          reset_controller=ResetController(production_state))
             receipts = [json.loads(p.read_text()) for p in (run_dir / 'reset-evidence').glob('*.json')]
             check('production_runner_' + case_id, launched == [case_id]
                   and len(receipts) == 3 and all(r['status'] == 'verified' for r in receipts)

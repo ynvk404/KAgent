@@ -84,9 +84,9 @@ class ResetController:
         elif self.source_identity != manifest.dataset['artifacts']:
             raise ResetBlocked('selection source identity changed')
 
-    def request(self, action: str, *, route=None, lease_seconds=None) -> dict:
+    def request(self, action: str, *, route: str | None = None, lease_seconds: int | None = None) -> dict:
         nonce = uuid.uuid4().hex
-        data = {'action': action, 'nonce': nonce}
+        data: dict[str, str | int | None] = {'action': action, 'nonce': nonce}
         if route is not None:
             data.update(route=route, lease_seconds=lease_seconds)
         started = time.monotonic()

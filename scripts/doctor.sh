@@ -10,8 +10,6 @@
 #   - Runtime path permissions (.kagent, artifacts)
 #   - Config & LLM provider presence (strictly ZERO secrets displayed)
 #   - Optional scanner tools (nmap, ffuf)
-#   - Burp & MCP integrations
-#   - Benchmark ground truth integrity
 #
 # Exit codes:
 #   0: All critical checks passed (warnings may be present)
@@ -128,73 +126,35 @@ else
     report_fail "No python3 executable found in PATH or ./venv-linux"
 fi
 
+# Share runtime/dependency validation with setup's non-mutating check.
 if [[ -n "$PYTHON_BIN" ]]; then
-    PY_VER="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")' 2>/dev/null || echo "")"
-    PY_MAJOR="$("$PYTHON_BIN" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || echo "0")"
-    PY_MINOR="$("$PYTHON_BIN" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo "0")"
-
-    if [[ "$PY_MAJOR" -ge 3 && "$PY_MINOR" -ge 11 ]]; then
-        report_pass "Python version: $PY_VER (satisfies >= 3.11 requirement)"
+    KAGENT_VENV_DIR="$(dirname "$(dirname "$PYTHON_BIN")")"
+    if [[ -f "$KAGENT_VENV_DIR/pyvenv.cfg" ]] && ./scripts/setup.sh --check-only --venv-path "$KAGENT_VENV_DIR"; then
+        report_pass "Virtualenv, Python version, required dependencies and CLI verified"
     else
-        report_fail "Python version: $PY_VER (requires Python >= 3.11)"
+        report_fail "Environment setup check failed; run scripts/setup.sh"
+    fi
+    if KAGENT_VER="$("$PYTHON_BIN" -B -c 'from src.version import describe; print(describe())' 2>/dev/null)"; then
+        report_pass "KAgent version: $KAGENT_VER"
+    else
+        report_fail "Unable to read KAgent version"
     fi
 fi
-
-# ------------------------------------------------------------------------------
-# 3. KAgent Core Imports & Packaging
-# ------------------------------------------------------------------------------
-report_info "KAgent Core Import & Metadata"
-
-if [[ -n "$PYTHON_BIN" ]]; then
-    if "$PYTHON_BIN" -c "import src; from src.version import describe; print(describe())" >/dev/null 2>&1; then
-        KAGENT_VER="$("$PYTHON_BIN" -c 'from src.version import describe; print(describe())')"
-        report_pass "KAgent import successful: $KAGENT_VER"
-    else
-        report_fail "Unable to import KAgent core modules from src/"
-    fi
-
-    if "$PYTHON_BIN" -c "import src.cli.main" >/dev/null 2>&1; then
-        report_pass "CLI entrypoint (src.cli.main) is importable"
-    else
-        report_fail "Failed to import src.cli.main"
-    fi
-fi
-
-# ------------------------------------------------------------------------------
-# 4. Dependencies Check
-# ------------------------------------------------------------------------------
-report_info "Python Dependencies"
 
 check_python_module() {
     local mod="$1"
-    local desc="$2"
-    local required="${3:-1}"
-
-    if [[ -n "$PYTHON_BIN" ]] && "$PYTHON_BIN" -c "import $mod" >/dev/null 2>&1; then
-        report_pass "Module $desc ($mod) installed"
+    if [[ -n "$PYTHON_BIN" ]] && "$PYTHON_BIN" -B -c "import $mod" >/dev/null 2>&1; then
+        report_pass "Optional module $2 ($mod) installed"
     else
-        if [[ "$required" -eq 1 ]]; then
-            report_fail "Required module $desc ($mod) is MISSING"
-        else
-            report_warn "Optional module $desc ($mod) is not installed"
-        fi
+        report_warn "Optional module $2 ($mod) is not installed"
     fi
 }
 
-# Required dependencies from pyproject.toml
-check_python_module "httpx" "HTTPX client" 1
-check_python_module "mcp" "Model Context Protocol SDK" 1
-check_python_module "yaml" "PyYAML" 1
-check_python_module "requests" "Requests HTTP library" 1
-check_python_module "rich" "Rich terminal formatting" 1
-check_python_module "textual" "Textual TUI framework" 1
-check_python_module "watchdog" "Watchdog filesystem monitor" 1
-
 # Optional dependencies [dev] & [enhanced]
-check_python_module "pytest" "pytest testing framework [dev]" 0
-check_python_module "frontmatter" "python-frontmatter [dev]" 0
-check_python_module "filelock" "filelock concurrency [enhanced]" 0
-check_python_module "pygments" "Pygments syntax highlighting [enhanced]" 0
+check_python_module "pytest" "pytest testing framework [dev]"
+check_python_module "frontmatter" "python-frontmatter [dev]"
+check_python_module "filelock" "filelock concurrency [enhanced]"
+check_python_module "pygments" "Pygments syntax highlighting [enhanced]"
 
 # ------------------------------------------------------------------------------
 # 5. Filesystem & Runtime Directories
@@ -283,38 +243,6 @@ if command -v ffuf >/dev/null 2>&1; then
     report_pass "Scanner: ffuf found at $(command -v ffuf)"
 else
     report_warn "Scanner: ffuf not found in PATH (optional, KAgent native tools remain active)"
-fi
-
-# ------------------------------------------------------------------------------
-# 8. Benchmark Ground Truth & Definitions
-# ------------------------------------------------------------------------------
-report_info "Benchmark Integrity"
-
-PLANNER_CASES_PATH=""
-if [[ -f "benchmarks/internal/planner_cases.json" && -s "benchmarks/internal/planner_cases.json" ]]; then
-    PLANNER_CASES_PATH="benchmarks/internal/planner_cases.json"
-elif [[ -f "benchmarks/planner_cases.json" && -s "benchmarks/planner_cases.json" ]]; then
-    PLANNER_CASES_PATH="benchmarks/planner_cases.json"
-fi
-
-if [[ -n "$PLANNER_CASES_PATH" ]]; then
-    CASES_COUNT="$("$PYTHON_BIN" -c "import json; print(len(json.load(open('$PLANNER_CASES_PATH'))))" 2>/dev/null || echo "ok")"
-    report_pass "Planner benchmark cases present: $PLANNER_CASES_PATH ($CASES_COUNT cases)"
-else
-    report_fail "Planner benchmark cases missing: benchmarks/internal/planner_cases.json"
-fi
-
-REASONING_SPEC_PATH=""
-if [[ -f "benchmarks/internal/REASONING.md" && -s "benchmarks/internal/REASONING.md" ]]; then
-    REASONING_SPEC_PATH="benchmarks/internal/REASONING.md"
-elif [[ -f "benchmarks/REASONING.md" && -s "benchmarks/REASONING.md" ]]; then
-    REASONING_SPEC_PATH="benchmarks/REASONING.md"
-fi
-
-if [[ -n "$REASONING_SPEC_PATH" ]]; then
-    report_pass "Reasoning benchmark spec present: $REASONING_SPEC_PATH"
-else
-    report_fail "Reasoning benchmark spec missing: benchmarks/internal/REASONING.md"
 fi
 
 # ------------------------------------------------------------------------------

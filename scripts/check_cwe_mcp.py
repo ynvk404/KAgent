@@ -8,6 +8,10 @@ from __future__ import annotations
 import asyncio
 import argparse
 import json
+import os
+import signal
+import sys
+from contextlib import asynccontextmanager
 import tempfile
 import time
 from pathlib import Path
@@ -16,10 +20,10 @@ from typing import Any
 
 from mcp import ClientSession
 
-from components.cwe_mcp.contract import EXPECTED_CORPUS, SEARCH_SCHEMA, GET_SCHEMA, LookupResponse
+from components.cwe_mcp.contract import EXPECTED_CORPUS, SEARCH_SCHEMA, GET_SCHEMA, LookupResponse, SearchResponse
 from src.config.config import MCPServerConfig
 from src.engagement.state import EngagementState
-from src.findings.cwe_enrichment import Enrichment, parse_response
+from src.findings.cwe_enrichment import Enrichment, TrustedSource, parse_response
 from src.findings.store import Store, read_report
 from src.permission.permission import Decision, YoloPrompter, UserControlledRefusal
 from src.permission.runtime.execution import default_execution_policy
@@ -299,6 +303,119 @@ async def operator_flow(root, deployment):
         await session.close()
 
 
+INSPECT = """import hashlib, zipfile, time
+from pathlib import Path
+root = Path(__import__('sys').argv[1])
+while True:
+    with zipfile.ZipFile(root / 'runtime.zip') as archive:
+        for name in archive.namelist():
+            if name.endswith('.py'):
+                compile(archive.read(name), name, 'exec', dont_inherit=True)
+    for path in (root / 'runtime').rglob('*'):
+        if path.is_file():
+            with path.open('rb') as stream:
+                hashlib.file_digest(stream, 'sha256')
+    time.sleep(1)
+"""
+
+
+async def stop_process(process):
+    # Only this harness's explicitly created session/process group is stopped.
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        await asyncio.wait_for(process.wait(), 5)
+    except TimeoutError:
+        os.killpg(process.pid, signal.SIGKILL)
+        await process.wait()
+
+
+@asynccontextmanager
+async def tooling_load(deployment: Path):
+    processes = set()
+    async def pyright():
+        while True:
+            process = await asyncio.create_subprocess_exec(
+                str(Path(sys.executable).parent / 'pyright'),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True)
+            processes.add(process)
+            try:
+                if await process.wait() != 0:
+                    raise RuntimeError('moderate-load pyright failed')
+            finally:
+                await stop_process(process)
+                processes.discard(process)
+    inspector = await asyncio.create_subprocess_exec(
+        '/usr/bin/python3', '-I', '-B', '-c', INSPECT, str(deployment),
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True)
+    processes.add(inspector)
+    task = asyncio.create_task(pyright())
+    try:
+        yield task, inspector
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        for process in tuple(processes):
+            await stop_process(process)
+
+
+async def startup_rounds(deployment: Path, count: int, mode: str, samples: list, load=None):
+    root = Path(__file__).resolve().parents[1]
+    for index in range(count):
+        before = len(samples)
+        started = time.monotonic()
+        registry, prompter, policy, _, session, metrics = await connect(root, deployment)
+        try:
+            source = TrustedSource(registry, policy)
+            search = parse_response(await registry.execute('mcp_cwe_catalog_search_cwe',
+                {'query': 'missing authorization', 'max_results': 5}, None, prompter), 'search')
+            exact = parse_response(await registry.execute('mcp_cwe_catalog_get_cwe',
+                {'id': 639}, None, prompter), 'get')
+            assert isinstance(search, SearchResponse) and isinstance(exact, LookupResponse)
+            assert search.candidates and exact.found and exact.candidate is not None
+            assert exact.candidate.cwe_id == 'CWE-639'
+            source.unchanged()
+            assert policy.active == 0 and not policy.engagement.http_permissions.grants
+            if load is not None:
+                task, inspector = load
+                assert not task.done() and inspector.returncode is None
+        finally:
+            await session.close()
+        current = samples[before:]
+        assert len(current) == 3 and all(s['completed'] and s['seconds'] < integration.HANDSHAKE_TIMEOUT_S for s in current)
+        print(json.dumps({'mode': mode, 'round': index + 1, 'fresh_processes': current,
+                          'discovery': metrics, 'round_seconds': time.monotonic() - started}), flush=True)
+
+
+async def check_startup(deployment: Path, count: int):
+    if deployment.is_symlink() or not deployment.is_dir() or deployment.resolve() != deployment:
+        raise RuntimeError('BLOCKED: configured CWE deployment must be a canonical directory')
+    samples = []
+    original = ClientSession.initialize
+    async def measured(self, *args, **kwargs):
+        start = time.monotonic()
+        completed = False
+        try:
+            result = await original(self, *args, **kwargs)
+            completed = True
+            return result
+        finally:
+            samples.append({'seconds': time.monotonic() - start, 'completed': completed})
+    ClientSession.initialize = measured
+    try:
+        await startup_rounds(deployment, count, 'sequential', samples)
+        async with tooling_load(deployment) as load:
+            await startup_rounds(deployment, count, 'pyright-and-dependency-inspection', samples, load)
+    finally:
+        ClientSession.initialize = original
+    print(json.dumps({'successful_fresh_processes': len(samples), 'handshake_budget_seconds': integration.HANDSHAKE_TIMEOUT_S,
+                      'max_initialization_seconds': max(s['seconds'] for s in samples)}), flush=True)
+
+
 async def main(deployment: Path):
     repository = Path(__file__).resolve().parents[1]
     if deployment.is_symlink() or not deployment.is_dir() or deployment.resolve() != deployment:
@@ -330,9 +447,26 @@ async def main(deployment: Path):
     destination.write_text(json.dumps(report, indent=2)+'\n')
     print(json.dumps(report, indent=2))
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
+
+def cli(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Check the configured CWE MCP deployment.")
     parser.add_argument('--deployment', required=True, type=Path,
                         help='explicit configured CWE MCP deployment root')
-    args = parser.parse_args()
-    asyncio.run(main(args.deployment))
+    parser.add_argument('--startup', action='store_true',
+                        help='check fresh-process startup sequentially and under tooling load')
+    parser.add_argument('--rounds', type=int,
+                        help='startup rounds per load mode, 1..20 (default: 5; requires --startup)')
+    args = parser.parse_args(argv)
+    if args.rounds is not None and not args.startup:
+        parser.error('--rounds requires --startup')
+    count = args.rounds if args.rounds is not None else 5
+    if not 1 <= count <= 20:
+        parser.error('--rounds must be between 1 and 20')
+    if args.startup:
+        asyncio.run(check_startup(args.deployment, count))
+    else:
+        asyncio.run(main(args.deployment))
+
+
+if __name__ == '__main__':
+    cli()

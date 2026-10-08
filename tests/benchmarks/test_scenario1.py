@@ -15,11 +15,11 @@ from benchmarks.common.contracts import (CaseExecution, GroundTruth, Operational
     RuntimeMetrics, RuntimeSettings, decode, digest, file_hash, write_new)
 from benchmarks.common.metrics import distribution, llm_metrics
 from benchmarks.common.recorder import Recorder, read_records
-from benchmarks.scenario1.canonical import inspect_case_evidence, inspect_export
-from benchmarks.scenario1.dataset import Dataset, MappingError, parse_truth, select
-from benchmarks.scenario1.evaluate import confusion, evaluate
-from benchmarks.scenario1.runner import envelope, run
-from benchmarks.scenario1.runtime import (build_agent, candidate_arguments, execute_case, prompt,
+from benchmarks.scenario1.core.canonical import inspect_case_evidence, inspect_export
+from benchmarks.scenario1.core.dataset import Dataset, MappingError, parse_truth, select
+from benchmarks.scenario1.core.evaluate import confusion, evaluate
+from benchmarks.scenario1.core.runner import envelope, run
+from benchmarks.scenario1.core.runtime import (build_agent, candidate_arguments, execute_case, prompt,
                                           request_fixture, execution_status)
 from src.llm.core.client import Client
 from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
@@ -1021,14 +1021,14 @@ def test_unexpected_schedule_and_partial_started(tmp_path, op, settings):
 
 def test_real_fresh_process_workers_with_fake_external_io(tmp_path, monkeypatch, op, settings):
     import subprocess
-    from benchmarks.scenario1.runner import launch_worker
+    from benchmarks.scenario1.core.runner import launch_worker
     secure = tmp_path / 'config.json'
     secure.write_text(json.dumps({'backend': 'openai', 'api_keys': {'openai': 'fake-secret-marker'}}))
     monkeypatch.setenv('kagent_CONFIG', str(secure))
     actual_popen = subprocess.Popen
     script = '''
 import asyncio, httpx
-from benchmarks.scenario1.worker import main
+from benchmarks.scenario1.core.worker import main
 from tests.benchmarks.test_scenario1 import ScriptedClient
 real = httpx.AsyncClient
 httpx.AsyncClient = lambda **kw: real(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b'bounded fixture', request=r)), **kw)
@@ -1072,7 +1072,7 @@ def test_cli_dry_run_never_initializes_agent_provider_or_network(tmp_path, monke
 
 def test_parent_watchdog_terminates_real_process(tmp_path, monkeypatch, op, settings):
     import subprocess
-    from benchmarks.scenario1.runner import launch_worker
+    from benchmarks.scenario1.core.runner import launch_worker
     original = subprocess.Popen
     children = []
     def start(cmd, **kwargs):
@@ -1087,7 +1087,7 @@ def test_parent_watchdog_terminates_real_process(tmp_path, monkeypatch, op, sett
 
 def test_worker_provider_setup_failure_has_safe_trace(tmp_path, monkeypatch, op, settings):
     import subprocess
-    from benchmarks.scenario1.runner import launch_worker
+    from benchmarks.scenario1.core.runner import launch_worker
     config = tmp_path / 'secure.json'
     config.write_text('{"backend":""}')
     monkeypatch.setenv('kagent_CONFIG', str(config))

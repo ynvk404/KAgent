@@ -16,7 +16,7 @@ from benchmarks.common.contracts import (CLASSES, PARTITIONS, CanonicalResultExp
     decode, digest, file_hash, RunManifest, RuntimeSettings, write_new)
 from benchmarks.common.recorder import Recorder, read_records, validate_lifecycle
 from benchmarks.scenario1.__main__ import main
-from benchmarks.scenario1.classification import write_run_classification
+from benchmarks.scenario1.core.classification import write_run_classification
 from benchmarks.scenario1.reporting.aggregate import partition_rows, summary_rows
 from benchmarks.scenario1.reporting.charts import render_charts
 from benchmarks.scenario1.reporting.loader import load_report, presentation_id
@@ -235,7 +235,7 @@ def test_classification_compatibility_and_binding(tmp_path, op, settings, kind, 
 
 
 def test_smoke_legacy_and_dynamic_multi_case(tmp_path):
-    from benchmarks.scenario1.dataset import select
+    from benchmarks.scenario1.core.dataset import select
     from tests.benchmarks.test_scenario1 import make_dataset
     manifest = replace(select(make_dataset(tmp_path / 'dataset'), 'smoke-run', 'smoke'),
                        runtime=asdict(RuntimeSettings('http://127.0.0.1:3000', '/benchmark', True, 'confirmation-only')))
@@ -327,7 +327,7 @@ def _evaluated_run(tmp_path, op, settings, *, status='completed', started=True,
                    finish=True, result=True, torn=False, partial=False, publish=True):
     """Evaluator-generated integration artifacts, with no Agent/provider/target."""
     from tests.benchmarks.test_scenario1 import schedule_run, diagnostic_execution
-    from benchmarks.scenario1.evaluate import evaluate
+    from benchmarks.scenario1.core.evaluate import evaluate
     root = tmp_path / 'run'
     recorder = schedule_run(root, single_manifest(op, settings))
     if started:
@@ -434,7 +434,7 @@ def test_fail_fast_exception_and_multiple_valid_evaluations(tmp_path, op, settin
     recorder = Recorder(root / 'events.jsonl', 'run')
     recorder.append('evaluated', op.case_id, 'not-run', data={
         'partition': 'not-run', 'reason': 'fail-fast', 'evaluation_identity': 'fail-fast-v1'})
-    from benchmarks.scenario1.evaluate import evaluate
+    from benchmarks.scenario1.core.evaluate import evaluate
     # Non-evaluated rows are unchanged: fail-fast reason can legitimately replace
     # the read-only interruption reason, but the old evaluation must be rejected.
     with pytest.raises(ValueError, match='interruption mismatch'):
@@ -891,8 +891,8 @@ def test_reporting_fresh_process_imports_no_execution_runtime(tmp_path, op, sett
 import sys
 from benchmarks.scenario1.__main__ import main
 assert main(['report', '--run', sys.argv[1]]) == 0
-prefixes = ('src.agent', 'src.config', 'src.llm', 'src.report', 'benchmarks.scenario1.runtime',
-            'benchmarks.scenario1.runner', 'benchmarks.scenario1.worker', 'benchmarks.scenario1.evaluate')
+prefixes = ('src.agent', 'src.config', 'src.llm', 'src.report', 'benchmarks.scenario1.core.runtime',
+            'benchmarks.scenario1.core.runner', 'benchmarks.scenario1.core.worker', 'benchmarks.scenario1.core.evaluate')
 assert not [m for m in sys.modules if m.startswith(prefixes)]
 '''
     completed = subprocess.run([sys.executable, '-B', '-c', code, str(root)], capture_output=True, text=True)

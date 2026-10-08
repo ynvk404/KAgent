@@ -19,7 +19,7 @@ from benchmarks.common.contracts import (CaseExecution, OperationalCaseInput, Ru
 from benchmarks.common.recorder import Recorder
 from .classification import RunKind, write_run_classification
 from .runtime import CAPABILITY, REPO
-from .reset.client import ResetBlocked, persist
+from ..reset.client import ResetBlocked, persist
 
 
 def reproducibility() -> dict:
@@ -40,7 +40,7 @@ def reproducibility() -> dict:
                                   *REPO.joinpath('benchmarks/scenario1').rglob('*.py'),
                                   *REPO.joinpath('benchmarks/scenario1/reset/java').rglob('*.java'),
                                   *REPO.joinpath('benchmarks/scenario1/reset/tests').rglob('*.java'),
-                                  *(REPO / 'benchmarks/scenario1/reset' / name for name in ('run-target.sh', 'mvn-runtime-wrapper')),
+                                  REPO / 'benchmarks/scenario1/reset/run-target.sh',
                                   *(REPO / name for name in ('pyproject.toml', 'requirements.txt', 'pyrightconfig.json')),
                               }) if p.is_file() and not p.is_symlink()
                               and not p.is_relative_to(REPO / 'benchmarks/scenario1/reset/evidence')},
@@ -75,7 +75,7 @@ def launch_worker(envelope: dict, seconds: float) -> tuple[int, bool]:
     env['PYTHONPATH'] = str(REPO)
     env['KAGENT_PROJECT_ROOT'] = envelope['workspace']
     env.pop('KAgent_TRACE_AGENT', None)
-    proc = subprocess.Popen([sys.executable, '-m', 'benchmarks.scenario1.worker'], cwd=REPO, env=env,
+    proc = subprocess.Popen([sys.executable, '-m', 'benchmarks.scenario1.core.worker'], cwd=REPO, env=env,
                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     try:

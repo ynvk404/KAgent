@@ -1,6 +1,0 @@
-{
-  "enabled": true,
-  "audit_sha256": "3f6364a5c8f9109a083278b1819d104bca06a025a5baaa33d0b915dbb59e5623",
-  "resume_from": null,
-  "resume_policy": "new immutable run; reset and reverify; never append or trust prior target state"
-}

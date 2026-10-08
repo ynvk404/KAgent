@@ -9,7 +9,7 @@ import sys
 import uuid
 
 from benchmarks.common.contracts import DEFAULT_SEED, RunManifest, RuntimeSettings, decode, write_new, read_json
-from .dataset import Dataset, select
+from .core.dataset import Dataset, select
 
 
 class _BenchmarkParser(argparse.ArgumentParser):
@@ -44,8 +44,8 @@ def parser():
     running.add_argument('--target-state', required=True, choices=['confirmation-only', 'external-reset'])
     running.add_argument('--deployment-metadata')
     running.add_argument('--reset-state', type=Path, help='private owned-target control state; never sent to KAgent')
-    running.add_argument('--reset-audit', type=Path, default=Path(__file__).parent / 'reset/evidence/source-boundary.json',
-                         help='historical audit provenance only; does not exclude cases')
+    running.add_argument('--reset-audit', type=Path,
+                         help='optional historical audit provenance; does not exclude cases')
     running.add_argument('--resume-from', type=Path, help='reverify and rerun exact selection into a new immutable run')
     running.add_argument('--timeout', type=float, default=180)
     running.add_argument('--http-requests', type=int, default=24)
@@ -81,7 +81,7 @@ def main(argv=None) -> int:
         return 0
     try:
         if args.command == 'evaluate':
-            from .evaluate import evaluate
+            from .core.evaluate import evaluate
             report = evaluate(args.run)
             print(json.dumps({'run_id': report['run_id'], 'incomplete': report['incomplete'],
                               **report['metrics']['overall']}, indent=2))
@@ -108,7 +108,7 @@ def main(argv=None) -> int:
         settings = RuntimeSettings(args.target, args.context_path, args.authorized_lab, args.target_state,
                                    args.timeout, args.http_requests, args.tool_calls, args.agent_calls,
                                    args.deployment_metadata)
-        from .runner import run, validate_run_kind, validate_runtime
+        from .core.runner import run, validate_run_kind, validate_runtime
         validate_runtime(manifest, settings, verified_reset=args.reset_state is not None)
         validate_run_kind(manifest, args.run_kind)
         if args.dry_run:
@@ -120,7 +120,7 @@ def main(argv=None) -> int:
         controller = ResetController(args.reset_state) if args.reset_state else None
         run(manifest, settings, destination, run_kind=args.run_kind, fail_fast=args.fail_fast,
             reset_controller=controller, reset_audit=args.reset_audit if controller else None, resume_from=args.resume_from)
-        from .evaluate import evaluate
+        from .core.evaluate import evaluate
         report = evaluate(destination)
         print(json.dumps({'artifacts': str(destination), **report['metrics']['overall']}, indent=2))
         return 5 if (destination / 'blocked.json').exists() else 2 if report['metrics']['overall']['invalid-result'] else 4 if report['metrics']['overall']['execution-failed'] else 0

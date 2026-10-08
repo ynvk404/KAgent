@@ -7,9 +7,15 @@ discovery or whole-target completion. No official experiment or accuracy result
 is claimed by this implementation, and its metrics are not an official OWASP
 scanner score.
 
+Implementation modules live in `benchmarks/scenario1/core/`: dataset mapping,
+bindings, canonical exports, run classification, runner, runtime, worker and
+evaluation. Reporting and logical reset remain sibling packages. The CLI
+entrypoint stays in `benchmarks/scenario1/__main__.py`, so all commands below
+continue to use `python -m benchmarks.scenario1`.
+
 ## Data and selection
 
-`benchmarks.scenario1.dataset` reads BenchmarkJava's `expectedresults-1.2.csv`
+`benchmarks.scenario1.core.dataset` reads BenchmarkJava's `expectedresults-1.2.csv`
 and `data/benchmark-crawler-http.xml`. Truth must have an explicit version,
 distinct IDs, boolean labels and correct CWE (89/79). Request mappings cross-check
 servlet annotations, literal request readers, parameter maps, name enumeration,

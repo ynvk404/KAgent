@@ -1,8 +1,0 @@
-#!/bin/sh
-# Persistent replacement for the lost wrapper. The actual Tomcat JVM receives
-# the Javassist opening via JAVA_TOOL_OPTIONS, including forked Maven children.
-set -eu
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} --add-opens=java.base/java.lang=ALL-UNNAMED"
-exec /experiment/apache-maven-3.9.12/bin/mvn --offline -B -C -Dstyle.color=never \
-  -Dmaven.repo.local=/root/.m2/repository -Dspotless.skip=true "$@"

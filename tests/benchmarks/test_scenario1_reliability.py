@@ -5,8 +5,8 @@ import json
 import pytest
 
 from benchmarks.common.contracts import file_hash
-from benchmarks.scenario1.runner import reproducibility, validate_runtime
-from benchmarks.scenario1.runtime import build_agent, execute_case, prompt, request_fixture
+from benchmarks.scenario1.core.runner import reproducibility, validate_runtime
+from benchmarks.scenario1.core.runtime import build_agent, execute_case, prompt, request_fixture
 from src.llm.core.types import ToolCall
 from src.tools.common.outcome import ToolOutput
 from tests.benchmarks.test_scenario1 import (
@@ -17,7 +17,7 @@ from tests.benchmarks.test_scenario1 import (
 
 @pytest.fixture
 def built_agents(monkeypatch):
-    from benchmarks.scenario1 import runtime
+    from benchmarks.scenario1.core import runtime
     original = runtime.build_agent
     agents = []
 
@@ -331,7 +331,7 @@ def test_fixture_discipline_preserves_unrelated_fields(tmp_path, op, settings, l
 
 
 def test_known_stateful_runtime_fails_closed_even_with_reset_declaration(tmp_path, settings):
-    from benchmarks.scenario1.dataset import select
+    from benchmarks.scenario1.core.dataset import select
     dataset = make_dataset(tmp_path, 1)
     truth = dataset.truth[0]
     source = tmp_path / f'src/main/java/org/owasp/benchmark/testcode/{truth.case_id}.java'
@@ -344,9 +344,9 @@ def test_known_stateful_runtime_fails_closed_even_with_reset_declaration(tmp_pat
 
 
 def test_reproducibility_pins_dirty_runtime_without_config_contents(tmp_path, monkeypatch):
-    from benchmarks.scenario1 import runner
+    from benchmarks.scenario1.core import runner
     from types import SimpleNamespace
-    for name in ('src/agent/runtime.py', 'benchmarks/scenario1/runtime.py', 'skills/sql-injection/SKILL.md'):
+    for name in ('src/agent/runtime.py', 'benchmarks/scenario1/core/runtime.py', 'skills/sql-injection/SKILL.md'):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('original runtime')

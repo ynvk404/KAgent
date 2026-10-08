@@ -10,11 +10,11 @@ import pytest
 
 from benchmarks.common.contracts import CaseExecution, RuntimeMetrics, decode, digest, write_new
 from benchmarks.scenario1.__main__ import parser
-from benchmarks.scenario1.classification import (read_run_designation, write_run_classification,
+from benchmarks.scenario1.core.classification import (read_run_designation, write_run_classification,
                                                 RECORD_NAME)
-from benchmarks.scenario1.evaluate import evaluate
-from benchmarks.scenario1.runner import run
-from benchmarks.scenario1.runtime import build_agent, execute_case, request_fixture
+from benchmarks.scenario1.core.evaluate import evaluate
+from benchmarks.scenario1.core.runner import run
+from benchmarks.scenario1.core.runtime import build_agent, execute_case, request_fixture
 from tests.benchmarks.test_scenario1 import (ScriptedClient, single_manifest,
     op, settings, mock_http, isolated_project_environment)
 
@@ -81,7 +81,7 @@ async def test_per_case_dispatch_metric_serializes_and_legacy_is_na(
 
 def test_run_classification_precedes_worker_and_binds_final_manifest(
         tmp_path, monkeypatch, op, settings):
-    from benchmarks.scenario1 import runner
+    from benchmarks.scenario1.core import runner
     monkeypatch.setattr(runner, 'reproducibility', lambda: {'offline': True})
     manifest = single_manifest(op, settings)
     results = []
@@ -109,7 +109,7 @@ def test_run_classification_precedes_worker_and_binds_final_manifest(
 
 def test_default_run_kind_smoke_rejection_and_legacy_interpretation(
         tmp_path, monkeypatch, capsys, op, settings):
-    from benchmarks.scenario1 import runner
+    from benchmarks.scenario1.core import runner
     monkeypatch.setattr(runner, 'reproducibility', lambda: {'offline': True})
     parsed = parser().parse_args(['run', '--dataset', 'unused', '--case', op.case_id,
         '--target', settings.target, '--context-path', settings.context_path,
@@ -136,7 +136,7 @@ def test_default_run_kind_smoke_rejection_and_legacy_interpretation(
     assert read_run_designation(legacy).declared is False
     smoke = tmp_path / 'smoke'
     from tests.benchmarks.test_scenario1 import make_dataset
-    from benchmarks.scenario1.dataset import select
+    from benchmarks.scenario1.core.dataset import select
     smoke_manifest = select(make_dataset(tmp_path / 'dataset'), 'smoke-run', 'smoke')
     write_new(smoke / 'manifest.json', asdict(smoke_manifest))
     designation = read_run_designation(smoke)

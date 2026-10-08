@@ -103,6 +103,6 @@ Start a durable attempt, link runtime observation IDs and immutable proof refs,
 and submit a structured assessment. Runtime checks provenance, identity and
 execution completeness; skill controls, repeatability, impact and stop conditions
 remain the Agent's responsibility. A bounded completed negative does not prove
-universal absence. Optional operator review creates its own revision. See the
-[workflow contract](../docs/agent-assessed-evidence.md) for source/import, related
-request, excerpt, resume and legacy rules.
+universal absence. Optional operator review creates its own revision. The runtime
+contract is implemented in `src/workflow/assessment.py`, `src/workflow/evidence.py`
+and `src/tools/workflow/workflow_tool.py`.

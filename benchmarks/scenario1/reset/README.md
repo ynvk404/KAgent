@@ -10,24 +10,19 @@ Tomcat 9.0.122, JDK 17, Hibernate 3.6.10.Final and Spring 5.3.39. The original
 handoff/prototype sources were unavailable in the supplied recovery directories.
 Historical 20/20 and 28/28 results are context only, not evidence for this code.
 
-**Final status: PARTIAL.** The logical reset is implemented and verified within
-the focused SQLi/XSS scope. The clean final reproduction passed 42/42 checks,
-13 representative HTTP response pairs and explicit INSERT A → reset → query B.
-Its 33 measured reset cycles had median internal **0.980 s** and end-to-end
-**0.986 s**. Production installer/controller/runner integration was exercised
-without a model, and all six owned target groups were cleaned successfully.
-Full ORM parity and restoration of effects outside the databases remain unverified.
+**Status: PARTIAL.** The logical reset is implemented within the focused
+SQLi/XSS scope. Full ORM parity and restoration of effects outside the databases
+remain unverified. Use the focused reproduction command below to generate new
+verification receipts; historical receipts are removed by `scripts/cleanup.py`.
 The current parent policy admits all 504 SQLi and 455 XSS cases through logical
 reset, including the 272 historically classified SQL-controlled cases. This
 policy follows the operator's explicit choice to accept that external-effects
 limitation; it does not extend the earlier focused verification to all cases.
 
-The benchmark regression group initially had 357 PASS and 14 environment failures
-caused by concurrent Docker Desktop drive remounts. All 14 passed when rerun from
-the WSL home directory with an explicit PYTHONPATH. The final reset-blocked branch
-also passes the unchanged evaluator and reporting loader using their existing
+The reset-blocked branch uses the evaluator and reporting loader's existing
 fail-fast sentinel; `blocked.json` and event `block_reason` retain the reset cause.
-See the XML receipts and `evidence/RESULTS.md` for the exact test lineage.
+Historical audit provenance is optional: pass `--reset-audit <path>` to bind an
+existing audit to a new run. No default audit file is required.
 
 ## Implementation
 
@@ -39,12 +34,10 @@ See the XML receipts and `evidence/RESULTS.md` for the exact test lineage.
 | `java/InstallProbe.java` | Live Tomcat container hierarchy, classloader, original filter instance and lifecycle listener assertions |
 | `install.py` | Compile into a copy of the cached WAR and install the first filter/lifecycle listener; retain the original initializer and filters |
 | `run-target.sh` | Start the owned HSQLDB server and cached Tomcat; apply Javassist `--add-opens` to the actual JVM |
-| `mvn-runtime-wrapper` | Durable offline Maven wrapper for forked JDK 17 runtime use |
 | `owned_target.py` | Create/readiness/cleanup of ownership-labelled disposable targets, internal networks and fixed-upstream ingress proxy |
 | `client.py` | Parent-only strict control verification, target/source attestation, exclusive runner lock and durable reset receipts |
 | `verify.py`, `tests/ResetProbe.java` | Fixed, model-free focused reproduction and mutations; production targets do not install probes |
-| `recover_coverage.py` | Persist the surviving audit projection without repeating the 504-case analysis |
-| `../runner.py`, `../__main__.py` | CLI and sequential worker lifecycle integration |
+| `../core/runner.py`, `../__main__.py` | CLI and sequential worker lifecycle integration |
 | `../../../tests/benchmarks/test_scenario1_reset.py` | Offline admission/failure/resume/metrics/identity regressions |
 
 Baseline capture runs after the original application initializer, while the
@@ -72,7 +65,7 @@ without certifying restoration of filesystem, LDAP or other external effects.
 
 | Mode | Status |
 |---|---|
-| Owned exact-target logical reset | Implemented; focused verification in `evidence/final-focused/verification.json` |
+| Owned exact-target logical reset | Implemented; regenerate focused verification with `verify.py` |
 | All 504 SQLi cases | Eligible with exact source/target identity and verified logical reset; no historical allowlist admission gate |
 | 455 XSS cases | Preserved and eligible under the existing native HTTP boundary; focused response samples do not certify all 455 |
 | 272 historically SQL-controlled cases | Eligible for logical reset; effects outside databases remain an accepted limitation |
@@ -109,8 +102,7 @@ venv-linux/bin/python -m benchmarks.scenario1.reset.verify \
 ```
 
 Verification receipts store hashes, durations, status and redacted response
-semantics. Development failures remain in `evidence/focused-development-*` so
-they cannot be mistaken for a clean reproduction. Private state contains a
+semantics under the supplied output directory. Private state contains a
 credential: keep it local, never commit it or pass it to workers. Runtime copies
 and private state are removed during owned cleanup. Docker Desktop/Drvfs can
 invalidate the caller's directory inode during bind mounts; the resource wrapper
@@ -118,12 +110,17 @@ reacquires the same working-directory path after Docker operations.
 
 ## Locked 12-case smoke command for the next session
 
-The commands below retain all locked cases, including SQL-controlled cases.
+After cleanup, recreate the deterministic smoke selection before using its
+manifest. The commands below include SQL-controlled cases.
 Every case uses logical reset; failure, timeout, incomplete readback or unknown
 outcome still stops the run. Scope remains PARTIAL for effects outside databases.
 The smoke commands were not run here.
 
 ```bash
+venv-linux/bin/python -m benchmarks.scenario1 select \
+  --dataset /mnt/d/DOANTOTNGHIEP/benchmark-targets/BenchmarkJava \
+  --mode smoke --seed 1729 \
+  --output artifacts/benchmarks/scenario1-smoke-1729/manifest.json
 venv-linux/bin/python -m benchmarks.scenario1.reset.owned_target create \
   --state artifacts/benchmarks/smoke-target-private.json \
   --war /home/khainguyen/.cache/kagent-s1-build-62da4de4df96/benchmark-offline.war --port 18080

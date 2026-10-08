@@ -10,8 +10,8 @@ from typing import Any
 from benchmarks.common.contracts import (CLASSES, PARTITIONS, CaseExecution, EvaluationRecord,
     RunManifest, decode, digest, file_hash, identifier, read_json)
 from benchmarks.common.recorder import read_records, validate_lifecycle
-from benchmarks.scenario1.classification import read_run_designation
-from benchmarks.scenario1.bindings import (EVALUATOR, evaluation_identity, orphan_binding,
+from benchmarks.scenario1.core.classification import read_run_designation
+from benchmarks.scenario1.core.bindings import (EVALUATOR, evaluation_identity, orphan_binding,
     validate_recorded_evaluations)
 from .model import ReportModel
 

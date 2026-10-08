@@ -16,7 +16,7 @@ from benchmarks.common.contracts import CaseExecution, OperationalCaseInput, Run
 from benchmarks.common.metrics import llm_metrics
 from .canonical import freeze
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 CAPABILITY = 'scenario1-native-http-confirmation-v1'
 
 

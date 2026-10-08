@@ -83,6 +83,59 @@ pytest -q
 
 Skill contracts and runtime behavior are still being refined through testing.
 
+## Cleaning project outputs
+
+From the repository root, after stopping KAgent and benchmark runs:
+
+```bash
+python3 scripts/cleanup.py --dry-run
+python3 scripts/cleanup.py
+```
+
+The cleanup removes all `docs/` and `artifacts/` contents, including audits,
+reports, findings, checkpoints, benchmark results and archived runs. It also
+removes historical benchmark evidence, project-local transient state and Python
+and test caches. No age filter is applied: all files in these output locations
+are removed. Saved runs must be copied outside the project outputs to retain them.
+
+Source code, tests, skills, configuration, virtual environments, project
+memory/intelligence/custom skills and `~/.kagent/` are retained.
+
+Use the same script for narrower resets:
+
+```bash
+python3 scripts/cleanup.py --scope runtime
+python3 scripts/cleanup.py --scope benchmark
+python3 scripts/cleanup.py --scope benchmark --reset-intelligence
+```
+
+`runtime` clears transient project state (including tool-result files) and known
+skill/finding/worker outputs. `benchmark` additionally clears benchmark outputs
+under `.kagent/` and `artifacts/benchmarks/`. Both retain docs, audits, checkpoints,
+archived runs, caches and the containing runtime directories. Intelligence is
+retained unless `--reset-intelligence` is explicitly passed with `all` or `benchmark`;
+this deletes only project `scenarios.jsonl` and its lock. Every scope supports `--dry-run`.
+
+After cleanup, recreate a benchmark selection before using its manifest;
+historical audit provenance is optional through `--reset-audit <path>`.
+
+The four operator scripts are:
+
+| Script | Purpose |
+|---|---|
+| `scripts/setup.sh` | Create the virtualenv and install dependencies; `--check-only` validates without installing |
+| `scripts/doctor.sh` | Reuse setup validation and inspect storage, config presence and optional tools |
+| `scripts/cleanup.py` | Clean outputs with the scopes above |
+| `scripts/check_cwe_mcp.py` | Check an explicitly configured CWE MCP deployment |
+
+Run Scenario 1 directly with `venv-linux/bin/python -m benchmarks.scenario1 --help`.
+For CWE acceptance or repeated startup checks under tooling load:
+
+```bash
+venv-linux/bin/python -m scripts.check_cwe_mcp --deployment /absolute/path/to/cwe-deployment
+venv-linux/bin/python -m scripts.check_cwe_mcp --deployment /absolute/path/to/cwe-deployment --startup --rounds 5
+```
+
 ## Authorized use and scope
 
 Use KAgent only against targets you are authorized to test. Keep activity

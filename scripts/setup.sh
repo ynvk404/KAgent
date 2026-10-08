@@ -85,53 +85,49 @@ log_ok()   { printf "[OK] %s\n" "$*"; }
 log_warn() { printf "[WARN] %s\n" "$*" >&2; }
 log_err()  { printf "[ERROR] %s\n" "$*" >&2; }
 
-# 1. Verify Python >= 3.11 is available
+# A check uses the selected virtualenv; it does not require system Python.
+if [[ "$CHECK_ONLY" -eq 1 ]]; then
+    if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+        log_err "Virtual environment at '$VENV_DIR' does not exist."
+        exit 1
+    fi
+    "$VENV_DIR/bin/python" -B - <<'PYTHON'
+import importlib
+import sys
+
+if sys.version_info < (3, 11):
+    print("[ERROR] KAgent requires Python >= 3.11.", file=sys.stderr)
+    raise SystemExit(1)
+print(f"[OK] Python {sys.version.split()[0]} in selected virtual environment.")
+failed = False
+for module in ("httpx", "mcp", "yaml", "requests", "reportlab", "rich", "textual", "watchdog", "src.cli.main"):
+    try:
+        importlib.import_module(module)
+    except Exception:
+        print(f"[ERROR] Cannot import required module: {module}", file=sys.stderr)
+        failed = True
+if failed:
+    raise SystemExit(1)
+print("[OK] Required dependencies and CLI entrypoint are importable.")
+PYTHON
+    if [[ "$CHECK_TOOLS" -eq 1 ]]; then
+        command -v nmap >/dev/null 2>&1 && log_ok "Scanner: nmap found" || log_warn "Scanner: nmap not found (optional)"
+        command -v ffuf >/dev/null 2>&1 && log_ok "Scanner: ffuf found" || log_warn "Scanner: ffuf not found (optional)"
+    fi
+    log_ok "Setup check passed."
+    exit 0
+fi
+
+# Installation needs system Python to create the virtualenv.
 SYSTEM_PYTHON=""
 if command -v python3 >/dev/null 2>&1; then
     SYSTEM_PYTHON="python3"
 elif command -v python >/dev/null 2>&1; then
     SYSTEM_PYTHON="python"
 fi
-
-if [[ -z "$SYSTEM_PYTHON" ]]; then
-    log_err "Python is not installed or not in PATH."
-    log_err "Please install Python 3.11 or newer (e.g., sudo apt install python3 python3-venv python3-pip)."
+if [[ -z "$SYSTEM_PYTHON" ]] || ! "$SYSTEM_PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then
+    log_err "Please install Python 3.11 or newer with venv support."
     exit 1
-fi
-
-PY_VER="$("$SYSTEM_PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")"
-PY_MAJOR="${PY_VER%%.*}"
-PY_MINOR="${PY_VER##*.}"
-
-if [[ "$PY_MAJOR" -lt 3 || ("$PY_MAJOR" -eq 3 && "$PY_MINOR" -lt 11) ]]; then
-    log_err "Found Python $PY_VER, but KAgent requires Python >= 3.11."
-    exit 1
-fi
-log_ok "Detected supported Python: $PY_VER ($SYSTEM_PYTHON)"
-
-# 2. Check or create virtual environment
-if [[ "$CHECK_ONLY" -eq 1 ]]; then
-    if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-        log_err "Virtual environment at '$VENV_DIR' does not exist."
-        exit 1
-    fi
-    log_ok "Virtual environment exists at '$VENV_DIR'."
-
-    # Check package import
-    if "$VENV_DIR/bin/python" -c "import src.cli.main" >/dev/null 2>&1; then
-        log_ok "KAgent runtime modules can be imported."
-    else
-        log_err "KAgent packages are not installed in '$VENV_DIR'."
-        exit 1
-    fi
-
-    if [[ "$CHECK_TOOLS" -eq 1 ]]; then
-        command -v nmap >/dev/null 2>&1 && log_ok "Scanner: nmap found" || log_warn "Scanner: nmap not found (optional)"
-        command -v ffuf >/dev/null 2>&1 && log_ok "Scanner: ffuf found" || log_warn "Scanner: ffuf not found (optional)"
-    fi
-
-    log_ok "Setup check passed. Environment is ready."
-    exit 0
 fi
 
 # Not check-only: perform setup
