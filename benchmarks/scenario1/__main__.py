@@ -10,6 +10,8 @@ import uuid
 
 from benchmarks.common.contracts import DEFAULT_SEED, RunManifest, RuntimeSettings, decode, write_new, read_json
 from .core.dataset import Dataset, select
+from .core.storage import storage_root
+from src.paths import project_artifact_root
 
 
 class _BenchmarkParser(argparse.ArgumentParser):
@@ -32,7 +34,7 @@ def parser():
     selection.add_argument('--mode', choices=['default', 'reduced', 'smoke'], default='default')
     selection.add_argument('--seed', type=int, default=DEFAULT_SEED)
     selection.add_argument('--case')
-    selection.add_argument('--output', required=True, type=Path)
+    selection.add_argument('--output', type=Path, help='optional frozen manifest path; defaults to internal selections')
     running = commands.add_parser('run')
     running.add_argument('--dataset', required=True, type=Path, help='read-only verification of pinned source hashes')
     source = running.add_mutually_exclusive_group(required=True)
@@ -101,8 +103,9 @@ def main(argv=None) -> int:
             return 0
         if args.command == 'select':
             manifest = select(dataset, uuid.uuid4().hex, args.mode, args.seed, args.case)
-            write_new(args.output, asdict(manifest))
-            print(f'Selected {len(manifest.execution_order)} cases; manifest: {args.output}')
+            output = args.output or storage_root() / 'selections' / f'{manifest.run_id}.json'
+            write_new(output, asdict(manifest))
+            print(f'Selected {len(manifest.execution_order)} cases; manifest: {output}')
             return 0
         if args.manifest:
             manifest = decode(RunManifest, read_json(args.manifest))
@@ -123,7 +126,7 @@ def main(argv=None) -> int:
             print(json.dumps({'dry_run': True, 'cases': manifest.execution_order, 'runtime': asdict(settings),
                               'mapping_version': manifest.mapping_version, 'dataset_version': dataset.version}, indent=2))
             return 0
-        destination = args.output or Path('artifacts/benchmarks') / manifest.run_id
+        destination = args.output or project_artifact_root() / 'benchmarks' / manifest.run_id
         from .reset.client import ResetController
         if args.container:
             from .reset.operator_target import OperatorResetController
@@ -131,12 +134,14 @@ def main(argv=None) -> int:
                                                  ingress_container=args.ingress_container)
         else:
             controller = ResetController(args.reset_state) if args.reset_state else None
-        run(manifest, settings, destination, run_kind=args.run_kind, fail_fast=args.fail_fast,
+        internal = run(manifest, settings, destination, run_kind=args.run_kind, fail_fast=args.fail_fast,
             reset_controller=controller, reset_audit=args.reset_audit if controller else None, resume_from=args.resume_from)
         from .core.evaluate import evaluate
-        report = evaluate(destination)
-        print(json.dumps({'artifacts': str(destination), **report['metrics']['overall']}, indent=2))
-        return 5 if (destination / 'blocked.json').exists() else 2 if report['metrics']['overall']['invalid-result'] else 4 if report['metrics']['overall']['execution-failed'] else 0
+        report = evaluate(internal)
+        from .reporting import write_report
+        write_report(internal)
+        print(json.dumps({'artifacts': str(destination), 'internal': str(internal), **report['metrics']['overall']}, indent=2))
+        return 5 if (internal / 'blocked.json').exists() else 2 if report['metrics']['overall']['invalid-result'] else 3 if report['incomplete'] else 4 if report['metrics']['overall']['execution-failed'] else 0
     except (ValueError, OSError, KeyError) as err:
         # Configuration/mapping errors contain no credentials; runtime errors only exported as types.
         print(f'benchmark error: {err}', file=sys.stderr)

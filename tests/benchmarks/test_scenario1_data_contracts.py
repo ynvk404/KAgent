@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 import hashlib
 import json
 
@@ -85,15 +86,17 @@ def test_run_classification_precedes_worker_and_binds_final_manifest(
     monkeypatch.setattr(runner, 'reproducibility', lambda: {'offline': True})
     manifest = single_manifest(op, settings)
     results = []
+    roots = []
     for kind in ('development', 'official'):
         destination = tmp_path / kind
         def launcher(payload, _seconds):
-            record = read_run_designation(destination)
+            record = read_run_designation(Path(payload['output']).parent.parent)
             assert (record.classification, record.declared) == (kind, True)
             assert 'truth' not in payload and 'expected_vulnerable' not in str(payload)
             results.append(kind)
             return -9, False
-        run(manifest, settings, destination, run_kind=kind, launcher=launcher)
+        destination = run(manifest, settings, destination, run_kind=kind, launcher=launcher)
+        roots.append(destination)
         record = json.loads((destination / RECORD_NAME).read_text())
         manifest_bytes = (destination / 'manifest.json').read_bytes()
         assert record == {'schema_version': 1, 'run_id': manifest.run_id,
@@ -102,7 +105,7 @@ def test_run_classification_precedes_worker_and_binds_final_manifest(
                           'manifest_identity': digest(json.loads(manifest_bytes))}
         assert not {'truth', 'operational', 'expected_vulnerable'} & record.keys()
     assert results == ['development', 'official']
-    first, second = (evaluate(tmp_path / kind, publish=False) for kind in ('development', 'official'))
+    first, second = (evaluate(root, publish=False) for root in roots)
     assert first['metrics'] == second['metrics']
     assert first['records'] == second['records']
 
@@ -120,14 +123,16 @@ def test_default_run_kind_smoke_rejection_and_legacy_interpretation(
         '--target-state', settings.target_state, '--run-kind', 'official']).run_kind == 'official'
     manifest = single_manifest(op, settings)
     destination = tmp_path / 'default'
-    run(manifest, settings, destination, launcher=lambda *_: (-9, False))
+    public = destination
+    destination = run(manifest, settings, public, launcher=lambda *_: (-9, False))
     assert read_run_designation(destination).classification == 'development'
     record_bytes = (destination / RECORD_NAME).read_bytes()
     with pytest.raises(FileExistsError):
         write_run_classification(destination, 'official')
     assert (destination / RECORD_NAME).read_bytes() == record_bytes
+    public.mkdir()
     with pytest.raises(ValueError, match='already exists'):
-        run(manifest, settings, destination, launcher=lambda *_: pytest.fail('worker launched'))
+        run(manifest, settings, public, launcher=lambda *_: pytest.fail('worker launched'))
     assert (destination / RECORD_NAME).read_bytes() == record_bytes
 
     legacy = tmp_path / 'legacy'

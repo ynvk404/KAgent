@@ -19,6 +19,7 @@ from benchmarks.common.contracts import (CaseExecution, OperationalCaseInput, Ru
 from benchmarks.common.recorder import Recorder
 from .classification import RunKind, write_run_classification
 from .runtime import CAPABILITY, REPO
+from .storage import allocate_run, bind_storage, resolve_run
 from ..reset.client import ResetBlocked, persist
 
 
@@ -115,10 +116,10 @@ def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *,
     if launcher is launch_worker and reset_controller is None:
         raise ResetBlocked('production execution requires --reset-state or --container with verified logical reset')
     validate_run_kind(manifest, run_kind)
-    destination = destination.resolve()
-    if destination.exists():
-        raise ValueError('run directory already exists; history cannot be overwritten or resumed')
-    destination.mkdir(parents=True, mode=0o700)
+    public = Path(os.path.abspath(destination))
+    if resume_from is not None:
+        resume_from = resolve_run(resume_from)
+    destination = allocate_run(public)
     admission_error = None
     if reset_controller is not None:
         try:
@@ -130,6 +131,7 @@ def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *,
     bound = replace(manifest, runtime=asdict(settings), reproducibility=reproducibility())
     write_new(destination / 'manifest.json', asdict(bound))
     classification = write_run_classification(destination, run_kind)
+    bind_storage(destination, public)
     audit_hash = file_hash(reset_audit) if reset_audit else None
     write_new(destination / 'reset-policy.json', {
         'enabled': reset_controller is not None,

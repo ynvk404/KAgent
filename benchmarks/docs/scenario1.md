@@ -311,35 +311,105 @@ execute a pilot.
 
 ```bash
 venv-linux/bin/python -m benchmarks.scenario1 list --dataset /path/to/BenchmarkJava
-venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode reduced --output artifacts/benchmarks/scenario1-selection.json
-venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode smoke --seed 1729 --output artifacts/benchmarks/scenario1-smoke.json
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-smoke.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --output artifacts/benchmarks/smoke-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode reduced --output .kagent/benchmarks/scenario1/selections/scenario1-selection.json
+venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode smoke --seed 1729 --output .kagent/benchmarks/scenario1/selections/scenario1-smoke.json
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/scenario1-smoke.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --output artifacts/benchmarks/smoke-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/smoke-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --dry-run
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --dry-run
 venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --case BenchmarkTest00013 --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --output artifacts/benchmarks/single-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --fail-fast --output artifacts/benchmarks/run-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --run-kind official --output artifacts/benchmarks/official-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --fail-fast --output artifacts/benchmarks/run-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --run-kind official --output artifacts/benchmarks/official-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/run-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 report --run artifacts/benchmarks/run-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 report --run .kagent/benchmarks/scenario1/runs/STORAGE_ID --output artifacts/benchmarks/offline-export-UNIQUE
 ```
 
-`report` reads an existing manifest, evaluation, case results, lifecycle events,
-and optional run classification; it does not run the evaluator, worker, Agent,
-provider, or target. It writes `report.json`, `summary.csv`, `partitions.csv`,
-`per-case.csv`, an abnormal-analysis template, `thesis-tables.md`, and eight static SVG chart types under
-`<run>/report/`. Use `--evaluation evaluation-<identity>.json` when the run has
-multiple evaluation artifacts. `--output` may select another new directory
-inside the same run. An existing output directory is rejected without overwrite.
-Only evaluable cases enter the confusion matrix. CSV and the class-rate chart
-include explicit numerators and denominators; a zero denominator is NA. The
-per-case final status comes from the parent `runtime-finished` event, while the
-result artifact's status is kept separately as worker diagnostics. Missing
-transport dispatch counts and incomplete token totals remain blank. The report
-exports a restricted presentation model without target origins, request fixtures,
-evidence, provider configuration, or raw messages. Legacy smoke runs without a
-declaration
-are labeled `Development / smoke`; other legacy runs have undeclared official
-status. A smoke report is for exporter validation, not a thesis result.
+New executions physically separate canonical/runtime storage from public output:
+
+```text
+<project>/artifacts/benchmarks/<run-name>/
+├── report/              # existing CSV, Markdown, report.json and SVG charts
+└── results/
+    ├── index.json       # storage, manifest, evaluation and public file bindings
+    ├── <case-id>.json   # reader projection; not a canonical CaseExecution
+    └── evidence/        # selected sanitized response text
+
+<project>/.kagent/benchmarks/scenario1/
+├── selections/          # default location for select (explicit --output still works)
+└── runs/<storage-id>/
+    ├── storage.json     # separate location/manifest descriptor
+    ├── manifest.json
+    ├── run-classification.json
+    ├── reset-policy.json
+    ├── events.jsonl
+    ├── results/<case-id>.json
+    ├── evaluations/evaluation-<identity>.json
+    ├── reset-evidence/
+    ├── workspaces/<execution-id>/
+    └── publications/    # private staging and any completed WSL backing
+```
+
+Storage uses the existing project path policy (`project_data_root()`), never
+personal/shared stores. Every execution allocates an exclusive UUID `storage_id`;
+rerunning a selection leaves `manifest.run_id` unchanged. Canonical schemas,
+bytes, seals and hash formulas are unchanged; `results/<case-id>.json` references
+remain relative to the internal run root. Worker envelopes still contain only
+one operational case and its isolated workspace/output, with no truth or other
+case data. Target ownership locking is unchanged.
+
+The CLI `run` records the internal execution, evaluates it, then publishes a
+single public tree. The Python runner returns the internal root; callers can use
+`evaluate(root)` and `write_report(root)` explicitly. A blocked run retains its
+reset receipts and blocker internally. An interruption before publication leaves
+only forensic data; offline evaluate/report can export it later. New report
+metadata explicitly states `execution_state` (`finished`, `blocked`, or
+`interrupted`) and `execution_complete`, independently of canonical evaluator
+`incomplete` semantics. No report publication claims a blocked run is complete,
+even when all cases finished before a final idle transition failed.
+
+The small resolver accepts a legacy directory, a new public tree or an internal
+run. Internal `storage.json` binds the UUID, semantic run ID and final manifest
+byte/semantic hashes. Public `results/index.json` has its own versioned integrity
+binding, relative internal reference, evaluation identity and public file hashes.
+Resolution verifies those bindings, the canonical evaluation/lifecycle and the
+exact parent-side case/evidence projections. Missing/corrupt new descriptors or
+canonical data fail closed, including internal roots missing their descriptor;
+there is no legacy fallback for damaged new output. `--resume-from` uses the same
+resolver and reexecutes the locked selection into a fresh storage UUID/workspaces;
+it never appends to the previous execution.
+
+`report` reads existing evaluation artifacts and never invokes the evaluator,
+worker, Agent, provider or target. `evaluate` resolves to canonical data and
+writes immutable evaluations inside `evaluations/` for new runs. Use
+`--evaluation evaluation-<identity>.json` when there are several evaluations.
+For new runs, `report --output` names a new public run root; omitting it uses the
+runner's recorded public destination. Existing output is rejected. Another export
+requires an explicit new destination; it is never created automatically. Legacy
+reporting retains its existing `--output` contract (a new directory inside the
+legacy run), root-level evaluation filenames, and sibling staging/fallback.
+No historical files, hashes, symlinks or backing directories are migrated,
+rewritten or moved, including `scenario1-smoke-run-01`.
+
+Reports retain `summary.csv`, `partitions.csv`, `per-case.csv`, `thesis-tables.md`,
+an abnormal-analysis template, `report.json` and the existing chart set. Only
+evaluable cases enter the confusion matrix. Numerators/denominators, NA semantics,
+metrics, evaluator identity and scoring are unchanged. Report tables retain the
+restricted presentation model. Public case JSON adds the testcase ID, sanitized
+operational input, assessment identity/acceptance, outcome, evaluation reason,
+external truth/confusion and recorded resource metrics. Truth is joined only by
+the parent exporter after execution. Full workflow, observations, transcript,
+permission decisions/journal, provider configuration and workspace paths are
+excluded. Free-form assessment rationale stays internal.
+
+Public case schema `scenario1-public-case-v1` and `projection_binding` are distinct
+from the sealed canonical export. Selected evidence is bounded to 8192 bytes per
+selected primary response, sanitized with the production evidence redactor,
+with local filesystem references removed. It has its own public SHA-256, the
+canonical body/source hashes and JSON-pointer provenance into the canonical
+case result. Redaction/truncation can change bytes: public hashes do not pretend
+to be canonical evidence hashes. Canonical evidence and seals are untouched.
+The index stores compact resolution/integrity information, not copied manifests
+or large metadata snapshots. Hashes detect corruption and bind the local
+artifacts; they are not authentication against someone who can rewrite all data.
 
 The loader recomputes the existing evaluator v1 identity from the semantic
 manifest, non-evaluated lifecycle rows, partial-tail flag and (when present)
@@ -353,46 +423,50 @@ overall/class totals and supplied strata; rates retain the evaluator's
 zero-denominator null semantics. Reporting validates consistency; it does not rerun
 workflow acceptance/scoring or attest that the Agent's assessment is correct.
 
-Raw run/case identifiers, provider/model labels and commit identifiers are kept
-internally for validation, then presented as deterministic pseudonyms:
+Report tables and metadata present run/case identifiers, provider/model labels
+and commit identifiers as deterministic pseudonyms:
 `<kind>-SHA256(compact sorted-key JSON ["scenario1-report-<kind>-v1", raw])`.
-Kinds are `run`, `case`, `provider`, `model`, and `commit`. This permits offline
-joins to original artifacts without exporting those arbitrary strings. Metadata
+Kinds are `run`, `case`, `provider`, `model`, and `commit`. Public case filenames
+and case JSON additionally retain the actual testcase identifier for comparison;
+the public index retains the run pseudonym. This permits offline joins to
+canonical artifacts without exporting arbitrary provider/model or run labels. Metadata
 exports use fixed vocabularies, booleans/numbers, the recognized dataset version
 `1.2`, a bounded Python version format and the fixed capability-profile name;
 unrecognized labels and known fixture-value aliases are omitted. Reasons use a
-closed vocabulary. CLI argument/input/output errors and success messages do not
+closed vocabulary. Report CLI argument/input/output errors and success messages do not
 echo artifact text, URLs or filesystem paths. These restrictions prevent raw
 opaque labels/credentials from being copied; they are not anonymization or an
 absolute secret detector. Unsalted pseudonyms/hashes permit correlation and
 possible dictionary guessing; allowed structured fields and numeric metrics
 remain observable. Inspect exports before public release of sensitive artifacts.
 
-Output reserves the entire root namespaces `manifest.json`, `events.jsonl`,
-`run-classification.json`, `evaluation-*`, `results`, `workspaces` and writer
-staging names, even when absent. A new nested report directory elsewhere inside
-the run is allowed. All validation/rendering finishes before output creation.
-Files are written/fsynced in a private sibling staging directory (directories
-0700, files 0600), then published with Linux `renameat2(RENAME_NOREPLACE)`.
-If the filesystem rejects that operation with EINVAL, ENOSYS or EOPNOTSUPP
-(including WSL DrvFS/9p), publication instead creates an exclusive relative
-directory symlink to the completed staging directory. Both methods publish the
-complete report atomically and reject even concurrent empty-directory collisions.
-The symlink's `.kagent-report-*` backing directory must be kept alongside the
-report when copying or archiving the run. Unsupported platforms, other rename
-errors and failed symlink creation still fail without an overwrite fallback.
-Actual mode enforcement depends on the filesystem's permission support.
-A synchronous write failure or
-interruption cleans only owned staging;
-retry can use the same destination. There is no asynchronous/offloaded writer.
-Readers see either no destination or the complete rendered report. Held directory
-handles, no-follow traversal and inode/path rechecks detect parent/staging
-substitution. A process with permission to rename directories can still race the
-last recheck; this is a residual TOCTOU limitation, not a filesystem sandbox.
-An externally moved/substituted staging directory is not blindly deleted. A hard
-process kill can leave private staging; power-loss durability of the final rename
-is not guaranteed. Partition SVGs include all five labeled counts (including
-zeros), patterned segments and a count table, with text outside small segments.
+For new runs, the writer renders and stages the entire `report/` + `results/`
+tree under `<internal-run>/publications/.kagent-report-<uuid>/` (directories 0700,
+files 0600). No staging, workspace or runtime files enter the public run. Held
+directory descriptors, no-follow parent traversal and inode checks protect
+publication. Linux `renameat2(RENAME_NOREPLACE)` publishes the whole public run
+atomically and exclusively, including protection against empty directories,
+files and dangling symlinks created concurrently. Publishing the two children
+separately would expose partial output, so it is deliberately avoided.
+
+On EINVAL, ENOSYS or EOPNOTSUPP (including WSL DrvFS/9p), the public **run root**
+becomes an exclusive relative symlink to its completed internal backing tree;
+listing that root still yields exactly `report/` and `results/`. The backing
+lives only in `publications/`. Keep public symlinks together with their internal
+backing when archiving; moving public output alone breaks offline canonical
+resolution. Sources/destinations on different filesystems fail explicitly before
+staging/publication; there is no partial copy fallback. Unsupported platforms,
+other rename errors and failed symlink creation never fall back to overwrite.
+Legacy reports keep their previous sibling-backing contract for compatibility.
+
+Cleanup removes only the unpublished staging inode owned by the current
+invocation. A link published immediately before interruption retains its backing.
+Concurrent exporters have one winner; losers clean only their own stage. A hard
+kill can leave private staging. Filesystem permission support and power-loss
+durability remain platform-dependent; a process allowed to rename directories
+can still race the final inode check. There is no asynchronous/offloaded writer,
+non-atomic overwrite repair or automatic duplicate report. Partition SVGs retain
+all five labeled counts (including zeros), patterned segments and a count table.
 
 The compatibility report figures are `charts/class-metrics.svg`,
 `charts/evaluation-partitions.svg`, `charts/processing-time.svg` and
@@ -532,10 +606,9 @@ and finite `--timeout`, `--http-requests`, `--tool-calls`, `--agent-calls` (defa
 180 seconds / 24 / 80 / 24). Exit codes: 0 command completed, 2 input/integrity
 error, 3 incomplete offline run, 4 recorded execution failures, 5 blocked reset or
 execution boundary. Unresolved labels
-do not make a completed execution fail. Artifacts include `manifest.json`,
-`run-classification.json`,
-`events.jsonl`, `results/<case>.json`, `workspaces/<execution-id>/`, and immutable
-`evaluation-<identity>.json` containing per-case records and all metrics.
+do not make a completed execution fail. Canonical artifacts live in the internal
+run tree shown above; immutable `evaluations/evaluation-<identity>.json` contains
+per-case records and all metrics. Only reports and reader projections are public.
 
 Execution is sequential, Linux/POSIX (process groups/advisory locks). The operator
 starts and manages prepared targets in Docker Desktop; the runner only reads

@@ -12,6 +12,7 @@ from benchmarks.common.recorder import Recorder, read_records, validate_lifecycl
 from .canonical import inspect_case_evidence, inspect_export
 from .runtime import candidate_arguments
 from .bindings import EVALUATOR, evaluation_identity, orphan_binding, validate_recorded_evaluations
+from .storage import evaluation_root, resolve_run
 
 
 def confusion(vulnerable: bool, outcome: str) -> str:
@@ -49,7 +50,7 @@ def summarize(records: list[dict], truth: dict, executions: dict, histories: dic
 
 
 def evaluate(directory: Path, *, publish=True) -> dict:
-    directory = directory.resolve()
+    directory = resolve_run(directory)
     manifest = decode(RunManifest, read_json(directory / 'manifest.json'))
     if manifest.runtime is None:
         raise ValueError('run has no runtime settings')
@@ -151,7 +152,7 @@ def evaluate(directory: Path, *, publish=True) -> dict:
     if sum(report['metrics']['overall'][p] for p in PARTITIONS) != len(truths):
         raise ValueError('evaluation partition does not account for schedule')
     if publish:
-        path = directory / f'evaluation-{identity}.json'
+        path = evaluation_root(directory) / f'evaluation-{identity}.json'
         if path.exists():
             if read_json(path) != report:
                 raise ValueError('conflicting evaluation artifact')

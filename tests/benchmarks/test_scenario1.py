@@ -750,7 +750,7 @@ async def test_parent_final_status_controls_timing_after_terminal_export(tmp_pat
             write_new(Path(payload['output']), raw)
             return code, timeout
         root = tmp_path / status
-        run(manifest, settings, root, launcher=launcher)
+        root = run(manifest, settings, root, launcher=launcher)
         output = root / 'results' / f'{op.case_id}.json'
         contents = output.read_bytes()
         report = evaluate(root)
@@ -890,8 +890,8 @@ async def test_wrong_http_method_is_not_case_scoreable(tmp_path, monkeypatch, op
 
 def test_parent_crash_and_partial_accounting(tmp_path, op, settings):
     manifest = single_manifest(op, settings)
-    run(manifest, settings, tmp_path / 'crash', launcher=lambda *args: (-9, False))
-    report = evaluate(tmp_path / 'crash')
+    root = run(manifest, settings, tmp_path / 'crash', launcher=lambda *args: (-9, False))
+    report = evaluate(root)
     assert report['records'][0]['partition'] == 'execution-failed'
     assert report['records'][0]['reason'] == 'crashed'
     partial = tmp_path / 'partial'
@@ -940,13 +940,13 @@ async def test_sqli_production_path(tmp_path, monkeypatch, op, settings, mock_ht
 def test_fail_fast_whole_schedule(tmp_path, settings):
     d = make_dataset(tmp_path / 'dataset', 10)
     manifest = select(d, 'run', 'reduced')
-    run(manifest, settings, tmp_path / 'run', fail_fast=True, launcher=lambda *args: (-9, False))
-    report = evaluate(tmp_path / 'run')
+    root = run(manifest, settings, tmp_path / 'run', fail_fast=True, launcher=lambda *args: (-9, False))
+    report = evaluate(root)
     counts = report['metrics']['overall']
     assert counts['scheduled'] == 40 and counts['started'] == 1
     assert counts['execution-failed'] == 1 and counts['not-run'] == 39
     assert counts['reasons']['fail-fast'] == 39
-    assert evaluate(tmp_path / 'run') == report
+    assert evaluate(root) == report
 
 
 def test_conflicting_recorder_ownership_and_complete_tail(tmp_path):

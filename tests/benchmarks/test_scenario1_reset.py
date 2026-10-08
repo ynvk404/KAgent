@@ -13,6 +13,7 @@ from benchmarks.scenario1.core.runner import run
 from benchmarks.scenario1.reset.client import ResetBlocked, ResetController
 from benchmarks.scenario1.reset.install import COMMIT
 from tests.benchmarks.test_scenario1 import make_dataset, op, settings, single_manifest
+from benchmarks.scenario1.core.storage import storage_root
 
 
 class Controller:
@@ -131,6 +132,8 @@ def test_interruption_resume_requires_new_verified_reset(tmp_path, op, settings)
     original = tmp_path / 'first'
     with pytest.raises(KeyboardInterrupt):
         run(manifest, settings, original, launcher=interrupted, reset_controller=first)
+    assert not original.exists()
+    original = next((storage_root() / 'runs').iterdir())
     history = (original / 'events.jsonl').read_bytes()
     second = Controller()
     run(manifest, settings, tmp_path / 'resumed', launcher=lambda *_: (-9, False),
@@ -305,7 +308,8 @@ def test_interruption_at_every_transition_stays_closed(tmp_path, op, settings, p
             launcher=worker, reset_controller=control)
     assert control.calls[-1] == 'block'
     assert 'idle' not in control.calls
-    assert (tmp_path / 'run' / 'blocked.json').exists()
+    assert not (tmp_path / 'run').exists()
+    assert (next((storage_root() / 'runs').iterdir()) / 'blocked.json').exists()
 
 
 @pytest.mark.parametrize('phase', ['begin', 'identity', 'idle'])

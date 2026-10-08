@@ -13,6 +13,7 @@ from benchmarks.common.recorder import read_records, validate_lifecycle
 from benchmarks.scenario1.core.classification import read_run_designation
 from benchmarks.scenario1.core.bindings import (EVALUATOR, evaluation_identity, orphan_binding,
     validate_recorded_evaluations)
+from benchmarks.scenario1.core.storage import evaluation_root, resolve_run
 from .model import ReportModel
 
 
@@ -40,6 +41,19 @@ _REASONS = frozenset({
     'not-confirmed', 'confirmed', 'invalid-result',
     'blocked', 'deferred', 'authorization-required', 'timeout', 'crashed',
     'runtime-error', 'provider-error', 'setup-error',
+    # Fixed evaluator diagnostics are useful public reasons. Arbitrary exception
+    # messages remain redacted, including filesystem/provider/fixture contents.
+    'result artifact hash mismatch', 'execution export identity mismatch', 'execution status conflict',
+    'unsupported frozen workflow schema', 'malformed frozen objective',
+    'malformed/duplicate frozen Candidate', 'malformed frozen result',
+    'malformed/duplicate frozen evidence', 'unsupported result protocol', 'execution identity mismatch',
+    'Candidate operational binding mismatch', 'target identity mismatch', 'objective identity mismatch',
+    'Candidate binding mismatch', 'missing result identity conflict',
+    'duplicate/missing production result identity', 'stale/latest result mismatch',
+    'unaccepted assessment identity/provenance', 'stale frozen attempt epoch/target revision',
+    'attempt projection mismatch', 'source epoch mismatch', 'evidence candidate ownership mismatch',
+    'unaccepted terminal assessment', 'unresolved acceptance projection conflict',
+    'runtime/session_id mismatch', 'runtime/candidate_id mismatch', 'runtime/objective_id mismatch',
     *('evidence-case-binding:' + name for name in (
         'unsupported-input-component', 'malformed-source', 'unsupported-evidence-source',
         'missing-native-http-evidence', 'candidate-ownership-mismatch',
@@ -171,6 +185,7 @@ def _validate_metrics(metrics: dict, records: dict[str, EvaluationRecord],
 
 
 def _select_evaluation(directory: Path, selected: Path | None) -> Path:
+    directory = evaluation_root(directory)
     if selected is not None:
         path = directory / selected if selected.parent == Path('.') else selected
         if path.is_symlink():
@@ -189,7 +204,7 @@ def _select_evaluation(directory: Path, selected: Path | None) -> Path:
 
 
 def load_report(directory: Path, evaluation: Path | None = None) -> ReportModel:
-    directory = directory.resolve()
+    directory = resolve_run(directory)
     manifest_path = directory / 'manifest.json'
     manifest = decode(RunManifest, read_json(manifest_path))
     if manifest.runtime is None:
