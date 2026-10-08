@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="23" time="58.412" timestamp="2026-10-08T09:44:37.825586+00:00" hostname="DESKTOP-07T15QS"><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_reset_before_after_and_separate_evidence" time="8.720" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_unknown_reset_blocks_every_next_worker[1-0]" time="5.948"><failure message="ImportError: cannot import name 'load_report' from 'benchmarks.scenario1.reporting' (/mnt/d/DOANTOTNGHIEP/kagent/benchmarks/scenario1/reporting/__init__.py)">tmp_path = PosixPath('/tmp/pytest-of-khainguyen/pytest-11/test_unknown_reset_blocks_ever0')
+settings = RuntimeSettings(target='http://127.0.0.1:3000', context_path='/benchmark', authorized_lab=True, target_state='confirma...only', timeout_seconds=10, http_requests=24, tool_calls=80, agent_calls=24, deployment_metadata=None, schema_version=1)
+failure = 1, launched = 0
+
+    @pytest.mark.parametrize('failure,launched', [(1, 0), (2, 1), (3, 1)])
+    def test_unknown_reset_blocks_every_next_worker(tmp_path, settings, failure, launched):
+        manifest = select(make_dataset(tmp_path / 'dataset'), 'run', mode='smoke')
+        control = Controller(failure)
+        workers = []
+        root = run(manifest, settings, tmp_path / 'run', launcher=lambda *args: (workers.append(args) or (-9, False)),
+                   reset_controller=control, reset_audit=audit_for(tmp_path, manifest))
+        assert len(workers) == launched
+        assert (root / 'blocked.json').exists()
+        events = [json.loads(row) for row in (root / 'events.jsonl').read_text().splitlines()]
+        untouched = [row for row in events if row['kind'] == 'evaluated']
+        assert len(untouched) == 12 - launched
+        assert all(r['status'] == 'not-run' and r['data']['partition'] == 'not-run' for r in untouched)
+        assert any(json.loads(p.read_text())['status'] == 'blocked' for p in (root / 'reset-evidence').glob('*.json'))
+        from benchmarks.scenario1.evaluate import evaluate
+&gt;       from benchmarks.scenario1.reporting import load_report
+E       ImportError: cannot import name 'load_report' from 'benchmarks.scenario1.reporting' (/mnt/d/DOANTOTNGHIEP/kagent/benchmarks/scenario1/reporting/__init__.py)
+
+/mnt/d/DOANTOTNGHIEP/kagent/tests/benchmarks/test_scenario1_reset.py:89: ImportError</failure></testcase><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_unknown_reset_blocks_every_next_worker[2-1]" time="10.195"><failure message="ImportError: cannot import name 'load_report' from 'benchmarks.scenario1.reporting' (/mnt/d/DOANTOTNGHIEP/kagent/benchmarks/scenario1/reporting/__init__.py)">tmp_path = PosixPath('/tmp/pytest-of-khainguyen/pytest-11/test_unknown_reset_blocks_ever1')
+settings = RuntimeSettings(target='http://127.0.0.1:3000', context_path='/benchmark', authorized_lab=True, target_state='confirma...only', timeout_seconds=10, http_requests=24, tool_calls=80, agent_calls=24, deployment_metadata=None, schema_version=1)
+failure = 2, launched = 1
+
+    @pytest.mark.parametrize('failure,launched', [(1, 0), (2, 1), (3, 1)])
+    def test_unknown_reset_blocks_every_next_worker(tmp_path, settings, failure, launched):
+        manifest = select(make_dataset(tmp_path / 'dataset'), 'run', mode='smoke')
+        control = Controller(failure)
+        workers = []
+        root = run(manifest, settings, tmp_path / 'run', launcher=lambda *args: (workers.append(args) or (-9, False)),
+                   reset_controller=control, reset_audit=audit_for(tmp_path, manifest))
+        assert len(workers) == launched
+        assert (root / 'blocked.json').exists()
+        events = [json.loads(row) for row in (root / 'events.jsonl').read_text().splitlines()]
+        untouched = [row for row in events if row['kind'] == 'evaluated']
+        assert len(untouched) == 12 - launched
+        assert all(r['status'] == 'not-run' and r['data']['partition'] == 'not-run' for r in untouched)
+        assert any(json.loads(p.read_text())['status'] == 'blocked' for p in (root / 'reset-evidence').glob('*.json'))
+        from benchmarks.scenario1.evaluate import evaluate
+&gt;       from benchmarks.scenario1.reporting import load_report
+E       ImportError: cannot import name 'load_report' from 'benchmarks.scenario1.reporting' (/mnt/d/DOANTOTNGHIEP/kagent/benchmarks/scenario1/reporting/__init__.py)
+
+/mnt/d/DOANTOTNGHIEP/kagent/tests/benchmarks/test_scenario1_reset.py:89: ImportError</failure></testcase><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_unknown_reset_blocks_every_next_worker[3-1]" time="9.113"><failure message="ImportError: cannot import name 'load_report' from 'benchmarks.scenario1.reporting' (/mnt/d/DOANTOTNGHIEP/kagent/benchmarks/scenario1/reporting/__init__.py)">tmp_path = PosixPath('/tmp/pytest-of-khainguyen/pytest-11/test_unknown_reset_blocks_ever2')
+settings = RuntimeSettings(target='http://127.0.0.1:3000', context_path='/benchmark', authorized_lab=True, target_state='confirma...only', timeout_seconds=10, http_requests=24, tool_calls=80, agent_calls=24, deployment_metadata=None, schema_version=1)
+failure = 3, launched = 1
+
+    @pytest.mark.parametrize('failure,launched', [(1, 0), (2, 1), (3, 1)])
+    def test_unknown_reset_blocks_every_next_worker(tmp_path, settings, failure, launched):
+        manifest = select(make_dataset(tmp_path / 'dataset'), 'run', mode='smoke')
+        control = Controller(failure)
+        workers = []
+        root = run(manifest, settings, tmp_path / 'run', launcher=lambda *args: (workers.append(args) or (-9, False)),
+                   reset_controller=control, reset_audit=audit_for(tmp_path, manifest))
+        assert len(workers) == launched
+        assert (root / 'blocked.json').exists()
+        events = [json.loads(row) for row in (root / 'events.jsonl').read_text().splitlines()]
+        untouched = [row for row in events if row['kind'] == 'evaluated']
+        assert len(untouched) == 12 - launched
+        assert all(r['status'] == 'not-run' and r['data']['partition'] == 'not-run' for r in untouched)
+        assert any(json.loads(p.read_text())['status'] == 'blocked' for p in (root / 'reset-evidence').glob('*.json'))
+        from benchmarks.scenario1.evaluate import evaluate
+&gt;       from benchmarks.scenario1.reporting import load_report
+E       ImportError: cannot import name 'load_report' from 'benchmarks.scenario1.reporting' (/mnt/d/DOANTOTNGHIEP/kagent/benchmarks/scenario1/reporting/__init__.py)
+
+/mnt/d/DOANTOTNGHIEP/kagent/tests/benchmarks/test_scenario1_reset.py:89: ImportError</failure></testcase><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_interruption_resume_requires_new_verified_reset" time="11.265" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_production_requires_reset" time="0.004" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_boundary_blocks_sql_control_and_hash_mismatch" time="0.002" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed0]" time="0.012" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed1]" time="0.010" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed2]" time="0.010" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed3]" time="0.010" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed4]" time="0.010" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed5]" time="0.010" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed6]" time="0.010" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed7]" time="0.011" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed8]" time="0.011" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed9]" time="0.009" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed10]" time="0.012" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_http_200_is_not_cleanliness_proof[changed11]" time="0.011" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_target_ownership_excludes_concurrent_runners" time="0.018" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_wrong_dataset_is_rejected_before_control_traffic[git_commit-wrong]" time="0.011" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_wrong_dataset_is_rejected_before_control_traffic[dirty-True]" time="0.016" /><testcase classname="tests.benchmarks.test_scenario1_reset" name="test_reset_seconds_are_excluded_from_worker_wall_time" time="5.374" /></testsuite></testsuites>

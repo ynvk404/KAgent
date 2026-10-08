@@ -1,0 +1,145 @@
+# Scenario 1 logical reset handoff
+
+The maintained implementation is here, rather than in temporary experiment files.
+It uses SQL/DDL against two immutable fresh baselines. It never replaces catalog
+files, edits HSQLDB internals, or restarts Tomcat/Docker during a logical reset.
+BenchmarkJava source, truth, mappings, evaluator and metrics contracts are unchanged.
+
+Required target: source `8b67a88d73b2594570fc21150705283de884620b`, HSQLDB 2.7.4,
+Tomcat 9.0.122, JDK 17, Hibernate 3.6.10.Final and Spring 5.3.39. The original
+handoff/prototype sources were unavailable in the supplied recovery directories.
+Historical 20/20 and 28/28 results are context only, not evidence for this code.
+
+**Final status: PARTIAL.** The logical reset is implemented and verified within
+the focused SQLi/XSS scope. The clean final reproduction passed 42/42 checks,
+13 representative HTTP response pairs and explicit INSERT A → reset → query B.
+Its 33 measured reset cycles had median internal **0.980 s** and end-to-end
+**0.986 s**. Production installer/controller/runner integration was exercised
+without a model, and all six owned target groups were cleaned successfully.
+Full ORM parity and restoration of effects outside the databases remain unverified.
+The current parent policy admits all 504 SQLi and 455 XSS cases through logical
+reset, including the 272 historically classified SQL-controlled cases. This
+policy follows the operator's explicit choice to accept that external-effects
+limitation; it does not extend the earlier focused verification to all cases.
+
+The benchmark regression group initially had 357 PASS and 14 environment failures
+caused by concurrent Docker Desktop drive remounts. All 14 passed when rerun from
+the WSL home directory with an explicit PYTHONPATH. The final reset-blocked branch
+also passes the unchanged evaluator and reporting loader using their existing
+fail-fast sentinel; `blocked.json` and event `block_reason` retain the reset cause.
+See the XML receipts and `evidence/RESULTS.md` for the exact test lineage.
+
+## Implementation
+
+| File | Responsibility |
+|---|---|
+| `java/CatalogBaseline.java` | Independent seed/column/key/procedure oracle; immutable DDL, complete rows and metadata; exact named constraints; SQL restoration and independent readback |
+| `java/ResetLifecycle.java` | Rollback/close static JDBC, JNDI and Spring pools, normal/classic sessions and factories; restore both catalogs; replace pools/factories without eager Spring borrow |
+| `java/ResetGate.java` | Closed-by-default route admission, finite lease, active request drain, tracked session invalidation, authenticated nonce/generation receipts and permanent failure state |
+| `java/InstallProbe.java` | Live Tomcat container hierarchy, classloader, original filter instance and lifecycle listener assertions |
+| `install.py` | Compile into a copy of the cached WAR and install the first filter/lifecycle listener; retain the original initializer and filters |
+| `run-target.sh` | Start the owned HSQLDB server and cached Tomcat; apply Javassist `--add-opens` to the actual JVM |
+| `mvn-runtime-wrapper` | Durable offline Maven wrapper for forked JDK 17 runtime use |
+| `owned_target.py` | Create/readiness/cleanup of ownership-labelled disposable targets, internal networks and fixed-upstream ingress proxy |
+| `client.py` | Parent-only strict control verification, target/source attestation, exclusive runner lock and durable reset receipts |
+| `verify.py`, `tests/ResetProbe.java` | Fixed, model-free focused reproduction and mutations; production targets do not install probes |
+| `recover_coverage.py` | Persist the surviving audit projection without repeating the 504-case analysis |
+| `../runner.py`, `../__main__.py` | CLI and sequential worker lifecycle integration |
+| `../../../tests/benchmarks/test_scenario1_reset.py` | Offline admission/failure/resume/metrics/identity regressions |
+
+Baseline capture runs after the original application initializer, while the
+testcase gate remains closed. It validates the original seed inventories and
+rows, column types/sizes/defaults/nullability/identity flags, keys and procedure
+inventory independently. Subsequent checks compare the complete captured rows,
+SCRIPT configuration/DDL/procedures/grants/identity positions, and all selected
+metadata columns, including generated constraint/index names. Names are never
+normalized away. Changed settings are replayed; unchanged settings are retained
+to avoid HSQLDB changing collation spelling on an otherwise identical replay.
+
+Each case requires identity verification, logical reset/readback, explicit route
+authorization, worker completion/evidence, then logical reset/readback. Any
+error/timeout/unknown outcome stops the parent. `blocked.json` and untouched
+`not-run` events prevent those cases entering TP/TN/FP/FN. Exit code 5 means blocked.
+Receipts under `reset-evidence/` record reset durations separately from worker
+wall time, Agent processing time and token accounting. Control credentials and
+audit classifications never enter the worker envelope. Every run's
+`reset-policy.json` records `mode=logical-reset-all-cases`, `scope_verdict=PARTIAL`
+and `external_effects_restoration_verified=false`. Reset receipts also record
+that their verification covers database catalogs and application lifecycle,
+without certifying restoration of filesystem, LDAP or other external effects.
+
+## Supported modes and limits
+
+| Mode | Status |
+|---|---|
+| Owned exact-target logical reset | Implemented; focused verification in `evidence/final-focused/verification.json` |
+| All 504 SQLi cases | Eligible with exact source/target identity and verified logical reset; no historical allowlist admission gate |
+| 455 XSS cases | Preserved and eligible under the existing native HTTP boundary; focused response samples do not certify all 455 |
+| 272 historically SQL-controlled cases | Eligible for logical reset; effects outside databases remain an accepted limitation |
+| Container recreation between cases | Not used |
+| Arbitrary SQL/Java/filesystem/LDAP effects | No universal certification |
+| Hibernate ORM cache parity | Known limitation: fresh normal cache `[2,1,3]`, database/classic `[1,1,1]`; reset reads `[1,1,1]` |
+| Interruption/resume | Close/reset best effort; next invocation performs a new verified reset and replays the same selection into a new directory |
+
+The internal network has no target egress interface. A non-root, read-only nginx
+proxy publishes only a loopback port and has a fixed upstream. Target root is
+read-only, capabilities dropped, privileges restricted, resource budgets finite,
+and writable runtime state lives in disposable tmpfs. Deployment mounts contain
+only bootstrap source copies, not benchmark evidence/control state. These bounds
+do not establish safety for arbitrary SQL payloads. Unknown connections as well
+as active transactions are rejected after known pools are closed.
+
+The protocol verifies catalogs, lifecycle and startup pool configuration; it does
+not claim full Hibernate first-level cache equivalence or comprehensive testing
+of every possible database configuration mutation. An unsupported restoration
+must retain exact comparison failure and block the run.
+
+## Reproduce focused verification
+
+Run in Ubuntu/WSL from `/mnt/d/DOANTOTNGHIEP/kagent`. This command uses the reusable
+image/WAR cache, creates only owned disposable resources, and cleans them. It
+makes fixed HTTP requests and uses injected model-free worker failures for the
+production runner integration check; it does not run an Agent smoke or benchmark.
+
+```bash
+venv-linux/bin/python -m benchmarks.scenario1.reset.verify \
+  --dataset /mnt/d/DOANTOTNGHIEP/benchmark-targets/BenchmarkJava \
+  --war /home/khainguyen/.cache/kagent-s1-build-62da4de4df96/benchmark-offline.war \
+  --output artifacts/benchmarks/reset-verification-NEW
+```
+
+Verification receipts store hashes, durations, status and redacted response
+semantics. Development failures remain in `evidence/focused-development-*` so
+they cannot be mistaken for a clean reproduction. Private state contains a
+credential: keep it local, never commit it or pass it to workers. Runtime copies
+and private state are removed during owned cleanup. Docker Desktop/Drvfs can
+invalidate the caller's directory inode during bind mounts; the resource wrapper
+reacquires the same working-directory path after Docker operations.
+
+## Locked 12-case smoke command for the next session
+
+The commands below retain all locked cases, including SQL-controlled cases.
+Every case uses logical reset; failure, timeout, incomplete readback or unknown
+outcome still stops the run. Scope remains PARTIAL for effects outside databases.
+The smoke commands were not run here.
+
+```bash
+venv-linux/bin/python -m benchmarks.scenario1.reset.owned_target create \
+  --state artifacts/benchmarks/smoke-target-private.json \
+  --war /home/khainguyen/.cache/kagent-s1-build-62da4de4df96/benchmark-offline.war --port 18080
+venv-linux/bin/python -m benchmarks.scenario1.reset.owned_target wait-ready \
+  --state artifacts/benchmarks/smoke-target-private.json
+venv-linux/bin/python -m benchmarks.scenario1 run \
+  --dataset /mnt/d/DOANTOTNGHIEP/benchmark-targets/BenchmarkJava \
+  --manifest artifacts/benchmarks/scenario1-smoke-1729/manifest.json \
+  --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab \
+  --target-state external-reset --reset-state artifacts/benchmarks/smoke-target-private.json \
+  --output artifacts/benchmarks/scenario1-locked-smoke-NEW
+venv-linux/bin/python -m benchmarks.scenario1.reset.owned_target cleanup \
+  --state artifacts/benchmarks/smoke-target-private.json
+```
+
+For interruption recovery, use the same manifest, a new output path, and
+`--resume-from artifacts/benchmarks/OLD-RUN`. All selected cases are replayed;
+previous events/results remain immutable. This is safe restart, not append-in-place
+resume or aggregation of duplicate attempts. No commit or push is part of this work.

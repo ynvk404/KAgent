@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ from benchmarks.common.contracts import (CaseExecution, OperationalCaseInput, Ru
 from benchmarks.common.recorder import Recorder
 from .classification import RunKind, write_run_classification
 from .runtime import CAPABILITY, REPO
+from .reset.client import ResetBlocked, persist
 
 
 def reproducibility() -> dict:
@@ -36,17 +38,21 @@ def reproducibility() -> dict:
                                   *REPO.joinpath('src').rglob('*.py'),
                                   *REPO.joinpath('benchmarks/common').rglob('*.py'),
                                   *REPO.joinpath('benchmarks/scenario1').rglob('*.py'),
+                                  *REPO.joinpath('benchmarks/scenario1/reset/java').rglob('*.java'),
+                                  *REPO.joinpath('benchmarks/scenario1/reset/tests').rglob('*.java'),
+                                  *(REPO / 'benchmarks/scenario1/reset' / name for name in ('run-target.sh', 'mvn-runtime-wrapper')),
                                   *(REPO / name for name in ('pyproject.toml', 'requirements.txt', 'pyrightconfig.json')),
-                              }) if p.is_file() and not p.is_symlink()},
+                              }) if p.is_file() and not p.is_symlink()
+                              and not p.is_relative_to(REPO / 'benchmarks/scenario1/reset/evidence')},
             'dependencies': sorted((d.metadata['Name'], d.version) for d in distributions()
                                    if d.metadata['Name']),
             'capability_profile': CAPABILITY}
 
 
-def validate_runtime(manifest: RunManifest, settings: RuntimeSettings):
+def validate_runtime(manifest: RunManifest, settings: RuntimeSettings, *, verified_reset=False):
     if not settings.authorized_lab:
         raise ValueError('explicit --authorized-lab declaration required')
-    if manifest.dataset.get('state_mutating_cases'):
+    if manifest.dataset.get('state_mutating_cases') and not verified_reset:
         raise ValueError('selected servlets mutate target state; HTTP-only profile has no verified per-case '
                          'isolation/readback/cleanup. external-reset is only a declaration; selection must exclude these cases')
 
@@ -90,8 +96,19 @@ def launch_worker(envelope: dict, seconds: float) -> tuple[int, bool]:
 
 
 def run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, run_kind: RunKind = 'development',
-        fail_fast=False, launcher=launch_worker) -> Path:
-    validate_runtime(manifest, settings)
+        fail_fast=False, launcher=launch_worker, reset_controller=None, reset_audit: Path | None = None,
+        resume_from: Path | None = None) -> Path:
+    ownership = reset_controller.ownership() if reset_controller is not None else nullcontext()
+    with ownership:
+        return _run(manifest, settings, destination, run_kind=run_kind, fail_fast=fail_fast, launcher=launcher,
+                    reset_controller=reset_controller, reset_audit=reset_audit, resume_from=resume_from)
+
+
+def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, run_kind: RunKind,
+         fail_fast, launcher, reset_controller, reset_audit, resume_from) -> Path:
+    validate_runtime(manifest, settings, verified_reset=reset_controller is not None)
+    if launcher is launch_worker and reset_controller is None:
+        raise ResetBlocked('production execution requires --reset-state and verified clean target')
     validate_run_kind(manifest, run_kind)
     destination = destination.resolve()
     if destination.exists():
@@ -100,12 +117,42 @@ def run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, 
     bound = replace(manifest, runtime=asdict(settings), reproducibility=reproducibility())
     write_new(destination / 'manifest.json', asdict(bound))
     classification = write_run_classification(destination, run_kind)
+    audit_hash = file_hash(reset_audit) if reset_audit else None
+    write_new(destination / 'reset-policy.json', {
+        'enabled': reset_controller is not None,
+        'mode': 'logical-reset-all-cases' if reset_controller is not None else 'offline-injected-launcher',
+        'scope_verdict': 'PARTIAL',
+        'external_effects_restoration_verified': False,
+        'audit_role': 'historical-context-only',
+        'audit_sha256': audit_hash,
+        'resume_from': str(resume_from.resolve()) if resume_from else None,
+        'resume_policy': 'new immutable run; reset and reverify; never append or trust prior target state'})
+    # Resume preserves the exact locked manifest and re-executes it in a new run.
+    # Existing recorder/evaluator history is immutable; no partial result is trusted.
+    if resume_from is not None:
+        previous = decode(RunManifest, read_json(resume_from / 'manifest.json'))
+        for name in ('dataset', 'truth', 'operational', 'execution_order', 'seed', 'mode'):
+            if getattr(previous, name) != getattr(manifest, name):
+                raise ResetBlocked('resume selection identity mismatch')
     recorder = Recorder(destination / 'events.jsonl', manifest.run_id)
     operations = {o['case_id']: o for o in manifest.operational}
     for case_id in manifest.execution_order:
         recorder.append('scheduled', case_id, 'scheduled', data={'operational_hash': digest(operations[case_id]),
                                                                'manifest_hash': classification.manifest_identity})
     for case_id in manifest.execution_order:
+        if reset_controller is not None:
+            try:
+                reset_controller.check_identity(manifest, settings)
+                if reset_audit and file_hash(reset_audit) != audit_hash:
+                    raise ResetBlocked('historical audit evidence changed during run')
+                persist(destination, case_id, 'before', reset_controller.reset)
+                persist(destination, case_id, 'authorize', lambda: reset_controller.authorize(operations[case_id], settings))
+            except BaseException as err:
+                reset_controller.block()
+                block_run(destination, recorder, manifest, case_id, 'admission', type(err).__name__)
+                if not isinstance(err, Exception):
+                    raise
+                break
         execution_id = uuid.uuid4().hex
         output = destination / 'results' / f'{case_id}.json'
         workspace = destination / 'workspaces' / execution_id
@@ -131,6 +178,15 @@ def run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, 
         except Exception as err:
             status, failure = 'setup-error', type(err).__name__
             executed = None
+        except BaseException as err:
+            if reset_controller is not None:
+                try:
+                    persist(destination, case_id, 'interrupted', reset_controller.reset)
+                except BaseException:
+                    pass
+                reset_controller.block()
+                block_run(destination, recorder, manifest, case_id, 'interrupted', type(err).__name__)
+            raise
         data = {'wall_seconds': time.monotonic() - wall, 'error': failure,
                 'result_ref': str(output.relative_to(destination)) if output.exists() else None,
                 'result_sha256': file_hash(output) if output.exists() else None}
@@ -144,6 +200,17 @@ def run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, 
                 data['canonical_summary'].update(outcome=current.get('outcome') if current else None,
                                                  attempt_id=current.get('attempt_id') if current else None)
         recorder.append('runtime-finished', case_id, status, execution_id=execution_id, data=data)
+        if reset_controller is not None:
+            try:
+                persist(destination, case_id, 'after', reset_controller.reset)
+            except BaseException as err:
+                reset_controller.block()
+                following = manifest.execution_order[manifest.execution_order.index(case_id) + 1:]
+                block_run(destination, recorder, manifest, following[0] if following else None,
+                          'after', type(err).__name__)
+                if not isinstance(err, Exception):
+                    raise
+                break
         if fail_fast and status != 'completed':
             # Untouched cases remain scheduled. Evaluator marks them not-run/fail-fast.
             remaining = manifest.execution_order[manifest.execution_order.index(case_id) + 1:]
@@ -152,3 +219,16 @@ def run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, 
                                                                       'evaluation_identity': 'fail-fast-v1'})
             break
     return destination
+
+
+def block_run(destination, recorder, manifest, next_case, phase, error):
+    write_new(destination / 'blocked.json', {'status': 'blocked', 'phase': phase, 'error': error,
+                                            'next_case': next_case, 'reason': 'unverified target state or boundary'})
+    if next_case is not None:
+        for case_id in manifest.execution_order[manifest.execution_order.index(next_case):]:
+            # An interrupted case remains started, retaining the evaluator's
+            # existing interrupted-execution treatment. Only untouched cases are not-run.
+            records = [row for row in recorder.rows if row['case_id'] == case_id]
+            if records[-1]['kind'] == 'scheduled':
+                recorder.append('evaluated', case_id, 'not-run', data={'partition': 'not-run',
+                    'reason': 'fail-fast', 'block_reason': 'reset-blocked', 'evaluation_identity': 'fail-fast-v1'})

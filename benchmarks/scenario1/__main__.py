@@ -43,6 +43,10 @@ def parser():
     running.add_argument('--authorized-lab', action='store_true')
     running.add_argument('--target-state', required=True, choices=['confirmation-only', 'external-reset'])
     running.add_argument('--deployment-metadata')
+    running.add_argument('--reset-state', type=Path, help='private owned-target control state; never sent to KAgent')
+    running.add_argument('--reset-audit', type=Path, default=Path(__file__).parent / 'reset/evidence/source-boundary.json',
+                         help='historical audit provenance only; does not exclude cases')
+    running.add_argument('--resume-from', type=Path, help='reverify and rerun exact selection into a new immutable run')
     running.add_argument('--timeout', type=float, default=180)
     running.add_argument('--http-requests', type=int, default=24)
     running.add_argument('--tool-calls', type=int, default=80)
@@ -105,18 +109,21 @@ def main(argv=None) -> int:
                                    args.timeout, args.http_requests, args.tool_calls, args.agent_calls,
                                    args.deployment_metadata)
         from .runner import run, validate_run_kind, validate_runtime
-        validate_runtime(manifest, settings)
+        validate_runtime(manifest, settings, verified_reset=args.reset_state is not None)
         validate_run_kind(manifest, args.run_kind)
         if args.dry_run:
             print(json.dumps({'dry_run': True, 'cases': manifest.execution_order, 'runtime': asdict(settings),
                               'mapping_version': manifest.mapping_version, 'dataset_version': dataset.version}, indent=2))
             return 0
         destination = args.output or Path('artifacts/benchmarks') / manifest.run_id
-        run(manifest, settings, destination, run_kind=args.run_kind, fail_fast=args.fail_fast)
+        from .reset.client import ResetController
+        controller = ResetController(args.reset_state) if args.reset_state else None
+        run(manifest, settings, destination, run_kind=args.run_kind, fail_fast=args.fail_fast,
+            reset_controller=controller, reset_audit=args.reset_audit if controller else None, resume_from=args.resume_from)
         from .evaluate import evaluate
         report = evaluate(destination)
         print(json.dumps({'artifacts': str(destination), **report['metrics']['overall']}, indent=2))
-        return 2 if report['metrics']['overall']['invalid-result'] else 4 if report['metrics']['overall']['execution-failed'] else 0
+        return 5 if (destination / 'blocked.json').exists() else 2 if report['metrics']['overall']['invalid-result'] else 4 if report['metrics']['overall']['execution-failed'] else 0
     except (ValueError, OSError, KeyError) as err:
         # Configuration/mapping errors contain no credentials; runtime errors only exported as types.
         print(f'benchmark error: {err}', file=sys.stderr)

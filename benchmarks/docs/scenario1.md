@@ -108,18 +108,23 @@ Only bounded confirmation is requested; optional deeper impact is not requested.
 XSS outcomes requiring unavailable browser proof remain `browser-required`.
 Production playbook semantics and assessment authority are unchanged.
 
-Process/storage isolation does **not** reset the target application. The selected
-set may contain SQL servlets that perform INSERT or other writes even with a
-legitimate baseline. Runtime now rejects known state-mutating selections under
-both state declarations: this HTTP-only profile has no verified per-case
-isolation, readback or cleanup. `external-reset` remains a settings value but
-does not prove freshness or admit known writes.
-The operator owns application/database snapshots and resets outside this harness.
-The harness does not execute reset commands, validate snapshot freshness, or
-guarantee equivalent target state between cases. Sequential selected-manifest
-runs can accumulate application state unless an external lab orchestrator keeps
-it controlled. Record the strategy/build information in `--deployment-metadata`;
-for an initial smoke pilot choose a reviewed read-only single case.
+Production execution requires an owned exact-dataset target and `--reset-state`.
+The parent closes admission, logically restores both HSQLDB catalogs and verifies
+complete relevant state before authorizing each worker and after collecting its
+result. Reset receipts and durations are separate from worker/Agent metrics.
+Failures or unknown outcomes stop the run with `blocked.json`, exit code 5, and
+untouched cases recorded as `not-run`. HTTP 200 alone never admits a case.
+`external-reset` alone remains insufficient. See
+[reset implementation and handoff](../scenario1/reset/README.md).
+
+All 504 SQLi and 455 XSS cases use logical reset with verified source/target
+identity. The historical audit classification does not exclude cases, including
+the 272 SQL-controlled SQLi cases. This follows the operator's explicit choice
+to accept unverified restoration of effects outside the databases. Run policy
+and reset receipts record that limitation and scope verdict PARTIAL; no container
+recreation occurs between cases. Truth, selection and scoring remain unchanged.
+Reset failures and unknown outcomes still block subsequent workers. Eligibility
+does not certify execution of all cases or restoration of arbitrary external effects.
 
 Automatic default/reduced/smoke exclusion is blocked on trustworthy dataset-wide
 state metadata. The existing regex is a positive write indicator, not a verified
@@ -297,14 +302,14 @@ execute a pilot.
 
 ```bash
 venv-linux/bin/python -m benchmarks.scenario1 list --dataset /path/to/BenchmarkJava
-venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode reduced --output /tmp/scenario1-selection.json
-venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode smoke --seed 1729 --output /tmp/scenario1-smoke.json
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-smoke.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --output artifacts/benchmarks/smoke-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode reduced --output artifacts/benchmarks/scenario1-selection.json
+venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode smoke --seed 1729 --output artifacts/benchmarks/scenario1-smoke.json
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-smoke.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --reset-state artifacts/benchmarks/target-private.json --output artifacts/benchmarks/smoke-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/smoke-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-selection.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --dry-run
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --case BenchmarkTest00013 --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state confirmation-only --output artifacts/benchmarks/single-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-selection.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --fail-fast --output artifacts/benchmarks/run-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest /tmp/scenario1-selection.json --target http://127.0.0.1:8080 --context-path /benchmark --authorized-lab --target-state external-reset --run-kind official --output artifacts/benchmarks/official-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --reset-state artifacts/benchmarks/target-private.json --dry-run
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --case BenchmarkTest00013 --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --reset-state artifacts/benchmarks/target-private.json --output artifacts/benchmarks/single-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --reset-state artifacts/benchmarks/target-private.json --fail-fast --output artifacts/benchmarks/run-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest artifacts/benchmarks/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --reset-state artifacts/benchmarks/target-private.json --run-kind official --output artifacts/benchmarks/official-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/run-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 report --run artifacts/benchmarks/run-UNIQUE
 ```
@@ -476,13 +481,17 @@ it creates no Agent/client/worker, performs no provider probe/target health chec
 and saves no user configuration. Runtime execution requires `--authorized-lab`
 and finite `--timeout`, `--http-requests`, `--tool-calls`, `--agent-calls` (defaults
 180 seconds / 24 / 80 / 24). Exit codes: 0 command completed, 2 input/integrity
-error, 3 incomplete offline run, 4 recorded execution failures. Unresolved labels
+error, 3 incomplete offline run, 4 recorded execution failures, 5 blocked reset or
+execution boundary. Unresolved labels
 do not make a completed execution fail. Artifacts include `manifest.json`,
 `run-classification.json`,
 `events.jsonl`, `results/<case>.json`, `workspaces/<execution-id>/`, and immutable
 `evaluation-<identity>.json` containing per-case records and all metrics.
 
-Version 1 is sequential, Linux/POSIX (process groups/advisory locks), with no
-automatic retry, execution resume, cleanup, target reset or parallel runner.
+Execution is sequential, Linux/POSIX (process groups/advisory locks). The owned
+target helper creates and cleans disposable containers/networks. Logical reset
+does not restart Tomcat/Docker. `--resume-from` requires the same locked selection,
+a new output directory and a new verified reset; it replays the full selection
+without appending to previous history. There is no automatic retry or parallel runner.
 Dataset mapper v1 supports the inspected BenchmarkJava request-plumbing shapes;
 other layouts must fail explicitly and receive a reviewed mapping extension.

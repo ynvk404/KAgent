@@ -1,0 +1,27 @@
+{
+  "verdict": "IMPLEMENTED BUT UNVERIFIED",
+  "checks": [
+    {
+      "name": "exact_source_commit",
+      "status": "PASS"
+    },
+    {
+      "name": "all_959_cases_preserved",
+      "status": "PASS"
+    }
+  ],
+  "reset_receipts": [],
+  "http_parity": [],
+  "source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+  "orm_cache_parity": false,
+  "historical_results": "Not used as proof of this implementation",
+  "error_type": "FileNotFoundError",
+  "diagnostic_traceback": "Traceback (most recent call last):\n  File \"/mnt/d/DOANTOTNGHIEP/kagent/benchmarks/scenario1/reset/verify.py\", line 114, in verify\n    control = ResetController(state)\n  File \"/mnt/d/DOANTOTNGHIEP/kagent/benchmarks/scenario1/reset/client.py\", line 25, in __init__\n    self.state_path = state.absolute()\n                      ~~~~~~~~~~~~~~^^\n  File \"/usr/lib/python3.14/pathlib/__init__.py\", line 910, in absolute\n    cwd = os.getcwd()\nFileNotFoundError: [Errno 2] No such file or directory\n",
+  "cleanup": [
+    {
+      "status": "FAIL",
+      "error_type": "FileNotFoundError",
+      "diagnostic_traceback": "Traceback (most recent call last):\n  File \"/mnt/d/DOANTOTNGHIEP/kagent/benchmarks/scenario1/reset/verify.py\", line 233, in verify\n    cleanup(state)\n    ~~~~~~~^^^^^^^\n  File \"/mnt/d/DOANTOTNGHIEP/kagent/benchmarks/scenario1/reset/owned_target.py\", line 126, in cleanup\n    if assets.parent != state.absolute().parent or assets.name != value['owner'] + '-assets':\n                        ~~~~~~~~~~~~~~^^\n  File \"/usr/lib/python3.14/pathlib/__init__.py\", line 910, in absolute\n    cwd = os.getcwd()\nFileNotFoundError: [Errno 2] No such file or directory\n"
+    }
+  ]
+}

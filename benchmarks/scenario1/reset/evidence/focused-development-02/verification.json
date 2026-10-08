@@ -1,0 +1,403 @@
+{
+  "verdict": "IMPLEMENTED BUT UNVERIFIED",
+  "checks": [
+    {
+      "name": "exact_source_commit",
+      "status": "PASS"
+    },
+    {
+      "name": "all_959_cases_preserved",
+      "status": "PASS"
+    },
+    {
+      "name": "initial_gate_closed",
+      "status": "PASS"
+    },
+    {
+      "name": "both_catalogs_exact_baseline",
+      "status": "PASS"
+    },
+    {
+      "name": "reset_committed",
+      "status": "PASS"
+    },
+    {
+      "name": "reset_rolled-back",
+      "status": "PASS"
+    },
+    {
+      "name": "reset_ddl",
+      "status": "PASS"
+    },
+    {
+      "name": "reset_spring",
+      "status": "PASS"
+    },
+    {
+      "name": "reset_hibernate-active",
+      "status": "PASS"
+    },
+    {
+      "name": "JDBC_Spring_Hibernate_replaced",
+      "status": "PASS"
+    },
+    {
+      "name": "known_Hibernate_cache_difference_retained",
+      "status": "PASS"
+    },
+    {
+      "name": "USER_HOBBY_allocators_idempotent",
+      "status": "PASS"
+    },
+    {
+      "name": "session_cookie_invalidated",
+      "status": "PASS"
+    },
+    {
+      "name": "active_request_drained",
+      "status": "PASS"
+    },
+    {
+      "name": "repeated_idempotent_resets",
+      "status": "PASS"
+    }
+  ],
+  "reset_receipts": [
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "f523cf59cf624483a37f1e5108922918",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 1,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 1.051143749,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 1.056146713999624
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "7933e14261324c8d8b5867c308b486c9",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 2,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 1.013322639,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 1.0230369400005657
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "e8ded58eff8b4377982f558deba62b21",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 3,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 0.77347068,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 0.7770522130003883
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "c2951df37bee4af9b31d9ab3acf68d27",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 4,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 1.084838029,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 1.0893134400002964
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "b09bd6b520ee4af783b8ef53c192723f",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 5,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 0.832583586,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 0.8373918269999194
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "345dbb97f88a45fea8440e306a12785d",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 6,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 0.882180236,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 0.8909903450003185
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "f3215367280e4739b9ae64227c460173",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 7,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 1.183831411,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 1.1888261700005387
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "e1bef38df83144cea76356a169236e06",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 8,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 0.713773886,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 0.7192388869998467
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "6a7ba89adb1f486daac62f3f8d9ff630",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 9,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 0.714099272,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 0.7192392419992757
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "8366005010d94b178a8129c5cccba94e",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 10,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 0.66419089,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 0.668348366999453
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "502a2aac7226445a8048b3e21c3ea41a",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 11,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 0.661078206,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 0.6648269480001545
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "25c14c8f6fb44561b5b0a66fec449cba",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 12,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 1.030238871,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 1.0343640459996095
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "4cee2c0004d84f9caeeb43c223d96948",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 13,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 0.677257078,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 0.6811030270000629
+    },
+    {
+      "protocol": "kagent-logical-reset-v1",
+      "nonce": "8b297c4d688944579f5ebe7b02d7c015",
+      "state": "CLOSED",
+      "boot_id": "23a8c96b-fddb-4555-8ca9-6f321bdc76b7",
+      "generation": 14,
+      "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+      "hsqldb": "2.7.4",
+      "tomcat": "9.0.122",
+      "jdk": "17",
+      "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+      "reset_source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+      "catalogs": {
+        "server": "9ca5a104e06344f9e57d9931730a03c0d45e43c648c58a619ba011ce85972fb2",
+        "embedded": "728477953202acd7ee4da3623c1d505f0bd800353da1c2ccb1aa77ccd04f6d48"
+      },
+      "verified": true,
+      "active_requests": 0,
+      "tracked_sessions": 0,
+      "internal_seconds": 0.72512603,
+      "orm_cache_parity": false,
+      "end_to_end_seconds": 0.7287090549998538
+    }
+  ],
+  "http_parity": [],
+  "source_sha256": "4d114531864860b36045a1f3f2644c4ec1eeb1cef8b8cce752c1836ec2575026",
+  "orm_cache_parity": false,
+  "historical_results": "Not used as proof of this implementation",
+  "last_phase": "hibernate-active",
+  "error_type": "FileNotFoundError",
+  "median_internal_seconds": 0.8030271330000001,
+  "median_end_to_end_seconds": 0.8072220200001539,
+  "cleanup": [
+    {
+      "status": "FAIL",
+      "error_type": "FileNotFoundError"
+    }
+  ]
+}

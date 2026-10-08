@@ -1,0 +1,29 @@
+{
+  "case_id": "BenchmarkTest00113",
+  "phase": "before",
+  "status": "verified",
+  "verification": {
+    "protocol": "kagent-logical-reset-v1",
+    "nonce": "6992f395cca047c3b5af807e08c96a56",
+    "state": "CLOSED",
+    "boot_id": "8d71c73f-635f-4b29-b050-431f6775f3ff",
+    "generation": 1,
+    "source_commit": "8b67a88d73b2594570fc21150705283de884620b",
+    "hsqldb": "2.7.4",
+    "tomcat": "9.0.122",
+    "jdk": "17",
+    "war_sha256": "4a7d857eab644a74dde9a2fe4c8195b906976f0260bcdc9e020a1bd26e2b112c",
+    "reset_source_sha256": "285a2eb1669b2e6ec196ac15e828677f1a24fdabfb2ac2c370daeacd6f4a56db",
+    "catalogs": {
+      "server": "2bef852c8e8cf6f52150d8ff6d6345cfb93b7b5921d29d5df9554fdfc6c579a4",
+      "embedded": "dc5d90972a9f3e31a94c8c486365b062a3234848a6b0ab15053983c4c1a16453"
+    },
+    "verified": true,
+    "active_requests": 0,
+    "tracked_sessions": 0,
+    "internal_seconds": 1.279410885,
+    "orm_cache_parity": false,
+    "end_to_end_seconds": 1.2965703509999003
+  },
+  "end_to_end_seconds": 1.2966366569999082
+}
