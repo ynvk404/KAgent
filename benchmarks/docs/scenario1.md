@@ -374,10 +374,15 @@ staging names, even when absent. A new nested report directory elsewhere inside
 the run is allowed. All validation/rendering finishes before output creation.
 Files are written/fsynced in a private sibling staging directory (directories
 0700, files 0600), then published with Linux `renameat2(RENAME_NOREPLACE)`.
-Publication is an atomic directory move and rejects even concurrent empty-directory
-collisions; unsupported platforms/filesystems fail rather than using an overwrite
-fallback. WSL DrvFS mounts that reject `RENAME_NOREPLACE` cannot publish through
-this CLI; use a Linux filesystem for the run. A synchronous write failure or
+If the filesystem rejects that operation with EINVAL, ENOSYS or EOPNOTSUPP
+(including WSL DrvFS/9p), publication instead creates an exclusive relative
+directory symlink to the completed staging directory. Both methods publish the
+complete report atomically and reject even concurrent empty-directory collisions.
+The symlink's `.kagent-report-*` backing directory must be kept alongside the
+report when copying or archiving the run. Unsupported platforms, other rename
+errors and failed symlink creation still fail without an overwrite fallback.
+Actual mode enforcement depends on the filesystem's permission support.
+A synchronous write failure or
 interruption cleans only owned staging;
 retry can use the same destination. There is no asynchronous/offloaded writer.
 Readers see either no destination or the complete rendered report. Held directory

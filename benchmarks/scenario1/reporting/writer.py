@@ -38,7 +38,7 @@ def _destination(run: Path, output: Path | None) -> Path:
 
 def _publisher():
     # Linux renameat2(RENAME_NOREPLACE) is atomic even against a concurrent mkdir.
-    # Refuse unsupported platforms/filesystems instead of a racy exists()+rename.
+    # Unsupported filesystems can publish the complete stage via exclusive symlink.
     if sys.platform != 'linux':
         raise ValueError('atomic no-overwrite report publication requires Linux')
     rename = getattr(ctypes.CDLL(None, use_errno=True), 'renameat2', None)
@@ -54,6 +54,16 @@ def _publish(rename, parent_fd: int, staging_name: str, name: str) -> None:
         code = ctypes.get_errno()
         if code in {errno.EEXIST, errno.ENOTEMPTY}:
             raise ValueError('report output already exists; refusing to overwrite')
+        if code in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
+            # WSL DrvFS/9p rejects RENAME_NOREPLACE. symlinkat also creates the
+            # destination atomically and exclusively, even against an empty
+            # directory or dangling symlink. Keep its completed private stage;
+            # plain rename would risk replacing another owner's directory.
+            try:
+                os.symlink(staging_name, name, dir_fd=parent_fd, target_is_directory=True)
+            except FileExistsError:
+                raise ValueError('report output already exists; refusing to overwrite') from None
+            return
         raise OSError(code, 'atomic report publication failed')
 
 
@@ -152,5 +162,12 @@ def write_report(run: Path, output: Path | None = None, evaluation: Path | None 
             else:
                 if (stat.S_ISDIR(remaining.st_mode)
                         and (remaining.st_dev, remaining.st_ino) == (owned.st_dev, owned.st_ino)):
-                    shutil.rmtree(staging_name, dir_fd=parent_fd)
+                    # Also preserve a published backing directory if interrupted
+                    # immediately after symlink creation, before _publish returns.
+                    try:
+                        linked = os.readlink(destination.name, dir_fd=parent_fd) == staging_name
+                    except OSError:
+                        linked = False
+                    if not linked:
+                        shutil.rmtree(staging_name, dir_fd=parent_fd)
         os.close(parent_fd)

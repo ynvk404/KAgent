@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, replace
 import csv
+import errno
 import hashlib
 from io import StringIO
 import json
@@ -817,6 +818,113 @@ def test_publication_failure_cleans_owned_staging(tmp_path, op, settings, monkey
     with pytest.raises(OSError):
         write_report(root)
     assert not (root / 'report').exists() and not list(root.glob('.kagent-report-*'))
+
+
+@pytest.mark.parametrize('code', [errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP])
+def test_unsupported_rename_publishes_complete_report_exclusively(tmp_path, op, settings, monkeypatch, code):
+    import ctypes
+    from benchmarks.scenario1.reporting import writer
+    root, evaluation = _fixture(tmp_path, single_manifest(op, settings))
+    before = {p: p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    def unsupported(*args):
+        ctypes.set_errno(code)
+        return -1
+    monkeypatch.setattr(writer, '_publisher', lambda: unsupported)
+    destination = write_report(root)
+    assert destination.is_symlink()
+    assert destination.resolve().parent == root
+    assert list(root.glob('.kagent-report-*')) == [destination.resolve()]
+    report = json.loads((destination / 'report.json').read_text())
+    assert report['canonical_evaluator_metrics']['Overall']['TP'] == evaluation['metrics']['overall']['TP']
+    assert report['output_files'] == sorted(str(p.relative_to(destination))
+                                          for p in destination.rglob('*') if p.is_file())
+    for chart in (destination / 'charts').glob('*.svg'):
+        ET.fromstring(chart.read_bytes())
+    assert all(p.read_bytes() == content for p, content in before.items())
+    with pytest.raises(ValueError, match='reserved|already exists'):
+        write_report(root)
+
+
+@pytest.mark.parametrize('collision', ['empty-directory', 'file', 'symlink'])
+def test_unsupported_rename_fallback_preserves_concurrent_destination(tmp_path, op, settings, monkeypatch, collision):
+    import ctypes
+    import errno
+    from benchmarks.scenario1.reporting import writer
+    root, _ = _fixture(tmp_path, single_manifest(op, settings))
+    def unsupported(_source_fd, _source, _target_fd, target, _flags):
+        destination = root / target.decode()
+        if collision == 'empty-directory':
+            destination.mkdir()
+        elif collision == 'file':
+            destination.write_text('preserve')
+        else:
+            destination.symlink_to('absent')
+        ctypes.set_errno(errno.EINVAL)
+        return -1
+    monkeypatch.setattr(writer, '_publisher', lambda: unsupported)
+    with pytest.raises(ValueError, match='already exists'):
+        write_report(root)
+    assert not list(root.glob('.kagent-report-*'))
+    destination = root / 'report'
+    if collision == 'empty-directory':
+        assert not list(destination.iterdir())
+    elif collision == 'file':
+        assert destination.read_text() == 'preserve'
+    else:
+        assert destination.is_symlink() and destination.readlink() == Path('absent')
+
+
+def test_unsupported_rename_failed_symlink_cleans_stage(tmp_path, op, settings, monkeypatch):
+    import ctypes
+    import errno
+    from benchmarks.scenario1.reporting import writer
+    root, _ = _fixture(tmp_path, single_manifest(op, settings))
+    def unsupported(*args):
+        ctypes.set_errno(errno.EINVAL)
+        return -1
+    def denied(*args, **kwargs):
+        raise PermissionError('symlink publication denied')
+    monkeypatch.setattr(writer, '_publisher', lambda: unsupported)
+    monkeypatch.setattr(writer.os, 'symlink', denied)
+    with pytest.raises(PermissionError):
+        write_report(root)
+    assert not (root / 'report').exists() and not list(root.glob('.kagent-report-*'))
+
+
+def test_rename_permission_error_does_not_trigger_fallback(tmp_path, op, settings, monkeypatch):
+    import ctypes
+    import errno
+    from benchmarks.scenario1.reporting import writer
+    root, _ = _fixture(tmp_path, single_manifest(op, settings))
+    def denied(*args):
+        ctypes.set_errno(errno.EACCES)
+        return -1
+    monkeypatch.setattr(writer, '_publisher', lambda: denied)
+    with pytest.raises(PermissionError):
+        write_report(root)
+    assert not (root / 'report').exists() and not list(root.glob('.kagent-report-*'))
+
+
+def test_interruption_after_symlink_publication_preserves_complete_report(tmp_path, op, settings, monkeypatch):
+    import ctypes
+    from benchmarks.scenario1.reporting import writer
+    root, _ = _fixture(tmp_path, single_manifest(op, settings))
+    symlink = writer.os.symlink
+    def unsupported(*args):
+        ctypes.set_errno(errno.EINVAL)
+        return -1
+    def interrupt(*args, **kwargs):
+        symlink(*args, **kwargs)
+        raise KeyboardInterrupt('interrupted after publication')
+    monkeypatch.setattr(writer, '_publisher', lambda: unsupported)
+    monkeypatch.setattr(writer.os, 'symlink', interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        write_report(root)
+    destination = root / 'report'
+    assert destination.is_symlink() and destination.is_dir()
+    report = json.loads((destination / 'report.json').read_text())
+    assert report['output_files'] == sorted(str(p.relative_to(destination))
+                                          for p in destination.rglob('*') if p.is_file())
 
 
 @pytest.mark.parametrize('substitution', ['symlink', 'reserved'])
