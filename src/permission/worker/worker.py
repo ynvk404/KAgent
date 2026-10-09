@@ -95,7 +95,7 @@ class OfflineWorker:
                 await proc.wait()
 
     async def prepare(self, command: str, argv: list[str], *, broker: Path | None = None,
-                      scanner: bool = False, signal=None,
+                      scanner: bool = False, browser_mcp: bool = False, signal=None,
                       cwe_mcp_deployment_path: Path | None = None) -> tuple[str, list[str]]:
         """Inspect off the UI loop; cancellation/revoke never dispatch a child.
 
@@ -118,7 +118,7 @@ class OfflineWorker:
 
         check_authority()
         inspection = asyncio.create_task(asyncio.to_thread(
-            self.wrap, command, list(argv), broker=broker, scanner=scanner,
+            self.wrap, command, list(argv), broker=broker, scanner=scanner, browser_mcp=browser_mcp,
             cwe_mcp_deployment_path=cwe_mcp_deployment_path,
             _stopped=stopped, _deadline=deadline))
         try:
@@ -140,6 +140,7 @@ class OfflineWorker:
             raise ExecutionBlocked("blocked: worker-resource-changed")
 
     def wrap(self, command: str, argv: list[str], *, broker: Path | None = None, scanner: bool = False,
+             browser_mcp: bool = False,
              cwe_mcp_deployment_path: Path | None = None,
              _stopped: threading.Event | None = None, _deadline: float | None = None) -> tuple[str, list[str]]:
         def checkpoint() -> None:
@@ -191,11 +192,15 @@ class OfflineWorker:
         checkpoint()
         # Go scanners reserve a large virtual arena even for tiny scans. This
         # trusted adapter profile increases AS, not network/filesystem rights.
+        # Browser MCP's Node/V8 runtime also needs more virtual address space.
+        # Only its designated MCP launch selects this profile; shell/other MCP
+        # workers retain the default limit.
         # NPROC counts the controller's entire real UID (including IDE/WSL
         # threads), not this PID namespace. 256 made even /bin/sh startup
         # intermittent under ordinary validation. Retain a finite 1024 ceiling;
         # it is explicitly not a per-worker/cgroup process-tree guarantee.
-        args = ["--as=" + str(4 * 1024**3 if scanner else 512 * 1024**2), "--cpu=120", "--fsize=16777216", "--nofile=128", "--nproc=1024", "--core=0", "--",
+        address_space = 4 * 1024**3 if scanner else (1024**3 if browser_mcp else 512 * 1024**2)
+        args = ["--as=" + str(address_space), "--cpu=120", "--fsize=16777216", "--nofile=128", "--nproc=1024", "--core=0", "--",
                 self.binary, "--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
                 "--cap-drop", "ALL", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/tmp",
                 "--setenv", "LANG", "C.UTF-8"]

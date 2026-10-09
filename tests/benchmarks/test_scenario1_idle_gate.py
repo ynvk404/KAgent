@@ -41,7 +41,9 @@ def gate_java(tmp_path_factory):
     with tarfile.open(tomcat) as archive:
         for item in archive.getmembers():
             if '/lib/' in item.name and item.name.endswith('.jar'):
-                (deps / Path(item.name).name).write_bytes(archive.extractfile(item).read())
+                extracted = archive.extractfile(item)
+                assert extracted is not None
+                (deps / Path(item.name).name).write_bytes(extracted.read())
     classpath = os.pathsep.join((str(classes), str(deps / '*')))
     production = root / 'production'
     production.mkdir()
@@ -73,6 +75,7 @@ async def test_normal_tui_http_adapter_through_idle_java_gate(gate_java):
     from src.engagement.state import EngagementState
     from src.permission.permission import Decision
     from src.target.target import Target
+    from src.tools.common.outcome import ToolOutput
     from src.tools.common.registry import Registry
     from src.tools.http.http_tool import HTTPTool
 
@@ -84,6 +87,7 @@ async def test_normal_tui_http_adapter_through_idle_java_gate(gate_java):
     process = subprocess.Popen([*command, 'http'], env=env, stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
+        assert process.stdout is not None
         port = int(process.stdout.readline())
         url = f'http://127.0.0.1:{port}/benchmark/'
         engagement = EngagementState()
@@ -92,6 +96,7 @@ async def test_normal_tui_http_adapter_through_idle_java_gate(gate_java):
         registry.register(HTTPTool(Target(url), engagement))
         for method in ('GET', 'POST'):
             result = await registry.execute('http', {'url': url, 'method': method, 'phase': 'recon'}, None, Allow())
+            assert isinstance(result, ToolOutput)
             assert result.http_status == 200 and 'normal access' in result
     finally:
         process.communicate('\n', timeout=10)

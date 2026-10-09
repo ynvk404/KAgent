@@ -22,6 +22,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from src.config.config import MCPServerConfig
+from src.tools.mcp.session_servers import BROWSER_MCP_NAMES, BROWSER_MCP_SERVER
 from src.tools.mcp.cwe_deployment import (
     CWE_MCP_SERVER_NAME,
     is_designated_cwe_server,
@@ -150,6 +151,9 @@ class MCPSession:
                 if policy is not None:
                     require_matching_cwe_deployment(policy, worker)
             command, argv = await worker.prepare(command, argv, broker=broker, signal=signal,
+                                                 browser_mcp=(server.name in BROWSER_MCP_NAMES
+                                                              and command == BROWSER_MCP_SERVER.command
+                                                              and argv == BROWSER_MCP_SERVER.args),
                                                  cwe_mcp_deployment_path=cwe_deployment_path)
         params = StdioServerParameters(command=command, args=argv,
                                        env={} if worker is not None else server.env)

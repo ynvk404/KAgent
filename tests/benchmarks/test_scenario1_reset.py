@@ -1,6 +1,6 @@
 """Offline parent admission regressions; no Docker, HTTP target or model calls."""
 from dataclasses import replace
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 import json
 from pathlib import Path
 import time
@@ -17,7 +17,7 @@ from benchmarks.scenario1.core.storage import storage_root
 
 
 class Controller:
-    def ownership(self):
+    def ownership(self) -> AbstractContextManager[None]:
         return nullcontext()
     def __init__(self, fail=None):
         self.calls = []
@@ -284,7 +284,7 @@ def test_idle_transition_is_inside_exclusive_target_lock(tmp_path, op, settings)
 
 @pytest.mark.parametrize('phase', ['begin', 'identity', 'before', 'authorize', 'worker', 'after', 'idle'])
 @pytest.mark.parametrize('cancel', [False, True])
-def test_interruption_at_every_transition_stays_closed(tmp_path, op, settings, phase, cancel):
+def test_interruption_at_every_transition_stays_closed(tmp_path, op, settings, phase: str, cancel):
     from asyncio import CancelledError
     error = CancelledError if cancel else KeyboardInterrupt
     control = Controller()
