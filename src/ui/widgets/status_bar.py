@@ -147,10 +147,10 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
         context_hint = (
             f" · h{history_hint} · r{request_hint}"
             if compact_context
-            else f" · hist {history_hint} · req {request_hint}"
+            else f" · history {history_hint} · request {request_hint}"
         )
     elif request_hint:
-        context_hint = f" · req {request_hint}"
+        context_hint = f" · request {request_hint}"
     else:
         context_hint = ""
 

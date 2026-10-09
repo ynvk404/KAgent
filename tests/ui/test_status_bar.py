@@ -194,7 +194,7 @@ class TestStatusBarBusyLine:
             )
         ).plain
 
-        assert "hist ~2.3k · req ~7.3k/6k soft 122% · time 00:18" in line
+        assert "history ~2.3k · request ~7.3k/6k soft 122% · time 00:18" in line
 
     @pytest.mark.asyncio
     async def test_wide_idle_status_orders_hints_metrics_then_expand_last(self) -> None:
@@ -215,7 +215,7 @@ class TestStatusBarBusyLine:
         fields = [
             "ready · idle",
             "openai/gpt-oss-20b [tools ✓]",
-            "hist ~2.4k · req ~5.4k/6k soft 90%",
+            "history ~2.4k · request ~5.4k/6k soft 90%",
             "time 00:01",
             "Ctrl-K latest · Ctrl-O all",
         ]
@@ -245,7 +245,7 @@ class TestStatusBarBusyLine:
             "ready · idle",
             "deepseek-flash [tools ✓]",
             "skill: sql-injection",
-            "hist ~18.3k · req ~23.5k/16k soft 147%",
+            "history ~18.3k · request ~23.5k/16k soft 147%",
             "time 00:13",
             "Ctrl-K latest · Ctrl-O all",
         ]
@@ -254,7 +254,7 @@ class TestStatusBarBusyLine:
         assert line.endswith("Ctrl-K latest · Ctrl-O all")
 
     @pytest.mark.asyncio
-    async def test_wide_idle_status_without_active_skill_flows_directly_into_hist(self) -> None:
+    async def test_wide_idle_status_without_active_skill_flows_directly_into_history(self) -> None:
         frame = await render_frame(
             props(
                 model="deepseek-flash",
@@ -269,7 +269,7 @@ class TestStatusBarBusyLine:
             size=(140, 3),
         )
         line = next(line for line in frame.splitlines() if "ready" in line)
-        assert "[tools ✓] · hist ~11.6k · req ~16.8k/16k soft 105% · time 00:18 · Ctrl-K latest · Ctrl-O all" in line
+        assert "[tools ✓] · history ~11.6k · request ~16.8k/16k soft 105% · time 00:18 · Ctrl-K latest · Ctrl-O all" in line
         assert "skill:" not in line
         assert "mem:" not in line
 
@@ -300,7 +300,7 @@ class TestStatusBarBusyLine:
             size=(100, 3),
         )
 
-        assert "hist ~2.4k · req ~5.4k/6k soft 90%" in frame
+        assert "history ~2.4k · request ~5.4k/6k soft 90%" in frame
         assert "time 00:01" in frame
         assert "Ctrl-K latest" not in frame
 
