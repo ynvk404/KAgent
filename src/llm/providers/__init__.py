@@ -194,6 +194,14 @@ DEEPSEEK_MODELS: Final[tuple[str, ...]] = (
     "deepseek-v4-pro",
 )
 
+# First-party API only: (combined context window, maximum output tokens).
+# Verified 2026-10-09 against https://api-docs.deepseek.com/api/list-models/
+# and https://api-docs.deepseek.com/api/create-chat-completion/ .
+DEEPSEEK_CONTEXT_LIMITS: Final[dict[str, tuple[int, int]]] = {
+    "deepseek-flash": (1_048_576, 393_216),
+    "deepseek-v4-pro": (1_048_576, 393_216),
+}
+
 # Anthropic Claude
 
 ANTHROPIC_DEFAULT_BASE_URL: Final[str] = (

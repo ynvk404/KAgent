@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from src.llm.providers import KIMI_CONTEXT_WINDOWS
+from src.llm.providers import DEEPSEEK_CONTEXT_LIMITS, DEEPSEEK_DEFAULT_BASE_URL, KIMI_CONTEXT_WINDOWS
 
 if TYPE_CHECKING:
     from src.llm.core.client import Client
@@ -24,15 +24,37 @@ def resolve_input_budget(client: Client) -> InputBudget:
     explicit = getattr(client, "input_token_limit", None)
     if type(explicit) is int and explicit > 0:
         return InputBudget(explicit, "explicit-input")
-    window = KIMI_CONTEXT_WINDOWS.get(client.model()) if client.name() == "kimi" else None
+    return resolve_model_input_budget(client.name(), client.model(), getattr(client, "max_tokens", None),
+                                      base_url=getattr(client, "base_url", "") or "")
+
+
+def resolve_model_input_budget(provider: str, model: str, maximum: int | None = None, *,
+                               base_url: str | None = None) -> InputBudget:
+    """Shared reservations; absent config URL selects the factory default.
+
+    Live clients without a URL pass an empty string, which cannot establish
+    the first-party DeepSeek capacity from a provider/model label alone.
+    """
+    window = None
+    source = "unknown"
+    default_output = 2048  # Existing Kimi factory/direct-client reservation.
+    if provider == "kimi":
+        window = KIMI_CONTEXT_WINDOWS.get(model)
+        source = "kimi-context"
+    elif provider == "deepseek" and (base_url is None or base_url.rstrip("/") in {
+        DEEPSEEK_DEFAULT_BASE_URL, DEEPSEEK_DEFAULT_BASE_URL + "/v1",
+    }):
+        limits = DEEPSEEK_CONTEXT_LIMITS.get(model)
+        if limits is not None:
+            window, default_output = limits
+            source = "deepseek-context"
     if window is None:
         return InputBudget()
-    maximum = getattr(client, "max_tokens", None)
-    # Factory uses 2048 for Kimi. Direct adapters without an output setting
-    # retain that conservative reservation instead of claiming zero output.
-    output = maximum if type(maximum) is int and maximum > 0 else 2048
+    # DeepSeek omits max_tokens when unset. Reserve the verified output ceiling
+    # to cover every thinking mode without changing adapter request semantics.
+    output = maximum if type(maximum) is int and maximum > 0 else default_output
     safety = max(128, (window + 19) // 20)  # 5% heuristic uncertainty reservation.
-    return InputBudget(max(0, window - output - safety), "kimi-context", output, safety)
+    return InputBudget(max(0, window - output - safety), source, output, safety)
 
 
 class ContextCapacityError(RuntimeError):

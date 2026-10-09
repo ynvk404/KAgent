@@ -232,9 +232,9 @@ def test_help_uses_the_runtime_burp_default(capsys):
         (Config(backend="groq", auto_compact_threshold=4_000), 4_000),
         (Config(backend="groq", auto_compact_threshold=0), GROQ_AUTO_COMPACT_THRESHOLD),
         (Config(backend="openai-compat"), DEFAULT_AUTO_COMPACT_THRESHOLD),
-        (Config(backend="kimi", model="moonshot-v1-8k"), 6_144),
-        (Config(backend="kimi", model="moonshot-v1-32k"), 24_576),
-        (Config(backend="kimi", model="kimi-k2.6"), 196_608),
+        (Config(backend="kimi", model="moonshot-v1-8k"), 4_300),
+        (Config(backend="kimi", model="moonshot-v1-32k"), 21_810),
+        (Config(backend="kimi", model="kimi-k2.6"), 32_000),
         (Config(backend="kimi", model="unknown"), DEFAULT_AUTO_COMPACT_THRESHOLD),
         (
             Config(

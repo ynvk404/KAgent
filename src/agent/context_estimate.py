@@ -93,7 +93,11 @@ def estimate_request(req: ChatRequest, provider: str = "", *,
 
     History boundaries refer to the source history prefix, including system.
     Private/framing costs are separate, while compactable history includes its
-    own private/framing contribution. No disk artifacts are read here.
+    own private/framing contribution. Only the initial system prompt is fixed
+    inside history; later system messages (including slash-injected skills)
+    belong to the history[1:] input summarized by compaction. System messages
+    injected outside that history prefix remain fixed request context.
+    No disk artifacts are read here.
     """
     system = history = incoming = injected = private = framing = compactable = 0
     for index, message in enumerate(req.messages):
@@ -101,7 +105,7 @@ def estimate_request(req: ChatRequest, provider: str = "", *,
         private += private_cost
         framing += framing_cost
         in_history = history_count is None or index < history_count
-        if message.role == "system":
+        if message.role == "system" and (index == 0 or not in_history):
             system += visible_cost
         elif index == incoming_index:
             incoming += visible_cost

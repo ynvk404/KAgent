@@ -44,6 +44,8 @@ from src.permission.permission import AlwaysAllow
 from src.permission.permission import YoloPrompter
 
 from src.llm.core import factory as llm_factory
+from src.llm.core.client import Client
+from src.llm.runtime.context_budget import resolve_input_budget, resolve_model_input_budget
 from src.llm.runtime.provider_runtime import (
     build_startup_runtime,
     edit_custom_provider_transactionally,
@@ -87,7 +89,6 @@ from src.llm.providers import (
     annotations,
     anthropic_accepts_temperature,
     ipaddress,
-    kimi_auto_compact_threshold,
     kimi_locks_temperature,
     kimi_supports_thinking_toggle,
     urlparse,
@@ -1033,7 +1034,7 @@ async def main() -> int:
                 else None
             )
         ),
-        auto_compact_threshold=effective_auto_compact_threshold(current_runtime_config),
+        auto_compact_threshold=effective_auto_compact_threshold(current_runtime_config, client),
         tooling_profile=cast(
             PromptToolingProfile,
             cfg.tooling_profile.value
@@ -1233,7 +1234,7 @@ async def main() -> int:
         )
 
         agent.set_auto_compact_threshold(
-            effective_auto_compact_threshold(current_runtime_config)
+            effective_auto_compact_threshold(current_runtime_config, agent.client)
         )
 
         agent.set_prompt_profile(
@@ -1554,7 +1555,7 @@ def fs_watch(path: str, loop: asyncio.AbstractEventLoop, callback: Callable[[], 
     return None
 
 
-def effective_auto_compact_threshold(cfg: config.Config) -> int:
+def effective_auto_compact_threshold(cfg: config.Config, client: Client | None = None) -> int:
     if cfg.backend == "groq":
         if cfg.auto_compact_threshold <= 0:
             return GROQ_AUTO_COMPACT_THRESHOLD
@@ -1564,17 +1565,18 @@ def effective_auto_compact_threshold(cfg: config.Config) -> int:
             GROQ_AUTO_COMPACT_THRESHOLD,
         )
 
-    if (
-        cfg.backend == "kimi"
-        and cfg.auto_compact_threshold
-        == config.DEFAULT_AUTO_COMPACT_THRESHOLD
-    ):
-        kimi_threshold = kimi_auto_compact_threshold(
-            cfg.model
-        )
-
-        if kimi_threshold is not None:
-            return kimi_threshold
+    # Keep the established default-value sentinel and manual overrides.
+    # Capacity comes from the active backend/client, never a display name.
+    if cfg.auto_compact_threshold == config.DEFAULT_AUTO_COMPACT_THRESHOLD:
+        budget = (resolve_input_budget(client) if client is not None else
+                  resolve_model_input_budget(str(cfg.backend), cfg.model or (
+                      KIMI_DEFAULT_MODEL if cfg.backend == "kimi" else
+                      DEEPSEEK_DEFAULT_MODEL if cfg.backend == "deepseek" else ""
+                  ), cfg.max_tokens, base_url=cfg.base_url or None))
+        if budget.input_limit is not None:
+            # Reuse the existing 75% policy on *input* capacity after output
+            # and safety reservations. Cap the proactive default at 32K.
+            return min(32_000, budget.input_limit * 3 // 4)
 
     return cfg.auto_compact_threshold
 

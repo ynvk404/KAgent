@@ -3537,14 +3537,26 @@ class Agent:
         threshold = self.auto_compact_threshold
         if threshold > 0 and projection.fixed_floor_tokens >= threshold:
             emit({"type": "decision", "summary": (
-                f"context pressure: fixed/non-history floor ~{projection.fixed_floor_tokens} tokens "
+                f"context pressure: fixed/non-compactable floor ~{projection.fixed_floor_tokens} tokens "
                 f"meets soft compact threshold {threshold}; summarizing history cannot remove this floor."
             )})
+        hard_limit = self.input_budget().input_limit
+        # The economic history gate must not prevent a recovery attempt before
+        # hard admission refuses the request. Fixed context alone cannot recover.
+        capacity_pressure = (
+            hard_limit is not None
+            and projection.estimated_total > hard_limit
+            and projection.fixed_floor_tokens < hard_limit
+            and projection.compactable_history_tokens > 0
+        )
         if (
             threshold > 0
             and self.consecutive_compact_failures < MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
-            and projection.estimated_total >= threshold
-            and projection.compactable_history_tokens >= minimum_compactable_history_tokens(threshold)
+            and (
+                capacity_pressure
+                or (projection.estimated_total >= threshold
+                    and projection.compactable_history_tokens >= minimum_compactable_history_tokens(threshold))
+            )
         ):
             await self.auto_compact(signal, emit, trigger_tokens=projection.estimated_total,
                                     history_tokens=history_tokens, incoming_tokens=incoming_tokens,
@@ -5372,13 +5384,17 @@ class Agent:
             history_tokens if history_tokens is not None else tokens_before
         )
 
+        budget = self.input_budget()
+        trigger = f"~{displayed_tokens} tokens >= threshold {self.auto_compact_threshold}"
+        if budget.input_limit is not None and displayed_tokens > budget.input_limit:
+            trigger = (f"~{displayed_tokens} tokens exceeds hard input budget {budget.input_limit} "
+                       f"({budget.source}); soft threshold {self.auto_compact_threshold}")
+
         emit(
             {
                 "type": "compact",
                 "summary": (
-                    f"auto-compact triggered "
-                    f"(~{displayed_tokens} tokens >= "
-                    f"threshold {self.auto_compact_threshold}; "
+                    f"auto-compact triggered ({trigger}; "
                     f"history: {displayed_history_tokens}; "
                     f"input: {incoming_tokens}; "
                     f"tools: {tools_tokens}; projection includes injections/framing)..."
