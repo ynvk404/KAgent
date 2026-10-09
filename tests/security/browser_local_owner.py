@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.engagement.state import EngagementState
-from src.permission.permission import Decision, UserControlledRefusal
+from src.permission.permission import Decision, UserControlledRefusal, YoloPrompter
 from src.permission.runtime.execution import ExecutionBlocked, ExecutionPolicy
 from src.tools.common.registry import Registry
 from src.tools.mcp.browser_local import BrowserLocalBinding, linux_listeners
@@ -22,13 +22,15 @@ from src.tools.mcp import browser_deployment as deployment
 
 ORIGIN = 'http://juice.lab:8081'
 MOCK = """
-import { WebSocket } from '/usr/local/lib/kagent-browser-mcp/0.1.3-kagent-local-v2/node_modules/ws/wrapper.mjs';
+import { WebSocket } from '/usr/local/lib/kagent-browser-mcp/0.1.3-kagent-local-v3/node_modules/ws/wrapper.mjs';
+import { existsSync, readFileSync } from 'node:fs';
 const ws = new WebSocket('ws://127.0.0.1:9009');
 ws.on('message', bytes => {
   const req = JSON.parse(bytes.toString());
   console.log(req.type);
   if (req.type === 'browser_click' && req.payload.element === 'hold') return;
-  const result = req.type === 'getUrl' ? 'http://juice.lab:8081'
+  const origin = existsSync('/tmp/browser-mock-origin') ? readFileSync('/tmp/browser-mock-origin', 'utf8') : 'http://juice.lab:8081';
+  const result = req.type === 'getUrl' ? origin
     : req.type === 'getTitle' ? 'MOCK-OWNER-MARKER'
     : req.type === 'browser_snapshot' ? '- textbox [ref=s1e1]' : null;
   ws.send(JSON.stringify({ id: req.id, type: 'messageResponse', payload: { requestId: req.id, result } }));
@@ -57,14 +59,16 @@ async def main():
         engagement = EngagementState()
         engagement.add_origin(ORIGIN)
         policy = ExecutionPolicy(engagement, Path(scratch))
-        binding = BrowserLocalBinding(policy, BROWSER_LOCAL_SERVER, lab_ready=True, lab_origin=ORIGIN)
+        binding = BrowserLocalBinding(policy, BROWSER_LOCAL_SERVER, lab_origin=ORIGIN)
         policy.browser_local = binding
 
         class Operator:
             execution_policy = policy
             decision = Decision.ALLOW_ONCE
+            asks = 0
 
             async def ask(self, request, signal=None):
+                self.asks += 1
                 return self.decision
 
         operator = Operator()
@@ -110,6 +114,33 @@ async def main():
             await call('click', {'ref': 's1e1', 'element': 'search'})
             await call('type', {'ref': 's1e1', 'element': 'search', 'text': 'fixture', 'submit': False})
             assert binding.owner is owner and (await owner.request('browser_status'))['pid'] == pid
+            yolo = YoloPrompter(operator, True)
+            yolo.bind_execution_policy(policy)
+            grant = binding.activate_grant('read')
+            before_asks = operator.asks
+            await registry.execute('mcp_browser_browser_snapshot', {}, None, yolo)
+            assert operator.asks == before_asks and grant.remaining == 19
+            # The actual pinned server checks CURRENT extension metadata even
+            # with auto-approval. No snapshot action may run on a foreign tab.
+            origin_control = Path('/tmp/browser-mock-origin')
+            origin_control.write_text('http://outside.lab:8081')
+            before_snapshots = messages.count('browser_snapshot')
+            try:
+                await registry.execute('mcp_browser_browser_snapshot', {}, None, yolo)
+                raise AssertionError('Browser grant bypassed current-tab guard')
+            except RuntimeError as exc:
+                assert 'outside controller origin' in str(exc)
+            assert messages.count('browser_snapshot') == before_snapshots
+            origin_control.write_text('unverifiable-url')
+            try:
+                await registry.execute('mcp_browser_browser_snapshot', {}, None, yolo)
+                raise AssertionError('Browser grant accepted unverifiable tab origin')
+            except RuntimeError as exc:
+                assert 'Invalid URL' in str(exc)
+            assert messages.count('browser_snapshot') == before_snapshots
+            origin_control.unlink()
+            assert binding.owner is owner and (await owner.request('browser_status'))['pid'] == pid
+            yolo.set_yolo(False)
             operator.decision = Decision.DENY
             before = len(messages)
             try:
@@ -135,6 +166,7 @@ async def main():
             assert policy.active == 0 and not errors, errors
             print(json.dumps({'realOwner': True, 'persistentPid': True, 'permission': True,
                               'queuedRevocation': True, 'unknownOutcome': True, 'cleanup': True,
+                              'boundedYoloGrant': True, 'grantCurrentTabGuard': True,
                               'anyioContextErrors': False, 'realChrome': False}))
         finally:
             if pairing is not None and not pairing.done():

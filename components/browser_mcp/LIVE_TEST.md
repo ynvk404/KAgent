@@ -1,5 +1,8 @@
 # Browser MCP — bằng chứng Chrome live ngày 09/10/2026
 
+Đây là báo cáo lịch sử deployment v2. Trạng thái hiện hành ở
+[README.md](README.md); CLI hiện dùng một flag Browser.
+
 **GO — trusted-local lab mode**, cho profile lab và exact origin
 `http://juice.lab:8081` đã được operator xác nhận. Chuỗi navigate → snapshot
 → search click → type thành công với cùng process/session; DENY, queued/new
@@ -20,9 +23,10 @@ phép; không submit login/form hoặc click chức năng đổi dữ liệu.
 
 ```bash
 venv-linux/bin/python scripts/browser_local_live.py \
-  --browser --browser-local --browser-lab-ready --target http://juice.lab:8081
+  --browser --target http://juice.lab:8081
 ```
 
+Lệnh trên là cú pháp CLI hiện hành; artifacts v2 giữ flags cũ nguyên trạng.
 Runner nhận flags qua parser KAgent, dùng production Agent Skill/generic gate,
 Registry, YoloPrompter ở chế độ OFF, execution policy/receipts và Browser local
 binding. Mỗi đề xuất chỉ nhận ALLOW_ONCE hoặc DENY của envelope test rõ ràng.

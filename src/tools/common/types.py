@@ -11,6 +11,8 @@ class PermissionHints(TypedDict, total=False):
     sessionScopeDisplay: str
     riskTier: RiskTier
     yoloAutoApprove: bool
+    forceOperator: bool
+    browserGrant: str
 
 class ToolSummary(TypedDict):
     summary: str

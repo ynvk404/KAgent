@@ -35,6 +35,9 @@ class PermissionRequest:
     # Set only when the tool has validated the action as routine and in scope.
     # This is deliberately independent of risk_tier and session-cache policy.
     yolo_auto_approve: bool = field(default=False, kw_only=True)
+    # Trusted tool adapter can require manual review even while YOLO is ON.
+    force_operator: bool = field(default=False, kw_only=True)
+    offer_browser_grant: str | None = field(default=None, kw_only=True)
     offer_http_lab: bool = field(default=False, kw_only=True)
 
     def __post_init__(self) -> None:
@@ -100,7 +103,7 @@ class YoloPrompter:
         request: PermissionRequest,
         signal: Any = None,
     ) -> Decision:
-        if self._yolo:
+        if self._yolo and not request.force_operator:
             if self.execution_policy is not None:
                 if self.execution_policy.nested_allowed():
                     return Decision.ALLOW_ONCE

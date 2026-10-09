@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 
-PATCH_ID = 'kagent-local-v2'
+PATCH_ID = 'kagent-local-v3'
 UPSTREAM_BUNDLE_SHA256 = 'f391bfe0a8185e7551dfe70f129019b8eb786857fc1e8390edaa6ae3ad27ecfc'
 
 
@@ -24,6 +24,34 @@ def patch_bundle(bundle: bytes) -> bytes:
         reject(new Error("Browser disconnected; outcome unknown if action started"));
       };
       ws.addEventListener("close", closeHandler);''')
+    # Metadata only: no payloads, URLs, page text or extension protocol changes.
+    replace('function createSocketMessageSender(ws) {', 'function createSocketMessageSender(ws, trace) {')
+    replace('''    const message = { id, type: type2, payload };''', '''    const message = { id, type: type2, payload };
+    const timing = trace ? { id, type: type2, sentMs: 0, endMs: 0, outcome: "pending" } : null;
+    const finish = (outcome) => {
+      if (timing && timing.outcome === "pending") {
+        timing.endMs = Number(process.hrtime.bigint() - trace.started) / 1e6;
+        timing.outcome = outcome;
+      }
+    };''')
+    replace('''          reject(new Error(`WebSocket response timeout after ${timeoutMs}ms`));''', '''          finish("timeout");
+          reject(new Error(`WebSocket response timeout after ${timeoutMs}ms (${type2}, request ${id})`));''')
+    replace('''        const { result, error } = payload2;''', '''        finish(payload2.error ? "error" : "response");
+        const { result, error } = payload2;''')
+    replace('''        reject(new Error("WebSocket error occurred"));''', '''        finish("socket_error");
+        reject(new Error("WebSocket error occurred"));''')
+    replace('''        reject(new Error("Browser disconnected; outcome unknown if action started"));''', '''        finish("disconnect");
+        reject(new Error("Browser disconnected; outcome unknown if action started"));''')
+    replace('''        ws.send(JSON.stringify(message));''', '''        if (timing) {
+          timing.sentMs = Number(process.hrtime.bigint() - trace.started) / 1e6;
+          trace.websocket.push(timing);
+        }
+        ws.send(JSON.stringify(message));''')
+    replace('''        reject(new Error("WebSocket is not open"));''', '''        finish("not_open");
+        reject(new Error("WebSocket is not open"));''')
+    replace('''      this.ws
+    );''', '''      this.ws, this.trace
+    );''')
     replace('''    const message = JSON.parse(event.data.toString());''', '''    let message;
     try { message = JSON.parse(event.data.toString()); }
     catch { ws.close(1007, "Invalid JSON"); return; }
@@ -32,6 +60,7 @@ def patch_bundle(bundle: bytes) -> bytes:
   get ws() {
     if (!this._ws) {''', '''  _ws;
   activeSocket;
+  trace;
   scopeOrigin;
   generation = 0;
   snapshotGeneration = 0;
@@ -98,6 +127,8 @@ async function createWebSocketServer(port = mcpConfig.defaultWsPort) {
     ] };''')
     replace('''      const result = await tool.handle(context, request.params.arguments);
       return result;''', '''      const meta = request.params._meta?.kagentBrowser;
+      const traceId = typeof meta?.traceId === "string" && /^[a-f0-9]{1,32}$/.test(meta.traceId) ? meta.traceId : undefined;
+      if (traceId) context.trace = { traceId, started: process.hrtime.bigint(), websocket: [] };
       if (process.env.KAGENT_BROWSER_LOCAL === "1") {
         if (!meta || typeof meta.origin !== "string" ||
             !["http:", "https:"].includes(new URL(meta.origin).protocol) ||
@@ -122,23 +153,30 @@ async function createWebSocketServer(port = mcpConfig.defaultWsPort) {
         }
       }
       const result = await tool.handle(context, request.params.arguments);
-      return { ...result, _meta: { kagentBrowser: status() } };''')
+      return { ...result, _meta: { kagentBrowser: status(), kagentBrowserTiming: timing() } };''')
     replace('''        isError: true
       };
     }
   });
   server.setRequestHandler(ReadResourceRequestSchema''', '''        isError: true,
-        _meta: { kagentBrowser: status() }
+        _meta: { kagentBrowser: status(), kagentBrowserTiming: timing() }
       };
     } finally {
       context.activeSocket = undefined;
       context.scopeOrigin = undefined;
+      context.trace = undefined;
     }
   });
   server.setRequestHandler(ReadResourceRequestSchema''')
     replace('''    const resource = resources2.find(''', '''    if (request.params.uri === statusURI)
       return { contents: [{ uri: statusURI, mimeType: "application/json", text: JSON.stringify(status()) }] };
     const resource = resources2.find(''')
+    replace('''  const statusURI = "kagent://browser/status";''', '''  const statusURI = "kagent://browser/status";
+  const timing = () => context.trace ? {
+    traceId: context.trace.traceId,
+    serverMs: Number(process.hrtime.bigint() - context.trace.started) / 1e6,
+    websocket: context.trace.websocket
+  } : undefined;''')
     replace('''  server.close = async () => {
     await server.close();
     await wss.close();

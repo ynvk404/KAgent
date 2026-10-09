@@ -169,6 +169,8 @@ class BridgedPrompter(Prompter):
             session_scope_display=req.session_scope_display,
             risk_tier=req.risk_tier,
             yolo_auto_approve=req.yolo_auto_approve,
+            force_operator=req.force_operator,
+            offer_browser_grant=req.offer_browser_grant,
             offer_http_lab=req.offer_http_lab,
             resolve=resolve,
             reject=reject,

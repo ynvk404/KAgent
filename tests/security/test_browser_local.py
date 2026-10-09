@@ -13,7 +13,7 @@ import pytest
 from src.cli.runtime import FlagParseError, parse_flags
 from src.config.config import MCPServerConfig
 from src.engagement.state import EngagementState
-from src.permission.permission import Decision, UserControlledRefusal
+from src.permission.permission import Decision, UserControlledRefusal, YoloPrompter
 from src.permission.runtime.execution import ExecutionBlocked, ExecutionPolicy, current_policy
 from src.tools.common.registry import Registry
 from src.tools.mcp.integration import MCPSession, MCPTool, discover_mcp_tools
@@ -45,7 +45,7 @@ async def rig(tmp_path, monkeypatch):
     engagement.add_origin(ORIGIN)
     policy = ExecutionPolicy(engagement, tmp_path)
     policy.session_id = 'first-cli'
-    binding = local.BrowserLocalBinding(policy, BROWSER_LOCAL_SERVER, lab_ready=True, lab_origin=ORIGIN)
+    binding = local.BrowserLocalBinding(policy, BROWSER_LOCAL_SERVER, lab_origin=ORIGIN)
     policy.browser_local = binding
     operator = Operator(policy)
     sessions = []
@@ -126,17 +126,21 @@ async def execute(rig, name, args=None, signal=None):
     return await rig.registry.execute('mcp_browser_browser_' + name, args or {}, signal, rig.operator)
 
 
-def test_flags_only_explicit_opt_in_and_attestation():
-    assert not parse_flags(['--browser']).browser_local
-    assert parse_flags(['--browser', '--browser-local', '--list-tools']).browser_local
-    with pytest.raises(FlagParseError, match='requires --browser'):
-        parse_flags(['--browser-local'])
-    with pytest.raises(FlagParseError, match='explicit --target'):
-        parse_flags(['--browser', '--browser-local', '--browser-lab-ready'])
-    flags = parse_flags(['--browser', '--browser-local', '--browser-lab-ready', '--target', ORIGIN])
-    assert flags.browser_lab_ready and flags.target_url == ORIGIN
-    assert session_mcp_servers([], True)[0] is BROWSER_MCP_SERVER
-    assert session_mcp_servers([], True, True)[0] is BROWSER_LOCAL_SERVER
+def test_browser_flag_selects_local_without_profile_attestation():
+    flags = parse_flags(['--browser', '--target', ORIGIN])
+    assert flags.browser and flags.target_url == ORIGIN and not flags.yolo
+    assert parse_flags(['--browser', '--list-tools']).browser
+    assert session_mcp_servers([], True)[0] is BROWSER_LOCAL_SERVER
+    assert session_mcp_servers([BROWSER_LOCAL_SERVER, BROWSER_MCP_SERVER], False) == []
+
+
+@pytest.mark.parametrize('flag', ['--browser-local', '--browser-lab-ready'])
+def test_removed_browser_flags_are_unknown(flag, capsys):
+    from src.cli.help import print_help
+    with pytest.raises(FlagParseError, match='unknown option'):
+        parse_flags(['--browser', flag, '--target', ORIGIN])
+    print_help()
+    assert flag not in capsys.readouterr().out
 
 
 @pytest.mark.asyncio
@@ -182,16 +186,66 @@ async def test_reuse_serialization_neutral_owner_and_fresh_approvals(rig):
 
 
 @pytest.mark.asyncio
-async def test_deny_and_lab_attestation_never_start_host(rig):
+async def test_deny_and_missing_target_never_start_host(rig):
     rig.operator.decision = Decision.DENY
     with pytest.raises(UserControlledRefusal):
         await execute(rig, 'snapshot')
     assert not rig.calls and len(rig.sessions) == 1
-    rig.binding.lab_ready = False
+    rig.binding.lab_origin = ''
     rig.operator.decision = Decision.ALLOW_ONCE
-    with pytest.raises(ExecutionBlocked, match='confirmation required'):
+    with pytest.raises(ExecutionBlocked, match='explicit --target'):
         await execute(rig, 'snapshot')
     assert len(rig.sessions) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('enabled', [False, True])
+async def test_browser_asks_each_call_with_yolo_on_or_off_and_honors_deny(rig, enabled):
+    prompter = YoloPrompter(rig.operator, enabled)
+    prompter.bind_execution_policy(rig.policy)
+    for _ in range(2):
+        await rig.registry.execute('mcp_browser_browser_snapshot', {}, None, prompter)
+    assert len(rig.calls) == 2 and len(rig.operator.asks) == 2
+    assert all(request.force_operator and request.no_session_cache for request in rig.operator.asks)
+    rig.operator.decision = Decision.DENY
+    with pytest.raises(UserControlledRefusal):
+        await rig.registry.execute('mcp_browser_browser_snapshot', {}, None, prompter)
+    assert len(rig.calls) == 2 and len(rig.operator.asks) == 3
+    assert rig.policy.yolo is enabled and rig.policy.active == 0
+
+
+@pytest.mark.asyncio
+async def test_missing_scope_never_asks_or_starts_browser(rig):
+    rig.policy.engagement.reset_to_origin('http://different.lab:8081')
+    with pytest.raises(ExecutionBlocked, match='no longer in engagement scope'):
+        await execute(rig, 'snapshot')
+    assert not rig.calls and len(rig.sessions) == 1 and not rig.operator.asks
+
+
+@pytest.mark.asyncio
+async def test_extra_engagement_origin_does_not_expand_browser_target(rig):
+    rig.policy.engagement.add_origin('http://different.lab:8081')
+    with pytest.raises(ExecutionBlocked, match='outside operator lab binding'):
+        await execute(rig, 'navigate', {'url': 'http://different.lab:8081'})
+    assert not rig.calls and len(rig.sessions) == 1 and not rig.operator.asks
+
+
+@pytest.mark.asyncio
+async def test_timing_separates_lock_wait_and_never_contains_arguments(rig):
+    await rig.binding.lock.acquire()
+    pending = asyncio.create_task(execute(rig, 'snapshot', {'fixture': 'private-page-text'}))
+    try:
+        await asyncio.sleep(0.04)
+        assert not rig.calls
+    finally:
+        rig.binding.lock.release()
+    await pending
+    timing = rig.binding.last_timing
+    assert timing['lockAcquiredMs'] - timing['receiptValidatedMs'] >= 30
+    assert timing['ownerDispatchMs'] >= timing['readyMs'] >= timing['lockAcquiredMs']
+    assert timing['mcpResponseMs'] >= timing['ownerDispatchMs']
+    assert timing['traceId'] == rig.calls[0][3]['meta']['kagentBrowser']['traceId']
+    assert 'private-page-text' not in json.dumps(timing)
 
 
 @pytest.mark.asyncio
@@ -340,7 +394,7 @@ async def test_actual_patched_discovery_has_no_host_listener(tmp_path):
     if not deployment.BROWSER_LOCAL_ROOT.exists():
         pytest.skip('explicitly prepared Linux patched closure required')
     policy = ExecutionPolicy(EngagementState(), tmp_path)
-    binding = local.BrowserLocalBinding(policy, BROWSER_LOCAL_SERVER, lab_ready=False, lab_origin='')
+    binding = local.BrowserLocalBinding(policy, BROWSER_LOCAL_SERVER, lab_origin='')
     policy.browser_local = binding
     before = local.linux_listeners()
     try:

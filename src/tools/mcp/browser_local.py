@@ -9,10 +9,13 @@ from __future__ import annotations
 import asyncio
 from contextvars import Context, copy_context
 from copy import deepcopy
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
 import sys
+import time
+import uuid
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -37,6 +40,29 @@ WINDOWS_PORT_CHECK = (
 )
 MUTATING = frozenset({'browser_navigate', 'browser_click', 'browser_type', 'browser_select_option',
                       'browser_press_key', 'browser_go_back', 'browser_go_forward'})
+# Verified 0.1.3 handlers: read tools capture data; navigate changes location;
+# click/type dispatch input and then capture ARIA. Other tools stay manual.
+GRANT_ACTIONS = {
+    'read': frozenset({'browser_snapshot', 'browser_screenshot', 'browser_get_console_logs'}),
+    'navigate': frozenset({'browser_navigate'}),
+    'interaction': frozenset({'browser_click', 'browser_type'}),
+}
+GRANT_SECONDS = 300.0
+GRANT_CALLS = 20
+
+
+@dataclass
+class BrowserGrant:
+    id: str
+    group: str
+    actions: frozenset[str]
+    origin: str
+    lifecycle: tuple
+    stamp: tuple
+    epoch: int
+    revision: int
+    expires: float
+    remaining: int
 
 
 def validate_browser_url(raw: Any) -> HTTPOrigin:
@@ -213,12 +239,11 @@ class BrowserOwner:
 class BrowserLocalBinding:
     server_name = 'browser'
 
-    def __init__(self, policy, server, *, lab_ready: bool, lab_origin: str):
+    def __init__(self, policy, server, *, lab_origin: str):
         if not deployment.is_designated_browser_local(server) or sys.platform != 'linux':
             raise ExecutionBlocked('blocked: designated Linux Browser local binding required')
         self.policy = policy
         self.server = deepcopy(server)
-        self.lab_ready = lab_ready
         self.lab_origin = validate_browser_url(lab_origin).as_url() if lab_origin else ''
         self.owner: BrowserOwner | None = None
         self.retired: list[BrowserOwner] = []
@@ -229,6 +254,9 @@ class BrowserLocalBinding:
         self.generation = 0
         self.snapshot_generation = 0
         self.schema_identity = ''
+        self.last_timing: dict[str, Any] = {}
+        self.grant: BrowserGrant | None = None
+        self.grant_revision = 0
         self.lifecycle = self._lifecycle()
 
     def _lifecycle(self):
@@ -237,6 +265,7 @@ class BrowserLocalBinding:
                 self.policy.session_id, self.policy.root)
 
     def invalidate(self) -> None:
+        self.revoke_grant()
         self.epoch += 1
         self.generation = self.snapshot_generation = 0
         self.fault = ''
@@ -247,16 +276,79 @@ class BrowserLocalBinding:
             self.owner = None
         self.lifecycle = self._lifecycle()
 
+    @staticmethod
+    def action_group(name):
+        return next((group for group, actions in GRANT_ACTIONS.items() if name in actions), None)
+
+    def activate_grant(self, group, *, seconds=GRANT_SECONDS, calls=GRANT_CALLS):
+        """Trusted operator/UI callback only; never an MCP/model tool or HTTP grant."""
+        if (group not in GRANT_ACTIONS or type(seconds) not in {int, float}
+                or not 0 < seconds <= GRANT_SECONDS or type(calls) is not int or not 0 < calls <= GRANT_CALLS):
+            raise ValueError('invalid bounded Browser grant')
+        if (self.closed or self.fault or not self.policy.yolo or not self.lab_origin
+                or self._lifecycle() != self.lifecycle):
+            raise ExecutionBlocked('blocked: Browser grant requires current YOLO/target binding')
+        self.policy.require_network(self.lab_origin)
+        actions = GRANT_ACTIONS['read']
+        if group in {'navigate', 'interaction'}:
+            actions |= GRANT_ACTIONS['navigate']
+        if group == 'interaction':
+            actions |= GRANT_ACTIONS['interaction']
+        self.grant_revision += 1
+        self.grant = BrowserGrant(uuid.uuid4().hex[:12], group, actions, self.lab_origin,
+                                  self.lifecycle, self.policy.stamp(), self.epoch, self.grant_revision,
+                                  self.policy.clock() + seconds, calls)
+        return self.grant
+
+    def revoke_grant(self):
+        self.grant_revision += 1
+        self.grant = None
+
+    def check_grant(self, token, *, consumed=False):
+        grant = self.grant
+        if (grant is None or token != (grant.id, grant.revision) or not self.policy.yolo
+                or grant.revision != self.grant_revision or grant.epoch != self.epoch
+                or grant.lifecycle != self._lifecycle() or grant.stamp != self.policy.stamp()
+                or grant.origin != self.lab_origin or self.policy.clock() >= grant.expires
+                or (not consumed and grant.remaining <= 0)):
+            raise ExecutionBlocked('blocked: Browser grant missing/expired/exhausted/revoked/stale')
+        return grant
+
+    def grant_authorization(self, tool, args):
+        self.validate_tool(tool, args)
+        grant = self.grant
+        if grant is None or tool._remote_name not in grant.actions:
+            return None
+        token = (grant.id, grant.revision)
+        try:
+            self.check_grant(token)
+        except ExecutionBlocked:
+            return None
+        return token
+
+    def grant_status(self):
+        grant = self.grant
+        if grant is None:
+            return 'Browser grant: none; YOLO needs an explicit bounded Browser grant. /permissions browser revoke'
+        try:
+            self.check_grant((grant.id, grant.revision))
+            state = 'active'
+        except ExecutionBlocked:
+            state = 'expired/exhausted/stale'
+        return (f'Browser grant {grant.id}: {state}; origin {grant.origin}; actions {", ".join(sorted(grant.actions))}; '
+                f'{max(0, grant.expires - self.policy.clock()):.1f}s remaining; calls remaining {grant.remaining}. '
+                'Revoke: /permissions browser revoke')
+
     def validate_tool(self, tool, args) -> None:
         if (self.closed or self.policy.browser_local is not self or tool._session is not self
                 or tool._execution_policy is not self.policy
                 or not deployment.is_designated_browser_local(tool._server)):
             raise ExecutionBlocked('blocked: Browser local controller binding mismatch')
-        if not self.lab_ready or not self.lab_origin:
-            raise ExecutionBlocked('blocked: operator lab-profile/pairing confirmation required (--browser-lab-ready and --target)')
+        if not self.lab_origin:
+            raise ExecutionBlocked('blocked: Browser action requires explicit --target and engagement scope')
         if self._lifecycle() != self.lifecycle:
             self.invalidate()
-        # Lab attestation is bound to one operator-selected origin for this CLI.
+        # Bind every action to the exact operator-selected target origin.
         if self.lab_origin not in {origin.as_url() for origin in self.policy.engagement.allowed_origins}:
             raise ExecutionBlocked('blocked: Browser lab origin no longer in engagement scope')
         self.policy.require_network(self.lab_origin)
@@ -295,8 +387,17 @@ class BrowserLocalBinding:
                 await _cancel_and_drain_owner(owner.task)
 
     async def dispatch(self, tool, args, signal=None, cancel_event=None):
+        started = time.monotonic_ns()
+        timing: dict[str, Any] = {'traceId': uuid.uuid4().hex[:12], 'tool': tool._remote_name}
+
+        def mark(phase):
+            timing[phase + 'Ms'] = (time.monotonic_ns() - started) / 1e6
+
         self.validate_tool(tool, args)
+        mark('receiptValidated')
         invocation_epoch = self.epoch
+        grant_token = getattr(tool, '_browser_grant', None)
+        grant_consumed = False
         context = copy_context()
 
         def check():
@@ -305,6 +406,8 @@ class BrowserLocalBinding:
             if invocation_epoch != self.epoch or not self.policy.nested_allowed():
                 raise ExecutionBlocked('blocked: Browser queued receipt revoked/stale or binding reset')
             self.validate_tool(tool, args)
+            if grant_token is not None:
+                self.check_grant(grant_token, consumed=grant_consumed)
             if invocation_epoch != self.epoch:
                 raise ExecutionBlocked('blocked: Browser context changed before dispatch')
 
@@ -326,6 +429,7 @@ class BrowserLocalBinding:
         acquire = asyncio.create_task(self.lock.acquire())
         try:
             await guarded(acquire, RPC_TIMEOUT_S)
+            mark('lockAcquired')
         except BaseException:
             if acquire.done() and not acquire.cancelled() and acquire.exception() is None and acquire.result():
                 self.lock.release()
@@ -358,16 +462,27 @@ class BrowserLocalBinding:
             if args.get('ref') is not None and (not self.snapshot_generation
                     or state['snapshotGeneration'] != self.snapshot_generation):
                 raise ExecutionBlocked('blocked: reconnect/stale ref; request a fresh browser_snapshot')
+            mark('ready')
             meta = {'kagentBrowser': {'origin': self.lab_origin, 'generation': self.generation,
-                                      'snapshotGeneration': self.snapshot_generation}}
+                                      'snapshotGeneration': self.snapshot_generation,
+                                      'traceId': timing['traceId']}}
 
             def before_rpc():
-                nonlocal dispatched
+                nonlocal dispatched, grant_consumed
                 context.run(check)
+                if grant_token is not None:
+                    grant = self.check_grant(grant_token)
+                    if tool._remote_name not in grant.actions:
+                        raise ExecutionBlocked('blocked: Browser action outside grant')
+                    grant.remaining -= 1
+                    grant_consumed = True
                 dispatched = True
+                mark('ownerDispatch')
 
             result = await guarded(self.owner.request('call_tool', tool._remote_name, args,
                                                       meta=meta, guard=before_rpc), RPC_TIMEOUT_S)
+            mark('mcpResponse')
+            timing['server'] = (result.get('_meta') or {}).get('kagentBrowserTiming')
             result_meta = (result.get('_meta') or {}).get('kagentBrowser', {})
             if result_meta.get('generation') != self.generation:
                 raise RuntimeError('Browser disconnected during operation')
@@ -382,6 +497,8 @@ class BrowserLocalBinding:
                     raise RuntimeError('Browser MCP failure: ' + apply_evidence(message)[:4096])
             return result
         except BaseException as exc:
+            timing['errorKind'] = type(exc).__name__
+            mark('failed')
             self.invalidate()
             await self._drain_retired()
             # Do not restart/replay a dead or ambiguous persistent process.
@@ -394,7 +511,11 @@ class BrowserLocalBinding:
                                    'no automatic retry. Cause: ' + cause) from exc
             raise
         finally:
+            mark('complete')
+            self.last_timing = timing
             self.lock.release()
+            from src.logger.logger import get_logger
+            get_logger('mcp').debug('Browser timing %s', json.dumps(timing))
 
     async def close(self):
         self.closed = True

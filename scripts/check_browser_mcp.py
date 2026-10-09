@@ -79,11 +79,10 @@ async def measure(rounds: int) -> dict:
             'browser_tested': False}
 
 
-def check_cli(*, browser_local: bool = False) -> dict:
+def check_cli() -> dict:
     with tempfile.TemporaryDirectory(prefix='kagent-browser-cli-') as task_home:
         result = subprocess.run([
             str(Path(sys.executable).with_name('kagent')), '--browser', '--list-tools',
-            *(['--browser-local'] if browser_local else []),
             '--backend', 'openai-compat', '--model', 'local-placeholder',
             '--base-url', 'http://127.0.0.1:1', '--api-key', 'placeholder',
         ], env={'HOME': task_home, 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},

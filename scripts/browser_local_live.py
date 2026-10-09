@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sys
+import time
 import uuid
 from typing import Any
 
@@ -57,18 +58,19 @@ class ExactOperator:
 
     async def ask(self, request, signal=None):
         self.asks += 1
-        if request.tool != self.expected or not request.no_session_cache or request.risk_tier != 'high-impact':
+        if (request.tool != self.expected or not request.no_session_cache
+                or request.risk_tier != 'high-impact' or not request.force_operator):
             raise RuntimeError('unexpected permission envelope')
         self.emit('permission', tool=request.tool, decision=self.decision.value,
-                  no_session_cache=request.no_session_cache, risk_tier=request.risk_tier)
+                  no_session_cache=request.no_session_cache, risk_tier=request.risk_tier,
+                  force_operator=request.force_operator)
         return self.decision
 
 
 async def main():
     flags = parse_flags(sys.argv[1:])
-    if (not flags.browser or not flags.browser_local or not flags.browser_lab_ready
-            or flags.target_url != TARGET or flags.yolo):
-        raise ValueError('requires --browser --browser-local --browser-lab-ready --target ' + TARGET + ', without YOLO')
+    if not flags.browser or flags.target_url != TARGET:
+        raise ValueError('requires --browser --target ' + TARGET)
     repo = Path(__file__).resolve().parents[1]
     run_id = datetime.now(TZ).strftime('%Y%m%dT%H%M%S') + '-' + uuid.uuid4().hex[:8]
     evidence = repo / 'artifacts/browser_mcp_live' / run_id
@@ -76,7 +78,7 @@ async def main():
     log = evidence / 'events.jsonl'
 
     def emit(event, **fields):
-        row = {'time': datetime.now(TZ).isoformat(), 'event': event, **fields}
+        row = {'time': datetime.now(TZ).isoformat(), 'monotonic_ns': time.monotonic_ns(), 'event': event, **fields}
         safe = apply_evidence(json.dumps(row, ensure_ascii=False, default=str))
         with log.open('a', encoding='utf-8') as stream:
             stream.write(safe + '\n')
@@ -86,11 +88,27 @@ async def main():
     engagement.add_origin(TARGET)
     policy = default_execution_policy(engagement, repo)
     policy.session_id = run_id
+    # Observe existing gates in this diagnostic runner; do not change their policy.
+    prepare_receipt, start_receipt = policy.prepare, policy.start
+
+    def observed_prepare(*args, **kwargs):
+        start = time.monotonic_ns()
+        result = prepare_receipt(*args, **kwargs)
+        emit('receipt_prepare', duration_ms=(time.monotonic_ns() - start) / 1e6)
+        return result
+
+    def observed_start(*args, **kwargs):
+        start = time.monotonic_ns()
+        result = start_receipt(*args, **kwargs)
+        emit('receipt_start', duration_ms=(time.monotonic_ns() - start) / 1e6)
+        return result
+
+    policy.prepare, policy.start = observed_prepare, observed_start
     inner = ExactOperator(emit)
-    prompter = YoloPrompter(inner, False)
+    prompter = YoloPrompter(inner, flags.yolo)
     prompter.bind_execution_policy(policy)
-    server = session_mcp_servers([], flags.browser, flags.browser_local)[0]
-    binding = BrowserLocalBinding(policy, server, lab_ready=flags.browser_lab_ready, lab_origin=flags.target_url)
+    server = session_mcp_servers([], flags.browser)[0]
+    binding = BrowserLocalBinding(policy, server, lab_origin=flags.target_url)
     policy.browser_local = binding
     tools = Registry()
     skills = SkillRegistry()
@@ -186,7 +204,7 @@ async def main():
                     artifact = evidence / f'{calls:02d}-{name}.txt'
                     artifact.write_text(apply_evidence(result), encoding='utf-8')
                     emit('result', number=calls, tool=full_name, result=result, artifact=str(artifact),
-                         state=await state(), dispatches=dispatches)
+                         state=await state(), dispatches=dispatches, timing=binding.last_timing)
                 elif action == 'reset':
                     before = await state()
                     await agent.reset()
@@ -257,7 +275,7 @@ async def main():
                 while previous is not None and len(causes) < 4:
                     causes.append({'kind': type(previous).__name__, 'message': apply_evidence(str(previous))[:4096]})
                     previous = previous.__cause__
-                emit('error', kind=type(exc).__name__, message=str(exc), causes=causes)
+                emit('error', kind=type(exc).__name__, message=str(exc), causes=causes, timing=binding.last_timing)
     finally:
         await binding.close()
         await check_ports_free()

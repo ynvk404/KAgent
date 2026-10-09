@@ -4,9 +4,9 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { WebSocket } from '/usr/local/lib/kagent-browser-mcp/0.1.3-kagent-local-v2/node_modules/ws/wrapper.mjs';
+import { WebSocket } from '/usr/local/lib/kagent-browser-mcp/0.1.3-kagent-local-v3/node_modules/ws/wrapper.mjs';
 
-const root = '/usr/local/lib/kagent-browser-mcp/0.1.3-kagent-local-v2';
+const root = '/usr/local/lib/kagent-browser-mcp/0.1.3-kagent-local-v3';
 const bundle = `${root}/node_modules/@browsermcp/mcp/dist/index.js`;
 const origin = 'http://juice.lab:8081';
 const env = { PATH: '/usr/bin:/bin', HOME: '/tmp', KAGENT_BROWSER_LOCAL: '1' };
@@ -42,6 +42,8 @@ async function within(promise, milliseconds) {
 const status = async () => JSON.parse((await rpc('resources/read', { uri: 'kagent://browser/status' })).result.contents[0].text);
 let currentURL = origin;
 let disconnect = false;
+let delayAction = false;
+let delaySnapshot = false;
 const operations = [];
 function pair() {
   const ws = new WebSocket('ws://127.0.0.1:9009');
@@ -54,13 +56,19 @@ function pair() {
       : request.type === 'getTitle' ? 'KAGENT-MOCK-LAB-MARKER'
       : request.type === 'browser_snapshot' ? '- button "Search" [ref=s1e1]\n- textbox [ref=s1e2]'
       : null;
-    ws.send(JSON.stringify({ id: request.id, type: 'messageResponse', payload: { requestId: request.id, result } }));
+    if (delayAction && request.type === 'browser_click') {
+      // Wrong/stale request ID must not resolve the pending action.
+      ws.send(JSON.stringify({ type: 'messageResponse', payload: { requestId: 'wrong-id', result: 'not-accepted' } }));
+    }
+    const delay = delayAction && request.type === 'browser_click' ? 200
+      : delaySnapshot && request.type === 'browser_snapshot' ? 150 : 0;
+    setTimeout(() => ws.send(JSON.stringify({ id: request.id, type: 'messageResponse', payload: { requestId: request.id, result } })), delay);
   });
   return ws;
 }
 const call = async (name, args, generation, snapshotGeneration = 0) =>
   (await rpc('tools/call', { name, arguments: args,
-    _meta: { kagentBrowser: { origin, generation, snapshotGeneration } } })).result;
+    _meta: { kagentBrowser: { origin, generation, snapshotGeneration, traceId: String(nextId + 1) } } })).result;
 
 try {
   const initialized = await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {},
@@ -96,14 +104,34 @@ try {
   const typed = await call('browser_type', { ref: 's1e2', element: 'search', text: 'fixture', submit: false }, state.generation, 2);
   assert.ok(!typed.isError);
 
+  delayAction = true;
+  const beforeDelayed = operations.length;
+  const delayed = await call('browser_click', { ref: 's1e1', element: 'search' }, state.generation, 3);
+  assert.ok(!delayed.isError);
+  const actionTiming = delayed._meta.kagentBrowserTiming;
+  assert.equal(actionTiming.websocket.filter(row => row.type === 'browser_click').length, 1);
+  assert.equal(actionTiming.websocket.filter(row => row.type === 'browser_snapshot').length, 1);
+  const action = actionTiming.websocket.find(row => row.type === 'browser_click');
+  assert.ok(action.endMs - action.sentMs >= 180, JSON.stringify(actionTiming));
+  assert.equal(action.outcome, 'response');
+  assert.deepEqual(operations.slice(beforeDelayed), ['getUrl', 'browser_click', 'getUrl', 'getTitle', 'browser_snapshot']);
+  assert.ok(!JSON.stringify(actionTiming).includes('search'));
+  delayAction = false;
+  delaySnapshot = true;
+  const slowSnapshot = await call('browser_snapshot', {}, state.generation);
+  const snapshotTiming = slowSnapshot._meta.kagentBrowserTiming.websocket.find(row => row.type === 'browser_snapshot');
+  assert.ok(snapshotTiming.endMs - snapshotTiming.sentMs >= 130);
+  delaySnapshot = false;
+
   currentURL = 'http://outside.lab:8081';
   const beforeOutside = operations.length;
   assert.ok((await call('browser_snapshot', {}, state.generation)).isError);
   assert.deepEqual(operations.slice(beforeOutside), ['getUrl']);
   currentURL = origin;
   disconnect = true;
-  const lost = await within(call('browser_type', { ref: 's1e2', element: 'search', text: 'fixture', submit: false }, state.generation, 3), 3000);
+  const lost = await within(call('browser_type', { ref: 's1e2', element: 'search', text: 'fixture', submit: false }, state.generation, 5), 3000);
   assert.ok(lost.isError && lost.content[0].text.includes('outcome unknown'));
+  assert.equal(lost._meta.kagentBrowserTiming.websocket.at(-1).outcome, 'disconnect');
   await pause(30);
   const fresh = pair();
   await once(fresh, 'open');
@@ -136,7 +164,8 @@ try {
   await new Promise(resolve => occupied.close(resolve));
   console.log(JSON.stringify({ tools: 12, loopback: true, ownership: true, noKill: true,
     connectionReplacementBlocked: true, freshRefs: true, currentURLGuard: true,
-    disconnectBounded: true, payloadLimit: true, exitReleasesPort: true, mockOnly: true }));
+    disconnectBounded: true, payloadLimit: true, exitReleasesPort: true, timingAttribution: true,
+    requestMatching: true, noDuplicateActionSnapshot: true, mockOnly: true }));
 } finally {
   clearTimeout(watchdog);
   if (child.exitCode === null) child.kill();

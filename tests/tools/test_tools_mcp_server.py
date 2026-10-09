@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from src.config.config import MCPServerConfig
 from src.tools.mcp.session_servers import (
-    BROWSER_MCP_SERVER,
+    BROWSER_LOCAL_SERVER,
     session_mcp_servers,
 )
 
@@ -54,10 +54,8 @@ def test_replaces_stale_browser_entry_when_flag_on() -> None:
 
     assert len(browser) == 1
     assert out[0] == other
-    assert out[-1].args == [
-        "/usr/local/lib/kagent-browser-mcp/0.1.3/node_modules/@browsermcp/mcp/dist/index.js",
-    ]
-    assert out[-1] == BROWSER_MCP_SERVER
+    assert out[-1].args == BROWSER_LOCAL_SERVER.args
+    assert out[-1] is BROWSER_LOCAL_SERVER
 
 def test_does_not_mutate_input() -> None:
     input_servers = [other]

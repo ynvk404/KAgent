@@ -275,10 +275,16 @@ class Registry:
                     "yoloAutoApprove",
                     False,
                 ),
+                force_operator=hints.get("forceOperator", False),
+                offer_browser_grant=hints.get("browserGrant"),
             )
 
             decision = (Decision.ALLOW_ONCE if policy is not None and policy.yolo
+                        and (not request.force_operator or request.yolo_auto_approve)
                         else await prompter.ask(request, signal))
+
+            if decision == Decision.GRANT_LAB and request.offer_browser_grant:
+                decision = await getattr(tool, 'review_browser_grant')(args, prompter, signal)
 
             if decision == Decision.DENY:
                 if policy is not None and receipt is not None:

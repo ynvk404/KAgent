@@ -60,6 +60,24 @@ additional origin is authorized.
 
 Use `kagent --help` to see supported flags, including provider configuration,
 extra skill directories, session resume, and local browser/Burp integration.
+For verified persistent trusted-local Browser MCP on Linux/WSL, use:
+
+```bash
+kagent --browser --target http://juice.lab:8081
+kagent --browser --list-tools
+```
+
+The operator manages Chrome and the Browser MCP Extension. Use a separate lab
+profile without personal accounts or tabs. Actions require the declared target,
+exact engagement scope, and a separate execution receipt for every invocation.
+With YOLO off, each call asks permission. With YOLO on, an explicit bounded
+Browser grant can auto-approve covered actions; missing/uncovered grants still
+ask permission. Press `g` in a Browser permission dialog to review a grant,
+then confirm its origin, actions, time and quota. Use `/permissions browser`
+for status and `/permissions browser revoke` to revoke it.
+Extension readiness has a finite deadline. Discovery needs
+no connected extension. See [Browser MCP setup and limits](components/browser_mcp/README.md).
+
 The module entry point is also available for a checkout-based run:
 
 ```bash

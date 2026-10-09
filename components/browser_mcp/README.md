@@ -1,11 +1,14 @@
 # Browser MCP trusted-local persistent — 09/10/2026
 
-Trạng thái hiện hành: **GO — trusted-local lab mode** trên profile lab và
-`http://juice.lab:8081` đã được operator xác nhận. Chrome thật đã trả navigate,
-snapshot, search click/type trên cùng persistent session; DENY, queued/new
-revoke và reset/cleanup đạt. Có một welcome-banner click timeout/outcome
-unknown được giữ trong báo cáo, không retry; nguyên nhân nội bộ extension chưa
-xác định đầy đủ. Xem [bằng chứng và giới hạn live](LIVE_TEST.md).
+Trạng thái hiện hành: **PARTIAL về hiệu năng**; action WebSocket tới
+Extension/Chrome vẫn có độ trễ và đã tái hiện timeout 30 giây. Không replay,
+không tăng timeout, không sửa Extension. CLI dùng một flag `--browser` để
+chọn verified trusted-local persistent backend. Xem [bằng chứng live v2](LIVE_TEST.md);
+GO lịch sử không bảo đảm hiệu năng. Diagnostics v3 phân biệt lock, readiness,
+MCP và từng WebSocket action/snapshot; không thay đổi deadline hoặc tự retry.
+YOLO ON dùng [Browser grant hữu hạn do operator cấp](BOUNDED_YOLO.md), không tự cấp quyền Browser.
+Skill XSS tiếp tục chặn Browser MCP cho tới khi latency được xử lý và verify;
+Browser grant không vượt qua Skill gate.
 
 ## 1. Exact files changed trong đợt trusted-local
 
@@ -14,23 +17,23 @@ xác định đầy đủ. Xem [bằng chứng và giới hạn live](LIVE_TEST.
 | Tệp | Lý do |
 | --- | --- |
 | `src/tools/mcp/browser_deployment.py` | Identity launch local, inventory patched, checksum Node/prlimit; giữ verifier upstream. |
-| `src/tools/mcp/session_servers.py` | Controller opt-in chọn đúng config local; mặc định giữ Browser isolated đã pin. |
+| `src/tools/mcp/session_servers.py` | `--browser` chỉ chọn config local; không fallback vào worker. |
 | `src/tools/mcp/integration.py` | Dispatch Browser local riêng, metadata controller qua stdio; giữ worker/lifecycle general/CWE. |
 | `src/tools/mcp/browser_local.py` | Binding controller/engagement, neutral owner task, serialization, readiness, ownership, queue/revoke/teardown. |
 | `src/cli/runtime.py` | Session-only flags, install binding, discovery local fail closed, cleanup. |
-| `src/cli/help.py` | Help opt-in trusted host và xác nhận profile lab. |
+| `src/cli/help.py` | Help một flag Browser; Chrome/Extension do operator quản lý. |
 | `src/permission/runtime/execution.py` | Check adapter/binding Browser chỉ định; receipt/policy chung và YOLO giữ nguyên. |
 | `src/agent/agent.py` | Hook nhỏ `_clear_permission_cache` cho reset/resume/target/scope invalidation. |
 | `components/browser_mcp/patch_local.py` | Patch deterministic trên đúng SHA-256 bundle upstream. |
 | `components/browser_mcp/prepare_local.py` | Maintenance ngoài runtime: verify source, tạo tree mới, patch identity/inventory. |
-| `components/browser_mcp/patch-local-v2.diff` | Unified diff reviewable, giống `patch.diff` trong deployment. |
+| `components/browser_mcp/patch-local-v3.diff` | Unified diff reviewable, giống `patch.diff` trong deployment; thêm timing metadata. |
 | `components/browser_mcp/README.md` | Báo cáo hiện hành và giới hạn lab mode. |
 | `tests/security/test_browser_local.py` | Opt-in/config giả, receipts, queue, scope, readiness, reconnect/lifecycle, deployment failures. |
 | `tests/security/test_browser_local_protocol.py` | Điều phối Node/Python thật trong namespace riêng. |
 | `tests/security/browser_local_protocol.mjs` | Mock extension: loopback, replacement, refs, origin, disconnect, payload, port conflict. |
 | `tests/security/browser_local_owner.py` | Owner thật: PID reuse, permission/revoke, env/limits, AnyIO teardown. |
 | `scripts/check_browser_local_transport.py` | TCP/HTTP forwarding loopback và release cổng; không WebSocket/Chrome. |
-| `scripts/check_browser_mcp.py` | Tùy chọn local cho helper CLI discovery; không chạy lại đo RAM. |
+| `scripts/check_browser_mcp.py` | Helper CLI discovery dùng một flag Browser; phép đo resource upstream giữ nguyên. |
 | `scripts/browser_local_live.py` | Runner live có gates/receipts và evidence, DENY/revoke/reset/cleanup; không LLM. |
 | `components/browser_mcp/LIVE_TEST.md` | Chrome live evidence, timeout incident và scope của kết luận GO. |
 
@@ -43,17 +46,18 @@ HTTP, Burp/capture, benchmark/canonical results. Không commit/push.
 ```bash
 # Discovery; local discovery không mở listener host.
 kagent --browser --list-tools
-kagent --browser --browser-local --list-tools
 
-# Chỉ sau xác nhận profile lab sẵn sàng và profile khác đã ngắt.
-kagent --browser --browser-local --browser-lab-ready --target http://juice.lab:8081
+# Operator chuẩn bị Chrome lab và Extension, approve mỗi action.
+kagent --browser --target http://juice.lab:8081
 ```
 
-`--browser-local` cần `--browser`. `--browser-lab-ready` cần local mode và
-`--target` rõ ràng: operator attest profile lab riêng không có dữ liệu cá nhân,
-mọi Browser MCP profile khác đã ngắt. Flags không persist, không auto-approve.
-Attestation bound exact origin của target trong CLI này. Đổi sang origin khác
-cần restart với xác nhận mới.
+`--browser` không persist, không auto-approve. Action cần `--target` rõ ràng
+và exact origin trong engagement scope; discovery không cần target/Extension.
+Khuyến nghị profile Chrome riêng cho lab, không tài khoản/tab cá nhân và ngắt
+Extension ở các profile khác. Operator tự mở Chrome, cài/bật/pair Extension.
+KAgent không tạo/xóa profile, không cấu hình Chrome/Windows, không mở/đóng
+Chrome, không xóa cookies/storage. Readiness chờ hữu hạn 15 giây rồi fail rõ
+ràng trước dispatch nếu chưa kết nối. Đổi origin cần restart với target mới.
 
 Chỉ controller cài `BrowserLocalBinding` mới chọn nhánh này. Check policy
 object, binding/session object, frozen config, tên `browser`, command
@@ -74,16 +78,17 @@ dependency versions/package-lock. Runtime không npm/npx, install/download;
 đợt này không tải gói mới.
 
 Upstream giữ ở `/usr/local/lib/kagent-browser-mcp/0.1.3`.
-Controller chọn `/usr/local/lib/kagent-browser-mcp/0.1.3-kagent-local-v2`.
-`v1` là preparation trung gian, giữ nguyên nhưng không được chọn; `v2` thêm
-chặn snapshot khi metadata cho thấy redirect khác origin. Identity được tạo
+Controller chọn `/usr/local/lib/kagent-browser-mcp/0.1.3-kagent-local-v3`.
+`v1`/`v2` giữ nguyên, không được chọn; `v3` giữ guards/lifecycle của `v2` và
+thêm monotonic timing metadata cho từng request, không đổi Extension protocol.
+Identity được tạo
 và review từ patch cụ thể; không đổi anchor để bỏ qua verification failure.
 
 ```text
 Upstream inventory: 19bd4d4fa3b8454b54c4ebb8fa571f4ce23bdf31a94f8439ecb43f9916bb3a8b
 Upstream bundle:    f391bfe0a8185e7551dfe70f129019b8eb786857fc1e8390edaa6ae3ad27ecfc
-Patch:              kagent-local-v2
-Patched inventory: bc5fc7336fa72ca1d3e291e551516392def840fc7eee7f80d55d06335b9b3dab
+Patch:              kagent-local-v3
+Patched inventory: 787b6f16b5b776f9f182df79041fee37cd0f0f351f0ef69a1ebd1d15ab4a2ae1
 Node /usr/bin/node: d0efb6fcb9d023ba4e2b160ec2384dc28fe4f17732141ef47f676828fa960505
 prlimit:            cb28811cb3902773c1a0f3ac0ea554c7a1e232724e9d4cae055ede54b65a7bc4
 ```
@@ -100,7 +105,9 @@ Pending RPC reject khi close; JSON hỏng đóng socket. Fix recursive
 schema và extension messages.
 
 Resource nội bộ `kagent://browser/status` và MCP stdio `_meta` mang
-connection/snapshot generation + controller scope. Không expose thành model
+connection/snapshot generation + controller scope. `kagentBrowserTiming`
+chỉ mang correlation/request IDs, tên message, thời gian, outcome; không
+credentials/cookies/URLs/args/nội dung trang. Không expose thành model
 tool hoặc đổi extension WebSocket protocol. Mỗi launch verify tree canonical,
 root-owned, no group/world write, regular files/directories, no symlink/
 hardlink/IPC, inventory đầy đủ và anchor cố định; hash/ownership Node/prlimit
@@ -111,7 +118,7 @@ Maintenance trên upstream đã chuẩn bị, destination phải mới:
 ```bash
 sudo /usr/bin/python3 components/browser_mcp/prepare_local.py \
   /usr/local/lib/kagent-browser-mcp/0.1.3 \
-  /usr/local/lib/kagent-browser-mcp/0.1.3-kagent-local-v2
+  /usr/local/lib/kagent-browser-mcp/0.1.3-kagent-local-v3
 # Trên máy này destination đã có: lệnh sẽ từ chối ghi đè.
 venv-linux/bin/python -c 'from src.tools.mcp.browser_deployment import verify_browser_local_deployment; verify_browser_local_deployment()'
 ```
@@ -157,12 +164,20 @@ reset. Mutating response loss/cancel sau dispatch báo **outcome unknown**.
 ## 5. Permission/scope thực sự được kiểm tra
 
 Giữ Skill gates, generic validation, Registry approval, policy validation,
-execution receipts, deny/revoke và YOLO semantics. Không bypass worker gate
+execution receipts, deny/revoke và policy YOLO chung. YOLO OFF hỏi từng call.
+YOLO ON auto-approve khi có Browser grant còn hiệu lực, đủ quota và bao phủ
+action; thiếu/uncovered/stale grant trở về operator dialog, hard blocks giữ nguyên.
+`g` trong Browser dialog mở confirmation riêng (300 giây/20 dispatch): read,
+navigate hoặc interaction. Interaction xác nhận khả năng submit/change state.
+Grant không phải session trust; mỗi call vẫn có receipt riêng và recheck ngay
+trước RPC. `/permissions browser` hiển thị origin/actions/time/quota;
+`/permissions browser revoke` thu hồi. General/CWE/Shell/Native HTTP giữ policy cũ.
+Không bypass worker gate
 cho MCP khác. Stale receipts, queued cancellation/revoke và cross-controller
 binding bị chặn; persistent/Connected không mang quyền approval.
 
 Navigate validate absolute HTTP(S), loại credentials/backslash/control chars,
-exact origin trong engagement và lab attestation. Server recheck origin từ
+exact origin trong engagement và target binding. Server recheck origin từ
 controller metadata. Approval không mở rộng scope.
 
 Tool không URL đọc **getUrl hiện tại** qua socket pin cho call, đối chiếu
@@ -207,7 +222,7 @@ venv-linux/bin/python -m pytest \
 ```
 
 CLI thật, HOME tạm/provider placeholder, không LLM: cả
-`--browser --list-tools` và `--browser --browser-local --list-tools` exit 0,
+`--browser --list-tools` exit 0,
 12 `mcp_browser_*`, mọi tool `[permission required]`. Không pairing/action.
 
 ## 7. Windows–WSL transport
@@ -258,7 +273,7 @@ cũng chậm. [LIVE_TEST.md](LIVE_TEST.md) ghi timings, paths, checks và incide
 
 ## 10. Phân loại kết thúc
 
-**GO — trusted-local lab mode** cho profile/target và bộ thao tác đã kiểm tra,
+Kết luận live v2 lịch sử: **GO — trusted-local lab mode** cho profile/target và bộ thao tác đã kiểm tra,
 dựa trên Chrome thật, persistence, permission/revoke và cleanup. Không cần
 relay, fork extension, listener ngoài loopback hoặc đổi mạng hệ thống. Giữ
 timeout incident và các giới hạn nêu trên; không bảo đảm mọi operation luôn

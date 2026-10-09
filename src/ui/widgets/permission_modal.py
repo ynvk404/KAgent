@@ -121,7 +121,7 @@ class PermissionModal:
         elif key == "y":
             self.req.resolve(Decision.ALLOW_ONCE)
 
-        elif key == "g" and self.req.offer_http_lab:
+        elif key == "g" and (self.req.offer_http_lab or self.req.offer_browser_grant):
             self.req.resolve(Decision.GRANT_LAB)
 
         elif key == "a" and not self.req.no_session_cache:
@@ -190,6 +190,8 @@ class PermissionModal:
         parts.extend((Text(""), Text(permission_keys, style=MUTED)))
         if req.offer_http_lab:
             parts.append(Text("g review broad lab grant (separate confirmation)", style=WARNING))
+        if req.offer_browser_grant:
+            parts.append(Text(f"g review bounded Browser {req.offer_browser_grant} grant (separate confirmation)", style=WARNING))
         parts.append(Text(
             ("v preview" if self.show_full_detail else "v full detail")
             + " · scroll to review · secrets redacted",

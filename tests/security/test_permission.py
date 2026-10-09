@@ -27,6 +27,19 @@ class ScriptedPrompter(Prompter):
 
 
 @pytest.mark.asyncio
+async def test_force_operator_overrides_yolo_without_changing_ordinary_requests():
+    inner = ScriptedPrompter(Decision.DENY)
+    yolo = YoloPrompter(inner, True)
+    request = PermissionRequest(tool='browser', summary='snapshot', detail='scope checked',
+                                force_operator=True, yolo_auto_approve=True, no_session_cache=True)
+    assert await yolo.ask(request) == Decision.DENY
+    assert inner.seen == [request]
+    ordinary = PermissionRequest(tool='ordinary', summary='s', detail='d', yolo_auto_approve=True)
+    assert await yolo.ask(ordinary) == Decision.ALLOW_ONCE
+    assert inner.seen == [request]
+
+
+@pytest.mark.asyncio
 async def test_auto_approves_only_a_tool_marked_routine_action():
 
     inner = ScriptedPrompter(

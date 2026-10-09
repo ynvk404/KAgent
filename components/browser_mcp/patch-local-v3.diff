@@ -1,0 +1,316 @@
+--- upstream/node_modules/@browsermcp/mcp/dist/index.js
++++ kagent-local-v3/node_modules/@browsermcp/mcp/dist/index.js
+@@ -30,23 +30,31 @@
+ var MESSAGE_RESPONSE_TYPE = "messageResponse";
+ 
+ // ../../packages-r2r/messaging/src/ws/sender.ts
+-function createSocketMessageSender(ws) {
++function createSocketMessageSender(ws, trace) {
+   async function sendSocketMessage(type2, payload, options = { timeoutMs: 3e4 }) {
+     const { timeoutMs } = options;
+     const id = generateId();
+     const message = { id, type: type2, payload };
++    const timing = trace ? { id, type: type2, sentMs: 0, endMs: 0, outcome: "pending" } : null;
++    const finish = (outcome) => {
++      if (timing && timing.outcome === "pending") {
++        timing.endMs = Number(process.hrtime.bigint() - trace.started) / 1e6;
++        timing.outcome = outcome;
++      }
++    };
+     return new Promise((resolve, reject) => {
+       const cleanup = () => {
+         removeSocketMessageResponseListener();
+         ws.removeEventListener("error", errorHandler);
+-        ws.removeEventListener("close", cleanup);
++        ws.removeEventListener("close", closeHandler);
+         clearTimeout(timeoutId);
+       };
+       let timeoutId;
+       if (timeoutMs) {
+         timeoutId = setTimeout(() => {
+           cleanup();
+-          reject(new Error(`WebSocket response timeout after ${timeoutMs}ms`));
++          finish("timeout");
++          reject(new Error(`WebSocket response timeout after ${timeoutMs}ms (${type2}, request ${id})`));
+         }, timeoutMs);
+       }
+       const removeSocketMessageResponseListener = addSocketMessageResponseListener(ws, (responseMessage) => {
+@@ -54,6 +62,7 @@
+         if (payload2.requestId !== id) {
+           return;
+         }
++        finish(payload2.error ? "error" : "response");
+         const { result, error } = payload2;
+         if (error) {
+           reject(new Error(error));
+@@ -64,14 +73,25 @@
+       });
+       const errorHandler = (_event) => {
+         cleanup();
++        finish("socket_error");
+         reject(new Error("WebSocket error occurred"));
+       };
+       ws.addEventListener("error", errorHandler);
+-      ws.addEventListener("close", cleanup);
++      const closeHandler = () => {
++        cleanup();
++        finish("disconnect");
++        reject(new Error("Browser disconnected; outcome unknown if action started"));
++      };
++      ws.addEventListener("close", closeHandler);
+       if (ws.readyState === WebSocket.OPEN) {
++        if (timing) {
++          timing.sentMs = Number(process.hrtime.bigint() - trace.started) / 1e6;
++          trace.websocket.push(timing);
++        }
+         ws.send(JSON.stringify(message));
+       } else {
+         cleanup();
++        finish("not_open");
+         reject(new Error("WebSocket is not open"));
+       }
+     });
+@@ -80,7 +100,10 @@
+ }
+ function addSocketMessageResponseListener(ws, typeListener) {
+   const listener = async (event) => {
+-    const message = JSON.parse(event.data.toString());
++    let message;
++    try { message = JSON.parse(event.data.toString()); }
++    catch { ws.close(1007, "Invalid JSON"); return; }
++    if (!message || typeof message !== "object" || !message.payload) return;
+     if (message.type !== MESSAGE_RESPONSE_TYPE) {
+       return;
+     }
+@@ -110,21 +133,31 @@
+ var noConnectionMessage = `No connection to browser extension. In order to proceed, you must first connect a tab by clicking the Browser MCP extension icon in the browser toolbar and clicking the 'Connect' button.`;
+ var Context = class {
+   _ws;
++  activeSocket;
++  trace;
++  scopeOrigin;
++  generation = 0;
++  snapshotGeneration = 0;
++  refs = new Set();
+   get ws() {
+-    if (!this._ws) {
++    const socket = this.activeSocket || this._ws;
++    if (!socket || socket.readyState !== WebSocket.OPEN) {
+       throw new Error(noConnectionMessage);
+     }
+-    return this._ws;
++    return socket;
+   }
+   set ws(ws) {
+     this._ws = ws;
++    this.generation++;
++    this.snapshotGeneration = 0;
++    this.refs.clear();
+   }
+   hasWs() {
+     return !!this._ws;
+   }
+   async sendSocketMessage(type2, payload, options = { timeoutMs: 3e4 }) {
+     const { sendSocketMessage } = createSocketMessageSender(
+-      this.ws
++      this.ws, this.trace
+     );
+     try {
+       return await sendSocketMessage(type2, payload, options);
+@@ -139,7 +172,8 @@
+     if (!this._ws) {
+       return;
+     }
+-    await this._ws.close();
++    this._ws.terminate();
++    this.ws = undefined;
+   }
+ };
+ 
+@@ -153,40 +187,14 @@
+   });
+ }
+ 
+-// src/utils/port.ts
+-import { execSync } from "node:child_process";
+-import net from "node:net";
+-async function isPortInUse(port) {
+-  return new Promise((resolve) => {
+-    const server = net.createServer();
+-    server.once("error", () => resolve(true));
+-    server.once("listening", () => {
+-      server.close(() => resolve(false));
+-    });
+-    server.listen(port);
+-  });
+-}
+-function killProcessOnPort(port) {
+-  try {
+-    if (process.platform === "win32") {
+-      execSync(
+-        `FOR /F "tokens=5" %a in ('netstat -ano ^| findstr :${port}') do taskkill /F /PID %a`
+-      );
+-    } else {
+-      execSync(`lsof -ti:${port} | xargs kill -9`);
+-    }
+-  } catch (error) {
+-    console.error(`Failed to kill process on port ${port}:`, error);
+-  }
+-}
+-
+-// src/ws.ts
++// KAgent patch: never kill/adopt a process on a numbered port.
+ async function createWebSocketServer(port = mcpConfig.defaultWsPort) {
+-  killProcessOnPort(port);
+-  while (await isPortInUse(port)) {
+-    await wait(100);
+-  }
+-  return new WebSocketServer({ port });
++  const wss = new WebSocketServer({ host: "127.0.0.1", port, maxPayload: 8 * 1024 * 1024 });
++  await new Promise((resolve, reject) => {
++    wss.once("listening", resolve);
++    wss.once("error", reject);
++  });
++  return wss;
+ }
+ 
+ // src/server.ts
+@@ -202,18 +210,39 @@
+       }
+     }
+   );
+-  const wss = await createWebSocketServer();
+-  wss.on("connection", (websocket) => {
++  // Discovery never opens a host listener or pairs with an extension.
++  const wss = process.env.KAGENT_BROWSER_DISCOVERY === "1" ? null : await createWebSocketServer();
++  wss?.on("connection", (websocket) => {
+     if (context.hasWs()) {
+-      context.ws.close();
++      websocket.close(1008, "Browser connection already owned");
++      const deadline = setTimeout(() => websocket.terminate(), 250);
++      deadline.unref();
++      return;
+     }
+     context.ws = websocket;
+-  });
++    websocket.on("error", () => websocket.terminate());
++    websocket.on("close", () => {
++      if (context._ws === websocket) context.ws = undefined;
++    });
++  });
++  const status = () => ({
++    pid: process.pid, listening: !!wss, connected: context.hasWs(),
++    generation: context.generation, snapshotGeneration: context.snapshotGeneration
++  });
++  const statusURI = "kagent://browser/status";
++  const timing = () => context.trace ? {
++    traceId: context.trace.traceId,
++    serverMs: Number(process.hrtime.bigint() - context.trace.started) / 1e6,
++    websocket: context.trace.websocket
++  } : undefined;
+   server.setRequestHandler(ListToolsRequestSchema, async () => {
+     return { tools: tools.map((tool) => tool.schema) };
+   });
+   server.setRequestHandler(ListResourcesRequestSchema, async () => {
+-    return { resources: resources2.map((resource) => resource.schema) };
++    return { resources: [
++      ...resources2.map((resource) => resource.schema),
++      { uri: statusURI, name: "KAgent Browser connection state", mimeType: "application/json" }
++    ] };
+   });
+   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+     const tool = tools.find((tool2) => tool2.schema.name === request.params.name);
+@@ -226,16 +255,49 @@
+       };
+     }
+     try {
++      const meta = request.params._meta?.kagentBrowser;
++      const traceId = typeof meta?.traceId === "string" && /^[a-f0-9]{1,32}$/.test(meta.traceId) ? meta.traceId : undefined;
++      if (traceId) context.trace = { traceId, started: process.hrtime.bigint(), websocket: [] };
++      if (process.env.KAGENT_BROWSER_LOCAL === "1") {
++        if (!meta || typeof meta.origin !== "string" ||
++            !["http:", "https:"].includes(new URL(meta.origin).protocol) ||
++            new URL(meta.origin).origin !== meta.origin ||
++            meta.generation !== context.generation) {
++          throw new Error("Blocked: missing/stale controller Browser binding");
++        }
++        context.activeSocket = context.ws;
++        context.scopeOrigin = meta.origin;
++        if (request.params.name === "browser_navigate") {
++          if (new URL(request.params.arguments.url).origin !== meta.origin)
++            throw new Error("Blocked: navigate outside controller origin");
++        } else {
++          // Current metadata from the selected extension tab, never last-known URL.
++          const url = await context.sendSocketMessage("getUrl", undefined);
++          if (new URL(url).origin !== meta.origin)
++            throw new Error("Blocked: current browser tab outside controller origin");
++          const ref = request.params.arguments?.ref;
++          if (ref !== undefined && (meta.snapshotGeneration !== context.snapshotGeneration ||
++              !context.refs.has(ref)))
++            throw new Error("Blocked: stale ref; obtain a new snapshot");
++        }
++      }
+       const result = await tool.handle(context, request.params.arguments);
+-      return result;
++      return { ...result, _meta: { kagentBrowser: status(), kagentBrowserTiming: timing() } };
+     } catch (error) {
+       return {
+         content: [{ type: "text", text: String(error) }],
+-        isError: true
++        isError: true,
++        _meta: { kagentBrowser: status(), kagentBrowserTiming: timing() }
+       };
++    } finally {
++      context.activeSocket = undefined;
++      context.scopeOrigin = undefined;
++      context.trace = undefined;
+     }
+   });
+   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
++    if (request.params.uri === statusURI)
++      return { contents: [{ uri: statusURI, mimeType: "application/json", text: JSON.stringify(status()) }] };
+     const resource = resources2.find(
+       (resource2) => resource2.schema.uri === request.params.uri
+     );
+@@ -245,11 +307,14 @@
+     const contents = await resource.read(context, request.params.uri);
+     return { contents };
+   });
+-  server.close = async () => {
+-    await server.close();
+-    await wss.close();
++  const originalClose = server.close.bind(server);
++  let closing;
++  server.close = () => closing ||= (async () => {
+     await context.close();
+-  };
++    for (const socket of wss?.clients || []) socket.terminate();
++    if (wss) await new Promise((resolve) => wss.close(resolve));
++    await originalClose();
++  })();
+   return server;
+ }
+ 
+@@ -377,8 +442,12 @@
+ // src/utils/aria-snapshot.ts
+ async function captureAriaSnapshot(context, status = "") {
+   const url = await context.sendSocketMessage("getUrl", void 0);
++  if (context.scopeOrigin && new URL(url).origin !== context.scopeOrigin)
++    throw new Error("Blocked: page changed origin before snapshot; outcome unknown if action started");
+   const title = await context.sendSocketMessage("getTitle", void 0);
+   const snapshot2 = await context.sendSocketMessage("browser_snapshot", {});
++  context.snapshotGeneration++;
++  context.refs = new Set([...String(snapshot2).matchAll(/\[ref=([^\]\s]+)\]/g)].map(m => m[1]));
+   return {
+     content: [
+       {
+@@ -706,7 +775,8 @@
+ // src/index.ts
+ function setupExitWatchdog(server) {
+   process.stdin.on("close", async () => {
+-    setTimeout(() => process.exit(0), 15e3);
++    const deadline = setTimeout(() => process.exit(0), 1000);
++    deadline.unref();
+     await server.close();
+     process.exit(0);
+   });

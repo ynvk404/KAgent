@@ -55,8 +55,8 @@ _COMMAND_GROUPS: list[tuple[str, tuple[str, ...]]] = [
 
 _HELP_OVERRIDES: dict[str, tuple[str, str]] = {
     "/permissions": (
-        "[show|grant <spec>|revoke <id>|deny|retry <origin>]",
-        "view execution profile and manage limits, tool revokes and HTTP permissions",
+        "[show|browser [revoke]|grant <spec>|revoke <id>|deny|retry <origin>]",
+        "view execution profile, Browser grants, limits, tool revokes and HTTP permissions",
     ),
     "/burp": ("[port|stop|status]", "manage the local Burp bridge"),
     "/exit": ("(/quit)", "quit kagent"),
@@ -288,6 +288,19 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             sub = rest[0] if rest else "show"
             if sub == "show" and len(rest) <= 1:
                 text = (policy.status() + "\n" if policy is not None else "") + rights.status() + "\nGrant format: " + GRANT_SYNTAX
+                if policy is not None and policy.browser_local is not None:
+                    text += '\n' + policy.browser_local.grant_status()
+            elif sub == 'browser' and policy is not None:
+                binding = policy.browser_local
+                if binding is None:
+                    raise ValueError('Browser MCP is not enabled; start with --browser and --target')
+                if rest == ['browser', 'revoke']:
+                    binding.revoke_grant()
+                    text = 'Browser grant revoked. Queued auto-approvals cannot dispatch; already-sent effects are not rolled back.'
+                elif rest == ['browser']:
+                    text = binding.grant_status()
+                else:
+                    raise ValueError('usage: /permissions browser [revoke]')
             elif sub == "revoke-tool" and len(rest) == 2 and policy is not None:
                 policy.revoke(rest[1])
                 text = f"Tool revoked: {rest[1]}. YOLO and ordinary approval cannot override this rule."
@@ -333,7 +346,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                 asyncio.create_task(_review_http_grant())
                 return True
             else:
-                raise ValueError("usage: /permissions [show|grant <spec>|revoke <id>|deny|retry <origin>|revoke-tool <name>|restore-tool <name>|retry-tools|network-refresh|limits <calls> <concurrency>]\n" + GRANT_SYNTAX)
+                raise ValueError("usage: /permissions [show|browser [revoke]|grant <spec>|revoke <id>|deny|retry <origin>|revoke-tool <name>|restore-tool <name>|retry-tools|network-refresh|limits <calls> <concurrency>]\n" + GRANT_SYNTAX)
         except (ValueError, PermissionError) as err:
             dispatch(Append(entry=TranscriptEntry(kind="error", text=str(err))))
             return True

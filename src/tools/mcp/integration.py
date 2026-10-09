@@ -404,6 +404,7 @@ class MCPTool:
         from copy import copy
         frozen = copy(self)
         frozen._server = deepcopy(self._server)
+        frozen._browser_grant = None
         return frozen
 
     def __init__(
@@ -421,6 +422,7 @@ class MCPTool:
         self._schema_obj = schema_obj
         self._execution_policy: Any = None
         self._server: MCPServerConfig | None = None
+        self._browser_grant: tuple[str, int] | None = None
 
     def name(self) -> str:
         return self._tool_name
@@ -437,7 +439,55 @@ class MCPTool:
         return True
 
     def permission_hints(self, args: dict[str, Any]) -> PermissionHints:
-        return {"noSessionCache": True, "riskTier": "high-impact"}
+        hints: PermissionHints = {"noSessionCache": True, "riskTier": "high-impact"}
+        if is_designated_browser_local(self._server):
+            from src.tools.mcp.browser_local import BrowserLocalBinding
+            from src.permission.runtime.execution import ExecutionBlocked
+            binding = self._session
+            if not isinstance(binding, BrowserLocalBinding) or self._execution_policy is not binding.policy:
+                raise ExecutionBlocked('blocked: invalid Browser grant binding')
+            hints["forceOperator"] = True
+            self._browser_grant = binding.grant_authorization(self, args)
+            hints['yoloAutoApprove'] = self._browser_grant is not None
+            group = binding.action_group(self._remote_name)
+            if binding.policy.yolo and group is not None:
+                hints['browserGrant'] = group
+        return hints
+
+    async def review_browser_grant(self, args, prompter, signal=None):
+        from src.permission.permission import Decision, PermissionRequest
+        from src.tools.mcp.browser_local import BrowserLocalBinding, GRANT_SECONDS, GRANT_CALLS, GRANT_ACTIONS
+        from src.permission.runtime.execution import ExecutionBlocked
+        binding = self._session
+        if not is_designated_browser_local(self._server) or not isinstance(binding, BrowserLocalBinding):
+            raise ExecutionBlocked('blocked: invalid Browser grant adapter')
+        binding.validate_tool(self, args)
+        group = binding.action_group(self._remote_name)
+        if group is None or not binding.policy.yolo:
+            raise ExecutionBlocked('blocked: Browser action not eligible for a YOLO grant')
+        epoch, stamp, revision = binding.epoch, binding.policy.stamp(), binding.grant_revision
+        warning = ('Click/type may submit forms, change application state or enter sensitive data. '
+                   'Exact origin does not make those effects safe. Accept unknown application effects on this lab.'
+                   if group == 'interaction' else 'Navigation changes the selected tab location.' if group == 'navigate'
+                   else 'Read access may expose page data, screenshots and console logs.')
+        groups = ['read'] + (['navigate'] if group != 'read' else []) + (['interaction'] if group == 'interaction' else [])
+        actions = sorted(set().union(*(GRANT_ACTIONS[value] for value in groups)))
+        decision = await prompter.ask(PermissionRequest(
+            tool='browser_lab_grant', summary=f'Activate bounded Browser {group} grant for {binding.lab_origin}',
+            detail=f'Origin: {binding.lab_origin}\nActions: {", ".join(actions)}\n'
+                   f'Expires in {GRANT_SECONDS:g}s; at most {GRANT_CALLS} dispatched calls.\n{warning}\n'
+                   'This also approves the currently proposed invocation on the selected lab connection. '
+                   'The Extension does not authenticate tab/profile identity or constrain all Chrome traffic. '
+                   'Revoke: /permissions browser revoke',
+            no_session_cache=True, risk_tier='high-impact', force_operator=True), signal)
+        if decision != Decision.ALLOW_ONCE:
+            return Decision.DENY
+        binding.validate_tool(self, args)
+        if binding.epoch != epoch or binding.policy.stamp() != stamp or binding.grant_revision != revision:
+            raise ExecutionBlocked('blocked: Browser grant review context changed')
+        binding.activate_grant(group)
+        self._browser_grant = binding.grant_authorization(self, args)
+        return Decision.ALLOW_ONCE
 
     def summarize(self, args: dict[str, Any]) -> dict[str, str]:
         from src.redaction.redact import redact_payload
