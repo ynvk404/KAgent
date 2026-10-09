@@ -87,7 +87,7 @@ def test_duplicate_truth(tmp_path):
 
 def test_selection_versions_hashes_and_no_replacement(tmp_path):
     d = make_dataset(tmp_path)
-    default = select(d, 'run')
+    default = select(d, 'run', 'default')  # Historical 80-case verification remains supported.
     assert len(default.truth) == 80
     first = select(d, 'run', 'reduced')
     d.truth.reverse()
@@ -1058,14 +1058,20 @@ def test_cli_dry_run_never_initializes_agent_provider_or_network(tmp_path, monke
     from benchmarks.scenario1.__main__ import main
     from src.agent.agent import Agent
     from src.llm.runtime import provider_runtime
+    from benchmarks.scenario1.core import runner
     def forbidden(*args, **kw):
         raise AssertionError('dry-run attempted runtime I/O')
+    monkeypatch.setattr(Agent, '__init__', forbidden)
     monkeypatch.setattr(Agent, 'run', forbidden)
     monkeypatch.setattr(provider_runtime, 'build_startup_runtime', forbidden)
     monkeypatch.setattr(httpx, 'AsyncClient', forbidden)
+    monkeypatch.setattr(runner, 'run', forbidden)
+    monkeypatch.setattr(runner, 'launch_worker', forbidden)
     dataset = tmp_path / 'dataset'
-    make_dataset(dataset, 1)
-    assert main(['run', '--dataset', str(dataset), '--case', 'BenchmarkTest00001', '--target', ORIGIN,
+    manifest = select(make_dataset(dataset, 3), 'dry-run', 'smoke')
+    selection = tmp_path / 'selection.json'
+    write_new(selection, asdict(manifest))
+    assert main(['run', '--mode', 'smoke', '--dataset', str(dataset), '--manifest', str(selection), '--target', ORIGIN,
                  '--context-path', '/benchmark', '--authorized-lab', '--target-state', 'confirmation-only', '--dry-run']) == 0
     assert not (tmp_path / 'artifacts').exists()
 

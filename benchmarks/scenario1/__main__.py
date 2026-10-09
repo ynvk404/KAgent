@@ -9,7 +9,7 @@ import sys
 import uuid
 
 from benchmarks.common.contracts import DEFAULT_SEED, RunManifest, RuntimeSettings, decode, write_new, read_json
-from .core.dataset import Dataset, select
+from .core.dataset import Dataset, SELECTION_MODES, select
 from .core.storage import storage_root
 
 
@@ -30,18 +30,19 @@ def parser():
     listing.add_argument('--map', action='store_true', help='also validate all operational mappings')
     selection = commands.add_parser('select')
     selection.add_argument('--dataset', required=True, type=Path)
-    selection.add_argument('--mode', choices=['default', 'reduced', 'smoke'], default='default')
+    selection.add_argument('--mode', choices=SELECTION_MODES, default='smoke',
+                           help='smoke: 12 development cases (default); official: 40 cases')
     selection.add_argument('--seed', type=int, default=DEFAULT_SEED)
-    selection.add_argument('--case')
     selection.add_argument('--output', type=Path, help='optional frozen manifest path; defaults to internal selections')
-    running = commands.add_parser('run')
-    running.add_argument('--mode', choices=['smoke', 'official'], help='frozen lab execution profile')
-    running.add_argument('--config', type=Path, help='operator TOML; defaults to config.local.toml for --mode')
+    running = commands.add_parser('run', help='execute and export SVG, CSV, Markdown and JSON by default',
+                                  description='Run the benchmark and export SVG, CSV, Markdown and JSON by default.')
+    running.add_argument('--mode', choices=SELECTION_MODES, required=True,
+                         help='smoke: 12 cases, development; official: 40 cases, official classification')
+    running.add_argument('--config', type=Path,
+                         help='operator TOML; defaults to config.local.toml when required lab/manifest inputs are missing')
     running.add_argument('--progress', choices=['auto', 'none'], default='auto', help='progress on stderr; stdout remains JSON')
     running.add_argument('--dataset', type=Path, help='read-only verification of pinned source hashes')
-    source = running.add_mutually_exclusive_group()
-    source.add_argument('--manifest', type=Path)
-    source.add_argument('--case')
+    running.add_argument('--manifest', type=Path, help='frozen selection matching --mode; run never selects cases')
     running.add_argument('--target')
     running.add_argument('--context-path', help='explicit deployment context, e.g. /benchmark')
     running.add_argument('--authorized-lab', action='store_true')
@@ -61,15 +62,16 @@ def parser():
     running.add_argument('--agent-calls', type=int, default=24)
     running.add_argument('--dry-run', action='store_true')
     running.add_argument('--fail-fast', action='store_true')
-    running.add_argument('--run-kind', choices=['development', 'official'], default='development')
     running.add_argument('--output', type=Path)
+    running.add_argument('--export-csv', action='store_true', help='compatibility option; all report formats are always exported')
     evaluation = commands.add_parser('evaluate')
     evaluation.add_argument('--run', required=True, type=Path)
-    reporting = commands.add_parser('report', help='export offline HTML and SVG charts from frozen artifacts')
+    reporting = commands.add_parser('report', help='export offline SVG, CSV, Markdown and JSON from frozen artifacts',
+                                    description='Export SVG, CSV, Markdown and JSON by default from frozen artifacts offline.')
     reporting.add_argument('--run', required=True, type=Path)
     reporting.add_argument('--output', type=Path)
     reporting.add_argument('--evaluation', type=Path)
-    reporting.add_argument('--export-csv', action='store_true', help='also export legacy CSV/Markdown/report.json companions')
+    reporting.add_argument('--export-csv', action='store_true', help='compatibility option; all report formats are always exported')
     return p
 
 
@@ -109,16 +111,13 @@ def main(argv=None) -> int:
                 print(json.dumps(row))
             return 0
         if args.command == 'select':
-            manifest = select(dataset, uuid.uuid4().hex, args.mode, args.seed, args.case)
+            manifest = select(dataset, uuid.uuid4().hex, args.mode, args.seed)
             output = args.output or storage_root() / 'selections' / f'{manifest.run_id}.json'
             write_new(output, asdict(manifest))
             print(f'Selected {len(manifest.execution_order)} cases; manifest: {output}')
             return 0
-        if args.manifest:
-            manifest = decode(RunManifest, read_json(args.manifest))
-            dataset.verify(manifest)
-        else:
-            manifest = select(dataset, uuid.uuid4().hex, case_id=args.case)
+        manifest = decode(RunManifest, read_json(args.manifest))
+        dataset.verify(manifest)
         from .config import validate_profile
         validate_profile(manifest, args.mode)
         try:
@@ -135,7 +134,8 @@ def main(argv=None) -> int:
         validate_runtime(manifest, settings, verified_reset=args.reset_state is not None or args.container is not None)
         validate_run_kind(manifest, args.run_kind)
         if args.dry_run:
-            print(json.dumps({'dry_run': True, 'cases': manifest.execution_order, 'runtime': asdict(settings),
+            print(json.dumps({'dry_run': True, 'mode': args.mode, 'run_classification': args.run_kind,
+                              'cases': manifest.execution_order, 'runtime': asdict(settings),
                               'mapping_version': manifest.mapping_version, 'dataset_version': dataset.version}, indent=2))
             return 0
         destination = args.output

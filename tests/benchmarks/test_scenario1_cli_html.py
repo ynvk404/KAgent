@@ -2,15 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, replace
-import base64
-from html.parser import HTMLParser
 from io import StringIO
 import hashlib
+import csv
 import json
 from pathlib import Path
-import re
-import shutil
-import subprocess
 
 import pytest
 
@@ -28,7 +24,7 @@ from benchmarks.scenario1.reporting.loader import load_report
 from benchmarks.scenario1.reporting.projection import _evidence, _usage, index_file, json_bytes, result_files
 from tests.benchmarks.test_scenario1 import make_dataset, op, settings, single_manifest
 from tests.benchmarks.test_scenario1_reset import Controller
-from tests.benchmarks.test_scenario1_storage import frozen, html_payload
+from tests.benchmarks.test_scenario1_storage import frozen
 from tests.benchmarks.test_scenario1_reporting import _fixture
 
 
@@ -131,19 +127,22 @@ def test_missing_config_and_profile_conflicts(lab, monkeypatch, capsys):
     monkeypatch.setattr(config, 'DEFAULT_CONFIG', path.parent / 'missing.toml')
     assert main(['run', '--mode', 'smoke']) == 2
     assert 'copy config.example.toml' in capsys.readouterr().err
-    for extra, message in [(['--run-kind', 'official'], 'classifications conflict'),
-                           (['--case', 'BenchmarkTest00001'], 'frozen --manifest'),
-                           (['--manifest', str(path.parent / 'official.json')], '12-case smoke')]:
+    for extra in (['--run-kind', 'official'], ['--case', 'BenchmarkTest00001']):
+        with pytest.raises(SystemExit) as rejected:
+            main(['run', '--mode', 'smoke', '--config', str(path), '--authorized-lab', '--dry-run', *extra])
+        assert rejected.value.code == 2
+        assert 'unrecognized arguments' in capsys.readouterr().err
+    for extra, message in [(['--manifest', str(path.parent / 'official.json')], '12-case smoke')]:
         assert main(['run', '--mode', 'smoke', '--config', str(path), '--authorized-lab', '--dry-run', *extra]) == 2
         assert message in capsys.readouterr().err
     assert main(['run', '--mode', 'official', '--config', str(path), '--manifest', str(path.parent / 'smoke.json'), '--authorized-lab', '--dry-run']) == 2
-    assert 'frozen reduced 40-case' in capsys.readouterr().err
+    assert 'frozen 40-case official' in capsys.readouterr().err
 
 
-def test_legacy_long_form_and_no_silent_config(lab, monkeypatch, capsys):
+def test_explicit_long_form_and_no_silent_config(lab, monkeypatch, capsys):
     path, dataset = lab
     monkeypatch.setattr(config, 'DEFAULT_CONFIG', path)
-    assert main(['run', '--dataset', str(dataset.root), '--manifest', str(path.parent / 'smoke.json'),
+    assert main(['run', '--mode', 'smoke', '--dataset', str(dataset.root), '--manifest', str(path.parent / 'smoke.json'),
                  '--target', 'http://127.0.0.1:18080', '--context-path', '/benchmark', '--target-state',
                  'confirmation-only', '--authorized-lab', '--dry-run']) == 0
     assert json.loads(capsys.readouterr().out)['runtime']['timeout_seconds'] == 180
@@ -216,9 +215,10 @@ def test_reset_failure_and_observer_failure_do_not_change_execution(tmp_path, mo
 
 
 @pytest.mark.parametrize('progress', ['auto', 'none'])
-def test_cli_stdout_json_and_progress_stderr(tmp_path, monkeypatch, capsys, op, settings, progress):
+@pytest.mark.parametrize('export_csv', [False, True])
+def test_cli_stdout_json_and_progress_stderr(tmp_path, monkeypatch, capsys, op, settings, progress, export_csv):
     dataset = make_dataset(tmp_path / 'dataset')
-    manifest = select(dataset, 'run', case_id=dataset.truth[0].case_id)
+    manifest = select(dataset, 'run', 'smoke')
     write_new(tmp_path / 'selection.json', asdict(manifest))
     reset_state = tmp_path / 'state.json'
     write_new(reset_state, {})
@@ -227,79 +227,59 @@ def test_cli_stdout_json_and_progress_stderr(tmp_path, monkeypatch, capsys, op, 
     monkeypatch.setattr(runner, 'reproducibility', lambda: {})
     real = runner.run
     monkeypatch.setattr(runner, 'run', lambda *a, **kw: real(*a, **kw, launcher=lambda *_: (-9, False)))
-    assert main(['run', '--dataset', str(dataset.root), '--manifest', str(tmp_path / 'selection.json'),
+    assert main(['run', '--mode', 'smoke', '--dataset', str(dataset.root), '--manifest', str(tmp_path / 'selection.json'),
                  '--target', settings.target, '--context-path', settings.context_path, '--authorized-lab',
-                 '--target-state', 'external-reset', '--reset-state', str(reset_state), '--progress', progress]) == 4
+                 '--target-state', 'external-reset', '--reset-state', str(reset_state), '--progress', progress,
+                 *(['--export-csv'] if export_csv else [])]) == 4
     out = capsys.readouterr()
-    assert json.loads(out.out)['execution-failed'] == 1
+    payload = json.loads(out.out)
+    assert payload['execution-failed'] == 12
+    public = Path(payload['artifacts'])
+    assert COMPANIONS <= {p.name for p in (public / 'report').iterdir()}
+    assert len(list((public / 'report/charts').glob('*.svg'))) == 8
+    assert len(list((public / 'results').glob('*.json'))) == 13
+    assert not list(public.rglob('*.html')) and not list(public.rglob('*.txt'))
+    assert resolve_run(public) == Path(payload['internal'])
     assert ('KAgent — Scenario 1 Benchmark' in out.err) == (progress == 'auto')
 
 
-class Document(HTMLParser):
-    def __init__(self, text):
-        super().__init__()
-        self.tags = []
-        self.scripts = []
-        self.script = None
-        self.feed(text)
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        self.tags.append((tag, attrs))
-        if tag == 'script':
-            self.script = {'attrs': attrs, 'text': ''}
-            self.scripts.append(self.script)
-
-    def handle_endtag(self, tag):
-        if tag == 'script':
-            self.script = None
-
-    def handle_data(self, data):
-        if self.script is not None:
-            self.script['text'] += data
+COMPANIONS = {'summary.csv', 'per-case.csv', 'partitions.csv',
+              'abnormal-analysis-template.csv', 'thesis-tables.md', 'report.json'}
 
 
-def test_offline_html_all_charts_metrics_and_no_extra_files(tmp_path, op, settings):
+def test_default_all_formats_charts_metrics_and_no_extra_files(tmp_path, op, settings):
+    from benchmarks.scenario1.reporting.aggregate import public_metrics
     root, public, *_ = frozen(tmp_path, op, settings)
+    baseline = load_report(root)
     before = {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
     writer.write_report(root)
-    payload = html_payload(public)
-    assert len(payload['cases']) == 1 and payload['cases'][0]['case_id'] == op.case_id
-    assert 'T2C' not in payload['thesis_tables_and_captions']  # No unfinished execution in this fixture.
-    assert 'T3' in payload['thesis_tables_and_captions']
+    report = read_json(public / 'report/report.json')
+    case = read_json(public / 'results' / f'{op.case_id}.json')
+    assert case['case_id'] == op.case_id
+    assert report['canonical_evaluator_metrics'] == public_metrics(baseline)
+    assert {k: case[k] for k in baseline.cases[0] if k != 'case_id'} == {
+        k: v for k, v in baseline.cases[0].items() if k != 'case_id'}
+    markdown = (public / 'report/thesis-tables.md').read_text()
+    assert 'T2C' not in markdown and 'T3' in markdown
     files = {p.relative_to(public).as_posix() for p in public.rglob('*') if p.is_file()}
     svgs = {f for f in files if f.endswith('.svg')}
     assert len(svgs) == 8
-    assert files == {*svgs, 'index.html', 'results/index.json', f'results/{op.case_id}.json'}
-    text = (public / 'index.html').read_text()
-    document = Document(text)
-    assert sum(tag == 'svg' for tag, _ in document.tags) == 8
-    assert len(document.scripts) == 2
-    assert all(not any(key.startswith('on') for key in attrs) for _, attrs in document.tags)
-    assert all(not any(re.match(r'^(?:https?:)?//', value) for key, value in attrs.items() if key in {'src', 'href'}) for _, attrs in document.tags)
-    assert 'fetch(' not in text and 'XMLHttpRequest' not in text and 'innerHTML' not in text
-    assert 'connect-src &#x27;none&#x27;' in text
-    assert payload['metadata']['lifecycle_counts'] == {'scheduled': 1, 'started': 1, 'completed': 1}
-    assert 'NA' in text and 'Cache hit/miss counts: NA' in text
-    rows = payload['resource_statistics']
-    for field in ('input_tokens', 'output_tokens', 'total_tokens', 'llm_calls', 'tool_executed',
-                  'tool_result_events', 'http_admitted', 'http_dispatch_attempts', 'agent_seconds',
-                  'wall_seconds', 'cached_input_tokens', 'cache_creation_input_tokens'):
-        assert sum(row[1] == field for row in rows) == 3
-    assert next(row for row in rows if row[:2] == ['Overall', 'input_tokens'])[3] is None
-    assert next(row for row in rows if row[:2] == ['Overall', 'output_tokens'])[3] == '7'
+    assert files == {*svgs, *(f'report/{name}' for name in COMPANIONS),
+                     'results/index.json', f'results/{op.case_id}.json'}
+    assert set(report['output_files']) == {p.relative_to(public / 'report').as_posix()
+        for p in (public / 'report').rglob('*') if p.is_file()}
+    assert report['lifecycle_counts'] == {'scheduled': 1, 'started': 1, 'completed': 1}
     for ref, raw in before.items():
         assert (root / ref).read_bytes() == raw
     assert resolve_run(public) == root
     second = tmp_path / 'second'
-    writer.write_report(root, second)
-    assert (second / 'index.html').read_bytes() == (public / 'index.html').read_bytes()
+    writer.write_report(root, second, export_csv=True)
+    # internal_ref and its binding vary with destination; every other byte is identical.
+    assert {ref: (second / ref).read_bytes() for ref in files if ref != 'results/index.json'} == {
+        ref: (public / ref).read_bytes() for ref in files if ref != 'results/index.json'}
 
 
-def test_embedded_hostile_evidence_is_bounded_redacted_and_inert(tmp_path, op, settings):
-    root, public, *_ = frozen(tmp_path, op, settings)
-    files = result_files(root, load_report(root))
-    case = json.loads(files[f'results/{op.case_id}.json'])
+def test_embedded_hostile_evidence_is_bounded_redacted_and_json_only(op):
     secret = 'sk-' + 'S' * 40
     hostile = '</script><script>globalThis.pwned=true</script><img src="https://bad.invalid" onerror="alert(1)">'
     body = (hostile + '\napi_key=' + secret + '\n/home/operator/private\n' + 'x' * 10000).encode()
@@ -308,29 +288,17 @@ def test_embedded_hostile_evidence_is_bounded_redacted_and_inert(tmp_path, op, s
     export = {'workflow': {'validation_results': [{'result_id': 'result',
               'evidence_manifest': [{'source': source, 'hash': digest(source)}]}]},
               'result_id': 'result', 'accepted_at_freeze': True}
-    _, evidence = _evidence(export, op.case_id, {}, 2)
-    case['selected_evidence'] = evidence
-    from benchmarks.scenario1.reporting.charts import render_charts
-    from benchmarks.scenario1.reporting.html import render_html
-    html = render_html(load_report(root), [case], render_charts(load_report(root)), output_files=[]).decode()
-    assert secret not in html and '/home/operator/private' not in html
-    assert hostile not in html and '&lt;script&gt;globalThis.pwned' in html
-    document = Document(html)
-    assert len(document.scripts) == 2 and not any(tag == 'img' for tag, _ in document.tags)
-    embedded = json.loads(document.scripts[0]['text'])
-    proof = embedded['cases'][0]['selected_evidence'][0]
+    files = {}
+    _, evidence = _evidence(export, op.case_id, files, 2)
+    assert files == {}  # Evidence is embedded in JSON, never duplicated into TXT.
+    proof = json.loads(json_bytes({'selected_evidence': evidence}))['selected_evidence'][0]
+    assert secret not in proof['content'] and '/home/operator/private' not in proof['content']
     assert hostile in proof['content'] and proof['truncated'] is True
     assert len(proof['content'].encode()) <= 8192 and 'public_ref' not in proof
     assert proof['public_sha256'] == hashlib.sha256(proof['content'].encode()).hexdigest()
     assert proof['canonical_body_sha256'] == hashlib.sha256(body).hexdigest()
     assert proof['canonical_source_sha256'] == digest(source)
     assert proof['http_status'] == 200 and proof['byte_range'] == [0, 8192]
-    node = shutil.which('node')
-    if node:
-        script = tmp_path / 'report.js'
-        script.write_text(document.scripts[1]['text'])
-        checked = subprocess.run([node, '--check', str(script)], capture_output=True, text=True)
-        assert checked.returncode == 0, checked.stderr
 
 
 @pytest.mark.parametrize('complete,values,expected', [
@@ -349,7 +317,7 @@ def test_cache_telemetry_only_provider_reported_complete_totals(op, complete, va
     assert _usage(None)['cached_input_tokens']['requests'] is None
 
 
-def test_all_official_cases_pagination_filters_sorting_and_details(lab, tmp_path, settings):
+def test_all_official_cases_pagination_tables_and_details(lab, tmp_path, settings):
     _, dataset = lab
     manifest = replace(select(dataset, 'official-view', 'reduced'), runtime=asdict(settings))
     first, second, third = manifest.execution_order[:3]
@@ -365,67 +333,35 @@ def test_all_official_cases_pagination_filters_sorting_and_details(lab, tmp_path
             target.write_bytes(path.read_bytes())
     bind_storage(root, public)
     writer.write_report(root)
-    payload = html_payload(public)
-    assert [c['case_id'] for c in payload['cases']] == manifest.execution_order
+    cases = [read_json(public / 'results' / f'{cid}.json') for cid in manifest.execution_order]
+    assert [c['case_id'] for c in cases] == manifest.execution_order
     assert len(list((public / 'report/charts').glob('*.svg'))) == 10
-    text = (public / 'index.html').read_text()
-    document = Document(text)
-    bodies = [attrs for tag, attrs in document.tags if tag == 'tbody' and 'data-case' in attrs]
-    assert len(bodies) == 40
-    assert payload['metadata']['lifecycle_counts']['completed'] == 39
-    csp = next(attrs['content'] for tag, attrs in document.tags if tag == 'meta' and attrs.get('http-equiv') == 'Content-Security-Policy')
-    for style in re.findall(r'<style>(.*?)</style>', text, re.DOTALL):
-        hashed = base64.b64encode(hashlib.sha256(style.encode()).digest()).decode()
-        assert f"'sha256-{hashed}'" in csp
-    hashed = base64.b64encode(hashlib.sha256(document.scripts[1]['text'].encode()).digest()).decode()
-    assert f"'sha256-{hashed}'" in csp
-    node = shutil.which('node')
-    if not node:
-        pytest.skip('Node unavailable for report interaction verification')
-    # Execute the actual report script against a small DOM surface, with no network.
-    harness = '''const assert=require('node:assert/strict');
-const controls=Object.fromEntries(['search','class-filter','partition-filter'].map(id=>[id,{value:'',listeners:{},addEventListener(event,fn){this.listeners[event]=fn;}}]));
-const table={tBodies:fixture.cases.map(c=>({dataset:{case:c.case_id,class:c.vulnerability_class,partition:c.evaluator_partition,search:Object.values(c).join(' ').toLowerCase()},hidden:false})),appendChild(body){this.tBodies.splice(this.tBodies.indexOf(body),1);this.tBodies.push(body);}};
-const counter={textContent:''};
-const details=Object.fromEntries(fixture.cases.map((c,i)=>['case-detail-'+i,{open:false}]));
-const opens=fixture.cases.map((c,i)=>({dataset:{detail:'case-detail-'+i},listeners:{},addEventListener(event,fn){this.listeners[event]=fn;},setAttribute(){}}));
-const sorts=['case_id','agent_seconds'].map(key=>({dataset:{sort:key},listeners:{},addEventListener(event,fn){this.listeners[event]=fn;}}));
-const document={getElementById(id){if(id==='cases')return table;if(id==='visible-count')return counter;if(id==='report-data')return {textContent:JSON.stringify(fixture)};return controls[id]||details[id];},querySelectorAll(selector){return selector==='.open-case'?opens:sorts;}};
-function runReport(){SCRIPT_BODY}
-runReport();
-assert.equal(counter.textContent,'40 cases visible');
-controls.search.value=fixture.cases[0].case_id;controls.search.listeners.input();
-assert.equal(table.tBodies.filter(b=>!b.hidden).length,1);
-controls.search.value='';controls['class-filter'].value='sql-injection';controls.search.listeners.input();
-assert.equal(table.tBodies.filter(b=>!b.hidden).length,20);
-controls['class-filter'].value='';controls['partition-filter'].value='not-run';controls.search.listeners.input();
-assert.equal(table.tBodies.filter(b=>!b.hidden).length,1);
-sorts[0].listeners.click();
-assert.deepEqual(table.tBodies.map(b=>b.dataset.case),fixture.cases.map(c=>c.case_id).sort((a,b)=>a.localeCompare(b)));
-sorts[0].listeners.click();
-assert.deepEqual(table.tBodies.map(b=>b.dataset.case),fixture.cases.map(c=>c.case_id).sort((a,b)=>b.localeCompare(a)));
-sorts[1].listeners.click();assert.equal(table.tBodies.at(-1).dataset.case,fixture.cases[0].case_id);
-opens[0].listeners.click();assert.equal(details['case-detail-0'].open,true);
-opens[0].listeners.click();assert.equal(details['case-detail-0'].open,false);
-'''
-    script = tmp_path / 'interactions.js'
-    script.write_text('const fixture=' + json.dumps(payload) + ';\n' + harness.replace('SCRIPT_BODY', document.scripts[1]['text']))
-    checked = subprocess.run([node, str(script)], capture_output=True, text=True)
-    assert checked.returncode == 0, checked.stderr
+    assert not list(public.rglob('*.html')) and not list(public.rglob('*.txt'))
+    report = read_json(public / 'report/report.json')
+    assert report['lifecycle_counts']['completed'] == 39
+    rows = list(csv.DictReader(StringIO((public / 'report/per-case.csv').read_text())))
+    assert len(rows) == 40
+    # CSV keeps the restricted pseudonymous presentation; case JSON joins the real IDs.
+    assert [r['case_id'] for r in rows] == [c['case_id'] for c in load_report(root).cases]
+    assert [c['evaluator_partition'] for c in cases[:3]] == ['not-run', 'unresolved', 'invalid-result']
+    assert resolve_run(public) == root
 
 
-def test_opt_in_companions_and_legacy_v1_resolution(tmp_path, op, settings):
+@pytest.mark.parametrize('version', [1, 2])
+def test_historical_public_resolution(tmp_path, op, settings, version):
     root, public, *_ = frozen(tmp_path, op, settings)
-    writer.write_report(root, export_csv=True)
+    writer.write_report(root)
     assert {'summary.csv', 'per-case.csv', 'partitions.csv', 'abnormal-analysis-template.csv',
             'thesis-tables.md', 'report.json'} <= {p.name for p in (public / 'report').iterdir()}
     assert resolve_run(public) == root
     legacy_public = tmp_path / 'legacy-public'
     model = load_report(root)
     files = {f'report/{name}': raw for name, raw in writer._render(model).items()}
-    files.update(result_files(root, model, version=1))
+    files.update(result_files(root, model, version=version))
+    if version == 2:
+        files['index.html'] = b'<!doctype html><html><body>Historical dashboard</body></html>'
     index = json.loads(index_file(root, legacy_public, model, files))
-    index['schema'] = 'scenario1-public-results-v1'
+    index['schema'] = f'scenario1-public-results-v{version}'
     index['binding'] = digest({k: v for k, v in index.items() if k != 'binding'})
     files['results/index.json'] = json_bytes(index)
     for ref, raw in files.items():
@@ -433,7 +369,19 @@ def test_opt_in_companions_and_legacy_v1_resolution(tmp_path, op, settings):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(raw)
     assert resolve_run(legacy_public) == root
-    assert read_json(legacy_public / 'results' / f'{op.case_id}.json')['schema'] == 'scenario1-public-case-v1'
+    assert read_json(legacy_public / 'results' / f'{op.case_id}.json')['schema'] == f'scenario1-public-case-v{version}'
+    before = {p.relative_to(legacy_public): p.read_bytes() for p in legacy_public.rglob('*') if p.is_file()}
+    assert load_report(legacy_public).metrics == model.metrics
+    fresh = tmp_path / 'fresh-export'
+    writer.write_report(legacy_public, fresh)
+    assert not (fresh / 'index.html').exists()
+    assert resolve_run(fresh) == root
+    assert {p.relative_to(legacy_public): p.read_bytes() for p in legacy_public.rglob('*') if p.is_file()} == before
+    if version == 2:
+        # The historical dashboard remains a required, hash-checked artifact.
+        (legacy_public / 'index.html').write_bytes(b'changed dashboard')
+        with pytest.raises(ValueError, match='public artifact integrity mismatch'):
+            resolve_run(legacy_public)
 
 
 def test_rebound_embedded_evidence_cannot_bypass_canonical_projection(tmp_path, op, settings):
@@ -451,3 +399,56 @@ def test_rebound_embedded_evidence_cannot_bypass_canonical_projection(tmp_path, 
     index_path.write_bytes(json_bytes(index))
     with pytest.raises(ValueError, match='public/canonical projection binding mismatch'):
         resolve_run(public)
+
+
+@pytest.mark.parametrize('export_csv', [False, True])
+def test_report_cli_always_exports_all_formats(tmp_path, op, settings, monkeypatch, export_csv):
+    root, public, *_ = frozen(tmp_path, op, settings)
+    monkeypatch.setattr('benchmarks.scenario1.core.evaluate.evaluate',
+                        lambda *_: pytest.fail('offline report invoked evaluator'))
+    monkeypatch.setattr(runner, 'run', lambda *_: pytest.fail('offline report executed benchmark'))
+    assert main(['report', '--run', str(root), '--output', str(public),
+                 *(['--export-csv'] if export_csv else [])]) == 0
+    assert COMPANIONS <= {p.name for p in (public / 'report').iterdir()}
+    assert len(list((public / 'report/charts').glob('*.svg'))) == 8
+    assert not list(public.rglob('*.html')) and not list(public.rglob('*.txt'))
+    assert resolve_run(public) == root
+
+
+@pytest.mark.parametrize('component', ['report/summary.csv', 'report/charts/confusion-matrix.svg',
+                                     'report/thesis-tables.md', 'report/report.json'])
+@pytest.mark.parametrize('rebind', [False, True])
+def test_v3_missing_component_rejected_even_with_rebound_index(tmp_path, op, settings, component, rebind):
+    root, public, *_ = frozen(tmp_path, op, settings)
+    writer.write_report(root)
+    (public / component).unlink()
+    if rebind:
+        path = public / 'results/index.json'
+        index = read_json(path)
+        del index['files'][component]
+        index['binding'] = digest({k: v for k, v in index.items() if k != 'binding'})
+        path.write_bytes(json_bytes(index))
+    with pytest.raises(ValueError, match='unexpected/missing public (artifact|report component)'):
+        resolve_run(public)
+
+
+@pytest.mark.parametrize('component', ['report/summary.csv', 'report/charts/confusion-matrix.svg',
+                                     'report/thesis-tables.md', 'report/report.json'])
+def test_v3_report_component_hashes_checked(tmp_path, op, settings, component):
+    root, public, *_ = frozen(tmp_path, op, settings)
+    writer.write_report(root)
+    path = public / component
+    path.write_bytes(path.read_bytes() + b'\n')
+    with pytest.raises(ValueError, match='public artifact integrity mismatch'):
+        resolve_run(public)
+
+
+@pytest.mark.parametrize('command', ['run', 'report'])
+def test_cli_help_describes_default_formats_and_compatibility_option(capsys, command):
+    with pytest.raises(SystemExit) as exited:
+        parser().parse_args([command, '--help'])
+    assert exited.value.code == 0
+    help_text = ' '.join(capsys.readouterr().out.split())
+    assert 'compatibility option' in help_text and 'always exported' in help_text
+    assert all(name in help_text for name in ('SVG', 'CSV', 'Markdown', 'JSON', 'by default'))
+    assert 'HTML' not in help_text

@@ -9,8 +9,9 @@ from pathlib import Path
 import tomllib
 import uuid
 
-from benchmarks.common.contracts import file_hash
+from benchmarks.common.contracts import RunManifest, file_hash
 from src.paths import project_artifact_root
+from .core.dataset import SELECTION_MODES
 
 DEFAULT_CONFIG = Path(__file__).with_name('config.local.toml')
 SECTIONS = {
@@ -30,8 +31,14 @@ def _path(value: str, base: Path) -> Path:
 
 
 def resolve_config(args: argparse.Namespace, invocation: list[str]) -> dict:
-    """Merge only explicitly selected profiles/configs; keep legacy CLI defaults."""
-    config_path = args.config or (DEFAULT_CONFIG if args.mode else None)
+    """Resolve a two-mode run; complete explicit invocations need no TOML."""
+    if args.mode not in SELECTION_MODES:
+        raise ValueError('run mode must be smoke or official')
+    config_path = args.config
+    if config_path is None and any(getattr(args, key) is None
+                                   for key in ('dataset', 'target', 'context_path', 'target_state', 'manifest')):
+        config_path = DEFAULT_CONFIG
+    args.run_kind = 'official' if args.mode == 'official' else 'development'
     values: dict = {}
     metadata: dict = {'profile': args.mode, 'configuration_sha256': None}
     supplied = {word.split('=', 1)[0] for word in invocation if word.startswith('--')}
@@ -73,7 +80,7 @@ def resolve_config(args: argparse.Namespace, invocation: list[str]) -> dict:
                 continue
             if '--' + key.replace('_', '-') not in supplied:
                 setattr(args, key, _path(value, base) if key in PATH_KEYS else value)
-        if args.mode and not args.case and not args.manifest:
+        if not args.manifest:
             selected = values.get('manifests', {}).get(args.mode)
             if selected is None:
                 raise ValueError(f'[manifests].{args.mode} must name an explicitly frozen manifest')
@@ -82,15 +89,8 @@ def resolve_config(args: argparse.Namespace, invocation: list[str]) -> dict:
     for key in ('dataset', 'target', 'context_path', 'target_state'):
         if getattr(args, key) is None:
             raise ValueError(f'missing --{key.replace("_", "-")}; supply it or configure [lab]')
-    if not args.manifest and not args.case:
-        raise ValueError('run requires --manifest or --case; profiles require a frozen manifest')
-    if args.mode:
-        if args.case:
-            raise ValueError('--mode requires a frozen --manifest, not --case')
-        kind = 'official' if args.mode == 'official' else 'development'
-        if '--run-kind' in supplied and args.run_kind != kind:
-            raise ValueError('--mode and --run-kind classifications conflict')
-        args.run_kind = kind
+    if not args.manifest:
+        raise ValueError('run requires a frozen --manifest matching --mode smoke or official')
     if not args.dataset.is_dir():
         raise ValueError('--dataset must name an existing BenchmarkJava directory')
     for key in ('manifest', 'reset_war', 'reset_state', 'reset_audit'):
@@ -104,7 +104,7 @@ def resolve_config(args: argparse.Namespace, invocation: list[str]) -> dict:
         root = (_path(values['output']['root'], base) if values.get('output', {}).get('root')
                 else project_artifact_root() / 'benchmarks')
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-        args.output = root / f'scenario1-{args.mode or args.run_kind}-{stamp}-{uuid.uuid4().hex[:12]}'
+        args.output = root / f'scenario1-{args.mode}-{stamp}-{uuid.uuid4().hex[:12]}'
     if args.output.exists() or args.output.is_symlink():
         raise ValueError('run directory already exists; refusing to overwrite')
     metadata['effective_configuration'] = {
@@ -119,8 +119,9 @@ def resolve_config(args: argparse.Namespace, invocation: list[str]) -> dict:
     return metadata
 
 
-def validate_profile(manifest, mode: str | None) -> None:
-    if mode == 'smoke' and (manifest.mode != 'smoke' or len(manifest.execution_order) != 12):
-        raise ValueError('smoke profile requires the frozen 12-case smoke manifest')
-    if mode == 'official' and (manifest.mode != 'reduced' or len(manifest.execution_order) != 40):
-        raise ValueError('official profile requires the explicitly frozen reduced 40-case manifest')
+def validate_profile(manifest: RunManifest, mode: str) -> None:
+    if mode not in SELECTION_MODES:
+        raise ValueError('run mode must be smoke or official')
+    count = 12 if mode == 'smoke' else 40
+    if manifest.mode != SELECTION_MODES[mode] or len(manifest.execution_order) != count:
+        raise ValueError(f'{mode} mode requires the frozen {count}-case {mode} manifest')

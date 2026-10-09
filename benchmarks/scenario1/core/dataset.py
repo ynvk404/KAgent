@@ -19,6 +19,8 @@ JAVA = 'src/main/java/org/owasp/benchmark/testcode'
 HELPER = 'src/main/java/org/owasp/benchmark/helpers/SeparateClassRequest.java'
 DATASET_CATEGORIES = {'cmdi', 'crypto', 'hash', 'ldapi', 'pathtraver', 'securecookie',
                       'sqli', 'trustbound', 'weakrand', 'xpathi', 'xss'}
+# Public names map to the existing v1 wire values; hashes/identities stay intact.
+SELECTION_MODES = {'smoke': 'smoke', 'official': 'reduced'}
 
 
 class MappingError(ValueError):
@@ -241,7 +243,10 @@ class Dataset:
                 raise ValueError(f'manifest {field} differs from declared selection')
 
 
-def select(dataset: Dataset, run_id: str, mode='default', seed=DEFAULT_SEED, case_id: str | None = None) -> RunManifest:
+def select(dataset: Dataset, run_id: str, mode='smoke', seed=DEFAULT_SEED, case_id: str | None = None) -> RunManifest:
+    # Explicit legacy modes and single-case mapping remain available for reading
+    # historical artifacts and internal reset diagnostics, never as CLI choices.
+    mode = SELECTION_MODES.get(mode, mode)
     # Pin only artifacts actually used by this selection, independent of previous calls.
     dataset.hashes = {ref: file_hash(dataset.root / ref) for ref in (TRUTH, CRAWLER)}
     dataset.cache.clear()

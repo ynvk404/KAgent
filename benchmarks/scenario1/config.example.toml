@@ -12,6 +12,9 @@ reset_war = "../../lab/benchmark-offline.war"
 authorized_lab = true
 
 [manifests]
+# Freeze with select --mode smoke (12 cases) or --mode official (40 cases).
+# Official keeps the v1 internal mode "reduced"; existing 40-case manifests work.
+# The run mode fixes classification: smoke = development, official = official.
 smoke = "../../.kagent/benchmarks/scenario1/selections/smoke.json"
 official = "../../.kagent/benchmarks/scenario1/selections/official-40.json"
 

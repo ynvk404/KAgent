@@ -46,16 +46,27 @@ Selection protocol `sha256-rank-v1`, default seed **1729**:
 2. Rank each stratum by SHA-256 of compact, sorted-key JSON encoding of
    `["sha256-rank-v1", seed, "select", class, vulnerable_boolean, case_id]`;
    break hash ties lexicographically by case ID.
-3. Take 20 per stratum (`default`, 80), 10 (`reduced`, 40), or 3 (`smoke`, 12).
-   Smoke is a balanced development subset, not the final benchmark. Fail if a
-   stratum is too small.
+3. Take 3 per stratum (`smoke`, 12) or 10 (`official`, 40). Smoke is a balanced
+   development subset, not the final benchmark. Fail if a stratum is too small.
 4. Store selected truth/operational rows sorted by case ID. Execution order ranks
    IDs by the same hash encoding of `["sha256-rank-v1", seed, "order", case_id]`.
 
-Single selections contain exactly one ID. Smoke uses the same rank formula and
-one manifest, run ID, runner, worker isolation, evaluator and report as the
-other modes. A run schedules an ID once; repeat trials require separate run
-directories. Deterministic selection does not make LLM behavior deterministic.
+The CLI exposes only `smoke` and `official`; `select` defaults to `smoke`.
+For v1 compatibility, the public `official` name maps to the existing internal
+manifest mode `reduced`. This is the identical 40-case selection, with unchanged
+truth/operational rows, execution order, artifact hashes and manifest identity
+for the same dataset, seed and run ID. Smoke's internal mode remains `smoke`.
+The schema, selection fingerprint encoding and integrity bindings are unchanged;
+selection itself never declares a run classification.
+
+Historical `default` (80), `reduced` (40), and `single` (one ID) manifests remain
+decodable and verifiable. Legacy selection code is retained for these readers
+and internal reset diagnostics. The public CLI cannot create an 80-case or
+single-case selection, and cannot launch an 80-case or single-case manifest.
+Smoke uses the same rank formula and one manifest, run ID, runner, worker
+isolation, evaluator and report as official. A run schedules an ID once; repeat
+trials require separate run directories. Deterministic selection does not make
+LLM behavior deterministic.
 
 ## Runtime and authorization
 
@@ -135,7 +146,7 @@ recreation occurs between cases. Truth, selection and scoring remain unchanged.
 Reset failures and unknown outcomes still block subsequent workers. Eligibility
 does not certify execution of all cases or restoration of arbitrary external effects.
 
-Automatic default/reduced/smoke exclusion is blocked on trustworthy dataset-wide
+Automatic smoke/official exclusion is blocked on trustworthy dataset-wide
 state metadata. The existing regex is a positive write indicator, not a verified
 negative classification: batch/large-update calls and helper-mediated writes can
 escape it. Selection and quotas/ranking remain unchanged; known writes fail
@@ -289,9 +300,13 @@ metric is called an LLM "step".
 
 ## Run designation
 
-`run --run-kind {development,official}` declares the run classification;
-`development` is the default and `official` requires the explicit option.
-Smoke selections cannot be declared official. After writing and reading the
+`run --mode smoke` requires a frozen 12-case smoke selection and declares
+`development`. `run --mode official` requires a frozen 40-case official
+selection (v1 internal mode `reduced`) and declares `official`. Run mode is
+required; the public `--run-kind` and `--case` options have been removed.
+Smoke selections cannot be declared official. Selection mode and classification
+remain separate: the manifest describes the sample, while the runner declares
+classification in its existing bound record. After writing and reading the
 final `manifest.json`, the runner writes a separate, collision-safe
 `run-classification.json` before launching any worker. Its versioned record
 contains the run ID, declared classification, SHA-256 of the final manifest's
@@ -301,7 +316,13 @@ rows. This is operator-declared metadata, not a cryptographic signature or
 proof of protocol compliance, a clean environment, or scientific validity.
 For old runs without a record, the reader interprets smoke mode as
 `development/smoke`; other modes have unknown classification, meaning official
-status was not declared. Existing artifacts are not migrated.
+status was not declared. Historical `default`/`reduced` manifests and records
+emitted by the old `--run-kind` option retain their existing interpretation,
+including declared official runs of other historical sizes. They remain readable,
+evaluable and reportable; existing artifacts are never migrated or rewritten by
+this mode mapping. No new official designation is inferred from a historical
+manifest's name or size. Legacy programmatic runner contracts remain available
+for offline fixtures and reset verification.
 
 ## Commands
 
@@ -326,12 +347,20 @@ The existing explicit `--authorized-lab` acknowledgement remains required;
 approval. Omitting the CLI flag fails before execution. `--config PATH` selects
 another TOML file. CLI flags override TOML, including limits, target and manifest.
 An explicit `--reset-state` uses the legacy controller instead of configured
-container fields. Long commands without `--mode`/`--config` do not load TOML and
-retain their existing selection and `--run-kind` behavior. The new smoke profile
-requires a frozen 12-case smoke selection; official requires a frozen 40-case
-`reduced` selection, verified with the existing dataset verification contract.
-Smoke and conflicting run-kind declarations cannot be official. These profile
-checks do not change legacy programmatic run designation contracts.
+container fields. A complete explicit command with `--mode`, `--dataset`,
+`--manifest`, `--target`, `--context-path` and `--target-state` needs no TOML;
+otherwise the resolver loads `config.local.toml` unless `--config` selects
+another file. Both forms require the same frozen 12/40-case selection and
+classification. Config and CLI manifest overrides cannot bypass these checks.
+`[manifests]` accepts only `smoke` and `official`; config cannot set a separate
+mode or run classification. Existing frozen `reduced` 40-case manifests can be
+used directly with `run --mode official`. Every manifest is verified against
+the current dataset using the existing contract. Resume uses this same gate
+and retains the runner's exact selection identity check.
+
+`--dry-run` verifies config, selection and runtime declarations locally. It
+reports the public mode and run classification without creating an Agent,
+provider, worker, reset controller, run directory or HTTP request.
 
 Without `--output`, every invocation gets a timestamp/UUID output name; explicit
 existing output is rejected. Canonical reproducibility records include the
@@ -362,15 +391,13 @@ execute a pilot.
 
 ```bash
 venv-linux/bin/python -m benchmarks.scenario1 list --dataset /path/to/BenchmarkJava
-venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode reduced --output .kagent/benchmarks/scenario1/selections/scenario1-selection.json
-venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode smoke --seed 1729 --output .kagent/benchmarks/scenario1/selections/scenario1-smoke.json
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/scenario1-smoke.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --output artifacts/benchmarks/smoke-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode smoke --seed 1729 --output .kagent/benchmarks/scenario1/selections/smoke.json
+venv-linux/bin/python -m benchmarks.scenario1 select --dataset /path/to/BenchmarkJava --mode official --seed 1729 --output .kagent/benchmarks/scenario1/selections/official-40.json
+venv-linux/bin/python -m benchmarks.scenario1 run --mode smoke --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/smoke.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --output artifacts/benchmarks/smoke-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/smoke-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --dry-run
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --case BenchmarkTest00013 --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --output artifacts/benchmarks/single-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --fail-fast --output artifacts/benchmarks/run-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 run --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/scenario1-selection.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --run-kind official --output artifacts/benchmarks/official-UNIQUE
-venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/run-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 run --mode official --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/official-40.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --dry-run
+venv-linux/bin/python -m benchmarks.scenario1 run --mode official --dataset /path/to/BenchmarkJava --manifest .kagent/benchmarks/scenario1/selections/official-40.json --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab --target-state external-reset --container operator-benchmark --ingress-container operator-ingress --reset-war /path/to/benchmark-offline.war --fail-fast --output artifacts/benchmarks/official-UNIQUE
+venv-linux/bin/python -m benchmarks.scenario1 evaluate --run artifacts/benchmarks/official-UNIQUE
 venv-linux/bin/python -m benchmarks.scenario1 report --run .kagent/benchmarks/scenario1/runs/STORAGE_ID --output artifacts/benchmarks/offline-export-UNIQUE
 ```
 
@@ -378,8 +405,13 @@ New executions physically separate canonical/runtime storage from public output:
 
 ```text
 <project>/artifacts/benchmarks/<run-name>/
-├── index.html           # offline report, inline SVG, all public case details/evidence
 ├── report/
+│   ├── summary.csv
+│   ├── partitions.csv
+│   ├── per-case.csv
+│   ├── abnormal-analysis-template.csv
+│   ├── thesis-tables.md
+│   ├── report.json
 │   └── charts/          # all eight existing figures, plus existing pagination if needed
 └── results/
     ├── index.json       # storage, manifest, evaluation and public file bindings
@@ -441,11 +473,16 @@ legacy run), root-level evaluation filenames, and sibling staging/fallback.
 No historical files, hashes, symlinks or backing directories are migrated,
 rewritten or moved, including `scenario1-smoke-run-01`.
 
-New public exports contain one `index.html`, result JSON and the existing chart
-set. `summary.csv`, `partitions.csv`, `per-case.csv`, `thesis-tables.md`,
-`abnormal-analysis-template.csv` and `report.json` are opt-in companions via
-`report --export-csv` (or `write_report(..., export_csv=True)`) into a new output.
-Legacy runs retain their historical report export contract by default. Only
+New public exports always contain SVG charts, `summary.csv`, `partitions.csv`,
+`per-case.csv`, `thesis-tables.md`, `abnormal-analysis-template.csv`, `report.json`,
+`results/index.json` and per-testcase JSON with sanitized embedded evidence.
+Both `run` and offline `report` export all formats by default. No HTML dashboard,
+CSS/JavaScript dashboard assets or separate TXT evidence files are generated.
+The old `--export-csv` option is accepted by both commands as a compatibility
+no-op; `write_report(..., export_csv=True)` also produces the same components
+and bytes as the default (apart from destination-relative index bindings).
+Legacy runs retain their existing report directory contract and default
+CSV/Markdown/JSON/SVG exports. Only
 evaluable cases enter the confusion matrix. Numerators/denominators, NA semantics,
 metrics, evaluator identity and scoring are unchanged. Report tables retain the
 restricted presentation model. Public case JSON adds the testcase ID, sanitized
@@ -467,27 +504,27 @@ Each source retains canonical source/body hashes, source kind, original byte
 range, JSON pointer, pseudonymous observation reference and truncation flags.
 The 8192-byte public content limit and 32-source canonical bound are enforced.
 Canonical evidence and seals are untouched. The public index schema is now
-`scenario1-public-results-v2`; the resolver still reads and verifies v1 public
-trees against their original case/TXT projections. Smoke 1 and Smoke 2 are
+`scenario1-public-results-v3`: its root contains exactly `report/` and `results/`,
+and its file bindings cover all default report components and case JSON. Case
+JSON remains `scenario1-public-case-v2`; canonical schemas and hash formulas do
+not change. The resolver still reads and verifies v1 public trees against their
+original case/TXT projections and v2 trees with their original `index.html` and
+case v2 projections. Missing or extra v3 components fail closed even if the
+public file list is rebound. Smoke 1 and Smoke 2 are
 never rewritten or migrated.
 The index stores compact resolution/integrity information, not copied manifests
 or large metadata snapshots. Hashes detect corruption and bind the local
 artifacts; they are not authentication against someone who can rewrite all data.
 
-Open `index.html` directly with `file://`. All report data and selected evidence
-are embedded; charts also remain standalone SVG files. There are no external
-scripts, frameworks, fetches, servers or CDN dependencies. The report includes
-overview/denominators, all charts, SQLi/XSS/Overall resource distributions and
-coverage, searchable/filterable/sortable cases, expandable inputs/evidence,
-ground truth, agent outcomes, evaluator classifications and full public
-reproducibility/methodology metadata. Plain details still work without JavaScript.
-The original thesis tables and suggested figure captions are also embedded as an
-expandable reference, so removing default Markdown output does not discard them.
-Evidence is escaped text, inert embedded JSON escapes script-closing characters,
-and a content security policy permits only the fixed report script and styles.
+Read `report/thesis-tables.md` for thesis tables and suggested captions, open the
+standalone SVG figures, or consume the CSV/JSON files offline. The three Chapter
+3 figures and all existing chart definitions/pagination are preserved. Public
+case JSON retains operational inputs, assessment/acceptance, ground truth,
+agent outcome, evaluator classifications, numeric telemetry and selected evidence.
 Raw workflows, free-form internal assessment rationale and individual tool
 transcripts stay internal. Tool failures/blocks appear as recorded counts;
 persisted-finding presence is reported only when the frozen workflow supplies it.
+Existing HTML dashboards remain untouched and their public trees still resolve.
 
 Provider-reported cache read/write tokens are already retained in the LLM request
 ledger. The reporter uses complete totals only for complete request coverage;

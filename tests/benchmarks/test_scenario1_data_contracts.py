@@ -10,7 +10,6 @@ import httpx
 import pytest
 
 from benchmarks.common.contracts import CaseExecution, RuntimeMetrics, decode, digest, write_new
-from benchmarks.scenario1.__main__ import parser
 from benchmarks.scenario1.core.classification import (read_run_designation, write_run_classification,
                                                 RECORD_NAME)
 from benchmarks.scenario1.core.evaluate import evaluate
@@ -114,13 +113,6 @@ def test_default_run_kind_smoke_rejection_and_legacy_interpretation(
         tmp_path, monkeypatch, capsys, op, settings):
     from benchmarks.scenario1.core import runner
     monkeypatch.setattr(runner, 'reproducibility', lambda: {'offline': True})
-    parsed = parser().parse_args(['run', '--dataset', 'unused', '--case', op.case_id,
-        '--target', settings.target, '--context-path', settings.context_path,
-        '--target-state', settings.target_state])
-    assert parsed.run_kind == 'development'
-    assert parser().parse_args(['run', '--dataset', 'unused', '--case', op.case_id,
-        '--target', settings.target, '--context-path', settings.context_path,
-        '--target-state', settings.target_state, '--run-kind', 'official']).run_kind == 'official'
     manifest = single_manifest(op, settings)
     destination = tmp_path / 'default'
     public = destination
@@ -151,9 +143,9 @@ def test_default_run_kind_smoke_rejection_and_legacy_interpretation(
             launcher=lambda *_: pytest.fail('worker launched'))
     assert not (tmp_path / 'rejected').exists()
     from benchmarks.scenario1.__main__ import main
-    assert main(['run', '--dataset', str(tmp_path / 'dataset'), '--manifest', str(smoke / 'manifest.json'),
+    assert main(['run', '--mode', 'official', '--dataset', str(tmp_path / 'dataset'), '--manifest', str(smoke / 'manifest.json'),
         '--target', settings.target, '--context-path', settings.context_path,
-        '--target-state', settings.target_state, '--authorized-lab', '--run-kind', 'official',
+        '--target-state', settings.target_state, '--authorized-lab',
         '--output', str(tmp_path / 'cli-rejected')]) == 2
-    assert 'smoke run cannot be official' in capsys.readouterr().err
+    assert 'frozen 40-case official' in capsys.readouterr().err
     assert not (tmp_path / 'cli-rejected').exists()

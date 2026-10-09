@@ -6,11 +6,9 @@ from dataclasses import asdict, replace
 import ctypes
 import errno
 import hashlib
-import json
 import os
 from pathlib import Path
 from threading import Barrier
-import re
 
 import pytest
 
@@ -41,18 +39,11 @@ def frozen(tmp_path, op, settings):
     return root, public, legacy, evaluation, before
 
 
-def html_payload(public):
-    text = (public / 'index.html').read_text()
-    match = re.search(r'<script type="application/json" id="report-data">(.*?)</script>', text)
-    assert match is not None
-    return json.loads(match.group(1))
-
-
 def test_separated_public_tree_and_offline_roundtrip(tmp_path, op, settings):
     root, public, legacy, evaluation, before = frozen(tmp_path, op, settings)
     baseline = load_report(legacy)
     assert writer.write_report(root) == public
-    assert {p.name for p in public.iterdir()} == {'index.html', 'report', 'results'}
+    assert {p.name for p in public.iterdir()} == {'report', 'results'}
     assert not (public / 'results/evidence').exists()
     assert not list(public.rglob('.kagent-report-*'))
     assert {'manifest.json', 'run-classification.json', 'storage.json', 'results', 'evaluations',
@@ -69,6 +60,7 @@ def test_separated_public_tree_and_offline_roundtrip(tmp_path, op, settings):
     assert case['case_id'] == op.case_id
     assert case['canonical']['result_sha256'] == file_hash(root / 'results' / f'{op.case_id}.json')
     assert case['projection_binding'] == digest({k: v for k, v in case.items() if k != 'projection_binding'})
+    assert index['schema'] == 'scenario1-public-results-v3'
     assert index['storage_id'] == root.name
     assert index['run_id'] == baseline.metadata['run_id']
     assert not Path(index['internal_ref']).is_absolute()
@@ -215,7 +207,7 @@ def test_wsl_backing_is_internal(tmp_path, monkeypatch, op, settings, code):
     writer.write_report(root)
     assert public.is_symlink()
     assert public.resolve().parent == root / 'publications'
-    assert {p.name for p in public.iterdir()} == {'index.html', 'report', 'results'}
+    assert {p.name for p in public.iterdir()} == {'report', 'results'}
     assert resolve_run(public) == root
     assert len(list((root / 'publications').iterdir())) == 1
 
@@ -328,7 +320,7 @@ def test_interrupted_and_blocked_forensics_and_resume(tmp_path, monkeypatch, op,
     evaluation = evaluate(root)
     assert evaluation['incomplete'] and evaluation['records'][0]['partition'] == 'execution-failed'
     writer.write_report(root)
-    assert html_payload(public)['metadata']['execution_state'] == ('blocked' if blocked else 'interrupted')
+    assert read_json(public / 'report/report.json')['execution_state'] == ('blocked' if blocked else 'interrupted')
     assert load_report(public).metadata['incomplete'] is True
     # Resume resolves all layouts and always allocates a fresh execution.
     resumed = run(single_manifest(op, settings), settings, tmp_path / 'resumed',
@@ -364,7 +356,7 @@ def test_blocked_after_all_finishes_is_not_complete(tmp_path, op, settings):
     evaluation = evaluate(root)
     assert evaluation['incomplete'] is False  # preserve canonical v1 meaning
     public = writer.write_report(root)
-    metadata = html_payload(public)['metadata']
+    metadata = read_json(public / 'report/report.json')
     assert metadata['execution_state'] == 'blocked' and metadata['execution_complete'] is False
 
 
@@ -403,10 +395,9 @@ def test_cli_selection_execution_evaluation_and_offline_report(tmp_path, monkeyp
     from benchmarks.scenario1.reset import client
     from tests.benchmarks.test_scenario1 import make_dataset
     dataset = make_dataset(tmp_path / 'dataset')
-    cid = dataset.truth[0].case_id
-    assert main(['select', '--dataset', str(dataset.root), '--case', cid]) == 0
+    assert main(['select', '--dataset', str(dataset.root), '--mode', 'smoke']) == 0
     selection = next((storage_root() / 'selections').iterdir())
-    assert read_json(selection)['execution_order'] == [cid]
+    assert len(read_json(selection)['execution_order']) == 12
     real_run = runner.run
     monkeypatch.setattr(runner, 'reproducibility', lambda: {'offline': True})
     monkeypatch.setattr(client, 'ResetController', lambda _: Controller())
@@ -416,7 +407,7 @@ def test_cli_selection_execution_evaluation_and_offline_report(tmp_path, monkeyp
     public = tmp_path / 'artifacts/benchmarks/cli-run'
     reset_state = tmp_path / 'mocked-reset.json'
     write_new(reset_state, {})
-    args = ['run', '--dataset', str(dataset.root), '--manifest', str(selection),
+    args = ['run', '--mode', 'smoke', '--dataset', str(dataset.root), '--manifest', str(selection),
             '--target', 'http://127.0.0.1:3000', '--context-path', '/benchmark',
             '--authorized-lab', '--target-state', 'external-reset', '--reset-state', str(reset_state),
             '--output', str(public)]
@@ -429,7 +420,7 @@ def test_cli_selection_execution_evaluation_and_offline_report(tmp_path, monkeyp
     assert main(['report', '--run', str(root), '--output', str(second)]) == 0
     assert resolve_run(second) == root
     assert (root / 'events.jsonl').read_bytes() == history
-    assert {p.name for p in second.iterdir()} == {'index.html', 'report', 'results'}
+    assert {p.name for p in second.iterdir()} == {'report', 'results'}
 
 
 def test_execution_does_not_write_personal_or_original_artifacts(tmp_path, monkeypatch, op, settings):

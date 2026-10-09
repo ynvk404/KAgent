@@ -231,11 +231,16 @@ def test_operator_runner_preserves_reset_sequence_and_worker_boundary(deployment
 
 
 def test_cli_operator_dry_run_never_reads_docker(tmp_path, monkeypatch, capsys):
+    from dataclasses import asdict
+    from benchmarks.common.contracts import write_new
     from benchmarks.scenario1.__main__ import main
+    from benchmarks.scenario1.core.dataset import select
     from tests.benchmarks.test_scenario1 import make_dataset
-    make_dataset(tmp_path / 'dataset')
+    dataset = make_dataset(tmp_path / 'dataset')
+    selection = tmp_path / 'selection.json'
+    write_new(selection, asdict(select(dataset, 'dry-run', 'smoke')))
     monkeypatch.setattr(module, 'docker', lambda *_: pytest.fail('dry-run Docker read'))
-    args = ['run', '--dataset', str(tmp_path / 'dataset'), '--case', 'BenchmarkTest00001',
+    args = ['run', '--mode', 'smoke', '--dataset', str(tmp_path / 'dataset'), '--manifest', str(selection),
             '--target', 'http://127.0.0.1:18080', '--context-path', '/benchmark', '--authorized-lab',
             '--target-state', 'external-reset', '--container', 'operator-benchmark', '--dry-run']
     assert main(args) == 2

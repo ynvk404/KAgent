@@ -143,6 +143,7 @@ venv-linux/bin/python -m benchmarks.scenario1 select \
   --output artifacts/benchmarks/scenario1-smoke-1729/manifest.json
 
 venv-linux/bin/python -m benchmarks.scenario1 run \
+  --mode smoke \
   --dataset /mnt/d/DOANTOTNGHIEP/benchmark-targets/BenchmarkJava \
   --manifest artifacts/benchmarks/scenario1-smoke-1729/manifest.json \
   --target http://127.0.0.1:18080 --context-path /benchmark --authorized-lab \
