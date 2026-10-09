@@ -447,6 +447,18 @@ toward the same syntax-adjustment limit, not a new budget. Record the supported
 position or uncertainty in `injection_context`; do not force both variants when
 parser evidence already rules one out.
 
+When a captured database diagnostic shows the inserted value inside a SQL
+string literal, keep that quoted-string hypothesis unless later observations
+contradict it. Quote characters echoed in ordinary application text do not
+establish SQL context. If the diagnostic omits the insertion point or admits
+multiple shapes, retain an ambiguous context and state the alternatives.
+After consecutive probes return the same expression-type error, compare their
+captured diagnostics and reconsider the quote/input-position hypothesis before
+another request. A type error is distinct from a syntax error, a successful-write
+acknowledgement, and controlled SQL evaluation. Use the remaining syntax-shape
+adjustments only for a discriminating context-compatible probe; do not restart
+the allowance or require every technique.
+
 **Detecting second-order candidates.** Most Phase 1–2 probes are
 first-order: the payload is sent and its effect observed in the same
 request/response cycle. A candidate is second-order instead when the
@@ -721,7 +733,7 @@ Every candidate gets exactly one outcome:
 
 ### Evidence-to-decision checkpoint
 
-Immediately before registering proof and submitting a `confirmed` result,
+Immediately before registering proof and submitting any terminal assessment,
 establish these five points from the recorded evidence:
 
 - State the observed statement shape and input position (or supported
@@ -760,6 +772,33 @@ controlled evaluation of the proposed technique.
 Recheck mutation/cleanup bookkeeping for the entire attempt, including
 baseline successful-write acknowledgements, under the state-changing endpoint
 contract above. Record readback limitations and honest cleanup state.
+
+Maintain a compact baseline/control/probe ledger from each captured HTTP result:
+observation ID, effective method/URL, redacted request payload, HTTP status,
+relevant body excerpt, completeness/truncation and execution status. The runtime
+HTTP evidence envelope supplies the effective request preview, including replay
+changes; `request_preview_complete: false` means unseen request text remains
+unknown. A source ID or request hash alone does not recover a payload or body.
+Read retained output through an available evidence-reading API when a real
+reference exists; never invent a reader or bypass its gates. If capture or
+context reduction omitted required bytes and they cannot be retrieved, record
+that limitation rather than reconstructing them from intended payloads,
+Markdown proof or conversation memory. Check every claimed repetition against
+distinct executed observations: repeating a sentence, registering another
+snapshot or reusing an observation ID does not establish repeatability.
+
+Before choosing primary sources, check current candidate/attempt ownership,
+capture flags and support for each claim. Metadata-only captures cannot prove
+response content. After an admissibility rejection, inspect already captured
+usable observations first. If the primary parent set changes, correct the
+candidate entry and every dependent claim/excerpt, then call `record_evidence`
+with the correct `observation_ids` to register a new immutable snapshot. Replace
+`evidence_refs` before resubmitting; removing an ID from `record_result` alone
+does not repair its derived proof. Never edit registered snapshots in place or
+reuse a source from another attempt. Allow at most one repair submission within
+the existing recovery budget; do not reset it or send new HTTP probes solely to
+repair a manifest. If a valid repair is unavailable, record
+`insufficient-evidence` and stop.
 
 ### Standard result entry template
 

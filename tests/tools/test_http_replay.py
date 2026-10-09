@@ -82,6 +82,8 @@ async def test_captured_replay_approves_and_sends_exact_mutated_request(monkeypa
     prompter = Allow()
     args = {"phase": "validation", "candidate_id": candidate.id, "mutation_value": "new"}
     prepared, expected = tool.prepare(args)
+    from src.permission.runtime.observations import ObservationStore
+    tool.evidence_store = ObservationStore()
     output = await tool.run(args, None, prompter)
     assert len(seen) == 1
     assert seen[0].method == expected.method == prepared.method
@@ -94,6 +96,22 @@ async def test_captured_replay_approves_and_sends_exact_mutated_request(monkeypa
     assert "csrf-private" not in str(output)
     assert prompter.requests and "csrf-private" not in prompter.requests[0].detail
     assert "mutation: body q" in output
+    line = next(line for line in output.splitlines() if line.startswith('Runtime HTTP evidence '))
+    receipt = json.loads(line.split(': ', 1)[1])
+    observation = tool.evidence_store._items[receipt['observation_id']]
+    assert receipt['method'] == 'POST' and receipt['url'] == prepared.url
+    assert receipt['request_preview_complete']
+    preview = output.split('Effective request preview (redacted):\n', 1)[1].split(
+        '\nEnd effective request preview\n', 1)[0]
+    assert json.loads(preview.split('\n\n', 1)[1])['q'] == 'new'
+    assert receipt['request_body_bytes'] == len(expected.content)
+    assert observation.source_details is not None
+    assert bytes.fromhex(observation.source_details['request_preview_hex']).decode() == preview
+    from src.agent.agent import safe_tool_text
+    safe_handoff = safe_tool_text(json.dumps(observation.source_details), 'unavailable')
+    assert json.loads(safe_handoff) == observation.source_details
+    for secret in ('csrf-private', 'sid=private'):
+        assert secret not in output and secret not in json.dumps(observation.source_details)
 
 
 @pytest.mark.asyncio

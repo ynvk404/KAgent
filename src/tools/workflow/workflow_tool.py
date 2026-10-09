@@ -967,7 +967,7 @@ class WorkflowTool(Tool):
                     raise ValueError("generic fallback lacks declared criteria; submit unresolved")
             manifest = resolve_sources(policy, self.state, candidate, attempt, ids,
                 terminal=terminal, negative=result.outcome == "not-confirmed", store=self.observations)
-            check_excerpts(assessment, manifest)
+            check_excerpts(assessment, manifest, terminal=terminal)
             if terminal and not any(e["source"]["source_kind"] in {"native-http", "imported-capture"}
                     and e["source"].get("complete") and not e["source"].get("truncated")
                     and e["source"].get("execution_status") == "completed" for e in manifest):

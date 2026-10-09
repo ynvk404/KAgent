@@ -92,6 +92,31 @@ class EvidenceAdmissibilityError(ValueError):
     """A manifest repair error, distinct from a missing validation step."""
 
 
+def require_usable_source(row):
+    if usable_source(row):
+        return
+    reasons = []
+    if row.get("truncated") is True:
+        reasons.append("truncated")
+    if row.get("complete") is not True:
+        reasons.append("incomplete")
+    if row.get("execution_status") != "completed":
+        reasons.append("execution unfinished")
+    # Fixed guidance and controller ID only; never echo captured secrets.
+    raise EvidenceAdmissibilityError(
+        f"evidence-admissibility: source {row['id']} unusable ({', '.join(reasons)}). "
+        "Terminal assessment requires completed usable primary evidence. "
+        "Read this rejection; select only usable observations supporting the assessment. "
+        "When parents change, correct the source proof and dependent claims/excerpts, "
+        "then record_evidence again with the correct observation_ids for a new immutable snapshot. "
+        "Replace evidence_refs before resubmitting; removing a source ID alone cannot repair derived proof. "
+        "Retry at most once using existing evidence. Do not edit registered snapshots in place. "
+        "Do not add probes just to repair a manifest when existing evidence suffices. "
+        "If evidence is insufficient, submit insufficient-evidence; continue validation only "
+        "for a separately identified missing validation step."
+    )
+
+
 def check_source_requirements(candidate, attempt, rows, *, terminal):
     associations = request_associations(attempt)
     for entry in rows:
@@ -99,25 +124,8 @@ def check_source_requirements(candidate, attempt, rows, *, terminal):
         role, required = source_association(candidate, attempt, row, associations)
         if row.get("role") != role or row.get("required", True) is not required:
             raise ValueError("primary source association mismatch")
-        if terminal and required and not usable_source(row):
-            reasons = []
-            if row.get("truncated") is True:
-                reasons.append("truncated")
-            if row.get("complete") is not True:
-                reasons.append("incomplete")
-            if row.get("execution_status") != "completed":
-                reasons.append("execution unfinished")
-            # Only a controller-produced opaque ID and fixed reason strings;
-            # never response text, request values or credential-bearing URLs.
-            raise EvidenceAdmissibilityError(
-                f"evidence-admissibility: source {row['id']} unusable ({', '.join(reasons)}). "
-                "Terminal assessment requires completed usable primary evidence. "
-                "Read this rejection; select only usable observations supporting the assessment. "
-                "Retry at most once using existing evidence, repairing derived artifacts if needed. "
-                "Do not add probes just to repair a manifest when existing evidence suffices. "
-                "If evidence is insufficient, submit insufficient-evidence; continue validation only "
-                "for a separately identified missing validation step."
-            )
+        if terminal and required:
+            require_usable_source(row)
     if terminal:
         for key, request in associations.items():
             if request.get("required", True) and not any(
@@ -325,7 +333,7 @@ def accepted_result(state, candidate, result, policy=None) -> bool:
     return artifacts == [state.evidence[ref].to_dict() for ref in result.evidence_refs]
 
 
-def check_excerpts(assessment, manifest):
+def check_excerpts(assessment, manifest, *, terminal=False):
     excerpts = assessment.get("excerpts", [])
     if not isinstance(excerpts, list) or len(excerpts) > 16:
         raise ValueError("excerpts must be a bounded list")
@@ -336,6 +344,10 @@ def check_excerpts(assessment, manifest):
         source = parents.get(excerpt["source_id"])
         if source is None:
             raise ValueError("excerpt parent source unavailable")
+        # Optional request metadata may be retained, but citing its body makes
+        # completeness relevant even when the request was not required.
+        if terminal:
+            require_usable_source(source)
         start, end = excerpt["start"], excerpt["end"]
         body = bytes.fromhex(source["body"])
         if (type(start) is not int or type(end) is not int or not 0 <= start < end <= len(body)

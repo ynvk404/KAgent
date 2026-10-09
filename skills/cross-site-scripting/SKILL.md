@@ -421,7 +421,7 @@ variety to force a result.
 
 ## 5. Record the validation evidence
 
-Immediately before recording a `confirmed` XSS result, verify the actual
+Immediately before recording any terminal XSS assessment, verify the actual
 captured response bytes and surrounding context, including every delimiter
 needed by the claimed executable syntax. Compare the returned syntax with the
 request; do not substitute the intended payload or an LLM-reconstructed HTML
@@ -437,6 +437,34 @@ its actual response. If complete executable syntax or another permitted
 confirmation condition is not established, do not claim confirmed execution.
 Deterministic HTTP-based confirmation remains sufficient when step 3's context
 and proof conditions hold; a browser is not universally required.
+
+Keep a compact observation ledger linking detection marker, execution marker
+and the one permitted close variant to their effective requests, observation
+IDs, HTTP statuses, body excerpts and capture flags. The runtime HTTP evidence
+envelope supplies a redacted effective request preview; if
+`request_preview_complete: false`, unseen request text remains unknown. Compare
+distinct captured requests before calling a transformation deterministic or
+claiming repetition. Inspect the actual Content-Type, surrounding syntax,
+encoding, inert context and CSP for each response. Neither raw reflection nor
+HTML fragment parsing alone establishes execution; deterministic HTTP proof
+establishes exploitability under step 3, not observed browser execution.
+
+Select primary sources with current candidate/attempt ownership, completed
+execution and complete, untruncated captures that support the cited claims.
+Metadata-only capture cannot prove response content. When required bytes were
+omitted, use an available evidence-reading API only with a real reference and
+its existing gates; if retrieval is unavailable, state the limitation rather
+than reconstructing the response from the intended payload or conversation.
+After admissibility rejection, inspect usable observations already captured.
+Changing the primary parent set requires correcting the source proof and
+dependent claims/excerpts, then `record_evidence` with the correct
+`observation_ids` for a new immutable snapshot and replacing `evidence_refs`
+before resubmitting. Removing an observation ID alone leaves derived proof
+stale. Never edit registered snapshots in place or borrow another attempt's
+sources. Use at most one repair submission within the existing recovery budget,
+without new HTTP probes solely for manifest repair or resetting the budget.
+If valid repair is unavailable, record `insufficient-evidence` and stop;
+retain `browser-required` when the missing proof is browser execution.
 
 Every candidate gets exactly one outcome:
 

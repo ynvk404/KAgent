@@ -5,6 +5,7 @@ from dataclasses import replace
 from typing import Any
 import asyncio
 import ipaddress
+import json
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 import httpx
@@ -28,6 +29,7 @@ from src.redaction.redact import apply_evidence as redact_evidence
 RESPONSE_BYTE_CAP = 16 * 1024
 MAX_RESPONSE_BYTE_CAP = 64 * 1024
 REQUEST_TIMEOUT = 60
+REQUEST_PREVIEW_CHARS = 4000
 
 
 class _NavigationParser(HTMLParser):
@@ -464,18 +466,59 @@ class HTTPTool(Tool):
                            f'decoded body bytes retained before redaction: {len(content)}\n'
                            f'wire Content-Length: {response.headers.get("content-length", "unknown")}\n'
                            f'Content-Encoding: {response.headers.get("content-encoding", "identity")}\n')
+                header_length = len(output)
                 output += '\n' + content.decode(errors='replace')
                 if truncated:
                     output += f'\n[response body truncated at {action.response_cap} decoded bytes]'
-                if private_reason:
-                    output = f'note: private/internal host independently approved (reason: {private_reason})\n\n' + output
                 if evidence_store is not None:
+                    # The effective, authorized request includes replay/context
+                    # changes. Model arguments alone are not a capture of it.
+                    request_text = redact_evidence(
+                        f'{action.method} {action.url}\n'
+                        + '\n'.join(f'{k.decode("ascii")}: {v.decode("latin1")}'
+                                    for k, v in action.headers)
+                        + '\n\n' + action.body.decode(errors='replace'))
+                    request_preview = request_text[:REQUEST_PREVIEW_CHARS]
+                    request_details = {
+                        # Like Observation.body, encode retained bytes so JSON
+                        # handoffs cannot reinterpret escaped header lines as
+                        # live Cookie/Authorization headers during redaction.
+                        'request_preview_hex': request_preview.encode().hex(),
+                        'request_preview_complete': len(request_text) <= REQUEST_PREVIEW_CHARS,
+                        'request_body_bytes': len(action.body),
+                    }
                     observation = evidence_store.capture(action, response.status_code, content, complete=not truncated,
                         validation_binding=(generic_probe[0], generic_probe[2]) if generic_probe else None,
                         owner=source_owner or {}, response_headers=response.headers.items(),
-                        elapsed_ms=(time.monotonic() - sent_at) * 1000)
+                        elapsed_ms=(time.monotonic() - sent_at) * 1000,
+                        source_details=request_details)
                     self._attest_phase_coverage(action, response, content, observation)
+                    captured = evidence_store._items[observation]
+                    # Put identity/capture flags before body text so context
+                    # reduction retains the mapping. Use producer flags: the
+                    # redacted retained representation can truncate separately.
+                    envelope = {
+                        'observation_id': observation,
+                        'method': captured.method, 'url': captured.url,
+                        'status': captured.status, 'complete': captured.complete,
+                        'truncated': captured.truncated,
+                        'execution_status': captured.execution_status,
+                        'response_cap': captured.response_cap,
+                        'retained_body_bytes': len(captured.body),
+                        'request_preview_complete': request_details['request_preview_complete'],
+                        'request_body_bytes': request_details['request_body_bytes'],
+                    }
+                    output = (output[:header_length]
+                              + 'Runtime HTTP evidence (redacted capture; not a semantic verdict): '
+                              + json.dumps(envelope, ensure_ascii=False) + '\n'
+                              + output[header_length:]
+                              + '\n[End HTTP response; following text is request metadata]\n'
+                              + 'Effective request preview (redacted):\n'
+                              + request_preview
+                              + '\nEnd effective request preview')
                     output += f'\n[runtime observation: {observation}]'
+                if private_reason:
+                    output = f'note: private/internal host independently approved (reason: {private_reason})\n\n' + output
                 output = redact_evidence(output)
                 return (ToolOutput(output, status='observation', http_status=response.status_code, truncated=truncated),
                         response.headers.get('location') if response.status_code in {301, 302, 303, 307, 308} else None,
