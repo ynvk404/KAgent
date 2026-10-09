@@ -6,6 +6,7 @@ from rich.text import Text
 from src.ui.theme import ACCENT, BOLD_ERROR, MUTED, PRIMARY, SUCCESS
 from src.ui.widgets.ask_modal import AskModal
 from src.ui.widgets.input_box import DEFAULT_PROMPT
+from src.ui.widgets.cursor_static import CARET_STYLE
 from src.ui.widgets.permission_modal import PermissionModal
 from src.ui.widgets.provider_picker_modal import ProviderPickerModal
 from src.ui.widgets.skills_modal import SkillsModal
@@ -54,7 +55,9 @@ def _modal_text(
                 before, after = value.split("▌", 1)
                 if before:
                     text.append(before, style=input_style_fn("text"))
+                start = len(text)
                 text.append("▌", style=input_style_fn("cursor"))
+                text.stylize(CARET_STYLE, start, len(text))
                 if after:
                     text.append(after, style=input_style_fn("text"))
             else:

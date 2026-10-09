@@ -104,6 +104,7 @@ from src.ui.widgets.ask_modal import AskModal
 from src.ui.widgets.ask_modal import ASK_MODAL_VISIBLE_CAP, AskModal
 from src.ui.widgets.banner import Banner, BannerData
 from src.ui.widgets.input_box import DEFAULT_PROMPT, InputBox
+from src.ui.widgets.cursor_static import CARET_STYLE, CursorStatic
 from src.ui.widgets.mention_menu import MentionMenu
 from src.ui.widgets.permission_modal import PermissionModal
 from src.ui.widgets.provider_picker_modal import ProviderPickerModal
@@ -279,7 +280,7 @@ def _clean_permission_selection(text: str) -> str:
     return "\n".join(cleaned).strip()
 
 
-class _InputStatic(Static):
+class _InputStatic(CursorStatic):
     def __init__(self) -> None:
         super().__init__(id="input-box")
         self.value = ""
@@ -288,7 +289,7 @@ class _InputStatic(Static):
         return _input_selection_text(self.value, selection), "\n"
 
 
-class _PermissionStatic(Static):
+class _PermissionStatic(CursorStatic):
     """A selectable Static for permission renderables such as Rich Panels."""
 
     def __init__(self) -> None:
@@ -1208,7 +1209,10 @@ class KAgent(App):
             if i > 0:
                 text.append("\n")
             for seg in line.segments:
+                start = len(text)
                 text.append(seg.text, style=_input_style(seg.style))
+                if seg.style in {"cursor", "cursor_char"}:
+                    text.stylize(CARET_STYLE, start, len(text))
         self.input_static.value = self.input.value
         self.input_static.update(text)
 

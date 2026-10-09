@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from rich.console import Console
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.selection import Selection
@@ -619,11 +621,19 @@ def test_free_text_modal_uses_composer_prompt_styles() -> None:
     assert isinstance(rendered, Text)
 
     assert "Answer:\n❯ x▌" in rendered.plain
-    assert [span.style for span in rendered.spans] == [
-        "bold #38BDF8",
-        "#D6DEE8",
-        "bold #D6DEE8",
-    ]
+    # Check the visible styles, allowing nonvisual caret metadata spans.
+    console = Console()
+    answer_start = rendered.plain.index("Answer:")
+    for character, expected in (
+        ("❯", "bold #38BDF8"),
+        ("x", "#D6DEE8"),
+        ("▌", "bold #D6DEE8"),
+    ):
+        offset = rendered.plain.index(character, answer_start)
+        actual_style = rendered.get_style_at_offset(console, offset)
+        expected_style = Style.parse(expected)
+        assert actual_style.color == expected_style.color
+        assert actual_style.bold == expected_style.bold
 
 
 def test_input_selection_excludes_prompt_and_border() -> None:
