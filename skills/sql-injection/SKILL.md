@@ -350,10 +350,15 @@ successful write acknowledgement such as `Update complete` is evidence that
 the server reports a write, even if no optional impact exploit was intended.
 Record this observation in the narrative; never assert that no data was written
 when the response reports successful write execution. `mutation_performed`
-tracks mutation during the validation attempt and drives cleanup bookkeeping;
-use true when target state mutation was caused/observed, including baseline
-writes, with honest cleanup status. An acknowledgement does not independently
-verify affected rows or persistent state: state those limits explicitly.
+tracks mutation during the validation attempt and drives cleanup bookkeeping.
+Distinguish a write-capable request from a server-reported successful write
+and from independently verified affected rows or persistent state. Set
+`mutation_performed: true` for an explicit successful-write acknowledgement,
+including baseline writes, and record honest cleanup status even when readback
+is unavailable. An acknowledgement does not independently verify affected rows
+or persistent state: state those limits explicitly. A POST, HTTP 200, or merely
+write-capable request alone does not establish mutation. Cleanup still requires
+separate authority; reporting a write does not authorize automatic cleanup.
 
 If writes are observed or the endpoint is known to be state-changing, stop
 further stateful probes unless the profile has valid isolation and cleanup.
@@ -419,7 +424,8 @@ is enough to establish **SQLI-1** — a syntax-sensitivity signal — but is not
 by itself confirmation; Phase 2 is required before reporting SQLI-2.
 
 Before changing quote, parenthesis, or comment syntax, write down the query
-shape implied by the latest database error and choose the next single probe
+shape supported by the latest database error (or `unknown` / a justified
+hypothesis when ambiguous) and choose the next single probe
 that distinguishes the remaining possibilities. Do not walk a punctuation
 list (`--`, `-- `, `/*`, `')`, `'))`, and so on) one request at a time without
 using the returned parser position/message. Cap syntax-shape adjustments at
@@ -428,21 +434,18 @@ bounded confirmation technique or record the result as inconclusive.
 
 If neither the single-quote probe nor any variant in the Phase 1 section
 produces any observable change from baseline, that's a valid outcome. Don't
-conclude SQL injection is absent from one probe alone — continue into
-Phase 2's boolean-based check, which can surface injection that a syntax
-probe alone misses (e.g. numeric contexts where a stray quote is silently
-tolerated or stripped).
+conclude SQL injection is absent from one probe alone — continue into an
+applicable Phase 2 technique. A context-compatible boolean-based check can
+surface injection that a syntax probe alone misses (e.g. numeric contexts
+where a stray quote is silently tolerated or stripped).
 
-**Quoted vs. numeric context — try both systematically, don't guess.** If
-it isn't yet clear from the parameter's observed data type (e.g. an ID that
-always looks numeric vs. a value that's rendered inside quotes elsewhere in
-the app) whether the injection point sits in a quoted-string or a bare
-numeric context, don't assume one and skip the other. Try a
-quoted-string-style variant (e.g. `1' AND '1'='1`) and a bare numeric
-variant (e.g. `1 AND 1=1`) as a pair before concluding either is
-inapplicable — recording which one produced a signal is what fills in
-`injection_context` in the results template later, rather than guessing it
-after the fact.
+**Quoted vs. numeric context — use observed SQL evidence.** A numeric-looking
+input or a value rendered inside quotes elsewhere does not establish its SQL
+position. When both positions remain plausible, a bounded quoted-string-style
+and bare numeric comparison may help distinguish them; these requests count
+toward the same syntax-adjustment limit, not a new budget. Record the supported
+position or uncertainty in `injection_context`; do not force both variants when
+parser evidence already rules one out.
 
 **Detecting second-order candidates.** Most Phase 1–2 probes are
 first-order: the payload is sent and its effect observed in the same
@@ -472,12 +475,46 @@ techniques in order of intrusiveness. Stop at the first one that gives you
 a clear, reproducible signal — don't run every technique against every
 candidate.
 
+Select a technique using the SQL context supported by target evidence:
+
+- **Statement shape:** SELECT, INSERT, UPDATE, DELETE, or `unknown`.
+- **Input position:** quoted string, numeric expression, predicate, identifier,
+  or another supported expression; record `unknown` or a justified hypothesis
+  when the evidence does not resolve it.
+- **Probe compatibility:** explain why the proposed expression is syntactically
+  meaningful at that position and how its evaluation would be observable.
+
+Record this uncertainty in existing fields such as `injection_context` or in
+`notes`; `unknown` describes SQL context, not a validation outcome. Do not
+introduce new fields or outcomes for it.
+
+Do not infer SQL structure solely from HTTP method, endpoint name, or parameter
+name, or require reconstruction of the full query before testing. Repeated
+expression-type or syntax mismatches call for reconsidering the technique,
+not cycling through equivalent AND/OR payloads. Boolean evaluation can occur
+in INSERT/VALUES contexts; its applicability depends on the expression and
+observable effect, not a blanket statement-type rule. Preserve the existing
+attempt limits and state-changing endpoint isolation/cleanup guard.
+
+Distinguish syntax sensitivity (SQLI-1), a plausible candidate, and confirmed
+SQLI-2. Repeated malformed syntax errors or different parser messages alone
+do not establish SQLI-2. For error-based confirmation, explain which observed
+response characteristics demonstrate meaningful, controlled SQL evaluation
+rather than merely altered parsing, such as an error containing the evaluated
+result of a controlled, non-sensitive expression. A reproducible error response
+can itself supply sufficient evidence; no additional state change, impact test,
+or boolean differential is required when a supported technique already proves
+SQLi. Boolean, error-based, bounded UNION-based, time-based, and other applicable
+techniques remain valid within the existing proof bounds and capability gates.
+
 ### 2a. Boolean-based differential check
 
-Use this as the minimum confirmation step after a Phase 1 signal, including a
-clear error-based SQLI-1 signal, because Phase 1 alone does not establish
-SQLI-2. It also applies when 1b was absent or ambiguous but the surrounding
-context still suggests the query shape may be controllable. Use the `PHASE 2 — VALIDATION` section of
+When boolean probes fit the observed SQL context, use this as a minimum
+confirmation step, including after a clear error-based SQLI-1 signal: Phase 1
+syntax sensitivity alone does not establish SQLI-2. It also applies when 1b
+was absent or ambiguous but the surrounding context suggests an observable
+boolean evaluation. A TRUE/FALSE pair is required for boolean confirmation,
+not for every SQLi technique. Use the `PHASE 2 — VALIDATION` section of
 `payloads.txt` for the paired TRUE/FALSE probes — send a logically TRUE and
 a logically FALSE request, otherwise identical to each other and to the
 baseline.
@@ -579,7 +616,7 @@ here is binary (did a callback happen or not), not extractive.
 
 ### Bound the proof — do not escalate into extraction
 
-Once Phase 2 (via 2a, 2b, or — if available and authorized — 2d) gives a
+Once an applicable Phase 2 confirmation technique gives a
 clear, repeatable positive signal (SQLI-2), stop further confirmation probes
 and payload escalation for that candidate. Do not automatically move into
 extraction or post-exploitation. Phase 3 remains available only when its
@@ -684,11 +721,26 @@ extraction by default.
 
 Every candidate gets exactly one outcome:
 
-- `confirmed` with `SQLI-2` in `techniques` — a technique actually available in this environment (2a or 2b, or 2d when that capability exists) produced a clear, repeatable positive signal, bounded per "Bound the proof" above;
+- `confirmed` with `SQLI-2` in `techniques` — an applicable technique actually available in this environment (boolean, error-based, bounded UNION-based, time-based, or OOB only when its capability and authorization gates pass) produced a clear, repeatable positive signal, bounded per "Bound the proof" above;
 - `confirmed` with `SQLI-3` in `techniques` — SQLI-2 plus a minimal, authorized impact probe from Phase 3 succeeded;
 - `not-confirmed` — the applicable confirmation techniques available in this environment were tried as required by the workflow (per the "stop at the first clear signal" rule — this does not mean every technique must be run against every candidate), and none produced a clear, repeatable SQL injection signal. OOB is included only when its capability check passed and the user authorized it;
 - `blocked` — a probe was intercepted by a WAF, rate-limiter, or challenge page before reaching the application (step 2c); the application itself was never actually tested;
 - `deferred` — behavior indicates NoSQL/operator injection rather than SQL injection (per Scope, above); put that reason in `deferred_reason`.
+
+Before registering evidence or recording the result:
+
+- Verify each cited `observation_id` against its corresponding request and
+  response: method, URL, actual payload/marker, status, and the response
+  characteristics supporting the conclusion. Include baseline observations
+  whenever the conclusion depends on baseline behavior.
+- Select supporting observations that match the recorded conclusion; never
+  claim a request, probe, differential, or technical result that was not
+  actually observed. Use existing `evidence_refs` and assessment excerpts
+  where appropriate, keeping excerpts consistent with their cited sources.
+- Recheck mutation/cleanup bookkeeping for the entire attempt, including
+  baseline successful-write acknowledgements. Distinguish server-reported
+  writes from independently verified state and record readback limitations;
+  do not mark cleanup complete without evidence or perform it automatically.
 
 ### Standard result entry template
 

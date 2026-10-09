@@ -284,8 +284,10 @@ class TestScopeBounds:
         section = skill_text.split("### 2a. Boolean-based differential check", 1)[1]
         section = section.split("### 2b. Time-based check", 1)[0]
         normalized = _norm(section)
-        assert "including a clear error-based SQLI-1 signal" in normalized
-        assert "Phase 1 alone does not establish SQLI-2" in normalized
+        assert "When boolean probes fit the observed SQL context" in normalized
+        assert "clear error-based SQLI-1 signal" in normalized
+        assert "syntax sensitivity alone does not establish SQLI-2" in normalized
+        assert "not for every SQLi technique" in normalized
 
     def test_boolean_confirmation_requires_structured_repeated_pairs(self, skill_text: str):
         normalized = _norm(skill_text)
@@ -836,3 +838,74 @@ def test_stateful_and_evidence_repair_contract(skill_text):
                  'Do not generate fresh probes just to repair the manifest'):
         assert rule in prose
     assert 'BenchmarkTest' not in skill_text
+
+
+class TestContextAndEvidenceGuidance:
+    """Static guidance regressions; these do not model or prove LLM reasoning."""
+
+    def test_context_selection_uses_statement_position_and_compatibility(self, skill_text):
+        section = _norm(skill_text.split("## Phase 2: Validation", 1)[1]
+                        .split("### 2a.", 1)[0]).lower()
+        for requirement in (
+            "statement shape", "select, insert, update, delete", "input position",
+            "quoted string", "numeric expression", "predicate", "identifier",
+            "probe compatibility", "syntactically meaningful", "`unknown`",
+            "existing fields", "`injection_context`", "`notes`",
+            "not a validation outcome", "do not introduce new fields or outcomes",
+            "justified hypothesis", "do not infer sql structure solely from http method",
+            "endpoint name", "parameter name", "full query before testing",
+            "syntax mismatches", "reconsidering the technique", "equivalent and/or",
+            "boolean evaluation can occur in insert/values",
+            "attempt limits", "isolation/cleanup guard",
+        ):
+            assert requirement in section
+
+    def test_context_uncertainty_does_not_create_an_extra_probe_budget(self, skill_text):
+        section = _norm(skill_text.split("### 1b.", 1)[1]
+                        .split("**Detecting second-order", 1)[0]).lower()
+        assert "`unknown` / a justified hypothesis" in section
+        assert "three after the initial signal" in section
+        assert "same syntax-adjustment limit, not a new budget" in section
+        assert "do not force both variants" in section
+
+    def test_error_confirmation_requires_controlled_evaluation_without_impact(self, skill_text):
+        section = _norm(skill_text.split("## Phase 2: Validation", 1)[1]
+                        .split("### 2a.", 1)[0]).lower()
+        for requirement in (
+            "syntax sensitivity (sqli-1)", "plausible candidate", "confirmed sqli-2",
+            "malformed syntax errors", "parser messages alone do not establish sqli-2",
+            "response characteristics", "controlled sql evaluation", "altered parsing",
+            "reproducible error response can itself supply sufficient evidence",
+            "no additional state change, impact test, or boolean differential",
+            "boolean, error-based, bounded union-based, time-based",
+        ):
+            assert requirement in section
+        outcomes = _norm(skill_text.split("## Recording the result", 1)[1]
+                         .split("Before registering evidence", 1)[0]).lower()
+        assert "error-based, bounded union-based" in outcomes
+
+    def test_recording_checks_observation_provenance_before_evidence(self, skill_text):
+        section = _norm(skill_text.split("Before registering evidence or recording the result:", 1)[1]
+                        .split("### Standard result entry template", 1)[0]).lower()
+        for requirement in (
+            "each cited `observation_id`", "corresponding request and response",
+            "method", "url", "payload/marker", "status", "response characteristics",
+            "include baseline observations", "match the recorded conclusion",
+            "never claim", "actually observed", "`evidence_refs`", "assessment excerpts",
+            "consistent with their cited sources", "baseline successful-write acknowledgements",
+        ):
+            assert requirement in section
+
+    def test_successful_write_acknowledgement_sets_mutation_without_claiming_readback(self, skill_text):
+        section = _norm(skill_text.split("### State-changing endpoints", 1)[1]
+                        .split("### 1a.", 1)[0]).lower()
+        for requirement in (
+            "write-capable request", "server-reported successful write",
+            "independently verified affected rows or persistent state",
+            "`mutation_performed: true`", "explicit successful-write acknowledgement",
+            "including baseline writes", "honest cleanup status",
+            "even when readback is unavailable", "state those limits explicitly",
+            "post, http 200", "alone does not establish mutation",
+            "cleanup still requires separate authority", "does not authorize automatic cleanup",
+        ):
+            assert requirement in section

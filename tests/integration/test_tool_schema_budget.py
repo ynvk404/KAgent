@@ -75,12 +75,12 @@ def test_default_tool_schema_budget_is_measured_and_bounded(tmp_path):
     metrics = registry.schema_metrics()
 
     assert metrics["tool_count"] == 30
-    # Includes the ask_user interaction contract for blocking questions,
-    # free-text versus finite choices, semantic discovery schemas, and
-    # permission-prompt boundaries while retaining roughly 8% regression
-    # headroom over the measured default set.
-    assert metrics["characters"] < 25_000
-    assert metrics["approx_tokens"] < 6_250
+    # Includes ask_user, semantic discovery, permission boundaries, and the
+    # workflow assessment/evidence contract. The measured default set is
+    # 25,858 characters (~6,464 tokens); these fixed caps retain roughly 8%
+    # regression headroom. Token estimates use characters // 4.
+    assert metrics["characters"] < 28_000
+    assert metrics["approx_tokens"] < 7_000
     assert metrics["tools"][0]["name"] in {
         "ask_user",
         "confirm_finding",

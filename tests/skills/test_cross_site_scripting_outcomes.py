@@ -20,8 +20,46 @@ Run with:
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(scope="module")
+def skill_text():
+    return (Path(__file__).resolve().parents[2] / "skills" /
+            "cross-site-scripting" / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_payload_resource_guidance_respects_available_tools_and_refusals(skill_text):
+    section = " ".join(skill_text.split("## Relationship to `payloads.txt`", 1)[1]
+                       .split("## Target identifier", 1)[0].split()).lower()
+    for requirement in (
+        "prefer `read_payloads`", "when available", "`read_skill_file` only if exposed",
+        "permitted by its tool/skill contract", "do not guess nonexistent workspace skill paths",
+        "unrelated runner filesystem paths", "refused or blocked", "existing refusal/stop behavior",
+        "do not switch tools or paths to bypass",
+    ):
+        assert requirement in section
+    # Mentioning the optional resource tool must not expand the allowed-tools contract.
+    import yaml
+    metadata = yaml.safe_load(skill_text.split("---", 2)[1])
+    assert metadata["allowed-tools"] == [
+        "shell", "http", "read_payloads", "file_write", "ask_user", "confirm_finding", "workflow",
+    ]
+
+
+def test_reflection_analysis_prioritizes_target_observations_over_marker_presence(skill_text):
+    section = " ".join(skill_text.split("## 2. Determine the reflection context precisely", 1)[1]
+                       .split("## 3. Confirm", 1)[0].split()).lower()
+    for requirement in (
+        "captured http observations from the target", "reflection context and encoding",
+        "actual response before choosing further probes", "alphanumeric marker",
+        "input propagation only", "does not confirm executable xss",
+        "browser/dom execution evidence is unavailable", "limitation explicitly",
+        "`browser-required`", "http-only evidence cannot prove every browser-dependent case",
+    ):
+        assert requirement in section
 
 
 class Outcome(str, Enum):

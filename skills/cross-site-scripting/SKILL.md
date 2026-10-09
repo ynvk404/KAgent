@@ -155,6 +155,12 @@ context is unclear, use `ask_user` once before proceeding.
 Reading a section of `payloads.txt` is not by itself authorization to use
 it against a context it doesn't match. In particular:
 
+- Prefer `read_payloads` for bundled payload resources when available. Use
+  `read_skill_file` only if exposed by the current runtime and permitted by
+  its tool/skill contract. Do not guess nonexistent workspace skill paths or
+  access unrelated runner filesystem paths to compensate for missing tools.
+  If a resource request is refused or blocked, respect that result and the
+  existing refusal/stop behavior; do not switch tools or paths to bypass it.
 - Use `read_payloads(skill="cross-site-scripting", file="payloads.txt")`
   and select only the `PHASE 1 — CONTEXT DETECTION` block for step 2
   below, and only the `PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION` entry that
@@ -232,6 +238,14 @@ one request with the **detection marker** from `payloads.txt`'s
 `PHASE 1 — CONTEXT DETECTION` section — a plain, non-executing text string
 — and inspect exactly how it is embedded in the response before choosing a
 confirmation payload:
+
+Prioritize captured HTTP observations from the target over payload examples
+or local resource contents. Identify the reflection context and encoding from
+the actual response before choosing further probes. Reflection of an
+alphanumeric marker establishes input propagation only; it does not confirm
+executable XSS. If browser/DOM execution evidence is unavailable, describe that
+limitation explicitly and use `browser-required` when the existing outcome
+rules require it; HTTP-only evidence cannot prove every browser-dependent case.
 
 ```sh
 TARGET="http://localhost:3000"  # replace with the real target
