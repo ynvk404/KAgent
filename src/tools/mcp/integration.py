@@ -20,9 +20,10 @@ from typing import (
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from pydantic import AnyUrl
 
 from src.config.config import MCPServerConfig
-from src.tools.mcp.session_servers import BROWSER_MCP_NAMES, BROWSER_MCP_SERVER
+from src.tools.mcp.browser_deployment import is_designated_browser_server, is_designated_browser_local
 from src.tools.mcp.cwe_deployment import (
     CWE_MCP_SERVER_NAME,
     is_designated_cwe_server,
@@ -127,11 +128,22 @@ class MCPSession:
         return await MCPSession._open(server)
 
     @staticmethod
-    async def _open(server: MCPServerConfig, *, worker: Any = None, broker: Any = None, signal: Any = None) -> "MCPSession":
+    async def _open(server: MCPServerConfig, *, worker: Any = None, broker: Any = None, signal: Any = None,
+                    browser_local: bool = False, discovery_only: bool = False) -> "MCPSession":
         if not server.command:
             raise ValueError(f"mcp server {server.name} has no command")
 
         command, argv = server.command, list(server.args)
+        local_params = None
+        if browser_local:
+            from src.tools.mcp.browser_local import local_launch_parameters
+            if worker is not None or not is_designated_browser_local(server):
+                raise ValueError('blocked: invalid designated trusted-local Browser launch')
+            local_params = await local_launch_parameters(server, discovery_only=discovery_only)
+        elif is_designated_browser_local(server):
+            raise ValueError('blocked: Browser local launch requires controller opt-in')
+        if is_designated_browser_server(server) and worker is None:
+            raise ValueError('blocked: designated Browser MCP requires an isolated worker')
         is_cwe_server = server.name == CWE_MCP_SERVER_NAME
         if is_cwe_server:
             if not is_designated_cwe_server(server):
@@ -151,11 +163,9 @@ class MCPSession:
                 if policy is not None:
                     require_matching_cwe_deployment(policy, worker)
             command, argv = await worker.prepare(command, argv, broker=broker, signal=signal,
-                                                 browser_mcp=(server.name in BROWSER_MCP_NAMES
-                                                              and command == BROWSER_MCP_SERVER.command
-                                                              and argv == BROWSER_MCP_SERVER.args),
+                                                 browser_mcp=is_designated_browser_server(server),
                                                  cwe_mcp_deployment_path=cwe_deployment_path)
-        params = StdioServerParameters(command=command, args=argv,
+        params = local_params or StdioServerParameters(command=command, args=argv,
                                        env={} if worker is not None else server.env)
 
         exit_stack = AsyncExitStack()
@@ -213,11 +223,13 @@ class MCPSession:
         name: str,
         args: dict[str, Any],
         cancel_event: Optional[asyncio.Event] = None,
+        *, meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if self._closed:
             raise RuntimeError(f"mcp session {self.server_name} is closed")
 
-        call = self._session.call_tool(name, arguments=args)
+        call = (self._session.call_tool(name, arguments=args, meta=meta) if meta is not None
+                else self._session.call_tool(name, arguments=args))
 
         async def cancellable_call():
             if cancel_event is None:
@@ -238,10 +250,17 @@ class MCPSession:
                 await asyncio.gather(call_task, cancel_task, return_exceptions=True)
 
         result = await asyncio.wait_for(cancellable_call(), timeout=MCP_CALL_TIMEOUT_S)
-        return {
+        response = {
             "isError": bool(getattr(result, "isError", False)),
             "content": getattr(result, "content", None),
         }
+        if meta is not None:
+            response['_meta'] = getattr(result, 'meta', None)
+        return response
+
+    async def browser_status(self) -> dict[str, Any]:
+        response = await self._session.read_resource(AnyUrl('kagent://browser/status'))
+        return json.loads(response.contents[0].text)  # type: ignore[union-attr]
 
     async def close(self) -> None:
         if self._closed:
@@ -444,8 +463,17 @@ class MCPTool:
         from src.permission.runtime.execution import policy_for, ExecutionBlocked
         policy = policy_for(prompter)
         if policy is not None:
-            if self._execution_policy is not policy or self._server is None or policy.worker is None or not policy.nested_allowed():
+            if self._execution_policy is not policy or self._server is None or not policy.nested_allowed():
                 raise ExecutionBlocked('blocked: enforcement-unavailable; MCP worker identity/receipt unavailable')
+            if is_designated_browser_local(self._server):
+                binding = getattr(policy, 'browser_local', None)
+                if binding is None or self._session is not binding:
+                    raise ExecutionBlocked('blocked: Browser local binding identity mismatch')
+                source_owner = policy.observations.owner_provider()
+                result = await binding.dispatch(self, args, signal, cancel_event)
+                return self._render_policy_result(result, policy, source_owner)
+            if policy.worker is None:
+                raise ExecutionBlocked('blocked: enforcement-unavailable; MCP worker required')
             from src.permission.worker.broker import broker_directory
             # Fresh isolated server per invocation prevents background RPCs
             # from retaining a completed request's network authority.
@@ -460,18 +488,9 @@ class MCPTool:
                     result = await session.call_tool(self._remote_name, args, cancel_event)
                 finally:
                     await session.close()
-            if result['isError']:
-                raise RuntimeError(format_mcp_error(self._tool_name, self._remote_name, result['content']))
-            bounded = bound_content(result['content'], MCP_RESULT_CHAR_CAP)
-            encoded = json.dumps(bounded, default=str)
-            truncated = bounded != result['content'] or len(encoded) > MCP_RESULT_CHAR_CAP
-            output = truncate_string(encoded, MCP_RESULT_CHAR_CAP)
-            key = policy.observations.capture_output(
-                "mcp:" + self._server.name + ":" + self._remote_name, output,
-                owner=source_owner, truncated=truncated)
-            # Preserve structured library/catalog responses outside a validation
-            # attempt; only an owned validation capture needs a model-facing ID.
-            return output + (f"\n[runtime observation: {key}]" if source_owner else "")
+            return self._render_policy_result(result, policy, source_owner)
+        if is_designated_browser_local(self._server):
+            raise ExecutionBlocked('blocked: Browser local invocation requires current policy/receipt')
         evt = cancel_event if cancel_event is not None else (signal if isinstance(signal, asyncio.Event) else None)
         result = await self._session.call_tool(self._remote_name, args, evt)
         if result["isError"]:
@@ -480,6 +499,19 @@ class MCPTool:
             )
         bounded = bound_content(result["content"], MCP_RESULT_CHAR_CAP)
         return truncate_string(json.dumps(bounded, default=str), MCP_RESULT_CHAR_CAP)
+
+    def _render_policy_result(self, result, policy, source_owner) -> str:
+        assert self._server is not None
+        if result['isError']:
+            raise RuntimeError(format_mcp_error(self._tool_name, self._remote_name, result['content']))
+        bounded = bound_content(result['content'], MCP_RESULT_CHAR_CAP)
+        encoded = json.dumps(bounded, default=str)
+        truncated = bounded != result['content'] or len(encoded) > MCP_RESULT_CHAR_CAP
+        output = truncate_string(encoded, MCP_RESULT_CHAR_CAP)
+        key = policy.observations.capture_output(
+            'mcp:' + self._server.name + ':' + self._remote_name, output,
+            owner=source_owner, truncated=truncated)
+        return output + (f'\n[runtime observation: {key}]' if source_owner else '')
 
 
 def bound_content(content: Any, cap: int, depth: int = 0) -> Any:
@@ -548,16 +580,24 @@ def extract_mcp_text(content: Any) -> str:
     return "\n".join(parts)
 
 
-async def discover_mcp_tools(server: MCPServerConfig, *, execution_policy: Any = None) -> dict[str, Any]:
+async def discover_mcp_tools(server: MCPServerConfig, *, execution_policy: Any = None,
+                             browser_local: Any = None) -> dict[str, Any]:
     from src.permission.runtime.execution import ExecutionBlocked
     deployment = None
     if execution_policy is not None:
-        if execution_policy.worker is None:
+        if execution_policy.worker is None and browser_local is None:
             raise ExecutionBlocked('blocked: enforcement-unavailable; MCP isolated worker required')
         if server.name == CWE_MCP_SERVER_NAME:
             deployment = require_matching_cwe_deployment(execution_policy, execution_policy.worker)
     server = deepcopy(server)
-    session = await MCPSession.open(server, worker=execution_policy.worker if execution_policy else None)
+    if browser_local is not None:
+        if (not is_designated_browser_local(server) or execution_policy is None
+                or getattr(execution_policy, 'browser_local', None) is not browser_local
+                or browser_local.policy is not execution_policy):
+            raise ExecutionBlocked('blocked: invalid controller Browser opt-in discovery')
+        session = browser_local
+    else:
+        session = await MCPSession.open(server, worker=execution_policy.worker if execution_policy else None)
     try:
         if deployment is not None and execution_policy is not None:
             if require_matching_cwe_deployment(execution_policy, execution_policy.worker) != deployment:

@@ -134,11 +134,27 @@ class PermissionModal:
 
         req = self.req
 
-        parts: list[RenderableType] = [Text(
-            f"Permission requested: "
-            f"{display_tool_name(req.tool)}"
-        )]
+        parts: list[RenderableType] = [Text(f"Tool: {display_tool_name(req.tool)}")]
 
+        risk = f"Risk tier: {req.risk_tier}"
+        if req.tool in {"shell", "bash", "BashTool"} and req.risk_tier == "high-impact":
+            risk += " (all Shell commands)"
+        parts.append(Text(risk, style=MUTED if req.risk_tier == "routine" else WARNING))
+
+        if req.no_session_cache:
+            parts.append(Text(
+                "Session trust: unavailable (approval is not cached).",
+                style=WARNING,
+            ))
+            if req.tool == "http_lab_grant" or (
+                req.tool == "http" and not req.summary.startswith("http: private/internal URL ")
+            ):
+                parts.append(Text("HTTP grants are managed separately by the operator.", style=WARNING))
+        else:
+            parts.append(Text(
+                "Session trust: "
+                + redact(req.session_scope_display or "this tool for the current runtime")
+            ))
 
         action = _framed_action(req)
         show_detail = bool(req.detail) and req.detail != req.summary
@@ -161,29 +177,10 @@ class PermissionModal:
                 )
             )
             if explanation:
-                parts.extend((Text(""), Text(self._detail(explanation, PROSE_DETAIL_CAP))))
+                parts.append(Text(self._detail(explanation, PROSE_DETAIL_CAP)))
 
         if action is None and show_detail:
             parts.extend((Text(""), Text(self._detail(req.detail, PROSE_DETAIL_CAP))))
-
-        parts.append(Text(""))
-
-        if req.risk_tier != "routine":
-            parts.append(Text(
-                f"Risk tier: {req.risk_tier} · explicit action approval required",
-                style=WARNING,
-            ))
-
-        if req.no_session_cache:
-            parts.append(Text(
-                "Exact request review; generic session trust unavailable. Use operator HTTP grants."
-                if req.tool == "http_lab_grant" or (req.tool == "http" and not req.summary.startswith("http: private/internal URL "))
-                else "Session trust unavailable for this sensitive action", style=WARNING))
-        else:
-            parts.append(Text(
-                "Session trust: "
-                + (req.session_scope_display or "this tool for the current runtime")
-            ))
 
         permission_keys = (
             "y allow once · n deny · Esc cancel"
@@ -194,7 +191,8 @@ class PermissionModal:
         if req.offer_http_lab:
             parts.append(Text("g review broad lab grant (separate confirmation)", style=WARNING))
         parts.append(Text(
-            "v full detail / preview · scroll to review · secrets redacted",
+            ("v preview" if self.show_full_detail else "v full detail")
+            + " · scroll to review · secrets redacted",
             style=MUTED,
         ))
 

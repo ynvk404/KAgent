@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Final
 
 from src.config.config import MCPServerConfig
+from src.tools.mcp.browser_deployment import BROWSER_MCP_COMMAND, BROWSER_MCP_ARGS, BROWSER_LOCAL_ARGS
 
 
 # ==========================================================
@@ -20,11 +21,11 @@ BROWSER_MCP_NAMES: Final[frozenset[str]] = frozenset(
 #: Browser MCP mặc định được inject khi chạy với --browser.
 BROWSER_MCP_SERVER: Final[MCPServerConfig] = MCPServerConfig(
     name="browser",
-    command="npx",
-    args=[
-        "-y",
-        "@browsermcp/mcp@latest",
-    ],
+    command=BROWSER_MCP_COMMAND,
+    args=list(BROWSER_MCP_ARGS),
+)
+BROWSER_LOCAL_SERVER: Final[MCPServerConfig] = MCPServerConfig(
+    name='browser', command=BROWSER_MCP_COMMAND, args=list(BROWSER_LOCAL_ARGS),
 )
 
 
@@ -35,6 +36,7 @@ BROWSER_MCP_SERVER: Final[MCPServerConfig] = MCPServerConfig(
 def session_mcp_servers(
     configured: list[MCPServerConfig],
     browser_enabled: bool,
+    browser_local: bool = False,
 ) -> list[MCPServerConfig]:
 
     base = [
@@ -46,7 +48,7 @@ def session_mcp_servers(
     if browser_enabled:
         return [
             *base,
-            BROWSER_MCP_SERVER,
+            BROWSER_LOCAL_SERVER if browser_local else BROWSER_MCP_SERVER,
         ]
 
     return base

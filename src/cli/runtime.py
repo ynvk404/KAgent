@@ -261,6 +261,8 @@ class ParsedFlags:
     http_lab_grants: list[str] = field(default_factory=list)
     accept_unknown_http_effects: bool = False
     browser: bool = False
+    browser_local: bool = False
+    browser_lab_ready: bool = False
     burp: bool = False
     burp_port: int = 0
     no_stream: bool = False
@@ -350,6 +352,10 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
             out.accept_unknown_http_effects = True
         elif a == "--browser":
             out.browser = True
+        elif a == '--browser-local':
+            out.browser_local = True
+        elif a == '--browser-lab-ready':
+            out.browser_lab_ready = True
         elif a == "--no-stream":
             out.no_stream = True
         elif a in ("--burp", "--browser-ingest"):
@@ -392,6 +398,10 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
 
     if out.http_lab_grants and not out.accept_unknown_http_effects:
         raise FlagParseError("--http-lab-grant requires explicit --accept-unknown-http-effects; lab data may be deleted")
+    if out.browser_local and not out.browser:
+        raise FlagParseError('--browser-local requires --browser')
+    if out.browser_lab_ready and (not out.browser_local or not out.target_url):
+        raise FlagParseError('--browser-lab-ready requires --browser --browser-local and explicit --target')
     return out
 
 
@@ -584,7 +594,7 @@ async def main() -> int:
         cfg.api_key = os.environ.get("OPENAI_API_KEY") or ""
 
     cfg.mcp_servers = [s for s in cfg.mcp_servers if s.name not in BROWSER_MCP_NAMES]
-    session_servers = session_mcp_servers(cfg.mcp_servers, flags.browser)
+    session_servers = session_mcp_servers(cfg.mcp_servers, flags.browser, flags.browser_local)
     if flags.browser:
         logger.info("browser MCP enabled for this session", {"source": "--browser"})
 
@@ -922,18 +932,36 @@ async def main() -> int:
             sys.stderr.write(f"warning: failed to start burp bridge: {err}\n")
 
     mcp_sessions: list[MCPSession] = []
+    browser_binding = None
+    if flags.browser_local:
+        from src.tools.mcp.browser_local import BrowserLocalBinding
+        from src.tools.mcp.session_servers import BROWSER_LOCAL_SERVER
+        try:
+            browser_binding = BrowserLocalBinding(prompter.execution_policy, BROWSER_LOCAL_SERVER,
+                                                   lab_ready=flags.browser_lab_ready,
+                                                   lab_origin=flags.target_url)
+            prompter.execution_policy.browser_local = browser_binding
+        except Exception as err:
+            print(f'Browser local: {err}', file=sys.stderr)
+            await close_burp_bridge()
+            return 2
 
     if session_servers:
         from src.tools.mcp.integration import discover_mcp_tools  # noqa: PLC0415
 
         mcp_results = await asyncio.gather(
-            *(discover_mcp_tools(server, execution_policy=prompter.execution_policy) for server in session_servers),
+            *(discover_mcp_tools(server, execution_policy=prompter.execution_policy,
+                                browser_local=browser_binding if flags.browser_local and server.name == 'browser' else None)
+              for server in session_servers),
             return_exceptions=True,
         )
+        browser_local_failed = False
 
         for server, result in zip(session_servers, mcp_results):
             if isinstance(result, BaseException):
                 print(f"mcp {server.name}: {result}", file=sys.stderr)
+                if flags.browser_local and server.name == 'browser':
+                    browser_local_failed = True
                 continue
 
             result = cast(dict[str, Any], result)
@@ -942,6 +970,13 @@ async def main() -> int:
 
             for tool in result["tools"]:
                 tools.register(tool)
+
+        if browser_local_failed:
+            await asyncio.gather(*(s.close() for s in mcp_sessions), return_exceptions=True)
+            if browser_binding is not None:
+                await browser_binding.close()
+            await close_burp_bridge()
+            return 2
 
 
     if flags.list_skills:

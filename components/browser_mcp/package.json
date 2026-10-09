@@ -1,0 +1,13 @@
+{
+  "name": "kagent-browser-mcp-deployment",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@browsermcp/mcp": "0.1.3",
+    "@modelcontextprotocol/sdk": "1.8.0",
+    "commander": "13.1.0",
+    "ws": "8.18.1",
+    "zod": "3.24.2",
+    "zod-to-json-schema": "3.24.3"
+  }
+}

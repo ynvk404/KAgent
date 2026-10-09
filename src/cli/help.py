@@ -21,6 +21,11 @@ Flags:
   --skills <dirs>            comma-separated extra skill directories
   --resume <session-id>
   --browser                  enable Browser MCP for this session only (not persisted)
+  --browser-local            opt in to designated persistent trusted Linux/WSL Browser
+                             host process; no filesystem/network sandbox; needs --browser
+  --browser-lab-ready        attest dedicated lab Chrome profile is ready and all other
+                             Browser MCP profiles disconnected; needs local mode + --target
+                             Per-tool permission still applies. Discovery opens no host port.
   --burp [port]              start local Burp/KAgent bridge (default :8888)
   --browser-ingest [port]    deprecated alias for --burp
   --no-stream                disable streaming chat (fallback for backends

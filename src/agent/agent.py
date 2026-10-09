@@ -1969,6 +1969,12 @@ class Agent:
         self.refresh_scope_context()
 
     def _clear_permission_cache(self) -> None:
+        # Synchronous invalidation stops dispatch immediately; the Browser owner
+        # exits its own contexts, and a subsequent launch awaits that teardown.
+        policy = getattr(self.prompter, 'execution_policy', None)
+        binding = getattr(policy, 'browser_local', None)
+        if binding is not None:
+            binding.invalidate()
         clear = getattr(self.prompter, "clear_session_cache", None)
         if callable(clear):
             clear()

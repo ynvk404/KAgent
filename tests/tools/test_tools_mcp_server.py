@@ -30,7 +30,7 @@ def test_appends_exactly_one_browser_server_when_flag_on() -> None:
 
     assert len(out) == 1
     assert out[0].name == "browser"
-    assert out[0].command == "npx"
+    assert out[0].command == "/usr/bin/node"
 
 def test_strips_stale_browser_entry_when_flag_off() -> None:
     out = session_mcp_servers(
@@ -55,8 +55,7 @@ def test_replaces_stale_browser_entry_when_flag_on() -> None:
     assert len(browser) == 1
     assert out[0] == other
     assert out[-1].args == [
-        "-y",
-        "@browsermcp/mcp@latest",
+        "/usr/local/lib/kagent-browser-mcp/0.1.3/node_modules/@browsermcp/mcp/dist/index.js",
     ]
     assert out[-1] == BROWSER_MCP_SERVER
 

@@ -18,6 +18,9 @@ import time
 
 from src.permission.network.grants import check_cancelled
 from src.tools.mcp.cwe_deployment import CWE_MCP_MOUNT_PATH, verify_cwe_runtime_archive
+from src.tools.mcp.browser_deployment import (
+    BROWSER_MCP_ADDRESS_SPACE, BROWSER_MCP_COMMAND, BROWSER_MCP_ARGS, verify_browser_deployment,
+)
 
 from src.permission.runtime.execution import ExecutionBlocked
 
@@ -151,6 +154,11 @@ class OfflineWorker:
 
         checkpoint()
         self._check_roots()
+        if browser_mcp:
+            # Profile requests cannot substitute npm, another script or flags.
+            if command != BROWSER_MCP_COMMAND or tuple(argv) != BROWSER_MCP_ARGS:
+                raise ExecutionBlocked('blocked: invalid designated Browser MCP worker launch')
+            verify_browser_deployment(checkpoint)
         deployment = None
         if cwe_mcp_deployment_path is not None:
             deployment = self._validate_cwe_deployment(cwe_mcp_deployment_path, checkpoint)
@@ -199,7 +207,7 @@ class OfflineWorker:
         # threads), not this PID namespace. 256 made even /bin/sh startup
         # intermittent under ordinary validation. Retain a finite 1024 ceiling;
         # it is explicitly not a per-worker/cgroup process-tree guarantee.
-        address_space = 4 * 1024**3 if scanner else (1024**3 if browser_mcp else 512 * 1024**2)
+        address_space = 4 * 1024**3 if scanner else (BROWSER_MCP_ADDRESS_SPACE if browser_mcp else 512 * 1024**2)
         args = ["--as=" + str(address_space), "--cpu=120", "--fsize=16777216", "--nofile=128", "--nproc=1024", "--core=0", "--",
                 self.binary, "--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
                 "--cap-drop", "ALL", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/tmp",
@@ -289,5 +297,5 @@ class OfflineWorker:
         cwe_mount = f"; configured CWE MCP read-only mount at {CWE_MCP_MOUNT_PATH}" if self.cwe_mcp_deployment_path else ""
         return ("Linux isolated worker: lab read-only; artifacts/worker writable; direct network denied; "
                 "per-invocation scoped plaintext HTTP broker; CONNECT/raw TCP unavailable; per-process "
-                "512 MiB AS/120 CPU s; ffuf adapter 4 GiB AS, GOMAXPROCS 2; 16 MiB per-file; "
+                "512 MiB AS/120 CPU s; Browser MCP 1536 MiB AS; ffuf adapter 4 GiB AS, GOMAXPROCS 2; 16 MiB per-file; "
                 f"real-UID NPROC 1024 (not a cgroup/disk quota){cwe_mount}")

@@ -21,9 +21,16 @@ from src.tools.common.registry import Registry
 from src.tools.mcp.integration import MCPSession, discover_mcp_tools
 from src.tools.mcp.session_servers import BROWSER_MCP_SERVER
 import src.tools.mcp.integration as integration
+import src.permission.worker.worker as worker_module
 
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux worker resource profiles")
+
+
+@pytest.fixture(autouse=True)
+def deployment_verified_separately(monkeypatch):
+    # Inventory failures/real pinned startup are covered by test_browser_deployment.
+    monkeypatch.setattr(worker_module, 'verify_browser_deployment', lambda checkpoint: checkpoint())
 
 
 @pytest.mark.parametrize("brokered", [False, True])
@@ -32,11 +39,11 @@ def test_browser_budget_changes_only_address_space(tmp_path, brokered):
     broker = tmp_path / "broker" if brokered else None
     if broker is not None:
         broker.mkdir()
-    command, ordinary = worker.wrap("npx", BROWSER_MCP_SERVER.args, broker=broker)
-    browser_command, browser = worker.wrap("npx", BROWSER_MCP_SERVER.args, broker=broker, browser_mcp=True)
+    command, ordinary = worker.wrap(BROWSER_MCP_SERVER.command, BROWSER_MCP_SERVER.args, broker=broker)
+    browser_command, browser = worker.wrap(BROWSER_MCP_SERVER.command, BROWSER_MCP_SERVER.args, broker=broker, browser_mcp=True)
     assert command == browser_command == "/usr/bin/prlimit"
     assert ordinary[0] == "--as=536870912"
-    assert browser[0] == "--as=1073741824"
+    assert browser[0] == "--as=1610612736"
     assert browser[1:] == ordinary[1:]
     _, scanner = worker.wrap("/usr/bin/ffuf", [], scanner=True)
     assert scanner[0] == "--as=4294967296"
@@ -44,12 +51,12 @@ def test_browser_budget_changes_only_address_space(tmp_path, brokered):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("server,expected_limit", [
-    (deepcopy(BROWSER_MCP_SERVER), "--as=1073741824"),
-    (MCPServerConfig("browser-mcp", "npx", list(BROWSER_MCP_SERVER.args)), "--as=1073741824"),
-    (MCPServerConfig("other", "npx", list(BROWSER_MCP_SERVER.args)), "--as=536870912"),
+    (deepcopy(BROWSER_MCP_SERVER), "--as=1610612736"),
+    (MCPServerConfig("browser-mcp", BROWSER_MCP_SERVER.command, list(BROWSER_MCP_SERVER.args)), "--as=1610612736"),
+    (MCPServerConfig("other", BROWSER_MCP_SERVER.command, list(BROWSER_MCP_SERVER.args)), "--as=536870912"),
     (MCPServerConfig("browser", "/bin/sh", ["-c", "true"]), "--as=536870912"),
     (MCPServerConfig("browser", "npx", ["-y", "unrelated-mcp"]), "--as=536870912"),
-    (MCPServerConfig("browser", "npx", [*BROWSER_MCP_SERVER.args, "--extra"]), "--as=536870912"),
+    (MCPServerConfig("browser", BROWSER_MCP_SERVER.command, [*BROWSER_MCP_SERVER.args, "--extra"]), "--as=536870912"),
 ])
 async def test_discovery_and_dispatch_select_only_designated_browser_profile(tmp_path, monkeypatch, server, expected_limit):
     worker = OfflineWorker(tmp_path, (), "/usr/bin/bwrap", "/usr/bin/prlimit")
@@ -134,7 +141,7 @@ async def test_browser_profile_keeps_environment_and_worker_gates(tmp_path):
         await MCPSession._open(server, worker=worker)
     os.mkfifo(tmp_path / "host-fifo")
     with pytest.raises(ExecutionBlocked, match="host-ipc"):
-        await worker.prepare("npx", BROWSER_MCP_SERVER.args, browser_mcp=True)
+        await worker.prepare(BROWSER_MCP_SERVER.command, BROWSER_MCP_SERVER.args, browser_mcp=True)
 
 
 @pytest.mark.asyncio
@@ -175,11 +182,14 @@ except OSError:
 print(json.dumps(checks))
 """
     try:
-        command, argv = await worker.prepare("/usr/bin/python3", ["-I", "-B", "-c", script], browser_mcp=True)
+        command, argv = await worker.prepare(BROWSER_MCP_SERVER.command, BROWSER_MCP_SERVER.args, browser_mcp=True)
+        # Substitute a diagnostic payload only in this test after preflight;
+        # production rejects substitutions before granting the Browser budget.
+        argv[-2:] = ["/usr/bin/python3", "-I", "-B", "-c", script]
         process = await asyncio.create_subprocess_exec(command, *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await asyncio.wait_for(process.communicate(), 5)
         assert process.returncode == 0, stderr.decode()
-        assert json.loads(stdout) == {"as": [1024**3, 1024**3], "secret": None,
+        assert json.loads(stdout) == {"as": [1536 * 1024**2, 1536 * 1024**2], "secret": None,
                                      "host_hidden": True, "source_readonly": True, "network_isolated": True}
         assert not accepted and (root / "source.txt").read_text() == "ORIGINAL"
     finally:
@@ -187,14 +197,12 @@ print(json.dumps(checks))
         await listener.wait_closed()
 
 
-@pytest.mark.asyncio
-async def test_real_browser_budget_initializes_installed_node(tmp_path):
-    if not all(shutil.which(name) for name in ("bwrap", "prlimit", "node")):
-        pytest.skip("existing Linux bwrap/prlimit/Node required")
-    worker = await OfflineWorker.available(tmp_path, ())
-    assert worker is not None
-    command, argv = await worker.prepare("/usr/bin/node", ["-e", 'console.log("NODE_INIT_OK")'], browser_mcp=True)
-    process = await asyncio.create_subprocess_exec(command, *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    stdout, stderr = await asyncio.wait_for(process.communicate(), 5)
-    assert process.returncode == 0, stderr.decode()
-    assert stdout.strip() == b"NODE_INIT_OK"
+@pytest.mark.parametrize('command,argv', [
+    ('npx', ['-y', '@browsermcp/mcp@latest']),
+    ('/usr/bin/node', ['-e', 'console.log("NODE_INIT_OK")']),
+    (BROWSER_MCP_SERVER.command, [*BROWSER_MCP_SERVER.args, '--extra']),
+])
+def test_browser_budget_rejects_substituted_launch(tmp_path, command, argv):
+    worker = OfflineWorker(tmp_path, (), '/usr/bin/bwrap', '/usr/bin/prlimit')
+    with pytest.raises(ExecutionBlocked, match='invalid designated Browser MCP worker launch'):
+        worker.wrap(command, argv, browser_mcp=True)

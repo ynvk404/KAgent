@@ -84,6 +84,8 @@ class ExecutionPolicy:
         self.journal: Path | None = None
         self.session_id: str | None = None
         self.worker: Any = None
+        # Only the CLI controller can install this session-only Browser binding.
+        self.browser_local: Any = None
         self.generic_validation: Any = None
         from src.permission.runtime.observations import ObservationStore
         self.observations = ObservationStore()
@@ -260,8 +262,16 @@ class ExecutionPolicy:
                 and tool._server.name == 'cwe_catalog'):
             from src.tools.mcp.cwe_deployment import require_matching_cwe_deployment
             require_matching_cwe_deployment(self, self.worker)
-        if module == "src.tools.mcp.integration" and (self.worker is None or getattr(tool, '_execution_policy', None) is not self):
-            raise ExecutionBlocked('blocked: enforcement-unavailable; MCP isolated executor identity unavailable')
+        if module == 'src.tools.mcp.integration':
+            from src.tools.mcp.browser_deployment import is_designated_browser_local
+            if is_designated_browser_local(getattr(tool, '_server', None)):
+                if self.browser_local is None:
+                    raise ExecutionBlocked('blocked: designated Browser local opt-in unavailable')
+                if self.browser_local.policy is not self:
+                    raise ExecutionBlocked('blocked: Browser local controller binding mismatch')
+                self.browser_local.validate_tool(tool, args)
+            elif self.worker is None or getattr(tool, '_execution_policy', None) is not self:
+                raise ExecutionBlocked('blocked: enforcement-unavailable; MCP isolated executor identity unavailable')
         if module in {"src.tools.execution.shell", "src.tools.execution.plugin"} and self.worker is None:
             raise ExecutionBlocked("blocked: enforcement-unavailable; isolated filesystem/network/process adapter required")
         if module not in {"src.tools.http.http_tool", "src.tools.http.web", "src.tools.execution.file", "src.tools.execution.search",
