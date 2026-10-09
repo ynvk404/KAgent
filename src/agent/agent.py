@@ -288,6 +288,14 @@ _TOOL_CALL_CONTAINER_TAGS = frozenset(
     }
 )
 _TOOL_CALL_DETAIL_TAGS = frozenset({"invoke", "parameter", "arguments"})
+_PLAIN_SUMMARY_INSTRUCTION = (
+    "Return only a plain-text assessment summary of the recorded workflow state "
+    "and observations. Do not request tools or emit DSML, XML tool-call markup, "
+    "or function calls. Explain the stop reason and remaining work without "
+    "performing new actions. An accepted assessment is not a persisted finding; "
+    "report finding persistence only when the runtime records a successful "
+    "confirm_finding invocation."
+)
 
 
 def _looks_like_malformed_tool_call(content: str) -> bool:
@@ -4228,36 +4236,16 @@ class Agent:
                     )
 
             if step == max_steps - 1:
-                synthesis_req = ChatRequest(
-                    model=self.client.model(),
-                    messages=working,
+                return await self._whole_target_synthesis(
+                    working, signal, emit,
                     thinking_enabled=turn_request_thinking,
                     reasoning_level=turn_reasoning_level,
                     requested_reasoning_level=turn_requested_level,
+                    stop_reason="final_response",
+                    instruction=(f"The hard limit of {max_steps} outer agent iterations "
+                                 "was reached. Summarize the recorded evidence and remaining work."),
+                    max_steps=max_steps,
                 )
-                synthesis, synthesis_streamed = await self._chat_for_turn(
-                    synthesis_req, signal, emit, purpose="final_synthesis"
-                )
-                self._sanitize_response(synthesis)
-                self._trace_response(
-                    synthesis,
-                    phase="final_synthesis",
-                    step=step,
-                    streamed=synthesis_streamed,
-                    malformed_tool_text=False,
-                )
-                if synthesis.message.tool_calls or not synthesis.message.content.strip():
-                    emit({
-                        "type": "error",
-                        "err": InvalidResponseError(
-                            "final synthesis returned tools or no visible text"
-                        ),
-                    })
-                    return "invalid_response"
-                await self._record_assistant_response(
-                    synthesis, synthesis_streamed, working, emit
-                )
-                return "final_response"
 
         emit(
             {
@@ -4316,11 +4304,23 @@ class Agent:
         reasoning_level: ReasoningLevel,
         requested_reasoning_level: ReasoningLevel,
         stop_reason: Literal[
-            "workflow_completed", "workflow_blocked", "workflow_stalled", "max_steps"
+            "workflow_completed", "workflow_blocked", "workflow_stalled", "max_steps", "final_response"
         ],
         instruction: str,
         max_steps: int,
     ) -> str:
+        # The same bounded, buffered tool-free summary also serves direct mode.
+        if stop_reason == "final_response":
+            instruction += "\n\n" + _PLAIN_SUMMARY_INSTRUCTION
+        objective = self.workflow.objective
+        pending_findings = [candidate.id for candidate in self.workflow.candidates.values()
+                            if (objective is None or self.workflow.candidate_belongs_to_objective(candidate, objective))
+                            and self.workflow.eligible_for_finding(candidate.id)
+                            and not self.workflow.finding_is_persisted(candidate.id)]
+        if pending_findings:
+            instruction += ("\n\nRuntime: accepted confirmed assessments awaiting finding persistence: "
+                            + ", ".join(pending_findings)
+                            + ". No finding has been persisted for these assessment revisions.")
         if self.workflow.objective is not None and self.workflow.objective.requested_goals:
             if stop_reason == "workflow_completed":
                 instruction += (
@@ -4337,10 +4337,7 @@ class Agent:
         for attempt in range(2):
             messages = working if attempt == 0 else [*working, Message(
                 role="system",
-                content=("Return only a plain-text assessment summary of the recorded "
-                         "workflow state and observations. Do not request tools or emit "
-                         "DSML, XML tool-call markup, or function calls. Explain the "
-                         "stop reason and remaining work without performing new actions."),
+                content=_PLAIN_SUMMARY_INSTRUCTION,
             )]
             request = ChatRequest(
                 model=self.client.model(),
@@ -4363,8 +4360,8 @@ class Agent:
             )
             self._trace_response(
                 response,
-                phase="whole_target_synthesis",
-                step=None,
+                phase="final_synthesis" if stop_reason == "final_response" else "whole_target_synthesis",
+                step=max_steps - 1 if stop_reason == "final_response" else None,
                 streamed=streamed,
                 malformed_tool_text=malformed_tool_text,
             )
@@ -4376,7 +4373,9 @@ class Agent:
                     content=(f"Assessment stopped ({stop_reason}). The model returned "
                              "invalid tool-call output after one summary retry. "
                              "Review the recorded workflow state and artifacts for "
-                             "completed work and remaining blockers."),
+                             "completed work and remaining blockers."
+                             + (" Accepted assessments remain unpersisted as findings: "
+                                + ", ".join(pending_findings) + "." if pending_findings else "")),
                 ), finish_reason="stop")
                 streamed, chunks = False, []
             if not response.message.content.strip():

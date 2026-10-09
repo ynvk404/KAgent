@@ -710,6 +710,62 @@ def test_cleanup_lifecycle_updates_latest_result_without_creating_a_retest():
     assert WorkflowState.from_dict(state.to_dict()).latest_result(candidate.id) == pending
 
 
+@pytest.mark.parametrize('mutation,cleanup,status', [
+    (True, 'not-required', None),
+    (True, 'not-required', 'cleanup not performed'),
+    (True, 'not-required', 'not required; cleanup not performed'),
+    (True, 'not-required', 'failed: DELETE returned 403'),
+    (True, 'not-required', 'not required: operator action required'),
+    (True, 'not-required', 'not applicable: no cleanup capability'),
+    (True, 'succeeded', 'awaiting permission'),
+    (True, 'succeeded', 'deleted; verification pending'),
+    (True, 'succeeded', 'cleanup not performed'),
+    (True, 'succeeded', 'parent benchmark reset succeeded'),
+    (True, 'succeeded', 'external reset deleted and verified the fixture'),
+    (True, 'pending', 'deleted and verified'),
+    (False, 'pending', 'awaiting permission'),
+    (False, 'succeeded', 'deleted and verified'),
+    (False, 'not-required', 'deleted and verified'),
+])
+def test_new_cleanup_submissions_reject_contradictions_but_history_restores(mutation, cleanup, status):
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(make_candidate())
+    result = ValidationResult(candidate.id, 'sql-injection', 'insufficient-evidence',
+                              mutation_performed=mutation, cleanup_state=cleanup, cleanup_status=status)
+    with pytest.raises(ValueError, match='cleanup'):
+        state.add_validation_result(result)
+    assert not state.validation_results
+    historical = state.to_dict()
+    historical['validation_results'] = [result.to_dict()]
+    restored = WorkflowState.from_dict(historical)
+    assert restored.latest_result(candidate.id) == result
+    assert ValidationResult.from_dict(result.to_dict()) == result
+
+
+@pytest.mark.parametrize('mutation,cleanup,status', [
+    (False, 'not-required', None),
+    (False, 'not-required', 'not applicable: reflected input, nothing stored'),
+    (False, 'not-required', 'parent benchmark reset succeeded; Agent cleanup was unnecessary'),
+    (True, 'pending', None),
+    (True, 'pending', 'awaiting separate permission'),
+    (True, 'pending', 'deletion requested, awaiting verification'),
+    (True, 'failed', 'failed: cleanup endpoint returned 500'),
+    (True, 'requires-user-action', 'operator action required: no cleanup capability'),
+    (True, 'succeeded', 'resource deletion verified'),
+    (True, 'succeeded', 'test resource erased; verification complete'),
+    (True, 'succeeded', 'Agent cleanup deleted and verified; parent reset is separate'),
+    (True, 'not-required', 'not required: transaction auto-rolled back; no persistent artifact remains'),
+    (True, 'not-required', 'not applicable: verified isolated fixture expired; cleanup not performed'),
+])
+def test_new_cleanup_submissions_accept_supported_states(mutation, cleanup, status):
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(make_candidate())
+    result = ValidationResult(candidate.id, 'sql-injection', 'insufficient-evidence',
+                              mutation_performed=mutation, cleanup_state=cleanup, cleanup_status=status)
+    assert state.add_validation_result(result)
+    assert state.latest_result(candidate.id) is result
+
+
 def test_cleanup_state_is_separate_from_confirmation_and_blocks_clean_completion():
     state = whole_target_state()
     complete_required_phases(state)

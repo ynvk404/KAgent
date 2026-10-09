@@ -869,8 +869,8 @@ class TestContextAndEvidenceGuidance:
         assert "do not force both variants" in section
 
     def test_error_confirmation_requires_controlled_evaluation_without_impact(self, skill_text):
-        section = _norm(skill_text.split("## Phase 2: Validation", 1)[1]
-                        .split("### 2a.", 1)[0]).lower()
+        section = _norm(skill_text.split("### Evidence-to-decision checkpoint", 1)[1]
+                        .split("### Standard result entry template", 1)[0]).lower()
         for requirement in (
             "syntax sensitivity (sqli-1)", "plausible candidate", "confirmed sqli-2",
             "malformed syntax errors", "parser messages alone do not establish sqli-2",
@@ -881,11 +881,11 @@ class TestContextAndEvidenceGuidance:
         ):
             assert requirement in section
         outcomes = _norm(skill_text.split("## Recording the result", 1)[1]
-                         .split("Before registering evidence", 1)[0]).lower()
+                         .split("### Evidence-to-decision checkpoint", 1)[0]).lower()
         assert "error-based, bounded union-based" in outcomes
 
     def test_recording_checks_observation_provenance_before_evidence(self, skill_text):
-        section = _norm(skill_text.split("Before registering evidence or recording the result:", 1)[1]
+        section = _norm(skill_text.split("### Evidence-to-decision checkpoint", 1)[1]
                         .split("### Standard result entry template", 1)[0]).lower()
         for requirement in (
             "each cited `observation_id`", "corresponding request and response",
@@ -895,6 +895,19 @@ class TestContextAndEvidenceGuidance:
             "consistent with their cited sources", "baseline successful-write acknowledgements",
         ):
             assert requirement in section
+
+    def test_decision_checkpoint_rejects_parser_sensitivity_as_confirmation(self, skill_text):
+        checkpoint = _norm(skill_text.split("### Evidence-to-decision checkpoint", 1)[1]
+                           .split("### Standard result entry template", 1)[0]).lower()
+        for requirement in (
+            "immediately before", "statement shape and input position",
+            "compatibility", "actual observed effect", "baseline/control/probe",
+            "actual payloads", "comparison with baseline", "no stronger",
+            "insert baseline", "write acknowledgement", "malformed quote",
+            "identical non-boolean expression errors", "parser sensitivity",
+            "not sqli-2 confirmation by themselves",
+        ):
+            assert requirement in checkpoint
 
     def test_successful_write_acknowledgement_sets_mutation_without_claiming_readback(self, skill_text):
         section = _norm(skill_text.split("### State-changing endpoints", 1)[1]

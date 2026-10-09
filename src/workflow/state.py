@@ -850,6 +850,51 @@ class ValidationResult:
         self.session_id = _text(self.session_id, limit=120)
         self.objective_id = _text(self.objective_id, limit=80)
 
+    def validate_cleanup_submission(self) -> None:
+        """Check new declarations only; historical hydration stays unchanged.
+
+        mutation_performed includes server-reported write acknowledgements,
+        not just independently verified persistence. succeeded means Agent
+        cleanup, while not-required needs a reason when a write was reported.
+        Neither state grants cleanup authority or attests database contents.
+        """
+        detail = (self.cleanup_status or "").casefold()
+        inferred = _infer_cleanup_state(True, self.cleanup_status)
+        parent_reset_only = bool(re.search(
+            r"\b(?:parent(?: benchmark)?|benchmark|external) reset\b", detail,
+        )) and not re.search(r"\bagent cleanup\s+(?:deleted|removed|rolled back|performed|verified|succeeded)\b", detail)
+        awaiting = bool(re.search(
+            r"\b(?:pending|awaiting|waiting|unverified|not verified|not yet requested|"
+            r"not performed|not attempted|not done|no cleanup|not cleaned|not deleted|"
+            r"not removed|not restored|not rolled back)\b", detail,
+        ))
+        if not self.mutation_performed:
+            if self.cleanup_state != "not-required" or (
+                    inferred in {"succeeded", "failed", "requires-user-action"}
+                    and not awaiting and not parent_reset_only):
+                raise ValueError("cleanup declaration contradicts mutation_performed=false")
+            return
+        if self.cleanup_state == "not-required":
+            # A categorical 'not performed/not required' is not a justification.
+            reason = re.sub(
+                r"\b(?:(?:cleanup\s+)?(?:was\s+)?)?(?:not required|not applicable|"
+                r"not performed|not attempted|not done|no cleanup|n/a|none)\b", "", detail,
+            ).strip(" \t\n:;,.()-")
+            remaining_state = _infer_cleanup_state(True, reason)
+            if (inferred != "not-required" or not reason
+                    or remaining_state in {"failed", "requires-user-action"}
+                    or re.search(r"\b(?:awaiting|waiting|verification pending|no cleanup capability)\b", detail)):
+                raise ValueError("mutation cleanup not-required needs an explicit justification")
+            return
+        if self.cleanup_state == "succeeded":
+            # Reject explicit contradictions without requiring a vocabulary of
+            # deletion verbs for otherwise valid Agent cleanup explanations.
+            if (not detail or awaiting or parent_reset_only
+                    or inferred in {"failed", "requires-user-action", "not-required"}):
+                raise ValueError("cleanup succeeded requires performed Agent cleanup, not pending work or parent reset")
+        elif inferred in {"succeeded", "not-required"} and not awaiting:
+            raise ValueError("unresolved cleanup state contradicts completed/not-required cleanup status")
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "candidate_id": self.candidate_id,
@@ -1742,6 +1787,7 @@ class WorkflowState:
     ) -> bool:
         if result.candidate_id not in self.candidates:
             raise ValueError(f"unknown candidate: {result.candidate_id}")
+        result.validate_cleanup_submission()
         terminal_status: CandidateStatus = (
             "deferred"
             if result.outcome
@@ -2010,8 +2056,11 @@ class WorkflowState:
                 result = ValidationResult.from_dict(raw)
                 if result is not None and result.candidate_id in state.candidates:
                     # Persistence may contain an intentional forced retest
-                    # whose compact result is identical to an earlier attempt.
-                    state.add_validation_result(result, force=True)
+                    # or an older cleanup combination. Restore it verbatim;
+                    # new-submission consistency checks must not rewrite history.
+                    state.validation_results.append(result)
+                    state.set_candidate_status(result.candidate_id,
+                        "validated" if result.outcome in {"confirmed", "not-confirmed"} else "deferred")
 
         # Replaying results rebuilds history, but the serialized Candidate
         # status may reflect a later requeue or validation start.

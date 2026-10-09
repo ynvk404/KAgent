@@ -35,7 +35,7 @@ from src.workflow.state import (
     normalize_target_origin,
     validation_result_fingerprint,
 )
-from src.workflow.evidence import EvidenceArtifact, verify_evidence_reads
+from src.workflow.evidence import EvidenceArtifact, verify_evidence_reads, check_proof_references
 from src.workflow.assessment import (start_attempt, references, resolve_sources, candidate_binding,
                                      seal, accepted_result, check_excerpts)
 import uuid
@@ -165,7 +165,11 @@ class WorkflowTool(Tool):
                 "priority": {"type": "string", "enum": ["high", "medium", "low"]},
                 "evidence_path": {
                     "type": "string",
-                    "description": "Existing project proof file.",
+                    "description": (
+                        "Existing project proof file. Identify the entry with candidate_id; "
+                        "shared documents use Candidate headings. Explicit observation IDs "
+                        "in that entry must be declared primary parents."
+                    ),
                 },
                 "observation_ids": {"type": "array", "items": {"type": "string"},
                                     "description": "Primary runtime source IDs."},
@@ -199,13 +203,19 @@ class WorkflowTool(Tool):
                     "type": "object",
                 },
                 "mutation_performed": {"type": "boolean", "description":
-                    "Target state mutation caused/observed during this validation attempt, including baseline writes; drives cleanup state."},
+                    "True for explicit server-reported successful writes, including baseline writes, "
+                    "or verified mutation. An acknowledgement does not verify persistent state; "
+                    "POST/status 200 alone does not establish mutation. Drives cleanup bookkeeping."},
                 "cleanup_status": optional_string,
                 "cleanup_state": {
                     "type": "string",
                     "enum": sorted(CLEANUP_STATES),
                     "description": (
-                        "Mutations default pending; cleanup requires separate authority."
+                        "Mutations default pending. not-required: no Agent cleanup needed (justify "
+                        "if mutation was reported). pending: awaiting authority/action/verification. "
+                        "succeeded: Agent cleanup performed; parent benchmark reset is separate. "
+                        "failed: cleanup attempt failed. requires-user-action: operator intervention "
+                        "needed, including unavailable cleanup capability. Cleanup requires separate authority."
                     ),
                 },
                 "deferred_reason": optional_string,
@@ -807,10 +817,10 @@ class WorkflowTool(Tool):
             aid = policy.generic_validation.durable_attempt if policy else self.active_attempt
             selected = resolve_sources(policy, self.state, candidate, self.state.attempts.get(aid) if aid is not None else None, ids,
                 terminal=False, negative=False, store=self.observations) if ids else []
-            if ids:
-                previous = self.state.evidence_sources.get(artifact.id)
-                if previous is not None and previous != ids:
-                    raise ValueError("immutable derived evidence source association changed")
+            check_proof_references((self.evidence_root / artifact.path).read_bytes(), candidate_id, ids)
+            previous = self.state.evidence_sources.get(artifact.id)
+            if previous is not None and previous != ids:
+                raise ValueError("immutable derived evidence source association changed")
             self.state.add_evidence(artifact)
             if ids:
                 self.state.evidence_sources[artifact.id] = ids
@@ -848,6 +858,7 @@ class WorkflowTool(Tool):
                 session_id=self.session_id,
                 objective_id=(self.state.objective.id if self.state.objective else None),
             )
+            result.validate_cleanup_submission()
             candidate = self.state.candidates.get(result.candidate_id)
             if candidate is None:
                 raise ValueError(f"unknown candidate: {result.candidate_id}")

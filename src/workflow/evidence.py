@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,103 @@ MAX_EVIDENCE_BYTES = 2_000_000
 # A non-interactive status check may reuse a checksum only while the file's
 # stat signature is unchanged. This is not a permission cache and is not saved.
 _verified_sensitive: dict[tuple[str, str], tuple[int, int, int, int]] = {}
+
+
+def check_proof_references(content: bytes, candidate_id: str, parents: list[str]) -> None:
+    """Bind explicit source claims in an identifiable Markdown candidate entry.
+
+    This is deliberately a narrow source contract, not a narrative verifier.
+    Unscoped/ambiguous documents and binary artifacts still use structured
+    assessment.excerpts. Examples in fences, quotes and indented code are not
+    active claims. Full observation handles on their own line or in explicit
+    observation/source ID fields are claims; incidental IDs in prose are not.
+    """
+    try:
+        lines = content.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        return
+    active: list[tuple[int, str]] = []
+    fence = None
+    quoted = False
+    for position, line in enumerate(lines):
+        if line.lstrip().startswith(">"):
+            quoted = True
+            continue
+        if quoted and line.strip() and not re.match(r"^ {0,3}(?:#{1,6}\s|[-*+]\s|`{3,}|~{3,})", line):
+            continue  # lazy continuation of a quoted example paragraph
+        quoted = False
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence:
+            if (marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence)
+                    and not line[marker.end():].strip()):
+                fence = None
+            continue
+        if marker:
+            fence = marker[1]
+            continue
+        if line.startswith(("    ", "\t")):
+            continue
+        active.append((position, line))
+
+    metadata = re.compile(r"^ {0,3}(?:-\s+)?(?:\*\*)?candidate_id:(?:\*\*)?\s+`?([^\s`]+)`?\s*$")
+    headings = []
+    entries = []
+    for position, line in active:
+        heading = re.match(r"^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line)
+        if heading:
+            level = len(heading[1])
+            while headings and headings[-1][1] >= level:
+                headings.pop()
+            headings.append((position, level, heading[2]))
+        field = metadata.fullmatch(line)
+        if field:
+            # Canonical aggregates have Candidate headings; standalone proofs
+            # have one candidate_id under their document title (or no title).
+            boundary = next((h for h in reversed(headings)
+                             if re.match(r"Candidate\b", h[2], re.IGNORECASE)), None)
+            boundary = boundary or next((h for h in headings if h[1] == 1), None)
+            entries.append((field[1], boundary))
+    matches = [boundary for identity, boundary in entries if identity == candidate_id]
+    if len(matches) != 1:
+        return  # no reliable selected entry; keep the structured excerpt contract
+    boundary = matches[0]
+    if sum(other == boundary for _, other in entries) != 1:
+        return
+    start, level = (boundary[0], boundary[1]) if boundary else (0, 0)
+    end = len(lines)
+    if boundary:
+        for position, line in active:
+            heading = re.match(r"^ {0,3}(#{1,6})\s+", line)
+            if position > start and heading and len(heading[1]) <= level:
+                end = position
+                break
+    # Do not infer that unlabelled Candidate sections elsewhere belong to a
+    # standalone document's root marker. Ambiguous scope stays structured.
+    if (boundary is None or not re.match(r"Candidate\b", boundary[2], re.IGNORECASE)) and any(
+            start < position < end and re.match(r"^ {0,3}#{1,6}\s+Candidate\b", line, re.IGNORECASE)
+            for position, line in active):
+        return
+    observation = r"obs_[0-9a-f]{32}"
+    single = re.compile(rf"^ {{0,3}}(?:-\s+)?`?({observation})`?\s*$")
+    field = re.compile(r"^ {0,3}(?:-\s+)?(?:\*\*)?(?:observation_ids?|observation(?: ids?)?|source_ids?):(?:\*\*)?\s*(.*)$",
+                       re.IGNORECASE)
+    # Only a field made of handles/list punctuation/placeholders is unambiguous.
+    values = re.compile(rf"(?:{observation}|\[REDACTED(?:[^\]]*)\]|[\s`,;\[\]])+")
+    claimed = set()
+    for position, line in active:
+        if not start <= position < end:
+            continue
+        match = single.fullmatch(line)
+        if match:
+            claimed.add(match[1])
+        match = field.fullmatch(line)
+        if match and values.fullmatch(match[1]):
+            claimed.update(re.findall(observation, re.sub(r"\[REDACTED[^\]]*\]", "", match[1])))
+    if claimed - set(parents):
+        raise ValueError(
+            "proof observation reference lacks a declared primary parent; "
+            "correct the candidate artifact and dependent claims before re-registering"
+        )
 
 
 def _signature(path: Path) -> tuple[int, int, int, int]:

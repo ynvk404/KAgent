@@ -418,3 +418,18 @@ def test_fragment_transformation_requires_complete_same_context_variant():
     assert variant_response == payload
     assert classify_xss_outcome(Probe(ReflectionContext.HTML_BODY,
         payload_reflected_unescaped=True, payload_complete=True)) == Outcome.CONFIRMED
+
+
+def test_returned_syntax_checkpoint_uses_captured_bytes_before_confirmation(skill_text):
+    # Static instruction contract only; this does not prove live LLM adherence.
+    section = ' '.join(skill_text.split('## 5. Record the validation evidence', 1)[1]
+                       .split('Every candidate gets exactly one outcome:', 1)[0].split())
+    for requirement in (
+        'Immediately before recording', 'actual captured response bytes',
+        'every delimiter', 'intended payload', 'LLM-reconstructed HTML',
+        "<script>document.title='proof'</script", 'lacks the final `>`',
+        'one bounded same-context compensating variant', 'inspect its actual response',
+        'another permitted confirmation condition', 'do not claim confirmed execution',
+        'Deterministic HTTP-based confirmation remains sufficient',
+    ):
+        assert requirement in section

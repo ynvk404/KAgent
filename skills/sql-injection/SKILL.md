@@ -496,16 +496,8 @@ in INSERT/VALUES contexts; its applicability depends on the expression and
 observable effect, not a blanket statement-type rule. Preserve the existing
 attempt limits and state-changing endpoint isolation/cleanup guard.
 
-Distinguish syntax sensitivity (SQLI-1), a plausible candidate, and confirmed
-SQLI-2. Repeated malformed syntax errors or different parser messages alone
-do not establish SQLI-2. For error-based confirmation, explain which observed
-response characteristics demonstrate meaningful, controlled SQL evaluation
-rather than merely altered parsing, such as an error containing the evaluated
-result of a controlled, non-sensitive expression. A reproducible error response
-can itself supply sufficient evidence; no additional state change, impact test,
-or boolean differential is required when a supported technique already proves
-SQLi. Boolean, error-based, bounded UNION-based, time-based, and other applicable
-techniques remain valid within the existing proof bounds and capability gates.
+Apply the evidence-to-decision checkpoint in "Recording the result" before
+submitting confirmation, whatever technique supplies the proof.
 
 ### 2a. Boolean-based differential check
 
@@ -727,20 +719,47 @@ Every candidate gets exactly one outcome:
 - `blocked` — a probe was intercepted by a WAF, rate-limiter, or challenge page before reaching the application (step 2c); the application itself was never actually tested;
 - `deferred` — behavior indicates NoSQL/operator injection rather than SQL injection (per Scope, above); put that reason in `deferred_reason`.
 
-Before registering evidence or recording the result:
+### Evidence-to-decision checkpoint
 
+Immediately before registering proof and submitting a `confirmed` result,
+establish these five points from the recorded evidence:
+
+- State the observed statement shape and input position (or supported
+  uncertainty), using `injection_context` / `notes`.
+- Explain compatibility between that context and the selected technique,
+  including how evaluation would be observable. Reconsider identical
+  expression-type failures rather than attributing them to controlled evaluation.
+- Identify the actual observed effect supporting the claimed technique.
+  Distinguish syntax sensitivity (SQLI-1), a plausible candidate, and confirmed
+  SQLI-2: repeated malformed syntax errors or different parser messages alone
+  do not establish SQLI-2. Error-based proof must show response characteristics
+  demonstrating controlled SQL evaluation rather than merely altered parsing,
+  such as an error containing the evaluated result of a controlled,
+  non-sensitive expression. A reproducible error response can itself supply
+  sufficient evidence; no additional state change, impact test, or boolean
+  differential is required when a supported technique already proves SQLi.
+  Boolean, error-based, bounded UNION-based, time-based, and other applicable
+  techniques remain valid within the existing proof bounds and capability gates.
 - Verify each cited `observation_id` against its corresponding request and
   response: method, URL, actual payload/marker, status, and the response
-  characteristics supporting the conclusion. Include baseline observations
-  whenever the conclusion depends on baseline behavior.
-- Select supporting observations that match the recorded conclusion; never
+  characteristics supporting the conclusion. Attribute baseline/control/probe
+  observations to their actual payloads. Include baseline observations whenever
+  the conclusion depends on comparison with baseline behavior.
+- Keep the conclusion no stronger than the recorded evidence. Select supporting
+  observations that match the recorded conclusion; never
   claim a request, probe, differential, or technical result that was not
   actually observed. Use existing `evidence_refs` and assessment excerpts
   where appropriate, keeping excerpts consistent with their cited sources.
-- Recheck mutation/cleanup bookkeeping for the entire attempt, including
-  baseline successful-write acknowledgements. Distinguish server-reported
-  writes from independently verified state and record readback limitations;
-  do not mark cleanup complete without evidence or perform it automatically.
+
+Counterexample: an INSERT baseline reports a write acknowledgement, a
+malformed quote produces a syntax error, and AND/OR variants produce identical
+non-Boolean expression errors. These observations establish parser sensitivity,
+not SQLI-2 confirmation by themselves; the type errors do not demonstrate
+controlled evaluation of the proposed technique.
+
+Recheck mutation/cleanup bookkeeping for the entire attempt, including
+baseline successful-write acknowledgements, under the state-changing endpoint
+contract above. Record readback limitations and honest cleanup state.
 
 ### Standard result entry template
 

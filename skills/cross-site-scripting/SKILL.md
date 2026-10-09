@@ -338,9 +338,6 @@ Interpret the result according to the observed context:
 - Never claim browser execution solely because a payload string appears in
   an HTTP response when the observed context does not make execution
   deterministic from that response alone.
-- An incomplete executable payload must not be confirmed, even when reflected
-  raw in text/html. Missing delimiters or an unfinished tag are not execution
-  proof; examine the complete returned syntax, not just a matching substring.
 
 Keep the proof non-destructive and scoped to your own session:
 
@@ -424,6 +421,23 @@ variety to force a result.
 
 ## 5. Record the validation evidence
 
+Immediately before recording a `confirmed` XSS result, verify the actual
+captured response bytes and surrounding context, including every delimiter
+needed by the claimed executable syntax. Compare the returned syntax with the
+request; do not substitute the intended payload or an LLM-reconstructed HTML
+element for the captured response. An incomplete executable payload must not
+be confirmed merely from raw reflection in text/html.
+
+For example, a complete, untruncated response ending in
+`<script>document.title='proof'</script` lacks the final `>`. Do not call it a
+complete executable element because the intended request contained that
+character. Use the one bounded same-context compensating variant permitted in
+step 3 when deterministic trailing-character removal is observed, then inspect
+its actual response. If complete executable syntax or another permitted
+confirmation condition is not established, do not claim confirmed execution.
+Deterministic HTTP-based confirmation remains sufficient when step 3's context
+and proof conditions hold; a browser is not universally required.
+
 Every candidate gets exactly one outcome:
 
 - `confirmed` — sufficient evidence establishes XSS exploitability in the
@@ -466,6 +480,7 @@ appended in the order tested:
 ```markdown
 ## Candidate: <endpoint> [<method>] — param: <parameter> (<location>)
 
+- **candidate_id:** <structured Workflow Candidate ID>
 - **timestamp:** <ISO 8601 UTC timestamp when this entry was recorded, e.g. 2026-08-27T09:14:32Z>
 - **agent_session_id:** <identifier for the current agent run/session, for audit-trail correlation with logs elsewhere>
 - **outcome:** <confirmed | not-confirmed | blocked | browser-required>

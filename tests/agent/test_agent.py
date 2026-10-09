@@ -3967,18 +3967,111 @@ async def test_final_step_tools_get_one_tool_free_synthesis_with_observations():
 
 
 @pytest.mark.asyncio
-async def test_final_synthesis_tool_calls_are_rejected_without_execution():
+async def test_final_synthesis_tool_calls_retry_summary_without_execution():
     tool = PermissionTool("ok")
     agent, client = refusal_agent(
-        [tool_batch(tool_call("first", "ok", {})), tool_batch(tool_call("second", "ok", {}))],
+        [tool_batch(tool_call("first", "ok", {})), tool_batch(tool_call("second", "ok", {})),
+         ChatResponse(message=Message(role='assistant', content='Plain summary.'), finish_reason='stop')],
         [tool], AlwaysAllow(), max_steps=1,
     )
     collector = collect()
     await agent.run("go", FakeSignal(), collector["sink"])
-    assert len(client.requests) == 2
+    assert len(client.requests) == 3
+    assert all(request.tools is None for request in client.requests[1:])
     assert len([e for e in collector["events"] if e.type == "tool-result"]) == 1
-    assert isinstance(next(e.err for e in collector["events"] if e.type == "error"), InvalidResponseError)
-    assert collector["events"][-1].stop_reason == "invalid_response"
+    assert not any(e.type == 'error' for e in collector['events'])
+    assert agent.history[-1].content == 'Plain summary.'
+    assert collector["events"][-1].stop_reason == "final_response"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('retry_clean', [True, False])
+async def test_direct_final_synthesis_rejects_textual_finding_after_last_assessment(tmp_path, retry_clean):
+    from tests.helpers.workflow import run_workflow_fixture
+
+    class FixtureWorkflowTool(WorkflowTool):
+        async def run(self, args, signal, prompter):
+            return await run_workflow_fixture(self, args, signal, prompter)
+
+        async def _fixture_production_run(self, args, signal, prompter):
+            return await super().run(args, signal, prompter)
+
+    state = WorkflowState(objective=WorkflowObjective('direct-summary', 'direct', 'https://target.test'))
+    candidate, _ = state.add_candidate(Candidate('xss', target='https://target.test',
+        endpoint='/search', method='POST', parameter='q', location='body', objective_id='direct-summary'))
+    (tmp_path / 'proof.md').write_text('Complete POST fixture response, bounded interpretation.')
+    proof = EvidenceArtifact.capture_immutable_snapshot(candidate.id, 'proof.md', tmp_path)
+    state.add_evidence(proof)
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
+    workflow = FixtureWorkflowTool(state, Target('https://target.test'), skills=skills, evidence_root=tmp_path)
+    notifications = []
+    findings = FindingsStore(project_directory=tmp_path)
+    finding_tool = ConfirmFindingTool(findings, lambda f, path: notifications.append(path), state)
+    malformed = MALFORMED_TOOL_CALL_TEXT.replace('name="echo"', 'name="confirm_finding"')
+    clean = 'The confirmed assessment was accepted. Finding persistence remains pending.'
+    registry = ToolRegistry()
+    registry.register(workflow)
+    registry.register(finding_tool)
+    client = FakeClient([
+        tool_batch(tool_call('assessment', 'workflow', {'action': 'record_result',
+            'candidate_id': candidate.id, 'skill_name': 'cross-site-scripting',
+            'outcome': 'confirmed', 'evidence_refs': [proof.id]})),
+        ChatResponse(message=Message(role='assistant', content=malformed), finish_reason='stop'),
+        ChatResponse(message=Message(role='assistant', content=clean if retry_clean else malformed),
+                     finish_reason='stop'),
+    ])
+    agent = Agent(AgentOptions(client=client, tools=registry, skills=skills,
+        prompter=AlwaysAllow(), store=None, target=Target('https://target.test'), workflow=state, max_steps=1))
+    collector = collect()
+    await agent.run('continue', FakeSignal(), collector['sink'])
+    assert state.eligible_for_finding(candidate.id)
+    assert not state.finding_is_persisted(candidate.id)
+    assert not notifications and not (tmp_path / 'artifacts/findings').exists()
+    assert len(client.requests) == 3
+    assert client.requests[0].tools
+    assert all(request.tools is None for request in client.requests[1:])
+    assert any(message.role == 'system' and 'No finding has been persisted' in message.content
+               and candidate.id in message.content for message in client.requests[1].messages)
+    results = [e for e in collector['events'] if e.type == 'tool-result']
+    assert len(results) == 1 and json.loads(results[0].result)['eligible_for_confirm_finding']
+    visible = ''.join(e.text for e in collector['events'] if e.type in {'assistant-text', 'assistant-delta'})
+    assert malformed not in visible and 'DSML' not in visible
+    assert 'persist' in visible.lower() and 'finding' in visible.lower()
+    assert visible == agent.history[-1].content
+    if retry_clean:
+        assert visible == clean
+    else:
+        assert 'remain unpersisted as findings' in visible
+    done = collector['events'][-1]
+    assert done.stop_reason == 'final_response'
+    assert (done.agent_loop_llm_calls, done.final_synthesis_llm_calls) == (1, 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad_text', [MALFORMED_TOOL_CALL_TEXT,
+    '<function_call name="confirm_finding">{}</function_call>'])
+async def test_direct_synthesis_discards_malformed_buffer_even_with_clean_message(monkeypatch, bad_text):
+    agent, _ = refusal_agent([], [], AlwaysAllow(), max_steps=1)
+    calls = []
+
+    async def buffered_chat(request, signal, emit, purpose, stream_buffer):
+        calls.append(request)
+        if len(calls) == 1:
+            stream_buffer.extend([bad_text[:15], bad_text[15:]])
+            return ChatResponse(message=Message(role='assistant', content='Different clean text.'), finish_reason='stop'), True
+        stream_buffer.extend(['Plain ', 'summary.'])
+        return ChatResponse(message=Message(role='assistant', content='Plain summary.'), finish_reason='stop'), True
+
+    monkeypatch.setattr(agent, '_chat_for_turn', buffered_chat)
+    events = []
+    assert await agent._whole_target_synthesis([], FakeSignal(), events.append,
+        thinking_enabled=False, reasoning_level=ReasoningLevel.OFF,
+        requested_reasoning_level=ReasoningLevel.OFF, stop_reason='final_response',
+        instruction='Summarize the recorded observations.', max_steps=1) == 'final_response'
+    assert len(calls) == 2 and all(request.tools is None for request in calls)
+    assert ''.join(e['text'] for e in events if e['type'] in {'assistant-text', 'assistant-delta'}) == 'Plain summary.'
+    assert agent.history[-1].content == 'Plain summary.'
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -27,14 +28,15 @@ ASSESSMENT = {"hypothesis": "A bounded fixture response supports this candidate"
               "severity": "low"}
 
 
-async def setup(runtime, tmp_path, *, candidate_class="xss", related=None):
+async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, method="GET", payload="fixture"):
+    from urllib.parse import urlencode
     registry, prompter, policy, _, _, _, target = runtime
     skills = Skills()
     skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
     state = WorkflowState(objective=WorkflowObjective("assessment-objective", "whole_target", ORIGIN))
     assert state.objective is not None
     candidate, _ = state.add_candidate(Candidate(candidate_class=candidate_class,
-        target=ORIGIN, endpoint="/fixture", method="GET", parameter="q", location="query",
+        target=ORIGIN, endpoint="/fixture", method=method, parameter="q", location="body" if method == 'POST' else "query",
         objective_id=state.objective.id))
     coverage = CoverageStore(str(tmp_path / "coverage.json"))
     tool = WorkflowTool(state, target, coverage, skills, tmp_path, "assessment-session")
@@ -42,7 +44,11 @@ async def setup(runtime, tmp_path, *, candidate_class="xss", related=None):
     started = json.loads(await registry.execute("workflow", {"action": "start_validation",
         "candidate_id": candidate.id, "related_requests": related or []}, None, prompter))
     assert started["ok"]
-    await registry.execute("http", {"url": "/fixture?q=fixture", "phase": "validation"}, None, prompter)
+    request: dict[str, Any] = {"url": "/fixture?" + urlencode({'q': payload}), "method": method, "phase": "validation"}
+    if method == 'POST':
+        request.update(url='/fixture', body=urlencode({'q': payload}),
+                       headers={'Content-Type': 'application/x-www-form-urlencoded'})
+    await registry.execute("http", request, None, prompter)
     oid = next(reversed(policy.observations._items))
     (tmp_path / "proof.md").write_text("Agent analysis of the linked fixture response.")
     evidence = json.loads(await registry.execute("workflow", {"action": "record_evidence",
@@ -237,21 +243,27 @@ async def test_declared_multistep_required_sources(runtime, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("valid", [True, False])
-async def test_derived_excerpt_and_precommit_eviction(runtime, tmp_path, valid):
+@pytest.mark.parametrize("mismatch", [None, "source", "range", "hash"])
+async def test_derived_excerpt_and_precommit_eviction(runtime, tmp_path, mismatch):
     import hashlib
     state, candidate, _, args, oid = await setup(runtime, tmp_path)
     registry, p, policy, *_ = runtime
     body = policy.observations._items[oid].body
     args["assessment"]["excerpts"] = [{"source_id": oid, "start": 0, "end": len(body),
-        "sha256": hashlib.sha256(body).hexdigest() if valid else "f" * 64}]
+        "sha256": hashlib.sha256(body).hexdigest()}]
+    if mismatch == 'source':
+        args['assessment']['excerpts'][0]['source_id'] = 'obs_' + 'a' * 32
+    elif mismatch == 'range':
+        args['assessment']['excerpts'][0]['end'] = len(body) + 1
+    elif mismatch == 'hash':
+        args['assessment']['excerpts'][0]['sha256'] = 'f' * 64
     linked = json.loads(await registry.execute("workflow", {"action": "record_evidence",
         "candidate_id": candidate.id, "evidence_path": "proof.md", "observation_ids": [oid]}, None, p))
     assert linked["evidence_kind"] == "derived" and linked["primary_parents"] == [oid]
     assert state.evidence_sources[args["evidence_refs"][0]] == [oid]
     policy.observations._items.clear()
     output = await registry.execute("workflow", args, None, p)
-    if valid:
+    if mismatch is None:
         assert json.loads(output)["result"]["assessment_source"] == "agent"
         restored = WorkflowState.from_dict(json.loads(json.dumps(state.to_dict())))
         assert restored.evidence_sources == state.evidence_sources
@@ -570,7 +582,8 @@ async def test_observed_baseline_write_keeps_cleanup_pending_when_unresolved(run
     from tests.security.test_execution_policy import REAL_CLIENT
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: REAL_CLIENT(
         transport=httpx.MockTransport(lambda req: httpx.Response(200, content=b'Update complete', request=req)), **kwargs))
-    state, candidate, _, args, _ = await setup(runtime, tmp_path, candidate_class='sqli')
+    state, candidate, _, args, _ = await setup(runtime, tmp_path, candidate_class='sqli',
+        related=[{'role': 'baseline', 'method': 'GET', 'url': '/fixture?q=fixture'}])
     registry, p, *_ = runtime
     payload = json.loads(await registry.execute('workflow', {**args,
         'outcome': 'insufficient-evidence', 'mutation_performed': True,
@@ -582,4 +595,144 @@ async def test_observed_baseline_write_keeps_cleanup_pending_when_unresolved(run
     latest = state.latest_result(candidate.id)
     assert latest is not None and latest.outcome == 'insufficient-evidence'
     assert b'Update complete' in bytes.fromhex(latest.evidence_manifest[0]['source']['body'])
+    assert latest.evidence_manifest[0]['source']['role'] == 'baseline'
     assert not state.eligible_for_finding(candidate.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('candidate_class,method,payload,status,body', [
+    ('xss', 'POST', "<script>document.title='proof'</script>", 200,
+     b"<script>document.title='proof'</script>"),
+    ('sqli', 'GET', 'controlled-expression', 500, b'Controlled expression result: 49'),
+])
+async def test_native_confirmation_keeps_http_xss_and_error_based_sqli_contracts(
+        runtime, tmp_path, monkeypatch, candidate_class, method, payload, status, body):
+    # Native dispatch through mocked transport checks source admission only;
+    # semantic interpretation remains the Agent's responsibility under the skill.
+    import httpx
+    from tests.security.test_execution_policy import REAL_CLIENT
+    def handler(req):
+        runtime[4].append(req)
+        return httpx.Response(status, content=body, headers={'Content-Type': 'text/html'}, request=req)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: REAL_CLIENT(
+        transport=httpx.MockTransport(handler), **kwargs))
+    state, candidate, _, args, oid = await setup(runtime, tmp_path,
+        candidate_class=candidate_class, method=method, payload=payload)
+    registry, p, policy, _, sent, *_ = runtime
+    args['techniques'] = ['error-based'] if candidate_class == 'sqli' else ['html-body']
+    result = json.loads(await registry.execute('workflow', args, None, p))
+    assert result['eligible_for_confirm_finding']
+    assert args.get('confirmation') is None  # no universal Boolean-pair gate
+    assert sent[0].method == method and policy.observations._items[oid].body == body
+    assert accepted_result(state, candidate, state.latest_result(candidate.id), policy)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reference_format', ['standalone', 'field'])
+async def test_embedded_unknown_observation_requires_proof_repair(runtime, tmp_path, reference_format):
+    state, candidate, _, args, oid = await setup(runtime, tmp_path)
+    registry, p, policy, *_ = runtime
+    unknown = 'obs_' + 'f' * 32
+    proof = tmp_path / 'proof.md'
+    claim = unknown if reference_format == 'standalone' else f'- **observation_id:** `{unknown}`'
+    original = f'# Proof\n\n- candidate_id: {candidate.id}\n\n## Request\n{oid}\n\n## Second sink\n{claim}\n'
+    proof.write_text(original)
+    registration = {'action': 'record_evidence', 'candidate_id': candidate.id,
+                    'evidence_path': 'proof.md', 'observation_ids': [oid, unknown]}
+    before = state.to_dict()
+    assert 'primary evidence reference unavailable' in await registry.execute('workflow', registration, None, p)
+    registration['observation_ids'] = [oid]
+    rejected = await registry.execute('workflow', registration, None, p)
+    assert 'correct the candidate artifact and dependent claims' in rejected
+    assert state.to_dict() == before
+    assert proof.read_text() == original
+    proof.write_text(f'# Proof\n- candidate_id: {candidate.id}\n\n## Request\n{oid}\nOnly the captured request supports this proof.\n')
+    registered = json.loads(await registry.execute('workflow', registration, None, p))
+    assert registered['evidence_kind'] == 'derived'
+    args['evidence_refs'] = [registered['evidence']['id']]
+    assert json.loads(await registry.execute('workflow', args, None, p))['ok']
+    assert accepted_result(state, candidate, state.latest_result(candidate.id), policy)
+
+
+@pytest.mark.asyncio
+async def test_shared_proof_checks_only_selected_candidate_and_active_source_fields(runtime, tmp_path):
+    state, candidate, _, args, oid = await setup(runtime, tmp_path)
+    registry, p, policy, *_ = runtime
+    unknown = 'obs_' + 'e' * 32
+    proof = tmp_path / 'results.md'
+    proof.write_text(f'''# Aggregate results
+## Candidate: historical
+- **candidate_id:** cand_historical
+{unknown}
+## Candidate: selected
+- **candidate_id:** {candidate.id}
+- **observation_ids:** `{oid}`, [REDACTED]
+- source_ids: [REDACTED {unknown}]
+An unrelated identifier {unknown} and hash {'f' * 64} in prose.
+> Example observation: {unknown}
+>
+> {unknown}
+> Quoted example with a lazy continuation:
+{unknown}
+
+```markdown
+## Candidate: example
+- candidate_id: {candidate.id}
+observation_id: {unknown}
+```
+    {unknown}
+### Request
+{oid}
+## Candidate: later historical entry
+- candidate_id: cand_later
+observation_id: {unknown}
+''')
+    registration = {'action': 'record_evidence', 'candidate_id': candidate.id,
+                    'evidence_path': 'results.md', 'observation_ids': [oid]}
+    registered = json.loads(await registry.execute('workflow', registration, None, p))
+    ref = registered['evidence']['id']
+    args['evidence_refs'] = [ref]
+    assert json.loads(await registry.execute('workflow', args, None, p))['ok']
+    proof.write_text('Unrelated later content')
+    resumed = WorkflowState.from_dict(json.loads(json.dumps(state.to_dict())))
+    assert accepted_result(resumed, resumed.candidates[candidate.id], resumed.latest_result(candidate.id), policy)
+    assert unknown in (tmp_path / state.evidence[ref].path).read_text()
+
+
+@pytest.mark.asyncio
+async def test_registered_proof_cannot_drop_immutable_parents(runtime, tmp_path):
+    state, candidate, _, _, oid = await setup(runtime, tmp_path)
+    registry, p, *_ = runtime
+    registration = {'action': 'record_evidence', 'candidate_id': candidate.id,
+                    'evidence_path': 'proof.md', 'observation_ids': [oid]}
+    ref = json.loads(await registry.execute('workflow', registration, None, p))['evidence']['id']
+    rejected = await registry.execute('workflow', {**registration, 'observation_ids': []}, None, p)
+    assert 'immutable derived evidence source association changed' in rejected
+    assert state.evidence_sources[ref] == [oid]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_consistency_applies_to_initial_submission_and_same_attempt_update(runtime, tmp_path):
+    state, candidate, _, args, _ = await setup(runtime, tmp_path)
+    registry, p, policy, *_ = runtime
+    submission = {**args, 'mutation_performed': True, 'cleanup_state': 'not-required',
+                  'cleanup_status': 'cleanup not performed'}
+    assert (await registry.execute('workflow', submission, None, p)).startswith('error:')
+    assert not state.validation_results
+    submission.update(cleanup_state='pending', cleanup_status='awaiting authority')
+    payload = json.loads(await registry.execute('workflow', submission, None, p))
+    assert payload['created'] and payload['eligible_for_confirm_finding']
+    latest = state.latest_result(candidate.id)
+    assert latest is not None
+    before = json.loads(json.dumps(state.to_dict()))
+    invalid_update = {**submission, 'cleanup_state': 'succeeded', 'cleanup_status': 'parent reset succeeded'}
+    assert (await registry.execute('workflow', invalid_update, None, p)).startswith('error:')
+    assert state.to_dict() == before
+    updated = json.loads(await registry.execute('workflow', {**submission,
+        'cleanup_state': 'succeeded', 'cleanup_status': 'resource deletion verified'}, None, p))
+    assert not updated['created']
+    assert updated['result']['attempt_id'] == payload['result']['attempt_id']
+    assert updated['result']['result_id'] == payload['result']['result_id']
+    assert len(state.validation_results) == 1 and len(state.attempts) == 1
+    assert latest.cleanup_state == 'succeeded' and accepted_result(state, candidate, latest, policy)
