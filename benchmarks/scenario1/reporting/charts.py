@@ -217,7 +217,7 @@ def _case_charts(model: ReportModel, *, metric: str, stem: str, title: str, axis
         for index, (label, _, color) in enumerate(CLASS_STYLES):
             x = 32 + index * 112
             body += [_rect(x, 136, 18, 15, color), _text(x + 26, 149, label, 'small')]
-        body.append(_text(888, 149, 'Case numbers follow per-case.csv row order', 'small right'))
+        body.append(_text(888, 149, 'Case numbers follow manifest execution order', 'small right'))
         bottom = 194 + max(1, len(cases)) * 30
         for tick in range(5):
             x = 220 + tick * 135

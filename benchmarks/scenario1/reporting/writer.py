@@ -130,14 +130,14 @@ def _render(model) -> dict[str, bytes]:
     return files
 
 
-def write_report(run: Path, output: Path | None = None, evaluation: Path | None = None) -> Path:
+def write_report(run: Path, output: Path | None = None, evaluation: Path | None = None, *, export_csv: bool = False) -> Path:
     candidate = run.resolve()
     if ((candidate / 'events.jsonl').exists() and not (candidate / 'storage.json').exists()
             and candidate.parent.parts[-4:] != ('.kagent', 'benchmarks', 'scenario1', 'runs')):
         _destination(candidate, output)  # legacy output safety precedes input loading
     run = resolve_run(run)
     if (run / 'storage.json').exists():
-        return _write_public(run, output, evaluation)
+        return _write_public(run, output, evaluation, export_csv=export_csv)
     destination = _destination(run, output)
     rename = _publisher()
     model = load_report(run, evaluation)
@@ -185,8 +185,9 @@ def write_report(run: Path, output: Path | None = None, evaluation: Path | None 
         os.close(parent_fd)
 
 
-def _write_public(run: Path, output: Path | None, evaluation: Path | None) -> Path:
+def _write_public(run: Path, output: Path | None, evaluation: Path | None, *, export_csv: bool = False) -> Path:
     from .projection import index_file, result_files
+    from .html import render_html
     raw = output if output is not None else public_destination(run)
     destination = Path(os.path.abspath(raw))
     if destination.is_symlink() or destination.exists():
@@ -201,10 +202,18 @@ def _write_public(run: Path, output: Path | None, evaluation: Path | None) -> Pa
     model.metadata['execution_state'] = ('blocked' if (run / 'blocked.json').exists() else
                                          'interrupted' if model.metadata['incomplete'] else 'finished')
     model.metadata['execution_complete'] = model.metadata['execution_state'] == 'finished'
-    files = {f'report/{name}': raw for name, raw in _render(model).items()}
-    files.update(result_files(run, model))
+    charts = render_charts(model)
+    files = {f'report/{name}': raw for name, raw in charts.items()}
+    if export_csv:
+        files.update({f'report/{name}': raw for name, raw in _render(model).items()})
+    projections = result_files(run, model)
+    files.update(projections)
+    cases = [json.loads(projections[f'results/{cid}.json']) for cid in
+             json.loads((run / 'manifest.json').read_bytes())['execution_order']]
+    files['index.html'] = render_html(model, cases, charts,
+                                     output_files=sorted([*files, 'index.html', 'results/index.json']))
     files['results/index.json'] = index_file(run, destination, model, files)
-    # Stage the entire two-entry tree. Publishing one child at a time would
+    # Stage the entire public tree. Publishing one child at a time would
     # expose a half-publication and create an unsafe repair/overwrite problem.
     publications = run / 'publications'
     source_fd = os.open(publications, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -237,15 +246,6 @@ def _write_public(run: Path, output: Path | None, evaluation: Path | None) -> Pa
         owned = os.fstat(stage_fd)
         for name, contents in sorted(files.items()):
             _write_file(stage_fd, name, contents)
-        results_fd = os.open('results', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=stage_fd)
-        try:
-            try:
-                os.mkdir('evidence', mode=0o700, dir_fd=results_fd)
-            except FileExistsError:
-                pass
-            os.fsync(results_fd)
-        finally:
-            os.close(results_fd)
         os.fsync(stage_fd)
         check()
         named = os.stat(staging_name, dir_fd=source_fd, follow_symlinks=False)

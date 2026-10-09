@@ -305,6 +305,57 @@ status was not declared. Existing artifacts are not migrated.
 
 ## Commands
 
+For reusable operator configuration, copy
+`benchmarks/scenario1/config.example.toml` to the ignored
+`benchmarks/scenario1/config.local.toml` and set the existing dataset, exact
+origin/context, reset policy, container names, pinned WAR, frozen manifest paths
+and public output root. Paths in TOML resolve relative to the TOML file;
+explicit CLI paths retain their existing working-directory semantics. The
+schema has `[lab]`, `[manifests]`, `[output]` and optional `[limits]` only.
+No containers, WARs or manifests are discovered, and `run` never creates a
+profile selection. The tracked template contains placeholders, not machine paths.
+
+```bash
+python -m benchmarks.scenario1 run --mode smoke --authorized-lab
+python -m benchmarks.scenario1 run --mode official --authorized-lab
+python -m benchmarks.scenario1 run --mode smoke --authorized-lab --dry-run
+```
+
+The existing explicit `--authorized-lab` acknowledgement remains required;
+`[lab] authorized_lab = true` describes the configuration and never supplies
+approval. Omitting the CLI flag fails before execution. `--config PATH` selects
+another TOML file. CLI flags override TOML, including limits, target and manifest.
+An explicit `--reset-state` uses the legacy controller instead of configured
+container fields. Long commands without `--mode`/`--config` do not load TOML and
+retain their existing selection and `--run-kind` behavior. The new smoke profile
+requires a frozen 12-case smoke selection; official requires a frozen 40-case
+`reduced` selection, verified with the existing dataset verification contract.
+Smoke and conflicting run-kind declarations cannot be official. These profile
+checks do not change legacy programmatic run designation contracts.
+
+Without `--output`, every invocation gets a timestamp/UUID output name; explicit
+existing output is rejected. Canonical reproducibility records include the
+effective CLI/configuration, config/selection/WAR hashes, runtime limits and the
+existing source snapshot. Public metadata exposes allowlisted hashes and limits,
+not configuration paths or authorization policy.
+
+Progress uses flushed, ordinary stderr lines for TTY and redirected output;
+stdout retains the final JSON object. `--progress none` suppresses progress.
+The renderer receives the persisted parent start/finish rows and verified/blocked
+reset receipts; it never interprets missing exports as persistence success or
+execution completion as evaluability. Post-run evaluator partitions are shown
+separately. For example (illustrative times, not a recorded run):
+
+```text
+[01/12] BenchmarkTest00390 | XSS
+  Reset before  OK (verified receipt)
+  Agent running  ...
+  Result export  persisted (hash recorded)
+  Execution      completed | 34.3s worker wall; evaluation pending
+Progress: 1/12 executions finished
+  Reset after   OK (verified receipt)
+```
+
 Use `venv-linux/bin/python` from the repository; output files/run directories must
 be new. All commands below are templates; running the implementation did not
 execute a pilot.
@@ -327,11 +378,12 @@ New executions physically separate canonical/runtime storage from public output:
 
 ```text
 <project>/artifacts/benchmarks/<run-name>/
-├── report/              # existing CSV, Markdown, report.json and SVG charts
+├── index.html           # offline report, inline SVG, all public case details/evidence
+├── report/
+│   └── charts/          # all eight existing figures, plus existing pagination if needed
 └── results/
     ├── index.json       # storage, manifest, evaluation and public file bindings
-    ├── <case-id>.json   # reader projection; not a canonical CaseExecution
-    └── evidence/        # selected sanitized response text
+    └── <case-id>.json   # sanitized bounded evidence embedded in the reader projection
 
 <project>/.kagent/benchmarks/scenario1/
 ├── selections/          # default location for select (explicit --output still works)
@@ -389,8 +441,11 @@ legacy run), root-level evaluation filenames, and sibling staging/fallback.
 No historical files, hashes, symlinks or backing directories are migrated,
 rewritten or moved, including `scenario1-smoke-run-01`.
 
-Reports retain `summary.csv`, `partitions.csv`, `per-case.csv`, `thesis-tables.md`,
-an abnormal-analysis template, `report.json` and the existing chart set. Only
+New public exports contain one `index.html`, result JSON and the existing chart
+set. `summary.csv`, `partitions.csv`, `per-case.csv`, `thesis-tables.md`,
+`abnormal-analysis-template.csv` and `report.json` are opt-in companions via
+`report --export-csv` (or `write_report(..., export_csv=True)`) into a new output.
+Legacy runs retain their historical report export contract by default. Only
 evaluable cases enter the confusion matrix. Numerators/denominators, NA semantics,
 metrics, evaluator identity and scoring are unchanged. Report tables retain the
 restricted presentation model. Public case JSON adds the testcase ID, sanitized
@@ -400,16 +455,49 @@ the parent exporter after execution. Full workflow, observations, transcript,
 permission decisions/journal, provider configuration and workspace paths are
 excluded. Free-form assessment rationale stays internal.
 
-Public case schema `scenario1-public-case-v1` and `projection_binding` are distinct
+New public case schema `scenario1-public-case-v2` and `projection_binding` are distinct
 from the sealed canonical export. Selected evidence is bounded to 8192 bytes per
 selected primary response, sanitized with the production evidence redactor,
 with local filesystem references removed. It has its own public SHA-256, the
 canonical body/source hashes and JSON-pointer provenance into the canonical
 case result. Redaction/truncation can change bytes: public hashes do not pretend
-to be canonical evidence hashes. Canonical evidence and seals are untouched.
+to be canonical evidence hashes. UTF-8 `content` replaces the v1 `public_ref`
+and separate TXT derivative, with SHA-256 computed over its exact UTF-8 bytes.
+Each source retains canonical source/body hashes, source kind, original byte
+range, JSON pointer, pseudonymous observation reference and truncation flags.
+The 8192-byte public content limit and 32-source canonical bound are enforced.
+Canonical evidence and seals are untouched. The public index schema is now
+`scenario1-public-results-v2`; the resolver still reads and verifies v1 public
+trees against their original case/TXT projections. Smoke 1 and Smoke 2 are
+never rewritten or migrated.
 The index stores compact resolution/integrity information, not copied manifests
 or large metadata snapshots. Hashes detect corruption and bind the local
 artifacts; they are not authentication against someone who can rewrite all data.
+
+Open `index.html` directly with `file://`. All report data and selected evidence
+are embedded; charts also remain standalone SVG files. There are no external
+scripts, frameworks, fetches, servers or CDN dependencies. The report includes
+overview/denominators, all charts, SQLi/XSS/Overall resource distributions and
+coverage, searchable/filterable/sortable cases, expandable inputs/evidence,
+ground truth, agent outcomes, evaluator classifications and full public
+reproducibility/methodology metadata. Plain details still work without JavaScript.
+The original thesis tables and suggested figure captions are also embedded as an
+expandable reference, so removing default Markdown output does not discard them.
+Evidence is escaped text, inert embedded JSON escapes script-closing characters,
+and a content security policy permits only the fixed report script and styles.
+Raw workflows, free-form internal assessment rationale and individual tool
+transcripts stay internal. Tool failures/blocks appear as recorded counts;
+persisted-finding presence is reported only when the frozen workflow supplies it.
+
+Provider-reported cache read/write tokens are already retained in the LLM request
+ledger. The reporter uses complete totals only for complete request coverage;
+partial observed sums remain separately marked. Missing provider fields and old
+ledgers give NA. Cache hit/miss request counts are unavailable and never inferred
+from tokens. No LLM client instrumentation is added. All source, model/provider
+and runtime identity publication follows the existing pseudonymous policy.
+Charts keep their existing statistical definitions, including completed-case
+medians and pagination after 20 cases. An official 40-case run therefore retains
+two additional case-chart pages beyond the eight base figures.
 
 The loader recomputes the existing evaluator v1 identity from the semantic
 manifest, non-evaluated lifecycle rows, partial-tail flag and (when present)

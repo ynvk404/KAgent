@@ -240,6 +240,7 @@ def test_cli_operator_dry_run_never_reads_docker(tmp_path, monkeypatch, capsys):
             '--target-state', 'external-reset', '--container', 'operator-benchmark', '--dry-run']
     assert main(args) == 2
     assert '--reset-war' in capsys.readouterr().err
+    (tmp_path / 'not-read.war').write_bytes(b'offline dry-run identity fixture')
     assert main(args + ['--reset-war', str(tmp_path / 'not-read.war')]) == 0
     assert json.loads(capsys.readouterr().out)['dry_run'] is True
 
@@ -258,6 +259,7 @@ def test_admission_docker_wrapper_refuses_lifecycle(args, monkeypatch):
 def test_real_existing_container_logical_reset_between_requests(tmp_path):
     """Fixed insert/identity allocator/readback fixtures, no model and no lifecycle mutations."""
     import hashlib
+    import urllib.error
     import urllib.request
     from benchmarks.common.contracts import OperationalCaseInput, decode
     from benchmarks.scenario1.core.dataset import Dataset, select

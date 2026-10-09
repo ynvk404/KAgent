@@ -98,12 +98,13 @@ def launch_worker(envelope: dict, seconds: float) -> tuple[int, bool]:
 
 def run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, run_kind: RunKind = 'development',
         fail_fast=False, launcher=launch_worker, reset_controller=None, reset_audit: Path | None = None,
-        resume_from: Path | None = None) -> Path:
+        resume_from: Path | None = None, observer=None, invocation_metadata: dict | None = None) -> Path:
     ownership = reset_controller.ownership() if reset_controller is not None else nullcontext()
     with ownership:
         try:
             return _run(manifest, settings, destination, run_kind=run_kind, fail_fast=fail_fast, launcher=launcher,
-                        reset_controller=reset_controller, reset_audit=reset_audit, resume_from=resume_from)
+                        reset_controller=reset_controller, reset_audit=reset_audit, resume_from=resume_from,
+                        observer=observer, invocation_metadata=invocation_metadata)
         except BaseException:
             if reset_controller is not None:
                 reset_controller.block()
@@ -111,7 +112,16 @@ def run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, 
 
 
 def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *, run_kind: RunKind,
-         fail_fast, launcher, reset_controller, reset_audit, resume_from) -> Path:
+         fail_fast, launcher, reset_controller, reset_audit, resume_from, observer, invocation_metadata) -> Path:
+    def observe(row):
+        if observer is not None:
+            try:
+                observer(row)
+            except Exception:
+                pass  # Presentation failures never affect admission or scheduling.
+
+    def receipt(case_id, phase, operation):
+        return persist(destination, case_id, phase, operation, observer=observe)
     validate_runtime(manifest, settings, verified_reset=reset_controller is not None)
     if launcher is launch_worker and reset_controller is None:
         raise ResetBlocked('production execution requires --reset-state or --container with verified logical reset')
@@ -128,7 +138,10 @@ def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *,
             # Retain the normal immutable manifest/scheduled history and blocker
             # even when initial closure fails; no worker will be admitted.
             admission_error = err
-    bound = replace(manifest, runtime=asdict(settings), reproducibility=reproducibility())
+    repro = reproducibility()
+    if invocation_metadata is not None:
+        repro['invocation'] = invocation_metadata
+    bound = replace(manifest, runtime=asdict(settings), reproducibility=repro)
     write_new(destination / 'manifest.json', asdict(bound))
     classification = write_run_classification(destination, run_kind)
     bind_storage(destination, public)
@@ -165,7 +178,7 @@ def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *,
                     reset_controller.check_identity(manifest, settings)
                 if reset_audit and file_hash(reset_audit) != audit_hash:
                     raise ResetBlocked('historical audit evidence changed during run')
-                persist(destination, case_id, 'before', reset_controller.reset)
+                receipt(case_id, 'before', reset_controller.reset)
                 persist(destination, case_id, 'authorize', lambda: reset_controller.authorize(operations[case_id], settings))
             except BaseException as err:
                 reset_controller.block()
@@ -180,6 +193,7 @@ def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *,
         output.parent.mkdir(exist_ok=True, mode=0o700)
         recorder.append('started', case_id, 'started', execution_id=execution_id,
                         data={'workspace_ref': str(workspace.relative_to(destination))})
+        observe(recorder.rows[-1])
         wall = time.monotonic()
         failure = None
         executed = None
@@ -221,9 +235,10 @@ def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *,
                 data['canonical_summary'].update(outcome=current.get('outcome') if current else None,
                                                  attempt_id=current.get('attempt_id') if current else None)
         recorder.append('runtime-finished', case_id, status, execution_id=execution_id, data=data)
+        observe(recorder.rows[-1])
         if reset_controller is not None:
             try:
-                persist(destination, case_id, 'after', reset_controller.reset)
+                receipt(case_id, 'after', reset_controller.reset)
             except BaseException as err:
                 reset_controller.block()
                 following = manifest.execution_order[manifest.execution_order.index(case_id) + 1:]
@@ -238,6 +253,7 @@ def _run(manifest: RunManifest, settings: RuntimeSettings, destination: Path, *,
             for skipped in remaining:
                 recorder.append('evaluated', skipped, 'not-run', data={'partition': 'not-run', 'reason': 'fail-fast',
                                                                       'evaluation_identity': 'fail-fast-v1'})
+                observe(recorder.rows[-1])
             break
     if reset_controller is not None and not (destination / 'blocked.json').exists():
         try:

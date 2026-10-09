@@ -173,7 +173,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise ResetBlocked('reset redirect refused')
 
 
-def persist(directory: Path, case_id: str, phase: str, operation) -> dict:
+def persist(directory: Path, case_id: str, phase: str, operation, *, observer=None) -> dict:
     """Fsync a unique receipt on both success and failure, including interruption."""
     receipt = {'case_id': case_id, 'phase': phase, 'status': 'unknown',
                'verification_scope': ('admission-closure' if phase == 'block'
@@ -192,4 +192,9 @@ def persist(directory: Path, case_id: str, phase: str, operation) -> dict:
     finally:
         receipt['end_to_end_seconds'] = time.monotonic() - started
         write_new(path, receipt)
+        if observer is not None:
+            try:
+                observer({'kind': 'reset-receipt', **receipt})
+            except Exception:
+                pass  # Presentation cannot alter reset completion or its exception.
     return {'receipt_ref': str(path.relative_to(directory)), 'receipt_sha256': file_hash(path), **receipt}

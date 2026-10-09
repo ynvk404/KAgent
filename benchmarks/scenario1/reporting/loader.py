@@ -360,6 +360,8 @@ def load_report(directory: Path, evaluation: Path | None = None) -> ReportModel:
     def commit(value):
         validated = semantic(value, r'[0-9a-f]{40}')
         return presentation_id('commit', validated) if validated is not None else None
+    policy_path = directory / 'reset-policy.json'
+    policy = _mapping(read_json(policy_path)) if policy_path.exists() or policy_path.is_symlink() else {}
     metadata = {
         'report_schema_version': 1, 'run_id': presentation_id('run', manifest.run_id),
         'identifier_representation': 'sha256-domain-separated-v1',
@@ -379,6 +381,15 @@ def load_report(directory: Path, evaluation: Path | None = None) -> ReportModel:
         'runtime_limits': {key: _number(runtime.get(key)) for key in ('timeout_seconds', 'http_requests', 'tool_calls', 'agent_calls')},
         'provider_models': [{'provider': presentation_id('provider', p), 'model': presentation_id('model', m)} for p, m in provider_models],
         'scheduled': metrics['overall']['scheduled'], 'evaluable': metrics['overall']['evaluable'],
+        'lifecycle_counts': {key: metrics['overall'][key] for key in ('scheduled', 'started', 'completed')},
+        'dataset_identity': digest(manifest.dataset),
+        'dataset_artifact_hashes': sorted(manifest.dataset['artifacts'].values()),
+        'invocation': {key: _safe_identity(_mapping(repro.get('invocation')).get(key))
+                       for key in ('configuration_sha256', 'selection_file_sha256', 'reset_war_sha256')},
+        'reset_coverage': {'enabled': policy.get('enabled') if type(policy.get('enabled')) is bool else None,
+                           'scope_verdict': policy.get('scope_verdict') if policy.get('scope_verdict') == 'PARTIAL' else None,
+                           'external_effects_restoration_verified': False if policy.get('external_effects_restoration_verified') is False else None,
+                           'note': 'Logical reset does not certify filesystem/process/LDAP effects or full ORM cache parity.'},
     }
     public_keys = ('scheduled', 'evaluable', 'TP', 'TN', 'FP', 'FN', *PARTITIONS,
                    'recall', 'precision', 'fpr', 'evaluability')

@@ -11,7 +11,7 @@ from benchmarks.common.contracts import RunManifest, decode, digest, file_hash, 
 from benchmarks.common.recorder import read_records, validate_lifecycle
 from benchmarks.scenario1.core.storage import PUBLIC_SCHEMA, read_storage
 from src.redaction.redact import apply_evidence, redact_payload
-from .loader import _diagnostic, _safe_identity, presentation_id
+from .loader import _counter, _diagnostic, _mapping, _safe_identity, presentation_id
 from .model import ReportModel
 
 
@@ -41,7 +41,7 @@ def _input(op: dict) -> dict:
     }
 
 
-def _evidence(export: dict, cid: str, files: dict[str, bytes]) -> tuple[dict | None, list[dict]]:
+def _evidence(export: dict, cid: str, files: dict[str, bytes], version: int) -> tuple[dict | None, list[dict]]:
     result = next((r for r in export['workflow'].get('validation_results', [])
                    if isinstance(r, dict) and r.get('result_id') == export['result_id']), None)
     if result is None:
@@ -53,7 +53,10 @@ def _evidence(export: dict, cid: str, files: dict[str, bytes]) -> tuple[dict | N
                   'result_id': presentation_id('result', export['result_id']),
                   'canonical_assessment_binding': _safe_identity(result.get('assessment_binding'))}
     selected = []
-    for i, entry in enumerate(result.get('evidence_manifest', [])):
+    entries = result.get('evidence_manifest', [])
+    if len(entries) > 32:
+        raise ValueError('selected evidence exceeds the canonical 32-source bound')
+    for i, entry in enumerate(entries):
         source = entry.get('source') if isinstance(entry, dict) else None
         if not isinstance(source, dict) or source.get('source_kind') not in {'native-http', 'imported-capture'}:
             continue
@@ -65,7 +68,8 @@ def _evidence(export: dict, cid: str, files: dict[str, bytes]) -> tuple[dict | N
         # the canonical body. Both raw and public hashes make that explicit.
         excerpt = _text(body[:8192].decode('utf-8', errors='replace')).encode()
         ref = f'results/evidence/{cid}-{i}.txt'
-        files[ref] = excerpt
+        if version == 1:
+            files[ref] = excerpt
         selected.append({
             'public_ref': ref.removeprefix('results/'), 'public_sha256': hashlib.sha256(excerpt).hexdigest(),
             'canonical_ref': f'results/{cid}.json',
@@ -75,10 +79,51 @@ def _evidence(export: dict, cid: str, files: dict[str, bytes]) -> tuple[dict | N
             'source_kind': source['source_kind'], 'byte_range': [0, min(len(body), 8192)],
             'sanitized': True, 'truncated': len(body) > 8192,
         })
+        if version == 2:
+            item = selected[-1]
+            del item['public_ref']
+            content = excerpt[:8192].decode('utf-8', errors='ignore')
+            item.update(content=content, content_encoding='utf-8',
+                        public_sha256=hashlib.sha256(content.encode()).hexdigest(),
+                        truncated=len(body) > 8192 or len(excerpt) > 8192,
+                        observation_ref=presentation_id('observation', str(source.get('id'))),
+                        role=entry.get('role') if entry.get('role') in {
+                            'baseline', 'probe', 'control', 'imported', 'primary', 'trigger',
+                            'readback', 'cleanup', 'auxiliary'} else None,
+                        http_status=_counter(source.get('status')),
+                        response_complete=source.get('complete') if type(source.get('complete')) is bool else None,
+                        upstream_truncated=source.get('truncated') if type(source.get('truncated')) is bool else None,
+                        request_sha256=_safe_identity(source.get('request_hash')),
+                        response_sha256=_safe_identity(source.get('response_hash')),
+                        method=source.get('method') if source.get('method') in {'GET', 'POST', 'HEAD'} else None)
     return assessment, selected
 
 
-def result_files(root: Path, model: ReportModel) -> dict[str, bytes]:
+def _usage(execution) -> dict:
+    """Expose bounded numeric telemetry only, including provider-reported cache use."""
+    llm = _mapping(execution.metrics.get('llm')) if execution and execution.metrics else {}
+    output = {}
+    for name in ('input_tokens', 'output_tokens', 'total_tokens'):
+        token = _mapping(_mapping(llm.get('tokens')).get(name))
+        output[name] = {key: _counter(token.get(key)) for key in ('observed_sum', 'known_requests', 'requests')}
+        output[name]['complete'] = token.get('complete') if type(token.get('complete')) is bool else None
+    requests = llm.get('requests')
+    has_ledger = isinstance(requests, list)
+    requests = requests if isinstance(requests, list) else []
+    for name in ('cached_input_tokens', 'cache_creation_input_tokens'):
+        values = [_counter(row.get('usage', {}).get(name))
+                  if isinstance(row, dict) and isinstance(row.get('usage'), dict) else None for row in requests]
+        known = [v for v in values if v is not None]
+        complete = bool(requests) and llm.get('request_records_complete') is True and len(known) == len(requests)
+        output[name] = {'total': sum(known) if complete else None,
+                        'observed_sum': sum(known) if known else None,
+                        'known_requests': len(known) if has_ledger else None,
+                        'requests': len(requests) if has_ledger else None,
+                        'complete': complete if has_ledger else None}
+    return output
+
+
+def result_files(root: Path, model: ReportModel, *, version: int = 2) -> dict[str, bytes]:
     manifest = decode(RunManifest, read_json(root / 'manifest.json'))
     rows, _ = read_records(root / 'events.jsonl')
     histories = validate_lifecycle(rows)
@@ -99,9 +144,9 @@ def result_files(root: Path, model: ReportModel) -> dict[str, bytes]:
                                     finish['execution_id'], canonical['result_sha256'])
         assessment, evidence = (None, [])
         if execution and execution.result and summary['evaluator_partition'] in {'evaluable', 'unresolved'}:
-            assessment, evidence = _evidence(execution.result, cid, files)
+            assessment, evidence = _evidence(execution.result, cid, files, version)
         projection = {
-            'schema': 'scenario1-public-case-v1', 'case_id': cid,
+            'schema': f'scenario1-public-case-v{version}', 'case_id': cid,
             'run_id': presentation_id('run', manifest.run_id),
             'manifest_identity': model.metadata['manifest_identity'],
             'evaluation_identity': model.metadata['evaluation_identity'],
@@ -111,6 +156,19 @@ def result_files(root: Path, model: ReportModel) -> dict[str, bytes]:
             **{k: v for k, v in summary.items() if k != 'case_id'},
             'assessment': assessment, 'canonical': canonical, 'selected_evidence': evidence,
         }
+        if version == 2:
+            workflow = execution.result.get('workflow', {}) if execution and execution.result else {}
+            persisted = workflow.get('persisted_findings')
+            cid_internal = execution.result.get('candidate_id') if execution and execution.result else None
+            projection.update(usage=_usage(execution),
+                persisted_finding=bool(persisted.get(cid_internal)) if isinstance(persisted, dict) else None,
+                conclusion={'outcome': summary['agent_outcome'],
+                            'agent_limitations': None,
+                            'evaluator_reason': summary['evaluator_reason'],
+                            'free_form_conclusion': None,
+                            'note': 'Free-form agent prose and tool transcripts are not in the public projection.'},
+                tool_diagnostics={'blocked': summary['tool_blocked'], 'failed': summary['tool_failed'],
+                                  'individual_operations': None})
         projection['projection_binding'] = digest(projection)
         files[f'results/{cid}.json'] = json_bytes(projection)
     return files

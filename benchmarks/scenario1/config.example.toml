@@ -1,0 +1,26 @@
+# Copy to config.local.toml (ignored). Paths resolve relative to this file.
+# Replace every placeholder with your existing lab artifacts; run never selects.
+[lab]
+dataset = "../../lab/BenchmarkJava"
+target = "http://127.0.0.1:18080"
+context_path = "/benchmark"
+target_state = "external-reset"
+container = "operator-benchmark"
+ingress_container = "operator-ingress"
+reset_war = "../../lab/benchmark-offline.war"
+# Describes the lab; does not replace the required CLI acknowledgement.
+authorized_lab = true
+
+[manifests]
+smoke = "../../.kagent/benchmarks/scenario1/selections/smoke.json"
+official = "../../.kagent/benchmarks/scenario1/selections/official-40.json"
+
+[output]
+root = "../../artifacts/benchmarks"
+
+# Optional; these are the existing runtime defaults.
+[limits]
+timeout = 180
+http_requests = 24
+tool_calls = 80
+agent_calls = 24
