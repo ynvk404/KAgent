@@ -1,2 +1,0 @@
-# Unified diffs preserve a single-space prefix on empty context lines.
-components/browser_mcp/patch-local-v*.diff whitespace=-blank-at-eol

@@ -708,7 +708,7 @@ async def main() -> int:
             },
         )
         sys.stderr.write(f"hang stack dump: {hang_diagnostics.path}\n")
-    sys.stderr.write(f"debug session log: {session_debug.path}\n")
+        sys.stderr.write(f"debug session log: {session_debug.path}\n")
     coverage_store = CoverageStore(
         str(project_coverage_path(session_id)),
         diagnostics=hang_diagnostics,
@@ -1092,7 +1092,7 @@ async def main() -> int:
         await close_runtime_resources(root_ctl=root_ctl, reload_timer=None, watchers=[],
                                       mcp_sessions=mcp_sessions, close_burp_bridge=close_burp_bridge)
         return 2
-    if flags.http_lab_grants or flags.yolo:
+    if session_debug.enabled and (flags.http_lab_grants or flags.yolo):
         print("HTTP operator grants:\n" + engagement_state.http_permissions.status(), file=sys.stderr)
 
     skill_dirs_to_watch = [d for d in all_skill_dirs if os.path.exists(d)]
