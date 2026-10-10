@@ -134,7 +134,7 @@ class BrowserCaptureEndpointsTool(BaseCaptureTool):
                 "No endpoints captured yet. Confirm the extension is running "
                 "with capture enabled and the scope regex matches the target."
             )
-        return render_list(eps, DEFAULT_LIST_LIMIT)
+        return render_list([request_view(ep) for ep in eps], DEFAULT_LIST_LIMIT)
 
 class BrowserCaptureRequestsTool(BaseCaptureTool):
     def name(self) -> str:
@@ -182,7 +182,8 @@ class BrowserCaptureRequestsTool(BaseCaptureTool):
                 "id": r.id,
                 "baseline_request_ref": r.baseline_request_ref,
                 "method": r.method,
-                "url": apply_evidence(r.url),
+                "url": request_view({"url": r.url, "request_headers": r.request_headers,
+                                     "response_headers": r.response_headers})["url"],
                 "status": r.status,
                 "type": r.type,
                 "source": r.source,
@@ -201,7 +202,8 @@ class BrowserCaptureGetTool(BaseCaptureTool):
         return (
             "Fetch full details for one captured request: headers, request "
             "body, response body (when available). Pass the id returned by "
-            "browser_capture_requests."
+            "browser_capture_requests or the operator's capture selection. "
+            "Pass its baseline_request_ref to reject a changed retrieval binding."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -209,6 +211,10 @@ class BrowserCaptureGetTool(BaseCaptureTool):
             "type": "object",
             "properties": {
                 "id": {"type": "string", "description": "Request id from browser_capture_requests."},
+                "baseline_request_ref": {
+                    "type": "string",
+                    "description": "Expected selected baseline reference; rejects ID reuse or changed binding.",
+                },
                 "body_max_chars": {
                     "type": "number",
                     "description": "Optional cap for the response body excerpt (default 4000).",
@@ -224,6 +230,9 @@ class BrowserCaptureGetTool(BaseCaptureTool):
         r = self.store.get_request(id_)
         if not r:
             return f"error: no request with id {id_}"
+        expected = arg_string(args, "baseline_request_ref")
+        if expected and (r.baseline_request_ref != expected or self.store.resolve_baseline(expected) is None):
+            return "error: selected capture baseline unavailable or binding changed; recapture required"
         cap_val = arg_number(args, "body_max_chars")
         cap = int(cap_val) if cap_val is not None else 4000
         response_body = request_view(r).get("response_body")

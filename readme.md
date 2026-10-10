@@ -84,6 +84,49 @@ The module entry point is also available for a checkout-based run:
 python -m src.cli.main --help
 ```
 
+## Select captured Burp requests
+
+Start the local bridge with `/burp [port]` and configure the Burp extension's
+bridge URL and token. Both **Send to KAgent** and enabled **Auto-capture Proxy
+traffic / Auto-capture Repeater traffic** feed the same in-memory CaptureStore.
+Ingest alone does not start the Agent.
+
+Set `/target <authorized-lab-url>`, then use:
+
+- `/burp list`: show the newest 20 readable Burp records at the exact active
+  origin, with retrieval ID, method, redacted endpoint and `Showing M/N requests`.
+- `/burp use`: select the latest matching record for the next Agent turn.
+- `/burp use <id>`: select that exact retrieval ID.
+- `/burp use cancel`: cancel the pending selection and retain captures.
+- `/burp all`: select **at most 50 most recent matching records**, with
+  `Selected M/N requests`. This does not select the complete Burp history.
+
+Enter an ordinary prompt after selecting, for example “Analyze this request”
+or “Test this request for SQL injection.” Selection supplies a source; the prompt
+determines the work. It does not choose an input, prove a vulnerability, start
+batch testing or grant HTTP/credential replay permission. Scope may contain
+additional origins, but selection always uses the active target's exact scheme,
+hostname and effective port. Counts describe retained records, not HTTP sends.
+
+Selection is consumed once when a tools-enabled turn starts. Its frozen IDs and
+baseline references survive retries and compaction of that turn only. Pending
+selection is not saved in sessions or memory. Target/Scope/permission changes,
+reset and resume invalidate it; a tools-disabled turn such as `/plan` cancels it
+with a notice. Capture eviction, clear or changed bindings stop the handoff;
+the Agent never substitutes a newer request. Unsupported baselines can still
+provide redacted context, but replay needs a fresh supported capture. Follow-up
+uses actual tool history and Workflow/evidence records; resume does not restore
+live capture data or replay availability.
+
+For a manual check, send one request from Burp, run `/burp list` and
+`/burp use <id>`, then request analysis and verify `browser_capture_get` reads
+that ID. Repeat with Auto-capture enabled, select `/burp all`, and request only
+one request's analysis; selection alone should send no test traffic. For replay,
+explicitly request bounded testing and review captured credentials through the
+normal permission dialog. Send later traffic after selection to check that the
+selected set stays fixed. Test cancel, `/plan`, target/scope changes and reset;
+reset should retain captures, while restarting requires recapture for new replay.
+
 ## Repository layout
 
 - `src/` — CLI, TUI, agent loop, providers, tools, workflow, and persistence

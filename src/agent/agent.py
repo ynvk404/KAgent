@@ -92,6 +92,7 @@ from src.skills.registry import (
 
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
+from src.browser.selection import CaptureSelection, SelectedCapture, readable_burp_requests, MAX_SELECTED_REQUESTS
 from src.workflow.state import Candidate, WorkflowObjective, WorkflowState, candidate_origin
 from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
 from src.workflow.goals import RequestedGoal, extract_requested_classes
@@ -873,6 +874,7 @@ class _TurnContext:
     catalog: str = ""
     workflow: WorkflowState | None = None
     continuation: str = ""
+    capture_selection: CaptureSelection | None = None
 
 
 class AgentOptions:
@@ -1010,6 +1012,7 @@ class Agent:
         )
 
         self.running = False
+        self.pending_capture_selection: CaptureSelection | None = None
 
         self.active_skills: set[str] = set()
         self.pending_skills: set[str] = set()
@@ -1765,6 +1768,7 @@ class Agent:
             raise asyncio.CancelledError()
 
     async def reset(self) -> None:
+        self.cancel_capture_selection()
         self.engagement_state.http_permissions.reset()
         self.memory = None
         self.workflow.clear()
@@ -1813,6 +1817,7 @@ class Agent:
             return False
 
     def resume_saved(self) -> None:
+        self.cancel_capture_selection()
         if self.store is None:
             return
 
@@ -1951,7 +1956,10 @@ class Agent:
         else:
             _, scope_changed = self.engagement_state.add_origin(url)
 
+        prior_revision = self.target.revision
         self.target.set_base_url(url)
+        if self.target.revision != prior_revision:
+            self.cancel_capture_selection()
         if origin_changed:
             self.workflow.clear()
             self._clear_permission_cache()
@@ -1968,7 +1976,50 @@ class Agent:
         self._clear_permission_cache()
         self.refresh_scope_context()
 
+    def _capture_store(self):
+        from src.tools.common.browser_capture import BrowserCaptureGetTool
+        tool = self.tools.get("browser_capture_get")
+        if not isinstance(tool, BrowserCaptureGetTool):
+            raise ValueError("native Burp capture tools are unavailable in this runtime")
+        return tool.store
+
+    def list_burp_captures(self):
+        from src.permission.runtime.execution import policy_for
+        rows = readable_burp_requests(self._capture_store(), self.target, self.engagement_state,
+                                      policy_for(self.prompter))
+        return tuple(SelectedCapture.from_request(row) for row in rows)
+
+    def select_burp_captures(self, retrieval_id: str | None = None, *, all_recent: bool = False):
+        if self.running:
+            raise ValueError("a turn is already running; Burp selection cannot change")
+        # A failed replacement must never leave the previous source pending.
+        self.pending_capture_selection = None
+        from src.permission.runtime.execution import policy_for
+        policy = policy_for(self.prompter)
+        rows = readable_burp_requests(self._capture_store(), self.target, self.engagement_state, policy)
+        total = len(rows)
+        selected = ([row for row in rows if row.id == retrieval_id] if retrieval_id is not None
+                    else rows[:MAX_SELECTED_REQUESTS if all_recent else 1])
+        if not selected:
+            raise ValueError(f"No matching Burp requests for this selection at the active target. Selected 0/{total} requests.")
+        selection = CaptureSelection.create(selected, self.target, self.engagement_state, policy)
+        self.pending_capture_selection = selection
+        return selection, total
+
+    def cancel_capture_selection(self) -> None:
+        self.pending_capture_selection = None
+
+    def _turn_capture_selection(self) -> CaptureSelection | None:
+        return self._pending_context.capture_selection if self._pending_context is not None else None
+
+    def _validate_turn_capture_selection(self) -> None:
+        selection = self._turn_capture_selection()
+        if selection is not None:
+            from src.permission.runtime.execution import policy_for
+            selection.validate(self._capture_store(), self.target, self.engagement_state, policy_for(self.prompter))
+
     def _clear_permission_cache(self) -> None:
+        self.cancel_capture_selection()
         # Synchronous invalidation stops dispatch immediately; the Browser owner
         # exits its own contexts, and a subsequent launch awaits that teardown.
         policy = getattr(self.prompter, 'execution_policy', None)
@@ -2362,6 +2413,8 @@ class Agent:
         return False
 
     def _has_bounded_goal_context(self, objective: WorkflowObjective, user_msg: str) -> bool:
+        if self._turn_capture_selection() is not None:
+            return True
         if re.search(
             r"https?://[^\s<>\"']+|\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/\S+|"
             r"\b(?:at|on)\s+/(?!/)\S+|\bendpoint\s*[:=]?\s*(?:https?://\S+|/\S+)",
@@ -2674,6 +2727,11 @@ class Agent:
             (item_id for item_id in sorted(self.workflow.candidates) if item_id in user_msg),
             None,
         )
+        selection = self._turn_capture_selection()
+        if selection is not None and candidate_id is not None:
+            refs = {row.baseline_request_ref for row in selection.requests if row.baseline_request_ref}
+            if self.workflow.candidates[candidate_id].baseline_request_ref not in refs:
+                candidate_id = None
         candidate_request = bool(
             candidate_id and _CANDIDATE_VALIDATION_INTENT.search(user_msg)
         )
@@ -2693,15 +2751,27 @@ class Agent:
             )
         )
 
-        if current is not None and not _NEW_OBJECTIVE_INTENT.search(user_msg):
+        # Reuse an owned direct objective only when its complete captured
+        # source set is exactly the newly selected set. Preserve dedup/linking
+        # semantics without letting an unrelated objective take over.
+        same_capture_objective = False
+        if selection is not None and current is not None and current.mode != "whole_target":
+            owned = [candidate for candidate in self.workflow.candidates.values()
+                     if self.workflow.candidate_belongs_to_objective(candidate, current)]
+            same_capture_objective = (not whole_request and not is_purely_informational(normalize(user_msg))
+                and bool(_CANDIDATE_VALIDATION_INTENT.search(user_msg) or _OBJECTIVE_CONTINUATION_INTENT.search(user_msg))
+                and bool(owned) and all(candidate.baseline_request_ref for candidate in owned)) and (
+                {candidate.baseline_request_ref for candidate in owned}
+                == {row.baseline_request_ref for row in selection.requests})
+        if (selection is None or same_capture_objective) and current is not None and not _NEW_OBJECTIVE_INTENT.search(user_msg):
             different_candidate = (
                 current.mode == "candidate_validation"
                 and candidate_request
                 and candidate_id != current.candidate_id
             )
-            if not different_candidate and self._is_objective_continuation(
+            if not different_candidate and (same_capture_objective or self._is_objective_continuation(
                 user_msg, current
-            ):
+            )):
                 if current.mode != "candidate_validation":
                     for candidate_class in requested_classes:
                         current.add_requested_goal(candidate_class)
@@ -2903,6 +2973,12 @@ class Agent:
             if whole_target
             else tuple(sorted(self.workflow.candidates.values(), key=lambda item: item.id))
         )
+        selection = self._turn_capture_selection()
+        if selection is not None:
+            refs = {row.baseline_request_ref for row in selection.requests if row.baseline_request_ref}
+            candidates = tuple(candidate for candidate in candidates if candidate.baseline_request_ref in refs
+                               and objective is not None
+                               and self.workflow.candidate_belongs_to_objective(candidate, objective))
         pending_inputs = sum(
             item.disposition == "pending" for item in self.workflow.objective_inputs()
         ) if whole_target else 0
@@ -2959,6 +3035,7 @@ class Agent:
             for goal in (objective.requested_goals if objective is not None else [])
         )
         return PlannerContext(
+            selected_capture_ids=tuple(row.retrieval_id for row in selection.requests) if selection else (),
             validation_routes=self._validation_routes(),
             active_skills=frozenset(self.active_skills),
             candidate_classes=(
@@ -2967,7 +3044,7 @@ class Agent:
                     if item.status in {"new", "queued", "validating"}
                     or item.id in revalidation_candidates
                 )
-                if whole_target else self.workflow.relevant_candidate_classes()
+                if whole_target or selection is not None else self.workflow.relevant_candidate_classes()
             ),
             completed_skills=frozenset(self.workflow.completed_skills),
             candidates=tuple(
@@ -3362,6 +3439,17 @@ class Agent:
         opts: AgentRunOptions | None = None,
     ) -> None:
         safe_emit = make_safe_emit(signal, emit)
+        if self.running:
+            safe_emit({"type": "error", "err": AgentRuntimeError("a turn is already running")})
+            return
+        # Consume after the busy check, before any suspension (including saves).
+        # This stub carries the selection until the full context is prepared.
+        selection = self.pending_capture_selection
+        self.pending_capture_selection = None
+        tools_enabled = opts is None or (opts.get("tools", True) if isinstance(opts, dict) else opts.tools)
+        if not tools_enabled and selection is not None:
+            safe_emit({"type": "decision", "summary": "Pending Burp selection cancelled: this turn has tools=False."})
+            selection = None
 
         self._trace_enabled = os.getenv(AGENT_TRACE_ENV) == "1"
         self._trace_run_id = uuid.uuid4().hex[:12] if self._trace_enabled else ""
@@ -3369,7 +3457,7 @@ class Agent:
         self.running = True
         self._reset_llm_call_counts()
         self._turn_client_error = False
-        self._pending_context = None
+        self._pending_context = _TurnContext(None, None, False, None, capture_selection=selection)
         stop_reason = "runtime_error"
 
         try:
@@ -3478,6 +3566,14 @@ class Agent:
         requested_goals_cancelled = self._cancel_requested_goals(user_msg, tools_enabled)
         if tools_enabled and not requested_goals_cancelled:
             self.initialize_target_from_user_request(user_msg)
+        # A prompt can initialize/change the Target. Recheck the consumed
+        # binding before planning, context admission or objective initialization.
+        try:
+            self._validate_turn_capture_selection()
+        except PermissionError as err:
+            emit({"type": "error", "err": err})
+            return "capture_unavailable"
+        if tools_enabled and not requested_goals_cancelled:
             self._initialize_request_objective(user_msg, tools_enabled)
 
         self.active_skills = set(self.pending_skills)
@@ -3514,6 +3610,10 @@ class Agent:
         decision = (build_decision_plan(user_msg, self.skills.list_enabled(), self.target, planner_context)
                     if planner_context is not None else None)
         injections = []
+        selection = self._turn_capture_selection()
+        if selection is not None:
+            from src.browser.selection import CAPTURE_GUIDANCE
+            injections.extend((Message("system", CAPTURE_GUIDANCE), Message("user", selection.observation())))
         if decision:
             injections.append(Message("system", decision.guidance))
         elif planner_context is not None and planner_context.workflow_status == "blocked" and planner_context.workflow_blockers:
@@ -3529,6 +3629,7 @@ class Agent:
             model=self.client.model(), messages=[], tools=actual_tools,
             thinking_enabled=turn_request_thinking, reasoning_level=turn_reasoning_level,
         ), tuple(injections))
+        context = replace(context, capture_selection=selection)
         self._pending_context = context
         projection = self._projected_estimate(self.history, self.memory, context)
         history_tokens = self.approx_tokens()
@@ -4423,7 +4524,9 @@ class Agent:
         started_at = datetime.now(timezone.utc).isoformat()
         response: ChatResponse | None = None
         status: Literal["success", "error", "cancelled"] = "success"
+        self._validate_turn_capture_selection()
         await self._admit_request(req, emit)
+        self._validate_turn_capture_selection()
         if signal.aborted:
             raise Exception("aborted")
         self._trace_context_estimate(
@@ -5022,9 +5125,19 @@ class Agent:
                     run_err = RuntimeError(blocker)
                 else:
                     try:
+                        self._validate_turn_capture_selection()
+                        dispatch_args = parsed.args
+                        selection = self._turn_capture_selection()
+                        if selection is not None and tc.function.name == "browser_capture_get":
+                            selected = next((row for row in selection.requests
+                                             if row.retrieval_id == parsed.args.get("id")), None)
+                            if selected is not None and selected.baseline_request_ref:
+                                if parsed.args.get("baseline_request_ref", selected.baseline_request_ref) != selected.baseline_request_ref:
+                                    raise ValueError("selected capture baseline reference mismatch")
+                                dispatch_args = {**parsed.args, "baseline_request_ref": selected.baseline_request_ref}
                         result = await self.tools.execute(
                             tc.function.name,
-                            parsed.args,
+                            dispatch_args,
                             signal,
                             self.prompter,
                         )

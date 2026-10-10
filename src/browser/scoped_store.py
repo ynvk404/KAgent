@@ -7,12 +7,35 @@ from __future__ import annotations
 from src.browser.store import CaptureStore
 from src.permission.runtime.execution import ExecutionBlocked, ExecutionPolicy
 from src.engagement.state import OutOfScopeError
+from src.target.origin import HTTPOrigin
 
 
 class ScopedCaptureStore(CaptureStore):
     def __init__(self, source: CaptureStore, policy: ExecutionPolicy):
         self.source = source
         self.policy = policy
+
+    def controller_burp_requests(self, origin: HTTPOrigin):
+        """Trusted UI metadata read, without issuing or impersonating a receipt.
+
+        Tool reads still use allowed() and require their registry receipt.
+        Filtering precedes all UI/selection limits, including the exact origin.
+        """
+        if {"*", "browser_capture_requests", "browser_capture_get"} & self.policy.revoked:
+            raise ExecutionBlocked('blocked: capture tool/session-revoked')
+        self.policy.require_network(origin.as_url())
+        rows = []
+        for row in self.source.list_requests(limit=self.source.max_entries):
+            if row.source != 'burp':
+                continue
+            try:
+                if HTTPOrigin.from_url(row.url) != origin:
+                    continue
+                self.policy.require_network(row.url)
+            except (ValueError, OutOfScopeError, ExecutionBlocked):
+                continue
+            rows.append(row)
+        return rows
 
     def allowed(self, url):
         if not self.policy.nested_allowed():

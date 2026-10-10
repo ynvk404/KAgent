@@ -221,6 +221,26 @@ class TestBrowserCaptureRequestsToolLimitClamp:
 
 
 class TestBrowserCaptureEndpointsToolListingCaps:
+    @pytest.mark.asyncio
+    async def test_native_endpoint_summary_serializes_with_real_store(self):
+        import json
+        store = CaptureStore()
+        store.ingest({"kind": "burp", "url": "https://target.test/search?q=fixture", "method": "GET"})
+        registry = ToolRegistry()
+        registry.register(BrowserCaptureEndpointsTool(store))
+        rows = json.loads(await registry.execute("browser_capture_endpoints", {}, None, AlwaysAllow()))
+        assert rows[0]["url"] == "https://target.test/search"
+        assert rows[0]["query_params"] == ["q"]
+        assert rows[0]["method"] == "GET" and rows[0]["hit_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_serialized_endpoint_summary_redacts_url_credentials(self):
+        store = CaptureStore()
+        store.ingest({"url": "https://fixture-user:fixture-password@target.test/search?q=1"})
+        result = await BrowserCaptureEndpointsTool(store).run({})
+        assert "fixture-user" not in result and "fixture-password" not in result
+        assert "target.test/search" in result
+
     def test_endpoint_parameter_names_are_sorted_for_stable_output(self):
         store = CaptureStore()
         store.ingest(
@@ -310,3 +330,29 @@ class TestBrowserCaptureBurpTasksToolListingCaps:
         )
 
         assert "more omitted; showing first 200" in out
+
+
+@pytest.mark.asyncio
+async def test_capture_get_expected_baseline_rejects_clear_and_id_reuse():
+    store = CaptureStore()
+    original = store.ingest({'kind': 'burp', 'id': 'one', 'url': 'http://target.test/search?q=1'})
+    store.clear()
+    replacement = store.ingest({'kind': 'burp', 'id': 'one', 'url': 'http://target.test/search?q=2'})
+    assert replacement['id'] == original['id']
+    registry = ToolRegistry()
+    registry.register(BrowserCaptureGetTool(store))
+    result = await registry.execute('browser_capture_get', {'id': original['id'],
+        'baseline_request_ref': original['baseline_request_ref']}, None, AlwaysAllow())
+    assert result.startswith('error:') and 'binding changed' in result
+    assert 'q=2' not in result and replacement['baseline_request_ref'] not in result
+
+
+@pytest.mark.asyncio
+async def test_native_listing_removes_userinfo_and_known_unlabelled_url_echoes():
+    store = CaptureStore()
+    row = store.ingest({'kind': 'burp', 'url': 'https://fixture-user:fixture-password@target.test/search?q=fixture-session-secret',
+                       'responseHeaders': [{'name': 'Set-Cookie', 'value': 'sid=fixture-session-secret'}]})
+    result = await BrowserCaptureRequestsTool(store).run({})
+    for secret in ('fixture-user', 'fixture-password', 'fixture-session-secret'):
+        assert secret not in result
+    assert row['id'] in result and row['baseline_request_ref'] in result

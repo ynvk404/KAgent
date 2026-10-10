@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from typing import Any, cast
+from urllib.parse import urlsplit, urlunsplit
 
 from src.redaction.redact import apply_evidence, http_credential_redactor, redact_payload, redact_request_context
 
@@ -68,7 +69,14 @@ def request_view(value: Any) -> dict[str, Any]:
         if key in row and isinstance(row[key], str):
             row[key] = redact(redact_request_context(row[key], "application/json"))
     if isinstance(row.get("url"), str):
-        row["url"] = redact(row["url"])
+        try:
+            parsed = urlsplit(cast(str, row["url"]))
+            # Userinfo belongs only to the runtime baseline. Even a partially
+            # masked credential-bearing URL must not become model/UI context.
+            safe_url = urlunsplit(parsed._replace(netloc=parsed.netloc.rsplit("@", 1)[-1]))
+        except ValueError:
+            safe_url = "[Invalid capture URL omitted]"
+        row["url"] = redact(safe_url)
     return row
 
 

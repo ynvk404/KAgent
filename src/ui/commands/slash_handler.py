@@ -58,7 +58,8 @@ _HELP_OVERRIDES: dict[str, tuple[str, str]] = {
         "[show|browser [revoke]|grant <spec>|revoke <id>|deny|retry <origin>]",
         "view execution profile, Browser grants, limits, tool revokes and HTTP permissions",
     ),
-    "/burp": ("[port|stop|status]", "manage the local Burp bridge"),
+    "/burp": ("[port|stop|status|list|use [id|cancel]|all]",
+              "manage bridge; list captures; use selects one; all selects at most 50 most recent requests"),
     "/exit": ("(/quit)", "quit kagent"),
     "/memory": (
         "[add <text>|list|forget <text>|clear|intel]",
@@ -443,6 +444,9 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         return True
 
     if cmd == "/reset":
+        cancel_selection = getattr(agent, "cancel_capture_selection", None)
+        if callable(cancel_selection):
+            cancel_selection()
         async def _reset():
             await agent.reset()
 
@@ -482,6 +486,48 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         return True
 
     if cmd == "/burp":
+        sub = rest[0] if rest else ""
+        if sub in {"list", "use", "all"}:
+            from src.browser.selection import LIST_DISPLAY_LIMIT, MAX_SELECTED_REQUESTS
+            changing = sub != "list"
+            if changing and agent.is_running():
+                dispatch(Append(entry=TranscriptEntry(kind="error", text="/burp: a turn is already running; selection cannot change.")))
+                return True
+            # Synchronous selection makes a following prompt see exactly this
+            # snapshot; no scheduled task can select after that prompt starts.
+            if (sub in {"list", "all"} and len(rest) != 1) or (sub == "use" and len(rest) > 2):
+                if changing:
+                    agent.cancel_capture_selection()
+                dispatch(Append(entry=TranscriptEntry(kind="error", text="usage: /burp list | /burp use [id|cancel] | /burp all; pending selection cleared." if changing else "usage: /burp list")))
+                return True
+            try:
+                if sub == "list":
+                    rows = agent.list_burp_captures()
+                    shown = rows[:LIST_DISPLAY_LIMIT]
+                    text = f"Showing {len(shown)}/{len(rows)} requests"
+                    text += "\n" + "\n".join(f"{row.retrieval_id}  {row.method}  {row.endpoint}" for row in shown)
+                    if not rows:
+                        text += "No matching Burp requests for the active target."
+                elif len(rest) == 2 and rest[1] == "cancel":
+                    agent.cancel_capture_selection()
+                    text = "Pending Burp selection cancelled; capture store retained."
+                else:
+                    selection, total = agent.select_burp_captures(
+                        rest[1] if len(rest) == 2 else None, all_recent=sub == "all")
+                    text = f"Selected {len(selection.requests)}/{total} requests for the next Agent turn."
+                    text += "\n" + "\n".join(f"{row.retrieval_id}  {row.method}  {row.endpoint}" for row in selection.requests)
+                    if sub == "all" and total > MAX_SELECTED_REQUESTS:
+                        text += "\nSelection is limited to the 50 most recent matching Burp records."
+                    text += "\nEnter a prompt to analyze or test the selected context. Selection grants no HTTP permission."
+                dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
+            except (ValueError, PermissionError) as err:
+                text = f"/burp: {err}"
+                if changing:
+                    agent.cancel_capture_selection()
+                    text += "\nPending selection cleared; Agent was not started."
+                dispatch(Append(entry=TranscriptEntry(kind="error", text=text)))
+            return True
+
         bridge = app.start_burp_bridge
         stop_bridge = app.close_burp_bridge
         status_bridge = app.burp_bridge_status
@@ -496,8 +542,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                 )
             )
             return True
-
-        sub = rest[0] if rest else ""
 
         if sub == "status":
             async def _status():

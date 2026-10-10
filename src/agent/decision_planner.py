@@ -69,6 +69,7 @@ class PlannerContext:
     validation_routes: dict[str, ValidationRoute] = field(default_factory=dict)
     requested_goals: tuple[PlannerGoal, ...] = ()
     goal_validation_routes: dict[str, ValidationRoute] = field(default_factory=dict)
+    selected_capture_ids: tuple[str, ...] = ()
 
 
 class SkillRecommendation(TypedDict):
@@ -209,6 +210,15 @@ def build_decision_plan(
 
     if not text:
         return None
+
+    if context is not None and context.selected_capture_ids and not context.candidates:
+        # Selection resolves a request source, not an input or a hypothesis.
+        # Read it before routing to a validator or an earlier workflow phase.
+        return DecisionPlan(None, "selected capture context awaits detail reads", "normal", [],
+                            "Decision planner guidance for this turn:\n"
+                            "Selected request context is resolved. Read the known IDs with browser_capture_get "
+                            "before choosing inputs/Candidates and the requested analysis or validator. "
+                            "Do not let an earlier objective or unrelated Candidate replace this source.")
 
     if context is not None and context.objective_mode == "whole_target":
         return build_whole_target_plan(skills, context)
