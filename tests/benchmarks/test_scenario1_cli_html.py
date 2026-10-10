@@ -347,7 +347,7 @@ def test_all_official_cases_pagination_tables_and_details(lab, tmp_path, setting
     assert resolve_run(public) == root
 
 
-@pytest.mark.parametrize('version', [1, 2])
+@pytest.mark.parametrize('version', [1, 2, 3])
 def test_historical_public_resolution(tmp_path, op, settings, version):
     root, public, *_ = frozen(tmp_path, op, settings)
     writer.write_report(root)
@@ -357,7 +357,7 @@ def test_historical_public_resolution(tmp_path, op, settings, version):
     legacy_public = tmp_path / 'legacy-public'
     model = load_report(root)
     files = {f'report/{name}': raw for name, raw in writer._render(model).items()}
-    files.update(result_files(root, model, version=version))
+    files.update(result_files(root, model, version=1 if version == 1 else 2))
     if version == 2:
         files['index.html'] = b'<!doctype html><html><body>Historical dashboard</body></html>'
     index = json.loads(index_file(root, legacy_public, model, files))
@@ -369,7 +369,7 @@ def test_historical_public_resolution(tmp_path, op, settings, version):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(raw)
     assert resolve_run(legacy_public) == root
-    assert read_json(legacy_public / 'results' / f'{op.case_id}.json')['schema'] == f'scenario1-public-case-v{version}'
+    assert read_json(legacy_public / 'results' / f'{op.case_id}.json')['schema'] == f'scenario1-public-case-v{1 if version == 1 else 2}'
     before = {p.relative_to(legacy_public): p.read_bytes() for p in legacy_public.rglob('*') if p.is_file()}
     assert load_report(legacy_public).metrics == model.metrics
     fresh = tmp_path / 'fresh-export'

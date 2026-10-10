@@ -300,6 +300,50 @@ def test_auto_capture_respects_independent_toggles_and_response_events(
     assert "private" not in extender.log_area.getText()
 
 
+@pytest.mark.parametrize("first,second", [("TOOL_PROXY", "TOOL_REPEATER"), ("TOOL_REPEATER", "TOOL_PROXY")])
+def test_auto_capture_deduplication_does_not_suppress_another_tool(extender, first, second):
+    extender.auto_send_proxy = True
+    extender.auto_send_repeater = True
+    extender._post_json = Mock()
+    message = _message()
+
+    extender.processHttpMessage(getattr(extender.callbacks, first), False, message)
+    extender.processHttpMessage(getattr(extender.callbacks, second), False, message)
+    assert extender._post_json.call_count == 2
+
+    # Duplicate notifications within each tool should still be suppressed.
+    extender.processHttpMessage(getattr(extender.callbacks, first), False, message)
+    extender.processHttpMessage(getattr(extender.callbacks, second), False, message)
+    assert extender._post_json.call_count == 2
+
+
+def test_repeater_updates_proxy_capture_against_local_bridge(extender, monkeypatch):
+    store = CaptureStore()
+    handle = start_ingest_server(IngestServerOptions(store=store, port=0, token="private-bridge-token"))
+    monkeypatch.setattr(extension_module, "urllib2", urllib.request)
+    extender.url_field.setText(handle.url)
+    extender.token_field.setText(handle.token)
+    extender.auto_proxy_box.setSelected(True)
+    extender.auto_repeater_box.setSelected(True)
+    extender._save_settings(None)
+    extender._post_json = Mock(wraps=extender._post_json)
+    try:
+        extender.processHttpMessage(extender.callbacks.TOOL_PROXY, False, _message())
+        baseline_ref = store.list_requests()[0].baseline_request_ref
+        response = RAW_RESPONSE.replace(b'"private-response"', b'"repeater-response"')
+        extender.processHttpMessage(extender.callbacks.TOOL_REPEATER, False, _message(response))
+
+        assert extender._post_json.call_count == 2
+        captured = store.list_requests()
+        assert len(captured) == 1
+        assert captured[0].response_body == '{"token":"repeater-response"}'
+        assert captured[0].baseline_request_ref == baseline_ref
+        assert captured[0].raw_request_b64 == base64.b64encode(RAW_REQUEST).decode()
+        assert "private" not in extender.log_area.getText()
+    finally:
+        handle.close()
+
+
 def test_bridge_traffic_is_skipped_before_capture_payload_is_built(extender):
     extender.auto_send_proxy = True
     extender._bridge_port = lambda: 8888
@@ -434,8 +478,8 @@ def test_auto_forward_retries_after_a_failed_post_and_deduplicates_successes():
     extender.processHttpMessage(1, False, object())
 
     assert len(calls) == 2
-    assert extender.auto_sent_keys == {"request-key"}
-    assert extender.auto_sent_order == ["request-key"]
+    assert extender.auto_sent_keys == {(1, "request-key")}
+    assert extender.auto_sent_order == [(1, "request-key")]
 
 
 def test_auto_forward_key_includes_request_content():

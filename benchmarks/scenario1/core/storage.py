@@ -11,7 +11,7 @@ from benchmarks.common.contracts import RunManifest, decode, digest, file_hash, 
 from src.paths import project_data_root
 
 STORAGE_SCHEMA = 'scenario1-storage-v1'
-PUBLIC_SCHEMA = 'scenario1-public-results-v3'
+PUBLIC_SCHEMA = 'scenario1-public-results-v4'
 
 
 def storage_root() -> Path:
@@ -93,7 +93,8 @@ def resolve_run(path: Path) -> Path:
         if (not isinstance(index, dict) or set(index) != {
                 'schema', 'storage_id', 'run_id', 'manifest_sha256', 'manifest_identity',
                 'evaluation_identity', 'internal_ref', 'files', 'binding'}
-                or index['schema'] not in {'scenario1-public-results-v1', 'scenario1-public-results-v2', PUBLIC_SCHEMA}
+                or index['schema'] not in {'scenario1-public-results-v1', 'scenario1-public-results-v2',
+                                          'scenario1-public-results-v3', PUBLIC_SCHEMA}
                 or index['binding'] != digest({k: v for k, v in index.items() if k != 'binding'})
                 or not isinstance(index['internal_ref'], str) or Path(index['internal_ref']).is_absolute()):
             raise ValueError('invalid public results descriptor')
@@ -107,11 +108,16 @@ def resolve_run(path: Path) -> Path:
         if index['run_id'] != presentation_id('run', descriptor['run_id']):
             raise ValueError('public/canonical run identity mismatch')
         version = int(index['schema'].rsplit('v', 1)[1])
-        if {p.name for p in root.iterdir()} != ({'index.html', 'report', 'results'} if version == 2 else {'report', 'results'}):
-            raise ValueError('unexpected public run entry')
         files = index['files']
         if not isinstance(files, dict) or not files:
             raise ValueError('missing public integrity bindings')
+        namespaces = {'report', 'results'}
+        if version == 2:
+            namespaces.add('index.html')
+        if version >= 4 and any(ref.startswith('findings/') for ref in index['files']):
+            namespaces.add('findings')
+        if {p.name for p in root.iterdir()} != namespaces:
+            raise ValueError('unexpected public run entry')
         entries = list(root.rglob('*'))
         if any(p.is_symlink() for p in entries):
             raise ValueError('untrusted public artifact namespace')
@@ -122,7 +128,8 @@ def resolve_run(path: Path) -> Path:
             relative = Path(ref)
             target = root / relative
             if (relative.is_absolute() or '..' in relative.parts or not relative.parts
-                    or (relative.parts[0] not in {'report', 'results'} and not (version == 2 and ref == 'index.html'))
+                    or (relative.parts[0] not in ({'report', 'results', 'findings'} if version >= 4 else {'report', 'results'})
+                        and not (version == 2 and ref == 'index.html'))
                     or target.is_symlink()
                     or not target.resolve().is_relative_to(root) or file_hash(target) != hashed):
                 raise ValueError('public artifact integrity mismatch')
@@ -138,8 +145,8 @@ def resolve_run(path: Path) -> Path:
         # different canonical execution, truth label or evidence derivative.
         from ..reporting.projection import result_files
         model = load_report(canonical, canonical / 'evaluations' / f'evaluation-{identity}.json')
-        expected = result_files(canonical, model, version=1 if version == 1 else 2)
-        if version == 3:
+        expected = result_files(canonical, model, version=1 if version == 1 else 3 if version >= 4 else 2)
+        if version >= 3:
             from ..reporting.charts import render_charts
             from ..reporting.tables import render_tables
             required = {f'report/{ref}' for ref in (*render_tables(model), *render_charts(model), 'report.json')}

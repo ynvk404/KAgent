@@ -55,12 +55,12 @@ def test_separated_public_tree_and_offline_roundtrip(tmp_path, op, settings):
     assert {p.relative_to(legacy): p.read_bytes() for p in legacy.rglob('*') if p.is_file()} == before
     index = read_json(public / 'results/index.json')
     case = read_json(public / 'results' / f'{op.case_id}.json')
-    assert case['schema'] == 'scenario1-public-case-v2'
+    assert case['schema'] == 'scenario1-public-case-v3'
     assert case['confusion'] == 'TP'
     assert case['case_id'] == op.case_id
     assert case['canonical']['result_sha256'] == file_hash(root / 'results' / f'{op.case_id}.json')
     assert case['projection_binding'] == digest({k: v for k, v in case.items() if k != 'projection_binding'})
-    assert index['schema'] == 'scenario1-public-results-v3'
+    assert index['schema'] == 'scenario1-public-results-v4'
     assert index['storage_id'] == root.name
     assert index['run_id'] == baseline.metadata['run_id']
     assert not Path(index['internal_ref']).is_absolute()

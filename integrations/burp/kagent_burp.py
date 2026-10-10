@@ -145,7 +145,8 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IHttpListener, ITab):
             return
         if self._is_bridge_message(messageInfo):
             return
-        key = self._message_key(messageInfo)
+        # A Proxy capture must not suppress a subsequent Repeater capture.
+        key = (toolFlag, self._message_key(messageInfo))
         if key in self.auto_sent_keys:
             return
         try:

@@ -492,7 +492,7 @@ the parent exporter after execution. Full workflow, observations, transcript,
 permission decisions/journal, provider configuration and workspace paths are
 excluded. Free-form assessment rationale stays internal.
 
-New public case schema `scenario1-public-case-v2` and `projection_binding` are distinct
+New public case schema `scenario1-public-case-v3` and `projection_binding` are distinct
 from the sealed canonical export. Selected evidence is bounded to 8192 bytes per
 selected primary response, sanitized with the production evidence redactor,
 with local filesystem references removed. It has its own public SHA-256, the
@@ -504,12 +504,28 @@ Each source retains canonical source/body hashes, source kind, original byte
 range, JSON pointer, pseudonymous observation reference and truncation flags.
 The 8192-byte public content limit and 32-source canonical bound are enforced.
 Canonical evidence and seals are untouched. The public index schema is now
-`scenario1-public-results-v3`: its root contains exactly `report/` and `results/`,
-and its file bindings cover all default report components and case JSON. Case
-JSON remains `scenario1-public-case-v2`; canonical schemas and hash formulas do
-not change. The resolver still reads and verifies v1 public trees against their
+`scenario1-public-results-v4`: its root contains `report/`, `results/`, and
+`findings/` when a current persisted finding is available. Its file bindings
+cover all default report components, case JSON and exported finding Markdown.
+Canonical schemas, scoring and hash formulas do not change.
+Each case JSON includes `finding.status` (`persisted`, `pending`,
+`not-applicable`, or `unknown`), `finding.report_ref` relative to that JSON,
+and a fixed diagnostic `finding.reason` when applicable. The existing
+`persisted_finding` field reflects whether a current report was exported;
+it is null when the result cannot be determined.
+Finding export requires an evaluable accepted confirmed assessment, a matching
+persisted-result fingerprint, and exactly one report in this execution's
+`workspaces/<execution-id>/artifacts/findings/`. Candidate, class, endpoint,
+assessment/evidence bindings, severity and observed impact must match the
+latest result. Missing, ambiguous or stale reports stay pending; no report is
+created from confirmation alone. Symlinks and hardlinked report files are
+rejected before publication. Reports are parsed with the production reader,
+rendered as sanitized derivatives with public IDs, and named
+`findings/<BenchmarkTest-id>.md`. Internal workspace reports remain unchanged.
+The resolver still reads and verifies v1 public trees against their
 original case/TXT projections and v2 trees with their original `index.html` and
-case v2 projections. Missing or extra v3 components fail closed even if the
+case v2 projections, as well as v3 trees with their original two directories.
+Missing or extra v4 components fail closed even if the
 public file list is rebound. Smoke 1 and Smoke 2 are
 never rewritten or migrated.
 The index stores compact resolution/integrity information, not copied manifests

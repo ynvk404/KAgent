@@ -13,6 +13,7 @@ from benchmarks.scenario1.core.storage import PUBLIC_SCHEMA, read_storage
 from src.redaction.redact import apply_evidence, redact_payload
 from .loader import _counter, _diagnostic, _mapping, _safe_identity, presentation_id
 from .model import ReportModel
+from .findings import finding_file
 
 
 def json_bytes(value: dict) -> bytes:
@@ -79,7 +80,7 @@ def _evidence(export: dict, cid: str, files: dict[str, bytes], version: int) -> 
             'source_kind': source['source_kind'], 'byte_range': [0, min(len(body), 8192)],
             'sanitized': True, 'truncated': len(body) > 8192,
         })
-        if version == 2:
+        if version >= 2:
             item = selected[-1]
             del item['public_ref']
             content = excerpt[:8192].decode('utf-8', errors='ignore')
@@ -123,7 +124,7 @@ def _usage(execution) -> dict:
     return output
 
 
-def result_files(root: Path, model: ReportModel, *, version: int = 2) -> dict[str, bytes]:
+def result_files(root: Path, model: ReportModel, *, version: int = 3) -> dict[str, bytes]:
     manifest = decode(RunManifest, read_json(root / 'manifest.json'))
     rows, _ = read_records(root / 'events.jsonl')
     histories = validate_lifecycle(rows)
@@ -156,7 +157,7 @@ def result_files(root: Path, model: ReportModel, *, version: int = 2) -> dict[st
             **{k: v for k, v in summary.items() if k != 'case_id'},
             'assessment': assessment, 'canonical': canonical, 'selected_evidence': evidence,
         }
-        if version == 2:
+        if version >= 2:
             workflow = execution.result.get('workflow', {}) if execution and execution.result else {}
             persisted = workflow.get('persisted_findings')
             cid_internal = execution.result.get('candidate_id') if execution and execution.result else None
@@ -169,6 +170,12 @@ def result_files(root: Path, model: ReportModel, *, version: int = 2) -> dict[st
                             'note': 'Free-form agent prose and tool transcripts are not in the public projection.'},
                 tool_diagnostics={'blocked': summary['tool_blocked'], 'failed': summary['tool_failed'],
                                   'individual_operations': None})
+        if version >= 3:
+            projection['finding'] = finding_file(root, execution, cid, summary['evaluator_partition'], files,
+                                                 sanitize=_text, public_id=presentation_id)
+            projection['persisted_finding'] = (
+                None if projection['finding']['status'] == 'unknown'
+                else projection['finding']['status'] == 'persisted')
         projection['projection_binding'] = digest(projection)
         files[f'results/{cid}.json'] = json_bytes(projection)
     return files
