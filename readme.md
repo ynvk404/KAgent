@@ -91,6 +91,16 @@ python -m src.cli.main --help
 - `tests/` — focused, integration, skill-contract, and regression tests
 - `.kagent/` — local project runtime data when created
 
+Confirmed Findings retain their canonical Markdown under `artifacts/findings/`.
+Normal KAgent runs also export compact reader reports under
+`artifacts/reports/findings/`, with links to the canonical Finding and registered
+evidence. A compact export failure leaves canonical persistence intact; retrying
+`confirm_finding` for the same Candidate regenerates the reader report.
+`/report` continues to produce a PDF assessment under `artifacts/reports/` from
+canonical Findings and workflow state; it does not read the compact Markdown.
+Scenario 1 exports compact Findings directly to `<benchmark-output>/findings/`
+and keeps only canonical Findings in each execution workspace.
+
 ## Testing
 
 `pytest.ini` collects the complete test suite under `tests/`.

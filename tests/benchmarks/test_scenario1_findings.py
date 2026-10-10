@@ -101,11 +101,37 @@ async def test_finding_export_redacts_links_and_preserves_sources(finding_run, o
     assert '## Observed impact' in content and finding.observed_impact in content
     assert secret not in content and 'cookie-secret' not in content and 'password=short' not in content
     assert str(tmp_path) not in content and finding.candidate_id not in content
+    assert f'../results/{op.case_id}.json' in content
+    assert 'Confirmation criteria:' in content and '## Limitations' in content
+    assert 'Confirmation binding' not in content and 'Assessment result' not in content
+    assert 'Candidate ID' not in content and 'Binding version' not in content
+    assert not list((root / 'workspaces').glob('*/artifacts/reports/findings'))
     index = read_json(public / 'results/index.json')
     assert index['files'][f'findings/{op.case_id}.md'] == file_hash(exported)
     assert resolve_run(public) == root
     assert evaluate(root, publish=False) == baseline
     assert all((root / ref).read_bytes() == value for ref, value in before.items())
+
+
+async def test_original_v4_finding_exports_remain_resolvable(finding_run, op):
+    from benchmarks.scenario1.reporting.loader import load_report
+    from benchmarks.scenario1.reporting.projection import result_files
+    build, _ = finding_run
+    root, public = build()
+    write_report(root)
+    historical = result_files(root, load_report(root), compact_findings=False)
+    for ref, raw in historical.items():
+        (public / ref).write_bytes(raw)
+    content = (public / f'findings/{op.case_id}.md').read_text()
+    assert 'Candidate ID' in content and 'Confirmation binding' in content
+    index = read_json(public / 'results/index.json')
+    index['schema'] = 'scenario1-public-results-v4'
+    index['files'] = {ref: file_hash(public / ref) for ref in index['files']}
+    index['binding'] = digest({k: v for k, v in index.items() if k != 'binding'})
+    (public / 'results/index.json').write_bytes(json_bytes(index))
+    before = {p.relative_to(public): p.read_bytes() for p in public.rglob('*') if p.is_file()}
+    assert resolve_run(public) == root
+    assert all((public / ref).read_bytes() == raw for ref, raw in before.items())
 
 
 @pytest.mark.asyncio

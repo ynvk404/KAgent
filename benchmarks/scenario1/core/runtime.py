@@ -327,7 +327,8 @@ def build_agent(op: OperationalCaseInput, settings: RuntimeSettings, root: Path,
     for tool in (http, FileReadTool(), FileWriteTool(), FileEditTool(), LoadSkillTool(skills),
                  ReadPayloadsTool(skills), ReadSkillFileTool(skills), PermissionStatusTool(), AskUserTool(MissingInput()),
                  CoverageTool(coverage), WorkflowTool(workflow, target, coverage, skills, root, session_id, http),
-                 ConfirmFindingTool(Findings(project_directory=root), lambda *_: None, workflow)):
+                 ConfirmFindingTool(Findings(project_directory=root), lambda *_: None, workflow,
+                                    export_summary=False)):
         tools.register(tool)
     # Explicit home injection isolates user-global memory/intelligence without touching HOME or config.
     personal = root / '.personal'

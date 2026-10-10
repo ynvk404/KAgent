@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from benchmarks.common.contracts import identifier
 from benchmarks.scenario1.core.canonical import projection
 from src.findings.store import read_report_bytes, render, report_bytes
+from src.findings.presentation import EvidenceLink, SummaryContext, render_summary
 from src.redaction.redact import apply_evidence
 from src.target.origin import HTTPOrigin
 from src.workflow.assessment import accepted_result
@@ -17,7 +18,8 @@ from src.workflow.state import validation_result_fingerprint
 
 
 def finding_file(root: Path, execution, case_id: str, partition: str, files: dict[str, bytes], *,
-                 sanitize: Callable[[str], str], public_id: Callable[[str, str], str]) -> dict:
+                 sanitize: Callable[[str], str], public_id: Callable[[str, str], str],
+                 compact: bool = True) -> dict:
     """A confirmation alone never creates a finding or authorizes report export."""
     def status(value, reason=None):
         return {'status': value, 'report_ref': None, 'reason': reason}
@@ -97,5 +99,12 @@ def finding_file(root: Path, execution, case_id: str, partition: str, files: dic
                      owasp=[sanitize(value) for value in finding.owasp] if finding.owasp else None,
                      classification_provenance=None)
     ref = f'findings/{identifier(case_id)}.md'
-    files[ref] = sanitize(render(public)).encode('utf-8')
+    if compact:
+        text = render_summary(public, context=SummaryContext.from_validation(candidate, latest),
+            evidence=(EvidenceLink('Selected evidence and provenance (selected_evidence)',
+                                   f'../results/{identifier(case_id)}.json'),), sanitize=sanitize)
+    else:
+        # Public v4 snapshots are immutable and retain their original renderer.
+        text = render(public)
+    files[ref] = sanitize(text).encode('utf-8')
     return {'status': 'persisted', 'report_ref': f'../{ref}', 'reason': None}

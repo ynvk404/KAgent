@@ -51,6 +51,11 @@ async def enrich_cwe(app: Any, rest: list[str]) -> None:
             finding_tool.notifier(finding, path)
 
         result = await controller.run(choose, publish)
+        try:
+            await finding_tool.write_summary(rest[0])
+        except Exception:
+            result += (' Compact report refresh failed; canonical classification remains persisted. '
+                       'Retry /enrich-cwe with the same candidate ID to refresh the report.')
         app.dispatch(Append(entry=TranscriptEntry(kind='system', text=result)))
     except Exception as exc:
         # Source/model payloads and sensitive filesystem errors never become UI

@@ -53,10 +53,61 @@ class ConfirmFindingTool:
         store: Store,
         notifier: FindingNotifier | None = None,
         workflow: WorkflowState | None = None,
+        *,
+        export_summary: bool = True,
     ) -> None:
         self.store = store
         self.notifier = notifier or (lambda *_: None)
         self.workflow = workflow
+        self._export_summary = export_summary
+
+    async def write_summary(self, candidate_id: str) -> str | None:
+        """Export only a persisted current Finding; retries regenerate the derivative."""
+        if not self._export_summary:
+            return None
+        from src.findings.presentation import SummaryContext
+        state = self.workflow
+        if state is None or not state.finding_is_persisted(candidate_id):
+            raise ValueError("persisted finding required for summary export")
+        candidate = state.candidates[candidate_id]
+        latest = state.latest_result(candidate_id)
+        assert latest is not None
+        snapshot = review_snapshot(state, candidate_id)
+        artifacts = [state.evidence[ref] for ref in latest.evidence_refs]
+
+        def guard(finding: Finding) -> None:
+            if (review_snapshot(state, candidate_id) != snapshot
+                    or not state.finding_is_persisted(candidate_id)
+                    or not state.eligible_for_finding(candidate_id)
+                    or finding.candidate_id != candidate_id
+                    or finding.canonical_class != candidate.candidate_class
+                    or finding.confirmation_binding != confirmation_binding(state, candidate_id)
+                    or finding.evidence_refs != latest.evidence_refs
+                    or finding.binding_version != latest.assessment_contract_version
+                    or finding.assessment_result_id != latest.result_id
+                    or finding.assessment_attempt_id != latest.attempt_id):
+                raise ValueError("finding summary does not match current validation")
+            if latest.assessment_contract_version >= 2 and (
+                    finding.assessment_source != latest.assessment_source
+                    or finding.severity != latest.assessment.get("severity")
+                    or finding.observed_impact != apply_evidence(
+                        latest.assessment.get("observed_impact", "")).strip("\n")):
+                raise ValueError("finding summary assessment changed")
+            if ((candidate.method and finding.method != candidate.method)
+                    or (candidate.parameter and finding.parameter != redact(candidate.parameter))
+                    or (candidate.target and HTTPOrigin.from_url(finding.url) != HTTPOrigin.from_url(candidate.target))):
+                raise ValueError("finding summary endpoint identity changed")
+            if candidate.endpoint:
+                endpoint = re.sub(r"^\s*(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+", "",
+                                  candidate.endpoint, count=1, flags=re.I)
+                template = re.escape(urlparse(endpoint).path).replace(r"\{", "{").replace(r"\}", "}")
+                template = re.sub(r"\{[^{}]+\}", r"[^/]+", template)
+                if not re.fullmatch(template, urlparse(finding.url).path):
+                    raise ValueError("finding summary endpoint identity changed")
+
+        return await self.store.export_summary(
+            candidate_id, SummaryContext.from_validation(candidate, latest), artifacts, guard=guard,
+        )
 
     def name(self) -> str:
         return "confirm_finding"
@@ -407,6 +458,20 @@ class ConfirmFindingTool:
         # malformed/missed tool call cannot make whole-target completion lie.
         self.workflow.mark_finding_persisted(candidate_id)
 
+        summary_notice = ""
+        try:
+            summary_path = await self.write_summary(candidate_id)
+            if summary_path:
+                summary_notice = f"\nCompact report written to {summary_path}"
+        except Exception:
+            # Canonical persistence is already committed. A derivative failure
+            # must not revoke it or encourage retesting; retry the same Candidate.
+            summary_notice = (
+                "\nFinding persisted; compact report export failed. "
+                "Retry confirm_finding with the same candidate_id to regenerate the report."
+            )
+            log.warning("compact finding report export failed")
+
         try:
             self.notifier(finding, path)
         except Exception:
@@ -420,7 +485,7 @@ class ConfirmFindingTool:
         return (f'Finding "{finding.title}" written to {path}\n'
                 f'Classification: {finding.vulnerabilityType or "unknown"}; '
                 f'CWE: {", ".join(finding.cwe or []) or "none"}; '
-                f'OWASP: {", ".join(finding.owasp or []) or "none"}')
+                f'OWASP: {", ".join(finding.owasp or []) or "none"}' + summary_notice)
 
 def is_severity(value: str) -> TypeGuard[Severity]:
     return value in SEVERITIES

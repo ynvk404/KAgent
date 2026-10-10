@@ -482,6 +482,92 @@ async def test_same_candidate_creates_one_official_report(tmp_path):
     assert f"- **Evidence:** {proof}" in first.read_text(encoding="utf-8")
 
 
+async def test_summary_failure_preserves_persistence_and_retry_regenerates(tmp_path, monkeypatch):
+    from pathlib import Path
+    from src.findings import store as module
+    from src.findings.store import read_report
+    tool, store = _tool(tmp_path)
+    prepare = module._prepare_summary
+    def fail(*_):
+        raise OSError("secret-bearing filesystem error")
+    monkeypatch.setattr(module, "_prepare_summary", fail)
+    output = await tool.run(_valid_args(tool, curl="curl https://target.test/search"), None, AlwaysAllow())
+    cid = next(iter(_workflow(tool).candidates))
+    canonical = store.report_for_candidate(cid)
+    before = canonical.read_bytes()
+    assert _workflow(tool).finding_is_persisted(cid)
+    assert "compact report export failed" in output
+    assert "secret-bearing" not in output
+    monkeypatch.setattr(module, "_prepare_summary", prepare)
+    output = await tool.run(_valid_args(tool, title="Renamed proposal", curl="curl https://other.test"), None, AlwaysAllow())
+    summary = tmp_path / "artifacts/reports/findings" / canonical.name
+    content = summary.read_text()
+    assert "Compact report written to" in output
+    assert "Renamed proposal" not in content and "other.test" not in content
+    assert read_report(canonical).curl in content
+    assert canonical.read_bytes() == before
+    assert len(list(store.dir.glob("*.md"))) == 1
+    assert len(list(summary.parent.glob("*.md"))) == 1
+    assert "[Canonical finding]" in content and "../../../proof-" in content
+    assert Path(summary).stat().st_mode & 0o777 == 0o600
+    assert not list(summary.parent.glob("*.tmp"))
+
+
+async def test_benchmark_mode_keeps_only_canonical_workspace_finding(tmp_path):
+    tool, store = _tool(tmp_path)
+    tool = ConfirmFindingTool(store, workflow=tool.workflow, export_summary=False)
+    output = await tool.run(_valid_args(tool), None, AlwaysAllow())
+    assert list(store.dir.glob("*.md"))
+    assert not (tmp_path / "artifacts/reports/findings").exists()
+    assert "Compact report" not in output
+
+
+async def test_summary_rejects_canonical_endpoint_tampering(tmp_path):
+    from src.findings.store import read_report, render
+    from src.workflow.state import Candidate
+    state = WorkflowState()
+    candidate, _ = state.add_candidate(Candidate(candidate_class="sqli", target="https://target.test",
+        endpoint="/search", method="GET", parameter="q", location="query"))
+    proof = _linked_proof(state, candidate, tmp_path)
+    state.add_validation_result(adopt_fixture_assessment(state, ValidationResult(
+        candidate.id, "sql-injection", "confirmed", evidence_refs=[proof])))
+    store = Store(project_directory=tmp_path)
+    tool = ConfirmFindingTool(store, workflow=state)
+    await tool.run(_valid_args(tool), None, AlwaysAllow())
+    canonical = store.report_for_candidate(candidate.id)
+    summary = tmp_path / "artifacts/reports/findings" / canonical.name
+    before = summary.read_bytes()
+    changed = read_report(canonical)
+    changed.url = "https://other.test/search"
+    canonical.write_text(render(changed))
+    with pytest.raises(ValueError, match="endpoint identity"):
+        await tool.write_summary(candidate.id)
+    assert summary.read_bytes() == before
+
+
+async def test_summary_uses_bound_context_and_reports_mutation_limits(tmp_path):
+    from src.workflow.assessment import seal
+    tool, store = _tool(tmp_path, candidate_class="sqli")
+    state = _workflow(tool)
+    candidate = next(iter(state.candidates.values()))
+    candidate.location = "body"
+    # Location contributes to identity, so adopt a fresh bound test assessment.
+    previous = state.latest_result(candidate.id)
+    assert previous is not None
+    latest = adopt_fixture_assessment(state, ValidationResult(candidate.id, "sql-injection", "confirmed",
+        evidence_refs=previous.evidence_refs, mutation_performed=True,
+        cleanup_state="requires-user-action"), assessment={"criteria": "Probe versus control differed.",
+        "limitations": "Affected rows were not independently verified."})
+    latest.assessment_binding = seal(latest)
+    state.add_validation_result(latest, force=True)
+    await tool.run(_valid_args(tool), None, AlwaysAllow())
+    canonical = store.report_for_candidate(candidate.id)
+    content = (tmp_path / "artifacts/reports/findings" / canonical.name).read_text()
+    assert "body" in content and "Probe versus control differed." in content
+    assert "Affected rows were not independently verified." in content
+    assert "requires-user-action" in content
+
+
 def test_metadata(tmp_path):
     tool, _ = _tool(tmp_path)
 

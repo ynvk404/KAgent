@@ -9,9 +9,13 @@ import tempfile
 import weakref
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Literal, cast, Any, Callable
+from typing import Literal, cast, Any, Callable, TYPE_CHECKING
 
 from src.paths import project_artifact_root, project_root
+
+if TYPE_CHECKING:
+    from src.findings.presentation import SummaryContext
+    from src.workflow.evidence import EvidenceArtifact
 
 Severity = Literal[
     "critical",
@@ -117,6 +121,68 @@ class Store:
         if len(matches) != 1:
             raise ValueError("finding report missing or ambiguous")
         return matches[0]
+
+    async def export_summary(
+        self, candidate_id: str, context: SummaryContext, artifacts: list[EvidenceArtifact],
+        *, guard: Callable[[Finding], None],
+    ) -> str:
+        """Regenerate one derivative under the canonical mutation lock.
+
+        Background work only prepares a private temp file. Cancellation drains
+        preparation before releasing the lock; visibility happens on this loop.
+        Canonical writes and CWE promotion cannot race this snapshot/publication.
+        """
+        from src.findings.presentation import artifact_links, relative_link, render_summary
+
+        async with self._save_lock:
+            path = self.report_for_candidate(candidate_id)
+            raw = report_bytes(path)
+            finding = read_report_bytes(raw, slug=path.stem)
+            guard(finding)
+            if not _SAFE_SLUG_RE.fullmatch(path.stem):
+                raise ValueError("unsafe summary filename")
+            directory = project_artifact_root(self.project_dir) / "reports" / "findings"
+            source = relative_link(path, directory, self.project_dir)
+            destination = _summary_destination(self.project_dir, directory, path.name, source)
+            content = render_summary(
+                finding, context=context,
+                evidence=artifact_links(artifacts, self.project_dir, directory),
+                source=source,
+            )
+            pending = asyncio.create_task(asyncio.to_thread(
+                _prepare_summary, self.project_dir, destination, content,
+            ))
+            temporary = None
+            try:
+                try:
+                    temporary = await asyncio.shield(pending)
+                except asyncio.CancelledError:
+                    while not pending.done():
+                        try:
+                            await asyncio.shield(pending)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            break
+                    # A preparation failure must not replace cancellation and
+                    # become a recoverable export notice in the caller.
+                    if not pending.cancelled() and pending.exception() is None:
+                        temporary = pending.result()
+                    raise
+                guard(finding)
+                if report_bytes(path) != raw:
+                    raise ValueError("canonical finding changed during summary export")
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    raise asyncio.CancelledError
+                _check_summary_destination(self.project_dir, destination)
+                os.replace(temporary, destination)
+                temporary = None
+                _fsync_directory(directory)
+                return str(destination)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
     async def promote_classification(
         self, path: Path, *, expected_digest: str, expected_revision: int,
@@ -585,6 +651,45 @@ def classification_replacement(raw: bytes, cwe: str, provenance: dict[str, Any],
     if len(replacement) > MAX_REPORT_BYTES:
         raise ValueError("classification replacement exceeds report bound")
     return replacement
+
+
+def _summary_destination(project: Path, directory: Path, name: str, source: str) -> Path:
+    from urllib.parse import quote
+    marker = f"- [Canonical finding]({quote(source, safe='/.-_')})".encode("utf-8")
+    stem = Path(name).stem
+    for index in range(1, 10_001):
+        path = directory / (name if index == 1 else f"{stem}-{index}.md")
+        _check_summary_destination(project, path)
+        if not path.exists() or marker in report_bytes(path).splitlines():
+            return path
+    raise ValueError("summary filename collision limit exceeded")
+
+
+def _check_summary_destination(project: Path, destination: Path) -> None:
+    for directory in (project / "artifacts", project / "artifacts" / "reports", destination.parent):
+        if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+            raise ValueError("unsafe summary directory")
+    if destination.is_symlink() or (destination.exists() and (
+            not destination.is_file() or destination.stat().st_nlink != 1)):
+        raise ValueError("unsafe summary resource")
+
+
+def _prepare_summary(project: Path, destination: Path, content: str) -> Path:
+    _check_summary_destination(project, destination)
+    for directory in (project / "artifacts", project / "artifacts" / "reports", destination.parent):
+        directory.mkdir(exist_ok=True, mode=0o700)
+        _check_summary_destination(project, destination)
+    fd, name = tempfile.mkstemp(prefix=".finding-", suffix=".tmp", dir=destination.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return temporary
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _prepare_classification(path: Path, raw: bytes) -> Path:

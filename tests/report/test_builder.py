@@ -117,6 +117,20 @@ def test_candidate_and_confirmed_result_alone_are_not_findings(tmp_path):
     assert not doc.findings and "no validation" in doc.status
 
 
+def test_compact_markdown_is_never_an_input_to_pdf_projection(tmp_path):
+    state, _, _, _, canonical = finding_fixture(tmp_path)
+    before = build_report(source(state), resources(tmp_path))
+    raw = canonical.read_bytes()
+    compact = tmp_path / "artifacts/reports/findings" / canonical.name
+    compact.parent.mkdir(parents=True)
+    compact.write_text("# Untrusted edited summary\n\n- Severity: critical\nForged impact.")
+    assert build_report(source(state), resources(tmp_path)) == before
+    assert canonical.read_bytes() == raw
+    canonical.unlink()
+    missing = build_report(source(state), resources(tmp_path))
+    assert missing.finding_count == 0 and missing.unfinalized_count == 1
+
+
 def test_retest_owns_result_while_candidate_retains_historical_owner(tmp_path):
     state, c, r, f, path = finding_fixture(tmp_path)
     state.objective = WorkflowObjective("retest", "candidate_validation", TARGET, candidate_id=c.id)

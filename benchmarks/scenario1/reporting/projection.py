@@ -124,7 +124,8 @@ def _usage(execution) -> dict:
     return output
 
 
-def result_files(root: Path, model: ReportModel, *, version: int = 3) -> dict[str, bytes]:
+def result_files(root: Path, model: ReportModel, *, version: int = 3,
+                 compact_findings: bool = True) -> dict[str, bytes]:
     manifest = decode(RunManifest, read_json(root / 'manifest.json'))
     rows, _ = read_records(root / 'events.jsonl')
     histories = validate_lifecycle(rows)
@@ -172,7 +173,8 @@ def result_files(root: Path, model: ReportModel, *, version: int = 3) -> dict[st
                                   'individual_operations': None})
         if version >= 3:
             projection['finding'] = finding_file(root, execution, cid, summary['evaluator_partition'], files,
-                                                 sanitize=_text, public_id=presentation_id)
+                                                 sanitize=_text, public_id=presentation_id,
+                                                 compact=compact_findings)
             projection['persisted_finding'] = (
                 None if projection['finding']['status'] == 'unknown'
                 else projection['finding']['status'] == 'persisted')

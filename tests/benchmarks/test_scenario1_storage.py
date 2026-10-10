@@ -60,7 +60,7 @@ def test_separated_public_tree_and_offline_roundtrip(tmp_path, op, settings):
     assert case['case_id'] == op.case_id
     assert case['canonical']['result_sha256'] == file_hash(root / 'results' / f'{op.case_id}.json')
     assert case['projection_binding'] == digest({k: v for k, v in case.items() if k != 'projection_binding'})
-    assert index['schema'] == 'scenario1-public-results-v4'
+    assert index['schema'] == 'scenario1-public-results-v5'
     assert index['storage_id'] == root.name
     assert index['run_id'] == baseline.metadata['run_id']
     assert not Path(index['internal_ref']).is_absolute()

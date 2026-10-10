@@ -131,6 +131,8 @@ async def test_explicit_command_only_classification_and_retry_resume(scenario):
     await enrich_cwe(s.app, [s.cand.id])
     assert s.output[-1].entry.kind == 'system', s.output[-1]
     after = read_report(s.path)
+    summary = s.store.project_dir / 'artifacts/reports/findings' / s.path.name
+    assert 'CWE-862' in summary.read_text()
     assert after.cwe == ['CWE-862'] and after.classification_revision == 1
     assert after.classification_provenance is not None
     assert after.classification_provenance['origin'] == 'promoted-external'
@@ -519,6 +521,24 @@ async def test_notifier_failure_never_undoes_visible_promotion(scenario):
     s.registry.get('confirm_finding').notifier = broken
     await enrich_cwe(s.app, [s.cand.id])
     assert s.output[-1].entry.kind == 'system' and read_report(s.path).cwe == ['CWE-862']
+
+
+async def test_summary_refresh_failure_does_not_undo_cwe_and_retry_repairs(scenario, monkeypatch):
+    s = scenario
+    tool = s.registry.get('confirm_finding')
+    original = tool.write_summary
+    monkeypatch.setattr(tool, 'write_summary', AsyncMock(side_effect=OSError('secret path')))
+    await enrich_cwe(s.app, [s.cand.id])
+    canonical = report_bytes(s.path)
+    assert read_report(s.path).cwe == ['CWE-862']
+    assert 'Compact report refresh failed' in s.output[-1].entry.text
+    assert 'secret path' not in s.output[-1].entry.text
+    calls = len(s.remote.calls)
+    monkeypatch.setattr(tool, 'write_summary', original)
+    await enrich_cwe(s.app, [s.cand.id])
+    assert len(s.remote.calls) == calls and report_bytes(s.path) == canonical
+    summary = s.store.project_dir / 'artifacts/reports/findings' / s.path.name
+    assert 'CWE-862' in summary.read_text()
 
 
 @pytest.mark.asyncio

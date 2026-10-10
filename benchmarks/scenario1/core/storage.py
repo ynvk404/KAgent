@@ -11,7 +11,7 @@ from benchmarks.common.contracts import RunManifest, decode, digest, file_hash, 
 from src.paths import project_data_root
 
 STORAGE_SCHEMA = 'scenario1-storage-v1'
-PUBLIC_SCHEMA = 'scenario1-public-results-v4'
+PUBLIC_SCHEMA = 'scenario1-public-results-v5'
 
 
 def storage_root() -> Path:
@@ -94,7 +94,7 @@ def resolve_run(path: Path) -> Path:
                 'schema', 'storage_id', 'run_id', 'manifest_sha256', 'manifest_identity',
                 'evaluation_identity', 'internal_ref', 'files', 'binding'}
                 or index['schema'] not in {'scenario1-public-results-v1', 'scenario1-public-results-v2',
-                                          'scenario1-public-results-v3', PUBLIC_SCHEMA}
+                                          'scenario1-public-results-v3', 'scenario1-public-results-v4', PUBLIC_SCHEMA}
                 or index['binding'] != digest({k: v for k, v in index.items() if k != 'binding'})
                 or not isinstance(index['internal_ref'], str) or Path(index['internal_ref']).is_absolute()):
             raise ValueError('invalid public results descriptor')
@@ -145,7 +145,8 @@ def resolve_run(path: Path) -> Path:
         # different canonical execution, truth label or evidence derivative.
         from ..reporting.projection import result_files
         model = load_report(canonical, canonical / 'evaluations' / f'evaluation-{identity}.json')
-        expected = result_files(canonical, model, version=1 if version == 1 else 3 if version >= 4 else 2)
+        expected = result_files(canonical, model, version=1 if version == 1 else 3 if version >= 4 else 2,
+                                compact_findings=version >= 5)
         if version >= 3:
             from ..reporting.charts import render_charts
             from ..reporting.tables import render_tables

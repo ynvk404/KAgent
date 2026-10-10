@@ -504,7 +504,7 @@ Each source retains canonical source/body hashes, source kind, original byte
 range, JSON pointer, pseudonymous observation reference and truncation flags.
 The 8192-byte public content limit and 32-source canonical bound are enforced.
 Canonical evidence and seals are untouched. The public index schema is now
-`scenario1-public-results-v4`: its root contains `report/`, `results/`, and
+`scenario1-public-results-v5`: its root contains `report/`, `results/`, and
 `findings/` when a current persisted finding is available. Its file bindings
 cover all default report components, case JSON and exported finding Markdown.
 Canonical schemas, scoring and hash formulas do not change.
@@ -520,12 +520,20 @@ assessment/evidence bindings, severity and observed impact must match the
 latest result. Missing, ambiguous or stale reports stay pending; no report is
 created from confirmation alone. Symlinks and hardlinked report files are
 rejected before publication. Reports are parsed with the production reader,
-rendered as sanitized derivatives with public IDs, and named
-`findings/<BenchmarkTest-id>.md`. Internal workspace reports remain unchanged.
+rendered as compact sanitized Markdown, and named
+`findings/<BenchmarkTest-id>.md`. Compact reports show the endpoint/input,
+recorded impact, confirmation criteria, reproduction, verification limitations,
+cleanup when relevant, and remediation when recorded. They link directly to
+`../results/<BenchmarkTest-id>.json` for selected evidence and its provenance;
+operational IDs and binding hashes stay out of the reader report.
+Internal workspace reports remain unchanged. No intermediate compact Markdown
+is created in the execution workspace. The public case JSON schema remains v3;
+index v5 distinguishes the new Finding presentation for integrity reconstruction.
 The resolver still reads and verifies v1 public trees against their
 original case/TXT projections and v2 trees with their original `index.html` and
 case v2 projections, as well as v3 trees with their original two directories.
-Missing or extra v4 components fail closed even if the
+Public v4 trees retain their original full Finding renderer and byte comparisons.
+Missing or extra v4/v5 components fail closed even if the
 public file list is rebound. Smoke 1 and Smoke 2 are
 never rewritten or migrated.
 The index stores compact resolution/integrity information, not copied manifests
