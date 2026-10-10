@@ -209,6 +209,80 @@ async def test_offline_capture_handoff_native_workflow_and_replay(runtime, selec
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('omission', ['missing', 'null'])
+async def test_selected_candidate_recovers_omitted_references_and_replays_capture(runtime, monkeypatch, omission):
+    row = burp_ingest(runtime)
+    slash(runtime, '/burp use')
+    original_tool = runtime.client.tool
+    proposed = []
+    def tool(name, args):
+        if name == 'workflow' and args.get('action') == 'record_candidate':
+            for field in ('baseline_request_ref', 'source_ref'):
+                if omission == 'missing':
+                    args.pop(field)
+                else:
+                    args[field] = None
+            proposed.append(deepcopy(args))
+        return original_tool(name, args)
+    monkeypatch.setattr(runtime.client, 'tool', tool)
+    await runtime.agent.run('Test the selected request for SQL injection', FakeSignal(), lambda _: None)
+    assert proposed and not proposed[0].get('baseline_request_ref')
+    assert runtime.client.finished and runtime.client.stage == 9
+    candidate = next(iter(runtime.workflow.candidates.values()))
+    assert candidate.baseline_request_ref == row['baseline_request_ref']
+    assert candidate.source_ref == row['id']
+    assert len(runtime.sent) == 1
+    assert runtime.sent[0].headers['cookie'] == 'sid=' + SECRET
+    assert json.loads(runtime.sent[0].content)['q'] == "first'"
+    assert [q.tool for q in runtime.operator.requests] == ['http_capture_credentials']
+    assert runtime.operator.requests[0].force_operator and runtime.operator.requests[0].no_session_cache
+    saved = runtime.agent.store.load()
+    assert saved.workflow.candidates[candidate.id].baseline_request_ref == row['baseline_request_ref']
+    assert SECRET not in '\n'.join(m.content for m in saved.messages)
+
+
+@pytest.mark.asyncio
+async def test_selected_candidate_original_baseline_read_uses_native_replay(runtime):
+    class BaselineClient(CaptureAwareClient):
+        async def chat(self, request, signal=None):
+            if self.stage == 5:
+                self.requests.append(deepcopy(request))
+                self.stage += 1
+                last = next(m for m in reversed(request.messages) if m.role == 'tool')
+                assert last.name == 'http' and last.tool_http_status == 200
+                assert SECRET not in '\n'.join(m.content for m in request.messages)
+                return self.tool('workflow', {'action': 'record_result', 'candidate_id': self.candidate,
+                    'skill_name': 'sql-injection', 'outcome': 'insufficient-evidence',
+                    'deferred_reason': 'Original baseline read only; no SQL injection probe was performed.'})
+            if self.stage == 6:
+                self.requests.append(deepcopy(request))
+                last = next(m for m in reversed(request.messages) if m.role == 'tool')
+                assert json.loads(last.content)['ok']
+                return self.done('Original captured baseline read; SQL injection remains unevaluated.')
+            response = await super().chat(request, signal)
+            if self.stage == 5:
+                assert response.message.tool_calls
+                tool_call = response.message.tool_calls[0]
+                args = json.loads(tool_call.function.arguments)
+                args.pop('mutation_value')
+                tool_call.function.arguments = json.dumps(args)
+            return response
+    client = BaselineClient(runtime.client.root)
+    runtime.agent.client = client
+    row = burp_ingest(runtime)
+    slash(runtime, '/burp use')
+    await runtime.agent.run('Read the selected baseline for SQL injection assessment', FakeSignal(), lambda _: None)
+    assert client.finished and len(runtime.sent) == 1
+    request = runtime.sent[0]
+    assert request.method == 'POST' and str(request.url) == ORIGIN + '/search'
+    assert request.content.decode() == RAW_BODY and request.headers['cookie'] == 'sid=' + SECRET
+    candidate = next(iter(runtime.workflow.candidates.values()))
+    assert candidate.baseline_request_ref == row['baseline_request_ref']
+    assert [q.tool for q in runtime.operator.requests] == ['http_capture_credentials']
+    assert runtime.operator.requests[0].force_operator and runtime.operator.requests[0].no_session_cache
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('negative', ['missing', 'wrong_origin', 'stale'])
 async def test_offline_handoff_negative_controls(runtime, negative):
     row = burp_ingest(runtime, origin='http://other.test' if negative == 'wrong_origin' else ORIGIN)

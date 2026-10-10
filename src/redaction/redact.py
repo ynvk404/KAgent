@@ -453,6 +453,17 @@ _EVIDENCE_DIGEST = re.compile(
     r"[A-Fa-f0-9]{96}|[A-Fa-f0-9]{128})\b"
 )
 
+# A digest-shaped DNS label is routing metadata in a URL/Host header, not a
+# standalone opaque secret. Inspect only already-sanitized text; credentials
+# and known credential echoes continue to take precedence over this exception.
+_EVIDENCE_HOSTNAME = re.compile(
+    r"(?:https?://(?:[^/\s\"'<>@]+@)?|(?im:^\s*host:\s*)|\A)"
+    r"(?P<host>(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"
+    r"(?=[:/\s\"'<>?#]|\Z)",
+    re.IGNORECASE,
+)
+
 
 def apply(text: str) -> str:
     return _redactor.apply(text)
@@ -461,7 +472,12 @@ def apply(text: str) -> str:
 def apply_evidence(text: str) -> str:
     """Redact durable proof more conservatively than ordinary prose."""
     cleaned = apply(text)
-    return _EVIDENCE_DIGEST.sub(lambda match: mask(match.group(0)), cleaned)
+    hosts = [match.span("host") for match in _EVIDENCE_HOSTNAME.finditer(cleaned)]
+    return _EVIDENCE_DIGEST.sub(
+        lambda match: match.group(0) if any(start <= match.start() and match.end() <= end
+                                           for start, end in hosts) else mask(match.group(0)),
+        cleaned,
+    )
 
 
 def http_credential_redactor(*header_sets: Iterable[tuple[str, str]]) -> Callable[[str], str]:

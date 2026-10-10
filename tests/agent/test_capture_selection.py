@@ -358,6 +358,61 @@ async def test_cancelled_goals_still_recheck_consumed_capture_before_planning(ru
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('mismatch', ['baseline', 'source', 'endpoint', 'method', 'origin', 'ambiguous'])
+async def test_selected_candidate_rejects_conflicting_or_ambiguous_binding(runtime, mismatch):
+    row = ingest(runtime)
+    other = ingest(runtime, 'other', path='/search?q=second')
+    if mismatch == 'ambiguous':
+        runtime.agent.select_burp_captures(all_recent=True)
+    else:
+        runtime.agent.select_burp_captures(row['id'])
+    args = {'action': 'record_candidate', 'candidate_class': 'sqli', 'endpoint': '/search',
+            'method': 'GET', 'parameter': 'q', 'location': 'query'}
+    if mismatch == 'baseline':
+        args['baseline_request_ref'] = other['baseline_request_ref']
+    elif mismatch == 'source':
+        args['source_ref'] = other['id']
+    elif mismatch == 'endpoint':
+        args['endpoint'] = '/different'
+    elif mismatch == 'method':
+        args['method'] = 'POST'
+    elif mismatch == 'origin':
+        args['target'] = 'http://other.test'
+    runtime.client.scripted = [call('workflow', args), answer()]
+    await runtime.agent.run('Analyze this selected request', FakeSignal(), lambda _: None)
+    result = next(m for m in runtime.agent.history if m.name == 'workflow')
+    assert result.tool_status == 'error'
+    assert not runtime.workflow.candidates
+
+
+@pytest.mark.asyncio
+async def test_selected_candidate_source_disambiguates_same_endpoint_and_preserves_shorthand(runtime):
+    first = ingest(runtime)
+    second = ingest(runtime, 'second', path='/search?q=second')
+    runtime.agent.select_burp_captures(all_recent=True)
+    runtime.client.scripted = [call('workflow', {'action': 'record_candidate', 'candidate_class': 'sqli',
+        'endpoint': 'GET /search', 'parameter': 'q', 'location': 'query', 'source_ref': first['id']}), answer()]
+    await runtime.agent.run('Analyze the first selected request', FakeSignal(), lambda _: None)
+    candidate = next(iter(runtime.workflow.candidates.values()))
+    assert candidate.baseline_request_ref == first['baseline_request_ref']
+    assert candidate.baseline_request_ref != second['baseline_request_ref']
+    assert (candidate.method, candidate.endpoint, candidate.parameter) == ('GET', '/search', 'q')
+
+
+@pytest.mark.asyncio
+async def test_selected_capture_cannot_validate_unbound_old_candidate(runtime):
+    ingest(runtime)
+    candidate, _ = runtime.workflow.add_candidate(Candidate(candidate_class='sqli', target=ORIGIN,
+        endpoint='/search', method='GET', parameter='q', location='query'))
+    runtime.agent.select_burp_captures()
+    runtime.client.scripted = [call('workflow', {'action': 'start_validation', 'candidate_id': candidate.id}), answer()]
+    await runtime.agent.run('Analyze selected capture', FakeSignal(), lambda _: None)
+    result = next(m for m in runtime.agent.history if m.name == 'workflow')
+    assert result.tool_status == 'error' and 'not bound' in result.content
+    assert candidate.baseline_request_ref is None and candidate.status != 'validating'
+
+
+@pytest.mark.asyncio
 async def test_real_provider_transport_retry_retains_redacted_frozen_selection(runtime, monkeypatch):
     import httpx
     from src.llm.providers.openai import OpenAIClient

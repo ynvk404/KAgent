@@ -356,3 +356,28 @@ async def test_native_listing_removes_userinfo_and_known_unlabelled_url_echoes()
     for secret in ('fixture-user', 'fixture-password', 'fixture-session-secret'):
         assert secret not in result
     assert row['id'] in result and row['baseline_request_ref'] in result
+
+
+@pytest.mark.asyncio
+async def test_hex_lab_hostname_survives_native_capture_views_and_selection():
+    import json
+    from src.browser.selection import SelectedCapture
+    host = 'a1b2c3d4e5f67890a1b2c3d4e5f67890.web-security-academy.net'
+    store = CaptureStore()
+    row = store.ingest({'kind': 'burp', 'url': f'https://fixture-user:fixture-password@{host}:443/product?productId=10',
+        'requestHeaders': [{'name': 'Host', 'value': host}, {'name': 'Cookie', 'value': 'sid=fixture-private-cookie'},
+                           {'name': 'Authorization', 'value': 'Bearer fixture-private-token'}]})
+    registry = ToolRegistry()
+    registry.register(BrowserCaptureGetTool(store))
+    registry.register(BrowserCaptureRequestsTool(store))
+    listing = json.loads(await registry.execute('browser_capture_requests', {}, None, AlwaysAllow()))
+    detail = json.loads(await registry.execute('browser_capture_get', {'id': row['id']}, None, AlwaysAllow()))
+    captured = store.get_request(row['id'])
+    assert captured is not None
+    selected = SelectedCapture.from_request(captured)
+    expected = f'https://{host}:443/product?productId=10'
+    assert listing[0]['url'] == detail['url'] == selected.endpoint == expected
+    assert detail['request_headers'][0]['value'] == host
+    safe = json.dumps([listing, detail, selected.metadata()])
+    for secret in ('fixture-user', 'fixture-password', 'fixture-private-cookie', 'fixture-private-token'):
+        assert secret not in safe

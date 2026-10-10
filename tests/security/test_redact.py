@@ -206,3 +206,22 @@ def test_truncated_embedded_json_secret_fails_closed():
     safe = apply('HTTP/1.1 200 OK\n\n{"token":{"opaque":"fixture-secret"')
     assert "fixture-secret" not in safe
     assert "[REDACTED]" in safe
+
+
+@pytest.mark.parametrize("suffix", ["web-security-academy.net", "example.test"])
+def test_evidence_preserves_hex_hostname_but_masks_secrets(suffix):
+    from src.redaction.redact import apply_evidence, http_credential_redactor
+    digest = "a1b2c3d4e5f67890a1b2c3d4e5f67890"
+    host = f"{digest}.{suffix}"
+    url = f"https://{host}:443/product?productId=10"
+    assert apply_evidence(host) == host
+    assert apply_evidence(f"Host: {host}") == f"Host: {host}"
+    assert apply_evidence(url) == url
+    assert digest not in apply_evidence(f"opaque proof: {digest}")
+    assert digest not in apply_evidence(f"https://{host}/?token={digest}").split("?", 1)[1]
+    redact = http_credential_redactor([("Host", host), ("Cookie", "sid=fixture-cookie")])
+    assert redact(url) == url
+    assert "fixture-cookie" not in redact(f"{url}&echo=fixture-cookie")
+    # Even a hostname-shaped value is secret when it came from credentials.
+    credential_redactor = http_credential_redactor([("Cookie", f"sid={host}")])
+    assert host not in credential_redactor(f"echo {url}")

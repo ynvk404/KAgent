@@ -2018,6 +2018,43 @@ class Agent:
             from src.permission.runtime.execution import policy_for
             selection.validate(self._capture_store(), self.target, self.engagement_state, policy_for(self.prompter))
 
+    def _selected_capture_workflow_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        from src.tools.workflow.workflow_tool import WorkflowTool
+        selection = self._turn_capture_selection()
+        if selection is None or not isinstance(self.tools.get("workflow"), WorkflowTool):
+            return args
+        if args.get("action") == "start_validation":
+            candidate = self.workflow.candidates.get(str(args.get("candidate_id", "")))
+            if candidate is not None and candidate.baseline_request_ref not in {
+                row.baseline_request_ref for row in selection.requests if row.baseline_request_ref
+            }:
+                raise ValueError("Candidate is not bound to the selected capture; record it with the selected baseline reference")
+            return args
+        if args.get("action") != "record_candidate":
+            return args
+        endpoint, method, error = WorkflowTool._normalize_method_endpoint(args.get("endpoint"), args.get("method"))
+        if error or not isinstance(endpoint, str) or not isinstance(method, str):
+            raise ValueError("selected capture Candidate requires a matching endpoint and method")
+        url = urljoin(selection.origin.as_url() + "/", endpoint)
+        target = args.get("target") or selection.origin.as_url()
+        if HTTPOrigin.from_url(url) != selection.origin or HTTPOrigin.from_url(target) != selection.origin:
+            raise ValueError("Candidate must match the selected capture origin")
+        baseline, source = args.get("baseline_request_ref"), args.get("source_ref")
+        store = self._capture_store()
+        matches = [selected for selected in selection.requests
+                   if (not baseline or baseline == selected.baseline_request_ref)
+                   and (not source or source == selected.retrieval_id)
+                   and (row := store.get_request(selected.retrieval_id)) is not None
+                   and row.method.upper() == method.upper()
+                   and urlsplit(row.url).path == urlsplit(url).path]
+        if len(matches) != 1:
+            raise ValueError("selected capture Candidate binding is ambiguous or mismatched; supply its exact source_ref and baseline_request_ref")
+        selected = matches[0]
+        if not selected.baseline_request_ref:
+            raise ValueError("selected capture baseline reference unavailable; recapture required")
+        return {**args, "baseline_request_ref": selected.baseline_request_ref,
+                "source_ref": source or selected.retrieval_id}
+
     def _clear_permission_cache(self) -> None:
         self.cancel_capture_selection()
         # Synchronous invalidation stops dispatch immediately; the Browser owner
@@ -4657,7 +4694,10 @@ class Agent:
             request = self._request_for_messages(working, tools)
         tools_tokens = schema_tokens(request.tools)
         threshold = self._reduction_threshold()
-        self.result_retention.admit(working, tools_tokens, request=request, threshold=threshold, strict=strict_retention)
+        storage_notice = self.result_retention.admit(working, tools_tokens, request=request,
+                                                   threshold=threshold, strict=strict_retention)
+        if storage_notice:
+            emit({"type": "decision", "summary": storage_notice})
 
         def size() -> int:
             return estimate_request(request, self.client.name()).estimated_total
@@ -5135,6 +5175,8 @@ class Agent:
                                 if parsed.args.get("baseline_request_ref", selected.baseline_request_ref) != selected.baseline_request_ref:
                                     raise ValueError("selected capture baseline reference mismatch")
                                 dispatch_args = {**parsed.args, "baseline_request_ref": selected.baseline_request_ref}
+                        if selection is not None and tc.function.name == "workflow":
+                            dispatch_args = self._selected_capture_workflow_args(dispatch_args)
                         result = await self.tools.execute(
                             tc.function.name,
                             dispatch_args,

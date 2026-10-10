@@ -31,6 +31,9 @@ validation_context and native HTTP replay checks; if unavailable, report the blo
 and request recapture. Follow the user's analysis/testing intent. Selection alone
 does not choose an input, create a Candidate, authorize HTTP, or request batch tests.
 Use the existing Workflow and validators after resolving the relevant inputs.
+When recording a Candidate, carry its exact source_ref and baseline_request_ref.
+Use that Candidate with native HTTP replay for baseline reads and mutations;
+do not replace a captured baseline with a fresh URL-only request.
 Distinguish selected requests, detail reads, and evidenced analysis/validation.
 browser_capture_get alone is not analysis. Report batch progress only when the user
 asks to process the set; derive tested/analyzed claims from Workflow/evidence,

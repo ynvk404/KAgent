@@ -189,7 +189,7 @@ class ResultRetention:
             # Optimization must never change the successful execution outcome.
             return
 
-    def admit(self, working: list[Message], tools_tokens: int, *, request: ChatRequest | None = None, threshold: int | None = None, strict: bool = False) -> None:
+    def admit(self, working: list[Message], tools_tokens: int, *, request: ChatRequest | None = None, threshold: int | None = None, strict: bool = False) -> str | None:
         from .agent import (MIDTURN_MIN_SAFETY_TOKENS,
                             MIDTURN_SAFETY_RATIO, MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR,
                             _proportional_reductions, _BoundedToolResult)
@@ -208,6 +208,7 @@ class ResultRetention:
                       and agent.tools.context_reduction_policy(msg.name) == "adaptive"]
         reductions = _proportional_reductions([len(working[i].content) - floor for i in candidates],
                                              max(0, total - target) * 4)
+        storage_notice = None
         for i, reduction in zip(candidates, reductions):
             msg = working[i]
             pending = self.pending.get(id(msg))
@@ -232,6 +233,13 @@ class ResultRetention:
                     tool_call_id=prototype.tool_call_id, status=prototype.status,
                     error_kind=prototype.error_kind, http_status=prototype.http_status,
                     truncated=prototype.truncated)
+            except ResultUnavailable:
+                # Security checks still reject this cache write. Checkpoints
+                # save the original sanitized message inline instead; only the
+                # working LLM view may be bounded by the existing context guard.
+                storage_notice = ("Private tool-result cache unavailable; uncached full sanitized output "
+                                  "is kept in session history. LLM context may use bounded excerpts.")
+                continue
             except Exception:
                 if strict:
                     raise
@@ -247,6 +255,7 @@ class ResultRetention:
             self.pending[id(replacement)] = PendingResult(replacement, pending.original, pending.provenance)
             agent._bounded_results.pop(id(msg), None)
             agent._bounded_results[id(replacement)] = _BoundedToolResult(replacement, pending.original)
+        return storage_notice
 
     def lookup(self, result_ref: str) -> ResultReference:
         from src.session.tool_results import valid_ref

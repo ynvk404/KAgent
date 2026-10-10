@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from src.agent.agent import (Agent, AgentOptions, AgentRunOptions, ParsedToolCall, ToolCallResult,
@@ -215,6 +216,78 @@ def test_storage_failure_fallback_inline_and_phase_a_bounds(make, monkeypatch, f
     assert len(working[-1].content) < len(msg.content)
     assert execution.result == source(40000) and execution.err_str == ''
     assert not agent.result_retention.references
+
+
+@pytest.mark.asyncio
+async def test_http_200_unsafe_cache_checkpoint_preserves_output_and_continues(make, tmp_path, monkeypatch):
+    calls = [ChatResponse(Message('assistant', '', tool_calls=[ToolCall('http-result', FunctionCall(
+        'http', json.dumps({'url': '/output', 'method': 'GET', 'phase': 'recon',
+                            'max_response_bytes': 65536})))]), 'tool_calls'),
+        ChatResponse(Message('assistant', 'HTTP result inspected; done.'), 'stop')]
+    client = FakeClient(calls)
+    agent = make(client=client, threshold=0)
+    agent.tools.register(HTTPTool(agent.target, agent.engagement_state))
+    directory = tmp_path / '.kagent'
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o777)  # Reproduce a Windows mount's reported mode.
+    payload = source(40000)
+    sent = []
+    real_client = httpx.AsyncClient
+    def transport(request):
+        sent.append(request)
+        return httpx.Response(200, text=payload, request=request)
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(
+        transport=httpx.MockTransport(transport), **kwargs))
+    original_chat = client.chat
+    async def chat(request, signal=None):
+        if client.requests:
+            saved = agent.store.load()
+            full = next(m for m in saved.messages if m.name == 'http')
+            assert payload in full.content and full.tool_http_status == 200
+            assert full.tool_result_refs is None
+            assert not agent._tool_results_unsaved
+        response = await original_chat(request, signal)
+        agent.set_auto_compact_threshold(3000)
+        return response
+    monkeypatch.setattr(client, 'chat', chat)
+    events = []
+    await agent.run('Read the bounded HTTP response', FakeSignal(), events.append)
+    assert len(sent) == 1 and len(client.requests) == 2
+    result = next(e for e in events if e.get('type') == 'tool-result')
+    assert result['http_status'] == 200 and payload in result['result']
+    represented = next(m for m in client.requests[1].messages if m.name == 'http')
+    assert len(represented.content) < len(result['result'])
+    assert not agent.result_retention.references and not agent.result_retention.pending
+    assert not any(e.get('type') == 'error' for e in events)
+    assert any(e.get('type') == 'decision' and 'cache unavailable' in e.get('summary', '')
+               and 'session history' in e['summary'] for e in events)
+    assert not (directory / 'tool-results').exists()
+    assert directory.stat().st_mode & 0o777 == 0o777
+    restored = make(threshold=0)
+    restored.resume_saved()
+    assert payload in next(m.content for m in restored.history if m.name == 'http')
+
+
+@pytest.mark.asyncio
+async def test_unsafe_cache_terminal_checkpoint_and_session_save_failure(make, tmp_path, monkeypatch):
+    agent = make()
+    directory = tmp_path / '.kagent'
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o777)
+    msg, working, _, _ = record(agent)
+    agent._tool_checkpoint_request = agent._request_for_messages(working, agent.tools.as_llm_tools())
+    save = agent.store.save
+    monkeypatch.setattr(agent.store, 'save', AsyncMock(side_effect=OSError('session save failed')))
+    with pytest.raises(OSError, match='session save failed'):
+        await agent._finish_tool_results()
+    assert agent._tool_results_unsaved
+    assert next(iter(agent.result_retention.pending.values())).original == msg.content
+    assert not agent.result_retention.references
+    monkeypatch.setattr(agent.store, 'save', save)
+    await agent._finish_tool_results()
+    assert not agent._tool_results_unsaved
+    assert next(m.content for m in agent.store.load().messages if m.role == 'tool') == msg.content
+    assert not (directory / 'tool-results').exists()
 
 
 @pytest.mark.parametrize('failure', ['normal', 'missing', 'corrupt'])
