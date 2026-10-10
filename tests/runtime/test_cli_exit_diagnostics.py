@@ -165,6 +165,66 @@ async def test_grant_failure_is_still_reported_without_debug(offline_cli, monkey
     assert "debug session log:" not in error and "HTTP operator grants:" not in error
 
 
+@pytest.mark.parametrize(("flags", "port", "bind_failure"), [
+    ([], None, False),
+    (["--burp"], 8888, False),
+    (["--burp", "8888"], 8888, False),
+    (["--burp", "9012"], 9012, False),
+    (["--browser-ingest", "9012"], 9012, False),
+    (["--burp", "8888"], 8888, True),
+])
+@pytest.mark.asyncio
+async def test_burp_startup_displays_connection_details_in_tui(
+    offline_cli, monkeypatch, capsys, flags, port, bind_failure
+):
+    cli = offline_cli.cli
+    monkeypatch.setattr(cli.sys, "argv", ["kagent", *flags])
+    handle = SimpleNamespace(port=port, url=f"http://127.0.0.1:{port}",
+                             token="0123456789abcdef0123456789abcdef", close=Mock())
+
+    def start_bridge(opts):
+        assert opts.port == port
+        if bind_failure:
+            raise OSError("Address already in use")
+        return handle
+
+    start = Mock(side_effect=start_bridge)
+    monkeypatch.setattr(cli, "start_ingest_server", start)
+    checked = []
+
+    async def run_app(app):
+        startup = capsys.readouterr()
+        assert startup.out == ""
+        assert ("failed to start burp bridge" in startup.err) is bind_failure
+        assert handle.token not in startup.err
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            notices = [entry for entry in app.state.transcript
+                       if entry.text.startswith("Burp bridge listening at")]
+            if port is not None and not bind_failure:
+                assert len(notices) == 1
+                assert notices[0].kind == "system"
+                assert handle.url in notices[0].text
+                assert f"Token: {handle.token}" in notices[0].text
+                rendered = "\n".join(line.text for line in app.transcript_log.lines)
+                assert handle.url in rendered and handle.token in rendered
+                # Connection details belong to the operator UI, not model history.
+                assert all(handle.token not in (message.content or "")
+                           for message in app.agent.history)
+            else:
+                assert notices == []
+                assert all(handle.token not in entry.text for entry in app.state.transcript)
+            checked.append(True)
+
+    monkeypatch.setattr(cli.KAgent, "run_async", run_app)
+    assert await cli.main() == 0
+    assert checked
+    assert start.call_count == int(port is not None)
+    assert handle.close.call_count == int(port is not None and not bind_failure)
+    output = capsys.readouterr()
+    assert handle.token not in output.out + output.err
+
+
 @pytest.mark.asyncio
 async def test_shutdown_failure_still_propagates_without_debug(offline_cli, monkeypatch, capsys):
     cli = offline_cli.cli

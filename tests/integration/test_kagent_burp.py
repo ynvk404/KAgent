@@ -182,19 +182,15 @@ def test_registers_only_context_menu_http_listener_and_tab(extender):
     assert not hasattr(extension_module, "HttpRequestResponse")
 
 
-def test_context_menu_keeps_only_send_and_scope_actions(extender):
+def test_context_menu_keeps_only_send_action(extender):
     messages = [_message(), _message(None)]
     invocation = types.SimpleNamespace(getSelectedMessages=lambda: messages)
     extender._send_requests = Mock()
-    extender._queue_task = Mock()
 
     items = extender.createMenuItems(invocation)
-    assert [item.text for item in items] == ["Send to KAgent", "Add Host to Scope"]
+    assert [item.text for item in items] == ["Send to KAgent"]
     items[0].actionPerformed(None)
     extender._send_requests.assert_called_once_with(messages)
-    extender._queue_task.assert_not_called()
-    items[1].actionPerformed(None)
-    extender._queue_task.assert_called_once_with(messages, "scope")
 
 
 @pytest.mark.parametrize("selection", [None, []])
@@ -317,22 +313,6 @@ def test_bridge_traffic_is_skipped_before_capture_payload_is_built(extender):
     extender._message_to_ingest_payload.assert_not_called()
 
 
-def test_scope_action_only_queues_existing_scope_task_payload(extender):
-    extender._post_json = Mock()
-    extender._get_json = Mock()
-    items = extender.createMenuItems(types.SimpleNamespace(getSelectedMessages=lambda: [_message()]))
-    items[1].actionPerformed(None)
-    extender._post_json.assert_called_once_with("/burp/task", {
-        "action": "scope", "target": "fixture.test", "host": "fixture.test",
-        "method": "POST", "url": TRAFFIC_URL,
-        "rawRequestB64": base64.b64encode(RAW_REQUEST).decode(),
-        "notes": "Queued from Burp context menu",
-    })
-    extender._get_json.assert_not_called()
-    assert "queued 1 scope task(s)" in extender.log_area.getText()
-    assert "private" not in extender.log_area.getText()
-
-
 def test_failed_clear_bridge_preserves_deduplication_state(extender):
     extender._remember_auto_key("captured-key")
     extender._delete = Mock(side_effect=RuntimeError("private-bridge-token"))
@@ -359,6 +339,7 @@ def test_retained_actions_against_local_bridge_preserve_capture_and_clear_contra
     try:
         messages = [_message()]
         items = extender.createMenuItems(types.SimpleNamespace(getSelectedMessages=lambda: messages))
+        assert [item.text for item in items] == ["Send to KAgent"]
         if capture_action == "manual":
             items[0].actionPerformed(None)
         else:
@@ -386,16 +367,9 @@ def test_retained_actions_against_local_bridge_preserve_capture_and_clear_contra
         assert '"ok": true' in extender.log_area.getText()
         assert "private" not in extender.log_area.getText()
 
-        items[1].actionPerformed(None)
-        tasks = store.list_burp_tasks()
-        assert len(tasks) == 1 and tasks[0].action == "scope"
-        assert tasks[0].target == tasks[0].host == "fixture.test"
-        assert tasks[0].raw_request_b64 == row.raw_request_b64
-        assert store.list_burp_issues() == []
-
         extender._clear_console()
         assert extender.log_area.getText() == ""
-        assert store.list_requests() == captured and store.list_burp_tasks() == tasks
+        assert store.list_requests() == captured and store.list_burp_tasks() == []
         assert "private" not in repr(extender.stdout.mock_calls)
         assert "private" not in "\n".join(events)
 

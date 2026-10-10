@@ -1308,6 +1308,14 @@ async def main() -> int:
         mutation_lock=config_mutation_lock,
     )
 
+    def bind_notice_publisher(publish: Callable[[str], None]) -> None:
+        notice_holder.bind(publish)
+        if flags.burp and ingest_handle is not None:
+            publish(
+                f"Burp bridge listening at {ingest_handle.url}\n"
+                f"Token: {ingest_handle.token}"
+            )
+
     app = KAgent(
         AppProps(
             agent=agent,
@@ -1324,8 +1332,7 @@ async def main() -> int:
             bind_banner_publisher=lambda publish:
                 setattr(banner_holder, "publish", publish),
 
-            bind_notice_publisher=lambda publish:
-                notice_holder.bind(publish),
+            bind_notice_publisher=bind_notice_publisher,
 
             resume_summary=resume_summary,
 

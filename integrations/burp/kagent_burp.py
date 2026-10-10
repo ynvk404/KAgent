@@ -111,8 +111,6 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IHttpListener, ITab):
             return items
 
         items.add(JMenuItem("Send to KAgent", actionPerformed=lambda e: self._send_requests(selected)))
-        # Queue the existing scope task; this does not change runtime scope.
-        items.add(JMenuItem("Add Host to Scope", actionPerformed=lambda e: self._queue_task(selected, "scope")))
         return items
 
     def _save_settings(self, _event):
@@ -139,17 +137,6 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IHttpListener, ITab):
             except Exception as exc:
                 self._log_error("send request failed", exc)
         self._log("sent %d request(s) to KAgent capture" % count)
-
-    def _queue_task(self, messages, action):
-        count = 0
-        for msg in messages:
-            try:
-                payload = self._message_to_task_payload(msg, action)
-                self._post_json("/burp/task", payload)
-                count += 1
-            except Exception as exc:
-                self._log_error("queue %s failed" % action, exc)
-        self._log("queued %d %s task(s) for KAgent" % (count, action))
 
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
         if messageIsRequest:
@@ -217,22 +204,6 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IHttpListener, ITab):
             payload["responseHeaders"] = self._headers(resp_info.getHeaders())
             payload["respBody"] = self._body_to_text(response, resp_info.getBodyOffset())
             payload["rawResponseB64"] = self._b64encode(self._raw_bytes(response))
-        return payload
-
-    def _message_to_task_payload(self, msg, action):
-        service = msg.getHttpService()
-        req_info = self.helpers.analyzeRequest(service, msg.getRequest())
-        url = req_info.getUrl()
-        host = service.getHost()
-        payload = {
-            "action": action,
-            "target": url.toString() if action != "scope" else host,
-            "host": host,
-            "method": req_info.getMethod(),
-            "url": url.toString(),
-            "rawRequestB64": self._b64encode(self._raw_bytes(msg.getRequest())),
-            "notes": "Queued from Burp context menu",
-        }
         return payload
 
     def _headers(self, headers):
