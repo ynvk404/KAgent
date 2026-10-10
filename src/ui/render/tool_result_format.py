@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .color_level import color_level
+from .sanitize import sanitize_text
 
 _LEVEL = color_level()
 
@@ -367,6 +368,7 @@ def _http_preview(content: str) -> tuple[str, int, int] | None:
 
 
 def build_tool_result_view(raw: str) -> ToolResultView:
+    raw = sanitize_text(raw)
     content = _compact_shell_result_for_transcript(extract_text_content(raw))
     is_http = looks_like_http_result(content)
     if looks_like_shell_result(content):

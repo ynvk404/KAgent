@@ -8,6 +8,7 @@ from typing import IO, Callable, Literal
 from src.ui.core.state import TranscriptEntry
 from src.ui.core.terminal_size import get_terminal_size
 from src.ui.render.markdown import render_markdown
+from src.ui.render.sanitize import sanitize_text
 from src.ui.widgets.banner import Banner, BannerData
 from src.ui.theme import ACCENT, ERROR, MUTED, PRIMARY, WARNING
 
@@ -99,8 +100,8 @@ def plain_rows_for_entry(entry: TranscriptEntry) -> list[Row]:
 
 def _display_text(entry: TranscriptEntry) -> str:
     if entry.expanded and entry.full_text is not None:
-        return entry.full_text
-    return entry.text
+        return sanitize_text(entry.full_text)
+    return sanitize_text(entry.text)
 
 
 def entry_view(

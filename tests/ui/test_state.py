@@ -248,7 +248,8 @@ def test_delta_changes_planning_to_answering():
 
 
     assert s.phase == "answering"
-    assert s.transcript[-1].text == "hello"
+    assert "awaiting sanitized message" in s.transcript[-1].text
+    assert s.stream_chunks == ("hello",)
 
 
 def test_busy_turn_transitions_through_waiting_input_and_back_to_answering():

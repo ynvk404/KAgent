@@ -253,7 +253,7 @@ def test_help_groups_commands_and_keeps_runtime_summary_compact():
     assert "Advanced" in text
     assert "Installed skills" in text
     assert "/exit (/quit)" in text
-    assert "/burp [port|stop|status|list|use [id|cancel]|all]" in text
+    assert "/burp [port|stop|status|credentials|list|use [id|cancel]|all]" in text
     assert "at most 50 most recent requests" in text
     assert any(line.startswith('  /memory [add <text>|list|forget <text>|clear|intel]') and line.endswith('manage saved/session memory') for line in text.splitlines())
     assert "/model <id|list>" in text

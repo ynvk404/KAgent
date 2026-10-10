@@ -89,7 +89,7 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
         name="/burp",
-        args="[port|stop|status|list|use [id|cancel]|all]",
+        args="[port|stop|status|credentials|list|use [id|cancel]|all]",
         description="manage bridge and capture selection; all selects at most 50 most recent requests",
     ),
 

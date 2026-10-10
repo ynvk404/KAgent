@@ -42,6 +42,7 @@ except ImportError:
 
 
 from src.ui.render.tool_result_format import build_tool_result_view, shell_result_exit_status
+from src.ui.render.sanitize import sanitize_text
 from src.ui.theme import ACCENT, DANGER, ERROR, MUTED, WARNING
 
 
@@ -102,6 +103,8 @@ class AppState:
     phase: UiPhase = "idle"
     transcript_filter: TranscriptFilter = "all"
     running_tool: str | None = None
+    # Buffer incomplete credentials until a complete message/event boundary.
+    stream_chunks: tuple[str, ...] = field(default=(), repr=False)
 
 
 def initial_state(banner: str, banner_data: BannerData) -> AppState:
@@ -221,18 +224,20 @@ def reducer(state: AppState, action: Action) -> AppState:
             return replace(state, banner_data=merged)
 
         case Append(entry=entry):
+            entry = replace(entry, text=sanitize_text(entry.text),
+                            full_text=sanitize_text(entry.full_text) if entry.full_text is not None else None)
             return replace(state, transcript=(*state.transcript, entry))
 
         case AppendDelta(text=text):
             phase: UiPhase = "answering" if state.busy else state.phase
             last = state.transcript[-1] if state.transcript else None
             if last is not None and last.kind == "assistant" and last.streaming:
-                updated = replace(last, text=last.text + text)
-                return replace(state, phase=phase, transcript=(*state.transcript[:-1], updated))
+                return replace(state, phase=phase, stream_chunks=(*state.stream_chunks, text))
             return replace(
                 state,
                 phase=phase,
-                transcript=(*state.transcript, TranscriptEntry(kind="assistant", text=text, streaming=True)),
+                stream_chunks=(text,),
+                transcript=(*state.transcript, TranscriptEntry(kind="assistant", text="Assistant text streaming; awaiting sanitized message", streaming=True)),
             )
 
         case SetBusy(busy=busy):
@@ -242,7 +247,7 @@ def reducer(state: AppState, action: Action) -> AppState:
             return replace(state, api_ready=ready)
 
         case SetActiveSkill(name=name):
-            return replace(state, active_skill=name)
+            return replace(state, active_skill=sanitize_text(name) if name is not None else None)
 
         case SetYolo(on=on):
             return replace(state, yolo=on)
@@ -312,7 +317,8 @@ def reducer(state: AppState, action: Action) -> AppState:
                 clear_gen=state.clear_gen + 1,
                 transcript_revision=state.transcript_revision + 1,
                 all_tool_outputs_expanded=False,
-                clear_message=message,
+                stream_chunks=(),
+                clear_message=sanitize_text(message) if message is not None else None,
                 active_skill=(
                     None
                     if message == "conversation reset"
@@ -624,23 +630,34 @@ def _format_compact_event(ev: Any) -> str:
     return f"compacted: {ev.summary}"
 
 
+def _finish_stream(state: AppState, text: str | None = None) -> AppState:
+    last = state.transcript[-1] if state.transcript else None
+    if last is None or last.kind != "assistant" or not last.streaming:
+        return state
+    safe = sanitize_text(text if text is not None else "".join(state.stream_chunks))
+    return replace(state, stream_chunks=(),
+                   transcript=(*state.transcript[:-1], replace(last, text=safe, streaming=False)))
+
+
 def _apply_agent_event(state: AppState, ev: AgentEvent) -> AppState:
+    if not isinstance(ev, (AssistantDeltaEvent, AssistantTextEvent)):
+        state = _finish_stream(state)
     match ev:
         case AssistantTextEvent(text=text):
             last = state.transcript[-1] if state.transcript else None
             if last is not None and last.kind == "assistant" and last.streaming:
-                finalized = replace(last, streaming=False)
-                return replace(state, phase="answering", transcript=(*state.transcript[:-1], finalized))
+                return replace(_finish_stream(state, text), phase="answering")
             return replace(
                 state,
                 phase="answering",
-                transcript=(*state.transcript, TranscriptEntry(kind="assistant", text=text)),
+                transcript=(*state.transcript, TranscriptEntry(kind="assistant", text=sanitize_text(text))),
             )
 
         case AssistantDeltaEvent(text=text):
             return reducer(state, AppendDelta(text=text))
 
         case ToolCallEvent(name=name, args_json=args_json):
+            args_json = sanitize_text(args_json)
             if name == "confirm_finding":
                 card = _format_finding_card(args_json)
                 if card is not None:
@@ -673,6 +690,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent) -> AppState:
         case ToolResultEvent(
             name=name, result=result, err=err, duration_ms=duration_ms, status=status
         ):
+            result, err = sanitize_text(result), sanitize_text(err)
             if not err and name == "confirm_finding":
                 return replace(
                     state,
@@ -759,32 +777,32 @@ def _apply_agent_event(state: AppState, ev: AgentEvent) -> AppState:
             return replace(
                 state,
                 phase="answering" if state.busy else state.phase,
-                transcript=(*state.transcript, TranscriptEntry(kind="error", text=str(agent_err))),
+                transcript=(*state.transcript, TranscriptEntry(kind="error", text=sanitize_text(str(agent_err)))),
             )
 
         case CompactEvent():
             return replace(
                 state,
                 phase="planning",
-                transcript=(*state.transcript, TranscriptEntry(kind="system", text=_format_compact_event(ev))),
+                transcript=(*state.transcript, TranscriptEntry(kind="system", text=sanitize_text(_format_compact_event(ev)))),
             )
 
         case DecisionEvent(summary=summary):
             return replace(
                 state,
                 phase="planning",
-                transcript=(*state.transcript, TranscriptEntry(kind="decision", text=summary)),
+                transcript=(*state.transcript, TranscriptEntry(kind="decision", text=sanitize_text(summary))),
             )
 
         case SkillActiveEvent(name=name):
-            return replace(state, active_skill=name)
+            return replace(state, active_skill=sanitize_text(name))
 
         case MemoryRecallEvent(names=names):
             return replace(
                 state,
                 transcript=(
                     *state.transcript,
-                    TranscriptEntry(kind="system", text=f"recalled memory: {', '.join(names)}"),
+                    TranscriptEntry(kind="system", text=sanitize_text(f"recalled memory: {', '.join(names)}")),
                 ),
             )
 

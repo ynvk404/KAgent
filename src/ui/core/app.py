@@ -87,6 +87,7 @@ from src.ui.core.state import (
     initial_state,
     reducer,
 )
+from src.ui.render.sanitize import sanitize_text
 from src.ui.render.color_level import color_level
 from src.ui.utils.ping import PingTask
 from src.ui.utils.text_field import (
@@ -107,6 +108,7 @@ from src.ui.widgets.input_box import DEFAULT_PROMPT, InputBox
 from src.ui.widgets.cursor_static import CARET_STYLE, CursorStatic
 from src.ui.widgets.mention_menu import MentionMenu
 from src.ui.widgets.permission_modal import PermissionModal
+from src.ui.widgets.details_modal import BridgeCredentialsModal
 from src.ui.widgets.provider_picker_modal import ProviderPickerModal
 from src.ui.widgets.skills_modal import SkillsModal
 from src.ui.widgets.skills_modal import SKILLS_MODAL_VISIBLE_CAP, SkillsModal
@@ -528,6 +530,7 @@ class KAgent(App):
         self._provider_modal: ProviderPickerModal | None = None
         self._perm_modal: PermissionModal | None = None
         self._skills_modal: SkillsModal | None = None
+        self._local_modal: BridgeCredentialsModal | None = None
 
         self._status_cache_key: tuple | None = None
         self._status_info: dict = {}
@@ -773,7 +776,7 @@ class KAgent(App):
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
         if event.button == 3 and self._last_selected_text:
-            self.copy_to_clipboard(self._last_selected_text)
+            self.copy_to_clipboard(sanitize_text(self._last_selected_text))
             event.stop()
 
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
@@ -1120,7 +1123,25 @@ class KAgent(App):
             return self._skills_modal
         self._skills_modal = None
 
-        return None
+        return self._local_modal
+
+    def _close_local_modal(self) -> None:
+        self._last_selected_text = ""
+        if self.is_running:
+            self.screen.clear_selection()
+        self._local_modal = None
+        self._sync_overlay()
+        self._render_input()
+
+    def show_bridge_credentials(self, state: BurpBridgeState) -> None:
+        self._local_modal = BridgeCredentialsModal(state, self.copy_to_clipboard, self._close_local_modal)
+        self._sync_overlay()
+
+    def _publish_notice(self, text: str) -> None:
+        if "Token:" in text and "Burp bridge" in text:
+            text = "\n".join("Bridge token hidden; /burp credentials to reveal/copy locally"
+                             if line.startswith("Token:") else line for line in text.splitlines())
+        self.dispatch(Append(TranscriptEntry(kind="system", text=text)))
 
     async def _handle_modal_key(
         self,
@@ -1223,7 +1244,7 @@ class KAgent(App):
         modal = self._get_active_modal()
         scrollable = isinstance(modal, PermissionModal) or (isinstance(modal, TextInputModal) and modal.req.scrollable)
         self.overlay_static.set_class(
-            isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal, ProviderPickerModal)),
+            isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal, ProviderPickerModal, BridgeCredentialsModal)),
             "modal-panel",
         )
         self.overlay_static.set_class(
@@ -1247,7 +1268,11 @@ class KAgent(App):
                 if isinstance(modal, TextInputModal)
                 else "Skills"
             )
-            self.overlay_text_static.update(_modal_text(modal))
+            if isinstance(modal, BridgeCredentialsModal):
+                self.overlay_static.border_title = "Local credentials"
+                self.overlay_text_static.update(modal.render())
+            else:
+                self.overlay_text_static.update(_modal_text(modal))
             self.overlay_static.display = True
         elif self.mention_matches:
             self.overlay_static.border_title = ""
@@ -1658,16 +1683,7 @@ class KAgent(App):
             )
 
         if self.bind_notice_publisher is not None:
-            self.bind_notice_publisher(
-                lambda text: self.dispatch(
-                    Append(
-                        entry=TranscriptEntry(
-                            kind="system",
-                            text=text,
-                        )
-                    )
-                )
-            )
+            self.bind_notice_publisher(self._publish_notice)
 
         if not self.resume_summary_shown and self.resume_summary:
             self.resume_summary_shown = True

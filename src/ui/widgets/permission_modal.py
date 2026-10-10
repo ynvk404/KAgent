@@ -141,6 +141,9 @@ class PermissionModal:
             risk += " (all Shell commands)"
         parts.append(Text(risk, style=MUTED if req.risk_tier == "routine" else WARNING))
 
+        if req.force_operator:
+            parts.append(Text("Operator review required", style=WARNING))
+
         if req.no_session_cache:
             parts.append(Text(
                 "Session trust: unavailable (approval is not cached).",

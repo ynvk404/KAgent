@@ -58,7 +58,7 @@ _HELP_OVERRIDES: dict[str, tuple[str, str]] = {
         "[show|browser [revoke]|grant <spec>|revoke <id>|deny|retry <origin>]",
         "view execution profile, Browser grants, limits, tool revokes and HTTP permissions",
     ),
-    "/burp": ("[port|stop|status|list|use [id|cancel]|all]",
+    "/burp": ("[port|stop|status|credentials|list|use [id|cancel]|all]",
               "manage bridge; list captures; use selects one; all selects at most 50 most recent requests"),
     "/exit": ("(/quit)", "quit kagent"),
     "/memory": (
@@ -543,15 +543,18 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             )
             return True
 
-        if sub == "status":
+        if sub in {"status", "credentials"}:
             async def _status():
                 r = await status_bridge()
                 if r.status == "not_running":
                     text = "Burp bridge: not running."
                 else:
+                    if sub == "credentials":
+                        app.show_bridge_credentials(r.state)
+                        return
                     text = (
                         f"Burp bridge: running at {r.state.url} (port {r.state.port})\n"
-                        f"Token: {r.state.token}"
+                        "Bridge token hidden; /burp credentials to reveal/copy locally"
                     )
                 dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
 
@@ -598,17 +601,17 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                         text = (
                             f"Burp bridge stopped on port {r.old_port}, "
                             f"restarted at {r.state.url}\n"
-                            f"Token: {r.state.token}"
+                            "Bridge token hidden; /burp credentials to reveal/copy locally"
                         )
                     case "already_running":
                         text = (
                             f"Burp bridge already running at {r.state.url}\n"
-                            f"Token: {r.state.token}"
+                            "Bridge token hidden; /burp credentials to reveal/copy locally"
                         )
                     case _:  
                         text = (
                             f"Burp bridge listening at {r.state.url}\n"
-                            f"Token: {r.state.token}"
+                            "Bridge token hidden; /burp credentials to reveal/copy locally"
                         )
                 dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
             except Exception as err:
