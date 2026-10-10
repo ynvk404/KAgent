@@ -1,7 +1,7 @@
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 from urllib.parse import unquote_plus
 
@@ -462,3 +462,28 @@ def apply_evidence(text: str) -> str:
     """Redact durable proof more conservatively than ordinary prose."""
     cleaned = apply(text)
     return _EVIDENCE_DIGEST.sub(lambda match: mask(match.group(0)), cleaned)
+
+
+def http_credential_redactor(*header_sets: Iterable[tuple[str, str]]) -> Callable[[str], str]:
+    """Hide known HTTP credentials even in unlabelled echoes; keep raw bytes external."""
+    secrets: set[str] = set()
+    for headers in header_sets:
+        for name, value in headers:
+            if value and apply_evidence(f'{name}: {value}') != f'{name}: {value}':
+                secrets.add(value)
+                if name.lower() == 'authorization':
+                    secrets.add(value.partition(' ')[2])
+                elif name.lower() in {'cookie', 'set-cookie'}:
+                    parts = value.split(';') if name.lower() == 'cookie' else value.split(';')[:1]
+                    secrets.update(part.partition('=')[2].strip().strip('"') for part in parts)
+    secrets.discard('')
+
+    def redact(text: str) -> str:
+        for value in sorted(secrets, key=len, reverse=True):
+            if len(value) < 4:
+                text = re.sub(r'(?<!\w)' + re.escape(value) + r'(?!\w)', '[REDACTED]', text)
+            else:
+                text = text.replace(value, '[REDACTED]')
+        return apply_evidence(text)
+
+    return redact

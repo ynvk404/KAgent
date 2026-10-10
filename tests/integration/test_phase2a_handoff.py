@@ -341,7 +341,7 @@ async def test_baseline_state_uses_live_binding_and_existing_completeness_guards
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["live", "missing", "expired", "wrong_origin", "wrong_identity", "rotated", "reset"])
-async def test_auth_ref_is_not_live_credentials_and_capture_requires_exact_binding(tmp_path, fault):
+async def test_capture_auth_availability_is_independent_of_native_context(tmp_path, fault):
     _, registry, http, captures = runtime(tmp_path)
     raw = captures.ingest(capture_payload(authContextRef="user", requestHeaders={"Content-Type": "application/json", "Cookie": "sid=private-cookie"}))
     _, candidate = await linked(registry, content_type="application/json", auth_context_ref="user", baseline_request_ref=raw["baseline_request_ref"])
@@ -357,15 +357,13 @@ async def test_auth_ref_is_not_live_credentials_and_capture_requires_exact_bindi
     response = await start(registry, candidate)
     context = response["validation_context"]
     assert context["auth_context_ref"] == "user"
-    assert context["auth"]["available"] is (fault == "live")
-    assert context["baseline"]["available"] is (fault == "live")
+    assert context["auth"]["available"]
+    assert context["auth"]["reason"] == "captured_credentials_require_permission"
+    assert context["baseline"]["available"]
     assert "private-cookie" not in json.dumps(response)
     args = {"phase": "validation", "candidate_id": candidate["id"], "mutation_value": "new"}
-    if fault == "live":
-        assert http.prepare(args)[1].headers["cookie"] == "sid=private-cookie"
-    else:
-        with pytest.raises(ValueError, match="runtime session cookie"):
-            http.prepare(args)
+    assert http.prepare(args)[1].headers["cookie"] == "sid=private-cookie"
+    assert not http.permissions._capture_grants
 
 
 @pytest.mark.asyncio

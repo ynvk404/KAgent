@@ -18,6 +18,7 @@ from typing import Any, Callable, Literal, TYPE_CHECKING
 from src.permission.permission import Decision, PermissionRequest, Prompter, UserControlledRefusal
 from src.target.origin import HTTPOrigin
 from src.tools.common.approval_display import redact_approval
+from src.redaction.redact import http_credential_redactor
 from src.permission.runtime.invocations import review_id, on_review_end, permission_invocation
 
 if TYPE_CHECKING:
@@ -37,6 +38,10 @@ class HTTPBlocked(UserControlledRefusal):
 
 class HTTPPending(HTTPBlocked):
     """Transient rate/concurrency pressure; bounded scheduling, no new approval."""
+
+
+class CaptureReplayPending(HTTPBlocked):
+    """Capture repair/review needed; no send or terminal validation conclusion."""
 
 
 def check_cancelled(signal: Any) -> None:
@@ -77,6 +82,18 @@ class HTTPLimits:
 
 
 @dataclass(frozen=True, slots=True)
+class CaptureSource:
+    """Immutable runtime provenance, never credential bytes or durable rights."""
+    baseline_ref: str
+    source: str
+    source_id: str
+    origin: HTTPOrigin
+    identity: str | None
+    source_ref: str | None
+    credential_digest: str
+
+
+@dataclass(frozen=True, slots=True)
 class EffectiveHTTP:
     method: str
     url: str
@@ -89,6 +106,7 @@ class EffectiveHTTP:
     transport_address: str = ""
     invocation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     redirect_limit: int = 0
+    capture_source: CaptureSource | None = None
 
     @property
     def origin(self) -> HTTPOrigin:
@@ -99,6 +117,8 @@ class EffectiveHTTP:
         material = [self.method, self.url, [(k.hex(), v.hex()) for k, v in self.headers],
                     self.body.hex(), self.response_cap, False, self.redirect_limit, 60]
         material.append(self.transport_address)
+        if self.capture_source is not None:
+            material.append(asdict(self.capture_source))
         return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode()).hexdigest()
 
     @property
@@ -107,12 +127,18 @@ class EffectiveHTTP:
 
     def preview(self) -> str:
         headers = "\n".join(f"{k.decode('ascii')}: {v.decode('latin1')}" for k, v in self.headers)
-        return redact_approval(
+        return self.redact_preview(
             f"{self.method} {self.url}\n{headers}\n\n{self.body.decode('utf-8', errors='replace')}\n\n"
             f"response body cap: {self.response_cap}; timeout: 60s; redirects: "
             f"{'off' if self.redirect_limit == 0 else f'explicit follow-up, at most {self.redirect_limit} hops'}; "
             f"TLS verification: off; socket: {self.transport_address or 'library DNS'}"
         )
+
+    def redact_preview(self, text: str) -> str:
+        if self.capture_source is not None:
+            text = http_credential_redactor((k.decode('ascii'), v.decode('latin1'))
+                                           for k, v in self.headers)(text)
+        return redact_approval(text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +187,7 @@ class HTTPReservation:
     release_slot: Callable[[], None]
     started: bool = False
     released: bool = False
+    capture_budget: _Budget | None = None
 
     def start(self) -> None:
         if self.released or self.started:
@@ -174,6 +201,8 @@ class HTTPReservation:
             if not self.started:
                 self.budget.used -= 1
                 self.budget.tokens = min(self.budget.limits.burst, self.budget.tokens + 1)
+                if self.capture_budget is not None:
+                    self.capture_budget.used -= 1
             self.released = True
 
 
@@ -202,6 +231,8 @@ class HTTPPermissions:
         # Controller opt-in: retained restrictions never restore authorization.
         self.constraint_journal: Callable[[], None] | None = None
         self._constraints: dict[HTTPOrigin, _Budget] = {}
+        self._capture_grants: dict[CaptureSource, _Budget] = {}
+        self._capture_pending: set[CaptureSource] = set()
 
     def constraint_state(self) -> list[dict[str, Any]]:
         rows = dict(self._constraints)
@@ -276,6 +307,7 @@ class HTTPPermissions:
         self._exact_budgets.clear()
         self._receipts.clear()
         self._suppressed.clear()
+        self._capture_grants.clear()
         self._declined_actions.clear()
         if not preserve_denial:
             self._revoked.clear()
@@ -286,6 +318,7 @@ class HTTPPermissions:
     def scope_changed(self) -> None:
         self.revision += 1
         self._receipts.clear()
+        self._capture_grants.clear()
         for origin in list(self.grants):
             if origin not in self.engagement.allowed_origins:
                 self.revoke(self.grants[origin].id)
@@ -297,6 +330,7 @@ class HTTPPermissions:
         self.denied = True
         self.revision += 1
         self._receipts.clear()
+        self._capture_grants.clear()
 
 
     def retry(self, url: str) -> None:
@@ -307,6 +341,9 @@ class HTTPPermissions:
         self._declined_actions = {digest: value for digest, value in self._declined_actions.items() if value != origin}
         self._revoked.discard(origin)
         self._blocked_gate.discard(origin)
+        self._capture_grants = {source: budget for source, budget in self._capture_grants.items()
+                                if source.origin != origin or
+                                (self.clock() < budget.expires_at and budget.used < budget.limits.requests)}
         budget = self._exact_budgets.get(origin)
         if budget is not None and (self.clock() >= budget.expires_at or budget.used >= budget.limits.requests):
             # Only this explicit operator command renews the exact-only safety
@@ -354,6 +391,8 @@ class HTTPPermissions:
                 self._suppressed.add(origin)
                 self.revision += 1
                 self._receipts.clear()
+                self._capture_grants = {source: budget for source, budget in self._capture_grants.items()
+                                        if source.origin != origin}
                 return
         raise ValueError("unknown active grant id")
 
@@ -459,6 +498,73 @@ class HTTPPermissions:
         if self._receipts.get(receipt.id) == receipt:
             del self._receipts[receipt.id]
 
+    def check_capture(self, action: EffectiveHTTP, *, reserved: bool = False) -> _Budget | None:
+        source = action.capture_source
+        if source is None or not source.credential_digest:
+            return None
+        budget = self._capture_grants.get(source)
+        if source.origin != action.origin or budget is None:
+            raise CaptureReplayPending("pending: captured credential authorization required")
+        # reserve() already accounted for this request before the final check.
+        exhausted = budget.used > budget.limits.requests if reserved else budget.used >= budget.limits.requests
+        if self.clock() >= budget.expires_at or exhausted:
+            raise CaptureReplayPending("pending: captured credential authorization expired/exhausted; use /permissions retry <origin> for review")
+        return budget
+
+    async def _authorize_capture(self, action: EffectiveHTTP, budget: _Budget,
+                                 prompter: Prompter, signal: Any,
+                                 target_revision: Callable[[], int]) -> None:
+        source = action.capture_source
+        if source is None or not source.credential_digest:
+            return
+        if source in self._capture_grants:
+            self.check_capture(action)
+            return
+        key = (review_id(), "capture:" + hashlib.sha256(repr(source).encode()).hexdigest())
+        if key in self._declined_actions or source in self._capture_pending:
+            raise CaptureReplayPending("pending: captured credential review declined or already open")
+        # Separate from HTTP autonomy: neither ingestion nor YOLO grants use of
+        # an unseen credential. One review approves this bounded source only.
+        revision = self.revision
+        self._capture_pending.add(source)
+        try:
+            decision = await prompter.ask(PermissionRequest(
+                tool="http_capture_credentials",
+                summary=f"Authorize captured credentials for {source.origin.as_url()}",
+                detail=(f"source: {source.source}; baseline: {source.baseline_ref}\n"
+                        "Use only this immutable capture and its identity for input mutations. "
+                        "No redirects or shared HTTP context import. Rights end on target/scope/session reset.\n"
+                        + f"Capture use: <= {budget.limits.requests} requests; expires within "
+                        + f"{max(0, budget.expires_at - self.clock()):g}s.\nCurrent HTTP execution limits: "
+                        + budget.limits.display() + "\n\n" + action.preview()),
+                no_session_cache=True, risk_tier="high-impact", force_operator=True), signal)
+            check_cancelled(signal)
+            self.sync_target()
+            self._check(action, target_revision())
+            if revision != self.revision:
+                raise HTTPBlocked("pending: capture policy changed during review")
+            if decision != Decision.ALLOW_ONCE:
+                self._declined_actions[key] = action.origin
+                def clear_capture_decline() -> None:
+                    self._declined_actions.pop(key, None)
+                on_review_end(clear_capture_decline)
+                raise CaptureReplayPending("pending: operator declined captured credential use; no dispatch")
+            # Bound memory without silently renewing expired/exhausted rights.
+            if len(self._capture_grants) >= 1024:
+                raise HTTPBlocked("pending: capture authorization capacity reached; reset required")
+            now = self.clock()
+            self._capture_grants[source] = _Budget(budget.limits, min(budget.expires_at, now + budget.limits.seconds),
+                                                   0, now)
+        finally:
+            self._capture_pending.discard(source)
+
+    def revoke_capture(self, baseline_ref: str) -> None:
+        """Trusted operator callback; never a model tool or persisted approval."""
+        self._capture_grants = {source: budget for source, budget in self._capture_grants.items()
+                                if source.baseline_ref != baseline_ref}
+        self.revision += 1
+        self._receipts.clear()
+
     async def review_grant(self, url: str, limits: HTTPLimits, mode: str, prompter: Prompter, signal: Any = None) -> HTTPGrant | None:
         self.sync_target()
         origin = self.engagement.require_in_scope(url)
@@ -505,6 +611,7 @@ class HTTPPermissions:
             pass  # Dispatch scheduler waits at most 30s, without asking again.
         if decline_key in self._declined_actions:
             raise HTTPBlocked("pending: exact action declined in this turn; operator retry required")
+        await self._authorize_capture(action, budget, prompter, signal, target_revision)
         if grant is not None and (grant.mode == "autonomous" or self._yolo_enabled):
             return self._mint(action, grant)
         if origin in self._pending or origin in self._grant_pending:
@@ -516,7 +623,7 @@ class HTTPPermissions:
         revision = self.revision
         try:
             decision = await prompter.ask(PermissionRequest(
-                tool="http", summary=f"Approve exact HTTP request: {action.method} {action.url}",
+                tool="http", summary=action.redact_preview(f"Approve exact HTTP request: {action.method} {action.url}"),
                 detail=action.preview() + "\n\n" + budget.limits.display() +
                        "\nPhase is annotation only. Approve this request once, or review a lab grant.",
                 no_session_cache=True, risk_tier="high-impact", offer_http_lab=grant is None), signal)
@@ -562,12 +669,15 @@ class HTTPPermissions:
             raise HTTPBlocked("blocked: grant changed; new authorization required")
         budget = self._budget(action, grant)
         self._capacity(action, budget)
+        capture_budget = self.check_capture(action)
         del self._receipts[receipt.id]
         budget.used += 1
         budget.tokens -= 1
         budget.active += 1
         origin = action.origin
         self._inflight[origin] = self._inflight.get(origin, 0) + 1
+        if capture_budget is not None:
+            capture_budget.used += 1
 
         if self.constraint_journal is not None:
             try:
@@ -577,6 +687,8 @@ class HTTPPermissions:
                 budget.tokens += 1
                 budget.active -= 1
                 self._inflight[origin] -= 1
+                if capture_budget is not None:
+                    capture_budget.used -= 1
                 raise
 
         def release_slot() -> None:
@@ -586,7 +698,7 @@ class HTTPPermissions:
             else:
                 del self._inflight[origin]
 
-        return HTTPReservation(budget, release_slot)
+        return HTTPReservation(budget, release_slot, capture_budget=capture_budget)
 
     async def reserve_when_ready(self, action: EffectiveHTTP, receipt: HTTPReceipt, signal: Any, target_revision: Callable[[], int]) -> HTTPReservation:
         """Bounded scheduler for already-authorized work, not permission retry.

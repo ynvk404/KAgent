@@ -21,7 +21,7 @@ from src.tools.workflow.workflow_tool import WorkflowTool
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.ui.commands.result_review import review_result
 from src.workflow.probe import ProbeProposal
-from src.workflow.state import WorkflowState, WorkflowObjective, WorkflowMode
+from src.workflow.state import AttackSurfaceInput, WorkflowState, WorkflowObjective, WorkflowMode
 from src.workflow.validation_route import GENERIC_VALIDATOR
 from tests.helpers.agent_fakes import FakeSignal, FakeClient
 from tests.helpers.workflow import record_completed_phase
@@ -67,6 +67,11 @@ async def custom_env(runtime, tmp_path, shape="json", mode: WorkflowMode="direct
         "content_type": content_type or None, "baseline_request_ref": ingested["baseline_request_ref"],
         "source_skill": "web-input-analysis"}, None, p))
     c = state.candidates[recorded["candidate"]["id"]]
+    if mode == 'whole_target':
+        item, _ = state.add_attack_surface_input(AttackSurfaceInput(objective_id=state.objective.id,
+            target_origin=ORIGIN, method=method, endpoint=endpoint, parameter=parameter, location=shape,
+            content_type=content_type or None, baseline_request_ref=ingested['baseline_request_ref']))
+        state.link_input_candidate(item.id, c.id)
     assert c.endpoint and c.method and c.location and c.parameter and state.objective.target_origin
     env = registry, p, policy, operator, state, c, tool, recorded
     probe = ProbeProposal(c.id, state.objective.id, state.objective.target_origin,
@@ -259,8 +264,13 @@ async def test_custom_state_changes_during_permission_await_stop_send(runtime, t
             env[6].target.set_base_url("http://127.0.0.1:3001")
         return receipt
     monkeypatch.setattr(http.permissions, "authorize", authorize)
-    with pytest.raises((ValueError, UserControlledRefusal)):
-        await env[0].execute("http", http_args(env, "Lab-A"), None, env[1])
+    if change in {'baseline', 'auth'}:
+        pending = await env[0].execute("http", http_args(env, "Lab-A"), None, env[1])
+        assert pending.status == 'error' and pending.error_kind == 'permission_denied'
+        assert pending.startswith('pending:') and pending.http_status is None
+    else:
+        with pytest.raises((ValueError, UserControlledRefusal)):
+            await env[0].execute("http", http_args(env, "Lab-A"), None, env[1])
     assert not runtime[4] and not boundary.in_flight
 
 

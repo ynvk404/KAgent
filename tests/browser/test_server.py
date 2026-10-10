@@ -1,5 +1,6 @@
 import pytest
 import requests
+import base64
 
 from src.browser.server import IngestServerOptions, start_ingest_server, event_text
 from src.browser.store import CaptureStore
@@ -55,6 +56,30 @@ def test_capture_event_text_redacts_query_credentials():
     event = event_text("/ingest", {"method": "GET", "url": "http://target.test/?access_token=private-value"})
     assert "private-value" not in event
     assert "access_token" in event
+
+
+def test_bridge_request_and_task_reads_are_redacted_but_raw_baseline_remains(store):
+    raw = base64.b64encode(b"GET /api HTTP/1.1\r\nHost: fixture.test\r\nCookie: sid=private-cookie\r\n\r\n").decode()
+    captured = store.ingest({"kind": "burp", "url": "http://fixture.test/api?token=private-query",
+        "requestHeaders": {"Cookie": "sid=private-cookie", "Authorization": "Bearer private-auth"},
+        "requestBody": '{"password":"private-password"}', "rawRequestB64": raw,
+        "respBody": '{"token":"private-response"}'})
+    task = store.ingest_burp_task({"action": "scan", "url": "http://fixture.test/?token=private-query",
+        "rawRequestB64": raw, "notes": "Authorization: Bearer private-auth"})
+    handle = start_ingest_server(IngestServerOptions(store=store, port=0, token="bridge-token"))
+    try:
+        for path in ("/requests", "/burp/tasks"):
+            response = requests.get(handle.url + path, headers={"X-KAgent-Token": "bridge-token"})
+            assert response.status_code == 200
+            text = response.text
+            for secret in (raw, "private-query", "private-cookie", "private-auth", "private-password", "private-response"):
+                assert secret not in text
+            assert "raw_request_b64" not in text
+            assert response.json()[0]["baseline_request_ref"]
+        assert store.resolve_baseline(captured["baseline_request_ref"]).raw_request_b64 == raw
+        assert store.resolve_baseline(task["baseline_request_ref"]).raw_request_b64 == raw
+    finally:
+        handle.close()
 
 
 def test_rejects_non_loopback_host_headers(store):

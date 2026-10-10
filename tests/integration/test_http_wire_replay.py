@@ -235,7 +235,7 @@ async def test_localhost_wire_capture_and_approval_invariant(monkeypatch):
         before = len(wire)
         result = await send({"phase": "validation", "candidate_id": explicit.id,
                              "mutation_value": "new", "max_redirects": 1})
-        assert "unknown path provenance" in result and len(wire) == before + 1
+        assert "captured redirect not followed" in result and len(wire) == before + 1
         result = await send({"phase": "recon", "url": "/bad-location", "max_redirects": 1})
         assert "malformed redirect" in result
         result = await send({"phase": "recon", "url": "/gzip"})

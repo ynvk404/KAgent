@@ -1038,6 +1038,42 @@ async def test_generic_captured_replay_uses_existing_input_builder(runtime, tmp_
     assert not env[3].requests
 
 
+@pytest.mark.parametrize("headers", [{"Cookie": "sid=generic-cookie"},
+    {"Authorization": "Bearer generic-token"},
+    {"Cookie": "sid=generic-cookie", "Authorization": "Bearer generic-token"}])
+async def test_generic_capture_uses_same_bounded_credential_gate(runtime, tmp_path, headers):
+    from src.browser.store import CaptureStore
+    env = await setup(runtime, tmp_path)
+    capture = CaptureStore()
+    ingested = capture.ingest({"kind": "burp", "id": "generic", "method": "GET",
+        "url": ORIGIN + env[5].endpoint, "requestHeaders": headers})
+    tool = env[0].get("http")
+    tool.capture_store = capture
+    env[5].baseline_request_ref = ingested["baseline_request_ref"]
+    bind_context(env)
+    await start(env)
+    args = {"candidate_id": env[5].id, "phase": "validation"}
+    pending = await env[0].execute("http", args, None, env[1])
+    assert pending.status == 'error' and pending.error_kind == 'permission_denied'
+    assert pending.startswith('pending:') and pending.http_status is None
+    assert not runtime[4] and env[4].latest_result(env[5].id) is None
+    assert env[2].generic_validation.started_candidate == env[5].id
+    env[3].decision = Decision.ALLOW_ONCE
+    for extra in ({}, {"mutation_value": "https://example.com/"}, {"mutation_value": "https://example.com/"}):
+        assert (await env[0].execute("http", args | extra, None, env[1])).http_status == 200
+    assert len(runtime[4]) == 3 and len(env[3].requests) == 2  # Denial then one bounded review.
+    assert all(question.force_operator for question in env[3].requests)
+    assert not tool.context_store._cookies and not tool.context_store._authorization
+    for actual in runtime[4]:
+        for key, value in headers.items():
+            assert actual.headers[key] == value
+    # Raw/native reconstruction cannot import this capture into the shared context.
+    baseline = env[2].generic_validation.baseline(tool, env[5])
+    with pytest.raises(ExecutionBlocked, match="isolated replay"):
+        await env[0].execute("http", {"phase": "validation", "url": str(baseline.url),
+            "headers": dict(baseline.headers)}, None, env[1])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("loss", ["fresh", "clear", "legacy"])
 async def test_generic_baseline_cannot_resurrect_from_reused_external_id(runtime, tmp_path, loss):

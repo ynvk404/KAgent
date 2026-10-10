@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any, cast
 
-from src.redaction.redact import apply_evidence, redact_payload, redact_request_context
+from src.redaction.redact import apply_evidence, http_credential_redactor, redact_payload, redact_request_context
 
 
 def _record(value: Any) -> dict[str, Any]:
@@ -35,24 +35,40 @@ def request_view(value: Any) -> dict[str, Any]:
     row.pop("raw_request_oversize", None)
     request_headers = row.get("request_headers") or row.get("requestHeaders")
     response_headers = row.get("response_headers") or row.get("responseHeaders")
+    redact = http_credential_redactor(
+        ((str(_record(h).get('name', '')), str(_record(h).get('value', '')))
+         for headers in (request_headers, response_headers) for h in headers or []))
+
+    def redact_values(value: Any) -> Any:
+        if isinstance(value, str):
+            return redact(value)
+        if isinstance(value, dict):
+            return {key: redact_values(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [redact_values(item) for item in value]
+        return value
+
+    def redact_headers(headers: Any) -> list[dict[str, str]] | None:
+        values = _headers(headers)
+        return [{"name": h["name"], "value": redact(h["value"])} for h in values] if values else None
     content_type = next((h["value"] for h in _headers(request_headers) or []
                          if h["name"].lower() == "content-type"), None)
     for key in ("request_headers", "requestHeaders"):
         if key in row:
-            row[key] = _headers(request_headers)
+            row[key] = redact_headers(request_headers)
     for key in ("response_headers", "responseHeaders"):
         if key in row:
-            row[key] = _headers(response_headers)
+            row[key] = redact_headers(response_headers)
     for key in ("request_body", "requestBody"):
         if key in row and isinstance(row[key], str):
-            row[key] = redact_request_context(row[key], content_type)
+            row[key] = redact(redact_request_context(row[key], content_type))
         elif key in row:
-            row[key] = redact_payload(row[key])
+            row[key] = redact_values(redact_payload(row[key]))
     for key in ("response_body", "responseBody"):
         if key in row and isinstance(row[key], str):
-            row[key] = redact_request_context(row[key], "application/json")
+            row[key] = redact(redact_request_context(row[key], "application/json"))
     if isinstance(row.get("url"), str):
-        row["url"] = apply_evidence(row["url"])
+        row["url"] = redact(row["url"])
     return row
 
 

@@ -124,23 +124,25 @@ class ObservationStore:
     def capture(self, action, status: int, body: bytes, *, complete: bool,
                 validation_binding: tuple[str, str] | None = None, owner: Any = _OWNER_UNSET,
                 response_headers=(), elapsed_ms=None, source_kind="native-http",
-                producer="http", execution_status="completed", truncated=None, source_details=None) -> str:
+                producer="http", execution_status="completed", truncated=None, source_details=None,
+                redact_text: Callable[[str], str] | None = None) -> str:
         from src.redaction.redact import apply_evidence
         from src.workflow.assessment import digest, source_row
         # Owner is snapshotted before execution, never assigned from proof prose.
         owner = self.owner_provider() if owner is _OWNER_UNSET else owner
         owner = owner or {}
+        redact = redact_text or apply_evidence
         allowed_headers = {"location", "content-type", "content-length", "content-encoding",
                            "content-security-policy", "x-frame-options", "x-content-type-options",
                            "access-control-allow-origin", "access-control-allow-credentials",
                            "access-control-allow-methods", "vary", "cache-control"}
-        headers = tuple((str(k).lower(), apply_evidence(str(v))[:2000])
+        headers = tuple((str(k).lower(), redact(str(v))[:2000])
                         for k, v in response_headers if str(k).lower() in allowed_headers)[:24]
-        retained_body = apply_evidence(body.decode(errors="replace")).encode()
+        retained_body = redact(body.decode(errors="replace")).encode()
         retained_truncated = len(retained_body) > 65536
         complete = complete and not retained_truncated
         item = Observation("obs_" + uuid.uuid4().hex, action.epoch, action.method,
-            apply_evidence(action.url), action.transport_address, action.digest,
+            redact(action.url), action.transport_address, action.digest,
             hashlib.sha256(body).hexdigest(), status,
             retained_body[:65536], complete, time.time(),
             owner.get("candidate_id") or (validation_binding or (None, None))[0],

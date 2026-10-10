@@ -302,8 +302,8 @@ def _replace_multipart(body: bytes, content_type: str, parameter: str, value: st
     return separator.join(parts)
 
 
-def build_captured_request(row: Any, candidate: Any, value: str, *, occurrence: int = 0,
-                           input_path: str | None = None, old_value: str | None = None) -> tuple[httpx.Request, RequestDiff]:
+def _captured_parts(row: Any, candidate: Any) -> tuple[str, str, list[tuple[str, str]], bytes]:
+    """Validate the capture binding without consulting shared runtime identity."""
     method, url, raw_headers, body = _raw_capture(row)
     if urlsplit(url).username or urlsplit(url).password:
         raise ValueError("captured URL credentials require a credential-free recapture")
@@ -313,12 +313,24 @@ def build_captured_request(row: Any, candidate: Any, value: str, *, occurrence: 
     pattern = '^' + re.sub(r'\\\{[^{}]+\\\}', r'[^/]+', re.escape(endpoint)) + '$'
     if endpoint and not re.fullmatch(pattern, urlsplit(url).path):
         raise ValueError("baseline path differs from candidate")
+    content_type = httpx.Headers(raw_headers).get('content-type', '')
+    if candidate.content_type and content_type.split(';', 1)[0].strip().lower() != candidate.content_type.split(';', 1)[0].strip().lower():
+        raise ValueError('baseline content type differs from candidate')
+    return method, url, raw_headers, body
+
+
+def build_captured_baseline(row: Any, candidate: Any) -> httpx.Request:
+    method, url, raw_headers, body = _captured_parts(row, candidate)
+    return httpx.Request(method, url, headers=origin_headers(raw_headers), content=body)
+
+
+def build_captured_request(row: Any, candidate: Any, value: str, *, occurrence: int = 0,
+                           input_path: str | None = None, old_value: str | None = None) -> tuple[httpx.Request, RequestDiff]:
+    method, url, raw_headers, body = _captured_parts(row, candidate)
     if not isinstance(value, str) or occurrence < 0:
         raise ValueError("mutation value and occurrence are invalid")
     header_map = httpx.Headers(raw_headers)
     content_type = header_map.get("content-type", "")
-    if candidate.content_type and content_type.split(";", 1)[0].strip().lower() != candidate.content_type.split(";", 1)[0].strip().lower():
-        raise ValueError("baseline content type differs from candidate")
     if header_map.get("content-encoding", "identity").lower() != "identity":
         raise ValueError("encoded baseline request body cannot be safely mutated")
     parameter = candidate.parameter

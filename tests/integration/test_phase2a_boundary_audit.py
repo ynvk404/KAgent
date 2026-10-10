@@ -79,9 +79,12 @@ async def test_availability_observed_after_evidence_await(tmp_path, monkeypatch,
     result = json.loads(await task)
     assert result["ok"] and result["candidate"]["status"] == "validating"
     context = result["validation_context"]
-    assert not context["baseline"]["available"]
-    if change == "capture":
+    assert context["baseline"]["available"] is (change == "auth")
+    if change in {"capture", "auth"}:
         assert context["auth"]["available"]
+        if change == "auth":
+            assert context["auth"]["reason"] == "captured_credentials_require_permission"
+            assert not http.permissions._capture_grants
     else:
         assert not context["auth"]["available"]
 

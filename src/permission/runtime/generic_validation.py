@@ -317,27 +317,10 @@ class GenericValidationBoundary:
 
     def baseline(self, tool, candidate):
         if candidate.baseline_request_ref:
-            from src.tools.http.request_builder import _raw_capture, origin_headers
-            store = tool.capture_store
-            row = store.resolve_baseline(candidate.baseline_request_ref) if store else None
-            if row is None:
-                raise ValueError("generic captured baseline unavailable or unbound; recapture required")
-            method, url, headers, body = _raw_capture(row)
-            headers = origin_headers(headers)
+            _, request, _ = tool.captured_baseline(candidate)
+            headers = list(request.headers.multi_items())
             if len({key.lower() for key, _ in headers}) != len(headers):
                 raise ValueError("generic captured baseline has duplicate headers; expert context required")
-            headers = dict(headers)
-            if any(k.lower() in {"cookie", "authorization"} for k in headers):
-                if not candidate.auth_context_ref or row.auth_context_ref != candidate.auth_context_ref:
-                    raise ValueError("generic baseline credentials lack identity binding")
-            _, request = tool.prepare({"url": url, "method": method, "headers": headers,
-                                       "body": body.decode("utf-8"),
-                                       "auth_context_ref": candidate.auth_context_ref})
-            if ("authorization" in request.headers and tool.context_store.authorization_for(
-                    request, candidate.auth_context_ref) != request.headers["authorization"]
-                    or "cookie" in request.headers and tool.context_store.cookie_for(
-                    request, candidate.auth_context_ref) != request.headers["cookie"]):
-                raise ValueError("generic baseline runtime credentials missing/different; recapture required")
         else:
             _, request = tool.prepare({"url": candidate.endpoint, "method": candidate.method,
                                        "auth_context_ref": candidate.auth_context_ref})
@@ -358,6 +341,11 @@ class GenericValidationBoundary:
         if len(candidates) != 1:
             raise ValueError("generic HTTP requires one started candidate; deferred work must stop")
         candidate = self.require(candidates[0].id)
+        if candidate.baseline_request_ref:
+            _, _, source = tool.captured_baseline(candidate)
+            if source.credential_digest and (
+                    args.get("candidate_id") != candidate.id or action.capture_source is None):
+                raise ValueError("generic captured credentials require candidate_id for isolated replay")
         if self.state.latest_result(candidate.id) is not None and (
                 self.started_candidate != candidate.id
                 or self.started_objective != self.state.objective.id):
@@ -371,7 +359,7 @@ class GenericValidationBoundary:
                 or self.started_objective != self.state.objective.id):
             raise ValueError("generic execution proposal unavailable; saved status grants no probe rights")
         proposal = self.attempt.proposal
-        if args.get("candidate_id") and (
+        if args.get("candidate_id") and "mutation_value" in args and (
                 args.get("mutation_value") not in proposal.values
                 or args.get("occurrence", 0) != proposal.occurrence
                 or args.get("input_path") != proposal.input_path

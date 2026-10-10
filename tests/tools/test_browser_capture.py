@@ -38,6 +38,18 @@ def test_capture_view_redacts_api_key_header_variants(name):
     assert secret not in str(view)
 
 
+def test_capture_views_hide_unlabelled_echoes_without_changing_baseline_ref():
+    ref = "baseline:generation:nonce:" + "a" * 64
+    view = request_view({"baseline_request_ref": ref,
+        "request_headers": [{"name": "Cookie", "value": "sid=a"},
+                            {"name": "Authorization", "value": "Bearer fixture-private-token"}],
+        "request_body": '{"q":"fixture-private-token"}',
+        "response_body": "echo fixture-private-token", "url": "http://fixture.test/?q=fixture-private-token"})
+    assert view['baseline_request_ref'] == ref
+    assert [h['name'] for h in view['request_headers']] == ['Cookie', 'Authorization']
+    assert "fixture-private-token" not in str(view)
+
+
 @pytest.mark.asyncio
 async def test_model_capture_views_hide_raw_and_structured_secrets():
     store = CaptureStore()

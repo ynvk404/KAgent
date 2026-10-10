@@ -5,13 +5,14 @@ from dataclasses import replace
 from typing import Any
 import asyncio
 import ipaddress
+import hashlib
 import json
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 import httpx
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter, UserControlledRefusal, YoloPrompter
-from src.permission.network.grants import EffectiveHTTP, HTTPPending, check_cancelled
+from src.permission.network.grants import CaptureSource, CaptureReplayPending, EffectiveHTTP, HTTPPending, check_cancelled
 from src.permission.runtime.execution import policy_for
 from src.permission.runtime.invocations import permission_invocation
 from src.permission.network.transport import pin_request
@@ -22,9 +23,10 @@ from src.tools.http.private_host import gate_private_request, parse_http_url, Pr
 from src.tools.common.types import Tool, PermissionHints, arg_string
 from src.tools.common.outcome import ToolOutput
 from src.tools.http.context import HTTPContextStore
-from src.tools.http.request_builder import NATIVE_USER_AGENT, RequestDiff, build_captured_request, origin_headers, validate_host
+from src.tools.http.request_builder import NATIVE_USER_AGENT, RequestDiff, build_captured_baseline, build_captured_request, origin_headers, validate_host
 from src.browser.store import CaptureStore
 from src.redaction.redact import apply_evidence as redact_evidence
+from src.redaction.redact import http_credential_redactor
 
 RESPONSE_BYTE_CAP = 16 * 1024
 MAX_RESPONSE_BYTE_CAP = 64 * 1024
@@ -73,7 +75,8 @@ class HTTPTool(Tool):
             'Blocked requests must await operator action; do not reword or retry to bypass. '
             'Relative paths use /target. TLS verification is disabled. Redirects require '
             'max_redirects and separate approval per hop; cross-origin redirects stop. '
-            'Use candidate_id with mutation_value to replay one captured input.'
+            'Use candidate_id to replay a captured baseline, with mutation_value to vary one input. '
+            'Captured credentials require bounded operator approval even in YOLO; captured redirects stop.'
             ' Body/content/size comparisons need a positive response cap; omit it for the default. '
             'Terminal evidence needs a cap fitting the complete response within configured limits, not just a marker prefix. '
             'Truncated observations cannot support terminal evidence. Select complete observations '
@@ -153,16 +156,13 @@ class HTTPTool(Tool):
         self.permissions.sync_target()
         self.context_store.sync_target(self.target.revision, self.engagement.revision, self.permissions.epoch)
         if arg_string(args, 'candidate_id'):
-            request, diff = self._resolve_baseline(args)
-            assert self.workflow is not None
-            candidate = self.workflow.candidates[arg_string(args, 'candidate_id')]
-            self.context_store.add_identity(request, candidate.auth_context_ref)
+            request, diff, source = self._resolve_baseline(args)
             cap = args.get('max_response_bytes', RESPONSE_BYTE_CAP)
             if isinstance(cap, bool) or not isinstance(cap, int) or not 0 <= cap <= MAX_RESPONSE_BYTE_CAP:
                 raise ValueError('invalid response byte cap')
             action = EffectiveHTTP(request.method, str(request.url), tuple(request.headers.raw), request.content,
                                    cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
-                                   redirect_limit=args.get('max_redirects', 0))
+                                   redirect_limit=args.get('max_redirects', 0), capture_source=source)
             return action, request, diff
         raw_url = arg_string(args, 'url')
         if not raw_url:
@@ -213,27 +213,21 @@ class HTTPTool(Tool):
         self._require_scope(action.url)
         return action, request, None
 
-    def _resolve_baseline(self, args: dict) -> tuple[httpx.Request, RequestDiff]:
+    def captured_baseline(self, candidate):
+        """Shared expert/generic provenance checks; raw data stays in runtime."""
         if self.workflow is None or self.capture_store is None:
             raise ValueError('captured replay is unavailable in this runtime')
-        candidate_id = arg_string(args, 'candidate_id')
-        candidate = self.workflow.candidates.get(candidate_id)
         if candidate is None or not candidate.baseline_request_ref:
             raise ValueError('candidate has no captured baseline reference')
-        if 'url' in args or 'method' in args or 'body' in args or 'headers' in args:
-            raise ValueError('captured replay does not accept replacement url/method/headers/body')
-        if 'mutation_value' not in args or not isinstance(args['mutation_value'], str):
-            raise ValueError('captured replay requires mutation_value')
+        candidate_id = candidate.id
         ref = candidate.baseline_request_ref
         row = self.capture_store.resolve_baseline(ref)
         if row is None:
-            raise ValueError('captured baseline is unavailable or unbound; recapture required; validation is inconclusive')
+            raise ValueError('captured baseline unavailable or unbound; recapture required; validation is inconclusive')
         self._require_scope(row.url or '')
         if candidate.target is None or HTTPOrigin.from_url(row.url or '') != HTTPOrigin.from_url(candidate.target):
             raise ValueError('captured baseline origin differs from candidate')
         identity = candidate.auth_context_ref
-        if 'auth_context_ref' in args and arg_string(args, 'auth_context_ref') != (identity or ''):
-            raise ValueError('replay identity differs from candidate')
         if getattr(row, 'auth_context_ref', None) not in (None, identity):
             raise ValueError('captured baseline identity differs from candidate')
         if self.workflow.objective is not None and self.workflow.objective.mode == 'whole_target':
@@ -245,26 +239,59 @@ class HTTPTool(Tool):
                 for item in linked
             ):
                 raise ValueError('baseline provenance is not linked to candidate input')
+        baseline = build_captured_baseline(row, candidate)
+        credentials = [(key.hex(), value.hex()) for key, value in baseline.headers.raw
+                       if redact_evidence(f'{key.decode("ascii")}: {value.decode("latin1")}')
+                       != f'{key.decode("ascii")}: {value.decode("latin1")}']
+        source = CaptureSource(ref, row.source, row.id, HTTPOrigin.from_url(str(baseline.url)),
+                               identity, candidate.source_ref,
+                               hashlib.sha256(json.dumps(credentials).encode()).hexdigest() if credentials else '')
+        return row, baseline, source
+
+    def _resolve_baseline(self, args: dict) -> tuple[httpx.Request, RequestDiff | None, CaptureSource]:
+        candidate = self.workflow.candidates.get(arg_string(args, 'candidate_id')) if self.workflow else None
+        if candidate is None:
+            raise ValueError('candidate has no captured baseline reference')
+        if any(key in args for key in ('url', 'method', 'body', 'headers')):
+            raise ValueError('captured replay does not accept replacement url/method/headers/body')
+        if 'auth_context_ref' in args and arg_string(args, 'auth_context_ref') != (candidate.auth_context_ref or ''):
+            raise ValueError('replay identity differs from candidate')
+        row, baseline, source = self.captured_baseline(candidate)
+        if 'mutation_value' not in args:
+            if any(key in args for key in ('occurrence', 'input_path', 'old_value')):
+                raise ValueError('captured replay selectors require mutation_value')
+            return baseline, None, source
+        if not isinstance(args['mutation_value'], str):
+            raise ValueError('captured replay requires a string mutation_value')
         occurrence = args.get('occurrence', 0)
         if isinstance(occurrence, bool) or not isinstance(occurrence, int) or occurrence < 0:
             raise ValueError('occurrence must be a non-negative integer')
         request, diff = build_captured_request(row, candidate, args['mutation_value'], occurrence=occurrence,
                                                input_path=arg_string(args, 'input_path') or None,
                                                old_value=arg_string(args, 'old_value') if 'old_value' in args else None)
-        if 'cookie' in request.headers or 'authorization' in request.headers:
-            if not identity or getattr(row, 'auth_context_ref', None) != identity:
-                raise ValueError('captured credentials have no verified identity binding; recapture required')
-        runtime_cookie = self.context_store.cookie_for(request, identity)
-        if 'cookie' in request.headers and runtime_cookie != request.headers['cookie']:
-            raise ValueError('runtime session cookie is missing or differs from captured baseline; recapture required')
-        if 'authorization' in request.headers and self.context_store.authorization_for(request, identity) != request.headers['authorization']:
-            raise ValueError('runtime authorization is missing or differs from captured baseline; recapture required')
-        return request, diff
+        return request, diff, source
+
+    def _recheck_capture(self, args, action, request) -> None:
+        if action.capture_source is None:
+            return
+        try:
+            fresh, _ = self.prepare(args)
+        except (ValueError, TypeError) as exc:
+            raise CaptureReplayPending('pending: captured baseline unavailable or changed before dispatch; recapture/review required') from exc
+        fresh = replace(fresh, transport_address=action.transport_address)
+        expected_url = httpx.URL(action.url)
+        if action.transport_address:
+            expected_url = expected_url.copy_with(host=action.transport_address)
+        if (fresh.digest != action.digest or request.method != action.method
+                or request.url != expected_url or tuple(request.headers.raw) != action.headers
+                or request.content != action.body):
+            raise CaptureReplayPending('pending: captured effective request changed; new execution authorization required')
+        self.permissions.check_capture(action, reserved=True)
 
     def summarize(self, args: dict) -> dict:
         action, _, request_diff = self._prepare_with_diff(args)
         diff = request_diff.summary() + '\n' if request_diff else ''
-        return {'summary': f'http: {action.method} {action.url}',
+        return {'summary': action.redact_preview(f'http: {action.method} {action.url}'),
                 'detail': f"phase (annotation): {arg_string(args, 'phase')}\n" + diff + action.preview()}
 
     async def run_authorized(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> ToolOutput:
@@ -308,8 +335,12 @@ class HTTPTool(Tool):
             probe = boundary.begin_http(self, args, action, request)
         try:
             return await self._execute_invocation(args, signal, prompter, probe)
+        except CaptureReplayPending as exc:
+            # A capture needing repair/review blocks only this request. Raising
+            # UserControlledRefusal would terminate the Agent's entire batch.
+            return ToolOutput(str(exc), status='error', error_kind='permission_denied')
         except HTTPPending:
-            # Bounded scheduler pressure has not sent a request and is not a
+            # Scheduler pressure has not sent a request and is not a
             # terminal denial or vulnerability conclusion.
             raise
         except UserControlledRefusal as exc:
@@ -328,7 +359,7 @@ class HTTPTool(Tool):
         action, request, diff = self._prepare_with_diff(args)
         policy = policy_for(prompter)
         identity = (self.workflow.candidates[arg_string(args, 'candidate_id')].auth_context_ref
-                    if diff is not None and self.workflow is not None else arg_string(args, 'auth_context_ref') or None)
+                    if action.capture_source is not None and self.workflow is not None else arg_string(args, 'auth_context_ref') or None)
         supplied_headers = args.get('headers')
         explicit_cookie = bool(diff is not None and 'cookie' in request.headers)
         if isinstance(supplied_headers, dict):
@@ -362,6 +393,9 @@ class HTTPTool(Tool):
             if (action.target_revision, action.scope_revision, action.epoch) != (
                     self.target.revision, self.engagement.revision, self.permissions.epoch):
                 outputs.append('[HTTP context changed; redirect not followed]')
+                break
+            if action.capture_source is not None:
+                outputs.append('[captured redirect not followed; recapture required to retain credential provenance]')
                 break
             if explicit_cookie:
                 outputs.append('[redirect explicit Cookie has unknown path provenance; recapture required before following]')
@@ -411,7 +445,7 @@ class HTTPTool(Tool):
             self.permissions.pause_private(action.origin)
             raise
         check_cancelled(signal)
-        transport_options: dict[str, Any] = {'trust_env': False} if policy is not None else {}
+        transport_options: dict[str, Any] = {'trust_env': False} if policy is not None or action.capture_source is not None else {}
         async with httpx.AsyncClient(verify=False, follow_redirects=False, timeout=REQUEST_TIMEOUT, **transport_options) as client:
             reservation = await self.permissions.reserve_when_ready(action, receipt, signal, lambda: self.target.revision)
             response = None
@@ -419,6 +453,7 @@ class HTTPTool(Tool):
                 if policy is not None and not policy.nested_allowed():
                     from src.permission.runtime.execution import ExecutionBlocked
                     raise ExecutionBlocked("blocked: policy-changed-before-http-send")
+                self._recheck_capture(generic_args, action, request)
                 if generic_probe is not None:
                     assert policy is not None
                     policy.generic_validation.recheck_http(self, generic_args, action, generic_probe)
@@ -440,10 +475,11 @@ class HTTPTool(Tool):
                 check_cancelled(signal)
                 self.permissions.sync_target()
                 self.context_store.sync_target(self.target.revision, self.engagement.revision, self.permissions.epoch)
-                self.context_store.extract(
-                    request, response, identity, action.url,
-                    generation=(action.target_revision, action.scope_revision, action.epoch),
-                )
+                if action.capture_source is None:
+                    self.context_store.extract(
+                        request, response, identity, action.url,
+                        generation=(action.target_revision, action.scope_revision, action.epoch),
+                    )
                 chunks: list[bytes] = []
                 total = 0
                 truncated = False
@@ -458,22 +494,24 @@ class HTTPTool(Tool):
                     chunks.append(chunk)
                     total += len(chunk)
                 content = b''.join(chunks)[:action.response_cap]
+                redact = (http_credential_redactor(request.headers.multi_items(), response.headers.multi_items())
+                          if action.capture_source else redact_evidence)
                 version = getattr(response, 'http_version', None)
-                output = f'{version or "HTTP"} {response.status_code} {response.reason_phrase}\n'
+                output = f'{version or "HTTP"} {response.status_code} {redact(response.reason_phrase)}\n'
                 for k, v in response.headers.items():
-                    output += f'{k}: {v}\n'
-                output += (f'final URL: {action.url}\n'
+                    output += f'{k}: {redact(v)}\n'
+                output += (f'final URL: {redact(action.url)}\n'
                            f'decoded body bytes retained before redaction: {len(content)}\n'
                            f'wire Content-Length: {response.headers.get("content-length", "unknown")}\n'
                            f'Content-Encoding: {response.headers.get("content-encoding", "identity")}\n')
                 header_length = len(output)
-                output += '\n' + content.decode(errors='replace')
+                output += '\n' + redact(content.decode(errors='replace'))
                 if truncated:
                     output += f'\n[response body truncated at {action.response_cap} decoded bytes]'
                 if evidence_store is not None:
                     # The effective, authorized request includes replay/context
                     # changes. Model arguments alone are not a capture of it.
-                    request_text = redact_evidence(
+                    request_text = redact(
                         f'{action.method} {action.url}\n'
                         + '\n'.join(f'{k.decode("ascii")}: {v.decode("latin1")}'
                                     for k, v in action.headers)
@@ -487,11 +525,13 @@ class HTTPTool(Tool):
                         'request_preview_complete': len(request_text) <= REQUEST_PREVIEW_CHARS,
                         'request_body_bytes': len(action.body),
                     }
+                    if action.capture_source is not None:
+                        request_details['baseline_request_ref'] = action.capture_source.baseline_ref
                     observation = evidence_store.capture(action, response.status_code, content, complete=not truncated,
                         validation_binding=(generic_probe[0], generic_probe[2]) if generic_probe else None,
                         owner=source_owner or {}, response_headers=response.headers.items(),
                         elapsed_ms=(time.monotonic() - sent_at) * 1000,
-                        source_details=request_details)
+                        source_details=request_details, redact_text=redact if action.capture_source else None)
                     self._attest_phase_coverage(action, response, content, observation)
                     captured = evidence_store._items[observation]
                     # Put identity/capture flags before body text so context
@@ -518,7 +558,8 @@ class HTTPTool(Tool):
                               + '\nEnd effective request preview')
                     output += f'\n[runtime observation: {observation}]'
                 if private_reason:
-                    output = f'note: private/internal host independently approved (reason: {private_reason})\n\n' + output
+                    output = f'note: private/internal host independently approved (reason: {redact(private_reason)})\n\n' + output
+                # Opaque observation IDs and producer metadata are not traffic.
                 output = redact_evidence(output)
                 return (ToolOutput(output, status='observation', http_status=response.status_code, truncated=truncated),
                         response.headers.get('location') if response.status_code in {301, 302, 303, 307, 308} else None,

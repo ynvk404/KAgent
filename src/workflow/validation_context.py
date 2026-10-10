@@ -282,7 +282,7 @@ def _runtime_availability(
     tool.permissions.sync_target()
     tool.context_store.sync_target(tool.target.revision, tool.engagement.revision, tool.permissions.epoch)
     captured_headers: httpx.Headers | None = None
-    capture_identity: str | None = None
+    capture_has_credentials = False
     runtime_url = fields["url"]
     if ref:
         try:
@@ -319,11 +319,21 @@ def _runtime_availability(
                         baseline = _availability("unavailable", reason="binding_mismatch")
                         captured_headers = None
                     else:
-                        capture_identity = getattr(row, "auth_context_ref", None)
+                        _, captured_request, captured_source = tool.captured_baseline(candidate)
+                        capture_has_credentials = bool(captured_source.credential_digest)
+                        captured_headers = captured_request.headers
                         runtime_url = url
                         baseline = _availability("available")
         except (ValueError, OutOfScopeError, UserControlledRefusal):
             baseline = _availability("unavailable", reason="capture_access_denied")
+        # Availability describes retained capture bytes, not permission. The
+        # executor asks for bounded capture rights independently of HTTP/YOLO.
+        if baseline["available"] and captured_headers is not None:
+            if capture_has_credentials:
+                auth = _availability("available", reason="captured_credentials_require_permission")
+            elif identity:
+                auth = _availability("unavailable", reason="captured_credentials_missing")
+            return baseline, auth
     if identity and runtime_url:
         try:
             tool._require_scope(runtime_url)
@@ -334,16 +344,8 @@ def _runtime_availability(
             authorization = tool.context_store.authorization_for(request, identity)
             auth = _availability("available" if cookie or authorization else "unavailable",
                                  reason=None if cookie or authorization else "live_identity_missing_or_expired")
-            if captured_headers is not None and any(key in captured_headers for key in ("cookie", "authorization")):
-                if (capture_identity != identity
-                        or "cookie" in captured_headers and captured_headers["cookie"] != cookie
-                        or "authorization" in captured_headers and captured_headers["authorization"] != authorization):
-                    auth = _availability("unavailable", reason="captured_identity_not_live")
         except (ValueError, OutOfScopeError, UserControlledRefusal):
             auth = _availability("unavailable", reason="identity_context_unavailable")
     elif identity:
         auth = _availability("unavailable", reason="endpoint_unknown")
-    if captured_headers is not None and any(key in captured_headers for key in ("cookie", "authorization")):
-        if auth["state"] != "available":
-            baseline = _availability("unavailable", reason="captured_identity_not_live")
     return baseline, auth

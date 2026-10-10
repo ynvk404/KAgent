@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from src.logger.logger import get_logger
 
 from .store import CaptureStore
+from .redacted_view import request_view, task_view
 
 logger = get_logger("browser.server")
 
@@ -163,9 +164,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/endpoints":
             self.send_json(store.list_endpoints(), extra_headers=cors)
         elif path == "/requests":
-            self.send_json(store.list_requests(limit=500), extra_headers=cors)
+            self.send_json([request_view(row) for row in store.list_requests(limit=500)], extra_headers=cors)
         elif path == "/burp/tasks":
-            self.send_json(store.list_burp_tasks(), extra_headers=cors)
+            self.send_json([task_view(row) for row in store.list_burp_tasks()], extra_headers=cors)
         elif path == "/burp/issues":
             self.send_json(store.list_burp_issues(), extra_headers=cors)
         else:

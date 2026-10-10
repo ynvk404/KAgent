@@ -89,6 +89,7 @@ class BurpTask:
     raw_request_oversize: bool = False
     notes: Optional[str] = None
     baseline_request_ref: Optional[str] = None
+    auth_context_ref: Optional[str] = None
 
 
 @dataclass
@@ -305,7 +306,7 @@ class CaptureStore:
     def _baseline_signature(row: CapturedRequest | BurpTask) -> str:
         if isinstance(row, CapturedRequest):
             return CaptureStore._request_signature(row)
-        material = [row.method, row.url, row.host, row.target,
+        material = [row.method, row.url, row.host, row.target, row.auth_context_ref,
                     row.raw_request_b64, row.raw_request_oversize]
         return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
 
@@ -447,6 +448,7 @@ class CaptureStore:
                 raw_request_oversize=isinstance(obj.get("rawRequestB64"), str)
                                      and len(obj["rawRequestB64"]) > MAX_RAW_REQUEST_B64,
                 notes=_str_or_none(obj.get("notes")),
+                auth_context_ref=_str_or_none(obj.get("authContextRef")),
                 source="burp",
                 created_at=_now_ms(),
             )

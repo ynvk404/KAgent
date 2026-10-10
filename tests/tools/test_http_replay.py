@@ -22,6 +22,22 @@ class Allow:
         return Decision.ALLOW_ONCE
 
 
+@pytest.mark.asyncio
+async def test_captured_transport_disables_environment_proxy_without_runtime_policy(monkeypatch):
+    tool, capture, workflow = make_tool()
+    candidate = add_candidate(workflow, capture_json(capture))
+    original, options = httpx.AsyncClient, []
+    def client(**kwargs):
+        options.append(kwargs)
+        return original(transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request)), **kwargs)
+    monkeypatch.setattr('src.tools.http.http_tool.httpx.AsyncClient', client)
+    monkeypatch.setattr('src.tools.http.http_tool.gate_private_request', AsyncMock(return_value=''))
+    await tool.run({'phase': 'validation', 'candidate_id': candidate.id, 'mutation_value': 'new'}, None, Allow())
+    await tool.run({'phase': 'recon', 'url': '/api'}, None, Allow())
+    assert options[0]['trust_env'] is False
+    assert 'trust_env' not in options[1]
+
+
 def make_tool(url="http://target.test"):
     target = Target(url)
     engagement = EngagementState()
@@ -313,7 +329,7 @@ async def test_explicit_baseline_cookie_stops_on_redirect_cookie_update(monkeypa
     assert "recapture required" in output
 
 
-def test_replay_identity_binding_and_runtime_cookie_rotation():
+def test_replay_identity_binding_is_independent_of_runtime_cookie_rotation():
     tool, capture, workflow = make_tool()
     ref = capture_json(capture)
     candidate = add_candidate(workflow, ref)
@@ -324,23 +340,27 @@ def test_replay_identity_binding_and_runtime_cookie_rotation():
     _, request = tool.prepare(args)
     response = httpx.Response(200, headers={"Set-Cookie": "sid=rotated; Path=/"}, request=request)
     tool.context_store.extract(request, response, "user")
-    with pytest.raises(ValueError, match="runtime session cookie"):
-        tool.prepare(args)
+    _, replay = tool.prepare(args)
+    assert replay.headers['cookie'] == 'sid=private'
+    assert tool.context_store.cookie_for(request, 'user') == 'sid=rotated'
     capture.ingest({"id": "unbound", "method": "POST", "url": "http://target.test/api",
                     "requestHeaders": [{"name": "Content-Type", "value": "application/json"},
                                        {"name": "Cookie", "value": "sid=opaque"}],
                     "requestBody": '{"q":"old"}'})
     unbound = add_candidate(workflow, baseline_ref(capture, "wr:unbound"))
-    with pytest.raises(ValueError, match="identity binding"):
-        tool.prepare({"phase": "validation", "candidate_id": unbound.id, "mutation_value": "new"})
+    unbound_action, unbound_request = tool.prepare({"phase": "validation", "candidate_id": unbound.id, "mutation_value": "new"})
+    assert unbound_request.headers['cookie'] == 'sid=opaque'
+    assert unbound_action.capture_source and unbound_action.capture_source.credential_digest
     capture.ingest({"id": "spoofed", "method": "POST", "url": "http://target.test/api",
                     "authContextRef": "admin",
                     "requestHeaders": [{"name": "Content-Type", "value": "application/json"},
                                        {"name": "Cookie", "value": "sid=admin"}],
                     "requestBody": '{"q":"old"}'})
     spoofed = add_candidate(workflow, baseline_ref(capture, "wr:spoofed"), "admin")
-    with pytest.raises(ValueError, match="runtime session cookie"):
-        tool.prepare({"phase": "validation", "candidate_id": spoofed.id, "mutation_value": "new"})
+    admin_action, admin_request = tool.prepare({"phase": "validation", "candidate_id": spoofed.id, "mutation_value": "new"})
+    assert admin_request.headers['cookie'] == 'sid=admin'
+    assert admin_action.capture_source != unbound_action.capture_source
+    assert not tool.permissions._capture_grants  # Preparation grants no credential rights.
 
 
 def test_same_input_user_admin_candidates_and_replay_are_isolated():
@@ -363,7 +383,7 @@ def test_same_input_user_admin_candidates_and_replay_are_isolated():
         assert request.headers["cookie"] == f"sid={identity}"
 
 
-def test_captured_authorization_requires_matching_runtime_identity():
+def test_captured_authorization_does_not_require_runtime_identity_credentials():
     tool, capture, workflow = make_tool()
     capture.ingest({"id": "auth", "method": "POST", "url": "http://target.test/api",
                     "authContextRef": "user",
@@ -372,13 +392,15 @@ def test_captured_authorization_requires_matching_runtime_identity():
                     "requestBody": '{"q":"old"}'})
     candidate = add_candidate(workflow, baseline_ref(capture, "wr:auth"))
     args = {"phase": "validation", "candidate_id": candidate.id, "mutation_value": "new"}
-    with pytest.raises(ValueError, match="runtime authorization"):
-        tool.prepare(args)
+    _, replay = tool.prepare(args)
+    assert replay.headers['authorization'] == 'Bearer user'
     runtime_request = httpx.Request("GET", "http://target.test/api",
-                                    headers={"Authorization": "Bearer user"})
+                                    headers={"Authorization": "Bearer different-native-token"})
     tool.context_store.extract(runtime_request, httpx.Response(200, request=runtime_request), "user")
     _, replay = tool.prepare(args)
     assert replay.headers["authorization"] == "Bearer user"
+    assert tool.context_store.authorization_for(runtime_request, 'user') == 'Bearer different-native-token'
+    assert not tool.permissions._capture_grants
 
 
 def test_host_override_and_browser_user_agent_conflict():
@@ -412,7 +434,7 @@ async def test_malformed_location_and_explicit_cookie_redirect_stop(monkeypatch)
     bind_cookie(tool, "user", "private")
     result = await tool.run({"phase": "validation", "candidate_id": candidate.id,
                              "mutation_value": "new", "max_redirects": 2}, None, Allow())
-    assert "unknown path provenance" in result and len(seen) == 2
+    assert "captured redirect not followed" in result and len(seen) == 2
 
 
 @pytest.mark.asyncio
