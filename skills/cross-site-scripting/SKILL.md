@@ -43,6 +43,25 @@ allowed-tools:
 
 # Cross-site scripting playbook
 
+## Runtime completion contract
+
+The runtime derives validation completion from the current objective and target,
+assigned Candidates, accepted terminal ValidationResults, immutable proof integrity,
+coverage synchronization, cleanup, and required finding persistence. A `confirmed`
+result resolves its assigned work only after `confirm_finding` persists it; a valid
+`not-confirmed` result needs no finding. Pending, validating, blocked, deferred,
+browser-required, authorization-required and insufficient-evidence work remains
+outstanding. Stop unsafe or exhausted probes and record the unresolved outcome;
+do not describe it as completed validation.
+
+Do not issue a skill-completion tool call. The runtime tracks each requested goal
+and other assigned work independently; one finding cannot complete unrelated work.
+`results.md` is an optional report/export of persisted results, findings and evidence,
+not a completion gate. If exported, use the documented canonical target path and
+report write failures explicitly; never substitute an arbitrary alternate path.
+Minimal redacted proof artifacts and primary source references remain mandatory for
+both terminal outcomes, even when no results report is exported.
+
 ## Structured workflow contract
 
 `start_validation` returns the Candidate plus a transient `validation_context`:
@@ -496,8 +515,8 @@ Do not transfer the API result to the route. When no marker was reflected, set
 
 ### Standard result entry template
 
-Write every candidate's result — confirmed, not-confirmed, blocked, or
-browser-required — to:
+Optionally export every persisted candidate result — confirmed, not-confirmed,
+blocked, or browser-required — to:
 
 `artifacts/cross-site-scripting/<target>/results.md`
 
@@ -537,12 +556,12 @@ yet a tracked finding until that tool persists it.
 
 ## 6. Confirm an evidence-backed finding
 
-`cross-site-scripting` first produces tested evidence in `results.md`. For
+`cross-site-scripting` records accepted results with immutable evidence references. For
 each candidate marked `confirmed`, call `confirm_finding` to persist the
 canonical finding:
 
 ```
-cross-site-scripting → results.md → confirm_finding → final finding
+cross-site-scripting → accepted ValidationResult + immutable proof → confirm_finding → final finding
 ```
 
 Populate the tool call from the recorded evidence. Supply the required
@@ -565,8 +584,8 @@ valid. Include:
   blacklist-based input filtering as the primary fix.
 
 Do not call `confirm_finding` for `not-confirmed`, `blocked`, or
-`browser-required` candidates — they stay recorded in
-`results.md` only. For `browser-required`
+`browser-required` candidates — they remain recorded as
+ValidationResults. For `browser-required`
 candidates specifically, flag in the summary that browser-level
 confirmation is needed before the user decides whether to pursue it further.
 
@@ -590,11 +609,10 @@ scope.
 
 ## Stop conditions
 
-Stop working a candidate when it has reached one of the four outcomes in
-step 5 and been written to `results.md`.
-
-Stop the skill entirely when every `cross-site-scripting`-tagged candidate
-handed to you has been worked to an outcome and `results.md` is complete.
+Stop probing a candidate when its bounded testing reaches a recorded outcome.
+Accepted terminal work is resolved by the runtime contract above; unresolved
+outcomes stop probing but remain outstanding. Persist required confirmed findings
+and resolve cleanup and coverage before describing validation as complete.
 
 Do not: test candidates this skill was not explicitly handed, run automated
 payload fuzzing or XSS scanners by default, exfiltrate cookies/tokens/

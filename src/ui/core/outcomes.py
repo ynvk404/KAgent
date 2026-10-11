@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
-from src.agent.events import AgentEvent, ToolCallEvent, ToolResultEvent
+from src.agent.events import AgentEvent, SkillActiveEvent, ToolCallEvent, ToolResultEvent
+from src.agent.scope import runtime_scope
 from src.permission.runtime.execution import policy_for
-from src.ui.core.admission import PendingCall, call_metadata
+from src.ui.core.admission import PendingCall, call_metadata, invocation_call
 from src.ui.render.sanitize import sanitize_text
 from src.workflow.assessment import accepted_result, candidate_binding
 from src.workflow.state import WorkflowState, candidate_origin, validation_result_fingerprint
@@ -86,18 +87,17 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
     origin = candidate_origin(target)
     objective = workflow.objective
     policy = policy_for(getattr(agent, "prompter", None))
-    engagement = getattr(agent, "engagement_state", None)
-    scope = hashlib.sha256(str((origin, getattr(agent.target, "revision", None),
-                               getattr(engagement, "revision", None),
-                               getattr(getattr(engagement, "http_permissions", None), "epoch", None),
-                               getattr(policy, "session_id", None), objective.id if objective else None)).encode()).hexdigest()
+    scope = runtime_scope(agent)
     call = (call_metadata(event) if isinstance(event, ToolCallEvent) else
-            next((item for item in calls if isinstance(event, ToolResultEvent) and event.id
-                  and item.id == event.id and item.name == event.name), None))
+            invocation_call(calls, event) if isinstance(event, (ToolResultEvent, SkillActiveEvent)) else None)
+    invocation = getattr(event, 'invocation', None)
     event_origin = getattr(event, "target_origin", None)
     event_revision = getattr(event, "target_revision", None)
     event_objective = getattr(event, "objective_id", None)
-    if ((call and call.scope and call.scope != scope)
+    if ((invocation is not None and invocation.scope != scope)
+            or (invocation is not None and not isinstance(event, ToolCallEvent) and call is None)
+            or (call and (call.retired or (call.resolved and isinstance(event, ToolResultEvent))))
+            or (call and call.scope and call.scope != scope)
             or (event_origin is not None and candidate_origin(event_origin) != origin)
             or (event_revision is not None and event_revision != getattr(agent.target, "revision", None))
             or (event_objective is not None and event_objective != (objective.id if objective else None))):

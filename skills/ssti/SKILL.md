@@ -41,6 +41,25 @@ allowed-tools:
 
 # SSTI playbook
 
+## Runtime completion contract
+
+The runtime derives validation completion from the current objective and target,
+assigned Candidates, accepted terminal ValidationResults, immutable proof integrity,
+coverage synchronization, cleanup, and required finding persistence. A `confirmed`
+result resolves its assigned work only after `confirm_finding` persists it; a valid
+`not-confirmed` result needs no finding. Pending, validating, blocked, deferred,
+browser-required, authorization-required and insufficient-evidence work remains
+outstanding. Stop unsafe or exhausted probes and record the unresolved outcome;
+do not describe it as completed validation.
+
+Do not issue a skill-completion tool call. The runtime tracks each requested goal
+and other assigned work independently; one finding cannot complete unrelated work.
+`results.md` is an optional report/export of persisted results, findings and evidence,
+not a completion gate. If exported, use the documented canonical target path and
+report write failures explicitly; never substitute an arbitrary alternate path.
+Minimal redacted proof artifacts and primary source references remain mandatory for
+both terminal outcomes, even when no results report is exported.
+
 ## Structured workflow contract
 
 Before recording a `confirmed` result, save a minimal redacted proof artifact,
@@ -256,9 +275,9 @@ the user separately authorizes that as its own step.
 
 ## Reporting
 
-Write validation details and redacted supporting evidence to
+Optionally export persisted validation details and redacted supporting evidence to
 `artifacts/ssti/<target>/results.md` (using the target identifier convention from
-`recon`). This is a validation artifact, not an official finding.
+`recon`). This is a report/export artifact, not an official finding or completion gate.
 `confirm_finding` alone creates the report under `artifacts/findings/`.
 
 Include:

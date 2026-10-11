@@ -555,9 +555,9 @@ class KAgent(App):
         action: Action,
     ) -> None:
         if isinstance(action, AgentEventAction) and action.facts is None:
-            action = replace(action, facts=runtime_facts(self.agent, action.event, self.state.pending_calls))
+            action = replace(action, facts=runtime_facts(self.agent, action.event, self.state.call_history))
         elif isinstance(action, SetBusy) and action.busy and not self.state.busy and action.facts is None:
-            action = replace(action, facts=runtime_facts(self.agent, None, self.state.pending_calls))
+            action = replace(action, facts=runtime_facts(self.agent, None, self.state.call_history))
         self.state = reducer(
             self.state,
             cast(Any, action),

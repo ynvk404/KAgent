@@ -19,7 +19,6 @@ candidate-classes:
   - cors-misconfiguration
 requires:
   - web-input-analysis
-completion-artifact: artifacts/cors-misconfiguration/{target}/results.md
 allowed-tools:
   - http
   - read_payloads
@@ -30,6 +29,25 @@ allowed-tools:
 ---
 
 # CORS misconfiguration validation
+
+## Runtime completion contract
+
+The runtime derives validation completion from the current objective and target,
+assigned Candidates, accepted terminal ValidationResults, immutable proof integrity,
+coverage synchronization, cleanup, and required finding persistence. A `confirmed`
+result resolves its assigned work only after `confirm_finding` persists it; a valid
+`not-confirmed` result needs no finding. Pending, validating, blocked, deferred,
+browser-required, authorization-required and insufficient-evidence work remains
+outstanding. Stop unsafe or exhausted probes and record the unresolved outcome;
+do not describe it as completed validation.
+
+Do not issue a skill-completion tool call. The runtime tracks each requested goal
+and other assigned work independently; one finding cannot complete unrelated work.
+`results.md` is an optional report/export of persisted results, findings and evidence,
+not a completion gate. If exported, use the documented canonical target path and
+report write failures explicitly; never substitute an arbitrary alternate path.
+Minimal redacted proof artifacts and primary source references remain mandatory for
+both terminal outcomes, even when no results report is exported.
 
 ## Contract and scope
 
@@ -95,9 +113,3 @@ redacted `curl`, specific `remediation`, and
 evidence must be valid. Keep browser-dependent consequences conditional.
 Recommend an explicit Origin allowlist, avoiding credentialed wildcard or
 reflection policies, and returning `Vary: Origin` when responses vary by it.
-
-## Completion
-
-After all handed-off candidates are recorded, call
-`workflow(action="complete_skill", skill_name="cors-misconfiguration",
-artifact_ref="artifacts/cors-misconfiguration/<target>/results.md")`.

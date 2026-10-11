@@ -52,6 +52,25 @@ allowed-tools:
 
 # Authentication playbook
 
+## Runtime completion contract
+
+The runtime derives validation completion from the current objective and target,
+assigned Candidates, accepted terminal ValidationResults, immutable proof integrity,
+coverage synchronization, cleanup, and required finding persistence. A `confirmed`
+result resolves its assigned work only after `confirm_finding` persists it; a valid
+`not-confirmed` result needs no finding. Pending, validating, blocked, deferred,
+browser-required, authorization-required and insufficient-evidence work remains
+outstanding. Stop unsafe or exhausted probes and record the unresolved outcome;
+do not describe it as completed validation.
+
+Do not issue a skill-completion tool call. The runtime tracks each requested goal
+and other assigned work independently; one finding cannot complete unrelated work.
+`results.md` is an optional report/export of persisted results, findings and evidence,
+not a completion gate. If exported, use the documented canonical target path and
+report write failures explicitly; never substitute an arbitrary alternate path.
+Minimal redacted proof artifacts and primary source references remain mandatory for
+both terminal outcomes, even when no results report is exported.
+
 ## Structured workflow contract
 
 Before recording a `confirmed` result, save a minimal redacted proof artifact,
@@ -591,12 +610,12 @@ using the same target identifier as `recon`, `web-enumeration`, and
 
 ## 6. Confirm an evidence-backed finding
 
-`authentication` first produces tested evidence in `results.md`. For each
+`authentication` records accepted results with immutable evidence references. For each
 candidate marked `confirmed`, call `confirm_finding` to persist the canonical
 finding:
 
 ```
-authentication → results.md → confirm_finding → final finding
+authentication → accepted ValidationResult + immutable proof → confirm_finding → final finding
 ```
 
 Populate the tool call from the recorded evidence. Supply the required
@@ -626,7 +645,7 @@ result and its registered evidence must be valid. Include:
 
 Do not call `confirm_finding` for `not-confirmed`, `blocked`,
 `insufficient-evidence`, `authorization-required`, or `deferred`
-candidates as findings — they stay in `results.md` only. For
+candidates as findings — they remain recorded as ValidationResults. For
 `insufficient-evidence` and `authorization-required` candidates
 specifically, flag in the summary exactly what credential, test account,
 or authorization would be needed to finish testing them, so the user can
@@ -638,11 +657,10 @@ finding persistence and naming.
 
 ## Stop conditions
 
-Stop working a candidate when it has reached one of the six outcomes in
-step 5 and been written to `results.md`.
-
-Stop the skill entirely when every `authentication`-tagged candidate
-handed to you has been worked to an outcome and `results.md` is complete.
+Stop probing a candidate when its bounded testing reaches a recorded outcome.
+Accepted terminal work is resolved by the runtime contract above; unresolved
+outcomes stop probing but remain outstanding. Persist required confirmed findings
+and resolve cleanup and coverage before describing validation as complete.
 
 Do not: test outside the candidates explicitly provided for this run, guess or
 brute-force real credentials/OTPs/reset tokens, trigger reset or MFA flows

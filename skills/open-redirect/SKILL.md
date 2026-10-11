@@ -20,7 +20,6 @@ candidate-classes:
   - open-redirect
 requires:
   - web-input-analysis
-completion-artifact: artifacts/open-redirect/{target}/results.md
 allowed-tools:
   - http
   - read_payloads
@@ -31,6 +30,25 @@ allowed-tools:
 ---
 
 # Open redirect validation
+
+## Runtime completion contract
+
+The runtime derives validation completion from the current objective and target,
+assigned Candidates, accepted terminal ValidationResults, immutable proof integrity,
+coverage synchronization, cleanup, and required finding persistence. A `confirmed`
+result resolves its assigned work only after `confirm_finding` persists it; a valid
+`not-confirmed` result needs no finding. Pending, validating, blocked, deferred,
+browser-required, authorization-required and insufficient-evidence work remains
+outstanding. Stop unsafe or exhausted probes and record the unresolved outcome;
+do not describe it as completed validation.
+
+Do not issue a skill-completion tool call. The runtime tracks each requested goal
+and other assigned work independently; one finding cannot complete unrelated work.
+`results.md` is an optional report/export of persisted results, findings and evidence,
+not a completion gate. If exported, use the documented canonical target path and
+report write failures explicitly; never substitute an arbitrary alternate path.
+Minimal redacted proof artifacts and primary source references remain mandatory for
+both terminal outcomes, even when no results report is exported.
 
 ## Contract and scope
 
@@ -87,9 +105,3 @@ The latest result and registered evidence must be valid. Report only the
 off-origin redirect shown by the response; do not follow it. Recommend
 allow-listing permitted destinations or accepting only validated relative
 paths that resolve to the active origin.
-
-## Completion
-
-When all handed-off candidates have a result and the artifact exists, call
-`workflow(action="complete_skill", skill_name="open-redirect",
-artifact_ref="artifacts/open-redirect/<target>/results.md")`.

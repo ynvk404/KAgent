@@ -94,10 +94,8 @@ class TestFrontmatter:
         assert skill_frontmatter.get("name") == "sql-injection"
         assert skill_frontmatter.get("description")
 
-    def test_canonical_completion_artifact_declared(self, skill_frontmatter: dict):
-        assert skill_frontmatter.get("completion-artifact") == (
-            "artifacts/sql-injection/{target}/results.md"
-        )
+    def test_validation_has_no_presentation_completion_gate(self, skill_frontmatter: dict):
+        assert skill_frontmatter.get("completion-artifact") is None
 
     def test_allowed_tools_present(self, skill_frontmatter: dict):
         tools = skill_frontmatter.get("allowed-tools")
@@ -397,7 +395,8 @@ class TestFindingContract:
 
     def test_results_artifact_is_reused_as_evidence(self, skill_text: str):
         normalized = _norm(skill_text)
-        assert "register this file with `workflow(action=\"record_evidence\"" in normalized
+        assert "report may also serve as a proof source" in normalized
+        assert "Register the proof file with `workflow(action=\"record_evidence\"" in normalized
         assert "redacted, content-addressed snapshot" in normalized
         assert "proof remains immutable" in normalized
         assert "continues to be updated for later candidates" in normalized

@@ -21,7 +21,6 @@ candidate-classes:
   - jwt-misconfiguration
 requires:
   - web-input-analysis
-completion-artifact: artifacts/jwt-misconfiguration/{target}/results.md
 allowed-tools:
   - http
   - read_payloads
@@ -32,6 +31,25 @@ allowed-tools:
 ---
 
 # JWT misconfiguration validation
+
+## Runtime completion contract
+
+The runtime derives validation completion from the current objective and target,
+assigned Candidates, accepted terminal ValidationResults, immutable proof integrity,
+coverage synchronization, cleanup, and required finding persistence. A `confirmed`
+result resolves its assigned work only after `confirm_finding` persists it; a valid
+`not-confirmed` result needs no finding. Pending, validating, blocked, deferred,
+browser-required, authorization-required and insufficient-evidence work remains
+outstanding. Stop unsafe or exhausted probes and record the unresolved outcome;
+do not describe it as completed validation.
+
+Do not issue a skill-completion tool call. The runtime tracks each requested goal
+and other assigned work independently; one finding cannot complete unrelated work.
+`results.md` is an optional report/export of persisted results, findings and evidence,
+not a completion gate. If exported, use the documented canonical target path and
+report write failures explicitly; never substitute an arbitrary alternate path.
+Minimal redacted proof artifacts and primary source references remain mandatory for
+both terminal outcomes, even when no results report is exported.
 
 ## Contract and secret handling
 
@@ -109,9 +127,3 @@ reproducible token-free `curl`, `remediation`, and
 must be valid. State only the validation behavior proved for the fixture.
 Recommend a fixed algorithm allowlist, signature verification, and strict
 `exp`/`nbf`/`iss`/`aud` validation; never recommend accepting unsigned tokens.
-
-## Completion
-
-After each handed-off Candidate has an outcome and the artifact exists, call
-`workflow(action="complete_skill", skill_name="jwt-misconfiguration",
-artifact_ref="artifacts/jwt-misconfiguration/<target>/results.md")`.

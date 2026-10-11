@@ -1,4 +1,6 @@
 from src.workflow.assessment import accepted_result
+from src.agent.events import Invocation
+from src.agent.scope import runtime_scope
 import traceback
 import asyncio
 import hashlib
@@ -350,6 +352,7 @@ class ParsedToolCall:
         self.args = args
         self.args_json = args_json
         self.parse_err = parse_err
+        self.invocation: Invocation | None = None
 
 
 class ToolCallResult:
@@ -985,6 +988,10 @@ class Agent:
         self.engagement_state = opts.engagement_state or EngagementState()
         if not self.target.empty():
             self.engagement_state.add_origin(self.target.base_url())
+        # Establish the controller binding even when no HTTP adapter is enabled.
+        permissions = self.engagement_state.http_permissions
+        permissions.sync_target()
+        permissions.bind_target(lambda: self.target.revision)
 
         self.auto_compact_threshold = (
             opts.auto_compact_threshold
@@ -1971,6 +1978,7 @@ class Agent:
             self._clear_permission_cache()
         elif scope_changed:
             self._clear_permission_cache()
+        self._sync_permission_target()
         self.refresh_scope_context()
 
     def apply_target_clear(self) -> None:
@@ -1980,7 +1988,16 @@ class Agent:
         if scope_changed or target_changed:
             self.workflow.clear()
         self._clear_permission_cache()
+        self._sync_permission_target()
         self.refresh_scope_context()
+
+    def _sync_permission_target(self) -> None:
+        """Finish target invalidation before publishing any invocation ownership."""
+        self.engagement_state.http_permissions.sync_target()
+        from src.permission.runtime.execution import policy_for
+        policy = policy_for(self.prompter)
+        if policy is not None:
+            policy.engagement.http_permissions.sync_target()
 
     def _capture_store(self):
         from src.tools.common.browser_capture import BrowserCaptureGetTool
@@ -2166,44 +2183,19 @@ class Agent:
             workflow_tool is not None
             and getattr(workflow_tool, "coverage", None) is not None
         )
-        evidence_root = getattr(workflow_tool, "evidence_root", None)
-        from src.workflow.validation_route import GENERIC_VALIDATOR, generic_admission
         from src.permission.runtime.execution import policy_for
         execution = policy_for(self.prompter)
         routes = self._validation_routes()
-        invalid: set[str] = set()
-        for candidate in self.workflow.objective_candidates():
-            result = self.workflow.latest_result(candidate.id)
-            if (result is not None and result.outcome in {"confirmed", "not-confirmed"}
-                    and not accepted_result(self.workflow, candidate, result, execution)):
-                invalid.add(candidate.id)
-            if result is not None and result.skill_name == GENERIC_VALIDATOR:
-                trusted = accepted_result(self.workflow, candidate, result, execution)
-                if (routes[candidate.id].kind != "generic" or execution is None
-                        or generic_admission(candidate, self.workflow, self.skills, self.target, execution)
-                        or not isinstance(evidence_root, Path)
-                        or not trusted):
-                    invalid.add(candidate.id)
-        if isinstance(evidence_root, Path):
-            for candidate in self.workflow.objective_candidates():
-                result = self.workflow.latest_result(candidate.id)
-                if result is None or not result.evidence_refs:
-                    continue
-                if result.outcome in {"confirmed", "not-confirmed"} and not accepted_result(self.workflow, candidate, result, execution):
-                    invalid.add(candidate.id)
-                    continue
-                if any(
-                    (artifact := self.workflow.evidence.get(reference)) is None
-                    or not artifact.is_available_for_resume(evidence_root)
-                    for reference in result.evidence_refs
-                ):
-                    invalid.add(candidate.id)
+        validation_errors = {
+            candidate.id: self._validation_completion_error(candidate, execution)
+            for candidate in self.workflow.objective_candidates()
+        }
         status, actionable, blockers = self.workflow.whole_target_status(
             target_origin=origin,
             available_phases=self._available_workflow_phases(),
             validator_classes=self._workflow_validator_classes(),
             coverage_sync_available=coverage_sync_available,
-            invalid_evidence_candidate_ids=frozenset(invalid),
+            validation_errors=validation_errors,
             generic_eligible_candidate_ids=frozenset(
                 cid for cid, route in routes.items() if route.kind == "generic"
                 and self._generic_startable(self.workflow.candidates[cid])
@@ -2267,8 +2259,6 @@ class Agent:
             policy = policy_for(self.prompter)
         except Exception:
             policy = None
-        workflow_tool = self.tools.get("workflow")
-        evidence_root = getattr(workflow_tool, "evidence_root", None)
         result_statuses: dict[str, str] = {}
         for goal in objective.requested_goals:
             if goal.status == "cancelled":
@@ -2317,7 +2307,7 @@ class Agent:
             deferred_reasons: list[str] = []
             blocked_reasons: list[str] = []
             for candidate in candidates:
-                result, reason = self._valid_goal_candidate_result(candidate, objective, policy, evidence_root)
+                result, reason = self._valid_goal_candidate_result(candidate, policy)
                 if result is not None:
                     outcomes.append(result.outcome)
                     continue
@@ -2398,44 +2388,20 @@ class Agent:
         except (OSError, ValueError):
             return False
 
-    def _valid_goal_candidate_result(self, candidate, objective, policy, evidence_root):
-        from src.workflow.validation_route import GENERIC_VALIDATOR, generic_admission, resolve_validation_route
+    def _validation_completion_error(self, candidate, policy=None):
+        tool = self.tools.get("workflow")
+        if not isinstance(tool, WorkflowTool) or tool.state is not self.workflow:
+            return "runtime validation evaluator is unavailable"
+        if tool.target is None or tool.target.origin() != self.target.origin():
+            return "active target origin changed"
+        reason = tool.validation_completion_error(candidate.id, policy)
+        if reason is None and candidate.target and not self.engagement_state.is_in_scope(candidate.target):
+            return "candidate is outside current engagement scope"
+        return reason
 
-        result = self.workflow.latest_result(candidate.id)
-        if result is None or result.outcome not in {"confirmed", "not-confirmed"}:
-            outcome = result.outcome if result is not None else "no validation result"
-            return None, result.deferred_reason if result and result.deferred_reason else outcome
-        if result.objective_id is not None and result.objective_id != objective.id:
-            return None, "latest validation result belongs to another objective"
-        if objective.mode == "candidate_validation" and result.objective_id != objective.id:
-            return None, "explicit retest has no result for the current candidate-validation objective"
-        if candidate.status not in {"validated", "dismissed"}:
-            return None, f"candidate status is {candidate.status}"
-        route = resolve_validation_route(self.skills, candidate.candidate_class)
-        if result.skill_name == GENERIC_VALIDATOR:
-            if route.kind != "generic" or policy is None:
-                return None, "generic validation proof is unavailable under the current route"
-            if generic_admission(candidate, self.workflow, self.skills, self.target, policy):
-                return None, "generic validation admission no longer matches current scope/context"
-        elif route.kind != "expert" or route.skill_name != result.skill_name:
-            return None, route.reason or "recorded expert validator is no longer uniquely resolvable"
-        if not result.evidence_refs:
-            return None, "terminal validation result has no registered evidence"
-        if (result.outcome == "confirmed" or result.evidence_refs) and not self.workflow.evidence_matches(
-            candidate.id, result.evidence_refs,
-        ):
-            return None, "registered evidence is missing or belongs to another candidate"
-        if isinstance(evidence_root, Path) and any(
-            not self.workflow.evidence[reference].is_available_for_resume(evidence_root)
-            for reference in result.evidence_refs
-            if reference in self.workflow.evidence
-        ):
-            return None, "registered evidence is unavailable"
-        if not accepted_result(self.workflow, candidate, result, policy):
-            return None, "current accepted assessment is unavailable"
-        if candidate.target and not self.engagement_state.is_in_scope(candidate.target):
-            return None, "candidate is outside current engagement scope"
-        return result, None
+    def _valid_goal_candidate_result(self, candidate, policy):
+        reason = self._validation_completion_error(candidate, policy)
+        return (None, reason) if reason else (self.workflow.latest_result(candidate.id), None)
 
     def _goal_validation_route(self, candidate_class: str):
         from src.workflow.validation_route import resolve_validation_route
@@ -2959,49 +2925,33 @@ class Agent:
                     }
                 )
             )
-        return bool(self._generic_completion_blockers())
+        return bool(self._validation_completion_blockers())
 
-    def _generic_completion_blockers(self) -> tuple[str, ...]:
-        """Only recorded generic work for this objective; no new goal tracking."""
+    def _validation_completion_blockers(self) -> tuple[str, ...]:
+        """All recorded assigned work; satisfied goals do not close other work."""
         from src.permission.runtime.execution import policy_for
-        from src.workflow.validation_route import GENERIC_VALIDATOR, generic_admission, resolve_validation_route
         objective = self.workflow.objective
         if objective is None or objective.mode == "whole_target":
             return ()
         policy = policy_for(self.prompter)
-        tool = self.tools.get("workflow")
-        root = getattr(tool, "evidence_root", None)
         blockers = []
         for candidate in self.workflow.candidates.values():
             belongs = (candidate.id == objective.candidate_id if objective.mode == "candidate_validation"
                        else candidate.objective_id == objective.id)
-            result = self.workflow.latest_result(candidate.id)
-            if not belongs or not (resolve_validation_route(self.skills, candidate.candidate_class).kind == "generic"
-                    or result and result.skill_name == GENERIC_VALIDATOR):
+            if not belongs:
                 continue
-            reason = generic_admission(candidate, self.workflow, self.skills, self.target, policy)
-            if reason is None and policy is not None and (
-                    objective.id in policy.generic_validation.retest_objectives
-                    or candidate.status == "validating"):
-                reason = "explicit generic validation/retest remains pending"
-            if reason is None and (result is None or result.outcome not in {"confirmed", "not-confirmed"}):
-                reason = (result.deferred_reason or result.outcome) if result else "bounded probe/context or trusted proof pending"
-            if reason is None:
-                assert policy is not None and result is not None
-                trusted = accepted_result(self.workflow, candidate, result, policy)
-                if (not trusted
-                        or not isinstance(root, Path)
-                        or not self.workflow.evidence_matches(candidate.id, result.evidence_refs)
-                        or any(not self.workflow.evidence[ref].is_available_for_resume(root) for ref in result.evidence_refs)
-                        or result.coverage_synced is False):
-                    reason = "evidence/proof or coverage unresolved"
-                elif result.outcome == "confirmed" and not self.workflow.finding_is_persisted(candidate.id):
-                    reason = "confirmed finding persistence pending"
-            if reason is not None:
+            reason = self._validation_completion_error(candidate, policy)
+            if reason:
                 blockers.append(f"{candidate.id}: {reason}")
         return tuple(blockers)
 
+    def _generic_completion_blockers(self) -> tuple[str, ...]:
+        # Historical internal callers use this name; authority now covers experts too.
+        return self._validation_completion_blockers()
+
     def _planner_context(self) -> PlannerContext:
+        from src.permission.runtime.execution import policy_for
+        workflow_tool = self.tools.get("workflow")
         objective = self.workflow.objective
         whole_target = objective is not None and objective.mode == "whole_target"
         status, actionable_work, blockers = (
@@ -3089,7 +3039,10 @@ class Agent:
                 )
                 if whole_target or selection is not None else self.workflow.relevant_candidate_classes()
             ),
-            completed_skills=frozenset(self.workflow.completed_skills),
+            completed_skills=(
+                workflow_tool.completed_skills(policy_for(self.prompter))
+                if isinstance(workflow_tool, WorkflowTool) else frozenset()
+            ),
             candidates=tuple(
                 PlannerCandidate(
                     id=candidate.id,
@@ -3628,6 +3581,7 @@ class Agent:
         requested_goals_cancelled = self._cancel_requested_goals(user_msg, tools_enabled)
         if tools_enabled and not requested_goals_cancelled:
             self.initialize_target_from_user_request(user_msg)
+        self._sync_permission_target()
         # A prompt can initialize/change the Target. Recheck the consumed
         # binding before planning, context admission or objective initialization.
         try:
@@ -3807,7 +3761,7 @@ class Agent:
                 self._requested_goal_progress_signature() if requested_goal_run else ()
             )
             before_facts = self.workflow.progress_facts() if whole_target else frozenset()
-            response_chunks: list[str] | None = [] if whole_target or requested_goal_run or self._generic_completion_blockers() else None
+            response_chunks: list[str] | None = [] if whole_target or requested_goal_run or self._validation_completion_blockers() else None
 
             req = ChatRequest(
                 model=self.client.model(),
@@ -3930,7 +3884,7 @@ class Agent:
                 )
                 if opts is None or getattr(opts, "tools", True):
                     retry_req.tools = actual_tools
-                retry_chunks: list[str] | None = [] if whole_target or requested_goal_run or self._generic_completion_blockers() else None
+                retry_chunks: list[str] | None = [] if whole_target or requested_goal_run or self._validation_completion_blockers() else None
                 if retry_chunks is None:
                     resp, streamed = await self._chat_for_turn(
                         retry_req, signal, emit,
@@ -4106,7 +4060,7 @@ class Agent:
                                 self.learn_intelligence(build_turn_learning_text(user_msg, resp.message.content)),
                                 "learn_intelligence",
                         )
-                        return "workflow_blocked" if self._generic_completion_blockers() else "final_response"
+                        return "workflow_blocked" if self._validation_completion_blockers() else "final_response"
                     after_goal_signature = self._requested_goal_progress_signature()
                     requested_goal_no_progress = (
                         requested_goal_no_progress + 1
@@ -4168,7 +4122,7 @@ class Agent:
                         "learn_intelligence",
                     )
 
-                return "workflow_blocked" if self._generic_completion_blockers() else "final_response"
+                return "workflow_blocked" if self._validation_completion_blockers() else "final_response"
 
             if whole_target:
                 # Tool-call responses are known to be intermediate once the
@@ -4437,9 +4391,9 @@ class Agent:
         emit_text: bool = True,
         stream_buffer: list[str] | None = None,
     ) -> None:
-        blockers = self._generic_completion_blockers() if not resp.message.tool_calls else ()
+        blockers = self._validation_completion_blockers() if not resp.message.tool_calls else ()
         if blockers:
-            resp.message.content = "Generic validation remains incomplete: " + "; ".join(blockers)
+            resp.message.content = "Validation remains incomplete: " + "; ".join(blockers)
             streamed = False
             if stream_buffer is not None:
                 stream_buffer.clear()
@@ -4561,6 +4515,8 @@ class Agent:
         self._emit_buffered_response_text(response, streamed, chunks, emit)
         if stop_reason == "max_steps":
             emit({"type": "error", "err": MaxStepsError(max_steps)})
+        if stop_reason == "final_response" and self._validation_completion_blockers():
+            return "workflow_blocked"
         return stop_reason
 
     async def _chat_for_turn(
@@ -4913,15 +4869,7 @@ class Agent:
         ):
             parsed_calls = [self.parse_tool_call(tc) for tc in tool_calls]
             for tc, parsed in zip(tool_calls, parsed_calls):
-                emit(
-                    {
-                        "type": "tool-call",
-                        "id": tc.id,
-                        "name": tc.function.name,
-                        "args": parsed.args,
-                        "argsJSON": parsed.args_json,
-                    }
-                )
+                emit(self._tool_call_event(tc, parsed))
 
             ask_batch_results: list[ToolCallResult | None] = [
                 None for _ in tool_calls
@@ -4997,15 +4945,7 @@ class Agent:
 
                 parsed = self.parse_tool_call(tc)
 
-                emit(
-                    {
-                        "type": "tool-call",
-                        "id": tc.id,
-                        "name": tc.function.name,
-                        "args": parsed.args,
-                        "argsJSON": parsed.args_json,
-                    }
-                )
+                emit(self._tool_call_event(tc, parsed))
                 cid = parsed.args.get("candidate_id")
                 terminal_submission = (tc.function.name == "workflow"
                     and parsed.args.get("action") == "record_result"
@@ -5082,15 +5022,7 @@ class Agent:
 
         for tc, parsed in zip(tool_calls, parsed_all):
 
-            emit(
-                {
-                    "type": "tool-call",
-                    "id": tc.id,
-                    "name": tc.function.name,
-                    "args": parsed.args,
-                    "argsJSON": parsed.args_json,
-                }
-            )
+            emit(self._tool_call_event(tc, parsed))
 
         completed: dict[int, ToolCallResult] = {}
         published: set[int] = set()
@@ -5101,7 +5033,7 @@ class Agent:
             # Completion visibility follows actual completion; history/state
             # commits below retain submitted order and occur exactly once.
             published.add(index)
-            emit(self._tool_result_event(tc, result))
+            emit(self._tool_result_event(tc, result, parsed_all[index].invocation))
             return result
 
         try:
@@ -5332,7 +5264,14 @@ class Agent:
             retention_provenance=retention_provenance,
         )
 
-    def _tool_result_event(self, tc: ToolCall, res: ToolCallResult) -> dict[str, Any]:
+    def _tool_call_event(self, tc: ToolCall, parsed: ParsedToolCall) -> dict[str, Any]:
+        self._sync_permission_target()
+        parsed.invocation = Invocation(uuid.uuid4().hex, runtime_scope(self))
+        return {"type": "tool-call", "id": tc.id, "name": tc.function.name,
+                "args": parsed.args, "argsJSON": parsed.args_json, "invocation": parsed.invocation}
+
+    def _tool_result_event(self, tc: ToolCall, res: ToolCallResult,
+                           invocation: Invocation | None = None) -> dict[str, Any]:
         # Raw ToolCallResult remains available to transient controller processing
         # and observation bindings. Only event/history/context receive this view.
         error = safe_tool_text(
@@ -5362,6 +5301,7 @@ class Agent:
                 "error_kind": res.error_kind,
                 "http_status": res.http_status,
                 "truncated": res.truncated,
+                "invocation": invocation,
             }
 
     def record_tool_result(
@@ -5369,7 +5309,7 @@ class Agent:
         emit, working: list[Message], *, defer_admission: bool = False,
         publish_result: bool = True,
     ) -> None:
-        event = self._tool_result_event(tc, res)
+        event = self._tool_result_event(tc, res, parsed.invocation)
         content = event['result']
         if publish_result:
             emit(event)
@@ -5380,6 +5320,7 @@ class Agent:
         if (
             tc.function.name == "load_skill"
             and not res.err_str
+            and (parsed.invocation is None or parsed.invocation.scope == runtime_scope(self))
         ):
             name = (
                 parsed.args.get("name", "")
@@ -5395,6 +5336,7 @@ class Agent:
                         "type": "skill-active",
                         "name": name,
                         "call_id": tc.id,
+                        "invocation": parsed.invocation,
                         "target_origin": self.target.base_url(),
                         "target_revision": self.target.revision,
                         "objective_id": self.workflow.objective.id if self.workflow.objective else None,

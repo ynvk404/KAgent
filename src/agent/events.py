@@ -26,6 +26,13 @@ class AssistantDeltaEvent(BaseEvent):
     text: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class Invocation:
+    """One controller dispatch and its immutable original scope."""
+    id: str
+    scope: str
+
+
 @dataclass(slots=True)
 class ToolCallEvent(BaseEvent):
     type: Literal["tool-call"] = "tool-call"
@@ -35,6 +42,7 @@ class ToolCallEvent(BaseEvent):
 
     args: dict[str, Any] = field(default_factory=dict)
     args_json: str = ""
+    invocation: Invocation | None = None
 
     @property
     def argsJSON(self) -> str:
@@ -56,6 +64,7 @@ class ToolResultEvent(BaseEvent):
     error_kind: str | None = None
     http_status: int | None = None
     truncated: bool = False
+    invocation: Invocation | None = None
 
     @property
     def durationMs(self) -> float:
@@ -110,6 +119,7 @@ class SkillActiveEvent(BaseEvent):
     type: Literal["skill-active"] = "skill-active"
     name: str = ""
     call_id: str = ""
+    invocation: Invocation | None = None
     target_origin: str | None = None
     target_revision: int | None = None
     objective_id: str | None = None

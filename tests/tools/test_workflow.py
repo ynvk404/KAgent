@@ -1187,80 +1187,22 @@ async def test_skill_completion_is_explicit():
 
 
 @pytest.mark.asyncio
-async def test_sqli_completion_requires_and_reuses_canonical_artifact(tmp_path):
+async def test_sqli_report_and_historical_receipt_cannot_complete_unassigned_work(tmp_path):
     skills = SkillRegistry()
     skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
-    state = WorkflowState()
-    tool = WorkflowTool(
-        state,
-        Target("http://juice.lab:3000"),
-        skills=skills,
-        evidence_root=tmp_path,
-    )
-
-    missing = await run_workflow_fixture(tool,
-        {"action": "complete_skill", "skill_name": "sql-injection"},
-        None,
-        AlwaysAllow(),
-    )
-    assert "artifacts/sql-injection/juice-lab-3000/results.md" in missing
-    assert "sql-injection" not in state.completed_skills
-
-    legacy_path = tmp_path / "sql-injection/juice-lab-3000/results.md"
-    legacy_path.parent.mkdir(parents=True)
-    legacy_path.write_text("legacy result", encoding="utf-8")
-    legacy_only = await run_workflow_fixture(tool,
-        {"action": "complete_skill", "skill_name": "sql-injection"},
-        None,
-        AlwaysAllow(),
-    )
-    assert "requires artifacts/sql-injection/juice-lab-3000/results.md" in legacy_only
-    assert "sql-injection" not in state.completed_skills
-
+    state = WorkflowState(completed_skills={"sql-injection"})
+    tool = WorkflowTool(state, Target("http://juice.lab:3000"),
+                        skills=skills, evidence_root=tmp_path)
     result_path = tmp_path / "artifacts/sql-injection/juice-lab-3000/results.md"
     result_path.parent.mkdir(parents=True)
-    result_path.touch()
-    empty = await run_workflow_fixture(tool,
-        {"action": "complete_skill", "skill_name": "sql-injection"},
-        None,
-        AlwaysAllow(),
-    )
-    assert "requires artifacts/sql-injection/juice-lab-3000/results.md" in empty
-    assert "sql-injection" not in state.completed_skills
     result_path.write_text("confirmed SQLi result", encoding="utf-8")
-    wrong = await run_workflow_fixture(tool,
-        {
-            "action": "complete_skill",
-            "skill_name": "sql-injection",
-            "artifact_ref": "artifacts/sql-injection/juice-lab/results.md",
-        },
-        None,
-        AlwaysAllow(),
-    )
-    assert "requires artifacts/sql-injection/juice-lab-3000/results.md" in wrong
-
-    completed = json.loads(await run_workflow_fixture(tool,
-        {"action": "complete_skill", "skill_name": "sql-injection"},
-        None,
-        AlwaysAllow(),
-    ))
-    resumed = WorkflowState.from_dict(state.to_dict())
-    repeated = json.loads(await WorkflowTool(
-        resumed,
-        Target("http://juice.lab:3000"),
-        skills=skills,
-        evidence_root=tmp_path,
-    ).run(
-        {"action": "complete_skill", "skill_name": "sql-injection"},
-        None,
-        AlwaysAllow(),
-    ))
-
-    expected = "artifacts/sql-injection/juice-lab-3000/results.md"
-    assert completed["artifact_ref"] == expected
-    assert repeated["artifact_ref"] == expected
-    assert resumed.completed_artifacts == {"sql-injection": expected}
-    assert list(result_path.parent.iterdir()) == [result_path]
+    before = state.to_dict()
+    output = await tool.run({"action": "complete_skill", "skill_name": "sql-injection"},
+                            None, AlwaysAllow())
+    assert "runtime-managed" in output
+    assert "sql-injection" not in tool.completed_skills()
+    assert state.to_dict() == before
+    assert WorkflowState.from_dict(before).completed_skills == {"sql-injection"}
 
 
 @pytest.mark.asyncio

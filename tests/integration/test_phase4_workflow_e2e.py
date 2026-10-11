@@ -327,14 +327,7 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     assert "eyJhbGciOiJIUzI1NiJ9" not in report
     assert "[REDACTED" in report
     assert len(state.validation_results) == 1
-    completed = json.loads(await run_workflow_fixture(workflow,
-        {"action": "complete_skill", "skill_name": "sql-injection"},
-        None,
-        AlwaysAllow(),
-    ))
-    assert completed["artifact_ref"] == (
-        "artifacts/sql-injection/target-test-8443/results.md"
-    )
+    assert "sql-injection" not in state.completed_skills
     assert not (tmp_path / "findings/evidence").exists()
     assert not (tmp_path / "artifacts/findings/evidence").exists()
     assert coverage_path.exists()
@@ -347,6 +340,6 @@ async def test_offline_sqli_pipeline_confirms_one_canonical_redacted_finding(tmp
     )
     resumed = session.load().workflow
     assert resumed.evidence[evidence_id].is_resolvable(tmp_path)
-    assert resumed.completed_artifacts["sql-injection"] == completed["artifact_ref"]
+    assert "sql-injection" not in resumed.completed_artifacts
     resumed_coverage = CoverageStore(str(coverage_path))
     assert len(await resumed_coverage.list()) == 1

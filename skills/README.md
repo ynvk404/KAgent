@@ -56,7 +56,13 @@ The workflow records the artifact's digest and checks that it still exists
 when a linked finding is created. A result with `coverage_sync: pending` needs
 `workflow(sync_coverage)` before it is finding-eligible. Only
 `confirm_finding` writes an official report under `artifacts/findings/`; skill
-`results.md` files remain supporting validation artifacts.
+`results.md` files are optional report/export artifacts. Validation-stage skills
+with declared candidate classes use runtime completion: accepted terminal results,
+intact immutable proof, synchronized coverage, resolved cleanup, and a persisted
+finding for confirmed work. The model does not submit a skill completion receipt.
+Discovery skills retain their required artifacts and `complete_skill` phase gates.
+A custom validation skill's explicit `completion-artifact` remains an operational
+dependency checked by the runtime; do not use it for a presentation-only report.
 
 These are structural checks. The validator playbook and model still judge
 whether the observed proof is sufficient for its vulnerability class.

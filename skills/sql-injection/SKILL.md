@@ -30,7 +30,6 @@ triggers:
     - syntax sensitive
 candidate-classes:
   - sql-injection
-completion-artifact: artifacts/sql-injection/{target}/results.md
 requires:
   - web-input-analysis
 allowed-tools:
@@ -46,6 +45,25 @@ allowed-tools:
 
 # SQL injection playbook
 
+## Runtime completion contract
+
+The runtime derives validation completion from the current objective and target,
+assigned Candidates, accepted terminal ValidationResults, immutable proof integrity,
+coverage synchronization, cleanup, and required finding persistence. A `confirmed`
+result resolves its assigned work only after `confirm_finding` persists it; a valid
+`not-confirmed` result needs no finding. Pending, validating, blocked, deferred,
+browser-required, authorization-required and insufficient-evidence work remains
+outstanding. Stop unsafe or exhausted probes and record the unresolved outcome;
+do not describe it as completed validation.
+
+Do not issue a skill-completion tool call. The runtime tracks each requested goal
+and other assigned work independently; one finding cannot complete unrelated work.
+`results.md` is an optional report/export of persisted results, findings and evidence,
+not a completion gate. If exported, use the documented canonical target path and
+report write failures explicitly; never substitute an arbitrary alternate path.
+Minimal redacted proof artifacts and primary source references remain mandatory for
+both terminal outcomes, even when no results report is exported.
+
 ## Structured workflow contract
 
 `start_validation` returns the Candidate plus a transient `validation_context`:
@@ -60,9 +78,10 @@ permission or proof. Workflow list/prompt rows are summaries; use
 `workflow(action="get_input", input_id="...")` for a selected full canonical
 sanitized input, including after resume or compaction.
 
-Before recording a `confirmed` result, write or update the candidate entry in
-the canonical `artifacts/sql-injection/<target>/results.md`. When that entry contains the
-minimal redacted proof, register this file with
+Before recording either terminal result, save a minimal redacted proof artifact.
+The optional canonical `artifacts/sql-injection/<target>/results.md` report may
+also serve as a proof source when it contains the required evidence. Register
+the proof file with
 `workflow(action="record_evidence", candidate_id="...", evidence_path="...")`
 and use the returned `ev_...` ID in `evidence_refs`. The workflow tool stores
 a redacted, content-addressed snapshot in project-local evidence storage, so
@@ -802,7 +821,7 @@ repair a manifest. If a valid repair is unavailable, record
 
 ### Standard result entry template
 
-Write every candidate's result to `artifacts/sql-injection/<target>/results.md`
+Optionally export every persisted candidate result to `artifacts/sql-injection/<target>/results.md`
 using this exact template, one entry per candidate, appended in the order
 tested:
 
@@ -839,13 +858,13 @@ not exposed, write `unavailable`; never invent a plausible value.
 
 ## Confirm an evidence-backed finding
 
-`sql-injection` first produces tested evidence in `results.md`. For each
+`sql-injection` records accepted results with immutable evidence references. For each
 candidate whose canonical outcome is `confirmed` (with `SQLI-2` or `SQLI-3`
 recorded in `techniques`), call
 `confirm_finding` to persist the canonical finding:
 
 ```
-sql-injection → results.md → confirm_finding → final finding
+sql-injection → accepted ValidationResult + immutable proof → confirm_finding → final finding
 ```
 
 Populate the tool call from the recorded evidence. Include the required
@@ -884,8 +903,8 @@ confirm_finding:
 ```
 
 Keep SQLi-specific details such as level, technique, engine, injection
-context, proof scope, and any separately authorized Phase 3 evidence in
-`results.md` so the finding remains auditable. Do not fill in a rewritten,
+context, proof scope, and any separately authorized Phase 3 evidence in the
+registered proof and optionally exported `results.md` so the finding remains auditable. Do not fill in a rewritten,
 drop-in query fix — the general remediation category above is appropriate;
 a concrete query rewrite is not, since you don't have the application's real
 query.
@@ -897,20 +916,16 @@ administrative access or account takeover unless a separately authorized
 workflow actually validated that access against administrative functionality.
 
 Do not call `confirm_finding` for `not-confirmed`, `blocked`, or `deferred`
-candidates — they stay recorded in `results.md` only. Do not reuse the recon
+candidates — they remain recorded as ValidationResults. Do not reuse the recon
 target identifier as a finding file name or hand-roll a different finding
 format; `confirm_finding` owns canonical finding persistence and naming.
 
 ## Stop conditions
 
-Stop working a candidate when it has reached one of the five outcomes in
-Recording the result and been written to `results.md`.
-
-Stop the skill entirely when every `sql-injection` candidate provided for
-this run has been worked to an outcome and `results.md` is complete. Then call
-`workflow(action="complete_skill", skill_name="sql-injection",
-artifact_ref="artifacts/sql-injection/<target>/results.md")`; runtime rejects completion
-when the canonical artifact is absent or a different path is supplied.
+Stop probing a candidate when its bounded testing reaches a recorded outcome.
+Accepted terminal work is resolved by the runtime contract above; unresolved
+outcomes stop probing but remain outstanding. Persist required confirmed findings
+and resolve cleanup and coverage before describing validation as complete.
 
 Do not: scan for new candidates, run automated SQLi tools by default,
 extract real data or credentials, chain into other vulnerability classes,

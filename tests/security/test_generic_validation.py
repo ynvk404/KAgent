@@ -674,7 +674,9 @@ async def test_f02_direct_stream_respects_generic_completion_obligations(runtime
     agent.client = ReviewCompletionStream()
     agent.streaming_enabled = True
     agent._reconcile_requested_goals()
-    assert goal.status == "tested_confirmed"
+    assert goal.status == ("tested_confirmed" if pending == "none" else "in_progress")
+    if pending != "none":
+        assert pending in (goal.reason or "")
     if synthesis:
         env[4].objective.add_requested_goal("xss")
     collector = collect()
@@ -687,7 +689,7 @@ async def test_f02_direct_stream_respects_generic_completion_obligations(runtime
     else:
         assert "All complete." not in visible
         assert "incomplete" in visible
-        assert collector["events"][-1]["stop_reason"] == "workflow_blocked"
+        assert collector["events"][-1]["stop_reason"] == "workflow_stalled"
         assert agent.history[-1].content == visible
         assert all(m.content != "All complete." for m in agent.history if m.role == "assistant")
 

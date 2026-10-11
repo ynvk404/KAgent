@@ -29,7 +29,7 @@ else:
     BannerData = Any
 
 from src.tools.common.tool_display import display_tool_name
-from src.ui.core.admission import PendingCall, call_metadata, result_issues, issue_category
+from src.ui.core.admission import PendingCall, call_metadata, invocation_call, result_issues, issue_category
 from src.ui.core.outcomes import OutcomeFacts, ProgressRecord, concise_text
 from src.ui.render.sanitize import sanitize_text
 
@@ -99,7 +99,10 @@ class AppState:
     outcome_written: bool = False
     deferred_outcome: str | None = None
     deferred_facts: OutcomeFacts | None = field(default=None, repr=False)
-    pending_calls: tuple[PendingCall, ...] = field(default=(), repr=False)
+    # One bounded correlation ledger, independent of visible activity. Keep
+    # tombstones through Clear/Done/SetBusy/scope changes. Evicted or unknown
+    # correlated results fail closed; they cannot acquire the current scope.
+    call_history: tuple[PendingCall, ...] = field(default=(), repr=False)
     # Buffer incomplete credentials until a complete message/event boundary.
     stream_chunks: tuple[str, ...] = field(default=(), repr=False)
     baseline: OutcomeFacts | None = field(default=None, repr=False)
@@ -110,6 +113,26 @@ class AppState:
     skill_receipts: tuple[tuple[str, str], ...] = field(default=(), repr=False)
     running_skill: str | None = None
     planner_recommendation: tuple[str, str] | None = None
+
+
+    @property
+    def pending_calls(self) -> tuple[PendingCall, ...]:
+        return tuple(call for call in self.call_history if not call.retired and not call.resolved
+                     and call.scope == self.presentation_scope)
+
+
+def _retire_calls(state: AppState) -> tuple[PendingCall, ...]:
+    return tuple(replace(call, retired=True) if not call.retired else call for call in state.call_history)
+
+
+def _remember_call(state: AppState, call: PendingCall) -> tuple[PendingCall, ...]:
+    history = (*state.call_history, call)
+    if len(history) <= 256:
+        return history
+    # Prefer retiring old tombstones over losing a live sibling. If all slots
+    # are live, evict the oldest; its late result will fail closed as unknown.
+    index = next((i for i, item in enumerate(history) if item.retired or item.resolved), 0)
+    return history[:index] + history[index + 1:]
 
 
 def initial_state(banner: str, banner_data: BannerData) -> AppState:
@@ -238,7 +261,7 @@ def reducer(state: AppState, action: Action) -> AppState:
 
         case SetBusy(busy=busy, facts=facts):
             if busy and not state.busy:
-                state = replace(state, issues=(), milestones=(), delivered_results=(), pending_calls=(), outcome_written=False,
+                state = replace(state, issues=(), milestones=(), delivered_results=(), call_history=_retire_calls(state), outcome_written=False,
                                 deferred_outcome=None, deferred_facts=None,
                                 baseline=replace(facts, records=tuple(row for row in facts.records if row.kind != "capture")) if facts else None,
                                 latest_facts=facts,
@@ -249,7 +272,7 @@ def reducer(state: AppState, action: Action) -> AppState:
                            running_tool=state.running_tool if busy else None,
                            running_skill=state.running_skill if busy else None,
                            active_skill=state.active_skill if busy else None,
-                           pending_calls=state.pending_calls if busy else ())
+                           call_history=state.call_history if busy else _retire_calls(state))
 
         case SetApiReady(ready=ready):
             return replace(state, api_ready=ready)
@@ -285,7 +308,7 @@ def reducer(state: AppState, action: Action) -> AppState:
                 clear_gen=state.clear_gen + 1,
                 transcript_revision=state.transcript_revision + 1,
                 stream_chunks=(),
-                pending_calls=(),
+                call_history=_retire_calls(state),
                 issues=(), milestones=(), delivered_results=(), outcome_written=False,
                 presentation_scope="", deferred_outcome=None, deferred_facts=None,
                 baseline=None, latest_facts=None, progress_rows=(), observed=(),
@@ -304,20 +327,41 @@ def reducer(state: AppState, action: Action) -> AppState:
             return _finish_outcome(state, state.deferred_outcome, state.deferred_facts)
 
         case AgentEventAction(event=event, facts=facts):
+            if isinstance(event, SkillActiveEvent) and event.call_id:
+                known = invocation_call(state.call_history, event)
+                if (known is not None and known.retired) or (known is None and event.invocation is not None):
+                    return state
+            if isinstance(event, (ToolCallEvent, ToolResultEvent)):
+                known = invocation_call(state.call_history, event)
+                if isinstance(event, ToolCallEvent) and known is not None:
+                    return state
+                if isinstance(event, ToolResultEvent) and (
+                        (known is not None and (known.retired or known.resolved))
+                        or (known is None and (event.invocation is not None or state.call_history))):
+                    return state
             if state.outcome_written and isinstance(event, (DecisionEvent, SkillActiveEvent, ToolCallEvent,
                                                             AssistantDeltaEvent, AssistantTextEvent)):
                 return state
             if facts and facts.stale_event:
                 if facts.scope == state.presentation_scope:
+                    if isinstance(event, ToolResultEvent):
+                        known = invocation_call(state.call_history, event)
+                        if known is not None:
+                            return replace(state, call_history=tuple(
+                                replace(call, retired=True) if call is known else call for call in state.call_history))
                     return state
-                return replace(state, pending_calls=(), running_tool=None, running_skill=None, active_skill=None,
+                return replace(state, presentation_scope=facts.scope, call_history=_retire_calls(state),
+                               issues=(), milestones=(), delivered_results=(), outcome_written=False,
+                               deferred_outcome=None, deferred_facts=None, baseline=None, latest_facts=facts,
+                               progress_rows=(), observed=(), activated_skills=(), skill_receipts=(), planner_recommendation=None,
+                               running_tool=None, running_skill=None, active_skill=None,
                                phase="waiting-approval" if state.pending_perm else "waiting-user" if state.pending_ask
                                else "answering" if state.busy else "idle")
             if facts and facts.scope != state.presentation_scope:
                 state = replace(state, presentation_scope=facts.scope, issues=(), milestones=(),
                                 delivered_results=(), outcome_written=False, deferred_outcome=None, deferred_facts=None,
                                 baseline=replace(facts, records=tuple(row for row in facts.records if row.kind != "capture")),
-                                latest_facts=facts, progress_rows=(), observed=(), pending_calls=(),
+                                latest_facts=facts, progress_rows=(), observed=(), call_history=_retire_calls(state),
                                 active_skill=None, activated_skills=(), skill_receipts=(), running_tool=None,
                                 running_skill=None, planner_recommendation=None)
             elif facts:
@@ -489,8 +533,8 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                 state = _flush_progress(state)
             elif call.name == "http":
                 state = _flush_selection(state)
-            pending = tuple(item for item in state.pending_calls if item.id != ev.id)
-            return replace(state, pending_calls=(*pending[-255:], call) if ev.id else pending,
+            history = _remember_call(state, call) if ev.id else state.call_history
+            return replace(state, call_history=history,
                            phase="waiting-approval" if state.pending_perm else "waiting-user" if state.pending_ask else "running-tool",
                            running_skill=call.skill if call.skill in state.activated_skills else None,
                            running_tool=sanitize_text(_activity_label(ev.name) +
@@ -498,9 +542,12 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                             if (facts and facts.activity) or call.activity else "")))
 
         case ToolResultEvent():
-            call = next((item for item in state.pending_calls if ev.id and item.id == ev.id and item.name == ev.name), None)
-            pending = tuple(item for item in state.pending_calls if item is not call)
-            state = replace(state, pending_calls=pending,
+            call = invocation_call(state.call_history, ev)
+            if call is not None:
+                state = replace(state, call_history=tuple(
+                    replace(item, resolved=True) if item is call else item for item in state.call_history))
+            pending = state.pending_calls
+            state = replace(state,
                             phase=("idle" if state.outcome_written else "waiting-approval" if state.pending_perm
                                    else "waiting-user" if state.pending_ask else "running-tool" if pending else "answering"),
                             running_skill=pending[-1].skill if pending and pending[-1].skill in state.activated_skills else None,
@@ -540,7 +587,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
             if completed:
                 state = _recover_issues(state, operation, recovery_identity)
                 if call and call.name == "load_skill":
-                    state = replace(state, skill_receipts=(*state.skill_receipts, (call.id, call.skill)))
+                    state = replace(state, skill_receipts=(*state.skill_receipts, (call.invocation.id if call.invocation else call.id, call.skill)))
                 elif ev.name not in {"http", "workflow", "confirm_finding", "read_skill_file", "read_payloads", "browser_capture_status"}:
                     state = replace(state, observed=(*state.observed, ProgressRecord(
                         "operation", ev.id, sanitize_text(display_tool_name(ev.name)))))
@@ -593,10 +640,11 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
             return state if state.pending_calls or state.pending_perm or state.pending_ask else replace(state, phase="planning")
 
         case SkillActiveEvent(name=name):
-            if ev.call_id and (ev.call_id, name) not in state.skill_receipts:
+            receipt_id = ev.invocation.id if ev.invocation else ev.call_id
+            if ev.call_id and (receipt_id, name) not in state.skill_receipts:
                 return state
             if ev.call_id:
-                key = "activation:" + ev.call_id
+                key = "activation:" + receipt_id
                 if key in state.milestones:
                     return state
                 state = replace(state, milestones=(*state.milestones, key))
@@ -612,7 +660,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
 
         case DoneEvent():
             state = replace(state, busy=False, phase="waiting-user" if state.pending_ask else "idle",
-                            running_tool=None, running_skill=None, active_skill=None, pending_calls=())
+                            running_tool=None, running_skill=None, active_skill=None, call_history=_retire_calls(state))
             if ev.stop_reason == "max_steps" and state.pending_ask is not None:
                 return replace(state, deferred_outcome=ev.stop_reason, deferred_facts=facts)
             if state.outcome_written:

@@ -6,6 +6,7 @@ import json
 import re
 from copy import deepcopy
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal, TypeGuard, cast
 from urllib.parse import urljoin, urlsplit
 
@@ -1634,6 +1635,62 @@ class WorkflowState:
                 facts.add(f"finding:{candidate_id}:{fingerprint}")
         return frozenset(facts)
 
+    def validation_completion_error(
+        self, candidate_id: str, *, target_origin: str | None,
+        evidence_root: Path, policy: Any = None,
+    ) -> str | None:
+        """Read-only verdict for assigned validation work, never a skill receipt.
+
+        Assessment acceptance, finding persistence and completion are separate
+        facts. Historical completion markers do not grant any of them.
+        """
+        from .assessment import accepted_result
+
+        objective = self.objective
+        candidate = self.candidates.get(candidate_id)
+        if objective is None or candidate is None:
+            return "validation requires an active objective and candidate"
+        try:
+            origin = normalize_target_origin(target_origin)
+        except ValueError:
+            origin = None
+        if not origin or origin != objective.target_origin:
+            return "active target origin changed"
+        if (not self.candidate_belongs_to_objective(candidate, objective)
+                or candidate_origin(candidate.target) != origin):
+            return "candidate does not belong to the current objective and target"
+        if candidate.endpoint and candidate_origin(urljoin(origin + "/", candidate.endpoint)) != origin:
+            return "candidate endpoint is outside the current target"
+        result = self.latest_result(candidate.id)
+        if result is None or result.outcome not in {"confirmed", "not-confirmed"}:
+            return (result.deferred_reason or result.outcome) if result else "no validation result"
+        if result.objective_id != objective.id:
+            return "latest validation result belongs to another objective"
+        if candidate.status not in {"validated", "dismissed"}:
+            return f"candidate status is {candidate.status}"
+        if any(attempt.get("candidate_id") == candidate.id
+               and attempt.get("objective_id") == objective.id
+               and attempt.get("status") == "active" for attempt in self.attempts.values()):
+            return "validation attempt remains incomplete"
+        if not result.evidence_refs or not self.evidence_matches(candidate.id, result.evidence_refs):
+            return "registered evidence is missing or belongs to another candidate"
+        if not accepted_result(self, candidate, result, policy):
+            return "current accepted assessment is unavailable"
+        if result.assessment_contract_version >= 2:
+            attempt = self.attempts.get(result.attempt_id or "", {})
+            if attempt.get("status") != "completed":
+                return "validation attempt remains incomplete"
+        if any(not self.evidence[ref].is_available_for_resume(evidence_root)
+               for ref in result.evidence_refs):
+            return "registered evidence is unavailable"
+        if result.cleanup_state not in {"not-required", "succeeded"}:
+            return f"mutation cleanup unresolved:{result.cleanup_state}"
+        if result.coverage_synced is False:
+            return "coverage sync pending"
+        if result.outcome == "confirmed" and not self.finding_is_persisted(candidate.id):
+            return "confirmed finding persistence pending"
+        return None
+
     def whole_target_status(
         self,
         *,
@@ -1643,6 +1700,7 @@ class WorkflowState:
         coverage_sync_available: bool,
         invalid_evidence_candidate_ids: frozenset[str] = frozenset(),
         generic_eligible_candidate_ids: frozenset[str] = frozenset(),
+        validation_errors: dict[str, str | None] | None = None,
     ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
         """Return status, actionable work, and blockers for the active objective."""
         objective = self.objective
@@ -1731,6 +1789,31 @@ class WorkflowState:
                 continue
             if result is None or result.outcome not in terminal_outcomes:
                 blockers.append(f"candidate lacks terminal result:{candidate.id}")
+                continue
+            if validation_errors is not None:
+                # Runtime supplies the same authoritative verdict used by
+                # Direct and requested goals. This method projects next work.
+                reason = validation_errors.get(candidate.id, "validation verdict unavailable")
+                if reason == "confirmed finding persistence pending":
+                    actionable.append(f"finding:{candidate.id}")
+                elif reason == "coverage sync pending":
+                    if not candidate.endpoint:
+                        blockers.append(f"coverage sync lacks candidate endpoint:{candidate.id}")
+                    elif coverage_sync_available:
+                        actionable.append(f"coverage-sync:{candidate.id}")
+                    else:
+                        blockers.append(f"coverage sync unavailable:{candidate.id}")
+                elif reason and not reason.startswith("mutation cleanup unresolved:"):
+                    repairable_evidence = reason in {
+                        "registered evidence is missing or belongs to another candidate",
+                        "registered evidence is unavailable",
+                        "current accepted assessment is unavailable",
+                        "latest validation result belongs to another objective",
+                    }
+                    if repairable_evidence and candidate.candidate_class in normalized_validators:
+                        actionable.append(f"revalidate:{candidate.id}")
+                    else:
+                        blockers.append(f"candidate validation unresolved:{candidate.id}:{reason}")
                 continue
             evidence_required = result.outcome == "confirmed" or bool(result.evidence_refs)
             evidence_invalid = (

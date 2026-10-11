@@ -2962,6 +2962,9 @@ def whole_target_agent(
         registry.register(tool)
     skills = SkillRegistry()
     skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    for tool in tools:
+        if isinstance(tool, WorkflowTool) and tool.skills is None:
+            tool.skills = skills
     client = FakeClient(scripted)
     agent = Agent(AgentOptions(
         client=client,
@@ -4039,12 +4042,10 @@ async def test_direct_final_synthesis_rejects_textual_finding_after_last_assessm
     assert malformed not in visible and 'DSML' not in visible
     assert 'persist' in visible.lower() and 'finding' in visible.lower()
     assert visible == agent.history[-1].content
-    if retry_clean:
-        assert visible == clean
-    else:
-        assert 'remain unpersisted as findings' in visible
+    assert 'incomplete' in visible and candidate.id in visible
+    assert 'persistence pending' in visible
     done = collector['events'][-1]
-    assert done.stop_reason == 'final_response'
+    assert done.stop_reason == 'workflow_blocked'
     assert (done.agent_loop_llm_calls, done.final_synthesis_llm_calls) == (1, 2)
 
 

@@ -280,9 +280,8 @@ async def test_new_validation_skills_have_expected_metadata_and_vectors(
         assert {"http", "read_payloads", "workflow", "confirm_finding"} <= set(
             skill.tools
         )
-        assert skill.completion_artifact == (
-            f"artifacts/{skill_name}/{{target}}/results.md"
-        )
+        assert skill.completion_artifact is None
+        assert "Runtime completion contract" in skill.body
         assert validate_skill(skill, known_tools, {item.name for item in shipped_registry.list()}) == []
 
         payload_path = SKILLS_ROOT / skill_name / "payloads.txt"
@@ -310,3 +309,14 @@ def test_discovery_coverage_contract_does_not_instruct_self_attestation(skill_na
     assert 'attestation limitation' in text
     assert 'Never use `skipped` to simulate' in text
     assert 'missing observation' in text
+
+
+def test_all_shipped_validators_use_runtime_completion(shipped_registry):
+    validators = [skill for skill in shipped_registry.list() if skill.stage == "validation"]
+    assert validators
+    for skill in validators:
+        assert skill.candidate_classes, skill.name
+        assert skill.completion_artifact is None, skill.name
+        assert "Runtime completion contract" in skill.body, skill.name
+        assert "complete_skill" not in skill.body, skill.name
+        assert "immutable proof" in skill.body, skill.name

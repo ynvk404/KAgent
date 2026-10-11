@@ -540,6 +540,9 @@ async def test_whole_target_requested_goals_keep_phase_order_and_gate_completion
         candidate.id, "sql-injection", "not-confirmed",
         evidence_refs=[artifact.id], objective_id=objective.id,
     )))
+    phase_agent.tools.register(ProductionWorkflowTool(
+        state, phase_agent.target, skills=skills, evidence_root=tmp_path,
+    ))
     phase_agent._reconcile_requested_goals()
     status, actionable, blockers = phase_agent._whole_target_state()
     assert status == "blocked"

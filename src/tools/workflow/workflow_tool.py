@@ -399,7 +399,7 @@ class WorkflowTool(Tool):
                     return self._typed_result("error: performed phase coverage requires an execution adapter observation")
             result = self._record_phase_coverage(args)
         elif action == "complete_skill":
-            result = self._complete_skill(args)
+            result = self._complete_skill(args, policy)
         elif action == "review_no_candidate":
             result = await self._review_no_candidate(args, prompter, signal)
         elif action == "list":
@@ -1164,7 +1164,79 @@ class WorkflowTool(Tool):
             return json.dumps({"ok": False, "coverage_sync": "pending", "error": str(err)})
         return json.dumps({"ok": True, "coverage_sync": "synced"})
 
-    def _complete_skill(self, args: dict[str, Any]) -> str:
+    def validation_completion_error(self, candidate_id: str, policy=None) -> str | None:
+        """Resolve validator admission, then evaluate authoritative persisted work."""
+        candidate = self.state.candidates.get(candidate_id)
+        if candidate is None:
+            return "unknown candidate"
+        result = self.state.latest_result(candidate_id)
+        route = resolve_validation_route(self.skills, candidate.candidate_class)
+        if result is not None:
+            if result.skill_name == GENERIC_VALIDATOR:
+                if route.kind != "generic" or policy is None:
+                    return "generic validation proof is unavailable under the current route"
+                admission = generic_admission(candidate, self.state, self.skills, self.target, policy)
+                if admission:
+                    return admission
+                objective = self.state.objective
+                if objective and objective.id in policy.generic_validation.retest_objectives:
+                    return "explicit generic validation/retest remains pending"
+            elif route.kind != "expert" or route.skill_name != result.skill_name:
+                return route.reason or "recorded expert validator is no longer uniquely resolvable"
+        if policy is not None and candidate.target and not policy.engagement.is_in_scope(candidate.target):
+            return "candidate is outside current engagement scope"
+        origin = self.target.origin() if self.target else None
+        reason = self.state.validation_completion_error(
+            candidate_id, target_origin=origin.as_url() if origin else None,
+            evidence_root=self.evidence_root, policy=policy,
+        )
+        if reason:
+            return reason
+        assert result is not None
+        if result.skill_name == GENERIC_VALIDATOR:
+            return None
+        # A custom validator may declare a genuine operational artifact. Shipped
+        # validators use immutable proof references and no presentation gate.
+        skill = self.skills.get(result.skill_name) if self.skills else None
+        if skill and skill.completion_artifact:
+            try:
+                expected = completion_artifact_path(skill.completion_artifact, self._active_target())
+                artifact = resolve_canonical_artifact(self.evidence_root, expected)
+                if not artifact.is_file() or artifact.stat().st_size <= 0:
+                    return f"operational artifact unavailable:{expected}"
+            except (OSError, ValueError):
+                return "operational artifact unavailable"
+        return None
+
+    def completed_skills(self, policy=None) -> frozenset[str]:
+        """Derived validation projection plus historical operational receipts.
+
+        Never store synthetic completion flags: new assignments/retests immediately
+        invalidate this projection, while old session markers remain readable.
+        """
+        validators = {
+            skill.name: skill for skill in self.skills.list()
+            if skill.stage == "validation" and skill.candidate_classes
+        } if self.skills else {}
+        completed = self.state.completed_skills - validators.keys()
+        objective = self.state.objective
+        if objective is None:
+            return frozenset(completed)
+        assigned = [c for c in self.state.candidates.values()
+                    if (c.id == objective.candidate_id if objective.mode == "candidate_validation"
+                        else c.objective_id == objective.id)]
+        for name, skill in validators.items():
+            candidates = [c for c in assigned if c.candidate_class in skill.candidate_classes]
+            if not candidates or any(self.validation_completion_error(c.id, policy) for c in candidates):
+                continue
+            if any(goal.candidate_class in skill.candidate_classes
+                   and not any(c.candidate_class == goal.candidate_class for c in candidates)
+                   for goal in objective.requested_goals):
+                continue
+            completed.add(name)
+        return frozenset(completed)
+
+    def _complete_skill(self, args: dict[str, Any], policy=None) -> str:
         skill_name = arg_string(args, "skill_name")
         if not skill_name:
             return "error: complete_skill requires skill_name"
@@ -1173,6 +1245,14 @@ class WorkflowTool(Tool):
             return "error: generic validator is an internal result identifier, not a skill"
         artifact_ref = arg_string(args, "artifact_ref")
         skill = self.skills.get(canonical) if self.skills else None
+        if skill and skill.stage == "validation" and skill.candidate_classes:
+            if artifact_ref:
+                return "error: vulnerability completion is runtime-managed; artifact_ref is not a completion receipt"
+            if canonical not in self.completed_skills(policy):
+                return "error: vulnerability validation is runtime-managed; assigned work remains unresolved"
+            # Compatibility for old callers, with no mutation or artifact receipt.
+            return json.dumps({"ok": True, "skill_name": canonical,
+                               "completion_source": "runtime", "phase": None, "artifact_ref": None})
         objective = self.state.objective
         workflow_phase = (
             self._phase_for_skill(canonical, skill)
@@ -1539,6 +1619,7 @@ class WorkflowTool(Tool):
             for candidate in selected
             if (result := self.state.latest_result(candidate.id)) is not None
         ]
+        completed_skills = self.completed_skills(policy)
         return json.dumps(
             {
                 "ok": True,
@@ -1563,8 +1644,8 @@ class WorkflowTool(Tool):
                     self._input_summary(item)
                     for item in self.state.objective_inputs()
                 ],
-                "completed_skills_total": len(self.state.completed_skills),
-                "completed_skills": sorted(self.state.completed_skills)[
+                "completed_skills_total": len(completed_skills),
+                "completed_skills": sorted(completed_skills)[
                     :MAX_LIST_COMPLETED_SKILLS
                 ],
                 "completed_artifacts": {

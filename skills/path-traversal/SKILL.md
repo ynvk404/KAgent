@@ -19,7 +19,6 @@ candidate-classes:
   - path-traversal
 requires:
   - web-input-analysis
-completion-artifact: artifacts/path-traversal/{target}/results.md
 allowed-tools:
   - http
   - read_payloads
@@ -30,6 +29,25 @@ allowed-tools:
 ---
 
 # Path traversal validation
+
+## Runtime completion contract
+
+The runtime derives validation completion from the current objective and target,
+assigned Candidates, accepted terminal ValidationResults, immutable proof integrity,
+coverage synchronization, cleanup, and required finding persistence. A `confirmed`
+result resolves its assigned work only after `confirm_finding` persists it; a valid
+`not-confirmed` result needs no finding. Pending, validating, blocked, deferred,
+browser-required, authorization-required and insufficient-evidence work remains
+outstanding. Stop unsafe or exhausted probes and record the unresolved outcome;
+do not describe it as completed validation.
+
+Do not issue a skill-completion tool call. The runtime tracks each requested goal
+and other assigned work independently; one finding cannot complete unrelated work.
+`results.md` is an optional report/export of persisted results, findings and evidence,
+not a completion gate. If exported, use the documented canonical target path and
+report write failures explicitly; never substitute an arbitrary alternate path.
+Minimal redacted proof artifacts and primary source references remain mandatory for
+both terminal outcomes, even when no results report is exported.
 
 ## Contract and preconditions
 
@@ -95,9 +113,3 @@ and registered evidence must be valid. Describe only access to the named
 harmless marker, not access to arbitrary files. Recommend canonicalizing the
 resolved path and enforcing that it remains beneath an allow-listed storage
 root.
-
-## Completion
-
-When every handed-off Candidate has a result and the artifact exists, call
-`workflow(action="complete_skill", skill_name="path-traversal",
-artifact_ref="artifacts/path-traversal/<target>/results.md")`.
