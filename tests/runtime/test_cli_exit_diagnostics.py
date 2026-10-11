@@ -248,3 +248,38 @@ async def test_shutdown_failure_still_propagates_without_debug(offline_cli, monk
         await cli.main()
     error = capsys.readouterr().err
     assert "debug session log:" not in error and "HTTP operator grants:" not in error
+
+
+@pytest.mark.asyncio
+async def test_failed_burp_restart_reports_stopped_and_can_reconnect(offline_cli, monkeypatch):
+    cli = offline_cli.cli
+    monkeypatch.setattr(cli.sys, "argv", ["kagent", "--burp"])
+    handles = []
+
+    def start(opts):
+        if opts.port == 9999:
+            raise OSError("fixture port unavailable")
+        handle = SimpleNamespace(port=opts.port, url=f"http://127.0.0.1:{opts.port}",
+                                 token=opts.token, close=Mock())
+        handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(cli, "start_ingest_server", start)
+
+    async def run_app(app):
+        with pytest.raises(RuntimeError, match="Failed to bind port 9999"):
+            await app.start_burp_bridge(9999)
+        status = await app.burp_bridge_status()
+        assert status.status == "not_running" and not status.state.running
+        handles[0].close.assert_called_once()
+        restarted = await app.start_burp_bridge(None)
+        assert restarted.status == "started" and restarted.state.running
+        assert restarted.state.token == handles[0].token
+        assert len(handles) == 2
+        assert (await app.start_burp_bridge(None)).status == "already_running"
+        assert (await app.close_burp_bridge()).status == "stopped"
+        assert (await app.close_burp_bridge()).status == "not_running"
+
+    monkeypatch.setattr(cli.KAgent, "run_async", run_app)
+    assert await cli.main() == 0
+    assert all(handle.close.call_count == 1 for handle in handles)

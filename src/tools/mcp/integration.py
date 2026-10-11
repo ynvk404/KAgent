@@ -700,7 +700,7 @@ async def discover_mcp_tools(server: MCPServerConfig, *, execution_policy: Any =
             wrapped._server = server
             tools.append(wrapped)
         return {"session": session, "tools": tools}
-    except Exception:
+    except BaseException:
         await session.close()
         raise
 

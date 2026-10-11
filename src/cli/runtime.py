@@ -849,6 +849,9 @@ async def main() -> int:
 
             old_port = ingest_handle.port
             ingest_handle.close()
+            # A failed replacement bind must not retain the closed server as
+            # the active bridge or prevent a subsequent reconnect.
+            ingest_handle = None
             ingest_handle = create_bridge(port)
             return BurpBridgeResult(
                 status="restarted",

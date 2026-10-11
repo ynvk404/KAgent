@@ -14,7 +14,7 @@ from src.logger import logger
 from src.version import VERSION
 from .server import start_ingest_server, IngestServerOptions
 from .store import CaptureStore
-from src.redaction.redact import apply_evidence
+from .redacted_view import request_view
 
 log: Any = logger
 
@@ -119,6 +119,11 @@ def format_iso(val: Any) -> Optional[str]:
             "+00:00", "Z"
         )
     return str(val)
+
+
+def format_capture_time(val: Any) -> Optional[str]:
+    """CaptureStore timestamps are milliseconds; format_iso accepts seconds."""
+    return format_iso(val / 1000 if isinstance(val, (int, float)) else val)
 
 
 def mcp_string_arg(arguments: dict[str, Any], name: str) -> Optional[str]:
@@ -251,7 +256,7 @@ async def main() -> int:
                         "requests": get_val(s, "request_count", "requestCount", default=0),
                         "endpoints": get_val(s, "endpoint_count", "endpointCount", default=0),
                         "snapshots": get_val(s, "snapshot_count", "snapshotCount", default=0),
-                        "lastActivityAt": format_iso(
+                        "lastActivityAt": format_capture_time(
                             get_val(s, "last_activity_at", "lastActivityAt")
                         ),
                     },
@@ -269,7 +274,7 @@ async def main() -> int:
                     "No endpoints captured yet. Confirm the extension is running with "
                     "capture enabled and the scope regex matches the target."
                 )
-            return text_result(json.dumps([to_dict(ep) for ep in eps], indent=2))
+            return text_result(json.dumps([request_view(ep) for ep in eps], indent=2))
 
         elif name == "browser_capture_requests":
             limit = mcp_int_arg(args_dict, "limit", 50, 1, 500)
@@ -287,12 +292,14 @@ async def main() -> int:
                     {
                         "id": get_val(r, "id"),
                         "method": get_val(r, "method"),
-                        "url": apply_evidence(get_val(r, "url")),
+                        "url": request_view({"url": get_val(r, "url"),
+                            "request_headers": get_val(r, "request_headers", "requestHeaders"),
+                            "response_headers": get_val(r, "response_headers", "responseHeaders")})["url"],
                         "status": get_val(r, "status"),
                         "type": get_val(r, "type"),
                         "source": get_val(r, "source"),
                         "elapsedMs": get_val(r, "elapsed_ms", "elapsedMs"),
-                        "receivedAt": format_iso(
+                        "receivedAt": format_capture_time(
                             get_val(r, "received_at", "receivedAt")
                         ),
                     }
@@ -309,7 +316,6 @@ async def main() -> int:
                 return text_result(f"error: no request with id {req_id}", is_error=True)
 
             cap = mcp_int_arg(args_dict, "body_max_chars", 4000, 0)
-            from src.browser.redacted_view import request_view
             r_dict = request_view(r)
 
             resp_body = r_dict.get("response_body", r_dict.get("responseBody"))
@@ -321,7 +327,7 @@ async def main() -> int:
 
             recv_at = get_val(r, "received_at", "receivedAt")
             if recv_at:
-                r_dict["receivedAt"] = format_iso(recv_at)
+                r_dict["receivedAt"] = format_capture_time(recv_at)
                 r_dict.pop("received_at", None)
 
             return text_result(json.dumps(r_dict, indent=2))

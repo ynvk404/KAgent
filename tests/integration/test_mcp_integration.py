@@ -34,6 +34,32 @@ class DummyPrompter:
 
 
 @pytest.mark.asyncio
+async def test_cancelled_capture_mcp_discovery_closes_open_session(monkeypatch):
+    entered = asyncio.Event()
+    closed = []
+
+    class Session:
+        async def list_tools(self):
+            entered.set()
+            await asyncio.Future()
+
+        async def close(self):
+            closed.append(True)
+
+    async def open_session(*args, **kwargs):
+        return Session()
+
+    monkeypatch.setattr(MCPSession, "open", open_session)
+    task = asyncio.create_task(mcp_integration.discover_mcp_tools(
+        MCPServerConfig("capture_fixture", "fixture-python", ["-m", "src.browser.mcp_server"])))
+    await asyncio.wait_for(entered.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
 async def test_direct_mcp_cancellation_awaits_inner_call_cleanup():
     started = asyncio.Event()
     stopped = asyncio.Event()
