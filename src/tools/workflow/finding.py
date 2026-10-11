@@ -114,12 +114,9 @@ class ConfirmFindingTool:
 
     def description(self) -> str:
         return (
-            "Write ./artifacts/findings/<slug>.md and show a TUI banner only for "
-            "reproducible confirmed vulnerabilities. Requires a candidate_id "
-            "whose latest result is confirmed and registered evidence passes "
-            "integrity checks. Limit observed_impact to that evidence; state "
-            "untested consequences conditionally in potential_impact. Never "
-            "report theoretical or unverified scanner hits."
+            "Persist reproducible confirmed findings to ./artifacts/findings/<slug>.md with a TUI banner. "
+            "Require candidate_id with latest confirmed result and integrity-checked registered evidence. "
+            "No theoretical/unverified scanner hits."
         )
 
     def schema(self) -> dict:
@@ -134,25 +131,23 @@ class ConfirmFindingTool:
                     "type": "string",
                     "minLength": 1,
                     "description": (
-                        "Candidate ID; latest result must be confirmed and "
-                        "registered evidence must pass integrity checks."
+                        "Returned Candidate ID."
                     ),
                 },
                 "severity": {
                     "type": "string",
                     "enum": list(SEVERITIES),
                     "description": (
-                        "Severity (Bugcrowd VRT "
-                        "P1–P5 → critical/high/medium/low/info)."
+                        "Bugcrowd VRT P1–P5: critical/high/medium/low/info."
                     ),
                 },
                 "url": {
                     "type": "string",
-                    "description": "Exact endpoint URL; origin and path must match Candidate.",
+                    "description": "Exact URL matching Candidate origin/path.",
                 },
                 "parameter": {
                     "type": "string",
-                    "description": "Must match Candidate's parameter when recorded.",
+                    "description": "Match recorded Candidate parameter.",
                 },
                 "payload": {
                     "type": "string",
@@ -160,7 +155,7 @@ class ConfirmFindingTool:
                 },
                 "method": {
                     "type": "string",
-                    "description": "HTTP method; must match Candidate when recorded.",
+                    "description": "Match recorded Candidate HTTP method.",
                 },
                 "response_excerpt": {
                     "type": "string",
@@ -169,14 +164,13 @@ class ConfirmFindingTool:
                 "observed_impact": {
                     "type": "string",
                     "description": (
-                        "Impact demonstrated by linked validation evidence; do not "
-                        "state untested consequences as facts."
+                        "Only impact shown by linked validation evidence; never treat untested consequences as facts."
                     ),
                 },
                 "potential_impact": {
                     "type": "string",
                     "description": (
-                        "State untested consequences conditionally. If none, say "
+                        "Untested consequences are conditional; if none: "
                         "'No additional impact assessed.'"
                     ),
                 },
@@ -191,8 +185,7 @@ class ConfirmFindingTool:
                 "vuln_class": {
                     "type": "string",
                     "description": (
-                        "Canonical Workflow/Coverage class; must match Candidate. "
-                        "CWE/OWASP values are assigned automatically."
+                        "Canonical Workflow/Coverage class matching Candidate; CWE/OWASP auto-assigned."
                     ),
                 },
             },

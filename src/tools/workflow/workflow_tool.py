@@ -151,13 +151,12 @@ class WorkflowTool(Tool):
         return (
             "record_result needs candidate_id, skill_name and outcome. "
             "Runtime owns IDs/scope; record_candidate must omit them and objective_id. "
-            "Use returned IDs and real evidence; omit secrets. "
-            "Only start_validation enters validating. record_evidence accepts candidate_id, "
-            "evidence_path, observation_ids; omit attempt_id. Once usable sources suffice, "
-            "register proof, record_result, then confirm_finding for an accepted confirmed result. "
-            "For an active-attempt conflict, list validating work and record its honest result "
-            "or insufficient-evidence/deferred with a reason before starting another candidate. "
-            "mutation_performed: verified writes; cleanup: separate authority. Samples aren't replay baselines.\n"
+            "Use returned IDs, real evidence; omit secrets. "
+            "Only start_validation enters validating. Usable sources -> record_evidence -> "
+            "record_result -> confirm_finding (accepted confirmed only). "
+            "Active-attempt conflict: list validating work; record its honest result "
+            "or insufficient-evidence/deferred with reason before starting another candidate. "
+            "mutation_performed: verified writes; cleanup needs separate authority. Samples aren't replay baselines.\n"
             '{"action":"record_candidate","candidate_class":"sqli","endpoint":"/login","method":"POST","parameter":"email"}\n'
             '{"action":"start_validation","candidate_id":"<returned candidate.id>"}'
         )
@@ -288,12 +287,12 @@ class WorkflowTool(Tool):
                 for action, fields in ACTION_INPUTS.items()))
         descriptions = {
             'candidate_id': 'Required for record_evidence, start_validation, and record_result.',
-            'attempt_id': 'Runtime reference from start_validation; cannot assign an attempt. record_result only; omit from record_evidence.',
+            'attempt_id': 'Runtime ID from start_validation; cannot assign an attempt. record_result only; omit from record_evidence.',
             'assessment': 'hypothesis,criteria,limitations,completed_attempt,observed_impact,severity.',
             'evidence_path': 'Project proof; shared Candidate headings; parent observation IDs.',
             'request_template': 'Redacted body skeleton; mark {INJECTION_POINT}.',
-            'status': 'Registration/list status; not used by record_result. validating is runtime-owned by start_validation, never request it in record_candidate.',
-            'observation_ids': 'Exact IDs returned by HTTP or authoritative evidence state; same candidate/attempt and request identity. Terminal sources must be complete, untruncated and completed.',
+            'status': 'Registration/list status; not used by record_result. Only start_validation owns validating; never register validating.',
+            'observation_ids': 'Exact HTTP/authoritative evidence IDs matching candidate, attempt and request. Terminal sources: complete, untruncated, completed.',
             'outcome': 'Required for record_result.',
             'related_requests': 'Unique method/URL across roles.',
             'coverage_reason': 'Non-performed: reason; observed: source/limitations.',

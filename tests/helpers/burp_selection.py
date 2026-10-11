@@ -37,34 +37,38 @@ class Operator:
         return self.decision
 
 
-def make_runtime(tmp_path, client=None):
-    skills = Skills()
-    skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
-    target, engagement, workflow, capture = Target(ORIGIN), EngagementState(), WorkflowState(), CaptureStore()
-    engagement.initialize_target(ORIGIN)
+def make_runtime(tmp_path, client=None, *, origin=ORIGIN, session_id='burp-selection',
+                 skills=None, yolo=True, max_steps=None, max_calls=None):
+    """Shared native runtime; defaults preserve capture-selection callers."""
+    if skills is None:
+        skills = Skills()
+        skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
+    target, engagement, workflow, capture = Target(origin), EngagementState(), WorkflowState(), CaptureStore()
+    engagement.initialize_target(origin)
     http = HTTPTool(target, engagement, workflow, capture, validation_registry=skills)
     operator = Operator()
-    prompter = YoloPrompter(operator, True)
-    policy = ExecutionPolicy(engagement, tmp_path)
+    prompter = YoloPrompter(operator, yolo)
+    policy = ExecutionPolicy(engagement, tmp_path, max_calls=max_calls)
     prompter.bind_execution_policy(policy)
     coverage = CoverageStore(str(tmp_path / 'coverage.json'))
-    workflow_tool = WorkflowTool(workflow, target, coverage, skills, tmp_path, 'burp-selection', http_tool=http)
+    workflow_tool = WorkflowTool(workflow, target, coverage, skills, tmp_path, session_id, http_tool=http)
     registry = Registry()
     register_browser_capture_tools(registry.register, capture)
     for tool in (http, workflow_tool, LoadSkillTool(skills), FileWriteTool()):
         registry.register(tool)
     client = client or FakeClient([])
-    store = Store.new_with_id(str(tmp_path / 'sessions'), 'burp-selection')
+    store = Store.new_with_id(str(tmp_path / 'sessions'), session_id)
     agent = Agent(AgentOptions(client, registry, skills, prompter, store, target,
                               workflow=workflow, engagement_state=engagement,
-                              auto_compact_threshold=0, streaming_enabled=False))
+                              auto_compact_threshold=0, streaming_enabled=False, max_steps=max_steps))
     actions = []
     app = SimpleNamespace(agent=agent, dispatch=actions.append, read_config=lambda: {},
                           start_burp_bridge=None, close_burp_bridge=None, burp_bridge_status=None,
                           actions=actions)
     return SimpleNamespace(agent=agent, app=app, capture=capture, target=target, engagement=engagement,
                            policy=policy, registry=registry, client=client, prompter=prompter,
-                           operator=operator, workflow=workflow, workflow_tool=workflow_tool, http=http)
+                           operator=operator, workflow=workflow, workflow_tool=workflow_tool, http=http,
+                           skills=skills, coverage=coverage, store=store)
 
 
 def ingest(runtime, id_='one', *, origin=ORIGIN, path='/search?q=first', kind='burp', **extra):

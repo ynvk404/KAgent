@@ -73,17 +73,14 @@ class HTTPTool(Tool):
 
     def description(self) -> str:
         return (
-            'Send scoped HTTP/S. Phase labels workflow, never permission. Exact requests '
-            'need approval unless an exact-origin lab grant or bounded YOLO policy applies. '
-            'Blocked requests must await operator action; do not reword or retry to bypass. '
-            'Relative paths use /target. TLS verification is disabled. Redirects require '
-            'max_redirects and separate approval per hop; cross-origin redirects stop. '
-            'Use candidate_id to replay a captured baseline, with mutation_value to vary one input. '
-            'Captured credentials require bounded operator approval even in YOLO; captured redirects stop.'
-            ' Body/content/size comparisons need a positive response cap; omit it for the default. '
-            'Terminal evidence needs a cap fitting the complete response within configured limits, not just a marker prefix. '
-            'Truncated observations cannot support terminal evidence. Select complete observations '
-            'already captured rather than adding truncated sources to a sufficient manifest.'
+            'Scoped HTTP/S; relative paths use /target; TLS verification disabled. Phase never grants permission. '
+            'Exact requests need approval unless an exact-origin lab grant or bounded YOLO applies. '
+            'If blocked, await operator action; never reword/retry to bypass. '
+            'Redirects: max_redirects and per-hop approval; stop cross-origin/captured redirects. '
+            'candidate_id replays captured baselines; mutation_value varies one input. '
+            'Captured credentials need bounded operator approval even in YOLO. '
+            'Terminal evidence: complete responses within configured limits, not marker prefixes. '
+            'Reuse complete captures; never add truncated sources to sufficient manifests.'
         )
 
     def schema(self) -> dict:
@@ -109,12 +106,11 @@ class HTTPTool(Tool):
                 'max_redirects': {'type': 'integer', 'minimum': 0, 'maximum': 5},
                 'max_response_bytes': {'type': 'integer', 'minimum': 0, 'maximum': MAX_RESPONSE_BYTE_CAP,
                                        'default': RESPONSE_BYTE_CAP,
-                                       'description': f'Decoded byte cap; default {RESPONSE_BYTE_CAP}. Zero requires '
-                                       'evidence_mode=metadata-only and cannot supply body/content/size comparisons. '
-                                       'Any truncated capture is unusable for terminal evidence.'},
+                                       'description': 'Decoded byte cap; omit for default. Body/content/size comparisons need >0; '
+                                       'zero requires evidence_mode=metadata-only. '
+                                       'Truncated captures cannot support terminal evidence.'},
                 'evidence_mode': {'type': 'string', 'enum': ['body', 'metadata-only'],
-                                  'default': 'body', 'description': 'Evidence needed by this probe. Body includes '
-                                  'content/size comparisons and timing probes requiring response content.'},
+                                  'default': 'body', 'description': 'body: content/size comparisons or timing probes needing response content.'},
             },
             'required': ['phase'],
         }

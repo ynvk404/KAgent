@@ -140,24 +140,16 @@ class ShellTool(Tool):
             )
         return "\n".join(
             (
-                "Run a command via /bin/sh -c. "
-                "Use the built-in http tool for target requests whenever it "
-                "can express them. Bound execution uses the isolated worker and scoped HTTP broker. "
-                "Use shell for local OS utilities or HTTP details the native "
-                "tool cannot express. YOLO auto-approves covered commands; OFF uses normal review. "
-                "Capture concise output — pipe through `head` for huge "
-                "outputs. Do not run interactive commands. Authorized "
-                "engagements only.",
-                "In the isolated worker, the project is read-only at /work (the working directory); "
-                "host paths are unavailable. Persist shell output only under artifacts/worker "
-                "(/work/artifacts/worker). Use file_write/file_edit for permitted project artifacts "
-                "outside that worker output directory, with their normal permission checks.",
-                "Write portable macOS/BSD + Linux commands. Avoid GNU-only "
-                "flags such as `grep -P`; prefer `grep -E`, `awk`, `sed`, "
-                "`perl -ne`, or `jq` for extraction.",
-                "",
-                "Prefer the built-in http tool for ordinary HTTP probes. Use "
-                "semantic discovery tools for bounded path/service discovery; "
+                "Run /bin/sh -c for OS utilities or HTTP details the built-in http tool "
+                "cannot express; prefer http otherwise. Bound execution: isolated worker "
+                "and scoped HTTP broker. YOLO auto-approves covered commands; OFF requires review. "
+                "Authorized engagements only; no interactive commands; concise output (`head` for large output).",
+                "Worker cwd /work: read-only project, no host paths. Write shell output only to "
+                "/work/artifacts/worker. For other permitted project artifacts use file_write/file_edit "
+                "with normal permission checks.",
+                "Use portable macOS/BSD + Linux commands: avoid GNU-only grep -P; "
+                "prefer grep -E, awk, sed, perl -ne or jq.",
+                "Use semantic tools for bounded path/service discovery; "
                 "generic-shell scanners require an explicit user request.",
             )
         )
@@ -261,11 +253,8 @@ class BashTool(ShellTool):
                 "permission, denylist, output truncation)."
             )
         return (
-            "Run a bash command via /bin/bash -c on the local machine. Same "
-            "gating as the shell tool (per-command permission, denylist, "
-            "output truncation). Prefer this over `shell` when you need bash "
-            "features like [[ ]] tests, process substitution <(...), arrays, "
-            "or $'...' quoting."
+            "Run /bin/bash -c; same per-command permission, denylist and output truncation as shell. "
+            "Prefer for bash features: [[ ]] tests, process substitution <(...), arrays or $'...' quoting."
         )
 
 def rewrite_portable_command(command: str) -> str:

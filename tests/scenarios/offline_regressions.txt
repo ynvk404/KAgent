@@ -1,0 +1,15 @@
+# M2 responsibility checkpoint. Run with -p tests.scenarios.offline_checkpoint so the
+# fail-closed guard is installed for THESE tests, including swallowed effects.
+# This explicit mocked-transport list is not the supplied 2944-test checkpoint.
+tests/integration/test_candidate_validation_recovery.py
+tests/integration/test_workflow_checkpoint_artifacts.py
+tests/integration/test_runtime_validation_completion.py
+tests/integration/test_requested_goal_lifecycle.py
+tests/security/test_agent_assessment.py
+tests/security/test_observation_grounding.py
+tests/security/test_generic_validation.py
+tests/security/test_generic_fallback_audit.py
+tests/security/test_execution_policy.py
+tests/integration/test_burp_selection.py
+tests/agent/test_capture_selection.py
+tests/ui/test_burp_commands.py
