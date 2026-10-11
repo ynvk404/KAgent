@@ -2070,7 +2070,12 @@ class Agent:
             if candidate is not None and candidate.baseline_request_ref not in {
                 row.baseline_request_ref for row in selection.requests if row.baseline_request_ref
             }:
-                raise ValueError("Candidate is not bound to the selected capture; record it with the selected baseline reference")
+                raise ValueError(
+                    "Candidate is not bound to the selected capture. For the same captured endpoint/method, "
+                    "record its matching capture references. A different endpoint requires independent "
+                    "operator intent/scope and its own provenance in a subsequent turn without this selection; "
+                    "do not borrow the selected baseline/source references or change selection automatically."
+                )
             return args
         if args.get("action") != "record_candidate":
             return args
@@ -2090,7 +2095,13 @@ class Agent:
                    and row.method.upper() == method.upper()
                    and urlsplit(row.url).path == urlsplit(url).path]
         if len(matches) != 1:
-            raise ValueError("selected capture Candidate binding is ambiguous or mismatched; supply its exact source_ref and baseline_request_ref")
+            raise ValueError(
+                "selected capture Candidate binding is ambiguous or mismatched. "
+                "Exact source_ref/baseline_request_ref disambiguate only a matching endpoint/method. "
+                "A different endpoint cannot be rebound to this capture; preserve the selection, "
+                "report the independent candidate, and obtain appropriate operator intent/scope "
+                "for a subsequent turn without this selection and with independent provenance."
+            )
         selected = matches[0]
         if not selected.baseline_request_ref:
             raise ValueError("selected capture baseline reference unavailable; recapture required")

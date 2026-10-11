@@ -152,6 +152,11 @@ class WorkflowTool(Tool):
             "record_result needs candidate_id, skill_name and outcome. "
             "Runtime owns IDs/scope; record_candidate must omit them and objective_id. "
             "Use returned IDs and real evidence; omit secrets. "
+            "Only start_validation enters validating. record_evidence accepts candidate_id, "
+            "evidence_path, observation_ids; omit attempt_id. Once usable sources suffice, "
+            "register proof, record_result, then confirm_finding for an accepted confirmed result. "
+            "For an active-attempt conflict, list validating work and record its honest result "
+            "or insufficient-evidence/deferred with a reason before starting another candidate. "
             "mutation_performed: verified writes; cleanup: separate authority. Samples aren't replay baselines.\n"
             '{"action":"record_candidate","candidate_class":"sqli","endpoint":"/login","method":"POST","parameter":"email"}\n'
             '{"action":"start_validation","candidate_id":"<returned candidate.id>"}'
@@ -283,11 +288,12 @@ class WorkflowTool(Tool):
                 for action, fields in ACTION_INPUTS.items()))
         descriptions = {
             'candidate_id': 'Required for record_evidence, start_validation, and record_result.',
-            'attempt_id': 'Runtime reference; cannot assign an attempt.',
+            'attempt_id': 'Runtime reference from start_validation; cannot assign an attempt. record_result only; omit from record_evidence.',
             'assessment': 'hypothesis,criteria,limitations,completed_attempt,observed_impact,severity.',
             'evidence_path': 'Project proof; shared Candidate headings; parent observation IDs.',
             'request_template': 'Redacted body skeleton; mark {INJECTION_POINT}.',
-            'status': 'Candidate status; not used by record_result.',
+            'status': 'Registration/list status; not used by record_result. validating is runtime-owned by start_validation, never request it in record_candidate.',
+            'observation_ids': 'Exact IDs returned by HTTP or authoritative evidence state; same candidate/attempt and request identity. Terminal sources must be complete, untruncated and completed.',
             'outcome': 'Required for record_result.',
             'related_requests': 'Unique method/URL across roles.',
             'coverage_reason': 'Non-performed: reason; observed: source/limitations.',
@@ -841,7 +847,19 @@ class WorkflowTool(Tool):
             if not generic and policy is not None and objective is not None:
                 policy.generic_validation.select_expert(candidate)
         except ValueError as err:
-            return f"error: {err}"
+            message = str(err)
+            if message in {"another validation attempt is active", "another generic validation attempt is active"}:
+                message += (
+                    '. Use workflow(action="list", status="validating") to identify the active candidate. '
+                    'Continue that attempt or call record_result for it with its validator skill_name. '
+                    'Use confirmed/not-confirmed only with registered proof and usable primary sources; '
+                    'otherwise use insufficient-evidence or deferred with deferred_reason/notes explaining '
+                    'the limitation (omit evidence_refs/observation_ids when unavailable). '
+                    'An accepted unresolved result releases the attempt but leaves its work outstanding. '
+                    'Then retry start_validation for the intended candidate; do not auto-close unrelated work '
+                    'or attach a new primary sink through related_requests.'
+                )
+            return f"error: {message}"
         return json.dumps({"ok": True, "candidate": candidate.to_dict(),
             "validation_context": context,
             "validator_resolution": "generic" if generic else "unique",

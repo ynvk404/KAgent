@@ -11,8 +11,9 @@ from burp import (
     ITab,
 )
 from java.awt import BorderLayout
+from java.lang import Runnable
 from java.net import URL
-from javax.swing import JPanel, JLabel, JTextField, JButton, JCheckBox, JTextArea, JScrollPane, JMenuItem, BoxLayout
+from javax.swing import JPanel, JLabel, JTextField, JButton, JCheckBox, JTextArea, JScrollPane, JMenuItem, BoxLayout, SwingUtilities
 from java.util import ArrayList
 import base64
 import hashlib
@@ -27,6 +28,14 @@ except ImportError:
 DEFAULT_BASE_URL = "http://127.0.0.1:8888"
 
 
+class _InitializeTab(Runnable):
+    def __init__(self, extender):
+        self.extender = extender
+
+    def run(self):
+        self.extender._initialize_tab()
+
+
 class BurpExtender(IBurpExtender, IContextMenuFactory, IHttpListener, ITab):
     def registerExtenderCallbacks(self, callbacks):
         self.callbacks = callbacks
@@ -37,19 +46,33 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IHttpListener, ITab):
         self.auto_send_repeater = False
         self.auto_sent_keys = set()
         self.auto_sent_order = []
+        self.stdout = callbacks.getStdout()
+        self.stderr = callbacks.getStderr()
 
         callbacks.setExtensionName("KAgent")
         callbacks.registerContextMenuFactory(self)
         callbacks.registerHttpListener(self)
-        callbacks.addSuiteTab(self)
-        self.stdout = callbacks.getStdout()
-        self.stderr = callbacks.getStderr()
+        # Finish UI registration before reporting a successful load instead
+        # of leaving a deferred tab-add task. Never wait on the EDT itself.
+        if SwingUtilities.isEventDispatchThread():
+            self._initialize_tab()
+        else:
+            SwingUtilities.invokeAndWait(_InitializeTab(self))
         self._println("KAgent Burp extension loaded. Start KAgent with --burp.")
+
+    def _initialize_tab(self):
+        self.ui_panel = self._build_ui()
+        self.callbacks.addSuiteTab(self)
 
     def getTabCaption(self):
         return "KAgent"
 
     def getUiComponent(self):
+        # Burp may retrieve the component again when managing its tab layout.
+        # Keep callbacks and widget state attached to the registered panel.
+        return self.ui_panel
+
+    def _build_ui(self):
         panel = JPanel(BorderLayout())
 
         # Tạo một container chính cho phần top, xếp các hàng theo chiều dọc

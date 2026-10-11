@@ -599,6 +599,37 @@ async def test_observed_baseline_write_keeps_cleanup_pending_when_unresolved(run
     assert not state.eligible_for_finding(candidate.id)
 
 
+@pytest.mark.parametrize("outcome", ["insufficient-evidence", "deferred"])
+async def test_active_attempt_conflict_requires_honest_unresolved_closure(runtime, tmp_path, outcome):
+    state, candidate, tool, args, old_id = await setup(runtime, tmp_path, candidate_class="sqli")
+    registry, p, policy, *_ = runtime
+    other = json.loads(await registry.execute("workflow", {"action": "record_candidate",
+        "candidate_class": "sqli", "endpoint": "/filter", "method": "GET", "parameter": "category"}, None, p))
+    cid = other["candidate"]["id"]
+    before = json.loads(json.dumps(state.to_dict()))
+    rejected = await registry.execute("workflow", {"action": "start_validation", "candidate_id": cid}, None, p)
+    assert "another validation attempt is active" in rejected
+    assert "insufficient-evidence" in rejected  # supplemental recovery guidance
+    assert state.to_dict() == before
+    closed = json.loads(await registry.execute("workflow", {"action": "record_result",
+        "candidate_id": candidate.id, "skill_name": "sql-injection", "outcome": outcome,
+        "deferred_reason": "Required repeatable proof unavailable; independent work requested."}, None, p))
+    assert closed["ok"] and not closed["eligible_for_confirm_finding"]
+    assert state.attempts[args["attempt_id"]]["status"] == "unresolved"
+    assert candidate.status == "deferred" and not state.eligible_for_finding(candidate.id)
+    unresolved = state.latest_result(candidate.id)
+    assert unresolved is not None and unresolved.evidence_manifest == []
+    started = json.loads(await registry.execute("workflow", {"action": "start_validation", "candidate_id": cid}, None, p))
+    aid = started["validation_context"]["attempt_id"]
+    assert aid != args["attempt_id"]
+    assert [a["id"] for a in state.attempts.values() if a["status"] == "active"] == [aid]
+    before = state.to_dict()
+    old_sources = await registry.execute("workflow", {"action": "record_evidence", "candidate_id": cid,
+        "evidence_path": "proof.md", "observation_ids": [old_id]}, None, p)
+    assert "ownership mismatch" in old_sources and state.to_dict() == before
+    assert not state.persisted_findings
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('candidate_class,method,payload,status,body', [
     ('xss', 'POST', "<script>document.title='proof'</script>", 200,

@@ -29,10 +29,16 @@ async def test_expert_status_alone_cannot_release_generic_boundary(runtime, tmp_
     args = {"action": "record_candidate", "candidate_class": "header-reflection",
             "endpoint": "/expert", "method": "GET", "parameter": "X-Test",
             "location": "header", "status": "validating"}
-    recorded = json.loads(await env[0].execute("workflow", args, None, env[1]))
+    before = env[4].to_dict()
+    rejected = await env[0].execute("workflow", args, None, env[1])
+    assert rejected.startswith("error:") and env[4].to_dict() == before
+    recorded = json.loads(await env[0].execute("workflow", {k: v for k, v in args.items() if k != "status"}, None, env[1]))
     cid = recorded["candidate"]["id"]
     if source == "restore":
-        env[4].replace_from(WorkflowState.from_dict(env[4].to_dict()))
+        saved = env[4].to_dict()
+        # Historical D1 state remains readable but grants no attempt authority.
+        next(row for row in saved["candidates"] if row["id"] == cid)["status"] = "validating"
+        env[4].replace_from(WorkflowState.from_dict(saved))
     with pytest.raises(ExecutionBlocked, match="generic"):
         await env[0].execute("http", {"url": "/outside-proposal", "phase": "validation"}, None, env[1])
     assert not runtime[4] and not env[3].requests

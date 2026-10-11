@@ -83,7 +83,14 @@ The optional canonical `artifacts/sql-injection/<target>/results.md` report may
 also serve as a proof source when it contains the required evidence. Register
 the proof file with
 `workflow(action="record_evidence", candidate_id="...", evidence_path="...")`
-and use the returned `ev_...` ID in `evidence_refs`. The workflow tool stores
+with the actual supporting `observation_ids` returned by HTTP (or retained in
+authoritative evidence state), and use the returned `ev_...` ID in `evidence_refs`.
+`record_evidence` accepts only `candidate_id`, `evidence_path`, and
+`observation_ids` in addition to `action`; omit `attempt_id`. The attempt ID
+returned by `start_validation` may be supplied to `record_result` as an equality
+check, never assigned by the Agent. An observation is captured traffic, `ev_...`
+is registered immutable proof, and neither is an accepted ValidationResult or a
+persisted finding. The workflow tool stores
 a redacted, content-addressed snapshot in project-local evidence storage, so
 the candidate's proof remains immutable even though the shared `results.md`
 continues to be updated for later candidates. Do not edit the stored snapshot;
@@ -107,6 +114,35 @@ mutation/cleanup state, and any deferred reason. Use `force=true` only when the
 user explicitly requests a retest or the request/input materially changed.
 Only an outcome of `confirmed` is eligible for `confirm_finding`; pass the
 Candidate ID to that tool. All other outcomes stop without confirming.
+
+If another validation attempt is active, use `workflow(action="list",
+status="validating")` to identify its Candidate and continue that attempt or
+submit its honest `record_result` with the matching validator `skill_name`.
+Use `insufficient-evidence` when sources or proof are insufficient, or `deferred`
+when work is postponed, and explain the limitation in `deferred_reason`/`notes`.
+Omit source/proof references when unavailable; never force `confirmed` or
+`not-confirmed` to release ownership. An accepted unresolved result releases
+the active attempt while retaining outstanding work. Only then start the next
+Candidate; do not auto-close an attempt merely because another input appeared.
+
+Selected Burp validation and same-input enrichment retain the matching capture's
+endpoint/method/input identity. A different endpoint or input is independent work:
+use its own Candidate provenance and validation attempt, with appropriate operator
+intent/scope in a subsequent turn without that selection when the binding would
+differ. Do not borrow the selected capture's references or declare a new primary
+sink as a related request of the old attempt. Primary observations must belong
+to the Candidate and attempt actually being assessed.
+During an active attempt, enrich annotations without changing its request context
+or ownership. If request context must change, record the current attempt's honest
+result or unresolved closure first, then update the Candidate and start a new
+attempt. Old observations remain owned by the old attempt.
+
+Send valid JSON with only the fields accepted by the chosen Workflow action.
+After an argument rejection, correct that action once using its schema and
+returned IDs; do not repeat unchanged invalid calls or issue HTTP to fix JSON.
+When complete, correctly owned sources already meet this playbook's evidence
+contract, prioritize proof registration → result submission → required finding
+persistence. Probe again only for an identified missing validation/proof step.
 
 For a boolean-based confirmed result under this playbook, include structured
 `confirmation` evidence. Use `kind: boolean-differential`, one shared
@@ -237,13 +273,18 @@ identifier exactly.
 
 Before starting, you should have:
 
-- `artifacts/web-input-analysis/<target>/candidates.md` containing at least one entry with `suspected_class: sql-injection`;
+- a concrete in-scope endpoint, method, parameter and input location from either
+  prior input analysis or the operator's direct validation request;
 - confirmation the target is still in scope.
 
-If no candidate file exists, or the candidate you're being asked about isn't
-in it, go back to `web-input-analysis` rather than inventing a new candidate
-here. This skill tests candidates that analysis already produced — it does
-not discover new ones.
+For analysis-led work, use the structured Candidate and canonical input context;
+`artifacts/web-input-analysis/<target>/candidates.md`, when present, is an analysis
+handoff. If analysis has not resolved the requested input, return to
+`web-input-analysis` rather than inventing its identity. For a concrete direct
+request, record the operator-supplied input as a Candidate and call
+`start_validation` before active probes; a prior analysis stage or `candidates.md`
+file is not required. This exception supplies bookkeeping, not permission or
+scope expansion. This validator does not independently discover new inputs.
 
 ## Engine identification (before choosing Phase 2 payloads)
 
@@ -698,10 +739,13 @@ and submit insufficient-evidence if it is insufficient. Do not generate fresh
 probes just to repair the manifest; continue validation only for a separately
 identified missing validation step.
 
-If Phase 2 never produces a clear, repeatable signal — including when 2d
-was unavailable and therefore not attempted — that's a valid outcome:
-record it as `not-confirmed` rather than continuing to escalate technique
-or payload variety to force a result.
+If the applicable bounded Phase 2 tests complete without a clear, repeatable
+signal — including when 2d was unavailable and therefore not attempted — record
+`not-confirmed` with usable primary evidence and registered proof. This is a
+bounded negative result, not proof that the endpoint has no SQL injection.
+If testing is blocked, unfinished, or its required sources/proof are unavailable,
+use the corresponding unresolved outcome below rather than forcing a terminal
+assessment or escalating technique/payload variety.
 
 ## Phase 3: Minimal Impact Validation (optional)
 
@@ -742,13 +786,26 @@ extraction by default.
 
 ## Recording the result
 
-Every candidate gets exactly one outcome:
+Every meaningful attempt records one outcome; an explicit later retest may add
+a new result for the same Candidate. Terminal assessments and unresolved closure
+have different meanings:
 
 - `confirmed` with `SQLI-2` in `techniques` — an applicable technique actually available in this environment (boolean, error-based, bounded UNION-based, time-based, or OOB only when its capability and authorization gates pass) produced a clear, repeatable positive signal, bounded per "Bound the proof" above;
 - `confirmed` with `SQLI-3` in `techniques` — SQLI-2 plus a minimal, authorized impact probe from Phase 3 succeeded;
 - `not-confirmed` — the applicable confirmation techniques available in this environment were tried as required by the workflow (per the "stop at the first clear signal" rule — this does not mean every technique must be run against every candidate), and none produced a clear, repeatable SQL injection signal. OOB is included only when its capability check passed and the user authorized it;
 - `blocked` — a probe was intercepted by a WAF, rate-limiter, or challenge page before reaching the application (step 2c); the application itself was never actually tested;
-- `deferred` — behavior indicates NoSQL/operator injection rather than SQL injection (per Scope, above); put that reason in `deferred_reason`.
+- `deferred` — work is postponed, or behavior indicates NoSQL/operator injection
+  rather than SQL injection (per Scope, above); put the reason in `deferred_reason`;
+- `insufficient-evidence` — required sources or reproducible proof are unavailable;
+  explain the limitation. This closes the attempt as unresolved, without claiming
+  a negative test or completed validation.
+
+`confirmed` and `not-confirmed` require an accepted terminal ValidationResult,
+registered immutable proof and usable primary observations. `blocked`, `deferred`
+and `insufficient-evidence` close the attempt as unresolved and keep its work
+outstanding; unavailable proof/source references may be omitted. Runtime also
+supports `browser-required` and `authorization-required` when those prerequisites
+block validation. None of these unresolved outcomes is eligible for a finding.
 
 ### Evidence-to-decision checkpoint
 
@@ -831,7 +888,7 @@ tested:
 - **candidate_id:** <structured Workflow Candidate ID>
 - **timestamp:** <ISO 8601 UTC timestamp when this entry was recorded, e.g. 2026-08-27T09:14:32Z>
 - **agent_session_id:** <identifier for the current agent run/session, for audit-trail correlation with logs elsewhere>
-- **outcome:** <confirmed | not-confirmed | blocked | deferred>
+- **outcome:** <confirmed | not-confirmed | blocked | deferred | insufficient-evidence | browser-required | authorization-required>
 - **techniques:** <SQLI-2 | SQLI-3 | technique attempted>
 - **deferred_reason:** <required when outcome is deferred>
 - **sqli_level:** <1 | 2 | 3 | none>
@@ -916,7 +973,9 @@ administrative access or account takeover unless a separately authorized
 workflow actually validated that access against administrative functionality.
 
 Do not call `confirm_finding` for `not-confirmed`, `blocked`, or `deferred`
-candidates — they remain recorded as ValidationResults. Do not reuse the recon
+candidates, or for any other unresolved outcome such as `insufficient-evidence`,
+`browser-required` or `authorization-required` — they remain recorded as
+ValidationResults. Do not reuse the recon
 target identifier as a finding file name or hand-roll a different finding
 format; `confirm_finding` owns canonical finding persistence and naming.
 

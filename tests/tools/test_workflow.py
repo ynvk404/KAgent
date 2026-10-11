@@ -29,6 +29,84 @@ from src.workflow.goals import RequestedGoal
 from tests.helpers.workflow import record_completed_phase, record_phase_coverage_for_test
 
 
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("enrich", [False, True])
+async def test_record_candidate_cannot_claim_validation_before_start(existing, enrich):
+    state = WorkflowState()
+    tool = WorkflowTool(state, Target("https://target.test"))
+    args = {"action": "record_candidate", "candidate_class": "sqli",
+            "endpoint": "/product", "method": "GET", "parameter": "productId"}
+    if existing:
+        assert json.loads(await tool.run(args, None, AlwaysAllow()))["ok"]
+    before = state.to_dict()
+    rejected = await tool.run({**args, "status": "validating",
+                              **({"source_ref": "independent-source"} if enrich else {})},
+                             None, AlwaysAllow())
+    assert rejected.startswith("error:")
+    assert state.to_dict() == before
+    assert not state.attempts
+
+
+async def test_record_candidate_preserves_owned_validation_and_restored_history():
+    from src.workflow.assessment import attempt_owner
+    state = WorkflowState()
+    tool = WorkflowTool(state, Target("https://target.test"), session_id="fixture")
+    args = {"action": "record_candidate", "candidate_class": "sqli",
+            "endpoint": "/product", "method": "GET", "parameter": "productId"}
+    cid = json.loads(await tool.run(args, None, AlwaysAllow()))["candidate"]["id"]
+    started = json.loads(await tool.run({"action": "start_validation", "candidate_id": cid},
+                                       None, AlwaysAllow()))
+    aid = started["validation_context"]["attempt_id"]
+    enriched = json.loads(await tool.run({**args, "signals": ["more context"]}, None, AlwaysAllow()))
+    assert not enriched["created"] and enriched["candidate"]["status"] == "validating"
+    assert tool.target is not None
+    owner = attempt_owner(state, aid, tool.evidence_epoch, tool.target.revision, "fixture")
+    assert owner is not None and owner["candidate_id"] == cid
+    saved = state.to_dict()
+    restored = WorkflowState.from_dict(saved)
+    assert restored.candidates[cid].status == "validating"
+    assert restored.attempts[aid]["status"] == "interrupted"
+    assert not restored.validation_results and not restored.eligible_for_finding(cid)
+    assert state.to_dict() == saved
+    resumed_tool = WorkflowTool(restored, tool.target, session_id="fixture")
+    restarted = json.loads(await resumed_tool.run({"action": "start_validation", "candidate_id": cid},
+                                                 None, AlwaysAllow()))
+    fresh_aid = restarted["validation_context"]["attempt_id"]
+    assert fresh_aid != aid and restored.attempts[aid]["status"] == "interrupted"
+    assert attempt_owner(restored, aid, tool.evidence_epoch, tool.target.revision, "fixture") is None
+    owner = attempt_owner(restored, fresh_aid, resumed_tool.evidence_epoch, tool.target.revision, "fixture")
+    assert owner is not None and owner["candidate_id"] == cid
+    assert len([a for a in restored.attempts.values() if a["status"] == "active"]) == 1
+
+
+@pytest.mark.parametrize("context", [
+    {"source_ref": "capture:additional"},
+    {"content_type": "application/json"},
+    {"request_template": "productId={INJECTION_POINT}"},
+])
+async def test_active_candidate_context_enrichment_cannot_invalidate_attempt_owner(context):
+    from src.workflow.assessment import attempt_owner
+    state = WorkflowState()
+    target = Target("https://target.test")
+    tool = WorkflowTool(state, target, session_id="fixture")
+    args = {"action": "record_candidate", "candidate_class": "sqli", "endpoint": "/product",
+            "method": "GET", "parameter": "productId", "baseline_request_ref": "capture:baseline"}
+    cid = json.loads(await tool.run(args, None, AlwaysAllow()))["candidate"]["id"]
+    started = json.loads(await tool.run({"action": "start_validation", "candidate_id": cid}, None, AlwaysAllow()))
+    aid = started["validation_context"]["attempt_id"]
+    before = state.to_dict()
+    rejected = await tool.run({**args, **context}, None, AlwaysAllow())
+    assert rejected.startswith("error:")
+    assert state.to_dict() == before
+    assert attempt_owner(state, aid, tool.evidence_epoch, target.revision, "fixture") is not None
+    closed = json.loads(await tool.run({"action": "record_result", "candidate_id": cid,
+        "skill_name": "sql-injection", "outcome": "deferred", "deferred_reason": "Request context update needed."}, None, AlwaysAllow()))
+    assert closed["ok"] and state.attempts[aid]["status"] == "unresolved"
+    enriched = json.loads(await tool.run({**args, **context}, None, AlwaysAllow()))
+    assert not enriched["created"] and enriched["candidate"]["id"] == cid
+    assert enriched["candidate"]["status"] != "validating"
+
+
 @pytest.mark.asyncio
 async def test_no_candidate_review_requires_closed_inventory_and_never_creates_test_records(tmp_path):
     objective = WorkflowObjective(

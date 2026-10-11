@@ -48,6 +48,25 @@ class _ArrayList(list):
         self.append(item)
 
 
+class _SwingUtilities:
+    """Model EDT dispatch only; this does not render Swing or Burp windows."""
+
+    on_edt = False
+
+    @classmethod
+    def isEventDispatchThread(cls):
+        return cls.on_edt
+
+    @classmethod
+    def invokeAndWait(cls, runnable):
+        assert not cls.on_edt, "cannot invokeAndWait from the EDT"
+        cls.on_edt = True
+        try:
+            runnable.run()
+        finally:
+            cls.on_edt = False
+
+
 def _make_module(name, **attrs):
     module = types.ModuleType(name)
     for key, value in attrs.items():
@@ -76,10 +95,12 @@ def _load_extension():
         )
     }
     swing["BoxLayout"] = type("BoxLayout", (_SwingComponent,), {"Y_AXIS": 1})
+    swing["SwingUtilities"] = _SwingUtilities
     stubs = {
         "burp": burp,
         "java": _make_module("java"),
         "java.awt": _make_module("java.awt", BorderLayout=border_layout),
+        "java.lang": _make_module("java.lang", Runnable=type("Runnable", (object,), {})),
         "java.net": _make_module("java.net", URL=type("URL", (object,), {})),
         "javax": _make_module("javax"),
         "javax.swing": _make_module("javax.swing", **swing),
@@ -144,10 +165,18 @@ def _components(root):
 @pytest.fixture
 def extender():
     registrations = []
+    tab_components = []
+
+    def add_suite_tab(obj):
+        # Exercise the actual ITab getters at registration, not just a count.
+        tab_components.append((obj.getTabCaption(), obj.getUiComponent()))
+        registrations.append(("tab", obj))
+
     callbacks = types.SimpleNamespace(
         TOOL_PROXY=1,
         TOOL_REPEATER=2,
         registrations=registrations,
+        tab_components=tab_components,
         getHelpers=lambda: types.SimpleNamespace(
             analyzeRequest=lambda service, raw: _traffic_info(raw),
             analyzeResponse=_traffic_info,
@@ -155,13 +184,12 @@ def extender():
         setExtensionName=lambda name: registrations.append(("name", name)),
         registerContextMenuFactory=lambda obj: registrations.append(("context", obj)),
         registerHttpListener=lambda obj: registrations.append(("http", obj)),
-        addSuiteTab=lambda obj: registrations.append(("tab", obj)),
+        addSuiteTab=add_suite_tab,
         getStdout=Mock,
         getStderr=Mock,
     )
     instance = BurpExtender()
     instance.registerExtenderCallbacks(callbacks)
-    instance.getUiComponent()
     # Jython's byte strings are str; use CPython bytes for the same traffic.
     instance._raw_bytes = bytes
     return instance

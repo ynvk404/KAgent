@@ -1093,6 +1093,14 @@ class WorkflowState:
         )
 
     def add_candidate(self, candidate: Candidate, *, input_id: str | None = None) -> tuple[Candidate, bool]:
+        # Candidate registration/enrichment cannot assert execution ownership.
+        # Only start_validation creates an attempt and enters validating;
+        # hydration restores historical state directly, outside this boundary.
+        if candidate.status == "validating":
+            raise ValueError(
+                "validating is runtime-owned; record_candidate must omit status or use queued, "
+                "then call start_validation with the returned candidate_id"
+            )
         if input_id is not None:
             self.validate_input_candidate(input_id, candidate)
         existing = self.candidates.get(candidate.id)
@@ -1111,6 +1119,18 @@ class WorkflowState:
             for item in self.attack_surface_inputs.values():
                 if existing.id in item.candidate_ids:
                     self.validate_input_candidate(item.id, prospective)
+            if existing.status == "validating":
+                from .assessment import candidate_binding
+                binding = candidate_binding(prospective)
+                if any(attempt.get("status") == "active"
+                       and attempt.get("candidate_id") == existing.id
+                       and attempt.get("candidate_binding") != binding
+                       for attempt in self.attempts.values()):
+                    raise ValueError(
+                        "active validation request context cannot change during candidate enrichment; "
+                        "continue the current attempt or record its honest unresolved result, "
+                        "then update context and call start_validation for a new attempt"
+                    )
             merged = _merge_compatible_context(
                 existing,
                 candidate,

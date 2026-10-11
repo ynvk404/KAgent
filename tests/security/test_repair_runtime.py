@@ -28,6 +28,7 @@ from src.target.target import Target
 from src.workflow.assessment import accepted_result
 from tests.security.test_agent_assessment import ASSESSMENT
 from src.workflow.state import Candidate, WorkflowObjective, WorkflowState
+from tests.security.test_execution_policy import runtime, ORIGIN, REAL_CLIENT
 from src.llm.runtime.validation_budget import ValidationBudget, ValidationBudgetExceeded, BudgetTransport
 
 
@@ -39,6 +40,21 @@ class Operator:
     async def ask(self, request, signal=None):
         self.calls += 1
         return self.decision
+
+
+@pytest.fixture
+def sqli_runtime(runtime, monkeypatch):
+    """Native workflow dispatch with the same fixture bodies, without sockets."""
+    registry, p, policy, operator, requests, _, _ = runtime
+
+    def handler(request):
+        requests.append(request)
+        rows = [{'id': 'TEST_ONLY', 'name': 'fixture'}] if '1=1' in request.url.params.get('q', '') else []
+        return httpx.Response(200, json={'data': rows}, request=request)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: REAL_CLIENT(
+        transport=httpx.MockTransport(handler), **kwargs))
+    return registry, p, policy, operator, ORIGIN, requests
 
 
 @pytest.fixture
@@ -150,8 +166,8 @@ async def test_real_stdio_mcp_startup_and_scoped_call_yolo_on_off(lab):
 
 
 @pytest.mark.asyncio
-async def test_production_sqli_chain_and_protected_certificate_resume(lab, tmp_path):
-    registry, p, policy, operator, origin, requests = lab
+async def test_production_sqli_chain_and_protected_certificate_resume(sqli_runtime, tmp_path):
+    registry, p, policy, operator, origin, requests = sqli_runtime
     journal = tmp_path / '.kagent/permissions/repair-session.json'
     policy.load_journal(journal)
     workflow = WorkflowState()
@@ -182,19 +198,19 @@ async def test_production_sqli_chain_and_protected_certificate_resume(lab, tmp_p
     assert not restored._receipts and restored.used == policy.used
     candidate.parameter = 'changed'
     assert not accepted_result(workflow, candidate, workflow.latest_result(candidate.id), restored)
-    assert len(requests) == 4 and operator.calls == 0
+    assert len(requests) == 4 and not operator.requests
 
 
 @pytest.mark.asyncio
-async def test_boolean_sqli_runtime_admits_sources_without_four_observation_semantic_gate(lab, tmp_path):
-    registry, p, policy, _, origin, requests = lab
+async def test_boolean_sqli_runtime_admits_sources_without_four_observation_semantic_gate(sqli_runtime, tmp_path):
+    registry, p, policy, _, origin, requests = sqli_runtime
     state = WorkflowState(objective=WorkflowObjective(
         id='sqli-assessment', mode='whole_target', target_origin=origin,
     ))
     candidate, _ = state.add_candidate(Candidate(
         candidate_class='sql-injection', target=origin, endpoint='/search',
         method='GET', parameter='q', location='query',
-        objective_id='sqli-assessment', status='validating',
+        objective_id='sqli-assessment',
     ))
     skills = SkillRegistry()
     skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
@@ -227,14 +243,18 @@ async def test_boolean_sqli_runtime_admits_sources_without_four_observation_sema
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('technique', ['error-based', 'time-based'])
-async def test_other_sqli_techniques_without_sources_reject_terminal(lab, tmp_path, technique):
-    registry, p, _, _, origin, _ = lab
+async def test_other_sqli_techniques_without_sources_reject_terminal(sqli_runtime, tmp_path, technique):
+    registry, p, _, _, origin, _ = sqli_runtime
     state = WorkflowState()
     candidate, _ = state.add_candidate(Candidate(
         candidate_class='sql-injection', target=origin, endpoint='/search',
-        method='GET', parameter='q', location='query', status='validating',
+        method='GET', parameter='q', location='query',
     ))
-    registry.register(WorkflowTool(state, target=Target(origin), evidence_root=tmp_path))
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
+    registry.register(WorkflowTool(state, target=Target(origin), skills=skills, evidence_root=tmp_path))
+    assert json.loads(await registry.execute('workflow', {
+        'action': 'start_validation', 'candidate_id': candidate.id}, None, p))['ok']
     (tmp_path / 'proof.txt').write_text('Bounded unverified SQLi attempt.')
     ref = json.loads(await registry.execute('workflow', {
         'action': 'record_evidence', 'candidate_id': candidate.id,

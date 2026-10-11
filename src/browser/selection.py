@@ -31,7 +31,12 @@ validation_context and native HTTP replay checks; if unavailable, report the blo
 and request recapture. Follow the user's analysis/testing intent. Selection alone
 does not choose an input, create a Candidate, authorize HTTP, or request batch tests.
 Use the existing Workflow and validators after resolving the relevant inputs.
-When recording a Candidate, carry its exact source_ref and baseline_request_ref.
+For direct validation or same-input enrichment of a matching endpoint/method,
+carry its exact source_ref and baseline_request_ref when recording a Candidate.
+A different endpoint is independent discovery, not enrichment of this capture:
+do not borrow these references, rebind the capture, change selection, or broaden scope.
+Report the new input and obtain appropriate operator intent/scope for independent
+testing in a subsequent turn without this selection, using its own provenance.
 Use that Candidate with native HTTP replay for baseline reads and mutations;
 do not replace a captured baseline with a fresh URL-only request.
 Distinguish selected requests, detail reads, and evidenced analysis/validation.

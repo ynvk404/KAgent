@@ -110,9 +110,11 @@ class TestBuildSystemPrompt:
                 candidate_class="idor",
                 target="https://target.test",
                 endpoint="/validating",
-                status="validating",
             )
         )
+        from src.workflow.assessment import start_attempt
+        start_attempt(workflow, validating, "fixture", "fixture-epoch")
+        workflow.set_candidate_status(validating.id, "validating")
 
         rendered = render_workflow(workflow)
 

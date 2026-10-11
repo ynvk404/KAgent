@@ -34,6 +34,19 @@ def make_candidate(**changes) -> Candidate:
     return Candidate(**values)
 
 
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("enrich", [False, True])
+def test_registration_rejects_runtime_owned_validating_atomically(existing, enrich):
+    state = WorkflowState()
+    if existing:
+        state.add_candidate(make_candidate())
+    before = state.to_dict()
+    proposal = make_candidate(status="validating", **({"source_ref": "capture:extra"} if enrich else {}))
+    with pytest.raises(ValueError, match="validating is runtime-owned"):
+        state.add_candidate(proposal)
+    assert state.to_dict() == before and not state.attempts
+
+
 def test_candidate_normalizes_and_has_stable_semantic_identity():
     candidate = make_candidate()
     same = make_candidate(
@@ -1263,7 +1276,12 @@ def test_result_requires_known_candidate_and_valid_values():
 
 def test_workflow_round_trip_and_safe_malformed_degradation():
     state = WorkflowState(current_phase="validation")
-    candidate, _ = state.add_candidate(make_candidate(status="validating"))
+    candidate, _ = state.add_candidate(make_candidate())
+    # Model the runtime start separately from candidate registration.
+    from src.workflow.assessment import start_attempt
+    attempt = start_attempt(state, candidate, "fixture", "fixture-epoch")
+    state.set_candidate_status(candidate.id, "validating")
+    attempt["status"] = "completed"
     state.add_validation_result(
         ValidationResult(
             candidate.id,
