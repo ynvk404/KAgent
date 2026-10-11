@@ -91,7 +91,12 @@ class PermissionModal:
         elif key == "n":
             self.req.resolve(Decision.DENY)
 
-    def render(self) -> RenderableType:
+    def instructions(self) -> Text:
+        keys = ("y allow once · a trust for session · n deny · Esc cancel"
+                if self._supports_reuse() else "y allow once · n deny · Esc cancel")
+        return Text(keys, style=MUTED)
+
+    def render(self, *, include_instructions: bool = True) -> RenderableType:
 
         req = self.req
         supports_reuse = self._supports_reuse()
@@ -129,10 +134,6 @@ class PermissionModal:
         if action is None and show_detail:
             parts.extend((Text(""), Text(redact(req.detail))))
 
-        permission_keys = (
-            "y allow once · n deny · Esc cancel"
-            if not supports_reuse
-            else "y allow once · a trust for session · n deny · Esc cancel"
-        )
-        parts.extend((Text(""), Text(permission_keys, style=MUTED)))
+        if include_instructions:
+            parts.extend((Text(""), self.instructions()))
         return Group(*parts)

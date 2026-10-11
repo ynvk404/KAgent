@@ -36,7 +36,8 @@ class _TranscriptHarness(App):
 
     def write_entry(self, entry: TranscriptEntry) -> None:
         writer = _RichLogWriter(self.transcript)
-        transcript = Transcript(out=cast(IO[str], writer), width=writer.content_width, write_banner=lambda _: None)
+        transcript = Transcript(out=cast(IO[str], writer), width=writer.content_width, write_banner=lambda _: None,
+                                write_line=writer.write_line)
         transcript.flush([entry], BannerData(provider="test", model="test", cwd="."), 0)
 
 

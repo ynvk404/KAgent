@@ -21,6 +21,7 @@ from src.workflow.state import (
     VALIDATION_OUTCOMES,
     ValidationResult,
     WorkflowObjective,
+    WorkflowPhase,
     WorkflowState,
     validation_result_fingerprint,
 )
@@ -1362,8 +1363,12 @@ async def test_phase_readiness_matches_completion_gate_for_artifact_coverage_and
     await rejected("requires " + ref)
     artifact.write_text("inventory", encoding="utf-8")
     await rejected("recon must complete")
+    recon_ref = "artifacts/recon/target-test/summary.md"
+    recon_artifact = tmp_path / recon_ref
+    recon_artifact.parent.mkdir(parents=True)
+    recon_artifact.write_text("bounded recon fixture", encoding="utf-8")
     record_completed_phase(state, "recon", objective_id="objective-active",
-                           target_origin="https://target.test", artifact_ref="artifacts/recon.md")
+                           target_origin="https://target.test", artifact_ref=recon_ref)
     await rejected("explicit coverage")
     await record_phase_coverage_for_test(tool, "enumeration")
     state.record_phase_coverage("enumeration", "active_content_discovery", "failed",
@@ -1408,9 +1413,16 @@ async def test_input_analysis_readiness_requires_input_resolution_or_explicit_no
     artifact.write_text("analysis", encoding="utf-8")
     assert "enumeration must complete" in tool.phase_completion_readiness(
         "web-input-analysis", no_inputs_discovered=True)["reason"]
-    for phase in ("recon", "enumeration"):
+    prerequisite_artifacts: tuple[tuple[WorkflowPhase, str], ...] = (
+        ("recon", "artifacts/recon/target-test/summary.md"),
+        ("enumeration", "artifacts/web-enumeration/target-test/inventory.md"),
+    )
+    for phase, prerequisite_ref in prerequisite_artifacts:
+        prerequisite_artifact = tmp_path / prerequisite_ref
+        prerequisite_artifact.parent.mkdir(parents=True)
+        prerequisite_artifact.write_text("bounded discovery fixture", encoding="utf-8")
         record_completed_phase(state, phase, objective_id="objective-active",
-                               target_origin="https://target.test", artifact_ref=f"artifacts/{phase}.md")
+                               target_origin="https://target.test", artifact_ref=prerequisite_ref)
     assert "no_inputs_discovered=true" in tool.phase_completion_readiness(
         "web-input-analysis")["reason"]
     readiness = tool.phase_completion_readiness("web-input-analysis", no_inputs_discovered=True)

@@ -89,6 +89,30 @@ ACTION_REQUIRED = {
     'complete_skill': ('skill_name',),
     'review_no_candidate': ('goal_id',),
 }
+ACTION_INPUTS = {
+    'get_input': ('input_id',),
+    # Legacy ownership fields are equality assertions; source is an ignored
+    # informational label retained for existing validation-feedback callers.
+    'record_input': ('objective_id', 'target_origin', 'target', 'endpoint', 'method', 'parameter',
+                     'location', 'input_type', 'content_type', 'sample_payload',
+                     'baseline_request_ref', 'auth_context_ref', 'source_ref', 'source'),
+    'set_input_disposition': ('input_id', 'disposition', 'disposition_reason'),
+    'link_input_candidate': ('input_id', 'candidate_id'),
+    'record_candidate': ('candidate_class', 'target', 'endpoint', 'method', 'parameter', 'location',
+                         'test_case', 'priority', 'signals', 'baseline_request_ref', 'auth_context_ref',
+                         'content_type', 'request_template', 'source_ref', 'source_skill', 'status',
+                         'input_id', 'current_phase'),
+    'record_evidence': ('candidate_id', 'evidence_path', 'observation_ids'),
+    'start_validation': ('candidate_id', 'probe', 'related_requests', 'assessment'),
+    'record_result': ('candidate_id', 'skill_name', 'outcome', 'attempt_id', 'evidence_refs',
+                      'observation_ids', 'techniques', 'repeatable', 'confirmation', 'mutation_performed',
+                      'cleanup_status', 'cleanup_state', 'deferred_reason', 'notes', 'assessment', 'force'),
+    'sync_coverage': ('candidate_id',),
+    'record_phase_coverage': ('phase', 'coverage_dimension', 'coverage_status', 'coverage_reason'),
+    'complete_skill': ('skill_name', 'artifact_ref', 'no_inputs_discovered', 'current_phase'),
+    'review_no_candidate': ('goal_id', 'artifact_ref'),
+    'list': ('candidate_id', 'status', 'candidate_class', 'limit'),
+}
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
 
 
@@ -126,21 +150,21 @@ class WorkflowTool(Tool):
     def description(self) -> str:
         return (
             "record_result needs candidate_id, skill_name and outcome. "
-            "Direct start_validation gives Candidate context; whole-target get_input uses record_input/list input_id. "
-            "Evidence needs real sources; performed phases need adapters."
+            "Runtime owns IDs/scope; record_candidate must omit them and objective_id. "
+            "Use returned IDs and real evidence; omit secrets. "
+            "mutation_performed: verified writes; cleanup: separate authority. Samples aren't replay baselines.\n"
+            '{"action":"record_candidate","candidate_class":"sqli","endpoint":"/login","method":"POST","parameter":"email"}\n'
+            '{"action":"start_validation","candidate_id":"<returned candidate.id>"}'
         )
 
     def schema(self) -> dict[str, Any]:
         optional_string = {"type": "string"}
-        return {
+        schema = {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": list(ACTIONS),
-                    "description": 'Required fields: ' + '; '.join(
-                        action + '(' + ','.join(fields) + ')' for action, fields in ACTION_REQUIRED.items())},
+                "action": {"type": "string", "enum": list(ACTIONS)},
                 "candidate_id": {
                     "type": "string",
-                    "description": "Required for record_evidence, start_validation, and record_result.",
                 },
                 "goal_id": {
                     "type": "string",
@@ -153,27 +177,23 @@ class WorkflowTool(Tool):
                         "method": {"type": "string", "enum": ['GET', 'POST', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'DELETE']},
                         "url": {"type": "string", "minLength": 1, "maxLength": 2000},
                         "required": {"type": "boolean"}},
-                    "required": ['role', 'method', 'url'], "additionalProperties": False},
-                    "description": "Unique method/URL, including across roles; merge duplicates."},
-                "assessment": {"type": "object", "description": "Bounded hypothesis, criteria, limitations, completed_attempt, observed_impact and severity."},
+                    "required": ['role', 'method', 'url'], "additionalProperties": False}},
+                "assessment": {"type": "object"},
                 "input_id": optional_string,
                 "input_type": optional_string,
                 "content_type": {
                     "type": "string",
                     "maxLength": 200,
-                    "description": "Observed request media type.",
                 },
                 "sample_payload": {
                     "type": "string",
                     "maxLength": 4000,
-                    "description": "Redacted request body skeleton.",
                 },
                 "disposition": {"type": "string", "enum": sorted(INPUT_DISPOSITIONS)},
                 "disposition_reason": optional_string,
                 "candidate_class": optional_string,
                 "target": {
                     "type": "string",
-                    "description": "Candidate target; record_input uses runtime scope.",
                 },
                 "endpoint": optional_string,
                 "method": optional_string,
@@ -181,18 +201,12 @@ class WorkflowTool(Tool):
                 "location": optional_string,
                 "test_case": {
                     "type": "string",
-                    "description": "Stable subcase for one input.",
                 },
                 "priority": {"type": "string", "enum": ["high", "medium", "low"]},
                 "evidence_path": {
                     "type": "string",
-                    "description": (
-                        "Existing project proof file. candidate_id selects the entry; shared files use Candidate headings. "
-                        "Its observation IDs must be declared primary parents."
-                    ),
                 },
-                "observation_ids": {"type": "array", "items": {"type": "string"},
-                                    "description": "Primary runtime source IDs."},
+                "observation_ids": {"type": "array", "items": {"type": "string"}},
                 "signals": {"type": "array", "items": {"type": "string"}},
                 "baseline_request_ref": optional_string,
                 "auth_context_ref": optional_string,
@@ -200,13 +214,11 @@ class WorkflowTool(Tool):
                 "request_template": {
                     "type": "string",
                     "maxLength": 4000,
-                    "description": "Body skeleton; mark test value {INJECTION_POINT}. Omit credentials.",
                 },
                 "source_skill": optional_string,
                 "status": {
                     "type": "string",
                     "enum": sorted(CANDIDATE_STATUSES),
-                    "description": "Candidate status; not used by record_result.",
                 },
                 "skill_name": {
                     "type": "string",
@@ -214,7 +226,6 @@ class WorkflowTool(Tool):
                 "outcome": {
                     "type": "string",
                     "enum": sorted(VALIDATION_OUTCOMES),
-                    "description": "Required for record_result.",
                 },
                 "evidence_refs": {"type": "array", "items": {"type": "string"}},
                 "techniques": {"type": "array", "items": {"type": "string"}},
@@ -222,39 +233,27 @@ class WorkflowTool(Tool):
                 "confirmation": {
                     "type": "object",
                 },
-                "mutation_performed": {"type": "boolean", "description":
-                    "Explicit server-reported writes or verified mutation. POST/status alone is insufficient; "
-                    "acknowledgement does not prove persistence. Tracks cleanup."},
+                "mutation_performed": {"type": "boolean"},
                 "cleanup_status": optional_string,
                 "cleanup_state": {
                     "type": "string",
                     "enum": sorted(CLEANUP_STATES),
-                    "description": (
-                        "Mutations default pending; justify not-required. succeeded means verified Agent cleanup; "
-                        "parent reset is separate. Cleanup needs separate authority."
-                    ),
                 },
                 "deferred_reason": optional_string,
                 "notes": optional_string,
                 "force": {
                     "type": "boolean",
-                    "description": "Intentional retest only.",
                 },
                 "no_inputs_discovered": {
                     "type": "boolean",
-                    "description": (
-                        "Attest that whole-target enumeration found no inputs."
-                    ),
                 },
                 "current_phase": optional_string,
                 "phase": {
                     "type": "string",
                     "enum": sorted(PHASE_COVERAGE_DIMENSIONS),
-                    "description": "Phase for record_phase_coverage.",
                 },
                 "coverage_dimension": {
                     "type": "string",
-                    "description": "Required coverage dimension for the selected phase.",
                 },
                 "coverage_status": {
                     "type": "string",
@@ -262,21 +261,41 @@ class WorkflowTool(Tool):
                 },
                 "coverage_reason": {
                     "type": "string",
-                    "description": "Required for non-performed coverage; observed needs source/limitation.",
                 },
                 "artifact_ref": {
                     "type": "string",
-                    "description": "Stage output path.",
                 },
                 "limit": {
                     "type": "number",
-                    "description": (
-                        f"List size (default {DEFAULT_LIST_LIMIT}, max {MAX_LIST_LIMIT})."
-                    ),
                 },
             },
             "required": ["action"],
         }
+        properties = {key: dict(field) for key, field in schema['properties'].items()}
+        schema['properties'] = properties
+        # Flat descriptions are portable on the current DeepSeek Chat
+        # Completions path. No unverified union/conditional or strict mode.
+        properties['action']['description'] = (
+            'Action fields (* required); omit others.\n' + '\n'.join(
+                action + '(' + ','.join(
+                    key + ('*' if key in ACTION_REQUIRED.get(action, ()) else '')
+                    for key in fields if key in properties) + ')'
+                for action, fields in ACTION_INPUTS.items()))
+        descriptions = {
+            'candidate_id': 'Required for record_evidence, start_validation, and record_result.',
+            'attempt_id': 'Runtime reference; cannot assign an attempt.',
+            'assessment': 'hypothesis,criteria,limitations,completed_attempt,observed_impact,severity.',
+            'evidence_path': 'Project proof; shared Candidate headings; parent observation IDs.',
+            'request_template': 'Redacted body skeleton; mark {INJECTION_POINT}.',
+            'status': 'Candidate status; not used by record_result.',
+            'outcome': 'Required for record_result.',
+            'related_requests': 'Unique method/URL across roles.',
+            'coverage_reason': 'Non-performed: reason; observed: source/limitations.',
+            'force': 'Explicit retest only.',
+        }
+        for key, description in descriptions.items():
+            properties[key]['description'] = description
+        return schema
 
     def requires_permission(self) -> bool:
         return False
@@ -287,7 +306,15 @@ class WorkflowTool(Tool):
 
     async def run(self, args, signal, prompter):
         async with self.state.mutation_lock:
-            return await self._run(args, signal, prompter)
+            before = self.state.to_dict()
+            revision = self.state.committed_revision
+            try:
+                return await self._run(args, signal, prompter)
+            finally:
+                # Also cover attempt/evidence/coverage metadata committed by
+                # actions that exit through cancellation rather than a receipt.
+                if self.state.committed_revision == revision and self.state.to_dict() != before:
+                    self.state.mark_committed()
 
     async def _run(
         self,
@@ -298,6 +325,14 @@ class WorkflowTool(Tool):
         action = arg_string(args, 'action')
         if action not in ACTIONS:
             return ToolOutput('error: action must be one of: ' + ', '.join(ACTIONS),
+                              status='error', error_kind='invalid_args')
+        if action == 'record_candidate' and 'objective_id' in args:
+            return ToolOutput('error: objective_id is assigned by the runtime; omit it from record_candidate',
+                              status='error', error_kind='invalid_args')
+        unsupported = sorted(set(args) - {'action', *ACTION_INPUTS[action]})
+        if unsupported:
+            return ToolOutput('error: ' + action + ' does not accept ' + ', '.join(unsupported)
+                              + '; omit these arguments (runtime identities cannot be assigned)',
                               status='error', error_kind='invalid_args')
         missing = [key for key in ACTION_REQUIRED.get(action, ()) if not arg_string(args, key)]
         if missing:
@@ -421,24 +456,26 @@ class WorkflowTool(Tool):
             return ToolOutput(result, status="error", error_kind="tool_exception")
         return result
 
-    def _record_candidate(self, args: dict[str, Any], policy=None) -> str:
-        if "objective_id" in args:
-            return "error: objective_id is assigned by the runtime"
+    def candidate_proposal(self, args: dict[str, Any]) -> Candidate:
+        """Read-only canonical proposal; ownership comes from the active runtime.
+
+        Used by dispatch and presentation recovery, never grants authority.
+        """
         candidate_class = arg_string(args, "candidate_class")
         if not candidate_class:
-            return "error: record_candidate requires candidate_class"
+            raise ValueError("record_candidate requires candidate_class")
         candidate_target = arg_string(args, "target") or self._active_target()
         if not candidate_target:
-            return "error: record_candidate requires target or an active Agent target"
+            raise ValueError("record_candidate requires target or an active Agent target")
         objective = self.state.objective
         objective_id: str | None = None
         requested_input_id = arg_string(args, "input_id")
         input_item = None
         if requested_input_id and (objective is None or objective.mode != "whole_target"):
-            return "error: input_id requires an active whole-target objective"
+            raise ValueError("input_id requires an active whole-target objective")
         if objective is not None and objective.mode == "whole_target":
             if candidate_origin(candidate_target) != objective.target_origin:
-                return "error: candidate target must match the active whole-target origin"
+                raise ValueError("candidate target must match the active whole-target origin")
             objective_id = objective.id
             if requested_input_id:
                 input_item = self.state.attack_surface_inputs.get(requested_input_id)
@@ -447,72 +484,81 @@ class WorkflowTool(Tool):
                     or input_item.objective_id != objective.id
                     or input_item.target_origin != objective.target_origin
                 ):
-                    return "error: input does not belong to the active whole-target objective"
+                    raise ValueError("input does not belong to the active whole-target objective")
         elif (
             objective is not None
             and objective.mode == "direct"
             and objective.target_origin is not None
             and candidate_origin(candidate_target) != objective.target_origin
         ):
-            return "error: candidate target must match the active direct objective origin"
-        validators = (
-            self.skills.validators_for_class(candidate_class) if self.skills else []
-        )
-        route = resolve_validation_route(self.skills, candidate_class)
-        supported = len(validators) == 1 if self.skills else None
-        validator_resolution = "unique" if route.kind == "expert" else route.kind
+            raise ValueError("candidate target must match the active direct objective origin")
         if objective is not None and objective.mode == "direct":
             objective_id = objective.id
         endpoint, method, normalization_error = self._normalize_method_endpoint(
             args.get("endpoint"), args.get("method")
         )
         if normalization_error:
-            return f"error: {normalization_error}"
+            raise ValueError(normalization_error)
+        return Candidate(
+            candidate_class=candidate_class,
+            target=candidate_target,
+            endpoint=(
+                endpoint if endpoint is not None
+                else input_item.endpoint if input_item is not None else None
+            ),
+            method=(
+                method if method is not None
+                else input_item.method if input_item is not None else None
+            ),
+            parameter=(
+                args.get("parameter") if args.get("parameter") is not None
+                else input_item.parameter if input_item is not None else None
+            ),
+            location=(
+                args.get("location") if args.get("location") is not None
+                else input_item.location if input_item is not None else None
+            ),
+            test_case=args.get("test_case"),
+            priority=args.get("priority"),
+            signals=args.get("signals", []),
+            baseline_request_ref=(args.get("baseline_request_ref")
+                                  if args.get("baseline_request_ref") is not None
+                                  else input_item.baseline_request_ref if input_item is not None else None),
+            auth_context_ref=(args.get("auth_context_ref")
+                              if args.get("auth_context_ref") is not None
+                              else input_item.auth_context_ref if input_item is not None else None),
+            content_type=(
+                args.get("content_type")
+                if args.get("content_type") is not None
+                else input_item.content_type if input_item is not None else None
+            ),
+            request_template=(args.get("request_template")
+                              if args.get("request_template") is not None
+                              else input_item.sample_payload if input_item is not None
+                              and input_item.sample_payload and "{INJECTION_POINT}" in input_item.sample_payload
+                              else None),
+            source_ref=(args.get("source_ref") if args.get("source_ref") is not None
+                        else input_item.source_ref if input_item is not None else None),
+            source_skill=args.get("source_skill"),
+            objective_id=objective_id,
+            status=args.get("status", "queued"),
+        )
+
+    def _record_candidate(self, args: dict[str, Any], policy=None) -> str:
         try:
-            candidate = Candidate(
-                candidate_class=candidate_class,
-                target=candidate_target,
-                endpoint=(
-                    endpoint if endpoint is not None
-                    else input_item.endpoint if input_item is not None else None
-                ),
-                method=(
-                    method if method is not None
-                    else input_item.method if input_item is not None else None
-                ),
-                parameter=(
-                    args.get("parameter") if args.get("parameter") is not None
-                    else input_item.parameter if input_item is not None else None
-                ),
-                location=(
-                    args.get("location") if args.get("location") is not None
-                    else input_item.location if input_item is not None else None
-                ),
-                test_case=args.get("test_case"),
-                priority=args.get("priority"),
-                signals=args.get("signals", []),
-                baseline_request_ref=(args.get("baseline_request_ref")
-                                      if args.get("baseline_request_ref") is not None
-                                      else input_item.baseline_request_ref if input_item is not None else None),
-                auth_context_ref=(args.get("auth_context_ref")
-                                  if args.get("auth_context_ref") is not None
-                                  else input_item.auth_context_ref if input_item is not None else None),
-                content_type=(
-                    args.get("content_type")
-                    if args.get("content_type") is not None
-                    else input_item.content_type if input_item is not None else None
-                ),
-                request_template=(args.get("request_template")
-                                  if args.get("request_template") is not None
-                                  else input_item.sample_payload if input_item is not None
-                                  and input_item.sample_payload and "{INJECTION_POINT}" in input_item.sample_payload
-                                  else None),
-                source_ref=(args.get("source_ref") if args.get("source_ref") is not None
-                            else input_item.source_ref if input_item is not None else None),
-                source_skill=args.get("source_skill"),
-                objective_id=objective_id,
-                status=("deferred" if supported is False else args.get("status", "queued")),
-            )
+            candidate = self.candidate_proposal(args)
+        except (TypeError, ValueError) as err:
+            return f"error: {err}"
+        candidate_class = candidate.candidate_class
+        objective = self.state.objective
+        requested_input_id = arg_string(args, "input_id")
+        validators = self.skills.validators_for_class(candidate_class) if self.skills else []
+        route = resolve_validation_route(self.skills, candidate_class)
+        supported = len(validators) == 1 if self.skills else None
+        validator_resolution = "unique" if route.kind == "expert" else route.kind
+        if supported is False:
+            candidate.status = "deferred"
+        try:
             reason = route.reason
             if route.kind == "generic":
                 reason = generic_admission(candidate, self.state, self.skills, self.target, policy)
@@ -1145,6 +1191,7 @@ class WorkflowTool(Tool):
                 expected_notes=f"result={fingerprint[:20]}", previous=previous)
             raise ValueError("canonical coverage context changed during persistence; retry sync")
         result.coverage_synced = True
+        self.state.mark_committed()
 
     async def _sync_coverage_action(self, args: dict[str, Any]) -> str:
         candidate_id = arg_string(args, "candidate_id")
@@ -1383,8 +1430,15 @@ class WorkflowTool(Tool):
             f"{objective.id}:{phase}", {}
         ) if objective is not None and phase is not None else {}
         required = PHASE_COVERAGE_DIMENSIONS.get(phase or "", ())
+        historically_completed = phase in self.state.completed_phases(objective)
+        if historically_completed and objective is not None:
+            marker = self.state.phase_completions[f"{objective.id}:{phase}"]
+            coverage = marker.coverage
+            no_inputs_discovered = marker.no_inputs_discovered
         result: dict[str, Any] = {
             "ready": False, "skill_name": canonical, "phase": phase,
+            "historically_completed": historically_completed, "artifact_valid": False,
+            "prerequisites_valid": False,
             "artifact_ref": None, "no_inputs_discovered": no_inputs_discovered,
             "objective_id": objective.id if objective is not None else None,
             "target_origin": objective.target_origin if objective is not None else None,
@@ -1406,11 +1460,10 @@ class WorkflowTool(Tool):
             return reject("phase completion requires an active whole-target objective")
         if objective.target_origin != normalize_target_origin(self._active_target()):
             return reject("phase completion must match the active objective and target")
-        if phase in self.state.completed_phases(objective):
-            return reject(f"{phase} phase is already completed")
         if (
-            skill is None or skill.disable_model_invocation or self.skills is None
-            or self.skills.is_disabled(canonical)
+            skill is None or self.skills is None
+            or (not historically_completed
+                and (skill.disable_model_invocation or self.skills.is_disabled(canonical)))
         ):
             return reject(f"{canonical} is unavailable for whole-target phase completion")
         if not skill.completion_artifact:
@@ -1428,12 +1481,21 @@ class WorkflowTool(Tool):
         result["artifact_ref"] = expected
         if not artifact_ready:
             return reject(f"{canonical} completion requires {expected}")
+        result["artifact_valid"] = True
         phases = self.state.completed_phases(objective)
         if phase == "enumeration" and "recon" not in phases:
             return reject("recon must complete before enumeration")
+        if phase == "input_analysis" and "enumeration" not in phases:
+            return reject("enumeration must complete before input analysis")
+        prerequisite_skill = {"enumeration": "recon", "input_analysis": "web-enumeration"}.get(phase)
+        if prerequisite_skill is not None:
+            prerequisite = self.phase_completion_readiness(prerequisite_skill)
+            if not prerequisite["artifact_valid"] or not prerequisite["prerequisites_valid"]:
+                return reject(f"{prerequisite['phase']} artifact repair required: {prerequisite['reason']}")
+        result["prerequisites_valid"] = True
+        if historically_completed:
+            return reject(f"{phase} phase is already completed")
         if phase == "input_analysis":
-            if "enumeration" not in phases:
-                return reject("enumeration must complete before input analysis")
             if any(item.disposition in {"pending", "blocked"} for item in self.state.objective_inputs()):
                 return reject("input analysis cannot complete while an input is pending or blocked")
             if not self.state.objective_inputs() and not no_inputs_discovered:
@@ -1453,6 +1515,25 @@ class WorkflowTool(Tool):
         result["ready"] = True
         result["reason"] = "ready"
         return result
+
+    def discovery_artifact_errors(self) -> dict[str, str]:
+        """Current operational validity of historical whole-target phases.
+
+        Repair is a file operation through existing permission gates. Historical
+        phase/coverage markers are retained; their probes need not run again.
+        """
+        objective = self.state.objective
+        if objective is None or objective.mode != "whole_target":
+            return {}
+        errors = {}
+        for phase, name in (("recon", "recon"), ("enumeration", "web-enumeration"),
+                            ("input_analysis", "web-input-analysis")):
+            if phase not in self.state.completed_phases(objective):
+                continue
+            readiness = self.phase_completion_readiness(name)
+            if not readiness["artifact_valid"]:
+                errors[phase] = readiness["reason"]
+        return errors
 
     def _record_phase_coverage(self, args: dict[str, Any]) -> str:
         objective = self.state.objective

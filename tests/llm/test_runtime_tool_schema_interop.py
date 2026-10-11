@@ -162,3 +162,31 @@ def test_c1_real_contracts_encode_offline_without_mutating_local_schemas(provide
     # Local enforcement remains authoritative when an encoder drops a constraint.
     with pytest.raises(ValueError, match="headers"):
         cast(HTTPTool, local_http).validate_args({"phase": "recon", "url": "/", "headers": {"X-Probe": 1}})
+
+
+@pytest.mark.parametrize('provider', ['anthropic', 'gemini'])
+def test_workflow_flat_contract_still_uses_existing_provider_encoding(provider):
+    from src.tools.workflow.workflow_tool import WorkflowTool
+    from src.workflow.state import WorkflowState
+    tool = WorkflowTool(WorkflowState())
+    registry = Registry()
+    registry.register(tool)
+    specs = registry.as_llm_tools()
+    original = deepcopy(specs)
+    body = encode(provider, ChatRequest('fixture', [Message('user', 'next')], tools=specs))
+    decl = declaration(provider, body)
+    assert specs == original and decl['name'] == 'workflow'
+    assert decl['description'] == tool.description() and 'strict' not in decl
+    schema = decl['input_schema' if provider == 'anthropic' else 'parameters']
+    local = tool.schema()
+    assert schema['required'] == ['action']
+    assert schema['properties']['action']['enum'] == local['properties']['action']['enum']
+    assert schema['properties']['action']['description'] == local['properties']['action']['description']
+    assert schema['properties']['related_requests']['items']['required'] == ['role', 'method', 'url']
+    assert schema['properties']['probe']['required'] == local['properties']['probe']['required']
+    if provider == 'anthropic':
+        assert schema == local
+    else:
+        assert schema['type'] == 'OBJECT'
+        assert schema['properties']['candidate_id']['type'] == 'STRING'
+        assert 'additionalProperties' not in schema['properties']['probe']

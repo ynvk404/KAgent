@@ -65,6 +65,8 @@ class ToolResultEvent(BaseEvent):
     http_status: int | None = None
     truncated: bool = False
     invocation: Invocation | None = None
+    # Controller admission of a real candidate-creation receipt, never tool args.
+    accepted_candidate_id: str | None = None
 
     @property
     def durationMs(self) -> float:

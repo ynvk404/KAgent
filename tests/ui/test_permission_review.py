@@ -120,7 +120,12 @@ def _content_text(app: KAgent, *, visible_only: bool = False) -> str:
     last = widget.virtual_size.height
     if visible_only:
         last = min(first + app.overlay_content_static.size.height, last)
-    return "\n".join(widget.render_line(y).text for y in range(first, last))
+    details = "\n".join(widget.render_line(y).text for y in range(first, last))
+    # Instructions are fixed beside the scrollable detail viewport.
+    hints = app.permission_hints_static
+    if hints.display:
+        details += "\n" + "\n".join(hints.render_line(y).text for y in range(hints.size.height))
+    return details
 
 
 @pytest.mark.asyncio

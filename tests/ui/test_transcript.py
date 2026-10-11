@@ -48,6 +48,18 @@ def _rendered_overview(data: BannerData) -> str:
     return output.getvalue()
 
 
+def test_width_changes_do_not_replay_append_only_stdout():
+    output = StringIO()
+    width = [80]
+    transcript = Transcript(out=output, width=lambda: width[0], write_banner=lambda _: None)
+    entries = [TranscriptEntry('assistant', 'Recorded evidence.')]
+    banner = BannerData('offline', 'fixture', '.')
+    transcript.flush(entries, banner, generation=0)
+    width[0] = 40
+    transcript.flush(entries, banner, generation=0)
+    assert output.getvalue().count('Recorded evidence.') == 1
+
+
 @pytest.mark.parametrize("final_state", ["yes", "no", "unknown"])
 def test_banner_refresh_replaces_overview_without_clearing_transcript(
     final_state: str,

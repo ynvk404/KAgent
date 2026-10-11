@@ -140,7 +140,7 @@ class ShellTool(Tool):
             )
         return "\n".join(
             (
-                "Run an arbitrary command via /bin/sh -c on the local machine. "
+                "Run a command via /bin/sh -c. "
                 "Use the built-in http tool for target requests whenever it "
                 "can express them. Bound execution uses the isolated worker and scoped HTTP broker. "
                 "Use shell for local OS utilities or HTTP details the native "
@@ -148,6 +148,10 @@ class ShellTool(Tool):
                 "Capture concise output — pipe through `head` for huge "
                 "outputs. Do not run interactive commands. Authorized "
                 "engagements only.",
+                "In the isolated worker, the project is read-only at /work (the working directory); "
+                "host paths are unavailable. Persist shell output only under artifacts/worker "
+                "(/work/artifacts/worker). Use file_write/file_edit for permitted project artifacts "
+                "outside that worker output directory, with their normal permission checks.",
                 "Write portable macOS/BSD + Linux commands. Avoid GNU-only "
                 "flags such as `grep -P`; prefer `grep -E`, `awk`, `sed`, "
                 "`perl -ne`, or `jq` for extraction.",

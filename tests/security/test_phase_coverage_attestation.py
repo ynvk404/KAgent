@@ -223,8 +223,12 @@ async def test_observed_coverage_completion_preserves_distinction_in_session_sta
     workflow_tool = registry.get('workflow')
     assert isinstance(workflow_tool, WorkflowTool)
     workflow_tool.skills = skills
+    recon_ref = 'artifacts/recon/127-0-0-1-3000/summary.md'
+    recon_artifact = tmp_path / recon_ref
+    recon_artifact.parent.mkdir(parents=True, exist_ok=True)
+    recon_artifact.write_text('Bounded recon fixture record.')
     record_completed_phase(state, 'recon', objective_id='attestation',
-                           target_origin=ORIGIN, artifact_ref='artifacts/recon.md')
+                           target_origin=ORIGIN, artifact_ref=recon_ref)
     await registry.execute('http', {'url': '/', 'phase': 'recon'}, None, p)
     for dimension in PHASE_COVERAGE_DIMENSIONS['enumeration']:
         if dimension == 'html_navigation':

@@ -418,8 +418,9 @@ async def test_input_editor_remains_visible_while_a_turn_is_active() -> None:
             set_class=lambda *_: None,
         ),
     )
-    app.overlay_content_static = cast(Any, SimpleNamespace(set_class=lambda *_: None))
+    app.overlay_content_static = cast(Any, SimpleNamespace(set_class=lambda *_: None, scroll_to=lambda **_: None))
     app.overlay_text_static = cast(Any, SimpleNamespace(update=lambda _: None))
+    app.permission_hints_static = cast(Any, SimpleNamespace(display=False, update=lambda _: None))
     app.input_static = cast(Any, SimpleNamespace(display=True))
     app.status_bar = cast(Any, SimpleNamespace(elapsed_seconds=None))
 
@@ -442,8 +443,9 @@ def test_prompt_panels_receive_shared_modal_frame_class() -> None:
             set_class=lambda on, name: class_changes.append((on, name)),
         ),
     )
-    app.overlay_content_static = cast(Any, SimpleNamespace(set_class=lambda *_: None))
+    app.overlay_content_static = cast(Any, SimpleNamespace(set_class=lambda *_: None, scroll_to=lambda **_: None))
     app.overlay_text_static = cast(Any, SimpleNamespace(update=lambda _: None))
+    app.permission_hints_static = cast(Any, SimpleNamespace(display=False, update=lambda _: None))
     app.input_static = cast(Any, SimpleNamespace(display=True))
     app.text_input = TextInputRequest(
         header="Question",
@@ -554,18 +556,16 @@ async def test_main_shell_regions_have_distinct_native_panels(
         assert app.input_static.region.width == 32
 
 
-def test_resize_rerenders_composer() -> None:
+async def test_resize_rerenders_composer(monkeypatch) -> None:
+    monkeypatch.setattr(KAgent, 'on_mount', lambda self: None)
     app = make_app()
     rendered: list[bool] = []
     app_any = cast(Any, app)
-    app_any._render_input = lambda: rendered.append(True)
-    app_any.refresh = lambda: None
-    event = cast(Any, SimpleNamespace(size=SimpleNamespace(width=47)))
-
-    KAgent.on_resize(app, event)
-
-    assert app.cols == 47
-    assert rendered == [True]
+    async with app.run_test(size=(80, 24)) as pilot:
+        app_any._render_input = lambda: rendered.append(True)
+        await pilot.resize_terminal(47, 24)
+        assert app.cols == 47
+        assert rendered == [True]
 
 
 @pytest.mark.asyncio

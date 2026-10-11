@@ -23,6 +23,7 @@ from src.permission.network.grants import HTTPLimits, HTTPBlocked
 from src.permission.runtime.observations import VerifiedResult
 from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry as Skills, Skill, SkillMetadataError
+from src.skills.artifacts import completion_artifact_path
 from src.tools.common.ask import AskUserTool
 from src.tools.execution.shell import ShellTool
 from src.tools.workflow.finding import ConfirmFindingTool
@@ -30,7 +31,7 @@ from src.tools.workflow.workflow_tool import WorkflowTool
 from src.ui.commands.result_review import review_result
 from src.workflow.assessment import accepted_result
 from tests.security.test_agent_assessment import ASSESSMENT
-from src.workflow.state import AttackSurfaceInput, Candidate, ValidationResult, WorkflowMode, WorkflowObjective, WorkflowState
+from src.workflow.state import AttackSurfaceInput, Candidate, ValidationResult, WorkflowMode, WorkflowObjective, WorkflowPhase, WorkflowState
 from src.workflow.validation_route import GENERIC_VALIDATOR, resolve_validation_route
 from src.workflow.probe import ProbeProposal
 from tests.helpers.workflow import record_completed_phase
@@ -48,15 +49,28 @@ def expert(name="expert", cls="open-redirect", manual=False):
 
 
 async def setup(runtime, tmp_path, cls="open-redirect", mode: WorkflowMode="direct", skills=None,
-                phase_artifact_ref="fixture.md") -> Any:
+                phase_artifact_ref=None) -> Any:
     registry, prompter, policy, operator, sent, responses, target = runtime
     skills = skills if skills is not None else Skills()
     state = WorkflowState()
     state.objective = WorkflowObjective("current-objective", mode, ORIGIN)
     if mode == "whole_target":
-        for phase in ("recon", "enumeration", "input_analysis"):
+        discovery = Skills()
+        discovery.load_dir(Path(__file__).resolve().parents[2] / "skills")
+        phase_skills: tuple[tuple[WorkflowPhase, str], ...] = (
+            ("recon", "recon"), ("enumeration", "web-enumeration"),
+            ("input_analysis", "web-input-analysis"),
+        )
+        for phase, name in phase_skills:
+            skill = discovery.get(name)
+            assert skill is not None and skill.completion_artifact
+            skills.add(skill)
+            ref = completion_artifact_path(skill.completion_artifact, ORIGIN)
+            path = tmp_path / ref
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("Bounded discovery fixture record.")
             record_completed_phase(state, phase, objective_id=state.objective.id,
-                                   target_origin=ORIGIN, artifact_ref=phase_artifact_ref)
+                                   target_origin=ORIGIN, artifact_ref=phase_artifact_ref or ref)
     coverage = CoverageStore(str(tmp_path / "coverage.json"))
     tool = WorkflowTool(state, target, skills=skills, coverage=coverage, evidence_root=tmp_path)
     registry.register(tool)

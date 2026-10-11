@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -46,6 +46,7 @@ class OutcomeFacts:
     completion_supported: bool = False
     accepted_call: bool = False
     operation_owner: str = ''
+    operation_candidate_id: str = ''
 
 
 def _evidence_summary(result) -> str:
@@ -109,8 +110,15 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
     incomplete = goals = validations = 0
     accepted_call = False
     operation_owner = ''
+    operation_candidate_id = ''
     tool = getattr(agent, "tools", {}).get("workflow")
     root = getattr(tool, "evidence_root", None)
+    from src.tools.workflow.workflow_tool import WorkflowTool
+    artifact_errors = tool.discovery_artifact_errors() if isinstance(tool, WorkflowTool) else {
+        phase: "canonical artifact validator unavailable"
+        for phase in workflow.completed_phases()
+        if objective is not None and objective.mode == "whole_target"
+    }
 
     def scoped_endpoint(endpoint: str | None) -> bool:
         return not endpoint or candidate_origin(urljoin((origin or "") + "/", endpoint)) == origin
@@ -248,13 +256,19 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
                 from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
                 if any(phase not in workflow.completed_phases(objective) for phase in REQUIRED_WHOLE_TARGET_PHASES):
                     pending.append("required workflow phases incomplete")
+                for phase, reason in artifact_errors.items():
+                    repair = sanitize_text(f"phase artifact repair required:{phase}: {reason}")
+                    pending.append(repair)
+                    blockers.append(repair)
 
     overview = ""
     completion_supported = False
     if objective and objective.mode == "whole_target" and objective.target_origin == origin:
         from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
         completed = workflow.completed_phases(objective)
-        parts = [marker.phase.replace("_", " ") + " completed" for marker in workflow.phase_completions.values()
+        parts = [marker.phase.replace("_", " ") + " completed"
+                 + (" (artifact repair required)" if marker.phase in artifact_errors else "")
+                 for marker in workflow.phase_completions.values()
                  if marker.objective_id == objective.id and marker.target_origin == origin and marker.phase in completed]
         inventory = [row for row in records if row.kind == "input"]
         if inventory:
@@ -277,9 +291,37 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
     activity = ""
     activity_skill = ""
     if call:
+        if call.name == 'workflow' and call.operation == 'record_candidate' and isinstance(tool, WorkflowTool):
+            if isinstance(event, ToolCallEvent):
+                try:
+                    args = (agent._selected_capture_workflow_args(event.args)
+                            if hasattr(agent, '_selected_capture_workflow_args') else event.args)
+                    proposal = tool.candidate_proposal(args)
+                except (TypeError, ValueError):
+                    proposal = None
+                if (proposal is not None and candidate_origin(proposal.target) == origin
+                        and scoped_endpoint(proposal.endpoint)):
+                    # Canonical business identity plus immutable runtime scope;
+                    # a rejected caller ownership field cannot change either.
+                    operation_owner = hashlib.sha256(repr((scope, call.operation, candidate_binding(proposal),
+                        event.args.get('input_id') or '')).encode()).hexdigest()
+                    operation_candidate_id = proposal.id
+                    call = replace(call, candidate_id=proposal.id)
+            elif (isinstance(event, ToolResultEvent) and call.invocation is not None
+                    and event.status == 'success' and not event.err and not event.error_kind):
+                try:
+                    receipt = json.loads(event.result)
+                except (ValueError, TypeError):
+                    receipt = None
+                stored = workflow.candidates.get(call.candidate_id)
+                recorded = receipt.get('candidate') if isinstance(receipt, dict) else None
+                accepted_call = (isinstance(receipt, dict) and receipt.get('ok') is True
+                    and stored is not None and stored in candidates
+                    and event.accepted_candidate_id == stored.id
+                    and isinstance(recorded, dict) and recorded == stored.to_dict())
         candidate = workflow.candidates.get(call.candidate_id)
         if candidate in candidates and candidate is not None:
-            if isinstance(event, ToolCallEvent) and call.name == 'workflow':
+            if isinstance(event, ToolCallEvent) and call.name == 'workflow' and call.operation != 'record_candidate':
                 active = next((attempt['id'] for attempt in workflow.attempts.values()
                     if attempt.get('candidate_id') == candidate.id and attempt.get('status') == 'active'), None)
                 position = sum(result.candidate_id == candidate.id for result in workflow.validation_results)
@@ -343,4 +385,4 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
     return OutcomeFacts(scope, tuple(milestones), tuple(dict.fromkeys(pending)), validations,
                         tuple(dict.fromkeys(records)), activity, incomplete, goals, tuple(dict.fromkeys(blockers)),
                         activity_skill, overview=overview, completion_supported=completion_supported, accepted_call=accepted_call,
-                        operation_owner=operation_owner)
+                        operation_owner=operation_owner, operation_candidate_id=operation_candidate_id)

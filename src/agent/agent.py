@@ -183,6 +183,7 @@ SCOPE_CONTEXT_MARKER = "# Current engagement scope (authoritative)"
 COMPACTION_MIN_HISTORY_TOKENS = 2_048
 COMPACTION_MIN_HISTORY_RATIO = 1 / 3
 MAX_PARALLEL_TOOL_CALLS = 4
+TOOL_CHECKPOINT_TIMEOUT_SECONDS = 10.0
 AGENT_TRACE_ENV = "KAgent_TRACE_AGENT"
 
 _EXPLICIT_HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
@@ -1035,6 +1036,7 @@ class Agent:
         self._pending_context: _TurnContext | None = None
         self._tool_checkpoint_request: ChatRequest | None = None
         self._tool_results_unsaved = False
+        self._workflow_saved_revision = self.workflow.committed_revision
 
         self._bounded_working: list[Message] | None = None
         self._bounded_results: dict[int, _BoundedToolResult] = {}
@@ -1757,15 +1759,21 @@ class Agent:
         Normal dispatch replaces this snapshot with its fully assembled request.
         """
         req = self._tool_checkpoint_request
-        if req is None or not self._tool_results_unsaved:
+        workflow_dirty = self.workflow.committed_revision != self._workflow_saved_revision
+        if not workflow_dirty and (req is None or not self._tool_results_unsaved):
             return
 
         async def finish() -> None:
-            if emit is None:
-                self.result_retention.admit(req.messages, schema_tokens(req.tools), request=req, strict=True)
-            else:
-                self.guard_working_context(req.messages, emit, request=req, strict_retention=True)
-            await self.save()
+            async with asyncio.timeout(TOOL_CHECKPOINT_TIMEOUT_SECONDS):
+                if req is not None and self._tool_results_unsaved:
+                    if emit is None:
+                        self.result_retention.admit(req.messages, schema_tokens(req.tools), request=req, strict=True)
+                    else:
+                        self.guard_working_context(req.messages, emit, request=req, strict_retention=True)
+                # Tool cancellation has unwound its mutation lock. Persist the
+                # accepted state even when no receipt reached record_tool_result;
+                # pending coverage stays retryable instead of delaying this save.
+                await self.save()
 
         task = asyncio.create_task(finish())
         cancelled = False
@@ -1776,7 +1784,13 @@ class Agent:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
                 cancelled = True
-        task.result()
+        try:
+            task.result()
+        except Exception as err:
+            if cancelled:
+                log_error("agent: cancellation checkpoint failed", {"err": err_message(err)})
+                raise asyncio.CancelledError() from err
+            raise
         if cancelled:
             raise asyncio.CancelledError()
 
@@ -1846,6 +1860,7 @@ class Agent:
 
         self.memory = loaded.memory
         self.workflow.replace_from(loaded.workflow)
+        self._workflow_saved_revision = self.workflow.committed_revision
         self.engagement_state.replace_from(loaded.engagement_state)
         if not self.target.empty():
             self.engagement_state.add_origin(self.target.base_url())
@@ -1879,11 +1894,13 @@ class Agent:
     async def _save_unlocked(self, workflow_override=None) -> None:
         if self.store is None:
             self._tool_results_unsaved = False
+            self._workflow_saved_revision = self.workflow.committed_revision
             return
 
         if self.history and self.result_retention.store is not None:
             self.history[0] = self.result_retention.attach(self.history[0])
 
+        workflow_revision = self.workflow.committed_revision
         await self.store.save(
             self.history,
             self.target,
@@ -1892,6 +1909,8 @@ class Agent:
             self.engagement_state,
         )
         self._tool_results_unsaved = False
+        if workflow_override is None or workflow_override is self.workflow:
+            self._workflow_saved_revision = workflow_revision
 
     async def save_context_snapshot(self, reason: str = "periodic") -> str:
         if self.store is None:
@@ -2196,6 +2215,7 @@ class Agent:
             validator_classes=self._workflow_validator_classes(),
             coverage_sync_available=coverage_sync_available,
             validation_errors=validation_errors,
+            discovery_artifact_errors=self._discovery_artifact_errors(),
             generic_eligible_candidate_ids=frozenset(
                 cid for cid, route in routes.items() if route.kind == "generic"
                 and self._generic_startable(self.workflow.candidates[cid])
@@ -3101,9 +3121,11 @@ class Agent:
         objective = self.workflow.objective
         if objective is None or objective.mode != "whole_target":
             return None
+        artifact_errors = self._discovery_artifact_errors()
         phase = next(
             (item for item in REQUIRED_WHOLE_TARGET_PHASES
-             if item not in self.workflow.completed_phases(objective)),
+             if item not in self.workflow.completed_phases(objective)
+             or item in artifact_errors),
             None,
         )
         skill_name = {
@@ -3114,6 +3136,13 @@ class Agent:
         if skill_name is None or not isinstance(tool, WorkflowTool):
             return None
         return tool.phase_completion_readiness(skill_name)
+
+    def _discovery_artifact_errors(self) -> dict[str, str]:
+        tool = self.tools.get("workflow")
+        return tool.discovery_artifact_errors() if isinstance(tool, WorkflowTool) else {
+            phase: "canonical artifact validator unavailable"
+            for phase in self.workflow.completed_phases()
+        }
 
     def _planner_event(self, decision) -> dict[str, Any]:
         # Presentation metadata comes from the existing plan, never model prose.
@@ -3539,6 +3568,13 @@ class Agent:
         finally:
             try:
                 await self._finish_tool_results()
+            except Exception as err:
+                if stop_reason != "cancelled":
+                    raise
+                # Keep the committed revision dirty for retry and preserve the
+                # original cancellation even if the final checkpoint fails.
+                log_error("agent: cancellation checkpoint failed", {"err": err_message(err)})
+                safe_emit({"type": "error", "err": Exception(f"save session: {err}")})
             finally:
                 if not self._tool_results_unsaved:
                     self.result_retention.pending.clear()
@@ -4363,7 +4399,11 @@ class Agent:
                     thinking_enabled=turn_request_thinking,
                     reasoning_level=turn_reasoning_level,
                     requested_reasoning_level=turn_requested_level,
-                    stop_reason="final_response",
+                    # A forced summary is not evidence of task completion.
+                    # Requested goals reaching accepted terminal states above
+                    # remain a successful direct assessment.
+                    stop_reason=("final_response" if requested_goal_run else
+                                 "workflow_blocked" if self._validation_completion_blockers() else "max_steps"),
                     instruction=(f"The hard limit of {max_steps} outer agent iterations "
                                  "was reached. Summarize the recorded evidence and remaining work."),
                     max_steps=max_steps,
@@ -5290,6 +5330,22 @@ class Agent:
                 "sanitized output unavailable. This is a representation failure; "
                 "do not repeat the action solely to recover its output.",
             )
+        accepted_candidate_id = None
+        if (tc.function.name == 'workflow' and invocation is not None
+                and invocation.scope == runtime_scope(self) and res.status == 'success'
+                and not res.err_str and not res.error_kind):
+            try:
+                args = parsed_args(tc.function)
+                receipt = json.loads(res.result)
+                tool = self.tools.get('workflow')
+                if args.get('action') == 'record_candidate' and isinstance(tool, WorkflowTool):
+                    proposal = tool.candidate_proposal(self._selected_capture_workflow_args(args))
+                    candidate = self.workflow.candidates.get(proposal.id)
+                    if (isinstance(receipt, dict) and receipt.get('ok') is True and candidate is not None
+                            and receipt.get('candidate') == candidate.to_dict()):
+                        accepted_candidate_id = candidate.id
+            except (TypeError, ValueError):
+                pass
         return {
                 "type": "tool-result",
                 "id": tc.id,
@@ -5302,6 +5358,7 @@ class Agent:
                 "http_status": res.http_status,
                 "truncated": res.truncated,
                 "invocation": invocation,
+                "accepted_candidate_id": accepted_candidate_id,
             }
 
     def record_tool_result(

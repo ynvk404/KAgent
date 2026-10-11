@@ -109,7 +109,7 @@ async def test_generic_synthesis_after_real_tool_execution(streaming, outcome):
     await agent.run("Use echo", FakeSignal(), events.append, AgentRunOptions(max_steps=1))
     assert tool.calls == 1
     assert_counts(agent, client, loop=1, synthesis=0 if outcome == "reject" else 1)
-    assert events[-1].stop_reason == {"reject": "context_capacity", "accepted": "final_response", "provider_failure": "client_error"}[outcome]
+    assert events[-1].stop_reason == {"reject": "context_capacity", "accepted": "max_steps", "provider_failure": "client_error"}[outcome]
     if outcome != "reject": assert client.invocations[-1][1].tools is None
 
 

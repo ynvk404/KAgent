@@ -338,11 +338,23 @@ def test_nonterminal_outcome_requires_canonical_record_and_keeps_recorded_reason
 
 
 def test_whole_target_overview_uses_only_recorded_state_and_completion_needs_runtime_outcome(tmp_path):
-    app, workflow, _ = runtime(tmp_path,whole=True)
+    from pathlib import Path
+    from src.skills.artifacts import completion_artifact_path
+    from src.skills.registry import Registry as SkillRegistry
+
+    app, workflow, tool = runtime(tmp_path,whole=True)
+    tool.skills = SkillRegistry()
+    tool.skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
     phases: tuple[WorkflowPhase, ...] = ('recon','enumeration','input_analysis')
-    for phase in phases:
+    for phase, name in zip(phases, ('recon', 'web-enumeration', 'web-input-analysis')):
+        skill = tool.skills.get(name)
+        assert skill is not None and skill.completion_artifact
+        artifact_ref = completion_artifact_path(skill.completion_artifact, ORIGIN)
+        artifact = tmp_path / artifact_ref
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text('Explicit offline discovery fixture record.')
         record_completed_phase(workflow,phase,objective_id='fixture-objective',target_origin=ORIGIN,
-            artifact_ref='artifacts/'+phase+'.md',no_inputs_discovered=phase=='input_analysis')
+            artifact_ref=artifact_ref,no_inputs_discovered=phase=='input_analysis')
         dispatch(app, ToolCallEvent(id=phase,name='workflow',args={'action':'complete_skill'}))
         dispatch(app, ToolResultEvent(id=phase,name='workflow',result='{"ok":true}'))
         assert sum(entry.text.startswith('Workflow ·') for entry in app.state.transcript) == 1

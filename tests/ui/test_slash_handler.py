@@ -405,7 +405,8 @@ def test_maxsteps_default_resets_to_agent_default():
 @pytest.mark.parametrize(
     ("prompt", "expected_steps", "expected_reason"),
     [
-        ("Explain how SQL injection works", 20, "final_response"),
+        # This fixture creates unresolved validation candidates on every step.
+        ("Explain how SQL injection works", 20, "workflow_blocked"),
         ("Perform a whole-target assessment", 40, "max_steps"),
     ],
 )

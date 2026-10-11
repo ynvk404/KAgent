@@ -220,7 +220,7 @@ class _RichLogWriter:
 
     def write_banner(self, data: BannerData) -> None:
         width = self.content_width()
-        banner = Banner(data, width=width).render_panel()
+        banner = Banner(data, width=width).render_panel(compact=self._log.app.size.height < 24)
         if self._overview is not None:
             self._overview.update(banner)
         else:
@@ -398,7 +398,7 @@ class KAgent(App):
     }}
 
     #overlay-content.permission-content {{
-        max-height: 33vh;
+        max-height: 30vh;
         overflow-y: auto;
         scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 0;
@@ -411,6 +411,18 @@ class KAgent(App):
         scrollbar-gutter: auto;
     }}
 
+    #permission-hints {{
+        height: auto;
+    }}
+
+    Screen.short-terminal #overview {{
+        max-height: 20vh;
+        overflow-y: auto;
+    }}
+
+    Screen.short-terminal #overlay-content.permission-content {{
+        max-height: 20vh;
+    }}
     """
 
     def __init__(self, props: AppProps):
@@ -539,6 +551,9 @@ class KAgent(App):
             with self.overlay_content_static:
                 self.overlay_text_static = _PermissionStatic()
                 yield self.overlay_text_static
+            self.permission_hints_static = Static(id="permission-hints")
+            self.permission_hints_static.display = False
+            yield self.permission_hints_static
 
         self.input_static = _InputStatic()
         self.input_static.border_title = "Input"
@@ -1082,6 +1097,8 @@ class KAgent(App):
         if self.state.pending_perm:
             if self._perm_modal is None or self._perm_modal.req is not self.state.pending_perm:
                 self._perm_modal = PermissionModal(self.state.pending_perm)
+                if hasattr(self, "overlay_content_static"):
+                    self.overlay_content_static.scroll_to(y=0, animate=False, immediate=True, force=True)
             return self._perm_modal
         self._perm_modal = None
 
@@ -1212,6 +1229,9 @@ class KAgent(App):
 
         modal = self._get_active_modal()
         scrollable = isinstance(modal, PermissionModal) or (isinstance(modal, TextInputModal) and modal.req.scrollable)
+        self.permission_hints_static.display = isinstance(modal, PermissionModal)
+        if isinstance(modal, PermissionModal):
+            self.permission_hints_static.update(modal.instructions())
         self.overlay_static.set_class(
             isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal, ProviderPickerModal, BridgeCredentialsModal)),
             "modal-panel",
@@ -1237,7 +1257,9 @@ class KAgent(App):
                 if isinstance(modal, TextInputModal)
                 else "Skills"
             )
-            if isinstance(modal, BridgeCredentialsModal):
+            if isinstance(modal, PermissionModal):
+                self.overlay_text_static.update(modal.render(include_instructions=False))
+            elif isinstance(modal, BridgeCredentialsModal):
                 self.overlay_static.border_title = "Local credentials"
                 self.overlay_text_static.update(modal.render())
             else:
@@ -1619,11 +1641,18 @@ class KAgent(App):
 
     def on_resize(self, event: events.Resize) -> None:
         self.cols = event.size.width
+        self.screen.set_class(event.size.height < 24, "short-terminal")
         self._render_input()
         if hasattr(self, "overview_static") and self.overview_static is not None and hasattr(self, "state") and self.state.banner_data:
             width = max(1, self.cols - 5)
-            self.overview_static.update(Banner(self.state.banner_data, width=width).render_panel())
+            self.overview_static.update(Banner(self.state.banner_data, width=width).render_panel(
+                compact=event.size.height < 24))
         self.refresh()
+
+    def on_transcript_view_reflow(self, event: TranscriptView.Reflow) -> None:
+        if event.follow_tail:
+            self.transcript_log.scroll_end(animate=False, immediate=True, x_axis=False)
+        self._recompute_view()
 
     def on_mount(self) -> None:
 

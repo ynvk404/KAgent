@@ -381,8 +381,11 @@ async def test_incremental_enumeration_records_progress_without_advancing_phase(
         client=FakeClient([]), tools=ToolRegistry(), skills=skills,
         prompter=AlwaysAllow(), store=None, target=target, workflow=state,
     ))
+    recon_ref = 'artifacts/recon/target-test/summary.md'
+    _artifact(tmp_path, recon_ref)
+    agent.tools.register(tool)
     record_completed_phase(state, 'recon', objective_id='incremental',
-                           target_origin=target.base_url(), artifact_ref='artifacts/recon.md')
+                           target_origin=target.base_url(), artifact_ref=recon_ref)
     tracker = WholeTargetStallTracker()
     tracker.set_phase('enumeration')
     for _ in range(MAX_CONSECUTIVE_NO_PROGRESS - 1):

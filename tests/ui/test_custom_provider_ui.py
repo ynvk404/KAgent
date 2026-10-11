@@ -920,6 +920,7 @@ def _make_test_kagent() -> KAgent:
     app.overlay_static = cast(Any, _DummyWidget())
     app.overlay_content_static = cast(Any, _DummyWidget())
     app.overlay_text_static = cast(Any, _DummyWidget())
+    app.permission_hints_static = cast(Any, _DummyWidget())
     app.input_static = cast(Any, _DummyWidget())
     app._recompute_view = lambda: app._sync_overlay()
     return app

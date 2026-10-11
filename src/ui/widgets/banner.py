@@ -127,9 +127,11 @@ class Banner:
             lines.append(line)
         return lines
 
-    def render_panel(self) -> RenderableType:
+    def render_panel(self, *, compact: bool = False) -> RenderableType:
         """Render the welcome block as one compact, responsive Rich panel."""
         details = Group(*self._detail_lines())
+        if compact:
+            return details
         logo = Text("\n".join(LOGO), style=ACCENT, no_wrap=True)
 
         if self.width >= 52:

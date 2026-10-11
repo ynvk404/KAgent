@@ -251,7 +251,9 @@ def test_whole_target_inventory_is_aggregated_and_exact_origin_scoped(tmp_path):
         dispatch(app, ToolCallEvent(id=str(i), name='workflow', args=operation))
         result = asyncio.run(app.agent.tools['workflow'].run(operation, None, AlwaysAllow()))
         dispatch(app, ToolResultEvent(id=str(i), name='workflow', result=result))
-    assert len(app.state.transcript) == 1 and app.state.transcript[0].text.startswith('Workflow ·')
+        inventory = [entry.text for entry in app.state.transcript if entry.text.startswith('Attack surface recorded:')]
+        assert len(inventory) == 1 and f'{i+1} input' in inventory[0]
+    assert len(app.state.transcript) == 2 and app.state.transcript[0].text.startswith('Workflow ·')
     assert '0/30 inputs reviewed' in app.state.transcript[0].text
     from src.workflow.state import AttackSurfaceInput
     foreign = AttackSurfaceInput('foreign', 'http://other.lab:3000', method='GET', endpoint='/outside', parameter='secret')
@@ -318,10 +320,9 @@ def test_context_pressure_stable_roots_are_diagnostics_and_capacity_failure_is_v
     app.dispatch(SetBusy(True))
     for count in range(50):
         dispatch(app, DecisionEvent(summary=f'context guard: reduced {count} characters; unresolved pressure: {count*30} tokens'))
-    assert len(app.state.transcript) == 1 and len(app.state.issues) == 1
-    assert app.state.issues[0].category == 'diagnostic' and app.state.issues[0].count == 50
+    assert not app.state.transcript and not app.state.issues
     dispatch(app, DecisionEvent(summary='context guard: reduced 100 characters successfully'))
-    assert len(app.state.transcript) == 1
+    assert not app.state.transcript
     error = ContextCapacityError(200, InputBudget(input_limit=100), 150)
     app.dispatch(AgentEventAction(ErrorEvent(err=error)))
     assert error.estimate == 200 and error.fixed_floor == 150

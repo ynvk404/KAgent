@@ -1071,6 +1071,12 @@ class WorkflowState:
     selected_sources: dict[str, dict[str, Any]] = field(default_factory=dict)
     evidence_sources: dict[str, list[str]] = field(default_factory=dict)
     mutation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+    # Runtime checkpoint bookkeeping, never serialized or used as authority.
+    committed_revision: int = field(default=0, repr=False, compare=False)
+
+    def mark_committed(self) -> None:
+        """Make a canonical mutation checkpoint-eligible before the next await."""
+        self.committed_revision += 1
 
     @staticmethod
     def _media_enrichment_match(existing: Any, incoming: Any, *, candidate: bool) -> bool:
@@ -1273,10 +1279,11 @@ class WorkflowState:
         goal.reason = "No objective-scoped candidate was recorded; class-specific validation was not performed."
         goal.review_artifact_ref = artifact_ref
         goal.review_binding = review_binding
+        self.mark_committed()
         return goal
 
-    @staticmethod
     def set_requested_goal_status(
+        self,
         goal: RequestedGoal,
         status: GoalStatus,
         *,
@@ -1289,10 +1296,15 @@ class WorkflowState:
             raise ValueError(f"unknown requested goal status: {status}")
         if status == "no_candidate":
             raise ValueError("no_candidate requires the explicit workflow review action")
+        changed = (goal.status, goal.reason, goal.review_artifact_ref, goal.review_binding) != (
+            status, reason, None, None,
+        )
         goal.status = status
         goal.reason = reason
         goal.review_artifact_ref = None
         goal.review_binding = None
+        if changed:
+            self.mark_committed()
 
     def objective_inputs(self) -> tuple[AttackSurfaceInput, ...]:
         objective = self.objective
@@ -1565,6 +1577,7 @@ class WorkflowState:
             return False
         self.phase_completions[key] = marker
         self.phase_coverage.pop(key, None)
+        self.mark_committed()
         return True
 
     def progress_facts(self) -> frozenset[str]:
@@ -1701,6 +1714,7 @@ class WorkflowState:
         invalid_evidence_candidate_ids: frozenset[str] = frozenset(),
         generic_eligible_candidate_ids: frozenset[str] = frozenset(),
         validation_errors: dict[str, str | None] | None = None,
+        discovery_artifact_errors: dict[str, str] | None = None,
     ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
         """Return status, actionable work, and blockers for the active objective."""
         objective = self.objective
@@ -1736,6 +1750,8 @@ class WorkflowState:
             )
         for phase in REQUIRED_WHOLE_TARGET_PHASES:
             if phase in completed:
+                if reason := (discovery_artifact_errors or {}).get(phase):
+                    blockers.append(f"phase artifact repair required:{phase}: {reason}")
                 continue
             if phase in available_phases:
                 if phase == "input_analysis" and any(
@@ -1893,9 +1909,11 @@ class WorkflowState:
                         setattr(existing, field_name, value)
                 if self.candidates[result.candidate_id].status == "validating":
                     self.set_candidate_status(result.candidate_id, terminal_status)
+                self.mark_committed()
                 return False
         self.validation_results.append(result)
         self.set_candidate_status(result.candidate_id, terminal_status)
+        self.mark_committed()
         return True
 
     def add_evidence(self, artifact: EvidenceArtifact) -> None:
@@ -1961,6 +1979,7 @@ class WorkflowState:
         result = self.latest_result(candidate_id)
         assert result is not None
         self.persisted_findings[candidate_id] = validation_result_fingerprint(result)
+        self.mark_committed()
 
     def clear(self) -> None:
         self.objective = None

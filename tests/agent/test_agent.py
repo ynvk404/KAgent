@@ -68,6 +68,7 @@ from src.workflow.state import (
     Candidate,
     ValidationResult,
     WorkflowObjective,
+    WorkflowPhase,
     WorkflowState,
 )
 from src.workflow.evidence import EvidenceArtifact
@@ -3242,7 +3243,7 @@ def agent_tool_call(call_id: str, name: str, args: dict[str, Any] | None = None)
 
 
 @pytest.mark.asyncio
-async def test_whole_target_early_final_is_buffered_and_continues_to_runtime_completion():
+async def test_whole_target_early_final_is_buffered_and_continues_to_runtime_completion(tmp_path):
     class CompletePhasesTool(Tool):
         def __init__(self):
             self.state: WorkflowState | None = None
@@ -3262,13 +3263,21 @@ async def test_whole_target_early_final_is_buffered_and_continues_to_runtime_com
         async def run(self, args, signal, prompter) -> str:
             assert self.state is not None and self.state.objective is not None
             objective = self.state.objective
-            for phase in ("recon", "enumeration", "input_analysis"):
+            phase_artifacts: tuple[tuple[WorkflowPhase, str], ...] = (
+                ("recon", "artifacts/recon/target-test/summary.md"),
+                ("enumeration", "artifacts/web-enumeration/target-test/inventory.md"),
+                ("input_analysis", "artifacts/web-input-analysis/target-test/candidates.md"),
+            )
+            for phase, artifact_ref in phase_artifacts:
+                artifact = tmp_path / artifact_ref
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_text("bounded discovery fixture", encoding="utf-8")
                 record_completed_phase(
                     self.state,
                     phase,
                     objective_id=objective.id,
                     target_origin=objective.target_origin or "",
-                    artifact_ref=f"artifacts/{phase}.md",
+                    artifact_ref=artifact_ref,
                     no_inputs_discovered=phase == "input_analysis",
                 )
             return "phases recorded"
@@ -3280,6 +3289,7 @@ async def test_whole_target_early_final_is_buffered_and_continues_to_runtime_com
         ChatResponse(message=Message(role="assistant", content="Assessment summary."), finish_reason="stop"),
     ], [mutate])
     mutate.state = agent.workflow
+    agent.tools.register(WorkflowTool(agent.workflow, agent.target, skills=agent.skills, evidence_root=tmp_path))
     collector = collect()
     await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
 
@@ -3317,8 +3327,12 @@ async def test_ready_workflow_list_grants_one_completion_turn(tmp_path, recovery
     state = WorkflowState(objective=WorkflowObjective(
         id="ready-phase", mode="whole_target", target_origin="https://target.test",
     ))
+    recon_ref = "artifacts/recon/target-test/summary.md"
+    recon_artifact = tmp_path / recon_ref
+    recon_artifact.parent.mkdir(parents=True)
+    recon_artifact.write_text("bounded recon fixture", encoding="utf-8")
     record_completed_phase(state, "recon", objective_id="ready-phase",
-                           target_origin="https://target.test", artifact_ref="artifacts/recon.md")
+                           target_origin="https://target.test", artifact_ref=recon_ref)
     from src.workflow.state import PHASE_COVERAGE_DIMENSIONS
     for dimension in PHASE_COVERAGE_DIMENSIONS["enumeration"]:
         state.record_phase_coverage("enumeration", dimension, "not_applicable",
@@ -3526,13 +3540,20 @@ async def test_whole_target_retries_pending_finding_after_malformed_call(tmp_pat
         id="objective-finding", mode="whole_target",
         target_origin="https://target.test",
     ))
-    for phase in ("recon", "enumeration", "input_analysis"):
+    for phase, artifact_ref in (
+        ("recon", "artifacts/recon/target-test/summary.md"),
+        ("enumeration", "artifacts/web-enumeration/target-test/inventory.md"),
+        ("input_analysis", "artifacts/web-input-analysis/target-test/candidates.md"),
+    ):
+        artifact = tmp_path / artifact_ref
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("bounded discovery fixture", encoding="utf-8")
         record_completed_phase(
             state,
             phase,  # type: ignore[arg-type]
             objective_id="objective-finding",
             target_origin="https://target.test",
-            artifact_ref=f"artifacts/{phase}.md",
+            artifact_ref=artifact_ref,
             no_inputs_discovered=phase == "input_analysis",
         )
     candidate, _ = state.add_candidate(Candidate(
@@ -3963,9 +3984,9 @@ async def test_final_step_tools_get_one_tool_free_synthesis_with_observations():
         "ran:first", "ran:second"
     ]
     assert agent.get_history()[-1].content == "synthesized"
-    assert not any(e.type == "error" and isinstance(e.err, MaxStepsError) for e in collector["events"])
+    assert any(e.type == "error" and isinstance(e.err, MaxStepsError) for e in collector["events"])
     done = collector["events"][-1]
-    assert done.stop_reason == "final_response"
+    assert done.stop_reason == "max_steps"
     assert (done.agent_loop_llm_calls, done.final_synthesis_llm_calls, done.total_llm_calls) == (1, 1, 2)
 
 
@@ -3982,9 +4003,9 @@ async def test_final_synthesis_tool_calls_retry_summary_without_execution():
     assert len(client.requests) == 3
     assert all(request.tools is None for request in client.requests[1:])
     assert len([e for e in collector["events"] if e.type == "tool-result"]) == 1
-    assert not any(e.type == 'error' for e in collector['events'])
+    assert all(isinstance(e.err, MaxStepsError) for e in collector['events'] if e.type == 'error')
     assert agent.history[-1].content == 'Plain summary.'
-    assert collector["events"][-1].stop_reason == "final_response"
+    assert collector["events"][-1].stop_reason == "max_steps"
 
 
 @pytest.mark.asyncio
@@ -6564,7 +6585,7 @@ async def test_max_steps_direct_default_resolves_to_twenty():
     agent, client = refusal_agent(responses, [echo], AlwaysAllow(), max_steps=None)
     collector = collect()
     await agent.run("Explain how SQL injection works", FakeSignal(), collector["sink"])
-    assert collector["events"][-1].stop_reason == "final_response"
+    assert collector["events"][-1].stop_reason == "max_steps"
     assert len(client.requests) == 21
     assert echo.calls == 20
 
@@ -6614,7 +6635,7 @@ async def test_max_steps_direct_explicit_override_wins():
     agent, client = refusal_agent(responses, [echo], AlwaysAllow(), max_steps=30)
     collector = collect()
     await agent.run("Explain how SQL injection works", FakeSignal(), collector["sink"])
-    assert collector["events"][-1].stop_reason == "final_response"
+    assert collector["events"][-1].stop_reason == "max_steps"
     assert len(client.requests) == 31
     assert echo.calls == 30
 
@@ -6669,7 +6690,7 @@ async def test_max_steps_run_options_override_wins():
         collector["sink"],
         opts=AgentRunOptions(max_steps=10),
     )
-    assert collector["events"][-1].stop_reason == "final_response"
+    assert collector["events"][-1].stop_reason == "max_steps"
     assert len(client.requests) == 11
     assert echo.calls == 10
 

@@ -150,6 +150,7 @@ class Transcript:
         self._last_generation: object | None = None
         self._banner_printed = False
         self._last_banner_data: BannerData | None = None
+        self._last_width: int | None = None
 
     def flush(
         self,
@@ -158,6 +159,11 @@ class Transcript:
         generation: object,
         clear_message: str | None = None,
     ) -> None:
+        width = self._width() if self._width is not None else None
+        # RichLog stores rendered strips, so a resize must redraw source entries.
+        if width != self._last_width and self._clear is not None:
+            self._last_generation = None
+        self._last_width = width
         changed = generation != self._last_generation or len(committed) != self._printed_count
         with self._preserve_viewport() if changed and self._preserve_viewport else nullcontext():
             self._flush(committed, banner_data, generation, clear_message)

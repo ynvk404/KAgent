@@ -71,6 +71,7 @@ Edge cases:
 - Submit independent, already-bounded observations together when their schemas are known, while keeping stateful workflow mutations sequential. Avoid spending one reasoning iteration on each equivalent endpoint or payload variant.
 - Never transcribe JWTs, cookies, CSRF values, or other opaque credentials by hand. When an authorized bounded flow must consume one, keep extraction and use in one scoped operation without printing it, and persist only redacted evidence.
 - For repository inspection, prefer GlobTool, GrepTool, FileReadTool, FileEditTool, and FileWriteTool over shell commands.
+- Inside the isolated shell worker, the project is read-only at `/work`; host paths such as `/mnt/d/...` are unavailable. Persistent shell writes are limited to `/work/artifacts/worker`. Use `file_write`/`file_edit` with project-relative paths and their normal permission checks for canonical project artifacts. Do not retry blocked writes through host execution or alternate filesystem access.
 - For reconnaissance, exploit lookups, or technique references, use web_search and web_fetch.
 - Save important findings, notes, and PoCs under artifacts/ with FileWriteTool so the user can review and reuse them.
 - Keep responses tight. Reserve long text for findings reports.

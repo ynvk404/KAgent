@@ -526,6 +526,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
             if facts and facts.activity:
                 call = replace(call, activity=facts.activity)
             call = replace(call, scope=state.presentation_scope,
+                           candidate_id=(facts.operation_candidate_id if facts and facts.operation_candidate_id else call.candidate_id),
                            identity=(facts.operation_owner if facts and facts.operation_owner else call.identity),
                            skill=(facts.activity_skill if facts and facts.activity_skill else call.skill),
                            recovery_identity=(facts.operation_owner if facts and facts.operation_owner else call.recovery_identity))
@@ -582,7 +583,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                 except (ValueError, TypeError):
                     receipt = None
                 completed = isinstance(receipt, dict) and receipt.get("ok") is True
-                if completed and call and call.operation in {"record_result", "start_validation"}:
+                if completed and call and call.operation in {"record_candidate", "record_result", "start_validation"}:
                     completed = bool(facts and facts.accepted_call)
             if completed:
                 state = _recover_issues(state, operation, recovery_identity)
@@ -594,7 +595,8 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
             if ev.name == "http" and ev.status in {"success", "observation"} and not ev.err and ev.http_status is not None and call:
                 state = replace(state, observed=(*state.observed, ProgressRecord("observation", ev.id,
                                 context or _activity_label(ev.name), str(ev.http_status))))
-            flush_progress = bool(call and (call.operation in {"start_validation", "complete_skill", "record_result"}
+            flush_progress = bool(call and (call.operation in {"start_validation", "complete_skill", "record_result",
+                                            "record_input", "set_input_disposition", "record_candidate", "link_input_candidate"}
                                             or ev.name == "confirm_finding"))
             if flush_progress:
                 state = _flush_progress(state)
@@ -611,6 +613,11 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
             state = replace(state, phase="waiting-approval" if state.pending_perm else "waiting-user" if state.pending_ask
                             else "running-tool" if state.pending_calls else "answering" if state.busy else state.phase)
             from src.llm.runtime.context_budget import ContextCapacityError
+            from src.agent.agent import IneffectiveCompactionError
+            if (isinstance(agent_err, IneffectiveCompactionError) or
+                    (str(agent_err).startswith('auto-compact failed (') and
+                     'compact result rejected: projected request would not shrink meaningfully' in str(agent_err))):
+                return state
             return _present_issue(state, "runtime", sanitize_text(str(agent_err)),
                                   root="context capacity" if isinstance(agent_err, ContextCapacityError) else None,
                                   category="cancelled" if isinstance(agent_err, BaseException)
@@ -619,10 +626,8 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
         case DecisionEvent(summary=summary):
             if not state.pending_calls and not state.pending_perm and not state.pending_ask:
                 state = replace(state, phase="planning", running_tool=None, running_skill=None)
-            if summary.startswith(("context guard:", "context pressure:")) and (
-                    "unresolved pressure:" in summary or "fixed/non-compactable floor" in summary):
-                root = "fixed context floor" if "fixed/non-compactable floor" in summary else "reducible capacity pressure"
-                return _present_issue(state, "context", sanitize_text(summary), category="diagnostic", root=root)
+            if summary.startswith(("context guard:", "context pressure:")):
+                return state
             if ev.recommended_skill:
                 event_key = "planner:" + ev.decision_id if ev.decision_id else ""
                 if event_key and event_key in state.milestones:
@@ -637,7 +642,20 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
             return state
 
         case CompactEvent():
-            return state if state.pending_calls or state.pending_perm or state.pending_ask else replace(state, phase="planning")
+            if not state.pending_calls and not state.pending_perm and not state.pending_ask:
+                state = replace(state, phase="planning")
+            # Current runtime supplies both estimates only after successful
+            # compaction. Trigger/skip events never carry an after estimate.
+            if (isinstance(ev.tokens_before, int) and not isinstance(ev.tokens_before, bool)
+                    and isinstance(ev.tokens_after, int) and not isinstance(ev.tokens_after, bool)
+                    and ev.tokens_before >= 0 and ev.tokens_after >= 0):
+                def tokens(value: int) -> str:
+                    return f"{value / 1000:.1f}k" if value >= 1000 else str(value)
+                return _milestone(state, f"compact:{ev.tokens_before}:{ev.tokens_after}",
+                    f"Context compacted · {tokens(ev.tokens_before)} → {tokens(ev.tokens_after)} tokens", "info")
+            if ev.summary.startswith('auto-compacted history:'):
+                return _milestone(state, 'compact:' + ev.summary, 'Context compacted', 'info')
+            return state
 
         case SkillActiveEvent(name=name):
             receipt_id = ev.invocation.id if ev.invocation else ev.call_id
