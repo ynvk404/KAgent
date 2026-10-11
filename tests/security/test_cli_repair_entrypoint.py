@@ -3,6 +3,7 @@ import importlib
 import asyncio
 import json
 import threading
+import logging
 from pathlib import Path
 from dataclasses import replace
 from unittest.mock import AsyncMock
@@ -33,7 +34,18 @@ def cli_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, 'IntelligenceStore', lambda: intelligence)
     monkeypatch.setattr(cli, 'MemoryStore', lambda: memory)
     monkeypatch.setattr(cli, 'EngagementStore', lambda: engagement)
-    return cli
+    # Real CLI startup must exercise logging against disposable user data.
+    # Restore handlers so later tests cannot inherit this fixture's file sink.
+    monkeypatch.setattr(cli.logger, 'default_log_path', lambda: home / '.kagent/logs/kagent.log')
+    base = logging.getLogger(cli.logger.BASE_LOGGER_NAME)
+    handlers, level, disabled = list(base.handlers), base.level, base.disabled
+    yield cli
+    for handler in list(base.handlers):
+        if handler not in handlers:
+            base.removeHandler(handler)
+            handler.close()
+    base.handlers[:] = handlers
+    base.level, base.disabled = level, disabled
 
 
 @pytest.mark.asyncio
@@ -91,6 +103,9 @@ async def test_cli_tui_real_factory_evidence_network_off_and_revoke(lab, tmp_pat
     monkeypatch.setattr(cli.KAgent, 'run_async', run_app)
     assert await cli.main() == 0 and checked
     probe.assert_awaited_once()
+    log_path = cli.logger.default_log_path()
+    assert log_path.is_relative_to(tmp_path) and log_path.is_file()
+    assert 'FAKE_TEST_ONLY' not in log_path.read_text()
 
 
 @pytest.mark.asyncio

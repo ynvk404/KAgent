@@ -11,6 +11,7 @@ from src.permission.permission import (
     PermissionRequest,
     Prompter,
     UserControlledRefusal,
+    PermissionReviewStale,
 )
 from src.tools.common.types import (
     Tool,
@@ -25,8 +26,10 @@ from src.tools.common.types import (
     ContextReductionTool,
 )
 from src.llm.core.types import ToolSpec
-from src.permission.runtime.execution import ExecutionPolicy, ExecutionReceipt, policy_for
-from src.permission.runtime.invocations import permission_invocation
+from src.permission.runtime.execution import ExecutionPolicy, ExecutionReceipt, ExecutionBlocked, policy_for
+from src.permission.runtime.invocations import permission_invocation, capture_review
+from src.permission.network.grants import check_cancelled
+from src.session.tool_results import ResultUnavailable
 from src.tools.common.approval_display import redact_approval as redact
 
 
@@ -190,10 +193,23 @@ class Registry:
         if callable(freeze):
             tool = cast(Tool, freeze())
         args = deepcopy(args)
+        if not isinstance(args, dict):
+            raise InvalidToolArguments("arguments must be an object")
         policy = policy_for(prompter)
         if policy is not None and type(tool).__module__ == 'src.tools.common.browser_capture':
             tool = cast(Tool, getattr(tool, 'bind_execution_policy')(policy))
-        receipt = policy.prepare(tool, args) if policy is not None else None
+        # Reject malformed inputs before policy preparation can create a
+        # receipt, occupy pending-review state, or derive resource identities.
+        if isinstance(tool, ArgumentValidatingTool):
+            try:
+                tool.validate_args(args)
+            except ResultUnavailable:
+                # An unavailable producer-issued reference is a retrieval
+                # failure, not a malformed call. Preserve the public contract.
+                raise
+            except (TypeError, ValueError) as err:
+                raise InvalidToolArguments(str(err)) from err
+        receipt = policy.prepare(tool, args, reviewing=True, signal=signal) if policy is not None else None
         try:
             return await self._execute(tool, args, signal, prompter, policy, receipt)
         finally:
@@ -214,17 +230,11 @@ class Registry:
         # caller changes nested arguments while the operator is reviewing.
         args = deepcopy(args)
 
-        if isinstance(tool, ArgumentValidatingTool):
-            try:
-                tool.validate_args(args)
-            except (TypeError, ValueError) as err:
-                raise InvalidToolArguments(str(err)) from err
-
         if isinstance(tool, AuthorizedExecutionTool):
             # Native HTTP uses operator grants/exact receipts rather than the
             # generic phase hints and origin permission cache. Direct tool calls
             # use the same gate; this is not an unguarded dispatch path.
-            token = policy.start(receipt, tool, args, signal) if policy and receipt else None
+            token = policy.start(policy.dispatch_receipt(receipt, tool, args, signal), tool, args, signal) if policy and receipt else None
             try:
                 return await tool.run_authorized(args, signal, prompter)
             finally:
@@ -278,15 +288,44 @@ class Registry:
                 force_operator=hints.get("forceOperator", False),
                 offer_browser_grant=hints.get("browserGrant"),
             )
+            review_guard = capture_review(signal=signal)
+            if policy is not None:
+                stamp = policy.stamp()
+                request.is_current = lambda: (policy.review_is_current(receipt, tool, args) if receipt is not None
+                                              else policy.stamp() == stamp)
+            else:
+                request.is_current = review_guard.is_current
+            if type(tool).__module__ not in {
+                    'src.tools.execution.file', 'src.tools.discovery.content', 'src.tools.discovery.service'}:
+                request.no_session_cache = True
+            if type(tool).__module__ != 'src.tools.mcp.integration':
+                request.offer_browser_grant = None
+            if request.offer_browser_grant:
+                request.session_scope_display, grant_detail = getattr(tool, 'browser_grant_review')(args)
+                request.detail += '\n\n' + redact(grant_detail)
 
             decision = (Decision.ALLOW_ONCE if policy is not None and policy.yolo
                         and (not request.force_operator or request.yolo_auto_approve)
                         else await prompter.ask(request, signal))
 
-            if decision == Decision.GRANT_LAB and request.offer_browser_grant:
-                decision = await getattr(tool, 'review_browser_grant')(args, prompter, signal)
+            check_cancelled(signal)
+            if request.is_current is not None and not request.is_current():
+                raise (ExecutionBlocked if policy is not None else PermissionReviewStale)('blocked: stale permission review')
 
-            if decision == Decision.DENY:
+            if decision == Decision.GRANT_LAB and request.offer_browser_grant:
+                decision = await getattr(tool, 'review_browser_grant')(args, prompter, signal, is_current=request.is_current)
+            elif decision == Decision.ALLOW_SESSION and request.offer_browser_grant:
+                if request.is_current is not None and not request.is_current():
+                    raise PermissionReviewStale('blocked: stale Browser permission review')
+                getattr(tool, 'activate_reviewed_browser_grant')(args, signal)
+                decision = Decision.ALLOW_ONCE
+
+            check_cancelled(signal)
+            if request.is_current is not None and not request.is_current():
+                raise (ExecutionBlocked if policy is not None else PermissionReviewStale)('blocked: stale permission review')
+
+            if decision not in {Decision.ALLOW_ONCE, Decision.ALLOW_SESSION} or (
+                    decision == Decision.ALLOW_SESSION and not request.supports_session):
                 if policy is not None and receipt is not None:
                     policy.finish_review(receipt, denied=True)
                 raise UserControlledRefusal(
@@ -301,7 +340,7 @@ class Registry:
         else:
             run_prompter = prompter
 
-        token = policy.start(receipt, tool, args, signal) if policy and receipt else None
+        token = policy.start(policy.dispatch_receipt(receipt, tool, args, signal), tool, args, signal) if policy and receipt else None
         try:
             return await tool.run(args, signal, run_prompter)
         finally:

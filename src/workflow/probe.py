@@ -38,12 +38,22 @@ class ProbeProposal:
         # performed by parse(), while the model gets the concrete interface.
         return {
             "type": "object",
+            "properties": {
+                **{key: {'type': 'string', 'minLength': 1} for key in (
+                    'candidate_id', 'objective_id', 'target_origin', 'endpoint', 'method', 'location', 'parameter')},
+                'values': {'type': 'array', 'minItems': 1, 'items': {'type': 'string',
+                    'description': 'At most 4096 UTF-8 bytes per concrete value.'}},
+                **{key: {'type': ['string', 'null']} for key in ('baseline_request_ref', 'auth_context_ref', 'input_path')},
+                'occurrence': {'type': 'integer', 'minimum': 0},
+                'observation': {'type': 'string', 'enum': ['compare-response', 'compare-status', 'compare-header']},
+                'capture': {'type': 'string', 'enum': ['native-http+candidate-proof']},
+                'stop': {'type': 'string', 'enum': ['after-comparison']},
+            },
+            'required': ['candidate_id', 'objective_id', 'target_origin', 'endpoint', 'method', 'location', 'parameter', 'values'],
+            'additionalProperties': False,
             "description": (
-                "Generic start: candidate_id/objective_id/target_origin/endpoint/method/location/parameter; "
-                "values:[strings]. Optional baseline_request_ref/auth_context_ref/occurrence/input_path. "
-                "Defaults observation=compare-response, "
-                "capture=native-http+candidate-proof, stop=after-comparison. "
-                "Matching controller-verified action context required; no authority."
+                "Generic start needs matching controller-verified action context. "
+                "Concrete comparison/capture/stop proposal; grants no authority."
             ),
         }
 

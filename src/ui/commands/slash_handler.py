@@ -40,10 +40,6 @@ _KEYBINDINGS: list[tuple[str, str]] = [
     ),
     ("Ctrl-N / Ctrl-J", "insert a newline inside the input"),
     ("Ctrl-A / Ctrl-E", "jump to start / end of the current line"),
-    (
-        "Ctrl-K / Ctrl-O / Ctrl-F",
-        "toggle latest / all tool output / cycle transcript filter",
-    ),
     ("Esc / Ctrl-C", "clear or cancel / quit"),
 ]
 
@@ -315,11 +311,12 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                 policy.refresh_network()
                 text = "Operator cleared vetted DNS bindings; next native connection re-vets its declared origin. No quota refill."
             elif sub == "limits" and len(rest) == 3 and policy is not None:
-                calls, concurrency = int(rest[1]), int(rest[2])
-                if calls <= 0 or concurrency <= 0:
-                    raise ValueError("limits must be positive: /permissions limits <session-calls> <concurrency>")
+                calls, concurrency = (None if rest[1] == 'session' else int(rest[1])), int(rest[2])
+                if (calls is not None and calls <= 0) or concurrency <= 0:
+                    raise ValueError("limits must be positive: /permissions limits <session-calls|session> <concurrency>")
                 policy.max_calls, policy.concurrency = calls, concurrency
                 policy.revision += 1
+                policy.persist()
                 text = policy.status()
             elif sub == "deny" and len(rest) == 1:
                 rights.deny_session()

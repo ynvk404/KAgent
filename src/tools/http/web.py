@@ -226,6 +226,10 @@ class WebFetchTool(Tool):
         return False
 
     async def run(self, args: dict[str, Any], signal: Any, prompter: Prompter) -> ToolOutput:
+        # Preserve this adapter's established direct-call abort exception;
+        # native HTTP keeps its separate CancelledError lifecycle.
+        if _is_aborted(signal):
+            raise _FetchAborted()
         guard_adapter(self, args, prompter)
         url = arg_string(args, "url")
         if not url:

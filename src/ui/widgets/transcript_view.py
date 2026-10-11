@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from rich.segment import Segment
-from rich.text import Text
 from textual.geometry import Offset
 from textual.selection import Selection
 from textual.strip import Strip
 from textual.widgets import RichLog
 
-from src.ui.core.state import TranscriptEntry
 from src.ui.theme import ACCENT, MUTED
-from src.ui.widgets.transcript import entry_view
 
 
 class TranscriptView(RichLog):
@@ -34,38 +34,49 @@ class TranscriptView(RichLog):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(wrap=True, markup=False, highlight=False, **kwargs)
-        self._printed_count = 0
-        self._last_generation: object | None = None
-
-    def sync(
-        self,
-        committed: list[TranscriptEntry],
-        generation: object,
-    ) -> None:
-        if generation != self._last_generation:
-            self.clear()
-            self._printed_count = 0
-            self._last_generation = generation
-
-        new_entries = committed[self._printed_count :]
-        for entry in new_entries:
-            self._write_entry(entry)
-
-        self._printed_count = len(committed)
-
-    def _write_entry(self, entry: TranscriptEntry) -> None:
-        width = self.transcript_content_width
-        for line in entry_view(entry, width=width):
-            self.write(
-                Text.from_ansi(line.text, style=line.color or ""),
-                width=width,
-            )
 
     @property
     def transcript_content_width(self) -> int:
         """Width available to transcript rows and the native scrollbar."""
         content_width = self.content_region.width or self.size.width
         return max(1, content_width - self.scrollbar_size_vertical)
+
+    @contextmanager
+    def preserve_viewport(self) -> Iterator[None]:
+        """Follow the tail only there; anchor history across aggregate rewrites."""
+        auto_scroll = self.auto_scroll
+        follow_tail = auto_scroll and self.is_vertical_scroll_end
+        offset = self.scroll_offset
+        old_count = len(self.lines)
+        old_first = self.lines[0] if self.lines else None
+        anchors: list[tuple[int, str, int]] = []
+        if not follow_tail:
+            texts = [line.text for line in self.lines]
+            for index in range(offset.y, min(len(texts), offset.y + self.size.height)):
+                if texts[index].strip():
+                    anchors.append((index - offset.y, texts[index], texts[:index].count(texts[index])))
+        # Batch writes must not schedule a scroll for every rendered line.
+        self.auto_scroll = False
+        try:
+            yield
+        finally:
+            self.auto_scroll = auto_scroll
+            changed = (old_count != len(self.lines) or
+                       (bool(self.lines) and self.lines[0] is not old_first))
+            if changed:
+                if follow_tail:
+                    self.scroll_end(animate=False, immediate=True, x_axis=False)
+                    # The live Assistant widget may change the viewport height
+                    # during the same dispatch. Follow its final layout as well.
+                    self.scroll_end(animate=False, immediate=False, x_axis=False)
+                else:
+                    top = offset.y
+                    for delta, text, occurrence in anchors:
+                        matches = [index for index, line in enumerate(self.lines) if line.text == text]
+                        if occurrence < len(matches):
+                            top = matches[occurrence] - delta
+                            break
+                    self.scroll_to(x=offset.x, y=max(0, top), animate=False, immediate=True, force=True)
 
     def render_line(self, y: int):
         scroll_x, scroll_y = self.scroll_offset

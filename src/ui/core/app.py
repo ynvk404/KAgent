@@ -71,9 +71,7 @@ from src.ui.core.state import (
     AgentEventAction,
     Append,
     Clear,
-    CycleTranscriptFilter,
-    ToggleAllToolOutputs,
-    ToggleLatestToolOutput,
+    FinalizeDeferredOutcome,
     MergeBannerData,
     SetApiReady,
     SetAsk,
@@ -83,10 +81,10 @@ from src.ui.core.state import (
     SetSkillsPicker,
     SetYolo,
     TranscriptEntry,
-    TranscriptFilter,
     initial_state,
     reducer,
 )
+from src.ui.core.outcomes import runtime_facts
 from src.ui.render.sanitize import sanitize_text
 from src.ui.render.color_level import color_level
 from src.ui.utils.ping import PingTask
@@ -209,10 +207,16 @@ class _RichLogWriter:
 
     def write(self, s: str) -> int:
         self._log.write(
-            Text.from_ansi(s.rstrip("\n")),
+            Text(sanitize_text(s.rstrip("\n"))),
             width=self.content_width(),
         )
         return len(s)
+
+    def write_line(self, line) -> None:
+        text = (Text.from_ansi(line.text) if getattr(line, 'trusted_ansi', False)
+                else Text(sanitize_text(line.text)))
+        text.style = line.color
+        self._log.write(text, width=self.content_width())
 
     def write_banner(self, data: BannerData) -> None:
         width = self.content_width()
@@ -340,41 +344,6 @@ class _PermissionStatic(CursorStatic):
         selected = selection.extract(visual_text)
         cleaned = _clean_permission_selection(selected)
         return (cleaned, "\n") if cleaned else None
-
-
-def filter_transcript(
-    entries: list[TranscriptEntry], f: TranscriptFilter
-) -> list[TranscriptEntry]:
-    if f == "all":
-        return entries
-    if f == "errors":
-        return [e for e in entries if e.kind == "error"]
-    if f == "findings":
-        return [e for e in entries if e.kind == "finding"]
-    if f == "compact":
-        return [e for e in entries if e.kind not in ("tool-call", "tool-result")]
-    if f == "current":
-        start = 0
-        for i in range(len(entries) - 1, -1, -1):
-            if entries[i].kind == "user":
-                start = i
-                break
-        return entries[start:]
-    return entries
-
-
-def transcript_entry_matches_filter(
-    entry: TranscriptEntry, f: TranscriptFilter
-) -> bool:
-    if f == "all":
-        return True
-    if f == "errors":
-        return entry.kind == "error"
-    if f == "findings":
-        return entry.kind == "finding"
-    if f == "compact":
-        return entry.kind not in ("tool-call", "tool-result")
-    return True  
 
 
 class KAgent(App):
@@ -560,6 +529,8 @@ class KAgent(App):
             width=rich_log_writer.content_width,
             clear=self.transcript_log.clear,
             write_banner=rich_log_writer.write_banner,
+            preserve_viewport=self.transcript_log.preserve_viewport,
+            write_line=rich_log_writer.write_line,
         )
 
         self.overlay_static = Vertical(id="overlay")
@@ -583,6 +554,10 @@ class KAgent(App):
         self,
         action: Action,
     ) -> None:
+        if isinstance(action, AgentEventAction) and action.facts is None:
+            action = replace(action, facts=runtime_facts(self.agent, action.event, self.state.pending_calls))
+        elif isinstance(action, SetBusy) and action.busy and not self.state.busy and action.facts is None:
+            action = replace(action, facts=runtime_facts(self.agent, None, self.state.pending_calls))
         self.state = reducer(
             self.state,
             cast(Any, action),
@@ -595,6 +570,7 @@ class KAgent(App):
             self._stop_turn_timer()
 
         self._recompute_view()
+        self._render_input()
 
         self.refresh()
 
@@ -910,6 +886,11 @@ class KAgent(App):
             self.exit()
             return
 
+        # A visible permission proposal owns Escape independently of its turn.
+        if key == "escape" and isinstance(self._get_active_modal(), PermissionModal):
+            await self._handle_modal_key(key, raw_input)
+            return
+
         if key == "escape" and self.state.busy:
             if self.run_abort_event is not None:
                 self.run_abort_event.set()
@@ -918,15 +899,6 @@ class KAgent(App):
         if await self._handle_modal_key(key, raw_input):
             return
 
-        if key == "ctrl+k":
-            self.dispatch(ToggleLatestToolOutput())
-            return
-        if key == "ctrl+o":
-            self.dispatch(ToggleAllToolOutputs())
-            return
-        if key == "ctrl+f":
-            self.dispatch(CycleTranscriptFilter())
-            return
         if len(self.mention_matches) > 0:
             if key == "up":
                 self.mention_idx = (self.mention_idx - 1 + len(self.mention_matches)) % len(self.mention_matches)
@@ -1138,6 +1110,9 @@ class KAgent(App):
         self._sync_overlay()
 
     def _publish_notice(self, text: str) -> None:
+        if "\n" not in text and text.startswith(("Burp bridge: captured request", "Burp bridge: received event",
+                            "Burp bridge: received session snapshot", "Burp bridge: received issue for import")):
+            return
         if "Token:" in text and "Burp bridge" in text:
             text = "\n".join("Bridge token hidden; /burp credentials to reveal/copy locally"
                              if line.startswith("Token:") else line for line in text.splitlines())
@@ -1183,33 +1158,27 @@ class KAgent(App):
     def _recompute_view(self) -> None:
 
         transcript = self.state.transcript
-        tfilter = self.state.transcript_filter
 
         last = transcript[-1] if transcript else None
         live = last if (last and last.kind == "assistant" and last.streaming) else None
         committed = transcript[:-1] if live else transcript
 
-        filtered_committed = filter_transcript(list(committed), tfilter)
-        generation = (
-            f"{self.state.clear_gen}:{tfilter}:{self.state.transcript_revision}"
-        )
+        generation = f"{self.state.clear_gen}:{self.state.transcript_revision}"
         self.transcript_writer.flush(
-            filtered_committed,
+            list(committed),
             self.state.banner_data,
             generation,
             clear_message=self.state.clear_message,
         )
 
-        show_live = transcript_entry_matches_filter(live, tfilter) if live else False
-        if live and show_live:
+        self.live_entry_static.display = live is not None
+        if live:
             self._render_live_entry(live)
         else:
             self.live_entry_static.update("")
 
-        expand_hint = any(e.collapsible for e in transcript)
-
         self._sync_overlay()
-        self._sync_status_bar(expand_hint=expand_hint)
+        self._sync_status_bar()
 
     def _render_live_entry(self, live: TranscriptEntry) -> None:
         text = Text()
@@ -1308,7 +1277,7 @@ class KAgent(App):
             text.append(ln.text, style=style)
         return text
 
-    def _sync_status_bar(self, *, expand_hint: bool) -> None:
+    def _sync_status_bar(self) -> None:
         # Runtime switches, carried state and in-place schema changes can all
         # change pressure without changing transcript length. This lightweight
         # estimate does no recall/search; recompute instead of a stale UI cache.
@@ -1319,20 +1288,22 @@ class KAgent(App):
             "request_tokens": self.agent.idle_request_estimate().estimated_total,
             "compact_threshold": self.agent.get_auto_compact_threshold(),
         }
+        # Permission requests do not identify a tool call. With overlapping
+        # operations, keep the wait truthful without guessing its candidate.
+        ambiguous_wait = self.state.phase == "waiting-approval" and len(self.state.pending_calls) > 1
 
         self.status_bar.apply(
             StatusProps(
                 busy=self.state.busy,
                 api_ready=self.state.api_ready,
-                active_skill=self.state.active_skill,
+                active_skill=None if ambiguous_wait else self.state.running_skill
+                             if self.state.pending_calls else self.state.active_skill,
                 yolo=self.state.yolo,
                 phase=self.state.phase,
-                transcript_filter=self.state.transcript_filter,  
                 model=self.state.banner_data.model,
                 tool_support=self.state.banner_data.tool_support,
                 target=self._status_info["target"],
-                expand_hint=expand_hint,
-                running_tool=self.state.running_tool,
+                running_tool=None if ambiguous_wait else self.state.running_tool,
                 ctx_tokens=self._status_info["ctx_tokens"],
                 request_tokens=self._status_info["request_tokens"],
                 compact_threshold=self._status_info["compact_threshold"],
@@ -1434,6 +1405,8 @@ class KAgent(App):
         def handle_event(
             ev: AgentEvent,
         ) -> None:
+            if self.run_abort_event is not abort_event:
+                return
             if self.session_debug is not None:
                 self.session_debug.agent_event(dataclasses.asdict(ev))
 
@@ -1465,14 +1438,7 @@ class KAgent(App):
 
                     self.dispatch(SetAsk(req=None))
 
-                    self.dispatch(
-                        Append(
-                            entry=TranscriptEntry(
-                                kind="system",
-                                text="stopped at max steps",
-                            )
-                        )
-                    )
+                    self.dispatch(FinalizeDeferredOutcome())
 
                 async def wait_abort_then_reject() -> None:
                     await abort_event.wait()
@@ -1490,14 +1456,7 @@ class KAgent(App):
                     else:
                         self.dispatch(SetAsk(req=None))
 
-                        self.dispatch(
-                            Append(
-                                entry=TranscriptEntry(
-                                    kind="system",
-                                    text="stopped at max steps",
-                                )
-                            )
-                        )
+                        self.dispatch(FinalizeDeferredOutcome())
 
                 def reject_max_steps(_: Exception) -> None:
                     abort_watcher.cancel()
@@ -1547,6 +1506,8 @@ class KAgent(App):
             )
 
         except Exception as err:
+            if self.run_abort_event is not abort_event:
+                return
             if self.session_debug is not None:
                 self.session_debug.write(
                     "run_error",
@@ -1565,15 +1526,14 @@ class KAgent(App):
             )
 
         finally:
-            self.run_abort_event = None
-
-            self._stop_turn_timer()
-
-            self.dispatch(
-                SetBusy(
-                    busy=False,
+            if self.run_abort_event is abort_event:
+                self.run_abort_event = None
+                self._stop_turn_timer()
+                self.dispatch(
+                    SetBusy(
+                        busy=False,
+                    )
                 )
-            )
 
 
     def run_agent_compact(self) -> None:
@@ -1607,6 +1567,8 @@ class KAgent(App):
         self.run_abort_event = abort_event
 
         def handle_event(event: AgentEvent) -> None:
+            if self.run_abort_event is not abort_event:
+                return
             if self.session_debug is not None:
                 self.session_debug.agent_event(dataclasses.asdict(event))
 
@@ -1622,6 +1584,8 @@ class KAgent(App):
             raise
 
         except Exception as err:
+            if self.run_abort_event is not abort_event:
+                return
             if self.session_debug:
                 self.session_debug.write(
                     "compact_error",
@@ -1643,15 +1607,14 @@ class KAgent(App):
             )
 
         finally:
-            self.run_abort_event = None
-            self.run_task = None
-
-
-            self.dispatch(
-                SetBusy(
-                    busy=False,
+            if self.run_abort_event is abort_event:
+                self.run_abort_event = None
+                self.run_task = None
+                self.dispatch(
+                    SetBusy(
+                        busy=False,
+                    )
                 )
-            )
 
 
     def on_resize(self, event: events.Resize) -> None:

@@ -2,6 +2,7 @@ import asyncio
 import ipaddress
 import socket
 from urllib.parse import urlparse
+import time
 
 from src.target.origin import HTTPOrigin
 
@@ -9,6 +10,7 @@ from src.permission.permission import (
     PermissionRequest,
     Decision,
     UserControlledRefusal,
+    PermissionReviewStale,
 )
 
 
@@ -67,7 +69,19 @@ async def gate_private_request(
     tool_name: str,
     target=None,
     permission_cache_key: str | None = None,
+    is_current=None,
 ) -> str:
+    from src.permission.runtime.invocations import capture_review, REVIEW_TIMEOUT_SECONDS
+    from src.permission.runtime.execution import policy_for
+    from src.permission.network.grants import check_cancelled
+    policy = policy_for(prompter)
+    active_check = policy.active_review_check() if policy is not None else lambda: True
+    revision = getattr(target, 'revision', None)
+    guard = capture_review(signal=signal, clock=policy.clock if policy else time.monotonic,
+                           timeout=policy.review_timeout if policy else REVIEW_TIMEOUT_SECONDS,
+                           condition=lambda: (active_check() and getattr(target, 'revision', None) == revision
+                                              and (is_current is None or is_current())))
+    check_cancelled(signal)
     reason = await private_host_reason(
         parsed.hostname
     )
@@ -112,11 +126,15 @@ async def gate_private_request(
                 if is_declared_target
                 else None
             ),
+            is_current=guard.is_current,
         ),
         signal,
     )
 
-    if decision == Decision.DENY:
+    check_cancelled(signal)
+    if not guard.is_current():
+        raise PermissionReviewStale('blocked: stale private-host permission review')
+    if decision not in {Decision.ALLOW_ONCE, Decision.ALLOW_SESSION}:
         raise PrivateHostDeclined(
             f"request to private/internal URL denied: "
             f"{parsed.geturl()}"

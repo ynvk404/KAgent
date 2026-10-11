@@ -25,7 +25,6 @@ from src.tools.common.outcome import ToolOutput
 from src.tools.common.registry import Registry
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import WorkflowState
-from src.ui.render.tool_result_format import build_tool_result_view
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, collect
 from tests.security.test_execution_policy import runtime, REAL_CLIENT
 
@@ -141,7 +140,8 @@ def test_preserved_workflow_result_reports_residual_without_destroying_semantics
     assert 'unresolved pressure' in events[-1]['summary']
     events.clear()
     agent.guard_working_context(working, events.append, AgentRunOptions(tools=False))
-    assert any('unresolved pressure' in e['summary'] for e in events)
+    assert events == []  # Unchanged pressure is recorded but not narrated again.
+    assert agent.last_context_diagnostics['estimated_total'] > agent.last_context_diagnostics['reduction_target']
     assert not any('reduced 0' in e['summary'] for e in events)
 
 
@@ -195,8 +195,11 @@ async def test_live_request_ui_history_and_resume_are_sanitized(payload, tmp_pat
     if payload.startswith('eyJ'):
         assert payload.splitlines()[0] not in expected
     assert '{INJECTION_POINT}' in expected
-    view = build_tool_result_view(event.result)
-    assert SECRET not in view.full + view.preview
+    from src.ui.core.state import initial_state, reducer, AgentEventAction
+    from src.ui.widgets.banner import BannerData
+    presentation = reducer(initial_state("", BannerData("test", "test", ".")), AgentEventAction(event))
+    assert SECRET not in repr(presentation.transcript)
+    assert not any("{INJECTION_POINT}" in entry.text for entry in presentation.transcript)
     assert tool.text == payload and tool.calls == 1
     await agent.save()
     assert SECRET not in store.path.read_text()

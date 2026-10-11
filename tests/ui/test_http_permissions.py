@@ -97,7 +97,7 @@ def test_operator_show_revoke_deny_retry_commands():
 
 
 @pytest.mark.asyncio
-async def test_real_modal_g_reviews_then_y_activates_grant(monkeypatch):
+async def test_real_modal_a_activates_session_grant_without_second_review(monkeypatch):
     monkeypatch.setattr(KAgent, "on_mount", lambda self: None)
     app = make_app()
     app._sync_overlay = KAgent._sync_overlay.__get__(app, KAgent)
@@ -111,15 +111,16 @@ async def test_real_modal_g_reviews_then_y_activates_grant(monkeypatch):
         try:
             await pilot.pause()
             assert app.state.pending_perm and app.state.pending_perm.offer_http_lab
+            assert "Once-only execution envelope:" in app.state.pending_perm.detail
+            assert app.state.pending_perm.session_scope_display is not None
+            assert "all endpoints, methods and payloads" in app.state.pending_perm.session_scope_display
+            assert "no request quota or fixed grant TTL" in app.state.pending_perm.session_scope_display
             assert not tool.permissions.grants
-            await pilot.press("g")
-            await pilot.pause()
-            assert app.state.pending_perm and app.state.pending_perm.tool == "http_lab_grant"
-            assert not tool.permissions.grants
-            await pilot.press("v", "end", "y")
+            await pilot.press("a")
             await pilot.pause()
             receipt = await task
             assert receipt.grant_id and tool.permissions.grants
+            assert tool.permissions.grants[action.origin].expires_at is None
             assert app.state.pending_perm is None
         finally:
             if not task.done():

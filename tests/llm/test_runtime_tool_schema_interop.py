@@ -113,3 +113,52 @@ async def test_actual_registry_agent_client_sends_provider_payload(provider, mon
     assert decl["name"] == "file_read"
     schema = decl["input_schema" if provider == "anthropic" else "parameters"]
     assert schema["properties"]["rows"]["items"]["required"] == ["value"]
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "gemini"])
+def test_c1_real_contracts_encode_offline_without_mutating_local_schemas(provider, tmp_path):
+    from src.coverage.store import CoverageStore
+    from src.engagement.state import EngagementState
+    from src.llm.providers.openai import OpenAIClient
+    from src.permission.permission import AlwaysAllow
+    from src.target.target import Target
+    from src.tools.common.ask import AskUserTool
+    from src.tools.execution.file import FileWriteTool, FileEditTool
+    from src.tools.http.http_tool import HTTPTool
+    from src.tools.workflow.coverage import CoverageTool
+    from tests.tools.test_discovery_tools import make_content_tool, make_service_tool
+
+    target = Target("http://target.test:8080")
+    engagement = EngagementState()
+    engagement.initialize_target(target.base_url())
+    registry = Registry()
+    for tool in (FileWriteTool(), FileEditTool(), HTTPTool(target, engagement),
+                 AskUserTool(cast(Any, AlwaysAllow())), CoverageTool(CoverageStore(str(tmp_path / "coverage.json"))),
+                 make_content_tool(), make_service_tool()):
+        registry.register(tool)
+    specs = registry.as_llm_tools()
+    before = deepcopy(specs)
+    request = ChatRequest("fixture", [Message("user", "next")], tools=specs)
+    if provider == "openai":
+        body = OpenAIClient("https://fixture.invalid", "synthetic", "fixture").encode_request(request, False)
+        encoded = {t["function"]["name"]: t["function"]["parameters"] for t in body["tools"]}
+    elif provider == "anthropic":
+        encoded = {t["name"]: t["input_schema"] for t in encode(provider, request)["tools"]}
+    else:
+        encoded = {t["name"]: t["parameters"] for t in encode(provider, request)["tools"][0]["functionDeclarations"]}
+    assert specs == before
+    assert set(encoded) == set(registry.names())
+    assert encoded["file_write"]["required"] == ["path", "content"]
+    assert encoded["file_edit"]["required"] == ["path", "old_string", "new_string"]
+    assert encoded["ask_user"]["properties"]["questions"]["maxItems"] == 4
+    assert encoded["coverage"]["properties"]["limit"]["type"].lower() == "integer"
+    assert encoded["content_discovery"]["properties"]["max_requests"]["minimum"] == 3
+    assert encoded["service_discovery"]["properties"]["timeout_seconds"]["maximum"] == 120
+    local_http = registry.get("http")
+    assert local_http is not None
+    assert local_http.schema()["properties"]["headers"]["additionalProperties"] == {"type": "string"}
+    if provider == "gemini":
+        assert "additionalProperties" not in encoded["http"]["properties"]["headers"]
+    # Local enforcement remains authoritative when an encoder drops a constraint.
+    with pytest.raises(ValueError, match="headers"):
+        cast(HTTPTool, local_http).validate_args({"phase": "recon", "url": "/", "headers": {"X-Probe": 1}})

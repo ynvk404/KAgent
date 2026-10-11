@@ -176,6 +176,7 @@ from src.ui.core.app import (
     ProviderChange,
 )
 from src.ui.core.custom_provider_adapter import ConfigBackedCustomProviderAdapter
+from src.ui.render.sanitize import sanitize_text
 from src.ui.commands.slash_handler import normalize_target_url
 from src.permission.network.control import parse_lab_spec
 
@@ -1604,34 +1605,34 @@ def emit(event: dict) -> None:
     event_type = event.get("type")
 
     if event_type == "assistant-text":
-        text = event.get("text", "")
+        text = sanitize_text(str(event.get("text") or ""))
         if text:
             print(f"\n{text}")
 
     elif event_type == "assistant-delta":
-        print(event.get("text", ""), end="", flush=True)
+        print(sanitize_text(str(event.get("text", ""))), end="", flush=True)
 
     elif event_type == "tool-call":
-        name = event.get("name", "?")
+        name = sanitize_text(str(event.get("name", "?")))
         args = event.get("args", {})
-        tool_id = event.get("id", "")[:8]
+        tool_id = sanitize_text(str(event.get("id", "")))[:8]
 
         print()
         print(_hr())
         print(f"{BOLD(CYAN('▶ TOOL CALL'))}  {BOLD(name)}  {DIM(f'#{tool_id}')}")
         if args:
-            pretty = _pretty_args(args)
+            pretty = sanitize_text(_pretty_args(args))
             for line in pretty.splitlines():
                 print(f"  {DIM(line)}")
 
     elif event_type == "tool-result":
-        name = event.get("name", "?")
-        result = event.get("result", "")
-        err = event.get("err", "")
+        name = sanitize_text(str(event.get("name", "?")))
+        result = sanitize_text(str(event.get("result") or ""))
+        err = sanitize_text(str(event.get("err") or ""))
         duration = event.get("duration_ms")
 
         status = RED("✖ FAILED") if err else GREEN("✔ RESULT")
-        meta = f"  {DIM(f'{duration}ms')}" if duration is not None else ""
+        meta = f"  {DIM(sanitize_text(str(duration)) + 'ms')}" if duration is not None else ""
         print(f"{BOLD(status)}  {BOLD(name)}{meta}")
 
         if err:
@@ -1643,22 +1644,22 @@ def emit(event: dict) -> None:
         print(_hr())
 
     elif event_type == "decision":
-        summary = event.get("summary", "")
+        summary = sanitize_text(str(event.get("summary", "")))
         print(f"\n{MAGENTA('◆ DECISION')}  {summary}")
 
     elif event_type == "skill-active":
-        name = event.get("name", "?")
+        name = sanitize_text(str(event.get("name", "?")))
         print(f"\n{BLUE('◈ SKILL ACTIVE')}  {BOLD(name)}")
 
     elif event_type == "error":
-        err = event.get("err", "")
+        err = sanitize_text(str(event.get("err", "")))
         print(f"\n{RED(BOLD('✖ ERROR'))}  {RED(str(err))}")
 
     elif event_type == "done":
         print()
 
     else:
-        print(f"\n{YELLOW('? UNKNOWN EVENT')}  {DIM(str(event))}")
+        print(f"\n{YELLOW('? UNKNOWN EVENT')}  {DIM(sanitize_text(str(event)))}")
 
 def _term_width(default: int = 100) -> int:
     try:

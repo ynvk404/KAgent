@@ -75,6 +75,10 @@ class CommandPluginTool:
             from src.permission.worker.broker import broker_directory
             async with broker_directory(signal) as broker:
                 command, argv = await worker.prepare(command, argv, broker=broker, signal=signal)
+                from src.permission.runtime.execution import policy_for
+                policy = policy_for(prompter)
+                if policy is not None:
+                    policy.revalidate_active(self, args, signal)
                 return await run_plugin(command, argv, args, signal)
         return await run_plugin(
             command,

@@ -24,7 +24,7 @@ REAL_CLIENT = httpx.AsyncClient
 
 
 def assert_pending(result):
-    assert result.status == 'error' and result.error_kind == 'permission_denied'
+    assert result.status == 'pending' and result.error_kind == 'permission_pending'
     assert result.startswith('pending:') and result.http_status is None
 
 
@@ -120,7 +120,7 @@ async def test_yolo_off_retains_exact_http_approval(replay):
     _, args = replay.baseline({"Cookie": "sid=capture-cookie"})
     await replay.send(args | {"mutation_value": "first"})
     await replay.send(args | {"mutation_value": "second"})
-    assert [q.tool for q in replay.control.questions] == ["http_capture_credentials", "http", "http"]
+    assert [q.tool for q in replay.control.questions] == ["http", "http_capture_credentials", "http"]
 
 
 async def test_manual_http_grant_and_yolo_do_not_authorize_unreviewed_credentials(replay):
@@ -481,10 +481,49 @@ async def test_capture_pending_is_not_a_terminal_agent_refusal(replay):
     replay.control.deny = True
     call = ToolCall(id='capture-review', function=FunctionCall(name='http', arguments=json.dumps(args)))
     result = await agent.run_parsed_tool_call(call, agent.parse_tool_call(call), FakeSignal())
-    assert result.status == 'error' and result.error_kind == 'permission_denied'
+    assert result.status == 'pending' and result.error_kind == 'permission_pending'
     assert not result.terminal_user_controlled_refusal and not replay.control.sent
     assert agent.workflow.latest_result(candidate.id) is None
     replay.control.deny = False
     retry = await agent.run_parsed_tool_call(call, agent.parse_tool_call(call), FakeSignal())
     assert retry.status == 'observation' and retry.http_status == 200
     assert len(replay.control.sent) == 1
+
+
+async def test_manual_session_capture_inherits_quota_free_limits_after_separate_source_review(replay):
+    replay.prompter.set_yolo(False)
+    now = [10.0]
+    replay.tool.permissions.clock = lambda: now[0]
+    async def ask(request, signal=None):
+        replay.control.questions.append(request)
+        return Decision.ALLOW_SESSION if request.tool == 'http' else Decision.ALLOW_ONCE
+    replay.prompter._inner.ask = ask
+    _, args = replay.baseline({'Cookie':'sid=capture-cookie'})
+    await replay.send(args)
+    now[0] += 2000
+    capture_budget = next(iter(replay.tool.permissions._capture_grants.values()))
+    capture_budget.used = 501
+    await replay.send(args | {'mutation_value':'second'})
+    assert [question.tool for question in replay.control.questions] == ['http', 'http_capture_credentials']
+    assert capture_budget.limits.requests is capture_budget.expires_at is None
+    assert len(replay.control.sent) == 2
+    assert 'capture-cookie' not in '\n'.join(question.detail for question in replay.control.questions)
+
+
+@pytest.mark.parametrize('same_origin', [True, False])
+async def test_capture_review_binds_origin_grant_version_without_cross_origin_invalidation(replay, same_origin):
+    other = 'http://127.0.0.1:3001'
+    replay.tool.engagement.add_origin(other)
+    _, args = replay.baseline({'Cookie': 'sid=capture-cookie'})
+    replacement_origin = ORIGIN if same_origin else other
+    async def replace_grant(_):
+        replay.tool.permissions.activate(replacement_origin, HTTPLimits.session())
+    replay.control.review = replace_grant
+    if same_origin:
+        with pytest.raises(HTTPBlocked, match='capture policy changed during review'):
+            await replay.send(args)
+        assert not replay.tool.permissions._capture_grants and not replay.control.sent
+    else:
+        await replay.send(args)
+        assert len(replay.control.sent) == 1 and len(replay.tool.permissions._capture_grants) == 1
+    assert not replay.tool.permissions._capture_pending and replay.policy.active == 0

@@ -80,7 +80,7 @@ async def test_shell_preview_matches_rewritten_dispatch_and_preserves_secrets(mo
     assert rewrite_portable_command(command) in calls[0][1]
 
 
-def test_full_detail_toggle_reveals_tail_without_approving_or_secret_leak():
+def test_full_detail_is_reviewable_without_a_mode_toggle_or_secret_leak():
     req = BridgedPermissionRequest(tool="shell", summary="shell command",
         detail="echo " + "X" * 9000 + " FINAL_OPERATION token=FAKE_SECRET_1234567890",
         resolve=Mock(), reject=Mock())
@@ -89,7 +89,8 @@ def test_full_detail_toggle_reveals_tail_without_approving_or_secret_leak():
         console = Console(width=120, record=True)
         console.print(modal.render())
         return console.export_text()
-    assert "FINAL_OPERATION" not in frame()
+    preview = frame()
+    assert "FINAL_OPERATION" in preview and "FAKE_SECRET_1234567890" not in preview
     modal.handle_key("v")
     full = frame()
     assert "FINAL_OPERATION" in full

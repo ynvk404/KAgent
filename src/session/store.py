@@ -261,12 +261,14 @@ def _message_from_dict(data: Any) -> Message | None:
         content = without_transient_validation_context(content, truncated=data.get("tool_truncated") is True)
 
     tool_status = data.get("tool_status")
-    if tool_status not in ("success", "observation", "error", "cancelled"):
+    if tool_status not in ("success", "observation", "error", "cancelled", "pending"):
         tool_status = None
     tool_error_kind = data.get("tool_error_kind")
     if tool_error_kind not in (
         "permission_denied", "scope_denied", "timeout", "network", "tls",
         "invalid_args", "cancelled", "tool_exception",
+        "permission_pending", "permission_timeout", "permission_stale", "policy_block",
+        "workflow_state", "reference_unavailable",
     ):
         tool_error_kind = None
     tool_http_status = data.get("tool_http_status")

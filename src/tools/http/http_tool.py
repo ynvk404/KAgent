@@ -7,11 +7,12 @@ import asyncio
 import ipaddress
 import hashlib
 import json
+import re
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 import httpx
 from src.engagement.state import EngagementState
-from src.permission.permission import Prompter, UserControlledRefusal, YoloPrompter
+from src.permission.permission import Prompter, UserControlledRefusal, PermissionPolicyBlocked, YoloPrompter
 from src.permission.network.grants import CaptureSource, CaptureReplayPending, EffectiveHTTP, HTTPPending, check_cancelled
 from src.permission.runtime.execution import policy_for
 from src.permission.runtime.invocations import permission_invocation
@@ -22,6 +23,8 @@ from src.workflow.state import WorkflowPhase, WorkflowState, normalize_target_or
 from src.tools.http.private_host import gate_private_request, parse_http_url, PrivateHostDeclined
 from src.tools.common.types import Tool, PermissionHints, arg_string
 from src.tools.common.outcome import ToolOutput
+from src.tools.common.arguments import string_fields
+from src.tools.common.approval_display import redact_approval
 from src.tools.http.context import HTTPContextStore
 from src.tools.http.request_builder import NATIVE_USER_AGENT, RequestDiff, build_captured_baseline, build_captured_request, origin_headers, validate_host
 from src.browser.store import CaptureStore
@@ -87,7 +90,8 @@ class HTTPTool(Tool):
         return {
             'type': 'object',
             'properties': {
-                'method': {'type': 'string'},
+                'method': {'type': 'string', 'minLength': 1,
+                           'pattern': r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
                 'phase': {'type': 'string', 'enum': ['recon', 'validation', 'impact'],
                           'description': 'Workflow annotation; never permission.'},
                 'url': {'type': 'string'},
@@ -118,7 +122,26 @@ class HTTPTool(Tool):
     def requires_permission(self) -> bool:
         return True
 
+    def _validate_input_types(self, args: dict) -> None:
+        # Direct adapter callers historically omit the workflow phase;
+        # Registry dispatch still enforces its required published field.
+        string_fields(args, optional=(
+            'phase', 'url', 'candidate_id', 'method', 'body', 'mutation_value',
+            'input_path', 'old_value', 'auth_context_ref', 'profile',
+            'browser_context', 'browser_user_agent', 'evidence_mode',
+        ))
+        if 'method' in args and not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", args['method']):
+            raise ValueError('method must be a non-empty HTTP token')
+        if 'headers' in args:
+            headers = args['headers']
+            if not isinstance(headers, dict):
+                raise ValueError('headers must be an object with string names and values')
+            if any(not isinstance(key, str) or not isinstance(value, str)
+                   for key, value in headers.items()):
+                raise ValueError('headers must contain only string names and values')
+
     def validate_args(self, args: dict) -> None:
+        self._validate_input_types(args)
         if args.get('phase') not in {'recon', 'validation', 'impact'}:
             raise ValueError('phase must be recon, validation, or impact')
         if not arg_string(args, 'url') and not arg_string(args, 'candidate_id'):
@@ -152,6 +175,7 @@ class HTTPTool(Tool):
         return action, request
 
     def _prepare_with_diff(self, args: dict) -> tuple[EffectiveHTTP, httpx.Request, RequestDiff | None]:
+        self._validate_input_types(args)
         self._validate_capture_mode(args, args.get('max_response_bytes', RESPONSE_BYTE_CAP))
         self.permissions.sync_target()
         self.context_store.sync_target(self.target.revision, self.engagement.revision, self.permissions.epoch)
@@ -184,7 +208,7 @@ class HTTPTool(Tool):
             for snapshot in self.capture_store.list_snapshots()
         )):
             raise ValueError('browser-like profile needs a same-origin browser snapshot')
-        headers = {k: v for k, v in args.get('headers', {}).items() if isinstance(v, str)} if isinstance(args.get('headers'), dict) else {}
+        headers = dict(args.get('headers', {}))
         validate_host(httpx.Headers(headers), resolved)
         headers = dict(origin_headers(list(headers.items())))
         if profile == 'browser-like' and any(key.lower() == 'user-agent' and value != arg_string(args, 'browser_user_agent') for key, value in headers.items()):
@@ -199,7 +223,7 @@ class HTTPTool(Tool):
                 headers['user-agent'] = NATIVE_USER_AGENT
         # Prepare the actual HTTPX Request once, including Host/Content-Length.
         # send(request) does not merge client defaults/cookies after approval.
-        request = httpx.Request((arg_string(args, 'method') or 'GET').upper(), resolved,
+        request = httpx.Request(args.get('method', 'GET').upper(), resolved,
                                 headers=headers, content=arg_string(args, 'body').encode('utf-8'))
         if request.url.username or request.url.password:
             # HTTPX otherwise derives BasicAuth during send(), after approval.
@@ -289,6 +313,18 @@ class HTTPTool(Tool):
         self.permissions.check_capture(action, reserved=True)
 
     def summarize(self, args: dict) -> dict:
+        try:
+            self._validate_input_types(args)
+        except ValueError as exc:
+            # Standalone presentation callers historically tolerate malformed
+            # headers. Show an explicitly invalid proposal without preparing
+            # a request or modifying identity/context state. Registry never
+            # reaches this branch because it validates before review.
+            return {'summary': 'http: invalid arguments', 'detail': redact_approval(
+                f'invalid arguments: {exc}\n'
+                f'proposed request (not prepared): {arg_string(args, "method") or "GET"} '
+                f'{arg_string(args, "url")}\n'
+                f'native default user-agent: {NATIVE_USER_AGENT}')}
         action, _, request_diff = self._prepare_with_diff(args)
         diff = request_diff.summary() + '\n' if request_diff else ''
         return {'summary': action.redact_preview(f'http: {action.method} {action.url}'),
@@ -313,6 +349,7 @@ class HTTPTool(Tool):
             await asyncio.gather(invocation, return_exceptions=True)
 
     async def _run_invocation(self, args, signal, prompter) -> ToolOutput:
+        self._validate_input_types(args)
         policy = policy_for(prompter)
         boundary = policy.generic_validation if policy is not None else None
         # A restored generic status cannot obtain compatibility-mode HTTP.
@@ -327,7 +364,7 @@ class HTTPTool(Tool):
                 saved_generic = bool(latest and latest.skill_name == GENERIC_VALIDATOR)
                 if ((belongs or objective is None) and saved_generic
                         or belongs and resolve_validation_route(self.validation_registry, candidate.candidate_class).kind != 'expert'):
-                    raise UserControlledRefusal('blocked: generic runtime policy unavailable')
+                    raise PermissionPolicyBlocked('blocked: generic runtime policy unavailable')
         probe = None
         failure = None
         if boundary is not None:
@@ -338,7 +375,7 @@ class HTTPTool(Tool):
         except CaptureReplayPending as exc:
             # A capture needing repair/review blocks only this request. Raising
             # UserControlledRefusal would terminate the Agent's entire batch.
-            return ToolOutput(str(exc), status='error', error_kind='permission_denied')
+            return ToolOutput(str(exc), status='pending', error_kind='permission_pending')
         except HTTPPending:
             # Scheduler pressure has not sent a request and is not a
             # terminal denial or vulnerability conclusion.
@@ -377,10 +414,11 @@ class HTTPTool(Tool):
             seen.add(redirect_key)
             if policy is not None:
                 if not policy.nested_allowed():
-                    raise UserControlledRefusal('blocked: http-executor-without-receipt')
+                    raise PermissionPolicyBlocked('blocked: http-executor-without-receipt')
                 request, address = await pin_request(policy, request)
                 action = replace(action, transport_address=address)
-            receipt = await self.permissions.authorize(action, prompter, signal, lambda: self.target.revision)
+            with self.permissions.reviewed_dispatch(action):
+                receipt = await self.permissions.authorize(action, prompter, signal, lambda: self.target.revision)
             try:
                 result, location, cookie_updated = await self._dispatch(action, request, receipt, policy, signal, prompter, identity, generic_probe, args)
             finally:
@@ -436,15 +474,18 @@ class HTTPTool(Tool):
 
     async def _dispatch(self, action, request, receipt, policy, signal, prompter, identity=None, generic_probe=None, generic_args=None) -> tuple[ToolOutput, str | None, bool]:
         # Independent gate: generic Registry approval cannot coalesce this gate.
+        active_check = policy.active_review_check() if policy is not None else lambda: True
         try:
             private_reason = await gate_private_request(
                 prompter, parse_http_url(action.url), signal, 'http', target=self.target,
+                is_current=lambda: active_check() and self.permissions.review_is_current(receipt, action, self.target.revision),
             )
         except PrivateHostDeclined:
             check_cancelled(signal)
             self.permissions.pause_private(action.origin)
             raise
         check_cancelled(signal)
+        receipt = self.permissions.dispatch_receipt(receipt, action, signal, self.target.revision)
         transport_options: dict[str, Any] = {'trust_env': False} if policy is not None or action.capture_source is not None else {}
         async with httpx.AsyncClient(verify=False, follow_redirects=False, timeout=REQUEST_TIMEOUT, **transport_options) as client:
             reservation = await self.permissions.reserve_when_ready(action, receipt, signal, lambda: self.target.revision)

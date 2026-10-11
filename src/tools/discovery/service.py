@@ -74,7 +74,9 @@ class ServiceDiscoveryTool(Tool):
                 },
                 "ports": {
                     "type": "array",
-                    "items": {"type": "integer"},
+                    "minItems": 1,
+                    "maxItems": MAX_PORTS,
+                    "items": {"type": "integer", "minimum": 1, "maximum": 65535},
                     "description": "Optional explicit list; every port must equal the active target URL's effective port.",
                 },
                 "mode": {
@@ -84,6 +86,8 @@ class ServiceDiscoveryTool(Tool):
                 },
                 "timeout_seconds": {
                     "type": "integer",
+                    "minimum": 5,
+                    "maximum": MAX_TIMEOUT_SECONDS,
                     "description": (
                         f"Network scan timeout (5–{MAX_TIMEOUT_SECONDS} seconds); "
                         "DNS resolution and operator permission wait are reported separately."

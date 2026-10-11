@@ -76,6 +76,19 @@ DEFAULT_LIST_LIMIT = 8
 MAX_LIST_LIMIT = 25
 MAX_LIST_COMPLETED_SKILLS = 20
 LIST_TEXT_LIMIT = 200
+ACTION_REQUIRED = {
+    'get_input': ('input_id',),
+    'set_input_disposition': ('input_id', 'disposition'),
+    'link_input_candidate': ('input_id', 'candidate_id'),
+    'record_candidate': ('candidate_class',),
+    'record_evidence': ('candidate_id', 'evidence_path'),
+    'start_validation': ('candidate_id',),
+    'record_result': ('candidate_id', 'skill_name', 'outcome'),
+    'sync_coverage': ('candidate_id',),
+    'record_phase_coverage': ('phase', 'coverage_dimension', 'coverage_status'),
+    'complete_skill': ('skill_name',),
+    'review_no_candidate': ('goal_id',),
+}
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
 
 
@@ -112,9 +125,9 @@ class WorkflowTool(Tool):
 
     def description(self) -> str:
         return (
-            "get_input: sanitized details. start_validation declares attempt. "
-            "record_result needs candidate_id, skill_name and outcome with primary IDs and assessment. "
-            "record_evidence: immutable redacted proof. Performed phases need adapter; other states need reasons."
+            "record_result needs candidate_id, skill_name and outcome. "
+            "Direct start_validation gives Candidate context; whole-target get_input uses record_input/list input_id. "
+            "Evidence needs real sources; performed phases need adapters."
         )
 
     def schema(self) -> dict[str, Any]:
@@ -122,7 +135,9 @@ class WorkflowTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": list(ACTIONS)},
+                "action": {"type": "string", "enum": list(ACTIONS),
+                    "description": 'Required fields: ' + '; '.join(
+                        action + '(' + ','.join(fields) + ')' for action, fields in ACTION_REQUIRED.items())},
                 "candidate_id": {
                     "type": "string",
                     "description": "Required for record_evidence, start_validation, and record_result.",
@@ -132,8 +147,14 @@ class WorkflowTool(Tool):
                 },
                 "probe": ProbeProposal.schema(),
                 "attempt_id": optional_string,
-                "related_requests": {"type": "array", "maxItems": 16, "items": {"type": "object"},
-                    "description": "At start: role (baseline/control/trigger/readback/cleanup/auxiliary), method, url, optional required."},
+                "related_requests": {"type": "array", "maxItems": 16, "items": {
+                    "type": "object", "properties": {
+                        "role": {"type": "string", "enum": ['baseline', 'control', 'trigger', 'readback', 'cleanup', 'auxiliary']},
+                        "method": {"type": "string", "enum": ['GET', 'POST', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'DELETE']},
+                        "url": {"type": "string", "minLength": 1, "maxLength": 2000},
+                        "required": {"type": "boolean"}},
+                    "required": ['role', 'method', 'url'], "additionalProperties": False},
+                    "description": "Unique method/URL, including across roles; merge duplicates."},
                 "assessment": {"type": "object", "description": "Bounded hypothesis, criteria, limitations, completed_attempt, observed_impact and severity."},
                 "input_id": optional_string,
                 "input_type": optional_string,
@@ -166,9 +187,8 @@ class WorkflowTool(Tool):
                 "evidence_path": {
                     "type": "string",
                     "description": (
-                        "Existing project proof file. Identify the entry with candidate_id; "
-                        "shared documents use Candidate headings. Explicit observation IDs "
-                        "in that entry must be declared primary parents."
+                        "Existing project proof file. candidate_id selects the entry; shared files use Candidate headings. "
+                        "Its observation IDs must be declared primary parents."
                     ),
                 },
                 "observation_ids": {"type": "array", "items": {"type": "string"},
@@ -203,19 +223,15 @@ class WorkflowTool(Tool):
                     "type": "object",
                 },
                 "mutation_performed": {"type": "boolean", "description":
-                    "True for explicit server-reported successful writes, including baseline writes, "
-                    "or verified mutation. An acknowledgement does not verify persistent state; "
-                    "POST/status 200 alone does not establish mutation. Drives cleanup bookkeeping."},
+                    "Explicit server-reported writes or verified mutation. POST/status alone is insufficient; "
+                    "acknowledgement does not prove persistence. Tracks cleanup."},
                 "cleanup_status": optional_string,
                 "cleanup_state": {
                     "type": "string",
                     "enum": sorted(CLEANUP_STATES),
                     "description": (
-                        "Mutations default pending. not-required: no Agent cleanup needed (justify "
-                        "if mutation was reported). pending: awaiting authority/action/verification. "
-                        "succeeded: Agent cleanup performed; parent benchmark reset is separate. "
-                        "failed: cleanup attempt failed. requires-user-action: operator intervention "
-                        "needed, including unavailable cleanup capability. Cleanup requires separate authority."
+                        "Mutations default pending; justify not-required. succeeded means verified Agent cleanup; "
+                        "parent reset is separate. Cleanup needs separate authority."
                     ),
                 },
                 "deferred_reason": optional_string,
@@ -279,13 +295,36 @@ class WorkflowTool(Tool):
         signal: Any,
         prompter: Prompter,
     ) -> str:
+        action = arg_string(args, 'action')
+        if action not in ACTIONS:
+            return ToolOutput('error: action must be one of: ' + ', '.join(ACTIONS),
+                              status='error', error_kind='invalid_args')
+        missing = [key for key in ACTION_REQUIRED.get(action, ()) if not arg_string(args, key)]
+        if missing:
+            if action == 'get_input':
+                return ToolOutput('error: get_input requires exact input_id from record_input/list',
+                                  status='error', error_kind='invalid_args')
+            return ToolOutput('error: ' + action + ' requires ' + ', '.join(missing),
+                              status='error', error_kind='invalid_args')
+        if 'related_requests' in args:
+            related = args['related_requests']
+            if (not isinstance(related, list) or len(related) > 16 or any(
+                    not isinstance(row, dict) or not {'role', 'method', 'url'} <= set(row)
+                    or set(row) - {'role', 'method', 'url', 'required'}
+                    or any(not isinstance(row[key], str) or not row[key] or len(row[key]) > 2000
+                           for key in ('role', 'method', 'url'))
+                    or row['role'] not in {'baseline', 'control', 'trigger', 'readback', 'cleanup', 'auxiliary'}
+                    or row['method'].upper() not in {'GET', 'POST', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'}
+                    or not isinstance(row.get('required', True), bool) for row in related)):
+                return ToolOutput('error: related_requests needs at most 16 objects with bounded role/method/url and optional boolean required',
+                                  status='error', error_kind='invalid_args')
         policy = policy_for(prompter)
         if policy is not None:
             policy.bind_validation_context(self.state, self.skills, self.target)
         action = arg_string(args, "action")
         if (policy is not None and policy.session_id is not None and self.session_id != policy.session_id
                 and action in {"start_validation", "record_evidence", "record_result"}):
-            return "error: workflow/runtime session identity mismatch"
+            return self._typed_result("error: workflow/runtime session identity mismatch")
         if action == "get_input":
             result = self._get_input(args)
         elif action == "record_input":
@@ -373,7 +412,7 @@ class WorkflowTool(Tool):
     def _typed_result(result: str) -> str:
         """Preserve string compatibility while exposing semantic failures."""
         if result.startswith("error:"):
-            return ToolOutput(result, status="error", error_kind="invalid_args")
+            return ToolOutput(result, status="error", error_kind="workflow_state")
         try:
             payload = json.loads(result)
         except (TypeError, ValueError):

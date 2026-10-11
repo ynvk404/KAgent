@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -987,7 +988,10 @@ async def test_auth_context_missing_or_changed_before_send_is_blocked(runtime, t
 
 
 @pytest.mark.asyncio
-async def test_generic_logical_origin_survives_native_dns_pinning(runtime, tmp_path):
+async def test_generic_logical_origin_survives_native_dns_pinning(runtime, tmp_path, monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", 3000))
+    ])
     env = await setup(runtime, tmp_path)
     origin = "http://lab.test:3000"
     env[6].target.set_base_url(origin)
@@ -1054,7 +1058,7 @@ async def test_generic_capture_uses_same_bounded_credential_gate(runtime, tmp_pa
     await start(env)
     args = {"candidate_id": env[5].id, "phase": "validation"}
     pending = await env[0].execute("http", args, None, env[1])
-    assert pending.status == 'error' and pending.error_kind == 'permission_denied'
+    assert pending.status == 'pending' and pending.error_kind == 'permission_pending'
     assert pending.startswith('pending:') and pending.http_status is None
     assert not runtime[4] and env[4].latest_result(env[5].id) is None
     assert env[2].generic_validation.started_candidate == env[5].id

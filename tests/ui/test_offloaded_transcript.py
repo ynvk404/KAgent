@@ -1,4 +1,5 @@
-"""Offloaded history leaves existing live transcript controls and full output intact."""
+"""Hidden presentation leaves selective retention and diagnostic events intact."""
+import copy
 import pytest
 from textual import events
 
@@ -10,23 +11,19 @@ from tests.ui.test_app import make_app
 
 
 @pytest.mark.asyncio
-async def test_full_offloaded_event_remains_expandable_and_filterable(make):
+async def test_full_offloaded_event_remains_intact_without_ui_traffic_cache(make):
     agent = make()
-    full = source(40000) + '\nAuthorization: Bearer ' + SECRET
+    full = source(40000) + "\nAuthorization: Bearer " + SECRET
     msg, _, emitted, _ = record(agent, full)
     assert msg.tool_result_refs
+    event = _to_agent_event(emitted[0])
+    original = copy.deepcopy(event)
     app = make_app()
-    app.state = reducer(app.state, AgentEventAction(_to_agent_event(emitted[0])))
-    entry = app.state.transcript[-1]
-    assert entry.collapsible and len(entry.full_text or '') > len(msg.content)
-    assert 'TAIL-CANARY' in (entry.full_text or '') and SECRET not in (entry.full_text or '')
-    await app._process_key(events.Key('ctrl+k', None))
-    assert app.state.transcript[-1].expanded
-    await app._process_key(events.Key('ctrl+o', None))
-    assert app.state.transcript[-1].expanded
-    await app._process_key(events.Key('ctrl+o', None))
-    assert not app.state.transcript[-1].expanded
-    previous = app.state.transcript_filter
-    await app._process_key(events.Key('ctrl+f', None))
-    assert app.state.transcript_filter != previous
-    assert app.state.transcript[-1].full_text == entry.full_text
+    app.state = reducer(app.state, AgentEventAction(event))
+    assert not app.state.transcript
+    assert event == original and "TAIL-CANARY" in event.result and SECRET not in event.result
+    assert len(event.result) > len(msg.content)
+    refs = copy.deepcopy(msg.tool_result_refs)
+    for key in ("ctrl+k", "ctrl+o", "ctrl+f"):
+        await app._process_key(events.Key(key, None))
+    assert not app.state.transcript and msg.tool_result_refs == refs

@@ -4,6 +4,7 @@ from typing import Any, Awaitable, Callable
 from unittest.mock import AsyncMock
 
 import httpx
+import socket
 import ssl
 import pytest
 
@@ -78,6 +79,10 @@ def fake_httpx_client(monkeypatch: pytest.MonkeyPatch):
     FakeAsyncClient.last_init_kwargs = None
     FakeAsyncClient.call_count = 0
     monkeypatch.setattr("src.tools.http.web.httpx.AsyncClient", FakeAsyncClient)
+    # The transport is fake; its public fixture names must not use live DNS.
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("203.0.113.1", 0))
+    ])
     yield
     clear_web_cache()
 

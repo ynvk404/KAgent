@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-ToolStatus = Literal["success", "observation", "error", "cancelled"]
+ToolStatus = Literal["success", "observation", "error", "cancelled", "pending"]
 ErrorKind = Literal[
     "permission_denied", "scope_denied", "timeout", "network", "tls",
     "invalid_args", "cancelled", "tool_exception",
+    "permission_pending", "permission_timeout", "permission_stale", "policy_block",
+    "workflow_state", "reference_unavailable",
 ]
 
 

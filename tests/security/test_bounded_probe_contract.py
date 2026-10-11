@@ -266,7 +266,7 @@ async def test_custom_state_changes_during_permission_await_stop_send(runtime, t
     monkeypatch.setattr(http.permissions, "authorize", authorize)
     if change in {'baseline', 'auth'}:
         pending = await env[0].execute("http", http_args(env, "Lab-A"), None, env[1])
-        assert pending.status == 'error' and pending.error_kind == 'permission_denied'
+        assert pending.status == 'pending' and pending.error_kind == 'permission_pending'
         assert pending.startswith('pending:') and pending.http_status is None
     else:
         with pytest.raises((ValueError, UserControlledRefusal)):

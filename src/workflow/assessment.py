@@ -61,7 +61,9 @@ def request_associations(attempt) -> dict[tuple[str, str], dict[str, Any]]:
             raise ValueError("invalid related request association")
         key = (request["method"], request["url"])
         if key in associations:
-            raise ValueError("ambiguous duplicate related request method/URL association")
+            raise ValueError("ambiguous duplicate related request method/URL association; "
+                             "declare each method/URL once with one role and requirement, "
+                             "or use distinct actual request URLs")
         associations[key] = request
     return associations
 

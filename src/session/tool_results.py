@@ -31,6 +31,11 @@ class ResultUnavailable(ValueError):
     """Safe error text: never include content, paths, or underlying exceptions."""
 
 
+class InvalidResultReference(ResultUnavailable):
+    """Malformed syntax differs from an unavailable producer-issued ID."""
+    error_kind = 'invalid_args'
+
+
 def digest_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 

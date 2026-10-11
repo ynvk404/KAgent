@@ -417,8 +417,9 @@ async def test_approval_before_reset_cannot_be_reused(rig):
     await asking.wait()
     rig.policy.engagement.http_permissions.reset()
     approve.set()
-    with pytest.raises(ExecutionBlocked, match='stale/replayed'):
+    with pytest.raises(ExecutionBlocked) as failure:
         await invocation
+    assert failure.value.error_kind == 'policy_block'
     assert not rig.calls and len(rig.sessions) == 1
 
 

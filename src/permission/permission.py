@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, Protocol, runtime_checkable, TYPE_CHECKING
+from typing import Any, Callable, Literal, Protocol, runtime_checkable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.permission.network.grants import HTTPPermissions
@@ -14,6 +15,23 @@ _RISK_TIERS = frozenset({"routine", "bounded-impact", "high-impact"})
 
 class UserControlledRefusal(PermissionError):
     """A permission request explicitly declined by the operator."""
+    explicit_denial = True
+
+
+class PermissionReviewStale(UserControlledRefusal):
+    """Review expired or its owner/policy changed; no operator denial."""
+    explicit_denial = False
+    error_kind = 'permission_stale'
+
+
+class PermissionPolicyBlocked(UserControlledRefusal):
+    """Runtime policy blocked execution without an operator refusal."""
+    explicit_denial = False
+    error_kind = 'policy_block'
+
+
+class PermissionReviewCancelled(asyncio.CancelledError):
+    """Escape cancels one proposal; whole-turn/task cancellation is separate."""
 
 class Decision(str, Enum):
     ALLOW_ONCE = "allow-once"
@@ -39,6 +57,13 @@ class PermissionRequest:
     force_operator: bool = field(default=False, kw_only=True)
     offer_browser_grant: str | None = field(default=None, kw_only=True)
     offer_http_lab: bool = field(default=False, kw_only=True)
+    # Lifecycle callback is authority metadata, not reviewed display content.
+    is_current: Callable[[], bool] | None = field(default=None, kw_only=True, repr=False, compare=False)
+
+    @property
+    def supports_session(self) -> bool:
+        return bool(self.offer_http_lab or self.offer_browser_grant or
+                    (not self.no_session_cache and self.cache_key and self.session_scope_display))
 
     def __post_init__(self) -> None:
         if self.risk_tier not in _RISK_TIERS:
@@ -107,7 +132,7 @@ class YoloPrompter:
             if self.execution_policy is not None:
                 if self.execution_policy.nested_allowed():
                     return Decision.ALLOW_ONCE
-                raise UserControlledRefusal("blocked: permission-without-execution-receipt")
+                raise PermissionPolicyBlocked("blocked: permission-without-execution-receipt")
             if request.yolo_auto_approve:
                 return Decision.ALLOW_ONCE
 

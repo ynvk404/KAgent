@@ -17,7 +17,7 @@ from textual.geometry import Offset
 from src.ui.bridges.ask_bridge import BridgedAskPrompter
 from src.ui.bridges.ask_bridge import AskRequest, BridgedAskPrompter
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest, BridgedPrompter
-from src.permission.permission import PermissionRequest
+from src.permission.permission import PermissionRequest, PermissionReviewCancelled
 from src.tools.common.ask import Option, Question
 from src.agent.agent import Agent
 from src.agent.events import DoneEvent, SkillActiveEvent
@@ -82,34 +82,14 @@ def make_app() -> KAgent:
 
 
 @pytest.mark.asyncio
-async def test_ctrl_k_toggles_latest_and_ctrl_o_toggles_all_tool_output() -> None:
+async def test_obsolete_transcript_shortcuts_leave_retained_entries_and_input_unchanged():
     app = make_app()
-    app.state = replace(
-        app.state,
-        transcript=(
-            TranscriptEntry(
-                kind="tool-result",
-                text="preview 1",
-                full_text="full 1",
-                collapsible=True,
-            ),
-            TranscriptEntry(
-                kind="tool-result",
-                text="preview 2",
-                full_text="full 2",
-                collapsible=True,
-            ),
-        ),
-    )
-
-    await app._process_key(events.Key("ctrl+k", None))
-    assert [entry.expanded for entry in app.state.transcript] == [False, True]
-
-    await app._process_key(events.Key("ctrl+o", None))
-    assert [entry.expanded for entry in app.state.transcript] == [True, True]
-
-    await app._process_key(events.Key("ctrl+o", None))
-    assert [entry.expanded for entry in app.state.transcript] == [False, False]
+    app.state = replace(app.state, transcript=(TranscriptEntry(kind="error", text="Evidence unavailable"),))
+    before = app.state.transcript
+    for key in ("ctrl+k", "ctrl+o", "ctrl+f"):
+        await app._process_key(events.Key(key, None))
+    assert app.state.transcript == before
+    assert app.input.value == ""
 
 
 class FakeInterval:
@@ -208,7 +188,7 @@ def test_status_telemetry_separates_history_from_next_request_pressure() -> None
     )
     app._status_cache_key = None
 
-    app._sync_status_bar(expand_hint=False)
+    app._sync_status_bar()
 
     props = received[-1]
     assert props.ctx_tokens == 9_002
@@ -216,7 +196,7 @@ def test_status_telemetry_separates_history_from_next_request_pressure() -> None
     assert props.compact_threshold == 16_000
     # Carried context/schema changes need no transcript append to refresh UI.
     estimate.estimated_total = 15_000
-    app._sync_status_bar(expand_hint=False)
+    app._sync_status_bar()
     assert received[-1].request_tokens == 15_000
 
 
@@ -393,7 +373,7 @@ async def test_escape_aborts_an_active_tui_ask_modal_and_clears_it() -> None:
 
 
 @pytest.mark.asyncio
-async def test_escape_aborts_active_tui_permission_instead_of_denying() -> None:
+async def test_escape_cancels_active_tui_permission_without_aborting_turn() -> None:
     app = make_app()
     bridge = BridgedPrompter(lambda req: app.dispatch(SetPerm(req=req)))
     app.run_abort_event = AbortEvent()
@@ -410,10 +390,11 @@ async def test_escape_aborts_active_tui_permission_instead_of_denying() -> None:
     assert app.state.pending_perm is not None
     await app._process_key(events.Key("escape", None))
 
-    with pytest.raises(Exception, match="aborted"):
+    with pytest.raises(PermissionReviewCancelled):
         await pending
-    assert app.run_abort_event.is_set()
+    assert not app.run_abort_event.is_set()
     assert app.state.pending_perm is None
+    assert not bridge._session_allowed
 
 
 @pytest.mark.asyncio
@@ -838,7 +819,7 @@ async def test_structured_permission_content_supports_real_mouse_drag(
         assert app._last_selected_text == needle
 
 
-def test_rich_log_writer_decodes_ansi_without_background_resets() -> None:
+def test_rich_log_writer_sanitizes_plain_ansi_input() -> None:
     written: list[tuple[Text, int]] = []
 
     def write(text: Text, *, width: int) -> None:
@@ -856,9 +837,9 @@ def test_rich_log_writer_decodes_ansi_without_background_resets() -> None:
 
     assert len(written) == 1
     text, width = written[0]
-    assert text.plain == "styled plain"
+    assert text.plain == "\\x1b[36mstyled\\x1b[0m plain"
     assert "\x1b" not in text.plain
-    assert any(getattr(span.style, "color", None) is not None for span in text.spans)
+    assert not text.spans
     assert all(getattr(span.style, "bgcolor", None) is None for span in text.spans)
     assert width == 40
 
@@ -1127,7 +1108,9 @@ async def test_slash_skill_promoted_updates_active_skill_in_ui():
     # Run agent turn (user submits prompt after slash command)
     await app.run_agent_turn("find xss")
 
-    assert app.state.active_skill == "cross-site-scripting"
+    assert app.state.active_skill is None
+    assert "cross-site-scripting" in app.state.activated_skills
+    assert any(entry.text == "Skill activated \u00b7 cross-site-scripting" for entry in app.state.transcript)
 
     # Next turn without skill resets active_skill
     async def mock_run_no_skill(msg: str, signal: Any, emit: Any, opts: Any = None) -> None:

@@ -26,8 +26,6 @@ def props(**overrides) -> StatusProps:
         compact_threshold=0,
         memory_items=0,
         phase="idle",
-        transcript_filter="all",
-        expand_hint=False,
     )
     base.update(overrides)
     return StatusProps(**base)
@@ -197,7 +195,7 @@ class TestStatusBarBusyLine:
         assert "history ~2.3k · request ~7.3k/6k soft 122% · time 00:18" in line
 
     @pytest.mark.asyncio
-    async def test_wide_idle_status_orders_hints_metrics_then_expand_last(self) -> None:
+    async def test_wide_idle_status_orders_runtime_context_and_time(self) -> None:
         frame = await render_frame(
             props(
                 model="openai/gpt-oss-20b",
@@ -206,7 +204,6 @@ class TestStatusBarBusyLine:
                 request_tokens=5400,
                 compact_threshold=6000,
                 elapsed_seconds=1,
-                expand_hint=True,
             ),
             size=(140, 3),
         )
@@ -217,11 +214,10 @@ class TestStatusBarBusyLine:
             "openai/gpt-oss-20b [tools ✓]",
             "history ~2.4k · request ~5.4k/6k soft 90%",
             "time 00:01",
-            "Ctrl-K latest · Ctrl-O all",
         ]
         positions = [line.index(field) for field in fields]
         assert positions == sorted(positions)
-        assert line.endswith("Ctrl-K latest · Ctrl-O all")
+        assert "Ctrl-K" not in line and "Ctrl-O" not in line
         assert "turn 00:01" not in line
 
     @pytest.mark.asyncio
@@ -235,7 +231,6 @@ class TestStatusBarBusyLine:
                 request_tokens=23500,
                 compact_threshold=16000,
                 elapsed_seconds=13,
-                expand_hint=True,
             ),
             size=(160, 3),
         )
@@ -247,11 +242,10 @@ class TestStatusBarBusyLine:
             "skill: sql-injection",
             "history ~18.3k · request ~23.5k/16k soft 147%",
             "time 00:13",
-            "Ctrl-K latest · Ctrl-O all",
         ]
         positions = [line.index(field) for field in fields]
         assert positions == sorted(positions)
-        assert line.endswith("Ctrl-K latest · Ctrl-O all")
+        assert "Ctrl-K" not in line and "Ctrl-O" not in line
 
     @pytest.mark.asyncio
     async def test_wide_idle_status_without_active_skill_flows_directly_into_history(self) -> None:
@@ -264,12 +258,11 @@ class TestStatusBarBusyLine:
                 request_tokens=16800,
                 compact_threshold=16000,
                 elapsed_seconds=18,
-                expand_hint=True,
             ),
             size=(140, 3),
         )
         line = next(line for line in frame.splitlines() if "ready" in line)
-        assert "[tools ✓] · history ~11.6k · request ~16.8k/16k soft 105% · time 00:18 · Ctrl-K latest · Ctrl-O all" in line
+        assert "[tools ✓] · history ~11.6k · request ~16.8k/16k soft 105% · time 00:18" in line
         assert "skill:" not in line
         assert "mem:" not in line
 
@@ -278,7 +271,6 @@ class TestStatusBarBusyLine:
         frame = await render_frame(
             props(
                 memory_items=60,
-                expand_hint=True,
             ),
             size=(140, 3),
         )
@@ -286,7 +278,7 @@ class TestStatusBarBusyLine:
         assert "mem: 60" not in frame
 
     @pytest.mark.asyncio
-    async def test_medium_width_drops_only_expand_before_hints_and_metrics(self) -> None:
+    async def test_medium_width_keeps_runtime_metrics(self) -> None:
         frame = await render_frame(
             props(
                 model="openai/gpt-oss-20b",
@@ -295,7 +287,6 @@ class TestStatusBarBusyLine:
                 request_tokens=5400,
                 compact_threshold=6000,
                 elapsed_seconds=1,
-                expand_hint=True,
             ),
             size=(100, 3),
         )
@@ -305,7 +296,7 @@ class TestStatusBarBusyLine:
         assert "Ctrl-K latest" not in frame
 
     @pytest.mark.asyncio
-    async def test_narrow_status_preserves_context_and_time_before_expand_hint(self) -> None:
+    async def test_narrow_status_preserves_context_and_time(self) -> None:
         frame = await render_frame(
             props(
                 model="gpt-oss-20b",
@@ -314,7 +305,6 @@ class TestStatusBarBusyLine:
                 request_tokens=5300,
                 compact_threshold=6000,
                 elapsed_seconds=18,
-                expand_hint=True,
             ),
             size=(72, 3),
         )

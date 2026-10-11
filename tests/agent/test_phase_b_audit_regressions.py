@@ -359,6 +359,10 @@ async def test_actual_agent_directory_retention_failure_keeps_sanitized_success(
     assert event['status'] == 'success' and len(event['result']) > 40000
     assert SECRET not in event['result'] + tool_message.content + agent.store.path.read_text()
     assert 'tr_' not in tool_message.content
-    from src.ui.render.tool_result_format import build_tool_result_view
-    assert build_tool_result_view(event['result']).full == event['result']
+    from src.agent.agent import _to_agent_event
+    from src.ui.core.state import initial_state, reducer, AgentEventAction
+    from src.ui.widgets.banner import BannerData
+    presentation = reducer(initial_state("", BannerData("test", "test", ".")),
+                           AgentEventAction(_to_agent_event(event)))
+    assert not presentation.transcript
     assert not list(detached.glob('*.result')) and not list(detached.glob('.tmp-*'))

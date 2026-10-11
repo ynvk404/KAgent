@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from typing import IO, cast
+
 import pytest
 from textual.app import App, ComposeResult
 from textual.geometry import Offset
 from textual.selection import Selection
 
 from src.ui.core.state import TranscriptEntry
-from src.ui.widgets.transcript import EntryKind, ROLE_STYLES, entry_view
+from src.ui.widgets.transcript import EntryKind, ROLE_STYLES, entry_view, Transcript
+from src.ui.core.app import _RichLogWriter
+from src.ui.widgets.banner import BannerData
 from src.ui.widgets.transcript_view import TranscriptView
 
 
@@ -29,6 +33,11 @@ class _TranscriptHarness(App):
 
     def on_mount(self) -> None:
         self.transcript.write("alpha beta")
+
+    def write_entry(self, entry: TranscriptEntry) -> None:
+        writer = _RichLogWriter(self.transcript)
+        transcript = Transcript(out=cast(IO[str], writer), width=writer.content_width, write_banner=lambda _: None)
+        transcript.flush([entry], BannerData(provider="test", model="test", cwd="."), 0)
 
 
 class _ScrolledTranscriptHarness(App):
@@ -96,7 +105,7 @@ async def test_four_column_table_is_laid_out_at_transcript_content_width() -> No
     app = _TranscriptHarness()
     async with app.run_test(size=(60, 12)) as pilot:
         app.transcript.clear()
-        app.transcript._write_entry(
+        app.write_entry(
             TranscriptEntry(kind="assistant", text=_FOUR_COLUMN_TABLE)
         )
         await pilot.pause()
@@ -116,13 +125,11 @@ async def test_four_column_table_is_laid_out_at_transcript_content_width() -> No
 @pytest.mark.parametrize(
     ("kind", "content", "expected"),
     [
-        ("tool-result", "[ok] http", "↳ [ok] http"),
         ("user", "message", "› message"),
         ("assistant", "response", "  response"),
-        ("system", "compacted", "· compacted"),
+        ("system", "Scoped workflow finished.", "  Scoped workflow finished."),
         ("error", "error text", "! error text"),
-        ("finding", "finding text", "★ finding text"),
-        ("decision", "decision text", "· decision text"),
+        ("finding", "Finding saved: report.md", "  Finding saved: report.md"),
     ],
 )
 async def test_transcript_role_prefixes_preserve_their_configured_separator(
@@ -133,28 +140,7 @@ async def test_transcript_role_prefixes_preserve_their_configured_separator(
     app = _TranscriptHarness()
     async with app.run_test(size=(80, 8)) as pilot:
         app.transcript.clear()
-        app.transcript._write_entry(TranscriptEntry(kind=kind, text=content))
-        await pilot.pause()
-
-        assert app.transcript.lines[0].text == expected
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("content", "expected"),
-    [
-        ("Ask User", "⚙  Ask User"),
-        ("http GET https://example.test", "⚙  http GET https://example.test"),
-    ],
-)
-async def test_tool_call_uses_extra_visual_separator(
-    content: str,
-    expected: str,
-) -> None:
-    app = _TranscriptHarness()
-    async with app.run_test(size=(80, 8)) as pilot:
-        app.transcript.clear()
-        app.transcript._write_entry(TranscriptEntry(kind="tool-call", text=content))
+        app.write_entry(TranscriptEntry(kind=kind, text=content))
         await pilot.pause()
 
         assert app.transcript.lines[0].text == expected
@@ -172,7 +158,7 @@ async def test_two_column_table_still_fits_without_secondary_wrapping() -> None:
     app = _TranscriptHarness()
     async with app.run_test(size=(40, 10)) as pilot:
         app.transcript.clear()
-        app.transcript._write_entry(
+        app.write_entry(
             TranscriptEntry(
                 kind="assistant",
                 text="| Name | Value |\n| --- | --- |\n| alpha | beta |",
@@ -195,7 +181,7 @@ async def test_new_table_uses_content_width_after_terminal_resize() -> None:
         assert app.transcript.transcript_content_width == 79
         await pilot.resize_terminal(50, 12)
         app.transcript.clear()
-        app.transcript._write_entry(
+        app.write_entry(
             TranscriptEntry(kind="assistant", text=_FOUR_COLUMN_TABLE)
         )
         await pilot.pause()
@@ -303,3 +289,47 @@ async def test_get_selection_clamps_negative_offsets_without_negative_indexing()
         assert app.transcript.get_selection(
             Selection(None, Offset(1, -1))
         ) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('follow_tail', [False, True])
+async def test_aggregate_rewrite_preserves_reading_anchor_and_tail_following(follow_tail):
+    app = _TranscriptHarness()
+    async with app.run_test(size=(50, 10)) as pilot:
+        writer = _RichLogWriter(app.transcript)
+        transcript = Transcript(out=cast(IO[str], writer), width=writer.content_width,
+            clear=app.transcript.clear, write_banner=lambda _:None,
+            preserve_viewport=app.transcript.preserve_viewport, write_line=writer.write_line)
+        banner = BannerData(provider='offline', model='fixture', cwd='.')
+        history = [TranscriptEntry(kind='assistant', text=f'History paragraph {i}: reviewed evidence.') for i in range(30)]
+        entries = [TranscriptEntry(kind='system', text='Selected: GET /search · input q (1 input).'), *history]
+        transcript.flush(entries, banner, generation=0)
+        await pilot.pause()
+        assert app.transcript.is_vertical_scroll_end
+        if not follow_tail:
+            app.transcript.scroll_to(y=10, animate=False, immediate=True, force=True)
+            await pilot.pause()
+        top_before = app.transcript.render_line(0).text
+        assert app.transcript.auto_scroll
+        entries[0] = TranscriptEntry(kind='system', text='Selected: ' + '; '.join(
+            f'POST /fixture/path/{i} · input selected_parameter_{i}' for i in range(3)) + ' (3 inputs).')
+        transcript.flush(entries, banner, generation=1)
+        await pilot.pause()
+        if follow_tail:
+            assert app.transcript.is_vertical_scroll_end
+        else:
+            assert not app.transcript.is_vertical_scroll_end
+            assert app.transcript.render_line(0).text == top_before
+        assert app.transcript.auto_scroll
+        entries.append(TranscriptEntry(kind='finding', text='Finding saved: fixture.md'))
+        transcript.flush(entries, banner, generation=1)
+        await pilot.pause()
+        if follow_tail:
+            assert app.transcript.is_vertical_scroll_end
+            assert any('Finding saved: fixture.md' in app.transcript.render_line(y).text
+                       for y in range(app.transcript.size.height))
+        else:
+            assert app.transcript.render_line(0).text == top_before
+        transcript.flush([], banner, generation=2)
+        await pilot.pause()
+        assert not app.transcript.lines and app.transcript.scroll_y == 0

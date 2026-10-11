@@ -193,7 +193,12 @@ class ShellTool(Tool):
         cmd = rewrite_portable_command(arg_string(args, "command") or "")
         first_line = cmd.split("\n", 1)[0]
         truncated = f"{first_line[:117]}..." if len(first_line) > 120 else first_line
-        return {"summary": f"{self.tool_name}: {truncated}", "detail": cmd}
+        timeout = args.get("timeout_seconds")
+        effective_timeout = (min(timeout, MAX_TIMEOUT_SECONDS)
+                             if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0
+                             else DEFAULT_TIMEOUT_SECONDS)
+        return {"summary": f"{self.tool_name}: {truncated}",
+                "detail": f"{cmd}\n\nTimeout: {effective_timeout:g}s"}
 
     async def run(
         self,
@@ -232,6 +237,10 @@ class ShellTool(Tool):
             from src.permission.worker.broker import broker_directory
             async with broker_directory(signal) as broker:
                 cmd, argv = await worker.prepare(cmd, argv, broker=broker, signal=signal)
+                from src.permission.runtime.execution import policy_for
+                policy = policy_for(prompter)
+                if policy is not None:
+                    policy.revalidate_active(self, args, signal)
                 return await run_with_capture(cmd, argv, timeout_seconds, signal)
         return await run_with_capture(cmd, argv, timeout_seconds, signal)
 

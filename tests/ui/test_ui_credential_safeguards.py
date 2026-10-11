@@ -3,6 +3,9 @@ import asyncio
 import json
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import cast
+from textual import events
+from src.ui.widgets.details_modal import BridgeCredentialsModal
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -45,7 +48,7 @@ def test_stream_buffer_preserves_ordinary_text_at_message_and_tool_boundaries():
     finalized = emit(state, AssistantTextEvent(text="first second"))
     assert finalized.transcript[-1].text == "first second"
     finalized = emit(state, ToolCallEvent(name="http", args_json='{"url":"/"}'))
-    assert finalized.transcript[-2].text == "first second"
+    assert finalized.transcript[-1].text == "first second"
     assert not finalized.stream_chunks
 
 
@@ -59,22 +62,22 @@ def test_tool_arguments_and_full_results_are_redacted_without_mutating_events():
     result = ToolResultEvent(name="http", result=raw_result)
     state = emit(emit(seed(), call), result)
     assert secret not in repr(state.transcript)
-    assert state.transcript[-1].full_text is not None
-    assert "evidence line 39" in state.transcript[-1].full_text
-    for expanded in (False, True):
-        assert secret not in "\n".join(row.text for row in entry_view(replace(state.transcript[-1], expanded=expanded)))
+    assert not state.transcript
+    assert secret not in repr(state.pending_calls)
     assert call.args_json == raw_args and result.result == raw_result
 
 
 def test_append_and_right_click_copy_sanitize_secrets():
     app = make_app()
-    app.dispatch(Append(TranscriptEntry(kind="system", text="password=short-secret", full_text="token=short-secret")))
+    app.dispatch(Append(TranscriptEntry(kind="system", text="password=short-secret")))
     assert "short-secret" not in repr(app.state.transcript)
     copied = []
-    app.copy_to_clipboard = copied.append
+    def copy_to_clipboard(text: str) -> None:
+        copied.append(text)
+    app.copy_to_clipboard = copy_to_clipboard
     app._last_selected_text = "Authorization: Basic short-secret"
     click = SimpleNamespace(button=3, stop=Mock())
-    app.on_mouse_down(click)
+    app.on_mouse_down(cast(events.MouseDown, click))
     assert copied and "short-secret" not in copied[0]
     click.stop.assert_called_once()
 
@@ -112,7 +115,9 @@ async def test_explicit_bridge_reveal_copy_stays_outside_original_transcript(siz
     monkeypatch.setattr(KAgent, "on_mount", lambda self: None)
     app = _make_app()
     copied = []
-    app.copy_to_clipboard = copied.append
+    def copy_to_clipboard(text: str) -> None:
+        copied.append(text)
+    app.copy_to_clipboard = copy_to_clipboard
     bridge = SimpleNamespace(url="http://localhost:9876", port=9876, token="local-bridge-credential")
     app.start_burp_bridge = AsyncMock()
     app.close_burp_bridge = AsyncMock()
@@ -121,9 +126,11 @@ async def test_explicit_bridge_reveal_copy_stays_outside_original_transcript(siz
         assert handle_slash(app, "/burp credentials")
         await pilot.pause()
         assert app.transcript_panel.border_title == "Transcript"
-        assert bridge.token not in app._get_active_modal().render().plain
+        modal = app._get_active_modal()
+        assert isinstance(modal, BridgeCredentialsModal)
+        assert bridge.token not in modal.render().plain
         await pilot.press("v")
-        assert bridge.token in app._get_active_modal().render().plain
+        assert bridge.token in modal.render().plain
         await pilot.press("c")
         assert copied == [bridge.token]
         await pilot.press("escape")

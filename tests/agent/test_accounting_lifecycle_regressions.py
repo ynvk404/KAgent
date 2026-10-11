@@ -10,6 +10,7 @@ from src.agent.agent import AgentRunOptions
 from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import AlwaysAllow, AlwaysDeny, UserControlledRefusal
 from src.session.store import Store
+from src.session.tool_results import ResultUnavailable
 from src.tools.common.registry import Registry, InvalidToolArguments
 from src.tools.execution.file import FileReadTool
 from tests.agent.test_token_accounting_independent_verify import make_agent, SnapshotClient
@@ -83,12 +84,12 @@ async def assert_resume_and_reread(agent, registry, tmp_path, monkeypatch, *, ex
         with pytest.raises(UserControlledRefusal):
             await restored.tools.execute("read_tool_result", args, FakeSignal(), AlwaysDeny())
         other = make_agent(tools=registry, store=Store.new_with_id(tmp_path / "sessions", "other"))
-        with pytest.raises(InvalidToolArguments, match="unavailable in this session/project/target generation"):
+        with pytest.raises(ResultUnavailable, match="unavailable in this session/project/target generation"):
             await other.tools.execute("read_tool_result", args, FakeSignal(), operator)
     assert operator.requests and all(r.no_session_cache for r in operator.requests)
     before = deepcopy(restored.history)
     restored.target.set_base_url("https://different-target.invalid")
-    with pytest.raises(InvalidToolArguments, match="unavailable in this session/project/target generation"):
+    with pytest.raises(ResultUnavailable, match="unavailable in this session/project/target generation"):
         await restored.tools.execute("read_tool_result", args, FakeSignal(), operator)
     assert restored.history == before
     # Repeated resume neither creates references nor replaces artifact identities.

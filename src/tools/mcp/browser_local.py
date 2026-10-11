@@ -11,6 +11,7 @@ from contextvars import Context, copy_context
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -47,8 +48,6 @@ GRANT_ACTIONS = {
     'navigate': frozenset({'browser_navigate'}),
     'interaction': frozenset({'browser_click', 'browser_type'}),
 }
-GRANT_SECONDS = 300.0
-GRANT_CALLS = 20
 
 
 @dataclass
@@ -61,8 +60,9 @@ class BrowserGrant:
     stamp: tuple
     epoch: int
     revision: int
-    expires: float
-    remaining: int
+    expires: float | None
+    remaining: int | None
+    connection_generation: int | None = None
 
 
 def validate_browser_url(raw: Any) -> HTTPOrigin:
@@ -280,11 +280,13 @@ class BrowserLocalBinding:
     def action_group(name):
         return next((group for group, actions in GRANT_ACTIONS.items() if name in actions), None)
 
-    def activate_grant(self, group, *, seconds=GRANT_SECONDS, calls=GRANT_CALLS):
+    def activate_grant(self, group, *, seconds=None, calls=None):
         """Trusted operator/UI callback only; never an MCP/model tool or HTTP grant."""
-        if (group not in GRANT_ACTIONS or type(seconds) not in {int, float}
-                or not 0 < seconds <= GRANT_SECONDS or type(calls) is not int or not 0 < calls <= GRANT_CALLS):
-            raise ValueError('invalid bounded Browser grant')
+        if (group not in GRANT_ACTIONS
+                or (seconds is not None and (type(seconds) not in {int, float}
+                                             or not math.isfinite(seconds) or seconds <= 0))
+                or (calls is not None and (type(calls) is not int or calls <= 0))):
+            raise ValueError('invalid Browser grant limits')
         if (self.closed or self.fault or not self.policy.yolo or not self.lab_origin
                 or self._lifecycle() != self.lifecycle):
             raise ExecutionBlocked('blocked: Browser grant requires current YOLO/target binding')
@@ -297,7 +299,8 @@ class BrowserLocalBinding:
         self.grant_revision += 1
         self.grant = BrowserGrant(uuid.uuid4().hex[:12], group, actions, self.lab_origin,
                                   self.lifecycle, self.policy.stamp(), self.epoch, self.grant_revision,
-                                  self.policy.clock() + seconds, calls)
+                                  self.policy.clock() + seconds if seconds is not None else None, calls,
+                                  self.generation or None)
         return self.grant
 
     def revoke_grant(self):
@@ -309,8 +312,10 @@ class BrowserLocalBinding:
         if (grant is None or token != (grant.id, grant.revision) or not self.policy.yolo
                 or grant.revision != self.grant_revision or grant.epoch != self.epoch
                 or grant.lifecycle != self._lifecycle() or grant.stamp != self.policy.stamp()
-                or grant.origin != self.lab_origin or self.policy.clock() >= grant.expires
-                or (not consumed and grant.remaining <= 0)):
+                or grant.origin != self.lab_origin
+                or (grant.connection_generation is not None and grant.connection_generation != self.generation)
+                or (grant.expires is not None and self.policy.clock() >= grant.expires)
+                or (not consumed and grant.remaining is not None and grant.remaining <= 0)):
             raise ExecutionBlocked('blocked: Browser grant missing/expired/exhausted/revoked/stale')
         return grant
 
@@ -329,14 +334,17 @@ class BrowserLocalBinding:
     def grant_status(self):
         grant = self.grant
         if grant is None:
-            return 'Browser grant: none; YOLO needs an explicit bounded Browser grant. /permissions browser revoke'
+            return 'Browser grant: none; YOLO needs an explicit scoped Browser grant. /permissions browser revoke'
         try:
             self.check_grant((grant.id, grant.revision))
             state = 'active'
         except ExecutionBlocked:
             state = 'expired/exhausted/stale'
+        lifetime = (f'{max(0, grant.expires - self.policy.clock()):.1f}s remaining'
+                    if grant.expires is not None else 'session lifetime')
+        quota = f'calls remaining {grant.remaining}' if grant.remaining is not None else 'no call quota'
         return (f'Browser grant {grant.id}: {state}; origin {grant.origin}; actions {", ".join(sorted(grant.actions))}; '
-                f'{max(0, grant.expires - self.policy.clock()):.1f}s remaining; calls remaining {grant.remaining}. '
+                f'{lifetime}; {quota}. '
                 'Revoke: /permissions browser revoke')
 
     def validate_tool(self, tool, args) -> None:
@@ -406,6 +414,7 @@ class BrowserLocalBinding:
             if invocation_epoch != self.epoch or not self.policy.nested_allowed():
                 raise ExecutionBlocked('blocked: Browser queued receipt revoked/stale or binding reset')
             self.validate_tool(tool, args)
+            self.policy.revalidate_active(tool, args, signal)
             if grant_token is not None:
                 self.check_grant(grant_token, consumed=grant_consumed)
             if invocation_epoch != self.epoch:
@@ -457,8 +466,16 @@ class BrowserLocalBinding:
                     raise ExecutionBlocked('blocked: Browser readiness deadline; extension has not connected; no action dispatched')
                 await guarded(asyncio.sleep(STATUS_POLL_S), STATUS_TIMEOUT_S)
             if self.generation != state['generation']:
+                reconnected = bool(self.generation)
                 self.generation = state['generation']
                 self.snapshot_generation = 0
+                if reconnected:
+                    self.revoke_grant()
+                    if grant_token is not None:
+                        raise ExecutionBlocked('blocked: reconnect invalidated Browser grant; '
+                                               'review again and request a fresh browser_snapshot')
+            if grant_token is not None:
+                self.check_grant(grant_token).connection_generation = self.generation
             if args.get('ref') is not None and (not self.snapshot_generation
                     or state['snapshotGeneration'] != self.snapshot_generation):
                 raise ExecutionBlocked('blocked: reconnect/stale ref; request a fresh browser_snapshot')
@@ -474,7 +491,8 @@ class BrowserLocalBinding:
                     grant = self.check_grant(grant_token)
                     if tool._remote_name not in grant.actions:
                         raise ExecutionBlocked('blocked: Browser action outside grant')
-                    grant.remaining -= 1
+                    if grant.remaining is not None:
+                        grant.remaining -= 1
                     grant_consumed = True
                 dispatched = True
                 mark('ownerDispatch')

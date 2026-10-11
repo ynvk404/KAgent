@@ -6,7 +6,7 @@ isolated worker and supported broker transport; never ambient host fallback.
 from __future__ import annotations
 
 from contextvars import ContextVar
-from dataclasses import dataclass, asdict, is_dataclass
+from dataclasses import dataclass, asdict, is_dataclass, field, replace
 import hashlib
 import json
 import os
@@ -14,18 +14,20 @@ import stat
 from pathlib import Path
 import time
 import uuid
+import math
 from typing import Any, TYPE_CHECKING
 
 from src.permission.permission import UserControlledRefusal
 from src.permission.network.grants import check_cancelled
-from src.permission.runtime.invocations import review_id, on_review_end
+from src.permission.runtime.invocations import review_id, on_review_end, capture_review, ReviewGuard, REVIEW_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
     from src.engagement.state import EngagementState
 
 
 class ExecutionBlocked(UserControlledRefusal):
-    pass
+    explicit_denial = False
+    error_kind = 'policy_block'
 
 
 @dataclass(frozen=True)
@@ -36,21 +38,31 @@ class ExecutionReceipt:
     expires: float
     review_id: str = 'library'
     validation_binding: tuple[str, str] | None = None
+    review_guard: ReviewGuard | None = field(default=None, compare=False, repr=False)
+
+
+@dataclass(frozen=True)
+class ExecutionReview(ExecutionReceipt):
+    """Immutable review ticket; cannot dispatch until exchanged for a receipt."""
 
 
 _active: ContextVar[tuple["ExecutionPolicy", ExecutionReceipt] | None] = ContextVar("execution_receipt", default=None)
+
+
+def file_resource_identity(path: str | Path) -> tuple:
+    resolved = Path(path).expanduser().resolve()
+    try:
+        info = resolved.stat()
+        return str(resolved), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+    except FileNotFoundError:
+        return str(resolved), 'absent'
 
 
 def invocation_digest(tool: Any, args: dict[str, Any]) -> str:
     config = getattr(tool, "cfg", None)
     resource = None
     if type(tool).__module__ == "src.tools.execution.file" and args.get("path"):
-        path = Path(args["path"]).expanduser().resolve()
-        try:
-            info = path.stat()
-            resource = [str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns]
-        except FileNotFoundError:
-            resource = [str(path), "absent"]
+        resource = list(file_resource_identity(args['path']))
     material = [tool.name(), type(tool).__module__, args,
                 asdict(config) if is_dataclass(config) and not isinstance(config, type) else None,
                 getattr(tool, "shell_path", None), resource]
@@ -60,8 +72,9 @@ def invocation_digest(tool: Any, args: dict[str, Any]) -> str:
 
 class ExecutionPolicy:
     def __init__(self, engagement: EngagementState, root: Path, *, protected: tuple[Path, ...] = (),
-                 clock=time.monotonic, max_calls: int = 10000, concurrency: int = 16,
-                 cwe_mcp_deployment_path: str | Path | None = None):
+                 clock=time.monotonic, max_calls: int | None = None, concurrency: int = 16,
+                 cwe_mcp_deployment_path: str | Path | None = None,
+                 review_timeout: float = REVIEW_TIMEOUT_SECONDS):
         self.engagement = engagement
         self.root = root.resolve()
         self.protected = tuple(p.resolve() for p in protected)
@@ -70,6 +83,13 @@ class ExecutionPolicy:
         self.cwe_mcp_deployment_path = (Path(cwe_mcp_deployment_path).expanduser()
                                         if cwe_mcp_deployment_path else None)
         self.clock = clock
+        if isinstance(review_timeout, bool) or not math.isfinite(review_timeout) or review_timeout <= 0:
+            raise ValueError('review_timeout must be positive and finite')
+        self.review_timeout = review_timeout
+        if max_calls is not None and (type(max_calls) is not int or max_calls <= 0):
+            raise ValueError('max_calls must be a positive integer or None')
+        if type(concurrency) is not int or concurrency <= 0:
+            raise ValueError('concurrency must be a positive integer')
         self.max_calls = max_calls
         self.concurrency = concurrency
         self.used = 0
@@ -78,6 +98,8 @@ class ExecutionPolicy:
         self.yolo = False
         self.revoked: set[str] = set()
         self._receipts: dict[str, ExecutionReceipt] = {}
+        self._active_receipts: dict[str, ExecutionReceipt] = {}
+        self._review_cleanups: dict[str, Any] = {}
         self._denied: set[tuple[str, str]] = set()
         self._pending: set[str] = set()
         self.input_questions: dict[str, str | None] = {}
@@ -113,18 +135,18 @@ class ExecutionPolicy:
         if self.yolo != enabled:
             self.yolo = enabled
             self.revision += 1
-            self._receipts.clear()
+            self._clear_reviews()
 
     def revoke(self, tool: str = "*") -> None:
         self.revoked.add(tool)
         self.revision += 1
-        self._receipts.clear()
+        self._clear_reviews()
         self.persist()
 
     def restore_tool(self, tool: str) -> None:
         self.revoked.discard(tool)
         self.revision += 1
-        self._receipts.clear()
+        self._clear_reviews()
         self.persist()
 
     def load_journal(self, path: Path) -> None:
@@ -140,10 +162,11 @@ class ExecutionPolicy:
             self.engagement.http_permissions.restore_constraints(raw.get("http_constraints", []))
             self.research_permissions.restore_constraints(raw.get("research_constraints", []))
             self.used = max(self.used, int(raw.get("used_calls", 0)))
-            self.max_calls = max(1, int(raw.get("max_calls", self.max_calls)))
+            limit = raw.get("max_calls", self.max_calls)
+            self.max_calls = max(1, int(limit)) if limit is not None else None
             self.concurrency = max(1, int(raw.get("concurrency", self.concurrency)))
             self.revision += 1
-            self._receipts.clear()
+            self._clear_reviews()
 
     def persist(self) -> None:
         if self.journal is None:
@@ -166,12 +189,12 @@ class ExecutionPolicy:
         self._denied.clear()
         self.input_questions.clear()
         self.revision += 1
-        self._receipts.clear()
+        self._clear_reviews()
 
     def refresh_network(self) -> None:
         self.vetted_ips.clear()
         self.revision += 1
-        self._receipts.clear()
+        self._clear_reviews()
 
     def require_path(self, path: str | Path, *, write: bool = False) -> Path:
         resolved = Path(path).expanduser().resolve()
@@ -307,39 +330,74 @@ class ExecutionPolicy:
             if backend == "nmap":
                 raise ExecutionBlocked("blocked: enforcement-unavailable; scanner process adapter required (native backend available)")
 
-    def prepare(self, tool: Any, args: dict[str, Any]) -> ExecutionReceipt:
+    def prepare(self, tool: Any, args: dict[str, Any], *, reviewing: bool = False,
+                signal: Any = None) -> ExecutionReceipt:
+        check_cancelled(signal)
         self.validate(tool, args)
         digest = invocation_digest(tool, args)
+        for old in list(self._receipts.values()):
+            if not self.review_is_current(old):
+                self.finish_review(old)
         if (review_id(), digest) in self._denied:
             raise ExecutionBlocked("blocked: invocation-declined; operator retry required")
         if digest in self._pending:
             raise ExecutionBlocked("pending: equivalent invocation review already open")
-        if self.used >= self.max_calls:
+        if self.max_calls is not None and self.used >= self.max_calls:
             raise ExecutionBlocked("blocked: session-call-budget-exhausted")
-        self._receipts = {key: value for key, value in self._receipts.items() if value.expires > self.clock()}
         if len(self._receipts) >= 1024:
             raise ExecutionBlocked("pending: receipt-capacity")
-        receipt = ExecutionReceipt(uuid.uuid4().hex, digest, self.stamp(), self.clock() + 60, review_id())
+        guard = capture_review(signal=signal, clock=self.clock,
+                               timeout=self.review_timeout if reviewing else 60)
+        receipt_type = ExecutionReview if reviewing else ExecutionReceipt
+        receipt = receipt_type(uuid.uuid4().hex, digest, self.stamp(), guard.expires,
+                               review_id(), review_guard=guard)
         if (tool.name() == "file_write" and self.generic_validation is not None
                 and self.generic_validation.restricted()):
             boundary = self.generic_validation
             candidate = next(c for c in boundary.candidates() if c.status == "validating")
-            from dataclasses import replace
             receipt = replace(receipt, validation_binding=(candidate.id, boundary.snapshot(candidate.id)))
         self._receipts[receipt.id] = receipt
         self._pending.add(digest)
+        self._review_cleanups[receipt.id] = guard.on_close(lambda: self.finish_review(receipt))
         return receipt
 
+    def _clear_reviews(self) -> None:
+        for receipt in list(self._receipts.values()):
+            self.finish_review(receipt)
+
     def finish_review(self, receipt: ExecutionReceipt, *, denied: bool = False) -> None:
-        self._pending.discard(receipt.digest)
+        # An old invocation's finally cannot remove a fresh sibling's pending
+        # digest after its own ticket was consumed/retired.
+        if self._receipts.pop(receipt.id, None) is not None:
+            self._pending.discard(receipt.digest)
+        cleanup = self._review_cleanups.pop(receipt.id, None)
+        if cleanup is not None:
+            cleanup()
         if denied:
             key = (receipt.review_id, receipt.digest)
             self._denied.add(key)
             on_review_end(lambda: self._denied.discard(key))
-        self._receipts.pop(receipt.id, None)
+
+    def dispatch_receipt(self, review: ExecutionReceipt, tool: Any, args: dict[str, Any],
+                         signal: Any) -> ExecutionReceipt:
+        """Exchange one still-current review for one short dispatch receipt."""
+        check_cancelled(signal)
+        self.validate(tool, args)
+        if not self.review_is_current(review) or review.review_id != review_id():
+            raise ExecutionBlocked('blocked: stale execution review')
+        if review.digest != invocation_digest(tool, args):
+            raise ExecutionBlocked('blocked: execution-arguments-changed')
+        if not isinstance(review, ExecutionReview):
+            return review
+        receipt = ExecutionReceipt(review.id, review.digest, review.revision, self.clock() + 60,
+                                   review.review_id, review.validation_binding, review.review_guard)
+        self._receipts[receipt.id] = receipt
+        return receipt
 
     def start(self, receipt: ExecutionReceipt, tool: Any, args: dict[str, Any], signal: Any):
         check_cancelled(signal)
+        if isinstance(receipt, ExecutionReview):
+            raise ExecutionBlocked('blocked: review-ticket-is-not-dispatch-receipt')
         if receipt.validation_binding is not None:
             try:
                 if self.generic_validation is None:
@@ -351,26 +409,47 @@ class ExecutionPolicy:
         digest = invocation_digest(tool, args)
         if receipt.digest != digest:
             raise ExecutionBlocked("blocked: execution-arguments-changed")
-        if (self._receipts.get(receipt.id) != receipt or receipt.revision != self.stamp()
+        if (not self.review_is_current(receipt)
                 or receipt.review_id != review_id() or self.clock() >= receipt.expires):
             raise ExecutionBlocked("blocked: stale/replayed-execution-receipt")
-        if self.used >= self.max_calls or self.active >= self.concurrency:
+        if ((self.max_calls is not None and self.used >= self.max_calls)
+                or self.active >= self.concurrency):
             raise ExecutionBlocked("pending: execution-budget/concurrency")
-        del self._receipts[receipt.id]
-        self._pending.discard(receipt.digest)
+        self.finish_review(receipt)
         self.used += 1
         self.persist()
         self.active += 1
+        self._active_receipts[receipt.id] = receipt
         return _active.set((self, receipt))
 
     def stop(self, token) -> None:
+        entry = _active.get()
         _active.reset(token)
+        if entry is not None and entry[0] is self:
+            self._active_receipts.pop(entry[1].id, None)
         self.active -= 1
 
     def nested_allowed(self) -> bool:
         entry = _active.get()
-        return (entry is not None and entry[0] is self and entry[1].revision == self.stamp()
-                and entry[1].review_id == review_id())
+        return bool(entry is not None and entry[0] is self and self.execution_is_current(entry[1]))
+
+    def execution_is_current(self, receipt: ExecutionReceipt) -> bool:
+        # A consumed receipt authorizes its running operation, not another
+        # dispatch. Its short dispatch TTL no longer measures execution time.
+        return (self._active_receipts.get(receipt.id) is receipt and receipt.revision == self.stamp()
+                and (receipt.review_guard is None or receipt.review_guard.owner_is_current()))
+
+    def active_review_check(self):
+        """Capture invocation identity before awaiting; callbacks have other contexts."""
+        entry = _active.get()
+        return lambda: bool(entry is not None and entry[0] is self and self.execution_is_current(entry[1]))
+
+    def revalidate_active(self, tool: Any, args: dict[str, Any], signal: Any) -> None:
+        check_cancelled(signal)
+        self.validate(tool, args)
+        entry = _active.get()
+        if not self.nested_allowed() or entry is None or entry[1].digest != invocation_digest(tool, args):
+            raise ExecutionBlocked('blocked: execution-resource/arguments-changed')
 
     def bind_validation_context(self, state, skills, target) -> None:
         if self.validation_context_matches(state, skills, target):
@@ -386,8 +465,20 @@ class ExecutionPolicy:
         return bool(self.generic_validation is not None
                     and self.generic_validation.matches(state, skills, target))
 
+    def review_is_current(self, receipt: ExecutionReceipt, tool: Any = None,
+                          args: dict[str, Any] | None = None) -> bool:
+        """UI callback check; do not consult the callback task's review context."""
+        try:
+            return (self._receipts.get(receipt.id) is receipt and receipt.revision == self.stamp()
+                    and self.clock() < receipt.expires
+                    and (receipt.review_guard is None or receipt.review_guard.is_current())
+                    and (tool is None or args is None or receipt.digest == invocation_digest(tool, args)))
+        except Exception:
+            return False
+
     def status(self) -> str:
-        return (f"Execution profile: {self.root}; YOLO: {self.yolo}; calls: {self.used}/{self.max_calls}; "
+        limit = str(self.max_calls) if self.max_calls is not None else 'no session quota'
+        return (f"Execution profile: {self.root}; YOLO: {self.yolo}; calls: {self.used}/{limit}; "
                 f"active: {self.active}/{self.concurrency}; revoked: {', '.join(sorted(self.revoked)) or '(none)'}\n"
                 f"Worker: {self.worker.summary() if self.worker is not None else 'enforcement-unavailable'}; local stdio MCP/HTTP ffuf need compatible configuration; nmap/remote MCP unavailable.\n"
                 "Read and export assumptions: lab root is operator-approved input; no general context egress guarantee.")

@@ -101,11 +101,14 @@ class ContentDiscoveryTool(Tool):
                 },
                 "paths": {
                     "type": "array",
+                    "minItems": 1,
+                    "maxItems": MAX_PATHS,
                     "items": {"type": "string"},
                     "description": f"Optional relative paths (max {MAX_PATHS}); otherwise a curated list is used.",
                 },
                 "extensions": {
                     "type": "array",
+                    "maxItems": MAX_EXTENSIONS,
                     "items": {"type": "string"},
                     "description": f"Optional file extensions appended to each path (max {MAX_EXTENSIONS}).",
                 },
@@ -116,14 +119,20 @@ class ContentDiscoveryTool(Tool):
                 },
                 "max_requests": {
                     "type": "integer",
+                    "minimum": 3,
+                    "maximum": MAX_REQUESTS,
                     "description": f"Total request hard cap, including two baselines and verification (3–{MAX_REQUESTS}).",
                 },
                 "rate_limit": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_RATE_LIMIT,
                     "description": f"Requests per second (1–{MAX_RATE_LIMIT}).",
                 },
                 "timeout_seconds": {
                     "type": "integer",
+                    "minimum": 5,
+                    "maximum": MAX_TIMEOUT_SECONDS,
                     "description": f"Whole operation timeout in seconds (5–{MAX_TIMEOUT_SECONDS}).",
                 },
             },

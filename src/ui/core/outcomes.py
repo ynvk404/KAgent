@@ -1,0 +1,346 @@
+"""Immutable, scoped presentation of runtime records; never advance Workflow."""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from urllib.parse import urljoin, urlsplit
+
+from src.agent.events import AgentEvent, ToolCallEvent, ToolResultEvent
+from src.permission.runtime.execution import policy_for
+from src.ui.core.admission import PendingCall, call_metadata
+from src.ui.render.sanitize import sanitize_text
+from src.workflow.assessment import accepted_result, candidate_binding
+from src.workflow.state import WorkflowState, candidate_origin, validation_result_fingerprint
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressRecord:
+    kind: str
+    key: str
+    label: str
+    disposition: str = ""
+    detail: str = ""
+    evidence: str = ""
+    order: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class OutcomeFacts:
+    scope: str = ""
+    milestones: tuple[tuple[str, str, str], ...] = ()
+    pending: tuple[str, ...] = ()
+    validations: int = 0
+    records: tuple[ProgressRecord, ...] = ()
+    activity: str = ""
+    incomplete: int = 0
+    goals: int = 0
+    blockers: tuple[str, ...] = ()
+    activity_skill: str = ""
+    stale_event: bool = False
+    overview: str = ""
+    completion_supported: bool = False
+    accepted_call: bool = False
+    operation_owner: str = ''
+
+
+def _evidence_summary(result) -> str:
+    """Only called for an accepted result; no traffic enters the UI copy."""
+    sources = {row["source"]["id"]: row["source"] for row in result.evidence_manifest
+               if isinstance(row.get("source"), dict) and row["source"].get("id")
+               and row["source"].get("complete") is True
+               and row["source"].get("truncated") is not True
+               and row["source"].get("execution_status") == "completed"}
+    roles = list(dict.fromkeys(row.get("role") for row in sources.values()
+                 if row.get("role") in {"baseline", "control", "trigger", "readback", "cleanup", "auxiliary"}))
+    if roles:
+        return ", ".join(roles)
+    http = sum(row.get("source_kind") in {"native-http", "imported-capture"} for row in sources.values())
+    return f"{http} accepted HTTP {'source' if http == 1 else 'sources'}" if http else ""
+
+
+def concise_text(value: str, limit: int = 240) -> str:
+    """Bound a sanitized presentation copy, without deriving a conclusion."""
+    text = " ".join(sanitize_text(value).split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def endpoint_label(method: str | None, endpoint: str | None, parameter: str | None = None) -> str:
+    # Query values, userinfo and fragments have no place in activity labels.
+    try:
+        parsed = urlsplit(endpoint or "")
+        path = parsed.path or "/"
+    except ValueError:
+        path = "[invalid endpoint]"
+    return sanitize_text(f"{method or '?'} {path}" + (f" · input {parameter}" if parameter else ""))
+
+
+def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall, ...]) -> OutcomeFacts:
+    workflow = getattr(agent, "workflow", None)
+    if not isinstance(workflow, WorkflowState):
+        return OutcomeFacts()
+    target = agent.target.base_url()
+    origin = candidate_origin(target)
+    objective = workflow.objective
+    policy = policy_for(getattr(agent, "prompter", None))
+    engagement = getattr(agent, "engagement_state", None)
+    scope = hashlib.sha256(str((origin, getattr(agent.target, "revision", None),
+                               getattr(engagement, "revision", None),
+                               getattr(getattr(engagement, "http_permissions", None), "epoch", None),
+                               getattr(policy, "session_id", None), objective.id if objective else None)).encode()).hexdigest()
+    call = (call_metadata(event) if isinstance(event, ToolCallEvent) else
+            next((item for item in calls if isinstance(event, ToolResultEvent) and event.id
+                  and item.id == event.id and item.name == event.name), None))
+    event_origin = getattr(event, "target_origin", None)
+    event_revision = getattr(event, "target_revision", None)
+    event_objective = getattr(event, "objective_id", None)
+    if ((call and call.scope and call.scope != scope)
+            or (event_origin is not None and candidate_origin(event_origin) != origin)
+            or (event_revision is not None and event_revision != getattr(agent.target, "revision", None))
+            or (event_objective is not None and event_objective != (objective.id if objective else None))):
+        return OutcomeFacts(scope=scope, stale_event=True)
+    records: list[ProgressRecord] = []
+    milestones: list[tuple[str, str, str]] = []
+    pending: list[str] = []
+    blockers: list[str] = []
+    incomplete = goals = validations = 0
+    accepted_call = False
+    operation_owner = ''
+    tool = getattr(agent, "tools", {}).get("workflow")
+    root = getattr(tool, "evidence_root", None)
+
+    def scoped_endpoint(endpoint: str | None) -> bool:
+        return not endpoint or candidate_origin(urljoin((origin or "") + "/", endpoint)) == origin
+
+    candidates = [candidate for candidate in workflow.candidates.values()
+                  if candidate_origin(candidate.target) == origin and scoped_endpoint(candidate.endpoint)
+                  and (objective is None or workflow.candidate_belongs_to_objective(candidate, objective))]
+    def validation_label(candidate) -> str:
+        label = endpoint_label(candidate.method, candidate.endpoint, candidate.parameter)
+        matching = [item for item in candidates
+                    if endpoint_label(item.method, item.endpoint, item.parameter) == label]
+        if len(matching) > 1:
+            label += " · " + candidate.candidate_class
+            if sum(item.candidate_class == candidate.candidate_class for item in matching) > 1:
+                label += " · candidate " + candidate.id[-8:]
+        return sanitize_text(label)
+    selected_candidate_ids: set[str] = set()
+    for item in workflow.attack_surface_inputs.values():
+        if (item.target_origin != origin or not scoped_endpoint(item.endpoint)
+                or objective is None or item.objective_id != objective.id):
+            continue
+        label = endpoint_label(item.method, item.endpoint, item.parameter)
+        records.append(ProgressRecord("input", item.id, label, item.disposition))
+        records.append(ProgressRecord("endpoint", f"{item.method}:{urlsplit(item.endpoint or '').path}",
+                                      endpoint_label(item.method, item.endpoint)))
+        if item.candidate_ids:
+            records.append(ProgressRecord("selection", item.id, label, "captured" if item.baseline_request_ref else "direct"))
+            selected_candidate_ids.update(item.candidate_ids)
+        if item.disposition in {"pending", "blocked"}:
+            pending.append("input review incomplete")
+        if item.disposition == "blocked":
+            blockers.append(sanitize_text(f"{label}: {item.disposition_reason}"))
+
+    for candidate in candidates:
+        label = endpoint_label(candidate.method, candidate.endpoint, candidate.parameter)
+        records.append(ProgressRecord("candidate", candidate.id, label + f" · {candidate.candidate_class}", candidate.status))
+        # Candidate geometry is a recorded input selection, not a discovery
+        # claim or a vulnerability conclusion.
+        if candidate.id not in selected_candidate_ids:
+            records.append(ProgressRecord("selection", candidate.id, label,
+                                          "captured" if candidate.baseline_request_ref else "direct"))
+        persisted = workflow.persisted_findings.get(candidate.id)
+        if persisted:
+            records.append(ProgressRecord("finding", candidate.id + ":" + persisted, label))
+        result = workflow.latest_result(candidate.id)
+        recorded_pause = result is not None and result.outcome in {
+            "blocked", "authorization-required", "browser-required", "deferred", "insufficient-evidence"}
+        if candidate.status == "deferred" and not recorded_pause:
+            pending.append("candidate deferred")
+            blockers.append(label + ": candidate deferred")
+        if result is None:
+            incomplete += 1
+            pending.append("validation incomplete")
+            continue
+        if result.cleanup_state in {"pending", "failed", "requires-user-action"}:
+            pending.append("cleanup " + result.cleanup_state)
+            blockers.append(f"{label}: cleanup {result.cleanup_state}")
+        if result.coverage_synced is False:
+            pending.append("coverage synchronization pending")
+        valid = accepted_result(workflow, candidate, result, policy)
+        if isinstance(root, Path):
+            valid = valid and all(workflow.evidence[ref].is_available_for_resume(root)
+                                  for ref in result.evidence_refs if ref in workflow.evidence)
+        if valid:
+            validations += 1
+            if candidate.status in {"new", "queued", "validating"}:
+                incomplete += 1
+                pending.append("validation incomplete")
+            identity = candidate.id + ":" + validation_result_fingerprint(result)
+            impact = result.assessment.get("observed_impact")
+            detail = concise_text(impact) if isinstance(impact, str) else ""
+            records.append(ProgressRecord("validation", identity, validation_label(candidate), result.outcome, detail,
+                                          _evidence_summary(result), workflow.validation_results.index(result)))
+            if (isinstance(event, ToolResultEvent) and call and call.operation == "record_result"
+                    and call.candidate_id == candidate.id and event.status == "success" and not event.err):
+                try:
+                    receipt = json.loads(event.result)
+                except (ValueError, TypeError):
+                    receipt = None
+                recorded = receipt.get("result") if isinstance(receipt, dict) else None
+                accepted_call = (isinstance(receipt, dict) and receipt.get("ok") is True
+                    and (not call.attempt_id or call.attempt_id == result.attempt_id)
+                    and (not isinstance(recorded, dict) or
+                         (recorded.get("candidate_id", candidate.id) == candidate.id
+                          and recorded.get("result_id", result.result_id) == result.result_id
+                          and recorded.get("attempt_id", result.attempt_id) == result.attempt_id)))
+            if result.outcome == "confirmed" and not workflow.finding_is_persisted(candidate.id):
+                records.append(ProgressRecord("unsaved", identity, label))
+                pending.append("finding persistence pending")
+        else:
+            incomplete += 1
+            pending.append("current assessment/evidence unavailable" if result.outcome in {"confirmed", "not-confirmed"}
+                           else "validation " + result.outcome)
+            if recorded_pause:
+                blockers.append(sanitize_text(f"{label}: {result.outcome}; {result.deferred_reason or ''}"))
+            if (isinstance(event, ToolResultEvent) and call and call.operation == "record_result"
+                    and call.candidate_id == candidate.id and event.status == "success" and not event.err
+                    and result.outcome in {"blocked", "authorization-required", "browser-required", "deferred", "insufficient-evidence"}):
+                try:
+                    receipt = json.loads(event.result)
+                except (ValueError, TypeError):
+                    receipt = None
+                recorded = receipt.get("result") if isinstance(receipt, dict) else None
+                if (isinstance(receipt, dict) and receipt.get("ok") is True and isinstance(recorded, dict)
+                        and recorded.get("candidate_id") == candidate.id
+                        and recorded.get("outcome") == result.outcome
+                        and recorded.get("result_id") == result.result_id
+                        and (not call.attempt_id or call.attempt_id == result.attempt_id)):
+                    status = "incomplete" if result.outcome == "insufficient-evidence" else "paused"
+                    text = f"Validation {status} · {validation_label(candidate)}\n  Reason · {result.outcome.replace('-', ' ')}"
+                    if result.deferred_reason:
+                        text += ": " + concise_text(result.deferred_reason)
+                    milestones.append(("validation-pause:" + candidate.id + ":" + validation_result_fingerprint(result), "warning", text))
+
+    selection = getattr(getattr(agent, "_pending_context", None), "capture_selection", None)
+    if selection is None:
+        selection = getattr(agent, "pending_capture_selection", None)
+    if selection is not None and selection.origin.as_url() == origin:
+        for row in selection.requests:
+            records.append(ProgressRecord("capture", row.baseline_request_ref or row.signature,
+                                          endpoint_label(row.method, row.endpoint), "burp"))
+
+    if objective:
+        if objective.target_origin != origin:
+            pending.append("active target differs from objective")
+            blockers.append("active target differs from objective")
+        else:
+            for goal in objective.requested_goals:
+                if goal.status not in {"tested_confirmed", "tested_not_confirmed", "no_candidate"}:
+                    goals += 1
+                    pending.append("requested goal " + goal.status.replace("_", " "))
+                    if goal.status in {"blocked", "unsupported"}:
+                        blockers.append(sanitize_text(f"{goal.candidate_class}: {goal.status}"))
+            if objective.mode == "whole_target":
+                from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
+                if any(phase not in workflow.completed_phases(objective) for phase in REQUIRED_WHOLE_TARGET_PHASES):
+                    pending.append("required workflow phases incomplete")
+
+    overview = ""
+    completion_supported = False
+    if objective and objective.mode == "whole_target" and objective.target_origin == origin:
+        from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
+        completed = workflow.completed_phases(objective)
+        parts = [marker.phase.replace("_", " ") + " completed" for marker in workflow.phase_completions.values()
+                 if marker.objective_id == objective.id and marker.target_origin == origin and marker.phase in completed]
+        inventory = [row for row in records if row.kind == "input"]
+        if inventory:
+            reviewed = sum(row.disposition in {"analyzed", "dropped"} for row in inventory)
+            parts.append(f"{reviewed}/{len(inventory)} inputs reviewed")
+            blocked = sum(row.disposition == "blocked" for row in inventory)
+            if blocked:
+                parts.append(f"{blocked} {'input' if blocked == 1 else 'inputs'} blocked")
+        active = sum(candidate.status == "validating" for candidate in candidates)
+        if active:
+            parts.append(f"{active} {'validation' if active == 1 else 'validations'} active")
+        if validations:
+            parts.append(f"{validations} {'validation' if validations == 1 else 'validations'} accepted")
+        if goals:
+            parts.append(f"{goals} {'goal' if goals == 1 else 'goals'} pending")
+        if parts:
+            overview = "Workflow · " + " · ".join(dict.fromkeys(parts))
+        completion_supported = all(phase in completed for phase in REQUIRED_WHOLE_TARGET_PHASES) and not pending
+
+    activity = ""
+    activity_skill = ""
+    if call:
+        candidate = workflow.candidates.get(call.candidate_id)
+        if candidate in candidates and candidate is not None:
+            if isinstance(event, ToolCallEvent) and call.name == 'workflow':
+                active = next((attempt['id'] for attempt in workflow.attempts.values()
+                    if attempt.get('candidate_id') == candidate.id and attempt.get('status') == 'active'), None)
+                position = sum(result.candidate_id == candidate.id for result in workflow.validation_results)
+                if call.operation == 'record_result':
+                    latest = workflow.latest_result(candidate.id)
+                    proposed = workflow.attempts.get(call.attempt_id)
+                    owner = (proposed if proposed and proposed.get('candidate_id') == candidate.id
+                             and proposed.get('candidate_binding') == candidate_binding(candidate) else
+                             workflow.attempts.get(active or (latest.attempt_id if latest else '') or ''))
+                    if owner is not None:
+                        active, position = owner['id'], owner.get('result_position', position)
+                operation_owner = hashlib.sha256(repr((scope, call.operation, candidate_binding(candidate), active,
+                    position,
+                    event.args.get('force') is True)).encode()).hexdigest()
+            activity = endpoint_label(candidate.method, candidate.endpoint, candidate.parameter)
+            if call.name == "http" and call.activity:
+                geometry = endpoint_label(candidate.method, candidate.endpoint)
+                activity = call.activity
+                if call.activity == geometry and candidate.parameter:
+                    activity += sanitize_text(f" · input {candidate.parameter}")
+            elif call.operation:
+                activity = call.operation.replace("_", " ") + " · " + activity
+            # A class route identifies its expert; activation is checked by the reducer.
+            from src.workflow.validation_route import resolve_validation_route
+            route = resolve_validation_route(getattr(tool, "skills", None), candidate.candidate_class)
+            if route.kind == "expert":
+                activity_skill = route.skill_name or ""
+            if (isinstance(event, ToolResultEvent) and call.operation == "start_validation"
+                    and event.status == "success" and not event.err and not event.error_kind):
+                try:
+                    receipt = json.loads(event.result)
+                except (ValueError, TypeError):
+                    receipt = None
+                context = receipt.get("validation_context") if isinstance(receipt, dict) else None
+                attempt_id = context.get("attempt_id") if isinstance(context, dict) else None
+                attempt = workflow.attempts.get(attempt_id) if isinstance(attempt_id, str) else None
+                if (isinstance(receipt, dict) and receipt.get("ok") is True and isinstance(attempt, dict)
+                        and candidate.status == "validating" and attempt.get("status") == "active"
+                        and attempt.get("candidate_id") == candidate.id
+                        and attempt.get("candidate_binding") == candidate_binding(candidate)
+                        and attempt.get("objective_id") == (objective.id if objective else None)
+                        and attempt.get("target_origin") == origin
+                        and attempt.get("target_revision") == getattr(agent.target, "revision", None)
+                        and attempt.get("session_id") == getattr(tool, "session_id", None)
+                        and (policy is None or attempt.get("epoch") == policy.engagement.http_permissions.epoch)):
+                    milestones.append(("attempt:" + attempt["id"], "info", "Validation started · " +
+                                       validation_label(candidate)))
+                    accepted_call = True
+        if (isinstance(event, ToolResultEvent) and event.status == "success" and not event.err
+                and event.name == "confirm_finding"):
+            receipt = re.match(r'^Finding "([^\n]*)" written to ([^\n]+)', event.result)
+            if (receipt and candidate in candidates and candidate is not None
+                    and workflow.finding_is_persisted(candidate.id)
+                    and accepted_result(workflow, candidate, workflow.latest_result(candidate.id), policy)):
+                result = workflow.latest_result(candidate.id)
+                assert result is not None
+                severity = result.assessment.get("severity")
+                label = f" ({severity})" if severity in {"info", "low", "medium", "high", "critical"} else ""
+                milestones.append((candidate.id + ":" + validation_result_fingerprint(result), "finding",
+                                   f"Finding saved · {concise_text(receipt[1])}{label}\n  {sanitize_text(receipt[2])}"))
+    return OutcomeFacts(scope, tuple(milestones), tuple(dict.fromkeys(pending)), validations,
+                        tuple(dict.fromkeys(records)), activity, incomplete, goals, tuple(dict.fromkeys(blockers)),
+                        activity_skill, overview=overview, completion_supported=completion_supported, accepted_call=accepted_call,
+                        operation_owner=operation_owner)

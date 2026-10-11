@@ -260,7 +260,8 @@ class ResultRetention:
     def lookup(self, result_ref: str) -> ResultReference:
         from src.session.tool_results import valid_ref
         if not valid_ref(result_ref):
-            raise ResultUnavailable("invalid tool result reference")
+            from src.session.tool_results import InvalidResultReference
+            raise InvalidResultReference("invalid tool result reference; use a published tr_ identifier")
         self.refresh_scope()
         ref = self.references.get(result_ref)
         if ref is None or self.store is None:

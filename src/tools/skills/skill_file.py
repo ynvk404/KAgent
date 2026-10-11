@@ -12,6 +12,7 @@ from src.tools.skills.paths import (
     list_files,
     render_file_preview,
     resolve_skill_dir,
+    SkillFilePages,
 )
 from src.tools.common.types import (
     Tool,
@@ -29,31 +30,23 @@ class ReadSkillFileTool:
         skills: SkillRegistry,
     ):
         self.skills = skills
+        self.pages = SkillFilePages()
 
     def name(self) -> str:
         return "read_skill_file"
 
     def description(self) -> str:
-        return (
-            "Read or list any auxiliary file shipped with a skill. "
-            "Skills carry their own directory; this tool resolves paths "
-            "relative to that directory and reads them safely.\n\n"
-            "Use after loading a skill — skill bodies reference "
-            "${SKILL_DIR} for absolute paths; this tool is the "
-            "skill-name-relative way to fetch the same file.\n\n"
-            "Examples:\n"
-            '  read_skill_file(skill="sql-injection", action="list")\n'
-            '  read_skill_file(skill="sql-injection", path="payloads.txt", limit=50)\n'
-            '  read_skill_file(skill="recon", action="list")'
-        )
+        return 'Read/list loaded skill files, excluding SKILL.md. Clipped: reuse skill/path, published source_ref and start_char (Unicode). Source <=256KiB, body <=16KiB. sf_ IDs are not read_tool_result refs.'
 
     def schema(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
+                'start_char': {'type': 'integer', 'minimum': 0, 'description': 'Unicode offset; source_ref required after 0.'},
+                'source_ref': {'type': 'string', 'description': 'Published sf_ source identity.'},
                 "skill": {
                     "type": "string",
-                    "description": "Skill name whose directory to read from.",
+                    "description": "Loaded skill name.",
                 },
                 "action": {
                     "type": "string",
@@ -62,23 +55,23 @@ class ReadSkillFileTool:
                         "read",
                     ],
                     "description": (
-                        "'list' returns filenames under the skill directory "
-                        "(excluding SKILL.md). 'read' returns one file's "
-                        "contents. Default: read when path is given, "
+                        "'list' returns auxiliary filenames "
+                        "(excludes SKILL.md). 'read' returns "
+                        "content. Default: read with path, "
                         "list when not."
                     ),
                 },
                 "path": {
                     "type": "string",
                     "description": (
-                        "Relative path within the skill directory "
-                        '(example: "payloads.txt").'
+                        "Auxiliary path within skill "
+                        ''
                     ),
                 },
                 "limit": {
                     "type": "number",
                     "description": (
-                        "Cap number of lines returned "
+                        "Line cap "
                         "(default 200, max 5000)."
                     ),
                 },
@@ -171,10 +164,8 @@ class ReadSkillFileTool:
                 f'error: path "{path}" escapes the skill directory via a symlink'
             )
 
-        return render_file_preview(
-            f"{skill_name}/{rel}",
-            resolved.read_text(encoding="utf-8"),
-            resolved.stat().st_size,
+        return self.pages.preview(
+            resolved, f"{skill_name}/{rel}", args,
             clamp_line_limit(
                 arg_number(
                     args,

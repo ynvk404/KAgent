@@ -405,6 +405,7 @@ class MCPTool:
         frozen = copy(self)
         frozen._server = deepcopy(self._server)
         frozen._browser_grant = None
+        frozen._browser_review = None
         return frozen
 
     def __init__(
@@ -423,6 +424,7 @@ class MCPTool:
         self._execution_policy: Any = None
         self._server: MCPServerConfig | None = None
         self._browser_grant: tuple[str, int] | None = None
+        self._browser_review: tuple | None = None
 
     def name(self) -> str:
         return self._tool_name
@@ -454,40 +456,65 @@ class MCPTool:
                 hints['browserGrant'] = group
         return hints
 
-    async def review_browser_grant(self, args, prompter, signal=None):
+    async def review_browser_grant(self, args, prompter, signal=None, *, is_current=None):
         from src.permission.permission import Decision, PermissionRequest
-        from src.tools.mcp.browser_local import BrowserLocalBinding, GRANT_SECONDS, GRANT_CALLS, GRANT_ACTIONS
+        scope, detail = self.browser_grant_review(args)
+        from src.permission.runtime.invocations import capture_review
+        guard = capture_review(signal=signal, clock=self._execution_policy.clock,
+                               timeout=self._execution_policy.review_timeout, condition=is_current)
+        decision = await prompter.ask(PermissionRequest(
+            tool='browser_lab_grant', summary=f'Activate {scope}', detail=detail,
+            no_session_cache=True, risk_tier='high-impact', force_operator=True, is_current=guard.is_current), signal)
+        if decision != Decision.ALLOW_ONCE:
+            return Decision.DENY
+        if not guard.is_current():
+            from src.permission.runtime.execution import ExecutionBlocked
+            raise ExecutionBlocked('blocked: stale Browser permission review')
+        self.activate_reviewed_browser_grant(args, signal)
+        return Decision.ALLOW_ONCE
+
+    def browser_grant_review(self, args):
+        """Complete adapter-owned scope shown before session approval."""
+        from src.tools.mcp.browser_local import GRANT_ACTIONS, BrowserLocalBinding
         from src.permission.runtime.execution import ExecutionBlocked
         binding = self._session
-        if not is_designated_browser_local(self._server) or not isinstance(binding, BrowserLocalBinding):
+        if (not isinstance(binding, BrowserLocalBinding) or not is_designated_browser_local(self._server)
+                or self._execution_policy is not binding.policy):
             raise ExecutionBlocked('blocked: invalid Browser grant adapter')
         binding.validate_tool(self, args)
         group = binding.action_group(self._remote_name)
         if group is None or not binding.policy.yolo:
             raise ExecutionBlocked('blocked: Browser action not eligible for a YOLO grant')
-        epoch, stamp, revision = binding.epoch, binding.policy.stamp(), binding.grant_revision
-        warning = ('Click/type may submit forms, change application state or enter sensitive data. '
-                   'Exact origin does not make those effects safe. Accept unknown application effects on this lab.'
-                   if group == 'interaction' else 'Navigation changes the selected tab location.' if group == 'navigate'
-                   else 'Read access may expose page data, screenshots and console logs.')
+        from src.permission.runtime.invocations import capture_review
+        self._browser_review = (binding.epoch, binding.policy.stamp(), binding.grant_revision,
+                               capture_review(clock=binding.policy.clock, timeout=binding.policy.review_timeout))
         groups = ['read'] + (['navigate'] if group != 'read' else []) + (['interaction'] if group == 'interaction' else [])
         actions = sorted(set().union(*(GRANT_ACTIONS[value] for value in groups)))
-        decision = await prompter.ask(PermissionRequest(
-            tool='browser_lab_grant', summary=f'Activate bounded Browser {group} grant for {binding.lab_origin}',
-            detail=f'Origin: {binding.lab_origin}\nActions: {", ".join(actions)}\n'
-                   f'Expires in {GRANT_SECONDS:g}s; at most {GRANT_CALLS} dispatched calls.\n{warning}\n'
-                   'This also approves the currently proposed invocation on the selected lab connection. '
-                   'The Extension does not authenticate tab/profile identity or constrain all Chrome traffic. '
-                   'Revoke: /permissions browser revoke',
-            no_session_cache=True, risk_tier='high-impact', force_operator=True), signal)
-        if decision != Decision.ALLOW_ONCE:
-            return Decision.DENY
+        scope = f'Browser {binding.lab_origin}; actions {", ".join(actions)}; selected connection; active session'
+        warning = ('Click/type may submit forms, change application state or enter sensitive data. '
+                   'Accept unknown application effects on this lab.' if group == 'interaction'
+                   else 'Navigation changes the selected tab location.' if group == 'navigate'
+                   else 'Read access may expose page data, screenshots and console logs.')
+        detail = (f'{scope}\nSession lifetime; no call quota. {warning}\n'
+                  'The Extension does not authenticate tab/profile identity or constrain all Chrome traffic. '
+                  'Revoke: /permissions browser revoke')
+        return scope, detail
+
+    def activate_reviewed_browser_grant(self, args, signal=None):
+        from src.permission.network.grants import check_cancelled
+        from src.permission.runtime.execution import ExecutionBlocked
+        from src.tools.mcp.browser_local import BrowserLocalBinding
+        binding = self._session
+        if (not isinstance(binding, BrowserLocalBinding) or not is_designated_browser_local(self._server)
+                or self._execution_policy is not binding.policy):
+            raise ExecutionBlocked('blocked: invalid Browser grant adapter')
+        check_cancelled(signal)
         binding.validate_tool(self, args)
-        if binding.epoch != epoch or binding.policy.stamp() != stamp or binding.grant_revision != revision:
+        if (self._browser_review is None or not self._browser_review[3].is_current()
+                or self._browser_review[:3] != (binding.epoch, binding.policy.stamp(), binding.grant_revision)):
             raise ExecutionBlocked('blocked: Browser grant review context changed')
-        binding.activate_grant(group)
+        binding.activate_grant(binding.action_group(self._remote_name))
         self._browser_grant = binding.grant_authorization(self, args)
-        return Decision.ALLOW_ONCE
 
     def summarize(self, args: dict[str, Any]) -> dict[str, str]:
         from src.redaction.redact import redact_payload
@@ -533,6 +560,7 @@ class MCPTool:
                 try:
                     if not policy.nested_allowed():
                         raise ExecutionBlocked('blocked: MCP execution receipt changed during initialization')
+                    policy.revalidate_active(self, args, signal)
                     if self._server.name == CWE_MCP_SERVER_NAME:
                         require_matching_cwe_deployment(policy, policy.worker)
                     result = await session.call_tool(self._remote_name, args, cancel_event)

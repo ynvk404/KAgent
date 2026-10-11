@@ -205,9 +205,11 @@ async def test_burp_startup_displays_connection_details_in_tui(
                 assert len(notices) == 1
                 assert notices[0].kind == "system"
                 assert handle.url in notices[0].text
-                assert f"Token: {handle.token}" in notices[0].text
+                assert handle.token not in notices[0].text
+                assert "/burp credentials" in notices[0].text
                 rendered = "\n".join(line.text for line in app.transcript_log.lines)
-                assert handle.url in rendered and handle.token in rendered
+                assert handle.url in rendered and handle.token not in rendered
+                assert "/burp credentials" in rendered
                 # Connection details belong to the operator UI, not model history.
                 assert all(handle.token not in (message.content or "")
                            for message in app.agent.history)

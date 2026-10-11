@@ -8,6 +8,8 @@ from src.coverage.store import CoverageStore, CoverageStatus
 from src.coverage.context import CoverageContext, normalize_contextual_endpoint
 from src.permission.permission import Prompter
 from src.tools.common.types import Tool, PermissionHints, arg_string
+from src.tools.common.arguments import positive_integer
+from src.tools.common.outcome import ToolOutput
 
 ACTIONS = (
     "mark",
@@ -114,14 +116,17 @@ class CoverageTool(Tool):
                     "items": {"type": "string"},
                 },
                 "limit": {
-                    "type": "number",
+                    "type": "integer",
+                    "minimum": 1,
                     "description": (
                         "For list/untested: page size "
-                        f"(default {DEFAULT_PAGE_SIZE}, max {MAX_PAGE_SIZE})."
+                        f"(default {DEFAULT_PAGE_SIZE}, clamped to {MAX_PAGE_SIZE})."
                     ),
                 },
                 "cursor": {
                     "type": "string",
+                    "pattern": "^[0-9]+$",
+                    "maxLength": 12,
                     "description": (
                         "list/untested: next_cursor offset; reuse filters."
                     ),
@@ -132,6 +137,15 @@ class CoverageTool(Tool):
 
     def requires_permission(self) -> bool:
         return False
+
+    def validate_args(self, args: dict[str, Any]) -> None:
+        if "limit" in args and not positive_integer(args["limit"]):
+            raise ValueError("limit must be a positive integer")
+        if "cursor" in args:
+            cursor = args["cursor"]
+            if (not isinstance(cursor, str) or not cursor.isascii()
+                    or not cursor.isdigit() or len(cursor) > 12):
+                raise ValueError("cursor must be a non-negative integer string of at most 12 digits")
 
     def requires_permission_for(self, args: dict[str, Any]) -> bool:
         return arg_string(args, "action") == "clear"
@@ -429,14 +443,14 @@ class CoverageTool(Tool):
 
     @staticmethod
     def _error(action: str, message: str) -> str:
-        return json.dumps(
+        return ToolOutput(json.dumps(
             {
                 "ok": False,
                 "action": action[:40],
                 "error": message[:500],
             },
             indent=2,
-        )
+        ), status='error', error_kind='invalid_args')
 
     def _page(
         self,
@@ -472,12 +486,7 @@ class CoverageTool(Tool):
         raw_limit = args.get("limit")
         if raw_limit is None:
             limit = DEFAULT_PAGE_SIZE
-        elif (
-            isinstance(raw_limit, bool)
-            or not isinstance(raw_limit, (int, float))
-            or not float(raw_limit).is_integer()
-            or raw_limit <= 0
-        ):
+        elif not positive_integer(raw_limit):
             return self._error(action, "limit must be a positive integer")
         else:
             limit = min(int(raw_limit), MAX_PAGE_SIZE)
@@ -485,7 +494,8 @@ class CoverageTool(Tool):
         raw_cursor = args.get("cursor")
         if raw_cursor is None:
             offset = 0
-        elif not isinstance(raw_cursor, str) or not raw_cursor.isdigit():
+        elif (not isinstance(raw_cursor, str) or not raw_cursor.isascii()
+              or not raw_cursor.isdigit()):
             return self._error(
                 action,
                 "cursor must be a non-negative integer string",

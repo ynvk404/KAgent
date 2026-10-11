@@ -14,6 +14,7 @@ from src.tools.skills.paths import (
     list_files,
     render_file_preview,
     resolve_skill_dir,
+    SkillFilePages,
 )
 from src.tools.common.types import Tool, arg_number, arg_string
 
@@ -27,40 +28,24 @@ class ReadPayloadsTool(Tool):
         skills: SkillRegistry,
     ):
         self.skills = skills
+        self.pages = SkillFilePages()
 
     def name(self) -> str:
         return "read_payloads"
 
     def description(self) -> str:
-        return "\n".join(
-            [
-                (
-                    "Read a curated payload list shipped with a skill. "
-                    "A skill can carry a payloads/ directory or a "
-                    "top-level payloads.txt file."
-                ),
-                "",
-                (
-                    "Use after loading a skill. "
-                    "Avoid inventing payloads from memory when "
-                    "the skill provides curated payload files."
-                ),
-                "",
-                "Examples:",
-                '  read_payloads(skill="ssti", action="list")',
-                '  read_payloads(skill="ssti", file="payloads.txt", limit=50)',
-                '  read_payloads(skill="sql-injection", file="payloads.txt")',
-            ]
-        )
+        return 'Read/list loaded skill payloads/ or payloads.txt. E.g. read_payloads(skill="ssti", file="payloads.txt"). Clipped: reuse skill/file, published source_ref and start_char (Unicode). Source <=256KiB, body <=16KiB. sf_ IDs are not read_tool_result refs.'
 
     def schema(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
+                'start_char': {'type': 'integer', 'minimum': 0, 'description': 'Unicode offset; source_ref required after 0.'},
+                'source_ref': {'type': 'string', 'description': 'Published sf_ source identity.'},
                 "skill": {
                     "type": "string",
                     "description": (
-                        "Skill name whose bundled payload source to read."
+                        "Loaded skill name."
                     ),
                 },
                 "action": {
@@ -77,14 +62,14 @@ class ReadPayloadsTool(Tool):
                 "file": {
                     "type": "string",
                     "description": (
-                        "Relative path inside skill/payloads, or payloads.txt "
-                        "for a skill's top-level compatibility file."
+                        "Path inside payloads/, or payloads.txt "
+                        "for the top-level file."
                     ),
                 },
                 "limit": {
                     "type": "number",
                     "description": (
-                        "Maximum lines returned. "
+                        "Line cap. "
                         "Default 200, max 5000."
                     ),
                 },
@@ -119,6 +104,8 @@ class ReadPayloadsTool(Tool):
         payloads_dir = skill_dir / "payloads"
         top_level_payloads = skill_dir / "payloads.txt"
         has_payloads_dir = payloads_dir.is_dir()
+        if has_payloads_dir and not contained_in(skill_dir, payloads_dir):
+            return 'error: payloads directory escapes the skill directory via a symlink'
         has_top_level_payloads = (
             top_level_payloads.is_file()
             and contained_in(skill_dir, top_level_payloads)
@@ -202,10 +189,8 @@ class ReadPayloadsTool(Tool):
                 f"error: not a file: {file}"
             )
 
-        return render_file_preview(
-            f"{skill_name}/{relative_path}",
-            resolved.read_text(encoding="utf-8"),
-            resolved.stat().st_size,
+        return self.pages.preview(
+            resolved, f"{skill_name}/{relative_path}", args,
             clamp_line_limit(
                 arg_number(
                     args,

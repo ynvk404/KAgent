@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import weakref
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import IO, Callable, Literal
 
@@ -10,17 +11,17 @@ from src.ui.core.terminal_size import get_terminal_size
 from src.ui.render.markdown import render_markdown
 from src.ui.render.sanitize import sanitize_text
 from src.ui.widgets.banner import Banner, BannerData
-from src.ui.theme import ACCENT, ERROR, MUTED, PRIMARY, WARNING
+from src.ui.theme import ACCENT, ERROR, MUTED, PRIMARY, WARNING, BOLD_SUCCESS
 
 EntryKind = Literal[
     "user",
     "assistant",
-    "tool-call",
-    "tool-result",
     "system",
     "error",
     "finding",
-    "decision",
+    "info",
+    "warning",
+    "validation",
 ]
 
 
@@ -33,17 +34,17 @@ class RoleStyle:
 ROLE_STYLES: dict[EntryKind, RoleStyle] = {
     "user": RoleStyle(color=ACCENT, prefix="› "),
     "assistant": RoleStyle(color=PRIMARY, prefix="  "),
-    "tool-call": RoleStyle(color=ACCENT, prefix="⚙  "),
-    "tool-result": RoleStyle(color=MUTED, prefix="↳ "),
-    "system": RoleStyle(color=MUTED, prefix="· "),
+    "system": RoleStyle(color=MUTED, prefix="  "),
     "error": RoleStyle(color=ERROR, prefix="! "),
-    "finding": RoleStyle(color=WARNING, prefix="★ "),
-    "decision": RoleStyle(color=ACCENT, prefix="· "),
+    "finding": RoleStyle(color=BOLD_SUCCESS, prefix="  "),
+    "info": RoleStyle(color=PRIMARY, prefix="  "),
+    "warning": RoleStyle(color=WARNING, prefix="  "),
+    "validation": RoleStyle(color=BOLD_SUCCESS, prefix="  "),
 }
 
 CONTINUATION_INDENT = "  "
 
-MARKDOWN_KINDS: set[EntryKind] = {"assistant", "finding"}
+MARKDOWN_KINDS: set[EntryKind] = {"assistant"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,9 @@ class RenderedLine:
 
     text: str
     color: str
+    # Only entry_view sets this after sanitizing untrusted input and applying
+    # application-owned Markdown formatting. Plain writer input is untrusted.
+    trusted_ansi: bool = False
 
 
 _row_cache: dict[
@@ -99,9 +103,11 @@ def plain_rows_for_entry(entry: TranscriptEntry) -> list[Row]:
 
 
 def _display_text(entry: TranscriptEntry) -> str:
-    if entry.expanded and entry.full_text is not None:
-        return sanitize_text(entry.full_text)
-    return sanitize_text(entry.text)
+    # Keep field boundaries: redacting one field must not consume another.
+    text = sanitize_text(entry.text)
+    for detail in entry.details:
+        text += "\n  " + sanitize_text(detail)
+    return text
 
 
 def entry_view(
@@ -114,10 +120,12 @@ def entry_view(
 
     lines: list[RenderedLine] = []
     for row in rows:
-        indent = (getattr(entry, "prefix", None) or style.prefix) if row.is_first else CONTINUATION_INDENT
+        indent = style.prefix if row.is_first else CONTINUATION_INDENT
         text = f"{indent}{row.text}" if row.text else ""
-        color = getattr(entry, "color", None) or style.color
-        lines.append(RenderedLine(text=text, color=color))
+        color = (MUTED if not row.is_first and (entry.kind in {"finding", "validation"}
+                 or row.text.startswith("  ")) else style.color)
+        lines.append(RenderedLine(text=text, color=color,
+            trusted_ansi=entry.kind in MARKDOWN_KINDS and not streaming))
     return lines
 
 
@@ -129,11 +137,15 @@ class Transcript:
         width: Callable[[], int] | None = None,
         clear: Callable[[], object] | None = None,
         write_banner: Callable[[BannerData], None] | None = None,
+        preserve_viewport: Callable[[], AbstractContextManager[None]] | None = None,
+        write_line: Callable[[RenderedLine], None] | None = None,
     ) -> None:
         self._out: IO[str] = out if out is not None else sys.stdout
         self._width = width
         self._clear = clear
         self._write_banner_panel = write_banner
+        self._preserve_viewport = preserve_viewport
+        self._write_line = write_line
         self._printed_count = 0
         self._last_generation: object | None = None
         self._banner_printed = False
@@ -145,6 +157,17 @@ class Transcript:
         banner_data: BannerData,
         generation: object,
         clear_message: str | None = None,
+    ) -> None:
+        changed = generation != self._last_generation or len(committed) != self._printed_count
+        with self._preserve_viewport() if changed and self._preserve_viewport else nullcontext():
+            self._flush(committed, banner_data, generation, clear_message)
+
+    def _flush(
+        self,
+        committed: list[TranscriptEntry],
+        banner_data: BannerData,
+        generation: object,
+        clear_message: str | None,
     ) -> None:
         if generation != self._last_generation:
             if self._clear is not None:
@@ -187,4 +210,7 @@ class Transcript:
     def _write_entry(self, entry: TranscriptEntry) -> None:
         width = self._width() if self._width is not None else None
         for line in entry_view(entry, width=width):
-            self._out.write(line.text + "\n")
+            if self._write_line:
+                self._write_line(line)
+            else:
+                self._out.write(line.text + "\n")

@@ -150,7 +150,7 @@ async def test_cursor_tracks_editing_focus_and_completion(app: KAgent) -> None:
         assert len(app.state.transcript) == 1
         assert app.input.value == ""
         await pilot.press("ctrl+f")
-        assert app.state.transcript_filter != "all"
+        assert len(app.state.transcript) == 1
         assert app.cursor_position == visible_caret(app, app.input_static)
 
 
@@ -250,3 +250,114 @@ async def test_driver_emits_caret_position_and_captures_background_output(
         assert app.cursor_position == visible_caret(app, app.input_static)
     assert app.ping_task is not None and app.ping_task._task is None
     assert app.snapshot_task is not None and app.snapshot_task.done()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reason', ['final_response', 'cancelled', 'context_capacity'])
+async def test_dispatch_refreshes_input_and_status_without_keyboard_or_resize(app, reason):
+    from src.agent.events import DoneEvent
+    from src.ui.core.state import AgentEventAction, SetBusy, SetPerm
+    from src.ui.bridges.perm_bridge import BridgedPermissionRequest
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.dispatch(SetBusy(True))
+        await pilot.pause()
+        assert app.state.busy and app.status_bar.phase == 'planning'
+        assert 'agent running' in str(app.input_static.render())
+        permission = BridgedPermissionRequest(tool='shell', summary='fixture', detail='fixture',
+                                             no_session_cache=True, resolve=Mock(), reject=Mock())
+        app.dispatch(SetPerm(permission))
+        await pilot.pause()
+        assert app.status_bar.phase == 'waiting-approval'
+        assert 'agent running' in str(app.input_static.render())
+        app.dispatch(SetPerm(None))
+        app.dispatch(AgentEventAction(DoneEvent(stop_reason=reason)))
+        await pilot.pause()
+        assert not app.state.busy and app.status_bar.phase == 'idle'
+        assert 'agent running' not in str(app.input_static.render())
+
+
+@pytest.mark.asyncio
+async def test_status_tracks_effective_capture_and_native_requests_while_transport_waits(app, monkeypatch):
+    import httpx
+    from src.agent.events import DoneEvent, ToolCallEvent, ToolResultEvent
+    from src.browser.store import CaptureStore
+    from src.engagement.state import EngagementState
+    from src.permission.permission import AlwaysAllow
+    from src.target.target import Target
+    from src.tools.common.outcome import ToolOutput
+    from src.tools.common.registry import Registry
+    from src.tools.http.http_tool import HTTPTool
+    from src.tools.workflow.workflow_tool import WorkflowTool
+    from src.ui.core.state import AgentEventAction, SetBusy
+    from src.workflow.state import Candidate, WorkflowState
+
+    origin = 'http://127.0.0.1:3000'
+    target, engagement, workflow, capture = Target(origin), EngagementState(), WorkflowState(), CaptureStore()
+    engagement.initialize_target(origin)
+    baseline = capture.ingest({'kind':'burp', 'id':'fixture', 'method':'POST', 'url':origin+'/api/login',
+        'requestHeaders':[{'name':'Content-Type','value':'application/json'}],
+        'requestBody':'{"email":"fixture@example.test"}'})
+    tool = HTTPTool(target, engagement, workflow, capture)
+    registry = Registry()
+    registry.register(tool)
+    registry.register(WorkflowTool(workflow, target))
+    app.agent.workflow = workflow
+    app.agent.target = target
+    app.agent.engagement_state = engagement
+    app.agent.tools = registry
+    entered, release = asyncio.Event(), asyncio.Event()
+    requests = []
+    async def transport(request):
+        requests.append(request)
+        entered.set()
+        await release.wait()
+        return httpx.Response(200, content=b'Offline fixture response', request=request)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr('src.tools.http.http_tool.httpx.AsyncClient',
+        lambda **kwargs:real_client(transport=httpx.MockTransport(transport), **kwargs))
+    monkeypatch.setattr('src.tools.http.http_tool.gate_private_request', AsyncMock(return_value=''))
+
+    async def execute(event_id, args):
+        app.dispatch(AgentEventAction(ToolCallEvent(id=event_id, name='http', args=args)))
+        result = await registry.execute('http', args, None, AlwaysAllow())
+        assert isinstance(result, ToolOutput)
+        app.dispatch(AgentEventAction(ToolResultEvent(id=event_id, name='http', result=result,
+            status=result.status, http_status=result.http_status)))
+
+    async with app.run_test(size=(120, 32)) as pilot:
+        app.dispatch(SetBusy(True))
+        candidate, _ = workflow.add_candidate(Candidate(candidate_class='authentication', target=origin,
+            method='POST', endpoint='/api/login', parameter='email', location='json',
+            content_type='application/json', baseline_request_ref=baseline['baseline_request_ref']))
+        cases = [({'candidate_id':candidate.id, 'mutation_value':'fixture2@example.test', 'phase':'validation'},
+                  'POST /api/login · input email', 'POST', '/api/login'),
+                 ({'url':origin+'/health?token=short-secret', 'method':'GET', 'phase':'recon'},
+                  'GET /health', 'GET', '/health')]
+        for index, (args, activity, method, path) in enumerate(cases):
+            entered.clear()
+            release.clear()
+            task = asyncio.create_task(execute(str(index), args))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                await pilot.pause()
+                assert not task.done()  # Inspect the actual rendered UI during pending I/O.
+                assert activity in app.status_bar.render().plain
+                row = app.screen._compositor.render_strips()[app.status_bar.region.y].text
+                assert activity in row and 'short-secret' not in row
+                if index:
+                    assert 'input email' not in row
+                assert requests[-1].method == method and requests[-1].url.path == path
+                assert 'agent running' in str(app.input_static.render())
+                assert sum(entry.text.startswith('Selected:') for entry in app.state.transcript) == 1
+                assert not any(entry.text.startswith('Validation ') for entry in app.state.transcript)
+                release.set()
+                await asyncio.wait_for(task, 2)
+            finally:
+                release.set()
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        app.dispatch(AgentEventAction(DoneEvent(stop_reason='final_response')))
+        await pilot.pause()
+        assert app.status_bar.phase == 'idle' and 'agent running' not in str(app.input_static.render())
+        assert len(requests) == 2

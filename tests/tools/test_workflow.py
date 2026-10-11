@@ -273,7 +273,7 @@ async def test_workflow_semantic_failure_has_typed_error_status():
 
     assert isinstance(output, ToolOutput)
     assert output.status == "error"
-    assert output.error_kind == "invalid_args"
+    assert output.error_kind == "workflow_state"
     assert output.startswith("error: record_input requires")
 
 

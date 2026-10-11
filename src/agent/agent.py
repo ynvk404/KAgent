@@ -75,7 +75,7 @@ from src.memory.store import (
     format_memory_recall,
 )
 
-from src.permission.permission import Prompter, UserControlledRefusal
+from src.permission.permission import Prompter, UserControlledRefusal, PermissionReviewCancelled
 from src.engagement.state import EngagementState, OutOfScopeError
 
 from src.session.store import (
@@ -407,6 +407,12 @@ def tool_error_kind(err: Exception, *, invalid_args: bool = False) -> ErrorKind:
         return "invalid_args"
     if isinstance(err, OutOfScopeError):
         return "scope_denied"
+    if getattr(err, 'error_kind', None) in {
+            'permission_pending', 'permission_timeout', 'permission_stale', 'policy_block', 'invalid_args'}:
+        return cast(ErrorKind, getattr(err, 'error_kind'))
+    from src.session.tool_results import ResultUnavailable
+    if isinstance(err, ResultUnavailable):
+        return 'reference_unavailable'
     if isinstance(err, UserControlledRefusal):
         return "permission_denied"
     if isinstance(err, (asyncio.TimeoutError, httpx.TimeoutException)):
@@ -3156,7 +3162,22 @@ class Agent:
             return None
         return tool.phase_completion_readiness(skill_name)
 
-    def _refresh_whole_target_guidance(self, working: list[Message], user_msg: str) -> None:
+    def _planner_event(self, decision) -> dict[str, Any]:
+        # Presentation metadata comes from the existing plan, never model prose.
+        import uuid
+        summary = f"Planner \u00b7 {decision.recommended_skill} \u00b7 risk: {decision.risk}"
+        matched = decision.reason.removeprefix(f"matched {decision.recommended_skill} signals:").strip()
+        if matched:
+            summary += f"\nmatched: {matched}"
+        return {"type": "decision", "summary": redact_payload(summary),
+                "decision_id": uuid.uuid4().hex,
+                "recommended_skill": decision.recommended_skill,
+                "candidate_id": decision.candidate_id,
+                "reason": redact_payload(decision.reason),
+                "target_origin": self.target.base_url(), "target_revision": self.target.revision,
+                "objective_id": self.workflow.objective.id if self.workflow.objective else None}
+
+    def _refresh_whole_target_guidance(self, working: list[Message], user_msg: str, emit=None) -> None:
         objective = self.workflow.objective
         if objective is None or objective.mode != "whole_target":
             return
@@ -3176,6 +3197,8 @@ class Agent:
         )
         if decision is not None:
             working.append(Message(role="system", content=decision.guidance))
+            if emit is not None and decision.recommended_skill:
+                emit(self._planner_event(decision))
             return
         status, _, blockers = self._whole_target_state()
         if status == "blocked" and blockers:
@@ -3193,7 +3216,7 @@ class Agent:
             + "; ".join(blockers)
         )
 
-    def _refresh_requested_goal_guidance(self, working: list[Message], user_msg: str) -> None:
+    def _refresh_requested_goal_guidance(self, working: list[Message], user_msg: str, emit=None) -> None:
         objective = self.workflow.objective
         if objective is None or not objective.requested_goals or objective.mode == "whole_target":
             return
@@ -3214,6 +3237,8 @@ class Agent:
         )
         if decision is not None:
             working.append(Message(role="system", content=decision.guidance))
+            if emit is not None and decision.recommended_skill:
+                emit(self._planner_event(decision))
 
     def add_scope_origin(self, url: str) -> tuple[HTTPOrigin, bool]:
         if self.target.empty():
@@ -3620,6 +3645,9 @@ class Agent:
                 {
                     "type": "skill-active",
                     "name": name,
+                    "target_origin": self.target.base_url(),
+                    "target_revision": self.target.revision,
+                    "objective_id": self.workflow.objective.id if self.workflow.objective else None,
                 }
             )
 
@@ -3673,11 +3701,8 @@ class Agent:
         incoming_tokens = projection.incoming_tokens
         tools_tokens = projection.tool_schema_tokens
         threshold = self.auto_compact_threshold
-        if threshold > 0 and projection.fixed_floor_tokens >= threshold:
-            emit({"type": "decision", "summary": (
-                f"context pressure: fixed/non-compactable floor ~{projection.fixed_floor_tokens} tokens "
-                f"meets soft compact threshold {threshold}; summarizing history cannot remove this floor."
-            )})
+        # The actual request's admission boundary publishes pressure details;
+        # this projection still controls compaction without duplicate notices.
         hard_limit = self.input_budget().input_limit
         # The economic history gate must not prevent a recovery attempt before
         # hard admission refuses the request. Fixed context alone cannot recover.
@@ -3706,20 +3731,7 @@ class Agent:
             emit(event)
 
         if decision and decision.recommended_skill:
-            matched_prefix = f"matched {decision.recommended_skill} signals:"
-            matched_signals = decision.reason.removeprefix(matched_prefix).strip()
-            summary = (
-                f"Planner · {decision.recommended_skill} · "
-                f"risk: {decision.risk}"
-            )
-            if matched_signals:
-                summary += f"\nmatched: {matched_signals}"
-            emit(
-                {
-                    "type": "decision",
-                    "summary": summary,
-                }
-            )
+            emit(self._planner_event(decision))
 
         self.history.append(
             Message(
@@ -3787,10 +3799,10 @@ class Agent:
                 raise Exception("aborted")
 
             if whole_target:
-                self._refresh_whole_target_guidance(working, expanded_user_msg)
+                self._refresh_whole_target_guidance(working, expanded_user_msg, emit)
                 stall_tracker.set_phase(self._whole_target_exploration_phase())
             elif requested_goal_run:
-                self._refresh_requested_goal_guidance(working, expanded_user_msg)
+                self._refresh_requested_goal_guidance(working, expanded_user_msg, emit)
             before_goal_signature = (
                 self._requested_goal_progress_signature() if requested_goal_run else ()
             )
@@ -4648,6 +4660,55 @@ class Agent:
         level = resolution.effective or requested
         return level, level is not ReasoningLevel.OFF if resolution.effective else False
 
+    def _context_diagnostics(self, request: ChatRequest, before: int, fixed_floor: int,
+                             emit, *, dropped_chars: int = 0) -> None:
+        total = estimate_request(request, self.client.name()).estimated_total
+        threshold = self._reduction_threshold()
+        target = max(0, threshold - max(MIDTURN_MIN_SAFETY_TOKENS,
+                                      round(threshold * MIDTURN_SAFETY_RATIO))) if threshold > 0 else 0
+        hard = self.input_budget().input_limit
+        reason = ('hard_input_limit_exceeded' if hard is not None and total > hard else
+                  'below_reduction_threshold' if threshold > 0 and before < threshold else
+                  'soft_threshold_disabled' if threshold <= 0 else
+                  'reduction_target_reached' if target and total <= target else
+                  'below_hard_input_limit' if hard is not None else 'hard_input_limit_unknown')
+        diagnostic = {
+            'estimated_total': total, 'estimated_before': before,
+            'soft_threshold': self.auto_compact_threshold, 'reduction_target': target,
+            'hard_input_limit': hard, 'fixed_floor': fixed_floor,
+            'reducible_tokens': max(0, before - fixed_floor),
+            'reduction_achieved': max(0, before - total), 'reason': reason,
+            'estimate_only': True, 'provider_usage': None,
+        }
+        self.last_context_diagnostics = diagnostic
+        self._trace('context_admission', **diagnostic)
+        if threshold <= 0 or before < threshold:
+            self._last_context_pressure_key = None
+            return
+        # Reduction is itself a state change. Repeated admission of an
+        # unchanged pressured request still checks capacity but emits once.
+        key = (total, self.auto_compact_threshold, target, hard, fixed_floor, reason)
+        if getattr(self, '_last_context_pressure_key', None) == key and before == total:
+            return
+        self._last_context_pressure_key = key
+        explanation = {
+            'hard_input_limit_exceeded': 'hard admission blocks this request',
+            'below_hard_input_limit': 'soft pressure remains; request fits hard input budget',
+            'hard_input_limit_unknown': 'soft pressure remains; provider hard limit unknown',
+            'reduction_target_reached': 'reduction target reached',
+            'below_reduction_threshold': 'below reduction threshold',
+            'soft_threshold_disabled': 'soft threshold disabled',
+        }[reason]
+        summary = ('context guard: reduced ' + str(dropped_chars) + ' characters; '
+                   if before > total else 'context pressure: ')
+        summary += (f'estimated total ~{total} tokens; soft threshold {self.auto_compact_threshold}; '
+                    f'reduction target {target}; hard input limit {hard if hard is not None else "unknown"}; '
+                    f'fixed/non-compactable floor at this boundary ~{fixed_floor}; reducible ~{diagnostic["reducible_tokens"]}; '
+                    f'reduction achieved ~{diagnostic["reduction_achieved"]}; {explanation}. Estimates, not provider usage.')
+        if total > target:
+            summary += f' unresolved pressure: ~{total - target} estimated tokens above reduction target.'
+        emit({'type': 'decision', 'summary': summary, 'context_diagnostics': diagnostic})
+
     def guard_working_context(
         self,
         working: list[Message],
@@ -4694,6 +4755,18 @@ class Agent:
             request = self._request_for_messages(working, tools)
         tools_tokens = schema_tokens(request.tools)
         threshold = self._reduction_threshold()
+        before = estimate_request(request, self.client.name()).estimated_total
+        before_chars = sum(len(message.content) for message in working)
+        boundary_indexes = [index for index, message in enumerate(working) if message.role == 'tool']
+        old_indexes = set(boundary_indexes[:-MIDTURN_ELISION_KEEP_RECENT])
+        reducible = sum(max(0, text_tokens(message.content) - (
+                        text_tokens(message.content[:MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR])
+                        if index not in old_indexes else text_tokens(MIDTURN_ELISION_PREFIX)))
+                        for index, message in enumerate(working) if message.role == 'tool'
+                        and self.tools.context_reduction_policy(message.name) == 'adaptive'
+                        and (not message.tool_result_refs or id(message) in self._bounded_results
+                             and message.tool_result_scope == self.result_retention.scope))
+        fixed_floor = before - reducible
         storage_notice = self.result_retention.admit(working, tools_tokens, request=request,
                                                    threshold=threshold, strict=strict_retention)
         if storage_notice:
@@ -4703,6 +4776,8 @@ class Agent:
             return estimate_request(request, self.client.name()).estimated_total
 
         if threshold <= 0 or size() < threshold:
+            self._context_diagnostics(request, before, fixed_floor, emit,
+                dropped_chars=max(0, before_chars - sum(len(message.content) for message in working)))
             return
 
         safety_tokens = max(
@@ -4757,7 +4832,7 @@ class Agent:
             original_length = len(original(msg))
             marker = (
                 f"{MIDTURN_ELISION_PREFIX}"
-                f" — {original_length} bytes dropped]"
+                f" — {len(original(msg).encode('utf-8'))} bytes dropped]"
             )
             if msg.tool_result_refs:
                 from .tool_results import reference_header
@@ -4817,27 +4892,8 @@ class Agent:
                     if size() <= target_tokens:
                         break
 
-        residual_tokens = max(0, size() - target_tokens)
-        if dropped > 0 or (tool_indexes and residual_tokens > 0):
-
-            emit(
-                {
-                    "type": "decision",
-                    "summary": (
-                        (
-                            "context guard: "
-                            f"reduced {dropped} characters of tool output "
-                            "mid-turn toward the context pressure target"
-                            if dropped > 0 else "context pressure: no reducible tool capacity"
-                        )
-                        + (
-                            f"; unresolved pressure: {residual_tokens} tokens"
-                            if residual_tokens > 0
-                            else ""
-                        )
-                    ),
-                }
-            )
+        self._context_diagnostics(request, before, fixed_floor, emit,
+            dropped_chars=max(0, before_chars - sum(len(message.content) for message in working)))
 
     async def _save_tool_batch(self, defer_admission: bool) -> None:
         if not defer_admission:
@@ -5036,15 +5092,32 @@ class Agent:
                 }
             )
 
-        results = await map_with_concurrency(
-            tool_calls,
-            MAX_PARALLEL_TOOL_CALLS,
-            lambda tc, i: self.run_parsed_tool_call(
-                tc,
-                parsed_all[i],
-                signal,
-            ),
-        )
+        completed: dict[int, ToolCallResult] = {}
+        published: set[int] = set()
+
+        async def run_and_publish(tc, index):
+            result = await self.run_parsed_tool_call(tc, parsed_all[index], signal)
+            completed[index] = result
+            # Completion visibility follows actual completion; history/state
+            # commits below retain submitted order and occur exactly once.
+            published.add(index)
+            emit(self._tool_result_event(tc, result))
+            return result
+
+        try:
+            results = await map_with_concurrency(
+                tool_calls,
+                MAX_PARALLEL_TOOL_CALLS,
+                run_and_publish,
+            )
+        except BaseException:
+            # The mapper joins cancelled siblings before returning. Completed
+            # operations still belong to this turn's checkpoint, even when a
+            # slower sibling or the event consumer interrupts the batch.
+            for index in sorted(completed):
+                self.record_tool_result(tool_calls[index], parsed_all[index], completed[index], emit,
+                    working, defer_admission=defer_admission, publish_result=index not in published)
+            raise
 
         executions = []
         for tc, parsed, result in zip(
@@ -5060,6 +5133,7 @@ class Agent:
                 emit,
                 working,
                 defer_admission=defer_admission,
+                publish_result=False,
             )
             executions.append(ExecutedToolCall(
                 name=tc.function.name,
@@ -5185,6 +5259,15 @@ class Agent:
                         )
                     except Exception as err:
                         run_err = err
+                    except PermissionReviewCancelled:
+                        # Escape cancels one permission proposal. Actual task
+                        # cancellation still propagates and cleans up siblings.
+                        task = asyncio.current_task()
+                        if signal.aborted or (task is not None and task.cancelling()):
+                            raise
+                        return ToolCallResult(result='Operation cancelled during permission review',
+                            err_str='Permission review cancelled', duration_ms=int((time.monotonic() - start) * 1000),
+                            status='cancelled', error_kind='cancelled')
 
         duration_ms = int(
             (time.monotonic() - start) * 1000
@@ -5207,6 +5290,8 @@ class Agent:
                     run_err, invalid_args=parsed.parse_err is not None,
                 )
             )
+            if error_kind in {'permission_pending', 'permission_timeout'}:
+                status = 'pending'
 
             log_error(
                 "agent: tool failed",
@@ -5224,11 +5309,11 @@ class Agent:
             error_kind = result.error_kind
             http_status = result.http_status
             truncated = result.truncated
-            if status == "error":
+            if status in {"error", "pending"}:
                 err_str = (
                     "fetch failed"
                     if tc.function.name in ("web_fetch", "web_search")
-                    else (error_kind or "tool failed")
+                    else str(result).strip() or (error_kind or "tool failed")
                 )
             elif status == "cancelled":
                 err_str = "cancelled"
@@ -5237,10 +5322,8 @@ class Agent:
             result=result,
             err_str=err_str,
             duration_ms=duration_ms,
-            terminal_user_controlled_refusal=isinstance(
-                run_err,
-                UserControlledRefusal,
-            ),
+            terminal_user_controlled_refusal=(isinstance(run_err, UserControlledRefusal)
+                                             and getattr(run_err, 'explicit_denial', True)),
             status=status,
             error_kind=error_kind,
             http_status=http_status,
@@ -5249,16 +5332,7 @@ class Agent:
             retention_provenance=retention_provenance,
         )
 
-    def record_tool_result(
-        self,
-        tc: ToolCall,
-        parsed: ParsedToolCall,
-        res: ToolCallResult,
-        emit,
-        working: list[Message],
-        *,
-        defer_admission: bool = False,
-    ) -> None:
+    def _tool_result_event(self, tc: ToolCall, res: ToolCallResult) -> dict[str, Any]:
         # Raw ToolCallResult remains available to transient controller processing
         # and observation bindings. Only event/history/context receive this view.
         error = safe_tool_text(
@@ -5277,8 +5351,7 @@ class Agent:
                 "sanitized output unavailable. This is a representation failure; "
                 "do not repeat the action solely to recover its output.",
             )
-        emit(
-            {
+        return {
                 "type": "tool-result",
                 "id": tc.id,
                 "name": tc.function.name,
@@ -5290,7 +5363,16 @@ class Agent:
                 "http_status": res.http_status,
                 "truncated": res.truncated,
             }
-        )
+
+    def record_tool_result(
+        self, tc: ToolCall, parsed: ParsedToolCall, res: ToolCallResult,
+        emit, working: list[Message], *, defer_admission: bool = False,
+        publish_result: bool = True,
+    ) -> None:
+        event = self._tool_result_event(tc, res)
+        content = event['result']
+        if publish_result:
+            emit(event)
 
         if not res.err_str:
             self.turn_executed_tool = True
@@ -5312,6 +5394,10 @@ class Agent:
                     {
                         "type": "skill-active",
                         "name": name,
+                        "call_id": tc.id,
+                        "target_origin": self.target.base_url(),
+                        "target_revision": self.target.revision,
+                        "objective_id": self.workflow.objective.id if self.workflow.objective else None,
                     }
                 )
 
@@ -6276,13 +6362,27 @@ async def map_with_concurrency(
         )
     ]
 
+    group = asyncio.gather(*workers)
     try:
-        await asyncio.gather(*workers)
+        # The controller owns cancellation; repeated parent cancellation must
+        # not repeatedly interrupt a worker's process/permission cleanup.
+        await asyncio.shield(group)
     except BaseException:
         for task in workers:
             if not task.done():
                 task.cancel()
-        await asyncio.gather(*workers, return_exceptions=True)
+        joined = asyncio.gather(*workers, return_exceptions=True)
+        interrupted = False
+        while not joined.done():
+            try:
+                await asyncio.shield(joined)
+            except asyncio.CancelledError:
+                interrupted = True
+        joined.result()
+        if group.done() and not group.cancelled():
+            group.exception()
+        if interrupted:
+            raise asyncio.CancelledError
         raise
 
     return results

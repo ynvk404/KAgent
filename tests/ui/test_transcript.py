@@ -69,18 +69,18 @@ def test_banner_refresh_replaces_overview_without_clearing_transcript(
         cwd="/workspace",
         tool_support=cast(ToolSupportPill, final_state),
     )
-    entries = [TranscriptEntry(kind="tool-result", text="existing tool output")]
+    entries = [TranscriptEntry(kind="system", text="existing tool output")]
 
     transcript.flush(entries, probing, generation="startup")
     assert overview.current is probing
-    assert output.lines == ["↳ existing tool output", ""]
+    assert output.lines == ["  existing tool output", ""]
 
     transcript.flush(entries, final, generation="startup")
 
     assert overview.current is final
     assert overview.updates == 2
     assert output.clear_calls == 1
-    assert output.lines == ["↳ existing tool output", ""]
+    assert output.lines == ["  existing tool output", ""]
     assert "probing…" not in _rendered_overview(final)
     assert "Model: test-model" in _rendered_overview(final)
     assert "[tools" not in _rendered_overview(final)
@@ -113,7 +113,7 @@ def test_banner_updates_and_new_generations_keep_one_current_overview() -> None:
     assert overview.current is unknown
     assert overview.updates == 3
     assert output.clear_calls == 2
-    assert output.lines == ["· conversation reset", ""]
+    assert output.lines == ["  conversation reset", ""]
     assert "Model: test-model" in _rendered_overview(unknown)
     assert "tools ?" not in _rendered_overview(unknown)
 
@@ -136,7 +136,7 @@ def test_new_generation_replaces_richlog_content_with_a_fresh_banner() -> None:
     transcript.flush(
         [
             TranscriptEntry(kind="error", text="old error"),
-            TranscriptEntry(kind="tool-result", text="old tool output"),
+            TranscriptEntry(kind="system", text="old tool output"),
         ],
         banner,
         generation="before-clear",
@@ -160,37 +160,18 @@ def test_new_generation_replaces_richlog_content_with_a_fresh_banner() -> None:
     assert "Status: ready" in rendered
 
 
-def test_new_transcript_revision_rerenders_expanded_tool_output_in_place() -> None:
+def test_new_transcript_revision_updates_repeated_error_in_place() -> None:
     output = _RichLogOutput()
-    transcript = Transcript(
-        out=cast(IO[str], output), clear=output.clear, width=lambda: 80
-    )
+    transcript = Transcript(out=cast(IO[str], output), clear=output.clear, width=lambda: 80)
     banner = BannerData(provider="test", model="test", cwd=".")
-    collapsed = TranscriptEntry(
-        kind="tool-result",
-        text="preview text",
-        full_text="full output\nlast evidence line",
-        collapsible=True,
-    )
-    expanded = TranscriptEntry(
-        kind="tool-result",
-        text=collapsed.text,
-        full_text=collapsed.full_text,
-        collapsible=True,
-        expanded=True,
-    )
-
-    transcript.flush([collapsed], banner, generation="clear:all:0")
-    assert "preview text" in "\n".join(output.lines)
-    assert "last evidence line" not in "\n".join(output.lines)
-
-    transcript.flush([expanded], banner, generation="clear:all:1")
-
+    first = TranscriptEntry(kind="error", text="Connection failed")
+    repeated = TranscriptEntry(kind="error", text="Connection failed (repeated 10 times; unresolved)")
+    transcript.flush([first], banner, generation="clear:0")
+    transcript.flush([repeated], banner, generation="clear:1")
     rendered = "\n".join(output.lines)
     assert output.clear_calls == 2
-    assert "preview text" not in rendered
-    assert "full output" in rendered
-    assert "last evidence line" in rendered
+    assert rendered.count("Connection failed") == 1
+    assert "repeated 10 times" in rendered
 
 
 def test_repeated_resets_do_not_accumulate_status_lines_or_banners() -> None:

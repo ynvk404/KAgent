@@ -95,12 +95,24 @@ class CompactEvent(BaseEvent):
 class DecisionEvent(BaseEvent):
     type: Literal["decision"] = "decision"
     summary: str = ""
+    recommended_skill: str | None = None
+    decision_id: str = ""
+    candidate_id: str | None = None
+    reason: str | None = None
+    target_origin: str | None = None
+    target_revision: int | None = None
+    objective_id: str | None = None
+    context_diagnostics: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
 class SkillActiveEvent(BaseEvent):
     type: Literal["skill-active"] = "skill-active"
     name: str = ""
+    call_id: str = ""
+    target_origin: str | None = None
+    target_revision: int | None = None
+    objective_id: str | None = None
 
 
 @dataclass(slots=True)

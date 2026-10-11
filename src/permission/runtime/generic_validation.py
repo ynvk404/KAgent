@@ -323,7 +323,8 @@ class GenericValidationBoundary:
                 raise ValueError("generic captured baseline has duplicate headers; expert context required")
         else:
             _, request = tool.prepare({"url": candidate.endpoint, "method": candidate.method,
-                                       "auth_context_ref": candidate.auth_context_ref})
+                                       **({"auth_context_ref": candidate.auth_context_ref}
+                                          if candidate.auth_context_ref is not None else {})})
         from src.target.origin import HTTPOrigin
         from urllib.parse import urlsplit
         if candidate.auth_context_ref and not any(k in request.headers for k in ("cookie", "authorization")):

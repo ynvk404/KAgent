@@ -119,7 +119,7 @@ async def main():
             grant = binding.activate_grant('read')
             before_asks = operator.asks
             await registry.execute('mcp_browser_browser_snapshot', {}, None, yolo)
-            assert operator.asks == before_asks and grant.remaining == 19
+            assert operator.asks == before_asks and grant.remaining is None and grant.expires is None
             # The actual pinned server checks CURRENT extension metadata even
             # with auto-approval. No snapshot action may run on a foreign tab.
             origin_control = Path('/tmp/browser-mock-origin')

@@ -7,7 +7,6 @@ from rich.text import Text
 from textual.reactive import reactive
 from textual.widget import Widget
 from src.ui.widgets.banner import ToolSupportPill
-from src.ui.core.state import TranscriptFilter
 from src.ui.theme import ACCENT, BOLD_DANGER, BOLD_ERROR, BOLD_SUCCESS, MUTED, SUCCESS, WARNING
 
 UiPhase = Literal[
@@ -76,22 +75,22 @@ class StatusProps:
     compact_threshold: int
     memory_items: int
     phase: UiPhase
-    transcript_filter: TranscriptFilter
     model: str | None = None
     tool_support: ToolSupportPill | None = None
     target: str | None = None
-    expand_hint: bool = False
     running_tool: str | None = None
     elapsed_seconds: float | None = None
 
 
-def busy_line(p: StatusProps) -> Text:
+def busy_line(p: StatusProps, width: int | None = None) -> Text:
     phase_text = phase_label(p.phase)
     label = (
         p.running_tool
         if p.phase == "running-tool" and p.running_tool
         else phase_text
     )
+    if p.phase in WAITING_PHASES and p.running_tool:
+        label += " · " + p.running_tool
     clock = (
         f" · time {format_elapsed(p.elapsed_seconds)}"
         if p.elapsed_seconds is not None
@@ -111,6 +110,29 @@ def busy_line(p: StatusProps) -> Text:
         line.append(f" · skill: {p.active_skill}", style=MUTED)
     if p.phase not in WAITING_PHASES:
         line.append(" · Esc to cancel", style=MUTED)
+    if width is not None and line.cell_len > width:
+        # Preserve the request's method/input before secondary skill metadata.
+        clock = f" · {format_elapsed(p.elapsed_seconds)}" if p.elapsed_seconds is not None else ""
+        cancel = " · Esc" if p.phase not in WAITING_PHASES else ""
+        budget = max(0, width - 2 - len(clock) - len(cancel))
+        for verbose, concise in (("workflow: start validation · ", "start: "),
+                                 ("workflow: record result · ", "record: "),
+                                 ("Saving finding: ", "Saving · ")):
+            label = label.replace(verbose, concise)
+        head, separator, parameter = label.rpartition(" · input ")
+        if separator:
+            tail = Text(" · " + parameter, style=MUTED)
+            tail.truncate(max(0, budget // 2), overflow="ellipsis")
+            activity = Text(head, style=MUTED)
+            activity.truncate(max(0, budget - tail.cell_len), overflow="ellipsis")
+            activity.append_text(tail)
+        else:
+            activity = Text(label, style=MUTED)
+            activity.truncate(budget, overflow="ellipsis")
+        line = Text(f"{indicator} ", style=ACCENT)
+        line.append_text(activity)
+        line.append(clock + cancel, style=MUTED)
+        line.truncate(width, overflow="ellipsis")
     return line
 
 
@@ -163,8 +185,6 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
     def build(
         *,
         include_extras: bool = True,
-        include_expand: bool = True,
-        include_input_hints: bool = False,
     ) -> Text:
         line = Text()
         if p.api_ready:
@@ -189,29 +209,16 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
         if p.elapsed_seconds is not None:
             line.append(f" · time {format_elapsed(p.elapsed_seconds)}", style=MUTED)
 
-        if include_extras and p.transcript_filter != "all":
-            line.append(f" · filter: {p.transcript_filter}", style=ACCENT)
-        if include_expand and p.expand_hint:
-            line.append(" · Ctrl-K latest · Ctrl-O all", style=ACCENT)
         return line
 
     full = build(
         include_extras=True,
-        include_expand=True,
     )
     if width is None or full.cell_len <= width:
         return full
 
-    without_expand = build(
-        include_extras=True,
-        include_expand=False,
-    )
-    if without_expand.cell_len <= width:
-        return without_expand
-
     return build(
         include_extras=False,
-        include_expand=False,
     )
 
 class StatusBar(Widget):
@@ -237,9 +244,7 @@ class StatusBar(Widget):
     model: reactive[str | None] = reactive(None)
     tool_support: reactive[ToolSupportPill | None] = reactive(None)
     phase: reactive[UiPhase] = reactive("idle")
-    transcript_filter: reactive[TranscriptFilter] = reactive("all")
     target: reactive[str | None] = reactive(None)
-    expand_hint: reactive[bool] = reactive(False)
     running_tool: reactive[str | None] = reactive(None)
     elapsed_seconds: reactive[float | None] = reactive(None)
 
@@ -259,19 +264,19 @@ class StatusBar(Widget):
             compact_threshold=self.compact_threshold,
             memory_items=self.memory_items,
             phase=self.phase,
-            transcript_filter=self.transcript_filter,
             model=self.model,
             tool_support=self.tool_support,
             target=self.target,
-            expand_hint=self.expand_hint,
             running_tool=self.running_tool,
             elapsed_seconds=self.elapsed_seconds,
         )
 
     def render(self) -> Text:
         props = self._to_props()
-        width = self.size.width or 80
-        content = busy_line(props) if props.busy else idle_line(props, width=width)
+        width = self.content_size.width or self.size.width or 80
+        badge_width = len("AutoApprove") + 1 if props.yolo else 0
+        content_width = max(1, width - badge_width)
+        content = busy_line(props, width=content_width) if props.busy else idle_line(props, width=content_width)
 
         if not props.yolo:
             return content

@@ -1,35 +1,12 @@
-from __future__ import annotations
-from src.ui.widgets.banner import BannerData
-import json
 from typing import Any
-
+import copy
+import json
 import pytest
-from src.ui.theme import ACCENT, DANGER, ERROR, MUTED, WARNING
-
-from src.ui.core.state import (
-    initial_state,
-    reducer,
-    AgentEventAction,
-    SetBusy,
-    SetAsk,
-    SetPerm,
-    Clear,
-    SetActiveSkill,
-    CycleTranscriptFilter,
-    ToggleAllToolOutputs,
-    ToggleLatestToolOutput,
-    Append,
-    TranscriptEntry,
-)
-
-from src.agent.events import (
-    ToolCallEvent,
-    ToolResultEvent,
-    ErrorEvent,
-    AssistantDeltaEvent,
-    DoneEvent,
-    DecisionEvent,
-)
+from src.ui.widgets.banner import BannerData
+from src.ui.core.state import (initial_state, reducer, AgentEventAction, SetBusy, SetAsk, SetPerm,
+    Clear, SetActiveSkill, Append, TranscriptEntry)
+from src.agent.events import (ToolCallEvent, ToolResultEvent, ErrorEvent, AssistantDeltaEvent,
+    AssistantTextEvent, DoneEvent, DecisionEvent, CompactEvent, MemoryRecallEvent)
 from src.ui.widgets.transcript import entry_view
 
 
@@ -42,189 +19,6 @@ def seed():
             cwd="",
         ),
     )
-
-
-def test_decision_summary_keeps_one_prefix_and_indents_matched_signals():
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            DecisionEvent(
-                summary=(
-                    "Planner · web-enumeration · risk: normal\n"
-                    "matched: skill:web-enumeration · stage:enumeration · web enumeration"
-                )
-            )
-        ),
-    )
-
-    entry = out.transcript[-1]
-    lines = entry_view(entry)
-
-    assert entry.kind == "decision"
-    assert lines[0].text == "· Planner · web-enumeration · risk: normal"
-    assert lines[1].text == (
-        "  matched: skill:web-enumeration · stage:enumeration · web enumeration"
-    )
-    assert not lines[0].text.startswith("· ·")
-
-
-def test_collapses_escaped_newline_in_args_preview():
-
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolCallEvent(
-                name="shell",
-                args_json=json.dumps(
-                    {
-                        "command": "python3 -c \"\\nports=[\\n80,443\\n]\""
-                    }
-                ),
-            )
-        ),
-    )
-
-    last = out.transcript[-1]
-
-    assert last.kind == "tool-call"
-    assert "\\n" not in last.text
-    assert "Shell" in last.text
-    assert "python3" in last.text
-
-
-
-def test_caps_preview_120_chars():
-
-    long_args = json.dumps(
-        {
-            "command": "echo " * 500
-        }
-    )
-
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolCallEvent(
-                name="shell",
-                args_json=long_args,
-            )
-        ),
-    )
-
-    last = out.transcript[-1]
-
-    assert len(last.text) <= 150
-    assert last.text.endswith("…")
-
-
-
-def test_shows_command_not_json():
-
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolCallEvent(
-                name="shell",
-                args_json=json.dumps(
-                    {
-                        "command":
-                        "curl -ksS https://example.com"
-                    }
-                ),
-            )
-        ),
-    )
-
-    last = out.transcript[-1]
-
-    assert last.prefix == "⏺  "
-    assert '{"command"' not in last.text
-    assert "curl -ksS https://example.com" in last.text
-
-
-def test_short_shell_command_uses_ui_separator_not_function_call_style():
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolCallEvent(
-                name="shell",
-                args_json=json.dumps({"command": "echo hello"}),
-            )
-        ),
-    )
-
-    assert out.transcript[-1].text == "Shell · echo hello"
-    assert "Shell(echo hello)" not in out.transcript[-1].text
-
-
-def test_long_shell_command_keeps_descriptive_header_and_command_block():
-    command = "curl -s " + "https://example.test/path?query=value&" * 8
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolCallEvent(name="shell", args_json=json.dumps({"command": command}))
-        ),
-    )
-
-    text = out.transcript[-1].text
-    assert text.startswith("Shell · HTTP request\n$ ")
-    assert command not in text
-    assert text.endswith("…")
-
-
-
-def test_BashTool_compact_style():
-
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolCallEvent(
-                name="BashTool",
-                args_json=json.dumps(
-                    {
-                        "command":
-                        "mkdir -p recon/gobus.net"
-                    }
-                ),
-            )
-        ),
-    )
-
-    last = out.transcript[-1]
-
-    assert last.prefix == "⏺  "
-    assert "mkdir -p recon/gobus.net" in last.text
-
-
-
-def test_comment_shell_command():
-
-    command = "\n".join(
-        [
-            "# Check for Laravel debug mode - try to trigger an error",
-            'curl -s "https://egyptianclothingbank.org/donor/login" -X POST',
-        ]
-    )
-
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolCallEvent(
-                name="shell",
-                args_json=json.dumps(
-                    {
-                        "command": command
-                    }
-                ),
-            )
-        ),
-    )
-
-    last = out.transcript[-1]
-
-    assert "Laravel debug mode" in last.text
-    assert "curl -s" in last.text
-    assert last.prefix == "⏺  "
 
 
 def test_delta_changes_planning_to_answering():
@@ -287,7 +81,6 @@ def test_finishing_turn_returns_to_idle():
     assert s.phase == "idle"
 
 
-
 def test_streaming_finalized_by_done():
 
     s = reducer(
@@ -312,30 +105,6 @@ def test_streaming_finalized_by_done():
 
     assert s.transcript[-1].streaming is False
     assert s.busy is False
-
-
-def test_cycle_filters():
-
-    s = seed()
-
-    assert s.transcript_filter == "all"
-
-
-    for expected in [
-        "compact",
-        "findings",
-        "errors",
-        "current",
-        "all",
-    ]:
-
-        s = reducer(
-            s,
-            CycleTranscriptFilter()
-        )
-
-        assert s.transcript_filter == expected
-
 
 
 def test_clear():
@@ -370,139 +139,6 @@ def test_clear_with_reset_message_clears_active_skill():
     assert s1.active_skill is None
 
 
-def test_ask_user_result_is_human_readable_without_mutating_event():
-    raw = json.dumps(
-        {
-            "answers": [
-                {
-                    "question": "Which endpoint and parameter would you like to test?",
-                    "answer": "sql injection",
-                }
-            ]
-        },
-        indent=2,
-    )
-    event = ToolResultEvent(
-        name="ask_user",
-        result=raw,
-        duration_ms=12,
-    )
-
-    out = reducer(seed(), AgentEventAction(event))
-
-    entry = out.transcript[-1]
-    assert entry.text == "\n".join(
-        [
-            "[ok] Ask User (12ms)",
-            "answers:",
-            "- sql injection",
-            "  Which endpoint and parameter would you like to test?",
-        ]
-    )
-    assert '"answers"' not in entry.text
-    assert event.result == raw
-    assert entry.collapsible is False
-    assert entry.full_text is None
-
-
-def test_invalid_ask_user_result_falls_back_to_raw_output():
-    raw = '{"unexpected":"technical payload"}'
-
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolResultEvent(
-                name="ask_user",
-                result=raw,
-                duration_ms=3,
-            )
-        ),
-    )
-
-    assert out.transcript[-1].text == f"[ok] Ask User (3ms)\n{raw}"
-
-
-def test_exact_ask_user_error_duplicate_is_rendered_once_without_mutating_event():
-    raw = "ERROR: aborted"
-    event = ToolResultEvent(
-        name="ask_user",
-        result=raw,
-        err="aborted",
-        duration_ms=1,
-    )
-
-    out = reducer(
-        seed(),
-        AgentEventAction(event),
-    )
-
-    assert out.transcript[-1].text == "[error] Ask User: aborted"
-    assert event.err == "aborted"
-    assert event.result == raw
-
-
-@pytest.mark.parametrize(
-    ("name", "err"),
-    [
-        ("http", "permission denied by user for http"),
-        ("file_read", "unexpected tool exception"),
-        ("shell", "could not parse arguments: invalid JSON"),
-        ("browser", "tool blocked by active skills"),
-    ],
-)
-def test_exact_tool_error_duplicate_is_rendered_once(name, err):
-    event = ToolResultEvent(
-        name=name,
-        result=f"ERROR: {err}",
-        err=err,
-        duration_ms=4,
-    )
-
-    out = reducer(seed(), AgentEventAction(event))
-
-    entry = out.transcript[-1]
-    assert entry.text == f"[error] {name}: {err}"
-    assert entry.text.count(err) == 1
-    assert event.result == f"ERROR: {err}"
-    assert event.err == err
-
-
-def test_distinct_tool_error_body_is_preserved():
-    result = "ERROR: command failed\nstderr: detailed diagnostics"
-
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolResultEvent(
-                name="shell",
-                result=result,
-                err="command failed",
-                duration_ms=5,
-            )
-        ),
-    )
-
-    assert out.transcript[-1].text == f"[error] shell: command failed\n{result}"
-
-
-def test_typed_tool_error_status_never_renders_as_ok_without_exception_text():
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolResultEvent(
-                name="workflow",
-                result="error: record_input requires an active whole-target objective",
-                status="error",
-                error_kind="invalid_args",
-                duration_ms=2,
-            )
-        ),
-    )
-
-    assert out.transcript[-1].text.startswith("[error] workflow")
-    assert "[ok]" not in out.transcript[-1].text
-
-
 def test_runtime_error_event_rendering_is_unchanged():
     out = reducer(
         seed(),
@@ -513,171 +149,135 @@ def test_runtime_error_event_rendering_is_unchanged():
     assert out.transcript[-1].text == "provider unavailable"
 
 
-def test_evidence_result_toggles_latest_output_without_duplicating_transcript():
-    raw = "HTTP/1.1 200 OK\ncontent-type: text/plain\n\n" + "\n".join(
-        f"evidence line {i}" for i in range(40)
-    )
 
-    collapsed = reducer(
-        seed(),
-        AgentEventAction(
-            ToolResultEvent(
-                name="http",
-                result=raw,
-                duration_ms=20,
-            )
-        ),
-    )
-
-    entry = collapsed.transcript[-1]
-    assert entry.collapsible is True
-    assert entry.full_text is not None
-    assert "evidence line 39" in entry.full_text
-    assert "Ctrl-K latest" in entry.text
-    assert len(collapsed.transcript) == 1
-
-    expanded = reducer(collapsed, ToggleLatestToolOutput())
-    assert len(expanded.transcript) == 1
-    assert expanded.transcript[-1].expanded is True
-    assert "evidence line 39" in "\n".join(
-        line.text for line in entry_view(expanded.transcript[-1])
-    )
-
-    collapsed_again = reducer(expanded, ToggleLatestToolOutput())
-    assert len(collapsed_again.transcript) == 1
-    assert collapsed_again.transcript[-1].expanded is False
-    assert "evidence line 39" not in "\n".join(
-        line.text for line in entry_view(collapsed_again.transcript[-1])
-    )
-    assert "evidence line 39" in (collapsed_again.transcript[-1].full_text or "")
+def emit(state, event):
+    before = copy.deepcopy(event)
+    error = event.err if isinstance(event, ErrorEvent) else None
+    state = reducer(state, AgentEventAction(event))
+    if isinstance(event, ErrorEvent):
+        assert event.err is error and str(event.err) == str(before.err)
+    else:
+        assert event == before
+    return state
 
 
-def test_toggle_all_tool_outputs_alternates_open_and_closed():
-    first = TranscriptEntry(
-        kind="tool-result", text="preview one", full_text="full one", collapsible=True
-    )
-    second = TranscriptEntry(
-        kind="tool-result", text="preview two", full_text="full two", collapsible=True
-    )
-    plain = TranscriptEntry(kind="tool-result", text="short result")
-    state = reducer(reducer(reducer(seed(), Append(first)), Append(second)), Append(plain))
-
-    expanded = reducer(state, ToggleAllToolOutputs())
-    assert [entry.expanded for entry in expanded.transcript] == [True, True, False]
-    assert expanded.all_tool_outputs_expanded is True
-
-    collapsed = reducer(expanded, ToggleAllToolOutputs())
-    assert [entry.expanded for entry in collapsed.transcript] == [False, False, False]
-    assert collapsed.all_tool_outputs_expanded is False
-
-
-def test_new_collapsible_result_resets_all_toggle_to_expand_next():
-    existing = TranscriptEntry(
-        kind="tool-result", text="preview one", full_text="full one", collapsible=True
-    )
-    expanded = reducer(reducer(seed(), Append(existing)), ToggleAllToolOutputs())
-    assert expanded.all_tool_outputs_expanded is True
-
-    raw = "\n".join(f"new evidence {i}" for i in range(40))
-    with_new_result = reducer(
-        expanded,
-        AgentEventAction(ToolResultEvent(name="http", result=raw, duration_ms=1)),
-    )
-    assert with_new_result.all_tool_outputs_expanded is False
-    assert with_new_result.transcript[-1].expanded is False
-
-    opened = reducer(with_new_result, ToggleAllToolOutputs())
-    assert opened.all_tool_outputs_expanded is True
-    assert all(
-        entry.expanded
-        for entry in opened.transcript
-        if entry.collapsible and entry.full_text is not None
-    )
+@pytest.mark.parametrize("count", [1, 10, 100])
+@pytest.mark.parametrize("tool", ["http", "shell", "unknown", "workflow", "load_skill", "browser_capture_status"])
+def test_routine_entry_count_is_constant(count, tool):
+    state = reducer(seed(), Append(TranscriptEntry(kind="user", text="Test local lab")))
+    for i in range(count):
+        state = emit(state, ToolCallEvent(id=str(i), name=tool, args={"url": "http://juice.lab:3000/path"}))
+        assert state.running_tool and state.phase == "running-tool"
+        result = {
+            "shell": "exit: 0\nstdout:\nsecret traffic",
+            "unknown": '{"body":"secret traffic"}',
+            "workflow": '{"ok":true,"created":false,"candidate":{"notes":"secret traffic"}}',
+            "load_skill": "# Skill: test\nsecret traffic",
+            "browser_capture_status": '{"requests":10,"endpoints":2,"detail":"secret traffic"}',
+        }.get(tool, "HTTP/1.1 500 Internal Server Error\n\nsecret traffic")
+        state = emit(state, ToolResultEvent(id=str(i), name=tool,
+            result=result, status="observation" if tool == "http" else "success"))
+    assert len(state.transcript) == 1
+    assert "secret traffic" not in repr(state)
+    assert state.running_tool is None and not state.pending_calls
+    assert len([line for entry in state.transcript for line in entry_view(entry) if line.text]) == 1
 
 
-def test_confirm_finding_card():
-
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolCallEvent(
-                name="confirm_finding",
-                args_json=json.dumps(
-                    {
-                        "severity": "low",
-                        "title":
-                            "Information Disclosure - PHP Version in Response Headers",
-                        "method": "GET",
-                        "url": "https://x.test/",
-                        "parameter": "debug",
-                        "observed_impact":
-                            "The response exposes the PHP version.",
-                        "potential_impact": "No additional impact assessed."
-                    }
-                ),
-            )
-        ),
-    )
-
-    last = out.transcript[-1]
-
-    assert last.kind == "tool-call"
-    assert last.prefix == "⏺ "
-    assert "pending validation" in last.text
-    assert last.color == ACCENT
-
-    assert (
-        "LOW · Information Disclosure - PHP Version in Response Headers"
-        in last.text
-    )
-
-    assert "GET https://x.test/" in last.text
-    assert "observed impact: The response exposes the PHP version." in last.text
-    assert "potential impact: No additional impact assessed." in last.text
+def test_planning_compaction_recall_and_proposed_findings_are_hidden():
+    state = seed()
+    for event in [DecisionEvent(summary="matched signal"), CompactEvent(summary="automatic handoff"),
+                  MemoryRecallEvent(names=["sql injection"]),
+                  ToolCallEvent(name="confirm_finding", args={"severity":"critical", "title":"Proposed"})]:
+        state = emit(state, event)
+    assert state.transcript == ()
+    assert state.running_tool == "Saving finding"
 
 
-
-@pytest.mark.parametrize(
-    "severity,color",
-    [
-        ("critical", DANGER),
-        ("high", ERROR),
-        ("medium", WARNING),
-        ("low", ACCENT),
-        ("info", MUTED),
-    ]
-)
-def test_finding_colors(severity, color):
-
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolCallEvent(
-                name="confirm_finding",
-                args_json=json.dumps(
-                    {
-                        "severity": severity,
-                        "title": "T"
-                    }
-                ),
-            )
-        ),
-    )
-
-    assert out.transcript[-1].color == color
+def test_interleaved_search_results_correlate_by_id():
+    state = emit(seed(), ToolCallEvent(id="search", name="shell", args={"command":"rg missing ."}))
+    state = emit(state, ToolCallEvent(id="other", name="shell", args={"command":"false"}))
+    state = emit(state, ToolResultEvent(id="search", name="shell", result="exit: 1\nstdout:\n"))
+    assert not state.transcript and state.running_tool == "shell"
+    state = emit(state, ToolResultEvent(id="other", name="shell", result="exit: 1\nstdout:\n"))
+    assert len(state.transcript) == 1 and "exit 1" in state.transcript[0].text
+    missing = emit(seed(), ToolResultEvent(id="missing", name="shell", result="exit: 1\nstdout:\n"))
+    assert "exit 1" in missing.transcript[0].text
 
 
+@pytest.mark.parametrize("event,reason", [
+    (ToolResultEvent(name="unknown", status="error", error_kind="permission_denied"), "permission_denied"),
+    (ToolResultEvent(name="unknown", status="cancelled"), "cancelled"),
+    (ToolResultEvent(name="workflow", result="error: evidence changed"), "evidence changed"),
+    (ToolResultEvent(name="workflow", result='{"ok":true,"coverage_sync":"pending","coverage_error":"disk full"}'), "disk full"),
+    (ToolResultEvent(name="workflow", result='{"ok":true,"result":{"outcome":"insufficient-evidence","cleanup_state":"requires-user-action"}}'), "Cleanup requires-user-action"),
+    (ToolResultEvent(name="confirm_finding", result="Finding persisted; compact report export failed."), "export failed"),
+    (ToolResultEvent(name="unknown", err="connection failed\npassword=short-secret"), "connection failed"),
+    (ToolResultEvent(name="unknown", truncated=True), "truncated"),
+    (ToolResultEvent(name="shell", result="exit: 0\nstdout:\nok\nstderr:\ncleanup required"), "cleanup required"),
+])
+def test_actionable_outcomes_survive_success_metadata(event, reason):
+    state = emit(seed(), event)
+    assert len(state.transcript) == 1
+    expected = "system" if event.truncated or event.name == "shell" else (
+        "warning" if reason in {"permission_denied", "cancelled", "disk full", "Cleanup requires-user-action", "export failed"} else "error")
+    assert state.transcript[0].kind == expected
+    assert reason in state.transcript[0].text
+    assert "short-secret" not in repr(state.transcript)
+    assert "[ok]" not in state.transcript[0].text
 
-def test_invalid_finding_fallback():
 
-    out = reducer(
-        seed(),
-        AgentEventAction(
-            ToolCallEvent(
-                name="confirm_finding",
-                args_json="{bad json"
-            )
-        ),
-    )
+def test_unknown_json_is_not_authoritative_or_dumped():
+    state = emit(seed(), ToolResultEvent(name="unknown", result='{"ok":true,"finding":"confirmed","payload":"hidden"}'))
+    assert not state.transcript
 
-    assert out.transcript[-1].kind == "tool-call"
+
+def test_pending_metadata_is_bounded_and_hides_arguments():
+    state = seed()
+    for i in range(300):
+        state = emit(state, ToolCallEvent(id=str(i), name="unknown", args={"password":"secret"}))
+    assert len(state.pending_calls) == 256
+    assert "secret" not in repr(state.pending_calls)
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_substantive_analysis_between_tools_is_preserved(streaming):
+    answer = "The observed response does not establish a vulnerability. Here is the requested analysis."
+    state = emit(seed(), ToolCallEvent(id="a", name="http"))
+    state = emit(state, ToolResultEvent(id="a", name="http", result="HTTP/1.1 200 OK"))
+    if streaming:
+        for chunk in [answer[:10], answer[10:]]:
+            state = emit(state, AssistantDeltaEvent(text=chunk))
+    else:
+        state = emit(state, AssistantTextEvent(text=answer))
+    state = emit(state, ToolCallEvent(id="b", name="http"))
+    state = emit(state, ToolResultEvent(id="b", name="http", result="HTTP/1.1 403 Forbidden"))
+    state = emit(state, DoneEvent(stop_reason="workflow_blocked"))
+    assert state.transcript[0].text == answer
+    assert len(state.transcript) == 2
+
+
+@pytest.mark.parametrize("boundary", [ToolCallEvent(name="http"), ToolResultEvent(name="http"),
+    DecisionEvent(), CompactEvent(), ErrorEvent(err=RuntimeError("provider failed")),
+    DoneEvent(stop_reason="cancelled")])
+def test_partial_stream_and_every_credential_split_survive_event_boundaries(boundary):
+    text = "Partial answer; validation remains incomplete.\nAuthorization: Basic short-secret"
+    for split in range(len(text) + 1):
+        state = emit(seed(), AssistantDeltaEvent(text=text[:split]))
+        state = emit(state, AssistantDeltaEvent(text=text[split:]))
+        assert "short-secret" not in repr(state.transcript)
+        state = emit(state, boundary)
+        assert state.transcript[0].text.startswith("Partial answer; validation remains incomplete.")
+        assert "short-secret" not in repr(state.transcript)
+        assert not state.stream_chunks and not state.transcript[0].streaming
+
+
+def test_appended_operator_notice_finalizes_partial_stream_safely():
+    state = emit(seed(), AssistantDeltaEvent(text="Partial requested answer.\nAuthorization: Basic short-secret"))
+    state = reducer(state, Append(TranscriptEntry(kind="system", text="Reached max steps")))
+    assert state.transcript[0].text.startswith("Partial requested answer.")
+    assert "short-secret" not in repr(state.transcript) and not state.stream_chunks
+
+
+def test_unknown_workflow_receipt_shapes_do_not_drop_events_or_imply_success():
+    state = emit(seed(), ToolResultEvent(name="workflow", result='{"ok":true,"result":{"outcome":{},"cleanup_state":[]}}'))
+    assert not state.transcript

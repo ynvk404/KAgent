@@ -31,7 +31,7 @@ async def test_valid_grant_autoapproves_fresh_receipts_and_keeps_same_owner(rig)
                        ('type', {'ref': 's1e1', 'element': 'search', 'text': 'fixture', 'submit': False})]:
         await call(rig, prompter, name, args)
     assert len(rig.calls) == rig.policy.used == 4 and rig.policy.active == 0
-    assert not rig.operator.asks and grant.remaining == 16
+    assert not rig.operator.asks and grant.remaining is None
     assert len({id(row[0]) for row in rig.calls}) == 1
     assert not rig.policy._receipts and not rig.policy._pending
 
@@ -175,12 +175,12 @@ async def test_operator_grant_flow_is_separate_from_session_trust_and_model_args
     rig.operator.ask = ask
     await call(rig, prompter, args={'grant': 'interaction', 'calls': 100000, 'forceOperator': False})
     grant = rig.binding.grant
-    assert grant.group == 'read' and grant.remaining == 19
+    assert grant.group == 'read' and grant.remaining is None
     assert len(seen) == 2 and seen[0].offer_browser_grant == 'read'
     assert all(request.force_operator and request.no_session_cache for request in seen)
     assert 'browser_click' not in seen[1].detail and ORIGIN in seen[1].detail
     await call(rig, prompter)
-    assert len(seen) == 2 and grant.remaining == 18
+    assert len(seen) == 2 and grant.remaining is None
 
 
 @pytest.mark.asyncio
@@ -197,7 +197,7 @@ async def test_interaction_grant_confirms_unknown_application_effects(rig):
     await call(rig, prompter, 'click', {'ref': 's1e1', 'element': 'search'})
     assert len(seen) == 2 and 'change application state' in seen[1].detail
     assert 'submit forms' in seen[1].detail and rig.binding.grant.group == 'interaction'
-    assert rig.binding.grant.remaining == 19
+    assert rig.binding.grant.remaining is None
 
 
 @pytest.mark.asyncio
@@ -261,22 +261,18 @@ async def test_real_permission_modal_grants_then_status_and_operator_revoke(rig)
             while len(requests) < 1:
                 await asyncio.sleep(0.001)
             assert requests[0].offer_browser_grant == 'read' and requests[0].force_operator
-            PermissionModal(requests[0]).handle_key('g')
-            while len(requests) < 2:
-                await asyncio.sleep(0.001)
-            assert requests[1].tool == 'browser_lab_grant'
             assert rig.binding.grant is None and not rig.calls
-            assert '300s' in requests[1].detail and '20 dispatched calls' in requests[1].detail
-            PermissionModal(requests[1]).handle_key('y')
+            assert 'Session lifetime; no call quota' in requests[0].detail
+            PermissionModal(requests[0]).handle_key('a')
             await task
         granted = rig.binding.grant
-        assert granted is not None and granted.remaining == 19
+        assert granted is not None and granted.remaining is None
         app = make_app()
         app.agent.prompter = prompter
         app.agent.engagement_state = rig.policy.engagement
         assert handle_slash(app, '/permissions browser')
         text = app.state.transcript[-1].text
-        assert ORIGIN in text and 'calls remaining 19' in text and '/permissions browser revoke' in text
+        assert ORIGIN in text and 'no call quota' in text and '/permissions browser revoke' in text
         assert handle_slash(app, '/permissions browser revoke')
         assert rig.binding.grant is None
     finally:
@@ -295,3 +291,46 @@ async def test_grant_review_requires_explicit_allow_once(rig, decision):
     with pytest.raises(UserControlledRefusal):
         await call(rig, prompter)
     assert rig.binding.grant is None and not rig.calls and rig.policy.active == 0
+
+
+@pytest.mark.asyncio
+async def test_reconnect_revokes_session_read_grant_even_without_element_refs(rig):
+    prompter = yolo(rig)
+    rig.binding.activate_grant('read')
+    await call(rig, prompter)
+    rig.generation[0] += 1
+    with pytest.raises(ExecutionBlocked, match='reconnect invalidated Browser grant'):
+        await call(rig, prompter)
+    assert len(rig.calls) == 1 and rig.binding.grant is None and rig.policy.active == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('decision', [Decision.ALLOW_SESSION, Decision.GRANT_LAB])
+async def test_expired_invocation_review_cannot_create_browser_session_authority(rig, decision):
+    from src.ui.bridges.perm_bridge import BridgedPrompter
+    shown = []
+    now = [100.0]
+    rig.policy.clock = lambda:now[0]
+    bridge = BridgedPrompter(shown.append)
+    prompter = YoloPrompter(bridge, True)
+    prompter.bind_execution_policy(rig.policy)
+    pending = asyncio.create_task(call(rig, prompter))
+    await asyncio.sleep(0)
+    first = shown[-1]
+    assert first is not None
+    if decision == Decision.GRANT_LAB:
+        first.resolve(decision)
+        for _ in range(10):
+            await asyncio.sleep(0)
+            if shown[-1] is not None and shown[-1].tool == 'browser_lab_grant':
+                break
+        review = shown[-1]
+        assert review is not None and review.tool == 'browser_lab_grant'
+        now[0] += rig.policy.review_timeout
+        review.resolve(Decision.ALLOW_ONCE)
+    else:
+        now[0] += rig.policy.review_timeout
+        first.resolve(decision)
+    with pytest.raises(PermissionError, match='stale'):
+        await pending
+    assert rig.binding.grant is None and not rig.calls and not bridge._session_allowed

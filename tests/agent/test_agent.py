@@ -5297,13 +5297,13 @@ async def test_runs_independent_tool_calls_in_same_step_concurrently():
         if event.type == "tool-result"
     ]
 
-    assert results == [
+    assert sorted(results) == [
         "parallel-ok:a",
         "parallel-ok:b",
     ]
 
 @pytest.mark.asyncio
-async def test_emits_tool_results_in_call_order_even_when_later_calls_finish_first():
+async def test_emits_completions_promptly_but_commits_results_in_call_order():
 
     agent = agent_with_tools(
         [
@@ -5359,10 +5359,10 @@ async def test_emits_tool_results_in_call_order_even_when_later_calls_finish_fir
         if event.type == "tool-result"
     ]
 
-    # second finishes first, but output order follows tool call order
+    # Completion events follow finish order; history below follows call order.
     assert order == [
-        "done:first",
         "done:second",
+        "done:first",
     ]
 
 
@@ -5570,7 +5570,7 @@ def test_context_guard_slight_pressure_removes_only_required_budget_plus_safety(
     assert "unresolved pressure" not in events[0]["summary"]
 
 
-def test_context_guard_pressure_without_tool_output_emits_no_event():
+def test_context_guard_pressure_without_tool_output_reports_fixed_floor_once():
     agent = make_agent([])
     agent.set_auto_compact_threshold(1)
     working = [Message(role="user", content="hi")]
@@ -5580,7 +5580,9 @@ def test_context_guard_pressure_without_tool_output_emits_no_event():
     agent.guard_working_context(working, events.append)
 
     assert working == original
-    assert events == []
+    assert len(events) == 1
+    assert events[0]['context_diagnostics']['reducible_tokens'] == 0
+    assert events[0]['context_diagnostics']['reduction_achieved'] == 0
 
 
 def test_context_guard_no_reducible_candidate_never_reports_zero_reduction():
@@ -5591,7 +5593,9 @@ def test_context_guard_no_reducible_candidate_never_reports_zero_reduction():
 
     agent.guard_working_context(working, events.append, AgentRunOptions(tools=False))
 
-    assert events == []
+    assert len(events) == 1
+    assert events[0]['context_diagnostics']['reducible_tokens'] == 0
+    assert events[0]['context_diagnostics']['reduction_achieved'] == 0
     assert not any("reduced 0 characters" in event["summary"] for event in events)
 
 
@@ -5610,7 +5614,8 @@ def test_context_guard_severe_pressure_reaches_floor_and_reports_residual():
     assert approximate_message_tokens(working) >= 628
     assert len(events) == 1
     assert "reduced 10000 characters" in events[0]["summary"]
-    assert f"unresolved pressure: {approximate_message_tokens(working) - 372} tokens" in events[-1]["summary"]
+    diagnostic = events[-1]['context_diagnostics']
+    assert diagnostic['estimated_total'] - diagnostic['reduction_target'] == approximate_message_tokens(working) - 372
     assert "reduced 0 characters" not in events[0]["summary"]
 
 
@@ -5626,7 +5631,8 @@ def test_context_guard_preserves_recent_semantic_result_under_severe_pressure():
 
     assert working[0].content == raw
     assert len(events) == 1
-    assert f"unresolved pressure: {approximate_message_tokens(working)} tokens" in events[0]["summary"]
+    diagnostic = events[0]['context_diagnostics']
+    assert diagnostic['estimated_total'] - diagnostic['reduction_target'] == approximate_message_tokens(working)
     assert "reduced 0" not in events[0]["summary"]
 
 
@@ -5649,7 +5655,8 @@ def test_context_guard_does_not_old_elide_protected_semantic_result():
     assert working[0].content == protected
     assert [message.content for message in working[1:]] == ["x" * 100] * 4
     assert len(events) == 1
-    assert f"unresolved pressure: {approximate_message_tokens(working)} tokens" in events[0]["summary"]
+    diagnostic = events[0]['context_diagnostics']
+    assert diagnostic['estimated_total'] - diagnostic['reduction_target'] == approximate_message_tokens(working)
     assert "reduced 0" not in events[0]["summary"]
 
 

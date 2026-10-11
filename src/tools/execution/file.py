@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import codecs
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,8 @@ from src.permission.permission import (
     Decision,
     PermissionRequest,
     UserControlledRefusal,
+    PermissionReviewStale,
+    PermissionPolicyBlocked,
 )
 from src.paths import project_artifact_root, project_root
 
@@ -19,7 +22,11 @@ from src.tools.common.types import (
     arg_string,
 )
 from src.tools.execution.sensitive import is_sensitive_path
-from src.permission.runtime.execution import policy_for
+from src.permission.runtime.execution import policy_for, file_resource_identity
+from src.permission.runtime.invocations import capture_review, REVIEW_TIMEOUT_SECONDS
+from src.permission.network.grants import check_cancelled
+from src.tools.common.arguments import string_fields
+from src.tools.common.outcome import ToolOutput
 
 READ_BYTE_CAP = 200 * 1024
 
@@ -85,10 +92,16 @@ async def gate_sensitive_path(
         abs_path
     )
     policy = policy_for(p)
+    check_cancelled(signal)
+    version = file_resource_identity(abs_path)
+    active_check = policy.active_review_check() if policy is not None else lambda: True
+    guard = capture_review(signal=signal, clock=policy.clock if policy else time.monotonic,
+                           timeout=policy.review_timeout if policy else REVIEW_TIMEOUT_SECONDS,
+                           condition=lambda: active_check() and file_resource_identity(abs_path) == version)
     if policy is not None:
         policy.require_path(real, write=verb in {"write to", "edit"})
         if not policy.nested_allowed():
-            raise UserControlledRefusal("blocked: file-executor-without-valid-receipt")
+            raise PermissionPolicyBlocked("blocked: file-executor-without-valid-receipt")
         if policy.yolo:
             return real
     if (
@@ -116,20 +129,24 @@ async def gate_sensitive_path(
             ),
             no_session_cache=True,
             risk_tier="high-impact",
+            is_current=guard.is_current,
         ),
         signal,
     )
 
-    if decision == Decision.DENY:
+    check_cancelled(signal)
+    if not guard.is_current():
+        raise PermissionReviewStale('blocked: stale sensitive-file review')
+    if decision not in {Decision.ALLOW_ONCE, Decision.ALLOW_SESSION}:
         raise UserControlledRefusal(
             f"{verb} of sensitive path denied: {real}"
         )
 
     if policy is not None:
         if not policy.nested_allowed():
-            raise UserControlledRefusal("blocked: policy-changed-during-sensitive-read-review")
+            raise PermissionReviewStale("blocked: policy-changed-during-sensitive-read-review")
         if str(policy.require_path(abs_path, write=verb in {"write to", "edit"})) != real:
-            raise UserControlledRefusal("blocked: file-resource-changed-during-review")
+            raise PermissionReviewStale("blocked: file-resource-changed-during-review")
 
     return real
 
@@ -218,6 +235,10 @@ class FileReadTool(Tool):
             signal
         )
 
+        policy = policy_for(prompter)
+        if policy is not None:
+            policy.revalidate_active(self, args, signal)
+
         size = os.path.getsize(
             real
         )
@@ -236,9 +257,10 @@ class FileReadTool(Tool):
         )
 
         if size > READ_BYTE_CAP:
-            return (
+            return ToolOutput(
                 content
-                + f"\n[... truncated {size-READ_BYTE_CAP} bytes ...]"
+                + f"\n[... truncated {size-READ_BYTE_CAP} bytes ...]",
+                truncated=True,
             )
 
         return content
@@ -279,6 +301,9 @@ class FileWriteTool(Tool):
     def requires_permission(self):
         return True
 
+    def validate_args(self, args: dict[str, Any]) -> None:
+        string_fields(args, required=("path", "content"), nonempty=("path",))
+
     def permission_hints(
         self,
         args
@@ -305,6 +330,7 @@ class FileWriteTool(Tool):
         signal,
         prompter,
     ) -> str:
+        self.validate_args(args)
         path = arg_string(
             args,
             "path"
@@ -331,6 +357,10 @@ class FileWriteTool(Tool):
             signal
         )
 
+        policy = policy_for(prompter)
+        if policy is not None:
+            policy.revalidate_active(self, args, signal)
+
         parent = Path(real).parent
         file_existed = Path(real).exists()
 
@@ -339,6 +369,9 @@ class FileWriteTool(Tool):
             exist_ok=True,
             mode=WRITE_DIR_MODE,
         )
+
+        if policy is not None:
+            policy.revalidate_active(self, args, signal)
 
         Path(real).write_text(
             content,
@@ -376,6 +409,12 @@ class FileEditTool(Tool):
 
     def requires_permission(self):
         return True
+
+    def validate_args(self, args: dict[str, Any]) -> None:
+        string_fields(args, required=("path", "old_string", "new_string"),
+                      nonempty=("path", "old_string"))
+        if "replace_all" in args and not isinstance(args["replace_all"], bool):
+            raise ValueError("replace_all must be a boolean")
 
     def schema(self):
         return {
@@ -417,6 +456,7 @@ class FileEditTool(Tool):
             "summary": f"edit file: {path}",
             "detail": (
                 f"path: {path}\n"
+                f"replace_all: {arg_bool(args, 'replace_all')}\n"
                 f"- {arg_string(args, 'old_string')}\n"
                 f"+ {arg_string(args, 'new_string')}"
             ),
@@ -428,6 +468,7 @@ class FileEditTool(Tool):
         signal,
         prompter,
     ) -> str:
+        self.validate_args(args)
         path = arg_string(
             args,
             "path"
@@ -464,6 +505,10 @@ class FileEditTool(Tool):
             signal
         )
 
+        policy = policy_for(prompter)
+        if policy is not None:
+            policy.revalidate_active(self, args, signal)
+
         content = Path(real).read_text(
             encoding="utf-8"
         )
@@ -488,6 +533,9 @@ class FileEditTool(Tool):
             old,
             new
         )
+
+        if policy is not None:
+            policy.revalidate_active(self, args, signal)
 
         Path(real).write_text(
             updated,

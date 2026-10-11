@@ -424,12 +424,15 @@ async def test_pending_and_deny_do_not_spam_or_create_session_deny(runtime):
     with review_turn():
         task = asyncio.create_task(registry.execute("http", args(), None, operator))
         await opened.wait()
-        for _ in range(5):
-            with pytest.raises(HTTPBlocked, match="already open"):
-                await registry.execute("http", args("/other", phase="impact"), None, operator)
+        queued = [asyncio.create_task(registry.execute("http", args("/other", phase="impact"), None, operator))
+                  for _ in range(5)]
+        await asyncio.sleep(0)
+        assert all(not item.done() for item in queued)
         release.set()
         with pytest.raises(HTTPBlocked):
             await task
+        results = await asyncio.wait_for(asyncio.gather(*queued, return_exceptions=True), 2)
+        assert all(isinstance(result, HTTPBlocked) and 'declined' in str(result) for result in results)
         for _ in range(3):
             with pytest.raises(HTTPBlocked, match="exact action declined"):
                 await registry.execute("http", args(), None, operator)
@@ -646,11 +649,12 @@ async def test_same_request_parallel_approvals_do_not_share_receipt(runtime):
     operator = Waiting()
     first = asyncio.create_task(registry.execute("http", args(), None, operator))
     await opened.wait()
-    with pytest.raises(HTTPBlocked, match="already open"):
-        await registry.execute("http", args(), None, operator)
+    second = asyncio.create_task(registry.execute("http", args(), None, operator))
+    await asyncio.sleep(0)
+    assert not second.done()
     release.set()
-    await first
-    assert len(sent) == len(operator.requests) == 1
+    await asyncio.wait_for(asyncio.gather(first, second), 2)
+    assert len(sent) == len(operator.requests) == 2
 
 
 def test_session_deny_survives_target_change_until_operator_retry(runtime):
@@ -727,7 +731,7 @@ async def test_retry_does_not_replenish_existing_lab_budget(runtime):
 
 
 @pytest.mark.asyncio
-async def test_legacy_origin_cache_and_allow_session_cannot_grant_http(runtime):
+async def test_legacy_origin_cache_cannot_grant_http_but_explicit_session_review_can(runtime):
     from src.ui.bridges.perm_bridge import BridgedPrompter
     tool, registry, sent, _ = runtime
     dialogs = []
@@ -739,9 +743,10 @@ async def test_legacy_origin_cache_and_allow_session_cannot_grant_http(runtime):
 
     bridge = BridgedPrompter(publish)
     bridge._session_allowed.add("http " + ORIGIN)
-    with pytest.raises(HTTPBlocked, match="denied"):
-        await registry.execute("http", args(), None, YoloPrompter(bridge, False))
-    assert len(dialogs) == 1 and not sent and not tool.permissions.grants
+    await registry.execute("http", args(), None, YoloPrompter(bridge, False))
+    assert len(dialogs) == 1 and len(sent) == 1 and tool.permissions.grants
+    assert not bridge._session_allowed - {"http " + ORIGIN}
+    assert next(iter(tool.permissions.grants.values())).limits == HTTPLimits.session()
 
 
 @pytest.mark.asyncio
@@ -813,8 +818,12 @@ async def test_pending_grant_coalesces_but_cancel_does_not_poison_new_invocation
     operator = Waiting()
     task = asyncio.create_task(tool.permissions.review_grant(ORIGIN, HTTPLimits(), "autonomous", operator))
     await opened.wait()
-    with pytest.raises(HTTPBlocked, match="already open"):
-        await registry.execute("http", args(), None, operator)
+    queued = asyncio.create_task(registry.execute("http", args(), None, operator))
+    await asyncio.sleep(0)
+    assert not queued.done()
+    queued.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await queued
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -822,3 +831,23 @@ async def test_pending_grant_coalesces_but_cancel_does_not_poison_new_invocation
     await registry.execute("http", args(), None, next_operator)
     assert len(operator.requests) == 1 and len(next_operator.requests) == 1 and len(sent) == 1
     assert not tool.permissions.grants and not tool.permissions._suppressed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('same_origin', [True, False])
+async def test_explicit_grant_review_detects_replacement_only_for_its_origin(runtime, same_origin):
+    tool, _, _, _ = runtime
+    other = 'https://juice.lab:3000'
+    tool.engagement.add_origin(other)
+    class Replacing(Operator):
+        async def ask(self, request, signal=None):
+            tool.permissions.activate(ORIGIN if same_origin else other, HTTPLimits.session())
+            return Decision.ALLOW_ONCE
+    if same_origin:
+        with pytest.raises(HTTPBlocked, match='policy changed during grant review'):
+            await tool.permissions.review_grant(ORIGIN, HTTPLimits(), 'autonomous', Replacing())
+        assert next(iter(tool.permissions.grants.values())).limits.requests is None
+    else:
+        grant = await tool.permissions.review_grant(ORIGIN, HTTPLimits(), 'autonomous', Replacing())
+        assert grant is not None and grant.limits.requests == 500
+    assert not tool.permissions._grant_pending

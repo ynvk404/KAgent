@@ -138,24 +138,24 @@ class AskUserTool(Tool):
                 )
         }
 
-    async def run(
-        self,
-        args: dict,
-        signal,
-        prompter: Prompter,
-    ) -> str:
+    def validate_args(self, args: dict[str, Any]) -> None:
+        self._questions(args)
+
+    def _questions(self, args: dict[str, Any]) -> list[Question]:
         raw = args.get("questions")
 
         if not isinstance(raw, list) or not raw:
-            raise Exception(
+            raise ValueError(
                 "questions is required"
             )
 
-        answers = []
+        if len(raw) > 4:
+            raise ValueError("questions must contain at most 4 questions")
+        questions = []
 
         for i, item in enumerate(raw):
             if not isinstance(item, dict):
-                raise Exception(
+                raise ValueError(
                     f"questions[{i}] invalid"
                 )
 
@@ -165,13 +165,15 @@ class AskUserTool(Tool):
             )
 
             if not isinstance(qtext, str) or not qtext:
-                raise Exception(
+                raise ValueError(
                     f"questions[{i}] question required"
                 )
 
             header = item.get(
                 "header"
             )
+            if "header" in item and not isinstance(header, str):
+                raise ValueError(f"questions[{i}] header must be a string")
 
             options = []
 
@@ -183,6 +185,8 @@ class AskUserTool(Tool):
             # compatible while advertising and internally using `options`.
             if legacy_choices:
                 raw_options = item.get("choices", [])
+            if raw_options is None and ("options" in item or legacy_choices):
+                raise ValueError(f"questions[{i}] options must be an array")
 
             if raw_options is None:
                 question = Question(
@@ -192,7 +196,13 @@ class AskUserTool(Tool):
                 )
             else:
                 if not isinstance(raw_options, list):
-                    raise Exception(f"questions[{i}] options must be an array")
+                    raise ValueError(f"questions[{i}] options must be an array")
+                # Bounds apply to submitted choices, before trusted UI
+                # augmentation can add the authorization-testing option.
+                if len(raw_options) < 2:
+                    raise ValueError(f"questions[{i}] at least 2 options required")
+                if len(raw_options) > 4:
+                    raise ValueError(f"questions[{i}] at most 4 options allowed")
 
                 for option_index, opt in enumerate(raw_options):
                     if legacy_choices and isinstance(opt, str):
@@ -202,17 +212,17 @@ class AskUserTool(Tool):
                         label = opt.get("label", "")
                         description = opt.get("description")
                     else:
-                        raise Exception(
+                        raise ValueError(
                             f"questions[{i}] options[{option_index}] invalid"
                         )
 
                     if not isinstance(label, str) or not label:
-                        raise Exception(
+                        raise ValueError(
                             f"questions[{i}] options[{option_index}] label required"
                         )
 
                     if description is not None and not isinstance(description, str):
-                        raise Exception(
+                        raise ValueError(
                             f"questions[{i}] options[{option_index}] description invalid"
                         )
 
@@ -229,17 +239,26 @@ class AskUserTool(Tool):
                     options,
                 )
 
-                if len(options) < 2:
-                    raise Exception(
-                        f"questions[{i}] at least 2 options required"
-                    )
-
                 question = Question(
                     question=qtext,
                     options=options,
                     header=header,
                 )
 
+            questions.append(question)
+        return questions
+
+    async def run(
+        self,
+        args: dict,
+        signal,
+        prompter: Prompter,
+    ) -> str:
+        # Parse the entire batch before presenting anything or recording a
+        # pending question. A bad later question must not partially ask it.
+        questions = self._questions(args)
+        answers = []
+        for item, question in zip(args["questions"], questions):
             from src.permission.runtime.execution import policy_for, ExecutionBlocked
             policy = policy_for(prompter)
             key = hashlib.sha256(json.dumps([policy.stamp() if policy else None, item],
@@ -259,7 +278,7 @@ class AskUserTool(Tool):
 
             answers.append(
                 {
-                    "question": qtext,
+                    "question": question.question,
                     "answer": choice
                 }
             )

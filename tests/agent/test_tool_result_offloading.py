@@ -2,6 +2,7 @@
 import asyncio
 from dataclasses import asdict, replace
 import json
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -27,7 +28,6 @@ from src.tools.execution.file import FileReadTool
 from src.tools.execution.shell import ShellTool
 from src.tools.execution.search import GrepTool
 from src.tools.http.http_tool import HTTPTool
-from src.ui.render.tool_result_format import build_tool_result_view
 from tests.agent.test_output_pipeline import source, assert_anchors, PAYLOADS, SECRET
 from tests.state.test_tool_result_store import artifact
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, collect
@@ -154,7 +154,12 @@ async def test_distributed_preview_gap_reread_and_live_visibility(make):
     assert_anchors(msg.content)
     assert 'GAP-EVIDENCE' not in msg.content
     assert events[0]['result'] == raw == execution.result
-    assert build_tool_result_view(events[0]['result']).full == raw
+    from src.agent.agent import _to_agent_event
+    from src.ui.core.state import initial_state, reducer, AgentEventAction
+    from src.ui.widgets.banner import BannerData
+    presentation = reducer(initial_state("", BannerData("test", "test", ".")),
+                           AgentEventAction(_to_agent_event(events[0])))
+    assert not presentation.transcript
     ref = reference(agent)
     response = json.loads(await agent.tools.execute('read_tool_result', {
         'result_ref':ref.result_ref, 'start_char':12500, 'max_chars':100}, FakeSignal(), agent.prompter))
@@ -220,6 +225,9 @@ def test_storage_failure_fallback_inline_and_phase_a_bounds(make, monkeypatch, f
 
 @pytest.mark.asyncio
 async def test_http_200_unsafe_cache_checkpoint_preserves_output_and_continues(make, tmp_path, monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("203.0.113.1", 0))
+    ])
     calls = [ChatResponse(Message('assistant', '', tool_calls=[ToolCall('http-result', FunctionCall(
         'http', json.dumps({'url': '/output', 'method': 'GET', 'phase': 'recon',
                             'max_response_bytes': 65536})))]), 'tool_calls'),
