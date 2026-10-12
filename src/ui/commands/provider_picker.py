@@ -106,14 +106,13 @@ async def _prompt_custom_model(
                 )
             )
             if models:
-                preview = ", ".join(models[:20])
-                discovery_note = f"Available models: {preview}. "
+                preview = "\n".join(models[:20])
+                discovery_note = f"Available models:\n{preview}\n\n"
                 if len(models) > 20:
-                    discovery_note += "Enter another ID to use an unlisted model. "
+                    discovery_note += "Showing the first 20 IDs; unlisted IDs are also accepted.\n"
             else:
                 discovery_note = (
-                    "The endpoint returned a valid but empty model list. "
-                    "Enter a model ID manually. "
+                    "The endpoint returned a valid but empty model list.\n"
                 )
             break
         except ProviderControlError as error:
@@ -133,21 +132,22 @@ async def _prompt_custom_model(
                     continue
                 raise error
             discovery_note = (
-                f"Discovery could not complete: {error}. Enter a model ID manually. "
+                f"Discovery could not complete: {error}.\n"
             )
             break
         except Exception:
             discovery_note = (
-                "Model discovery failed. Enter a model ID manually. "
+                "Model discovery failed.\n"
             )
             break
 
     model = await prompt_text(
         TextInputRequest(
             header="Step 4 of 4: Default model",
-            question=discovery_note + "Choose a discovered model ID or enter one manually.",
+            question=discovery_note + "Choose a model ID or enter one manually.",
             placeholder="e.g. llama-3.3-70b",
             initial_value=current_model,
+            scrollable=True,
             resolve=lambda _value: None,
             reject=lambda _error: None,
         )

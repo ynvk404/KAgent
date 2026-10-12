@@ -28,6 +28,8 @@ class AskModal:
     ) -> None:
         self.req = req
         self.idx = 0
+        self.item_lines: dict[int, int] = {}
+        self.answered = False
 
     def handle_key(
         self,
@@ -36,8 +38,11 @@ class AskModal:
         options = self.req.question.options
 
         key = key.lower()
+        if self.answered:
+            return
 
         if key in ("escape", "esc"):
+            self.answered = True
             self.req.reject(
                 Exception("cancelled")
             )
@@ -60,6 +65,7 @@ class AskModal:
 
         if key in ("enter", "return"):
             picked = options[self.idx]
+            self.answered = True
 
             self.req.resolve(
                 picked.label
@@ -76,6 +82,7 @@ class AskModal:
         q = self.req.question
 
         lines: list[str] = []
+        self.item_lines = {}
 
         if q.header:
             lines.append(
@@ -122,6 +129,7 @@ class AskModal:
                     + option.description
                 )
 
+            self.item_lines[len(lines)] = i
             lines.append(line)
 
         if window.hidden_below > 0:

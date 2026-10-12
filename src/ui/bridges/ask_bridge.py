@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, Optional, cast
+from typing import Any, Callable, Coroutine, Literal, Optional, cast
 
 from src.tools.common.ask import AskPrompter, Question
 
@@ -12,6 +12,7 @@ class AskRequest:
     question: Question
     resolve: Callable[[str], None]
     reject: Callable[[Exception], None]
+    presentation: Literal["question", "loading"] = "question"
 
 
 AskPublisher = Callable[[Optional[AskRequest]], None]

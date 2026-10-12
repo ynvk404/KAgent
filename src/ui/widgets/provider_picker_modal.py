@@ -11,6 +11,7 @@ from src.ui.core.custom_provider_adapter import (
     get_custom_provider_adapter,
 )
 from src.ui.theme import ACCENT
+from src.ui.commands.menu_window import compute_menu_window
 
 SECTION_OFFICIAL = 0
 SECTION_CUSTOM = 1
@@ -89,6 +90,7 @@ class ProviderPickerModal:
         self.confirming_delete: CustomProviderProfile | None = None
         self.confirm_idx: int = 0  # 0: Delete, 1: Cancel
         self.error_message: str | None = None
+        self.item_lines: dict[int, int] = {}
 
     @property
     def idx(self) -> int:
@@ -311,33 +313,10 @@ class ProviderPickerModal:
                 self.section = SECTION_MANUAL
             return
 
-        # Body items start at y == 2 (after header and blank line)
-        item_y_start = 2
-        items = self._get_section_items(self.section)
-        if not items:
-            return
-
-        if self.section == SECTION_CUSTOM:
-            profiles = self.adapter.list_custom_providers()
-            if not profiles:
-                # Empty state: line 2 is "  No custom providers saved.", line 4 is "+ Add custom provider"
-                if y == 4:
-                    self.idx = 0
-                return
-            else:
-                # Items are: profiles, then blank line, then + Add custom provider
-                num_profiles = len(profiles)
-                clicked_offset = y - item_y_start
-                if 0 <= clicked_offset < num_profiles:
-                    self.idx = clicked_offset
-                elif clicked_offset == num_profiles + 1:  # On + Add custom provider row
-                    self.idx = num_profiles
-                return
-
-        # Official or Manual sections
-        clicked_idx = y - item_y_start
-        if 0 <= clicked_idx < len(items):
-            self.idx = clicked_idx
+        self.render()
+        item = self.item_lines.get(y)
+        if item is not None:
+            self.idx = item
 
     def render_header_text(self) -> Text:
         header = Text()
@@ -356,6 +335,7 @@ class ProviderPickerModal:
         return header
 
     def render(self) -> list[str]:
+        self.item_lines = {}
         if self.confirming_delete is not None:
             return self._render_delete_dialog()
 
@@ -374,6 +354,7 @@ class ProviderPickerModal:
             for i, item in enumerate(items):
                 is_selected = i == self.idx
                 prefix = "> " if is_selected else "  "
+                self.item_lines[len(lines)] = i
                 lines.append(f"{prefix}{item}")
 
         elif self.section == SECTION_CUSTOM:
@@ -383,27 +364,38 @@ class ProviderPickerModal:
                 lines.append("")
                 is_selected = self.idx == 0
                 prefix = "> " if is_selected else "  "
+                self.item_lines[len(lines)] = 0
                 lines.append(f"{prefix}{ADD_CUSTOM_LABEL}")
             else:
-                for i, profile in enumerate(profiles):
+                window = compute_menu_window(len(profiles) + 1, self.idx, cap=8)
+                if window.hidden_above:
+                    lines.append(f"  ↑ {window.hidden_above} more")
+                for i in range(window.start, min(window.end, len(profiles))):
+                    profile = profiles[i]
                     is_selected = i == self.idx
                     prefix = "> " if is_selected else "  "
                     is_current = (
                         self._custom_provider_is_active(profile.id)
                     )
                     tag = "   ● active" if is_current else ""
+                    self.item_lines[len(lines)] = i
                     lines.append(f"{prefix}{profile.name}{tag}")
 
-                lines.append("")
-                add_selected = self.idx == len(profiles)
-                prefix = "> " if add_selected else "  "
-                lines.append(f"{prefix}{ADD_CUSTOM_LABEL}")
+                if window.end > len(profiles):
+                    lines.append("")
+                    add_selected = self.idx == len(profiles)
+                    prefix = "> " if add_selected else "  "
+                    self.item_lines[len(lines)] = len(profiles)
+                    lines.append(f"{prefix}{ADD_CUSTOM_LABEL}")
+                if window.hidden_below:
+                    lines.append(f"  ↓ {window.hidden_below} more")
 
         elif self.section == SECTION_MANUAL:
             items = self._get_manual_items()
             for i, item in enumerate(items):
                 is_selected = i == self.idx
                 prefix = "> " if is_selected else "  "
+                self.item_lines[len(lines)] = i
                 lines.append(f"{prefix}{item}")
 
         # 3. Footer

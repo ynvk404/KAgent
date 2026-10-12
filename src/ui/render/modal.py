@@ -2,6 +2,7 @@
 
 from rich.console import RenderableType
 from rich.text import Text
+from rich.style import Style
 
 from src.ui.theme import ACCENT, BOLD_ERROR, MUTED, PRIMARY, SUCCESS
 from src.ui.widgets.ask_modal import AskModal
@@ -39,25 +40,37 @@ def _modal_text(
     success_style: str = SUCCESS,
     muted_style: str = MUTED,
     error_style: str = BOLD_ERROR,
+    escape_action: str = "cancel",
+    compact: bool = False,
 ) -> RenderableType:
     input_style_fn = input_style or _input_style
     if isinstance(modal, PermissionModal):
         return modal.render()
 
     text = Text()
-    for i, line in enumerate(modal.render()):
-        if i > 0:
+    lines = modal.render()
+    for i, line in enumerate(lines):
+        if compact and i == 0 and isinstance(modal, TextInputModal):
+            continue
+        if compact and i == 0 and isinstance(modal, AskModal) and modal.req.presentation == "loading" and modal.req.question.header:
+            continue
+        if i == len(lines) - 1 and isinstance(modal, (AskModal, TextInputModal)):
+            line = line.replace("Esc cancel", f"Esc {escape_action}")
+        if len(text):
             text.append("\n")
-        if isinstance(modal, TextInputModal) and line.startswith(DEFAULT_PROMPT):
+        line_start = len(text)
+        if isinstance(modal, TextInputModal) and i == len(lines) - 3:
             text.append(DEFAULT_PROMPT, style=input_style_fn("prompt"))
             value = line[len(DEFAULT_PROMPT):]
             if "▌" in value:
-                before, after = value.split("▌", 1)
+                cursor = modal.cursor if modal.value else len(modal.req.placeholder or "")
+                before, after = value[:cursor], value[cursor + 1:]
                 if before:
                     text.append(before, style=input_style_fn("text"))
                 start = len(text)
                 text.append("▌", style=input_style_fn("cursor"))
                 text.stylize(CARET_STYLE, start, len(text))
+                text.stylize(Style(meta={"modal_cursor": True}), start, len(text))
                 if after:
                     text.append(after, style=input_style_fn("text"))
             else:
@@ -73,33 +86,37 @@ def _modal_text(
                 text.append("> [ Cancel ]", style=f"bold {accent_style}")
         elif isinstance(modal, ProviderPickerModal) and line.startswith("> "):
             if "● active" in line:
-                prefix_part, _, _ = line.partition("● active")
+                prefix_part, _, tail = line.partition("● active")
                 text.append(prefix_part, style=f"bold {accent_style}")
                 text.append("● active", style=f"bold {success_style}")
+                text.append(tail)
             else:
                 text.append(line, style=f"bold {accent_style}")
         elif isinstance(modal, ProviderPickerModal) and "● active" in line:
-            prefix_part, _, _ = line.partition("● active")
+            prefix_part, _, tail = line.partition("● active")
             text.append(prefix_part)
             text.append("● active", style=f"bold {success_style}")
+            text.append(tail)
         elif isinstance(modal, AskModal) and line.startswith("› "):
             if " — " in line:
                 head, desc = line.split(" — ", 1)
                 text.append(head, style=f"bold {accent_style}")
                 text.append(" — ")
                 if "● active" in desc:
-                    d_head, _, _ = desc.partition("● active")
+                    d_head, _, tail = desc.partition("● active")
                     if d_head:
                         text.append(d_head)
                     text.append("● active", style=f"bold {success_style}")
+                    text.append(tail)
                 else:
                     text.append(desc)
             else:
                 text.append(line, style=f"bold {accent_style}")
         elif isinstance(modal, AskModal) and "● active" in line:
-            head, _, _ = line.partition("● active")
+            head, _, tail = line.partition("● active")
             text.append(head)
             text.append("● active", style=f"bold {success_style}")
+            text.append(tail)
         elif isinstance(modal, SkillsModal) and line.startswith("› "):
             if " — " in line:
                 head, desc = line.split(" — ", 1)
@@ -107,10 +124,19 @@ def _modal_text(
                 text.append(" — " + desc)
             else:
                 text.append(line, style=f"bold {accent_style}")
-        elif line.strip().startswith("↑ ") or line.strip().startswith("↓ "):
+        elif i == len(lines) - 1 or line.strip().startswith("↑ ") or line.strip().startswith("↓ "):
             text.append(line, style=muted_style)
         elif line.startswith("error: "):
             text.append(line, style=error_style)
         else:
             text.append(line)
+        item = getattr(modal, "item_lines", {}).get(i)
+        if item is not None:
+            text.stylize(Style(meta={"modal_item": item}), line_start, len(text))
+        if isinstance(modal, ProviderPickerModal) and i == 0 and modal.confirming_delete is None:
+            for section, name in enumerate(("Official", "Custom", "Manual")):
+                start = text.plain.find(name, line_start)
+                text.stylize(Style(meta={"modal_section": section}), start, start + len(name))
+        if i == len(lines) - 1:
+            text.stylize(Style(meta={"modal_hint": True}), line_start, len(text))
     return text

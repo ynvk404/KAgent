@@ -29,19 +29,24 @@ class TextInputModal:
         self.value = ""
         self.value = getattr(req, "initial_value", "") or ""
         self.cursor = len(self.value)
+        self.answered = False
 
     def handle_key(
         self,
         key: str,
         text: str = "",
     ) -> None:
+        if self.answered:
+            return
         if key in ("escape", "esc"):
+            self.answered = True
             self.req.reject(
                 Exception("cancelled")
             )
             return
 
         if key in ("enter", "return"):
+            self.answered = True
             self.req.resolve(
                 self.value.strip()
             )

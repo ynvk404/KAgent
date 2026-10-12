@@ -416,6 +416,18 @@ class KAgent(App):
         height: auto;
     }}
 
+    #overlay-content.remaining-content {{
+        max-height: 60vh;
+        overflow-y: auto;
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 0;
+        scrollbar-color: {MUTED};
+    }}
+
+    Screen.short-terminal #overlay-content.remaining-content {{
+        max-height: 55vh;
+    }}
+
     Screen.short-terminal #overview {{
         max-height: 20vh;
         overflow-y: auto;
@@ -521,6 +533,7 @@ class KAgent(App):
         self._elapsed_timer = None
         self._elapsed_start: float = 0.0
         self._monotonic: Callable[[], float] = time.monotonic
+        self._modal_view_intent: tuple | None = None
 
 
     def compose(self) -> ComposeResult:
@@ -622,13 +635,21 @@ class KAgent(App):
         self.text_input_future = loop.create_future()
         future = self.text_input_future
 
+        def resolve(value: str) -> None:
+            if self.text_input_future is future:
+                self.resolve_text_input(value)
+
+        def reject(error: Exception) -> None:
+            if self.text_input_future is future:
+                self.reject_text_input(error)
+
         self.text_input = TextInputRequest(
             header=input_req.header,
             question=input_req.question,
             placeholder=input_req.placeholder,
             masked=input_req.masked,
-            resolve=lambda value: self.resolve_text_input(value),
-            reject=lambda err: self.reject_text_input(err),
+            resolve=resolve,
+            reject=reject,
             initial_value=getattr(input_req, "initial_value", "") or "",
             scrollable=input_req.scrollable,
         )
@@ -774,12 +795,14 @@ class KAgent(App):
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         modal = self._get_active_modal()
         if modal is not None:
+            if isinstance(modal, (AskModal, TextInputModal, ProviderPickerModal, SkillsModal)):
+                self.overlay_content_static.scroll_down(animate=False)
+                event.stop()
+                return
             if isinstance(modal, (PermissionModal, TurnDetailsModal)):
                 self.overlay_content_static.scroll_down(animate=False)
                 event.stop()
                 return
-            elif isinstance(modal, ProviderPickerModal):
-                modal.handle_scroll(1)
             else:
                 modal.handle_key("down")
             self._sync_overlay()
@@ -801,12 +824,14 @@ class KAgent(App):
     def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         modal = self._get_active_modal()
         if modal is not None:
+            if isinstance(modal, (AskModal, TextInputModal, ProviderPickerModal, SkillsModal)):
+                self.overlay_content_static.scroll_up(animate=False)
+                event.stop()
+                return
             if isinstance(modal, (PermissionModal, TurnDetailsModal)):
                 self.overlay_content_static.scroll_up(animate=False)
                 event.stop()
                 return
-            elif isinstance(modal, ProviderPickerModal):
-                modal.handle_scroll(-1)
             else:
                 modal.handle_key("up")
             self._sync_overlay()
@@ -834,6 +859,29 @@ class KAgent(App):
             region = self.overlay_text_static.region
             rel_x = event.x - region.x
             rel_y = event.y - region.y
+
+            if self.is_running and isinstance(modal, (AskModal, SkillsModal, ProviderPickerModal)):
+                if not self.overlay_content_static.scrollable_content_region.contains(event.screen_x, event.screen_y):
+                    return
+                rel_x = event.screen_x - region.x
+                rel_y = event.screen_y - region.y
+                if isinstance(modal, ProviderPickerModal) and modal.confirming_delete is not None:
+                    return
+                # Rendered segment metadata follows wrapping and scrolling; a
+                # logical item row is not necessarily one terminal row.
+                cell = 0
+                for segment in self.overlay_text_static.render_line(rel_y):
+                    meta = segment.style.meta if segment.style else {}
+                    if cell <= rel_x < cell + segment.cell_length:
+                        if "modal_item" in meta:
+                            modal.idx = meta["modal_item"]
+                        elif "modal_section" in meta and isinstance(modal, ProviderPickerModal):
+                            modal.section = meta["modal_section"]
+                        break
+                    cell += segment.cell_length
+                self._sync_overlay()
+                event.stop()
+                return
 
             if isinstance(modal, ProviderPickerModal):
                 modal.handle_click(rel_x, rel_y)
@@ -902,8 +950,8 @@ class KAgent(App):
             self.exit()
             return
 
-        # A visible permission proposal owns Escape independently of its turn.
-        if key == "escape" and isinstance(self._get_active_modal(), (PermissionModal, TurnDetailsModal)):
+        # Proposals and local information views own Escape independently of a turn.
+        if key == "escape" and isinstance(self._get_active_modal(), (PermissionModal, TurnDetailsModal, BridgeCredentialsModal)):
             await self._handle_modal_key(key, raw_input)
             return
 
@@ -1066,7 +1114,7 @@ class KAgent(App):
         self._text_input_modal = None
 
         if self.state.pending_ask:
-            if not self.state.pending_ask.question.options:
+            if not self.state.pending_ask.question.options and self.state.pending_ask.presentation != "loading":
                 if self._ask_text_input_for is not self.state.pending_ask:
                     question = self.state.pending_ask.question
                     self._ask_text_input_for = self.state.pending_ask
@@ -1153,7 +1201,7 @@ class KAgent(App):
             return False
 
         if ((isinstance(modal, (PermissionModal, TurnDetailsModal)) and key in {"up", "down", "pageup", "pagedown", "home", "end"})
-                or (isinstance(modal, TextInputModal) and modal.req.scrollable and key in {"pageup", "pagedown"})):
+                or (isinstance(modal, (TextInputModal, AskModal, ProviderPickerModal, SkillsModal)) and key in {"pageup", "pagedown"})):
             scroll = self.overlay_content_static
             if key == "up":
                 scroll.scroll_up(animate=False)
@@ -1235,7 +1283,8 @@ class KAgent(App):
             return
 
         modal = self._get_active_modal()
-        scrollable = isinstance(modal, (PermissionModal, TurnDetailsModal)) or (isinstance(modal, TextInputModal) and modal.req.scrollable)
+        scrollable = isinstance(modal, (PermissionModal, TurnDetailsModal))
+        remaining = isinstance(modal, (TextInputModal, AskModal, ProviderPickerModal, SkillsModal))
         self.permission_hints_static.display = isinstance(modal, (PermissionModal, TurnDetailsModal))
         if isinstance(modal, (PermissionModal, TurnDetailsModal)):
             self.permission_hints_static.update(modal.instructions())
@@ -1251,6 +1300,8 @@ class KAgent(App):
             scrollable,
             "permission-content",
         )
+        self.overlay_content_static.set_class(remaining, "remaining-content")
+        self.overlay_static.border_subtitle = "PgUp/PgDn scroll" if remaining else ""
 
         if modal is not None:
             self.overlay_static.border_title = (
@@ -1258,9 +1309,11 @@ class KAgent(App):
                 if isinstance(modal, PermissionModal)
                 else "Provider"
                 if isinstance(modal, ProviderPickerModal)
+                else "Model discovery"
+                if isinstance(modal, AskModal) and modal.req.presentation == "loading"
                 else "Ask User"
                 if isinstance(modal, AskModal)
-                else "Input"
+                else modal.req.header
                 if isinstance(modal, TextInputModal)
                 else "Skills"
             )
@@ -1273,8 +1326,21 @@ class KAgent(App):
                 self.overlay_static.border_title = "Turn Details"
                 self.overlay_text_static.update(modal.render())
             else:
-                self.overlay_text_static.update(_modal_text(modal))
+                self.overlay_text_static.update(_modal_formatter._modal_text(
+                    modal, escape_action="stop turn" if self.state.busy else "cancel",
+                    compact=True,
+                ))
             self.overlay_static.display = True
+            if remaining and self.is_running:
+                intent = (id(modal), getattr(modal, "idx", None), getattr(modal, "section", None),
+                          id(getattr(modal, "confirming_delete", None)), getattr(modal, "cursor", None),
+                          len(getattr(modal, "value", "")), self.size)
+                if intent != self._modal_view_intent:
+                    new_modal = (self._modal_view_intent is None
+                                 or intent[0] != self._modal_view_intent[0]
+                                 or intent[2:4] != self._modal_view_intent[2:4])
+                    self._modal_view_intent = intent
+                    self.call_after_refresh(self._reveal_modal_control, modal, new_modal)
         elif self.mention_matches:
             self.overlay_static.border_title = ""
             menu = MentionMenu(
@@ -1295,6 +1361,35 @@ class KAgent(App):
             self.overlay_static.display = False
 
         self.input_static.display = modal is None
+        if not remaining:
+            self._modal_view_intent = None
+
+    def _reveal_modal_control(self, modal, new_modal: bool = False) -> None:
+        """Reveal the selected label/caret only after navigation, editing or resize.
+
+        Manual scrolling is intentionally left alone. Long questions start at
+        their beginning; editing an answer reveals its caret in the same view.
+        """
+        if self._get_active_modal() is not modal:
+            return
+        widget = self.overlay_text_static
+        if new_modal:
+            self.overlay_content_static.scroll_to(y=0, animate=False, immediate=True)
+            if isinstance(modal, TextInputModal):
+                return
+        widget._render_content()
+        for y, line in enumerate(widget._render_cache.lines):
+            if any((segment.style and (
+                segment.style.meta.get("modal_cursor")
+                or segment.style.meta.get("modal_item") == getattr(modal, "idx", -1)
+            )) for segment in line):
+                scroll = self.overlay_content_static
+                first = int(scroll.scroll_y)
+                height = scroll.scrollable_content_region.height
+                if y < first or y >= first + height:
+                    scroll.scroll_to(y=y if y < first else y - height + 1,
+                                     animate=False, immediate=True)
+                return
 
     def _menu_lines_to_text(self, lines) -> Text:
         text = Text()
@@ -1658,6 +1753,10 @@ class KAgent(App):
             self.overview_static.update(Banner(self.state.banner_data, width=width).render_panel(
                 compact=event.size.height < 24))
         self.refresh()
+        self._sync_overlay()
+        modal = self._get_active_modal()
+        if isinstance(modal, (AskModal, SkillsModal, ProviderPickerModal, TextInputModal)):
+            self.call_after_refresh(self._reveal_modal_control, modal)
 
     def on_transcript_view_reflow(self, event: TranscriptView.Reflow) -> None:
         if event.follow_tail:

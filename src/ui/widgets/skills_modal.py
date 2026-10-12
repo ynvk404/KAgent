@@ -25,6 +25,7 @@ class SkillsModal:
         self.idx = 0
         self.busy_name: str | None = None
         self.error: str | None = None
+        self.item_lines: dict[int, int] = {}
 
     def skills(self):
         return self.agent.skills.list()
@@ -207,6 +208,7 @@ class SkillsModal:
     def render(self) -> list[str]:
 
         skills = self.skills()
+        self.item_lines = {}
 
 
         if not skills:
@@ -283,11 +285,12 @@ class SkillsModal:
             )
 
 
+            self.item_lines[len(lines)] = i
             lines.append(
                 f"{cursor}"
                 f"{state} "
                 f"{skill.name}"
-                f" — {truncate(skill.description, 60)}"
+                f" — {skill.description}"
             )
 
         if window.hidden_below > 0:

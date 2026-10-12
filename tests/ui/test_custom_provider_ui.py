@@ -947,7 +947,7 @@ async def test_prompt_text_lifecycle_syncs_overlay_immediately():
     assert app.text_input is not None
     assert app.text_input.question == "Enter provider name"
     assert app.overlay_static.display is True
-    assert app.overlay_static.border_title == "Input"
+    assert app.overlay_static.border_title == "custom provider"
 
     # Resolving immediately updates overlay and completes future
     app.resolve_text_input("My Provider")
@@ -1015,7 +1015,7 @@ async def test_add_custom_provider_consecutive_field_transitions(monkeypatch):
     await asyncio.sleep(0)
 
     assert app.text_input is not None
-    assert "Available models: llama-3.3-70b" in app.text_input.question
+    assert "llama-3.3-70b" in app.text_input.question.splitlines()
     assert "enter one manually" in app.text_input.question
     assert app.overlay_static.display is True
 
@@ -1135,7 +1135,7 @@ async def test_edit_custom_provider_consecutive_field_transitions(monkeypatch):
     await asyncio.sleep(0)
 
     assert app.text_input is not None
-    assert "Available models: new-model" in app.text_input.question
+    assert "new-model" in app.text_input.question.splitlines()
     assert "enter one manually" in app.text_input.question
     assert app.text_input.initial_value == "old-model"
     assert app.overlay_static.display is True

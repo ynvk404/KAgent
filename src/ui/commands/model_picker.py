@@ -114,6 +114,7 @@ async def fetch_and_pick_model(
         ),
         resolve=lambda _: None,
         reject=on_loading_cancel,
+        presentation="loading",
     )
     dispatch(SetAsk(req=loading_req))
 
