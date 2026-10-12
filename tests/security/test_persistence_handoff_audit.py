@@ -184,34 +184,31 @@ def test_c3_path_swap_after_scope_check_reads_outside_project(scratch, monkeypat
     source.write_text("original proof")
     outside = scratch / "outside"
     outside.write_text("outside synthetic proof")
-    original = Path.read_bytes
-    def read(path):
-        if path == source:
+    original = Path.open
+    def read(path, *args, **kwargs):
+        if path == source and not source.is_symlink():
             source.unlink()
             source.symlink_to(outside)
-        return original(path)
-    monkeypatch.setattr(Path, "read_bytes", read)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", read)
     artifact = EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, lab)
     assert (lab / artifact.path).read_bytes() == b"outside synthetic proof"
     observed("C3-source-path-swap", "FAIL", "PRODUCTION")
 
 
-def test_c3_postwrite_capture_can_accept_content_address_mismatch(scratch, monkeypatch):
+def test_c3_postwrite_verification_rejects_content_address_mismatch(scratch, monkeypatch):
     source = scratch / "proof.txt"
     source.write_text("original proof")
-    original = EvidenceArtifact.capture.__func__
-    def capture(cls, candidate, path, root, **kwargs):
-        destination = root / path
-        destination.chmod(0o600)
-        destination.write_text("changed proof")
-        return original(cls, candidate, path, root, **kwargs)
-    monkeypatch.setattr(EvidenceArtifact, "capture", classmethod(capture))
-    artifact = EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, scratch)
-    raw = (scratch / artifact.path).read_bytes()
-    assert artifact.sha256 == hashlib.sha256(raw).hexdigest()
-    assert Path(artifact.path).stem != artifact.sha256
-    assert artifact.source_path == str(source)
-    observed("C3-content-address-mismatch", "FAIL", "PRODUCTION")
+    original = Path.open
+    def read(path, *args, **kwargs):
+        if path.suffix == ".proof" and args and args[0] == "rb":
+            path.chmod(0o600)
+            path.write_text("changed proof")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", read)
+    with pytest.raises(ValueError, match="integrity conflict"):
+        EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, scratch)
+    observed("C3-content-address-mismatch", "PASS", "PRODUCTION_ACCEPTANCE")
 
 
 def test_c3_write_failure_leaves_partial_published_proof_and_breaks_retry(scratch, monkeypatch):
@@ -589,20 +586,16 @@ async def test_c2_shield_drain_alone_does_not_skip_queued_cancelled_writer(scrat
             executor.shutdown(wait=True)
 
 
-def test_c3_capture_size_and_hash_can_come_from_different_versions(scratch, monkeypatch):
+def test_c3_capture_rejects_size_and_hash_from_different_versions(scratch, monkeypatch):
     source = scratch / "proof.txt"
     source.write_bytes(b"old")
-    original = Path.read_bytes
-    def read(path):
-        if path == source:
-            path.write_bytes(b"new longer proof")
-        return original(path)
-    monkeypatch.setattr(Path, "read_bytes", read)
-    artifact = EvidenceArtifact.capture("candidate", source.name, scratch)
-    assert artifact.size == 3
-    assert artifact.sha256 == hashlib.sha256(b"new longer proof").hexdigest()
-    assert artifact.size != len(source.read_bytes())
-    observed("C3-capture-inconsistent-size", "FAIL", "PRODUCTION")
+    from tests.security.test_evidence_correctness import instrument_source
+    reads = instrument_source(monkeypatch, source, before_read=lambda: source.write_bytes(b"new longer proof"))
+    with pytest.raises(ValueError, match="changed during capture"):
+        EvidenceArtifact.capture("candidate", source.name, scratch)
+    assert reads.opened == 1 and reads.received <= 2_000_001
+    assert reads[0] == 2_000_001
+    observed("C3-capture-inconsistent-size", "PASS", "PRODUCTION_ACCEPTANCE")
 
 
 async def test_c3_proposed_cancelled_snapshot_drains_without_metadata_commit(scratch, monkeypatch):

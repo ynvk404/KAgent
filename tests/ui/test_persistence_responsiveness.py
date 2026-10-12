@@ -1,6 +1,6 @@
 """Controlled freeze reproductions; no claim about the historical live cause.
 
-Run with --runxfail to see the five baseline responsiveness failures. Only
+Run with --runxfail to see the remaining known responsiveness failures. Only
 ResponsivenessFailure is expected; integrity/harness failures remain failures.
 """
 from dataclasses import dataclass, asdict
@@ -26,6 +26,7 @@ from src.session.store import Store as SessionStore
 from src.tools.execution.file import FileWriteTool
 from src.ui.core.app import KAgent
 from src.workflow.evidence import EvidenceArtifact
+from src.workflow import evidence as evidence_module
 from tests.data.test_findings_store import make_finding
 from tests.tools.test_finding import _tool, _valid_args
 from tests.ui.test_overview import _make_app
@@ -133,9 +134,9 @@ async def measure(boundary: str, control: bool, root: Path, monkeypatch) -> Meas
                 assert json.loads((root / "session.json").read_text())["messages"][0]["content"] == "synthetic"
                 assert not list(root.glob("session.json.tmp.*"))
             elif boundary == "evidence_snapshot":
-                original = Path.read_bytes
+                original = evidence_module._read_captured_value
                 if not control:
-                    patcher.setattr(Path, "read_bytes", lambda p:
+                    patcher.setattr(evidence_module, "_read_captured_value", lambda p:
                                     slow(original, p) if p == source else original(p))
                 artifact = EvidenceArtifact.capture_immutable_snapshot("cand_synthetic", str(source), root)
                 snapshot = (root / artifact.path).read_bytes()
@@ -239,7 +240,7 @@ def assert_responsive(result: Measurement):
 
 
 @pytest.mark.parametrize("boundary", [
-    boundary if boundary == "session_save" else pytest.param(boundary, marks=pytest.mark.xfail(
+    boundary if boundary in {"session_save", "finding_post_read"} else pytest.param(boundary, marks=pytest.mark.xfail(
         strict=True, raises=ResponsivenessFailure,
         reason="confirmed synchronous persistence boundary awaiting its implementation checkpoint"))
     for boundary in BOUNDARIES

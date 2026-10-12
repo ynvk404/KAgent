@@ -34,9 +34,9 @@ async def snapshot(tool, cid, name, prompter):
 async def test_snapshot_denial_precedes_source_read(tmp_path, monkeypatch):
     tool, cid = workflow(tmp_path)
     (tmp_path / ".env").write_text("FAKE_CANARY")
-    def forbidden_read(_path):
+    def forbidden_read(_path, *args, **kwargs):
         pytest.fail("source must not be read before permission")
-    monkeypatch.setattr(Path, "read_bytes", forbidden_read)
+    monkeypatch.setattr(Path, "open", forbidden_read)
     with pytest.raises(UserControlledRefusal):
         await snapshot(tool, cid, ".env", AlwaysDeny())
     assert tool.state.evidence == {}

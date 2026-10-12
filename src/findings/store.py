@@ -278,16 +278,17 @@ class Store:
             )
 
         content = render(finding)
+        candidate_id, slug = finding.candidate_id, finding.slug
 
         async with self._save_lock:
             pending = asyncio.create_task(asyncio.to_thread(
-                self._write_once_for_candidate,
-                finding.candidate_id,
-                finding.slug,
+                self._write_and_read_for_candidate,
+                candidate_id,
+                slug,
                 content,
             ))
             try:
-                path = await asyncio.shield(pending)
+                path, snapshot = await asyncio.shield(pending)
             except asyncio.CancelledError:
                 # Keep this store's lock until the reserved-file write finishes.
                 # A cancelled caller never publishes a proposed retry snapshot.
@@ -298,10 +299,18 @@ class Store:
                         continue
                 pending.result()
                 raise
-            snapshot = read_report(Path(path))
             for item in fields(Finding):
                 setattr(finding, item.name, getattr(snapshot, item.name))
             return path
+
+    def _write_and_read_for_candidate(
+        self, candidate_id: str | None, slug: str, content: str,
+    ) -> tuple[str, Finding]:
+        # One joined worker owns write/reuse and canonical readback. Only the
+        # detached parsed snapshot returns to the controller; the caller's
+        # Finding and workflow finalization never enter this worker.
+        path = self._write_once_for_candidate(candidate_id, slug, content)
+        return path, read_report(Path(path))
 
     def _write_once_for_candidate(
         self, candidate_id: str | None, slug: str, content: str,
