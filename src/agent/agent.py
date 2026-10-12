@@ -3782,7 +3782,6 @@ class Agent:
         # all subsequent projections reuse this snapshot and do no searching,
         # workflow mutation, planner emission, or artifact reads.
         view = self._workflow_request_view(user_msg, actual_tools) if tools_enabled else None
-        decision = view.decision if view is not None else None
         if view is not None:
             actual_tools = view.tools
         injections = []
@@ -3843,9 +3842,6 @@ class Agent:
             projection = self._projected_estimate(self.history, self.memory, context)
         for event in recall_events:
             emit(event)
-
-        if decision and decision.recommended_skill:
-            emit(self._planner_event(decision))
 
         self.history.append(
             Message(

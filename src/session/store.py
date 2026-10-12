@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import copy
 import dataclasses
 import json
 import os
 import random
 import string
 import uuid
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 from src.logger.hang_diagnostics import HangDiagnostics
 
@@ -87,6 +90,9 @@ def dir_from_path(path=None):
 
 
 FSYNC_EVERY = 5
+
+# Cooperating stores on the same loop serialize save, clear and context writes.
+_SESSION_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def random_tmp_id():
@@ -336,6 +342,8 @@ class Store:
         self.id = session_id
         self.save_count = 0
         self.diagnostics = diagnostics
+        key = os.path.abspath(self.path)
+        self._write_lock = _SESSION_LOCKS.setdefault(key, asyncio.Lock())
 
     @staticmethod
     def new_with_id(directory, session_id):
@@ -426,104 +434,32 @@ class Store:
         if not self.path or str(self.path) in ("", "."):
             return
 
-        operation = "session.save"
-        tmp: Path | None = None
-        created_tmp = False
-        try:
-            self._stage(f"{operation}.mkdir")
-            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            _restrict_directory_permissions(self.path.parent)
+        # Snapshot before the first await: queued checkpoints own their inputs.
+        # Workflow/engagement projection stays on the controller loop; locks and
+        # live state never cross into the worker. Copies below have sole worker
+        # ownership and are never modified by the caller after submission.
+        snapshot = (
+            copy.deepcopy(messages),
+            copy.deepcopy(target.to_dict()) if target and not target.is_empty() else None,
+            dataclasses.asdict(memory) if memory else None,
+            copy.deepcopy(workflow.to_dict()) if workflow else None,
+            copy.deepcopy(engagement_state.to_dict()) if engagement_state else None,
+        )
+        path, session_id = self.path, self.id
+        loop = asyncio.get_running_loop()
 
-            self._stage(f"{operation}.serialize_messages")
-            serialized_messages = []
-            from src.llm.providers.gemini import safe_replay_part
-            from src.workflow.validation_context import without_transient_validation_context
-            for msg in messages:
-                serialized: dict[str, Any] = {
-                    "role": msg.role,
-                    "content": (
-                        without_transient_validation_context(msg.content, truncated=msg.tool_truncated)
-                        if msg.role == "tool" and msg.name == "workflow" else msg.content
-                    ),
-                    "reasoning_content": msg.reasoning_content,
-                    "provider_state_provider": msg.provider_state_provider,
-                    "provider_state_model": msg.provider_state_model,
-                    "gemini_parts": (
-                        [
-                            part
-                            for raw in msg.gemini_parts
-                            if (part := safe_replay_part(raw))
-                        ]
-                        if msg.provider_state_provider == "gemini" and msg.gemini_parts
-                        else None
-                    ),
-                    "tool_calls": (
-                        [dataclasses.asdict(tc) for tc in msg.tool_calls]
-                        if msg.tool_calls
-                        else None
-                    ),
-                    "tool_call_id": msg.tool_call_id,
-                    "name": msg.name,
-                }
-                if msg.role == "tool":
-                    if msg.tool_status is not None:
-                        serialized["tool_status"] = msg.tool_status
-                    if msg.tool_error_kind is not None:
-                        serialized["tool_error_kind"] = msg.tool_error_kind
-                    if msg.tool_http_status is not None:
-                        serialized["tool_http_status"] = msg.tool_http_status
-                    if msg.tool_truncated:
-                        serialized["tool_truncated"] = True
-                if msg.tool_result_refs:
-                    serialized["tool_result_refs"] = msg.tool_result_refs
-                if msg.tool_result_scope:
-                    serialized["tool_result_scope"] = msg.tool_result_scope
-                serialized_messages.append(serialized)
+        def stage(value: str) -> None:
+            # Diagnostics belong to the controller, not the filesystem worker.
+            loop.call_soon_threadsafe(self._stage, value)
 
-            data = redact_payload({
-                "updated_at": datetime.now().isoformat(),
-                "id": self.id if self.id else None,
-                "target": target.to_dict() if target and not target.is_empty() else None,
-                "memory": dataclasses.asdict(memory) if memory else None,
-                "workflow": workflow.to_dict() if workflow else None,
-                "engagement_state": (
-                    engagement_state.to_dict() if engagement_state else None
-                ),
-                "messages": serialized_messages,
-            })
-
-            self._stage(f"{operation}.json_dumps")
-            body = json.dumps(data, ensure_ascii=False) + "\n"
-
-            self.save_count += 1
-            need_fsync = self.save_count == 1 or self.save_count % FSYNC_EVERY == 0
-
-            tmp = Path(str(self.path) + ".tmp." + random_tmp_id())
-
-            self._stage(f"{operation}.open_temp")
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            created_tmp = True
-            with os.fdopen(fd, "w", encoding="utf8") as f:
-                self._stage(f"{operation}.write")
-                f.write(body)
-                self._stage(f"{operation}.flush")
-                f.flush()
-                if need_fsync:
-                    self._stage(f"{operation}.fsync")
-                    os.fsync(f.fileno())
-
-            self._stage(f"{operation}.replace")
-            os.replace(tmp, self.path)
-
-            self._stage(f"{operation}.chmod")
-            _restrict_permissions(self.path)
-
-        except Exception:
-            if created_tmp and tmp is not None:
-                tmp.unlink(missing_ok=True)
-            raise
-        finally:
-            self._clear_stage(operation)
+        async with self._write_lock:
+            try:
+                body = await _joined_thread(_serialize_session, session_id, snapshot, stage)
+                self.save_count += 1
+                need_fsync = self.save_count == 1 or self.save_count % FSYNC_EVERY == 0
+                await _joined_thread(_write_session, path, body, need_fsync, stage)
+            finally:
+                self._clear_stage("session.save")
 
     def _stage(self, stage: str) -> None:
         if self.diagnostics is not None:
@@ -536,41 +472,173 @@ class Store:
     async def clear(self) -> None:
         if not self.path or str(self.path) in ("", "."):
             return
-        self.path.unlink(missing_ok=True)
+        async with self._write_lock:
+            await _joined_thread(self.path.unlink, missing_ok=True)
 
     async def save_context_snapshot(self, markdown: str) -> str:
         if not self.path or str(self.path) in ("", "."):
             return ""
-
         out = self.context_snapshot_path()
-        out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        _restrict_directory_permissions(out.parent)
+        async with self._write_lock:
+            return await _joined_thread(_write_context_snapshot, out, markdown)
 
-        if not markdown.endswith("\n"):
-            markdown += "\n"
 
-        tmp = Path(str(out) + ".tmp." + random_tmp_id())
-        created_tmp = False
+async def _joined_thread(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Drain filesystem work under ownership, including repeated cancellation.
 
+    A worker failure during drain is retrieved; cancellation remains the caller's
+    outcome. No retry/clear/rollback can race a still-running background writer.
+    """
+    pending = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
+    cancelled = False
+    while not pending.done():
         try:
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            created_tmp = True
-            with os.fdopen(fd, "w", encoding="utf8") as f:
-                f.write(markdown)
-                f.flush()
+            await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        if not pending.cancelled():
+            pending.exception()
+        raise asyncio.CancelledError
+    return pending.result()
+
+
+def _serialize_session(session_id: str, snapshot: tuple, stage: Callable[[str], None]) -> str:
+    messages, target, memory, workflow, engagement_state = snapshot
+    stage("session.save.serialize_messages")
+    serialized_messages = []
+    from src.llm.providers.gemini import safe_replay_part
+    from src.workflow.validation_context import without_transient_validation_context
+    for msg in messages:
+        serialized: dict[str, Any] = {
+            "role": msg.role,
+            "content": (
+                without_transient_validation_context(msg.content, truncated=msg.tool_truncated)
+                if msg.role == "tool" and msg.name == "workflow" else msg.content
+            ),
+            "reasoning_content": msg.reasoning_content,
+            "provider_state_provider": msg.provider_state_provider,
+            "provider_state_model": msg.provider_state_model,
+            "gemini_parts": (
+                [
+                    part
+                    for raw in msg.gemini_parts
+                    if (part := safe_replay_part(raw))
+                ]
+                if msg.provider_state_provider == "gemini" and msg.gemini_parts
+                else None
+            ),
+            "tool_calls": (
+                [dataclasses.asdict(tc) for tc in msg.tool_calls]
+                if msg.tool_calls
+                else None
+            ),
+            "tool_call_id": msg.tool_call_id,
+            "name": msg.name,
+        }
+        if msg.role == "tool":
+            if msg.tool_status is not None:
+                serialized["tool_status"] = msg.tool_status
+            if msg.tool_error_kind is not None:
+                serialized["tool_error_kind"] = msg.tool_error_kind
+            if msg.tool_http_status is not None:
+                serialized["tool_http_status"] = msg.tool_http_status
+            if msg.tool_truncated:
+                serialized["tool_truncated"] = True
+        if msg.tool_result_refs:
+            serialized["tool_result_refs"] = msg.tool_result_refs
+        if msg.tool_result_scope:
+            serialized["tool_result_scope"] = msg.tool_result_scope
+        serialized_messages.append(serialized)
+
+    data = redact_payload({
+        "updated_at": datetime.now().isoformat(),
+        "id": session_id if session_id else None,
+        "target": target,
+        "memory": memory,
+        "workflow": workflow,
+        "engagement_state": engagement_state,
+        "messages": serialized_messages,
+    })
+
+    stage("session.save.json_dumps")
+    body = json.dumps(data, ensure_ascii=False) + "\n"
+    return body
+
+
+def _write_session(path: Path, body: str, need_fsync: bool, stage: Callable[[str], None]) -> None:
+    tmp = None
+    created_tmp = False
+    try:
+        stage("session.save.mkdir")
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _restrict_directory_permissions(path.parent)
+        tmp = Path(str(path) + ".tmp." + random_tmp_id())
+
+        stage("session.save.open_temp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created_tmp = True
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf8")
+        except BaseException:
+            os.close(fd)
+            raise
+        with handle as f:
+            stage("session.save.write")
+            f.write(body)
+            stage("session.save.flush")
+            f.flush()
+            if need_fsync:
+                stage("session.save.fsync")
                 os.fsync(f.fileno())
 
-            os.replace(tmp, out)
+        stage("session.save.replace")
+        os.replace(tmp, path)
 
-            _restrict_permissions(out)
+        stage("session.save.chmod")
+        _restrict_permissions(path)
 
-        except Exception:
-            if created_tmp:
-                tmp.unlink(missing_ok=True)
+    except Exception:
+        if created_tmp and tmp is not None:
+            tmp.unlink(missing_ok=True)
+        raise
+
+
+def _write_context_snapshot(out: Path, markdown: str) -> str:
+    out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _restrict_directory_permissions(out.parent)
+
+    if not markdown.endswith("\n"):
+        markdown += "\n"
+
+    tmp = Path(str(out) + ".tmp." + random_tmp_id())
+    created_tmp = False
+
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created_tmp = True
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf8")
+        except BaseException:
+            os.close(fd)
             raise
+        with handle as f:
+            f.write(markdown)
+            f.flush()
+            os.fsync(f.fileno())
 
-        return str(out)
+        os.replace(tmp, out)
 
+        _restrict_permissions(out)
+
+    except Exception:
+        if created_tmp:
+            tmp.unlink(missing_ok=True)
+        raise
+
+    return str(out)
 
 _PREVIEW_MARKER = "\n\n# Referenced files\n\n"
 

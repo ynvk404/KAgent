@@ -335,6 +335,7 @@ async def test_failed_cancellation_checkpoint_is_bounded_and_retryable(runtime, 
     agent.store = SessionStore(tmp_path / "session.json", "assessment-session")
     await agent.save()
     original_save = agent.store.save
+    from src.agent.agent import TOOL_CHECKPOINT_TIMEOUT_SECONDS as normal_checkpoint_timeout
     committed = asyncio.Event()
 
     async def failed_checkpoint(*unused, **kwargs):
@@ -360,6 +361,9 @@ async def test_failed_cancellation_checkpoint_is_bounded_and_retryable(runtime, 
     assert state.latest_result(candidate.id) is not None
     assert agent._workflow_saved_revision != state.committed_revision
     monkeypatch.setattr(agent.store, "save", original_save)
+    # The 20 ms deadline injects the failed checkpoint. The real async retry
+    # must use the runtime deadline; synchronous saves previously hid this timer.
+    monkeypatch.setattr("src.agent.agent.TOOL_CHECKPOINT_TIMEOUT_SECONDS", normal_checkpoint_timeout)
     await agent._finish_tool_results()
     saved_result = agent.store.load().workflow.latest_result(candidate.id)
     assert saved_result is not None and saved_result.outcome == "not-confirmed"
