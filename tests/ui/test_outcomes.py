@@ -79,8 +79,8 @@ def test_routine_notices_do_not_grow_transcript_but_multiline_warnings_remain():
     assert "integration failed" in app.state.transcript[0].text
 
 
-@pytest.mark.parametrize("reason,label", [("final_response", "Turn finished"),
-    ("workflow_completed", "Turn finished · workflow completion unavailable"), ("workflow_blocked", "Blocked"),
+@pytest.mark.parametrize("reason,label", [("final_response", "Turn completed"),
+    ("workflow_completed", "Turn ended · workflow completion unavailable"), ("workflow_blocked", "Blocked"),
     ("workflow_stalled", "Stalled"), ("cancelled", "Turn cancelled"), ("max_steps", "Stopped at max steps"),
     ("runtime_error", "Runtime failure"), ("context_capacity", "Context capacity failure")])
 def test_truthful_final_outcome_is_once_per_turn(reason, label):
@@ -127,7 +127,7 @@ async def test_actual_max_steps_callback_defers_summary_and_preserves_continue(d
     assert app.state.pending_ask is None
     if decision == "Continue":
         assert len(turns) == 2
-        assert app.state.transcript[-1].text == "Turn finished."
+        assert app.state.transcript[-1].text == "Turn completed."
         assert any("Finished continued work." == entry.text for entry in app.state.transcript)
     else:
         assert len(turns) == 1 and app.state.transcript[-1].text == "Stopped at max steps."
@@ -303,12 +303,12 @@ async def test_direct_candidate_observation_accepted_result_saved_and_prior_turn
     result = await tool.run(args, None, AlwaysAllow())
     dispatch(app, ToolResultEvent(id='save-new', name='confirm_finding', result=result))
     dispatch(app, DoneEvent(stop_reason='final_response'))
-    assert '1 saved finding' in app.state.transcript[-1].text
+    assert '1 finding saved' in app.state.transcript[-1].text
     assert 'accepted-but-unsaved' not in app.state.transcript[-1].text
     before = sum(entry.kind == 'finding' for entry in app.state.transcript)
     app.dispatch(SetBusy(True))
     dispatch(app, DoneEvent(stop_reason='final_response'))
-    assert 'saved findings' not in app.state.transcript[-1].text
+    assert 'findings saved' not in app.state.transcript[-1].text
     assert before == sum(entry.kind == 'finding' for entry in app.state.transcript)
     assert len(list(store.dir.glob('*.md'))) == 1
 
@@ -328,7 +328,7 @@ def test_context_pressure_stable_roots_are_diagnostics_and_capacity_failure_is_v
     assert error.estimate == 200 and error.fixed_floor == 150
     dispatch(app, DoneEvent(stop_reason='context_capacity'))
     assert 'Context capacity failure' in app.state.transcript[-1].text
-    assert '1 unrecovered operation issue.' in app.state.transcript[-1].text
+    assert '1 unresolved operation issue.' in app.state.transcript[-1].text
 
 
 def test_http_success_cannot_recover_unrelated_authorization_or_workflow_failure():
@@ -341,7 +341,7 @@ def test_http_success_cannot_recover_unrelated_authorization_or_workflow_failure
     dispatch(app, ToolResultEvent(id='success', name='http', status='observation', http_status=200))
     assert all(not issue.recovered for issue in app.state.issues)
     dispatch(app, DoneEvent(stop_reason='workflow_blocked'))
-    assert '2 unrecovered operation issues' in app.state.transcript[-1].text
+    assert '2 unresolved operation issues' in app.state.transcript[-1].text
 
 
 def test_selected_burp_requests_are_presented_as_selection_not_validation(tmp_path):
@@ -406,7 +406,7 @@ def test_workflow_rejection_recovers_only_after_bound_accepted_assessment(tmp_pa
     assert app.state.issues[0].recovered
     assert workflow.to_dict() == snapshot
     dispatch(app, DoneEvent(stop_reason='final_response'))
-    assert 'saved findings' not in app.state.transcript[-1].text
+    assert 'findings saved' not in app.state.transcript[-1].text
     assert '1 accepted-but-unsaved validation;' in app.state.transcript[-1].text
 
 

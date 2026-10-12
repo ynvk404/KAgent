@@ -107,6 +107,7 @@ from src.ui.widgets.cursor_static import CARET_STYLE, CursorStatic
 from src.ui.widgets.mention_menu import MentionMenu
 from src.ui.widgets.permission_modal import PermissionModal
 from src.ui.widgets.details_modal import BridgeCredentialsModal
+from src.ui.widgets.turn_details_modal import TurnDetailsModal
 from src.ui.widgets.provider_picker_modal import ProviderPickerModal
 from src.ui.widgets.skills_modal import SkillsModal
 from src.ui.widgets.skills_modal import SKILLS_MODAL_VISIBLE_CAP, SkillsModal
@@ -511,7 +512,7 @@ class KAgent(App):
         self._provider_modal: ProviderPickerModal | None = None
         self._perm_modal: PermissionModal | None = None
         self._skills_modal: SkillsModal | None = None
-        self._local_modal: BridgeCredentialsModal | None = None
+        self._local_modal: BridgeCredentialsModal | TurnDetailsModal | None = None
 
         self._status_cache_key: tuple | None = None
         self._status_info: dict = {}
@@ -773,7 +774,7 @@ class KAgent(App):
     def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         modal = self._get_active_modal()
         if modal is not None:
-            if isinstance(modal, PermissionModal):
+            if isinstance(modal, (PermissionModal, TurnDetailsModal)):
                 self.overlay_content_static.scroll_down(animate=False)
                 event.stop()
                 return
@@ -800,7 +801,7 @@ class KAgent(App):
     def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         modal = self._get_active_modal()
         if modal is not None:
-            if isinstance(modal, PermissionModal):
+            if isinstance(modal, (PermissionModal, TurnDetailsModal)):
                 self.overlay_content_static.scroll_up(animate=False)
                 event.stop()
                 return
@@ -902,7 +903,7 @@ class KAgent(App):
             return
 
         # A visible permission proposal owns Escape independently of its turn.
-        if key == "escape" and isinstance(self._get_active_modal(), PermissionModal):
+        if key == "escape" and isinstance(self._get_active_modal(), (PermissionModal, TurnDetailsModal)):
             await self._handle_modal_key(key, raw_input)
             return
 
@@ -1126,6 +1127,12 @@ class KAgent(App):
         self._local_modal = BridgeCredentialsModal(state, self.copy_to_clipboard, self._close_local_modal)
         self._sync_overlay()
 
+    def show_turn_details(self) -> None:
+        self._local_modal = TurnDetailsModal(self.state.latest_turn_details, self._close_local_modal)
+        if hasattr(self, "overlay_content_static"):
+            self.overlay_content_static.scroll_to(y=0, animate=False, immediate=True, force=True)
+        self._sync_overlay()
+
     def _publish_notice(self, text: str) -> None:
         if "\n" not in text and text.startswith(("Burp bridge: captured request", "Burp bridge: received event",
                             "Burp bridge: received session snapshot", "Burp bridge: received issue for import")):
@@ -1145,7 +1152,7 @@ class KAgent(App):
         if modal is None:
             return False
 
-        if ((isinstance(modal, PermissionModal) and key in {"up", "down", "pageup", "pagedown", "home", "end"})
+        if ((isinstance(modal, (PermissionModal, TurnDetailsModal)) and key in {"up", "down", "pageup", "pagedown", "home", "end"})
                 or (isinstance(modal, TextInputModal) and modal.req.scrollable and key in {"pageup", "pagedown"})):
             scroll = self.overlay_content_static
             if key == "up":
@@ -1228,12 +1235,12 @@ class KAgent(App):
             return
 
         modal = self._get_active_modal()
-        scrollable = isinstance(modal, PermissionModal) or (isinstance(modal, TextInputModal) and modal.req.scrollable)
-        self.permission_hints_static.display = isinstance(modal, PermissionModal)
-        if isinstance(modal, PermissionModal):
+        scrollable = isinstance(modal, (PermissionModal, TurnDetailsModal)) or (isinstance(modal, TextInputModal) and modal.req.scrollable)
+        self.permission_hints_static.display = isinstance(modal, (PermissionModal, TurnDetailsModal))
+        if isinstance(modal, (PermissionModal, TurnDetailsModal)):
             self.permission_hints_static.update(modal.instructions())
         self.overlay_static.set_class(
-            isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal, ProviderPickerModal, BridgeCredentialsModal)),
+            isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal, ProviderPickerModal, BridgeCredentialsModal, TurnDetailsModal)),
             "modal-panel",
         )
         self.overlay_static.set_class(
@@ -1261,6 +1268,9 @@ class KAgent(App):
                 self.overlay_text_static.update(modal.render(include_instructions=False))
             elif isinstance(modal, BridgeCredentialsModal):
                 self.overlay_static.border_title = "Local credentials"
+                self.overlay_text_static.update(modal.render())
+            elif isinstance(modal, TurnDetailsModal):
+                self.overlay_static.border_title = "Turn Details"
                 self.overlay_text_static.update(modal.render())
             else:
                 self.overlay_text_static.update(_modal_text(modal))

@@ -86,7 +86,7 @@ async def test_full_approval_detail_can_be_reviewed_with_keyboard_scroll(monkeyp
         assert app.overlay_static.region.bottom <= size[1]
         assert app.overlay_content_static.max_scroll_x == 0
         preview = _content_text(app)
-        assert "Session authority:" in preview
+        assert "Allow once:" in preview
         assert "LAST_OPERATION" in preview
         assert "truncated" not in preview
         await pilot.press("v")
@@ -247,7 +247,7 @@ async def test_short_high_impact_shell_preview_needs_no_scroll_at_normal_size(mo
         assert app.overlay_content_static.max_scroll_y == 0
         text = _content_text(app, visible_only=True)
         assert "Shell command" in text
-        assert "proposed operation only" in text
+        assert "current invocation only" in text
         assert "pwd; python3 --version" in text
         assert "y allow once · n deny · Esc cancel" in text
 

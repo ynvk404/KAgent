@@ -95,7 +95,7 @@ def test_shell_command_is_shown_once_in_a_native_titled_panel():
 
     assert frame.count("echo world") == 1
     assert "Shell command" in frame
-    assert "Session authority: unavailable; proposed operation only" in frame
+    assert "Allow once: current invocation only" in frame
     assert "a unavailable" not in frame
     assert "y allow once · n deny · Esc cancel" in frame
 
@@ -118,7 +118,7 @@ def test_http_request_action_is_shown_once_in_framed_block():
 
     assert frame.count("GET http://juice.lab:3000/robots.txt") == 1
     assert "HTTP request" in frame
-    assert "Session authority: HTTP requests to http://juice.lab:3000" in frame
+    assert "Session trust: HTTP requests to http://juice.lab:3000" in frame
 
 
 def test_file_actions_frame_path_once_and_keep_edit_content_visible():
@@ -156,7 +156,7 @@ def test_private_host_http_keeps_reason_without_duplicating_action():
     assert "HTTP request" in http_frame
     assert "host: 127.0.0.1" in http_frame
     assert "DNS resolves to loopback IPv4 (127.0.0.1)" in http_frame
-    assert "Session authority: unavailable; proposed operation only" in http_frame
+    assert "Allow once: current invocation only" in http_frame
 
 
 def test_generic_mcp_permission_remains_plain_text():
@@ -187,9 +187,9 @@ def test_coverage_and_sensitive_file_permissions_keep_plain_explanations():
 
     assert '{"action": "clear"}' in coverage_frame
     assert "╭" not in coverage_frame
-    assert "Session authority: unavailable; proposed operation only" in coverage_frame
+    assert "Allow once: current invocation only" in coverage_frame
     assert "This path is on the sensitive-path list." in sensitive_file_frame
-    assert "Session authority: unavailable; proposed operation only" in sensitive_file_frame
+    assert "Allow once: current invocation only" in sensitive_file_frame
 
 
 def test_allow_once_key():
@@ -230,8 +230,8 @@ def test_displays_actual_session_trust_scope():
         session_scope_display="HTTP requests to http://juice.lab:3000", offer_http_lab=True,
     )))
 
-    assert "Session authority: HTTP requests to http://juice.lab:3000" in frame
-    assert "a trust for session" in frame
+    assert "Session trust: HTTP requests to http://juice.lab:3000" in frame
+    assert "a trust origin" in frame
 
 
 def test_displays_exact_shell_trust_scope():
@@ -239,30 +239,30 @@ def test_displays_exact_shell_trust_scope():
         make_req(session_scope_display="this exact shell command only")
     ))
 
-    assert "Session authority: unavailable; proposed operation only" in frame
+    assert "Allow once: current invocation only" in frame
     assert "a unavailable" not in frame
 
 
 def test_displays_unavailable_session_trust_for_non_cacheable_request():
     frame = rendered(PermissionModal(make_req(no_session_cache=True)))
 
-    assert "Session authority: unavailable; proposed operation only" in frame
+    assert "Allow once: current invocation only" in frame
     assert "y allow once · n deny · Esc cancel" in frame
-    assert "a trust for session" not in frame
+    assert " · a trust " not in frame
 
 
 def test_displays_risk_tier_separately_from_session_trust():
     frame = rendered(PermissionModal(make_req(risk_tier="high-impact")))
 
     assert "Risk tier:" not in frame
-    assert "Session authority: unavailable; proposed operation only" in frame
+    assert "Allow once: current invocation only" in frame
     assert "a unavailable" not in frame
 
 
 def test_missing_scope_never_offers_tool_wide_authority():
     frame = rendered(PermissionModal(make_req(tool="plugin_tool")))
 
-    assert "Session authority: unavailable; proposed operation only" in frame
+    assert "Allow once: current invocation only" in frame
     assert "a unavailable" not in frame
 
 
@@ -321,11 +321,11 @@ def test_shell_preview_explains_actual_tool_policy_without_changing_it(command):
 
     assert "Risk tier:" not in frame
     assert "Timeout: 300s" in frame
-    assert "Session authority: unavailable; proposed operation only" in frame
+    assert "Allow once: current invocation only" in frame
     for line in command.splitlines():
         assert frame.count(line) == 1
     assert "scroll to review" not in frame and "secrets redacted" not in frame
-    assert "a trust for session" not in frame
+    assert " · a trust " not in frame
     modal.handle_key("a")
     req.resolve.assert_not_called()
     assert req.risk_tier == "high-impact"
@@ -344,7 +344,7 @@ def test_all_risk_tiers_preserve_independent_session_trust_choices(tier, no_sess
     assert "Risk tier:" not in frame
     assert "all Shell commands" not in frame
     assert "explicit action approval required" not in frame
-    assert "a trust for session" not in frame
+    assert " · a trust " not in frame
     modal.handle_key("a")
     req.resolve.assert_not_called()
 
@@ -361,7 +361,7 @@ def test_http_grant_action_is_offered_only_when_requested(offer_lab):
 
     assert "HTTP grants are managed separately" not in frame
     assert "Request budget: 10" in frame
-    assert ("a trust for session" in frame) is offer_lab
+    assert ("a trust origin" in frame) is offer_lab
     assert "g review" not in frame
     modal.handle_key("a")
     if offer_lab:

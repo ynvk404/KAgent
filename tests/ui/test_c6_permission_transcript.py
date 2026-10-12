@@ -12,6 +12,7 @@ from src.ui.core.state import AgentEventAction, initial_state, reducer
 from src.ui.core.outcomes import OutcomeFacts
 from src.ui.widgets.banner import BannerData
 from src.ui.widgets.permission_modal import PermissionModal
+from src.ui.widgets.turn_details_modal import TurnDetailsModal
 from tests.ui.test_app import make_app
 from tests.ui.test_permission_modal import make_req, rendered
 from tests.ui.test_permission_review import _content_text
@@ -27,13 +28,13 @@ def test_reusable_shortcut_tracks_current_request_without_changing_authority(off
     current = [True]
     req = make_req(**offer, is_current=lambda: current[0])
     modal = PermissionModal(req)
-    assert 'a trust for session' in rendered(modal)
+    assert ' · a trust ' in rendered(modal)
     modal.handle_key('a')
     req.resolve.assert_called_once_with(Decision.ALLOW_SESSION)
     req.resolve.reset_mock()
     current[0] = False
     text = rendered(modal)
-    assert 'a trust for session' not in text and 'a unavailable' not in text
+    assert ' · a trust ' not in text and 'a unavailable' not in text
     modal.handle_key('a')
     req.resolve.assert_not_called()
     assert req.supports_session  # Presentation does not mutate backend metadata.
@@ -43,7 +44,7 @@ def test_broken_lifecycle_callback_cannot_offer_reusable_approval():
     req = make_req(cache_key='fixture', session_scope_display='fixture scope',
                    is_current=Mock(side_effect=RuntimeError('fixture lifecycle ended')))
     modal = PermissionModal(req)
-    assert 'a trust for session' not in rendered(modal)
+    assert ' · a trust ' not in rendered(modal)
     modal.handle_key('a')
     req.resolve.assert_not_called()
 
@@ -95,7 +96,12 @@ def test_default_transcript_summarizes_successes_and_preserves_pending_and_failu
                                  error_kind='tool_exception', err='Fixture execution failed'))
     dispatch(app, DoneEvent(stop_reason='stop'))
     text = '\n'.join(row.text for row in app.state.transcript)
-    assert text.count('Operations completed:') == 1 and '(30)' in text
+    assert 'Operations completed:' not in text
+    assert app.state.latest_turn_details is not None
+    assert app.state.latest_turn_details.completed_operations == (('file_write', 30),)
+    app.show_turn_details()
+    assert isinstance(app._local_modal, TurnDetailsModal)
+    assert 'file_write (30)' in app._local_modal.render().plain
     assert 'PRIVATE RAW OUTPUT' not in text
     assert 'Permission review timed out' in text and 'Fixture execution failed' in text
     assert 'Unrecognized tool outcome' not in text and 'user refused' not in text.lower()

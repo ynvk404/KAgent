@@ -64,3 +64,5 @@ config.local.json
 
 # Pinned CWE MCP setup output (code/dependencies/corpus are deployment artifacts)
 /cwe-mcp-deployment/
+tests/ui/MINIMAL_PRESENTATION_IMPLEMENTATION.md
+tests/ui/NON_NATIVE_PERMISSION_IMPLEMENTATION.md

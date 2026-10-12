@@ -16,7 +16,7 @@ from src.tools.workflow.workflow_tool import WorkflowTool
 from src.ui.core.state import AgentEventAction, SetBusy, reducer, initial_state
 from src.ui.widgets.banner import BannerData
 from src.ui.widgets.transcript import entry_view
-from src.ui.theme import BOLD_SUCCESS, MUTED, PRIMARY
+from src.ui.theme import BOLD_ACCENT, BOLD_SUCCESS, MUTED, PRIMARY
 from src.workflow.state import Candidate, WorkflowState, WorkflowObjective
 from src.workflow.state import ValidationResult, ValidationOutcome, WorkflowPhase
 from src.workflow.assessment import accepted_result, seal
@@ -109,7 +109,7 @@ def test_visual_hierarchy_keeps_conclusion_prominent_and_detail_subordinate():
     confirmed = entry_view(TranscriptEntry('validation', 'Validation confirmed · GET /search\n  Observed impact · fixture'))
     assert confirmed[0].color == BOLD_SUCCESS and confirmed[1].color == MUTED
     negative = entry_view(TranscriptEntry('info', 'Validation not confirmed · GET /search'))
-    assert negative[0].color == PRIMARY
+    assert negative[0].color == BOLD_ACCENT
 
 
 def test_sensitive_field_redaction_preserves_other_milestone_details():
@@ -139,7 +139,7 @@ async def test_previous_turn_callback_cannot_write_into_new_turn():
     await app.run_agent_turn('first')
     await app.run_agent_turn('second')
     assert not any('stale' in entry.text for entry in app.state.transcript)
-    assert app.state.transcript[-1].text == 'Turn finished.'
+    assert app.state.transcript[-1].text == 'Turn completed.'
 
 
 @pytest.mark.asyncio

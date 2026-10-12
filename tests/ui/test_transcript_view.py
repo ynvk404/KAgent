@@ -130,7 +130,7 @@ async def test_four_column_table_is_laid_out_at_transcript_content_width() -> No
         ("assistant", "response", "  response"),
         ("system", "Scoped workflow finished.", "  Scoped workflow finished."),
         ("error", "error text", "! error text"),
-        ("finding", "Finding saved: report.md", "  Finding saved: report.md"),
+        ("finding", "Finding saved: report.md", "◆ Finding saved: report.md"),
     ],
 )
 async def test_transcript_role_prefixes_preserve_their_configured_separator(

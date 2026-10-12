@@ -11,7 +11,7 @@ from src.ui.core.terminal_size import get_terminal_size
 from src.ui.render.markdown import render_markdown
 from src.ui.render.sanitize import sanitize_text
 from src.ui.widgets.banner import Banner, BannerData
-from src.ui.theme import ACCENT, ERROR, MUTED, PRIMARY, WARNING, BOLD_SUCCESS
+from src.ui.theme import ACCENT, BOLD_ACCENT, BOLD_ERROR, MUTED, PRIMARY, WARNING, BOLD_SUCCESS
 
 EntryKind = Literal[
     "user",
@@ -35,11 +35,11 @@ ROLE_STYLES: dict[EntryKind, RoleStyle] = {
     "user": RoleStyle(color=ACCENT, prefix="› "),
     "assistant": RoleStyle(color=PRIMARY, prefix="  "),
     "system": RoleStyle(color=MUTED, prefix="  "),
-    "error": RoleStyle(color=ERROR, prefix="! "),
-    "finding": RoleStyle(color=BOLD_SUCCESS, prefix="  "),
-    "info": RoleStyle(color=PRIMARY, prefix="  "),
-    "warning": RoleStyle(color=WARNING, prefix="  "),
-    "validation": RoleStyle(color=BOLD_SUCCESS, prefix="  "),
+    "error": RoleStyle(color=BOLD_ERROR, prefix="! "),
+    "finding": RoleStyle(color=BOLD_SUCCESS, prefix="◆ "),
+    "info": RoleStyle(color=BOLD_ACCENT, prefix="◆ "),
+    "warning": RoleStyle(color=WARNING, prefix="! "),
+    "validation": RoleStyle(color=BOLD_SUCCESS, prefix="◆ "),
 }
 
 CONTINUATION_INDENT = "  "
@@ -122,7 +122,8 @@ def entry_view(
     for row in rows:
         indent = style.prefix if row.is_first else CONTINUATION_INDENT
         text = f"{indent}{row.text}" if row.text else ""
-        color = (MUTED if not row.is_first and (entry.kind in {"finding", "validation"}
+        color = (MUTED if entry.kind not in {"assistant", "user", "error", "warning"}
+                 and not row.is_first and (entry.kind in {"finding", "validation"}
                  or row.text.startswith("  ")) else style.color)
         lines.append(RenderedLine(text=text, color=color,
             trusted_ansi=entry.kind in MARKDOWN_KINDS and not streaming))

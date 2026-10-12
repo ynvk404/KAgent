@@ -179,5 +179,5 @@ async def test_recovery_keeps_other_errors_and_ignores_duplicate_and_late_delive
     await result(app, tool, 'correct-again', args, call(app, 'correct-again', args))
     assert sum(not issue.recovered for issue in app.state.issues) == 2
     dispatch(app, DoneEvent(stop_reason='final_response'))
-    assert '2 unrecovered operation issues' in app.state.transcript[-1].text
+    assert '2 unresolved operation issues' in app.state.transcript[-1].text
     assert len(state.candidates) == 1

@@ -76,6 +76,23 @@ class PresentedIssue:
 
 
 @dataclass(frozen=True, slots=True)
+class TurnDetails:
+    """Latest local UI outcome snapshot; never serialized into a session."""
+    turn_number: int
+    stop_reason: str | None
+    outcome: str
+    saved_findings: int
+    unsaved_validations: int
+    incomplete_validations: int
+    incomplete_goals: int
+    unresolved_issues: int
+    pending_permissions: int
+    export_failures: int
+    remaining: tuple[str, ...]
+    completed_operations: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class AppState:
     banner: str
     banner_data: BannerData
@@ -113,6 +130,8 @@ class AppState:
     skill_receipts: tuple[tuple[str, str], ...] = field(default=(), repr=False)
     running_skill: str | None = None
     planner_recommendation: tuple[str, str] | None = None
+    turn_number: int = 0
+    latest_turn_details: TurnDetails | None = field(default=None, repr=False)
 
 
     @property
@@ -262,6 +281,7 @@ def reducer(state: AppState, action: Action) -> AppState:
         case SetBusy(busy=busy, facts=facts):
             if busy and not state.busy:
                 state = replace(state, issues=(), milestones=(), delivered_results=(), call_history=_retire_calls(state), outcome_written=False,
+                                turn_number=state.turn_number + 1,
                                 deferred_outcome=None, deferred_facts=None,
                                 baseline=replace(facts, records=tuple(row for row in facts.records if row.kind != "capture")) if facts else None,
                                 latest_facts=facts,
@@ -314,6 +334,7 @@ def reducer(state: AppState, action: Action) -> AppState:
                 baseline=None, latest_facts=None, progress_rows=(), observed=(),
                 activated_skills=(), skill_receipts=(), running_skill=None, running_tool=None, planner_recommendation=None,
                 clear_message=sanitize_text(message) if message is not None else None,
+                latest_turn_details=None,
                 active_skill=(
                     None
                     if message == "conversation reset"
@@ -472,7 +493,7 @@ def _flush_selection(state: AppState) -> AppState:
 
 def _flush_progress(state: AppState) -> AppState:
     if state.latest_facts and state.latest_facts.overview:
-        state = _progress_row(state, "workflow", state.latest_facts.overview)
+        state = _progress_row(state, "workflow", state.latest_facts.overview, "info")
     inputs, endpoints = _new_records(state, "input"), _new_records(state, "endpoint")
     if inputs or endpoints:
         dispositions = {value: sum(row.disposition == value for row in inputs)
@@ -480,7 +501,7 @@ def _flush_progress(state: AppState) -> AppState:
         details = ", ".join(f"{count} {key}" for key, count in dispositions.items() if count)
         state = _progress_row(state, "inventory", f"Attack surface recorded: {_quantity(len(endpoints), 'endpoint')}, "
                               f"{_quantity(len(inputs), 'input')}" + (f" ({details})" if details else "") +
-                              f"; {_examples(inputs or endpoints)}.")
+                              f"; {_examples(inputs or endpoints)}.", "info")
     state = _flush_selection(state)
     candidates = _new_records(state, "candidate")
     if candidates:
@@ -606,7 +627,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                     if key not in baseline:
                         state = _milestone(state, key, text, cast(TranscriptKind, kind))
             if not flush_progress and facts and facts.overview:
-                state = _progress_row(state, "workflow", facts.overview)
+                state = _progress_row(state, "workflow", facts.overview, "info")
             return state
 
         case ErrorEvent(err=agent_err):
@@ -693,7 +714,7 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
     if state.outcome_written:
         return state
     label = {
-        "final_response": "Turn finished", "workflow_completed": "Workflow completed",
+        "final_response": "Turn completed", "workflow_completed": "Workflow completed",
         "workflow_blocked": "Blocked", "workflow_stalled": "Stalled", "cancelled": "Turn cancelled",
         "max_steps": "Stopped at max steps", "runtime_error": "Runtime failure",
         "context_capacity": "Context capacity failure", "client_error": "Provider failure",
@@ -715,35 +736,48 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
     unresolved = sum(not issue.recovered and issue.category in {"failure", "denial", "network"} for issue in state.issues)
     exports = sum(not issue.recovered and issue.category == "export" for issue in state.issues)
     if unresolved:
-        pending.append(_quantity(unresolved, "unrecovered operation issue"))
+        pending.append(_quantity(unresolved, "unresolved operation issue"))
     permission_pending = sum(not issue.recovered and issue.category == 'pending' for issue in state.issues)
     if permission_pending:
         pending.append(_quantity(permission_pending, 'unresolved permission outcome'))
+    if state.pending_perm is not None:
+        pending.append("permission review pending")
     if exports:
         pending.append(_quantity(exports, "optional export failure"))
     residual = bool(pending or (facts and (facts.incomplete or facts.goals or facts.blockers)))
+    saved = unsaved = 0
     if facts and facts.scope:
         saved, unsaved = len(_new_records(state, "finding")), len(_new_records(state, "unsaved"))
-        counts = [(saved, "saved finding"), (unsaved, "accepted-but-unsaved validation"),
+        counts = [(unsaved, "accepted-but-unsaved validation"),
                   (facts.incomplete, "incomplete validation"), (facts.goals, "incomplete goal")]
-        pending[0:0] = [_quantity(count, noun) for count, noun in counts if count]
+        pending[0:0] = ([_quantity(saved, "finding saved", "findings saved")] if saved else []) + [
+            _quantity(count, noun) for count, noun in counts if count]
+        residual = residual or bool(unsaved)
         negative = sum(row.disposition == "not-confirmed" for row in _new_records(state, "validation"))
         if negative:
             pending.insert(0, f"{_quantity(negative, 'validation')} not confirmed")
         if facts.blockers:
             pending.append(_quantity(len(facts.blockers), "active workflow blocker"))
     suffix_items = [item for item in pending if item != displayed_cause]
+    # Preserve the redactor's field boundary. A form-like password/token at
+    # the end of a blocker must not consume the following outcome counters.
     suffix = "; " + "; ".join(suffix_items) if suffix_items else ""
     operations = _new_records(state, "operation")
+    operation_counts: dict[str, int] = {}
     if operations:
-        operation_counts: dict[str, int] = {}
         for row in operations:
             operation_counts[row.label] = operation_counts.get(row.label, 0) + 1
-        suffix += "; Operations completed: " + "; ".join(
-            f"{name} ({count})" for name, count in operation_counts.items())
     if reason == "workflow_completed" and (residual or not facts or not facts.completion_supported):
-        label = "Turn finished · workflow work remains" if residual else "Turn finished · workflow completion unavailable"
-    return replace(state, outcome_written=True, deferred_outcome=None, deferred_facts=None, transcript=(*state.transcript,
+        label = "Turn ended · workflow work remains" if residual else "Turn ended · workflow completion unavailable"
+    elif reason == "final_response" and residual:
+        label = "Turn ended · work remains"
+    summary = sanitize_text(label + suffix + ".")
+    details = TurnDetails(state.turn_number, reason, summary, saved, unsaved,
+        facts.incomplete if facts else 0, facts.goals if facts else 0,
+        unresolved, permission_pending, exports, tuple(sanitize_text(item) for item in pending),
+        tuple((sanitize_text(name), count) for name, count in operation_counts.items()))
+    return replace(state, outcome_written=True, deferred_outcome=None, deferred_facts=None,
+                   latest_turn_details=details, transcript=(*state.transcript,
                    TranscriptEntry(kind="error" if reason in {"runtime_error", "context_capacity", "client_error", "invalid_response"}
                                    else "warning" if residual or reason in {"workflow_blocked", "workflow_stalled", "cancelled"}
-                                   else "info", text=sanitize_text(label + suffix + "."))))
+                                   else "info", text=summary)))

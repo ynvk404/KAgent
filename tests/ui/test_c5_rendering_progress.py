@@ -41,5 +41,5 @@ def test_old_operation_errors_do_not_become_current_blocker_count_or_final_cause
                                      status='error', error_kind='workflow_state'))
     dispatch(app, DoneEvent(stop_reason='workflow_stalled'))
     summary = app.state.transcript[-1].text
-    assert '2 unrecovered operation issues' in summary
+    assert '2 unresolved operation issues' in summary
     assert 'unresolved blocker' not in summary and 'OLD-ERROR' not in summary

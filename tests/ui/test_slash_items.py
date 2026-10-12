@@ -15,7 +15,7 @@ def test_menu_orders_help_first_then_related_commands():
         "/help",
         "/provider", "/model", "/thinking", "/maxsteps",
         "/target", "/scope", "/permissions", "/yolo",
-        "/plan", "/next", "/report", "/review-result", "/enrich-cwe", "/skills", "/burp",
+        "/plan", "/next", "/report", "/review-result", "/enrich-cwe", "/turn-details", "/skills", "/burp",
         "/memory", "/compact", "/snapshot",
         "/clear", "/reset", "/exit",
     ]
@@ -57,6 +57,7 @@ def test_prefix_matches_command_names():
     ) == [
         "/target",
         "/thinking",
+        "/turn-details",
     ]
 
 
