@@ -125,6 +125,9 @@ def entry_view(
         color = (MUTED if entry.kind not in {"assistant", "user", "error", "warning"}
                  and not row.is_first and (entry.kind in {"finding", "validation"}
                  or row.text.startswith("  ")) else style.color)
+        if (entry.kind in {"validation", "info"} and entry.text.startswith("Validation ")
+                and not row.is_first and row.text.lstrip().startswith("Observed impact · ")):
+            color = PRIMARY
         lines.append(RenderedLine(text=text, color=color,
             trusted_ansi=entry.kind in MARKDOWN_KINDS and not streaming))
     return lines

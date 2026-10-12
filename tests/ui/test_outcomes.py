@@ -435,7 +435,8 @@ def test_workflow_rejection_recovers_only_after_bound_accepted_assessment(tmp_pa
 
 
 @pytest.mark.parametrize('outcome', ['confirmed', 'not-confirmed'])
-def test_contextual_validation_displays_only_accepted_recorded_impact(tmp_path, outcome):
+@pytest.mark.parametrize('long_impact', [False, True])
+def test_contextual_validation_displays_only_accepted_recorded_impact(tmp_path, outcome, long_impact):
     tool, _ = _tool(tmp_path)
     app = make_app()
     workflow, candidate = configure(app, tool, tmp_path)
@@ -445,6 +446,8 @@ def test_contextual_validation_displays_only_accepted_recorded_impact(tmp_path, 
     app.dispatch(SetBusy(True))
     hypothesis = 'Authentication bypass hypothesis still requires evidence'
     recorded = 'Only the reviewed fixture behavior was observed; password=short-secret'
+    if long_impact:
+        recorded = 'Only the reviewed fixture behavior was observed. ' * 12 + 'password=short-secret'
     result = adopt_fixture_assessment(workflow, ValidationResult(candidate.id, 'test-skill', outcome,
         evidence_refs=latest.evidence_refs), assessment={'observed_impact':recorded, 'hypothesis':hypothesis})
     dispatch(app, AssistantTextEvent(text='The hypothesis alone does not establish a result.'))
@@ -459,6 +462,14 @@ def test_contextual_validation_displays_only_accepted_recorded_impact(tmp_path, 
     assert len(rows) == 1 and outcome.replace('-', ' ') in rows[0]
     assert 'Observed impact · Only the reviewed fixture behavior was observed' in rows[0]
     assert hypothesis not in rows[0] and 'short-secret' not in repr(app.state.transcript)
+    assert ('… [shortened]' in rows[0]) is long_impact
+    assert rows[0].count('[shortened]') == int(long_impact)
+    from src.ui.theme import PRIMARY, MUTED
+    entry = next(entry for entry in app.state.transcript if entry.text.startswith('Validation '))
+    assert len(entry.details[0].removeprefix('Observed impact · ')) <= 240
+    lines = entry_view(entry)
+    assert next(line for line in lines if 'Observed impact · ' in line.text).color == PRIMARY
+    assert next(line for line in lines if 'Evidence · ' in line.text).color == MUTED
     assert workflow.to_dict() == snapshot
 
 

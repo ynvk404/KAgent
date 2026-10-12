@@ -56,18 +56,24 @@ def _evidence_summary(result) -> str:
                and row["source"].get("complete") is True
                and row["source"].get("truncated") is not True
                and row["source"].get("execution_status") == "completed"}
-    roles = list(dict.fromkeys(row.get("role") for row in sources.values()
-                 if row.get("role") in {"baseline", "control", "trigger", "readback", "cleanup", "auxiliary"}))
-    if roles:
-        return ", ".join(roles)
-    http = sum(row.get("source_kind") in {"native-http", "imported-capture"} for row in sources.values())
-    return f"{http} accepted HTTP {'source' if http == 1 else 'sources'}" if http else ""
+    summaries = []
+    for kind, singular, plural in (
+            ("native-http", "HTTP observation", "HTTP observations"),
+            ("imported-capture", "imported capture", "imported captures"),
+            ("tool-output", "tool output", "tool outputs")):
+        count = sum(row.get("source_kind") == kind for row in sources.values())
+        if count:
+            summaries.append(f"{count} {singular if count == 1 else plural}")
+    return " · ".join(summaries)
 
 
-def concise_text(value: str, limit: int = 240) -> str:
+def concise_text(value: str, limit: int = 240, *, shortened_marker: str = "…") -> str:
     """Bound a sanitized presentation copy, without deriving a conclusion."""
     text = " ".join(sanitize_text(value).split())
-    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "…"
+    if len(text) <= limit:
+        return text
+    budget = limit - len(shortened_marker) if shortened_marker != "…" else limit
+    return text[:max(0, budget)].rsplit(" ", 1)[0] + shortened_marker
 
 
 def endpoint_label(method: str | None, endpoint: str | None, parameter: str | None = None) -> str:
@@ -189,7 +195,7 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
                 pending.append("validation incomplete")
             identity = candidate.id + ":" + validation_result_fingerprint(result)
             impact = result.assessment.get("observed_impact")
-            detail = concise_text(impact) if isinstance(impact, str) else ""
+            detail = concise_text(impact, shortened_marker="… [shortened]") if isinstance(impact, str) else ""
             records.append(ProgressRecord("validation", identity, validation_label(candidate), result.outcome, detail,
                                           _evidence_summary(result), workflow.validation_results.index(result)))
             if (isinstance(event, ToolResultEvent) and call and call.operation == "record_result"

@@ -107,7 +107,7 @@ async def test_validation_start_requires_matching_active_workflow_attempt_and_su
 def test_visual_hierarchy_keeps_conclusion_prominent_and_detail_subordinate():
     from src.ui.core.state import TranscriptEntry
     confirmed = entry_view(TranscriptEntry('validation', 'Validation confirmed · GET /search\n  Observed impact · fixture'))
-    assert confirmed[0].color == BOLD_SUCCESS and confirmed[1].color == MUTED
+    assert confirmed[0].color == BOLD_SUCCESS and confirmed[1].color == PRIMARY
     negative = entry_view(TranscriptEntry('info', 'Validation not confirmed · GET /search'))
     assert negative[0].color == BOLD_ACCENT
 
@@ -225,7 +225,7 @@ def test_accepted_evidence_is_scoped_subordinate_and_read_only(tmp_path, mode, o
     dispatch(app, ToolResultEvent(id='accepted',name='workflow',result=json.dumps({'ok':True,'result':result.public_dict()})))
     rows = [entry for entry in app.state.transcript if entry.text.startswith('Validation ')]
     assert len(rows) == 1
-    assert 'Evidence · baseline' in '\n'.join(line.text for line in entry_view(rows[0]))
+    assert 'Evidence · 1 HTTP observation' in '\n'.join(line.text for line in entry_view(rows[0]))
     assert rows[0].kind == ('validation' if outcome=='confirmed' else 'info')
     assert 'short-secret' not in repr(app.state.transcript)
     assert result.evidence_manifest[0]['hash'] not in repr(app.state.transcript)
@@ -448,19 +448,29 @@ async def test_actual_richlog_writer_applies_hierarchy_on_a_narrow_screen():
         transcript = Transcript(out=StringIO(),width=writer.content_width,clear=app.transcript.clear,
             write_banner=lambda _:None,preserve_viewport=app.transcript.preserve_viewport,write_line=writer.write_line)
         transcript.flush([
-            TranscriptEntry('validation','Validation confirmed · GET /search · q\n  Evidence · baseline'),
+            TranscriptEntry('validation','Validation confirmed · GET /search · q', details=(
+                'Evidence · 1 HTTP observation',
+                'Observed impact · ' + 'Reviewed response behavior. ' * 4 + 'End of impact.')),
             TranscriptEntry('info','Validation not confirmed · GET /other'),
             TranscriptEntry('finding','Finding saved · Fixture\n  artifacts/findings/fixture.md')],
             BannerData('offline','fixture','.'),generation=0)
         await pilot.pause()
         text = '\n'.join(line.text for line in app.transcript.lines)
-        assert 'Validation confirmed' in text and 'Evidence · baseline' in text
+        assert 'Validation confirmed' in text and 'Evidence · 1 HTTP observation' in text
+        assert 'Observed impact' in text and 'End of impact.' in ' '.join(text.split())
         assert 'Validation not confirmed' in text and 'artifacts/findings/fixture.md' in text
         first = app.transcript.lines[0]
         assert any(segment.style and segment.style.color == Style.parse(BOLD_SUCCESS).color
                    and segment.style.bold for segment in first)
         assert any(segment.style and segment.style.color == Style.parse(MUTED).color
                    for segment in app.transcript.lines[1])
+        impact_start = next(index for index, line in enumerate(app.transcript.lines)
+                            if 'Observed impact' in line.text)
+        impact_end = next(index for index in range(impact_start, len(app.transcript.lines))
+                          if not app.transcript.lines[index].text.strip())
+        impact_lines = app.transcript.lines[impact_start:impact_end]
+        assert all(any(segment.style and segment.style.color == Style.parse(PRIMARY).color
+                       for segment in line) for line in impact_lines)
         assert all(line.cell_length <= app.transcript.transcript_content_width for line in app.transcript.lines)
 
 

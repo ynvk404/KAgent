@@ -516,7 +516,7 @@ def _flush_progress(state: AppState) -> AppState:
         for row in sorted(validations, key=lambda row: row.order):
             text = f"Validation {row.disposition.replace('-', ' ')} · {row.label}"
             if row.detail:
-                text += f"\n  Observed impact · {concise_text(row.detail)}"
+                text += f"\n  Observed impact · {concise_text(row.detail, shortened_marker='… [shortened]')}"
             if row.evidence:
                 text += f"\n  Evidence · {concise_text(row.evidence)}"
             state = _milestone(state, "validation:" + row.key, text,
