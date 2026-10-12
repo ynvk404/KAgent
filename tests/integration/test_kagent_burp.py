@@ -16,6 +16,7 @@ class _SwingComponent:
         self.text = args[0] if args and isinstance(args[0], str) else ""
         self.selected = args[1] if len(args) > 1 and isinstance(args[1], bool) else False
         self.actionPerformed = kwargs.get("actionPerformed")
+        self.itemStateChanged = kwargs.get("itemStateChanged")
         self.children = [arg for arg in args if isinstance(arg, _SwingComponent)]
 
     def add(self, component, _constraint=None):
@@ -40,7 +41,10 @@ class _SwingComponent:
         return self.selected
 
     def setSelected(self, selected):
+        changed = self.selected != selected
         self.selected = selected
+        if changed and self.itemStateChanged is not None:
+            self.itemStateChanged(types.SimpleNamespace(getSource=lambda: self))
 
 
 class _ArrayList(list):

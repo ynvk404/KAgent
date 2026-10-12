@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from tests.integration.test_kagent_burp import (
-    BurpExtender, _components, extender, extension_module,
+    BurpExtender, _components, _message, extender, extension_module,
 )
 
 
@@ -17,6 +17,55 @@ def test_registered_tab_returns_one_populated_component(extender):
     assert extender.getUiComponent() is panel
     assert extender.getUiComponent() is panel
     assert extender.log_area in list(_components(panel))
+
+
+@pytest.mark.parametrize("checkbox,tool,other_tool", [
+    ("auto_proxy_box", "TOOL_PROXY", "TOOL_REPEATER"),
+    ("auto_repeater_box", "TOOL_REPEATER", "TOOL_PROXY"),
+])
+def test_enabling_auto_capture_takes_effect_without_save(extender, checkbox, tool, other_tool):
+    extender._post_json = Mock()
+    message = _message()
+    extender.processHttpMessage(getattr(extender.callbacks, tool), False, message)
+    extender._post_json.assert_not_called()
+
+    getattr(extender, checkbox).setSelected(True)
+    extender.processHttpMessage(getattr(extender.callbacks, other_tool), False, message)
+    extender._post_json.assert_not_called()
+    extender.processHttpMessage(getattr(extender.callbacks, tool), False, message)
+    extender._post_json.assert_called_once()
+    assert extender._post_json.call_args.args[0] == "/ingest"
+
+
+@pytest.mark.parametrize("checkbox,tool", [
+    ("auto_proxy_box", "TOOL_PROXY"),
+    ("auto_repeater_box", "TOOL_REPEATER"),
+])
+def test_unchecking_saved_auto_capture_stops_before_payload_without_save(extender, checkbox, tool):
+    box = getattr(extender, checkbox)
+    box.setSelected(True)
+    extender._save_settings(None)
+    extender._post_json = Mock()
+    extender._message_to_ingest_payload = Mock(wraps=extender._message_to_ingest_payload)
+
+    box.setSelected(False)
+    extender.processHttpMessage(getattr(extender.callbacks, tool), False, _message())
+
+    extender._post_json.assert_not_called()
+    extender._message_to_ingest_payload.assert_not_called()
+    assert not extender.auto_send_proxy and not extender.auto_send_repeater
+    assert not extender.auto_sent_keys
+
+
+def test_auto_capture_toggle_does_not_save_pending_connection_edits(extender):
+    extender.url_field.setText("http://127.0.0.1:9999")
+    extender.token_field.setText("pending-token")
+    extender.auto_proxy_box.setSelected(True)
+    extender.auto_repeater_box.setSelected(True)
+
+    assert extender.auto_send_proxy and extender.auto_send_repeater
+    assert extender.base_url == extension_module.DEFAULT_BASE_URL
+    assert extender.token == ""
 
 
 def test_repeated_getter_keeps_registered_controls_and_activity_log(extender):

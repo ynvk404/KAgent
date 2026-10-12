@@ -83,3 +83,48 @@ async def test_payload_directory_symlink_cannot_read_outside_skill(tmp_path):
     registry.add(Skill('demo', 'fixture', [], False, str(skill / 'SKILL.md'), ''))
     output = await ReadPayloadsTool(registry).run({'skill': 'demo', 'file': 'secret.txt'}, None, AlwaysAllow())
     assert output.startswith('error:') and 'OUTSIDE-CANARY' not in output
+
+
+@pytest.mark.parametrize('factory,key', [(ReadSkillFileTool, 'path'), (ReadPayloadsTool, 'file')])
+async def test_auxiliary_paging_publishes_executable_next_call_and_recovery(tmp_path, factory, key):
+    registry = Registry()
+    registry.add(Skill('demo', 'fixture', [], False, str(tmp_path / 'SKILL.md'), ''))
+    source = tmp_path / 'payloads.txt'
+    source.write_text('first\nsecond\nthird\n', encoding='utf-8')
+    tool = factory(registry)
+    args = {'skill': 'demo', key: 'payloads.txt', 'limit': 1}
+    first = await tool.run(args, None, AlwaysAllow())
+    page = json.loads(first.rsplit('\nContinuation: ', 1)[1])
+    from src.agent.agent import safe_tool_text
+    from src.agent.output_bounds import bound_distributed_content
+
+    visible = safe_tool_text(first, 'unavailable')
+    next_call = json.loads(visible.split('Next page: ', 1)[1].split('\n', 1)[0])
+    assert next_call['tool'] == tool.name()
+    # A large body must not bury the actionable instruction in its footer.
+    source.write_text('first\n' + 'x' * 20000, encoding='utf-8')
+    large = await tool.run({**args, 'limit': 5000}, None, AlwaysAllow())
+    bounded = bound_distributed_content(safe_tool_text(large, 'unavailable'), 2000,
+                                       minimum_retained_length=2000, elision_prefix='[omitted')
+    bounded_call = json.loads(bounded.split('Next page: ', 1)[1].split('\n', 1)[0])
+    resumed = await tool.run(bounded_call['arguments'], None, AlwaysAllow())
+    assert resumed.status == 'success' and not resumed.truncated
+    source.write_text('first\nsecond\nthird\n', encoding='utf-8')
+    assert next_call['arguments'] == {**args, 'source_ref': page['source_ref'],
+                                     'start_char': page['next_start_char']}
+    second = await tool.run(next_call['arguments'], None, AlwaysAllow())
+    assert 'second\n' in second and second.status == 'success'
+    repeated = await tool.run(args, None, AlwaysAllow())
+    assert json.loads(repeated.rsplit('\nContinuation: ', 1)[1])['source_ref'] == page['source_ref']
+    for bad in ({'start_char': 6}, {'start_char': 6, 'source_ref': 'demo:payloads.txt'}):
+        error = await tool.run({**args, **bad}, None, AlwaysAllow())
+        assert error.status == 'error'
+        recovery = json.loads(error.split('Recovery: ', 1)[1].split('\n', 1)[0])
+        assert recovery == {'tool': tool.name(), 'arguments': {**args, 'start_char': 0}}
+        recovered = await tool.run(recovery['arguments'], None, AlwaysAllow())
+        assert recovered.status == 'success' and 'first\n' in recovered
+    source.write_text('changed\ncontent\n', encoding='utf-8')
+    stale = await tool.run(next_call['arguments'], None, AlwaysAllow())
+    assert stale.error_kind == 'reference_unavailable'
+    fresh = await tool.run(args, None, AlwaysAllow())
+    assert json.loads(fresh.rsplit('\nContinuation: ', 1)[1])['source_ref'] != page['source_ref']

@@ -36,7 +36,7 @@ class ReadSkillFileTool:
         return "read_skill_file"
 
     def description(self) -> str:
-        return 'Read/list loaded skill files, excluding SKILL.md. Clipped: reuse skill/path, published source_ref and start_char (Unicode). Source <=256KiB, body <=16KiB. sf_ IDs are not read_tool_result refs.'
+        return 'Read/list loaded skill files, excluding SKILL.md. Clipped: copy the Next page call exactly; never guess source_ref or offsets. Fresh read: omit source_ref and start_char. Source <=256KiB, body <=16KiB. sf_ IDs are not read_tool_result refs.'
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -172,4 +172,6 @@ class ReadSkillFileTool:
                     "limit",
                 )
             ),
+            reader=self.name(),
+            source_args={"skill": skill_name, "path": path},
         )

@@ -39,7 +39,31 @@ def test_repeated_errors_changed_reasons_recovery_and_delivery():
     dispatch(app, ToolCallEvent(id="recovery", name="unknown", args={"operation": "fixture"}))
     dispatch(app, ToolResultEvent(id="recovery", name="unknown", result="ok"))
     assert all(issue.recovered for issue in app.state.issues)
-    assert all("recovered by successful operation receipt" in entry.text for entry in app.state.transcript)
+    assert [entry.text for entry in app.state.transcript] == ['unknown', 'unknown']
+    assert [entry.details for entry in app.state.transcript] == [
+        ('Recovered after 100 failed attempts',), ('Recovered after 1 failed attempt',)]
+    assert [issue.count for issue in app.state.issues] == [100, 1]
+    assert [issue.text for issue in app.state.issues] == [
+        'unknown: connection failed', 'unknown: permission denied']
+
+
+def test_recovery_preserves_sanitized_original_error_in_diagnostics():
+    app = make_app()
+    args = {'operation': 'fixture'}
+    dispatch(app, ToolCallEvent(id='failed', name='unknown', args=args))
+    dispatch(app, ToolResultEvent(id='failed', name='unknown', status='error',
+        err='error: rejected password=short-secret'))
+    original = app.state.issues[0].text
+    assert 'error: rejected' in original and 'short-secret' not in original
+    dispatch(app, ToolCallEvent(id='retry', name='unknown', args=args))
+    dispatch(app, ToolResultEvent(id='retry', name='unknown', result='ok'))
+    assert app.state.issues[0].recovered
+    assert app.state.issues[0].text == original
+    from src.ui.widgets.transcript import entry_view
+    displayed = '\n'.join(line.text for line in entry_view(app.state.transcript[0]))
+    assert 'Recovered after 1 failed attempt' in displayed
+    assert 'error:' not in displayed and 'rejected' not in displayed
+    assert 'short-secret' not in repr(app.state)
 
 
 def test_http_retries_group_by_operation_and_keep_target_auth_and_recovery_distinct():

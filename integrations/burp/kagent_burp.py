@@ -104,8 +104,14 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IHttpListener, ITab):
 
         # Hàng 3: Các ô Checkbox
         row3 = JPanel()
-        self.auto_proxy_box = JCheckBox("Auto-capture Proxy traffic", False)
-        self.auto_repeater_box = JCheckBox("Auto-capture Repeater traffic", False)
+        self.auto_proxy_box = JCheckBox(
+            "Auto-capture Proxy traffic", False,
+            itemStateChanged=self._sync_auto_capture_settings,
+        )
+        self.auto_repeater_box = JCheckBox(
+            "Auto-capture Repeater traffic", False,
+            itemStateChanged=self._sync_auto_capture_settings,
+        )
 
         row3.add(self.auto_proxy_box)
         row3.add(self.auto_repeater_box)
@@ -139,9 +145,15 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IHttpListener, ITab):
     def _save_settings(self, _event):
         self.base_url = self.url_field.getText().strip().rstrip("/") or DEFAULT_BASE_URL
         self.token = self.token_field.getText().strip()
+        self._sync_auto_capture_settings()
+        self._log("bridge settings saved")
+
+    def _sync_auto_capture_settings(self, _event=None):
+        # Checkbox changes take effect immediately; an unchecked box must not
+        # leave a previously saved auto-capture mode enabled. Keep listener
+        # callbacks reading these flags rather than accessing Swing widgets.
         self.auto_send_proxy = self.auto_proxy_box.isSelected()
         self.auto_send_repeater = self.auto_repeater_box.isSelected()
-        self._log("bridge settings saved")
 
     def _check_status(self, _event):
         try:

@@ -73,6 +73,7 @@ class PresentedIssue:
     recovered: bool = False
     category: str = "failure"
     recovery_identity: str = ""
+    presentation_label: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,7 +395,8 @@ def reducer(state: AppState, action: Action) -> AppState:
 
 
 def _present_issue(state: AppState, operation: str, text: str, *, category: str = "failure",
-                   root: str | None = None, recovery_identity: str = "") -> AppState:
+                   root: str | None = None, recovery_identity: str = "",
+                   presentation_label: str = "") -> AppState:
     key = hashlib.sha256((operation + "\n" + category + "\n" + (root or text)).encode()).hexdigest()
     kind: TranscriptKind = ("system" if category == "diagnostic" else "warning"
                             if category in {"incomplete", "denial", "cancelled", "export", "pending"} else "error")
@@ -405,7 +407,8 @@ def _present_issue(state: AppState, operation: str, text: str, *, category: str 
         transcript[previous.index] = TranscriptEntry(kind=kind, text=f"{text} (repeated {updated.count} times)")
         return replace(state, issues=tuple(updated if item is previous else item for item in state.issues),
                        transcript=tuple(transcript), transcript_revision=state.transcript_revision + 1)
-    issue = PresentedIssue(key, operation, len(state.transcript), text, category=category, recovery_identity=recovery_identity)
+    issue = PresentedIssue(key, operation, len(state.transcript), text, category=category,
+                           recovery_identity=recovery_identity, presentation_label=presentation_label)
     return replace(state, issues=(*state.issues[-255:], issue),
                    transcript=(*state.transcript, TranscriptEntry(kind=kind, text=text)))
 
@@ -420,7 +423,8 @@ def _recover_issues(state: AppState, operation: str, recovery_identity: str) -> 
                 and (issue.recovery_identity == recovery_identity or issue.category == "network")):
             issues[i] = replace(issue, recovered=True)
             transcript[issue.index] = TranscriptEntry(kind="info", text=
-                f"{issue.text} (seen {issue.count} times; recovered by successful operation receipt)")
+                issue.presentation_label or issue.operation.partition(":")[0], details=(
+                    f"Recovered after {issue.count} failed attempt{'s' if issue.count != 1 else ''}",))
             changed = True
     return replace(state, issues=tuple(issues), transcript=tuple(transcript),
                    transcript_revision=state.transcript_revision + 1) if changed else state
@@ -593,9 +597,11 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                         continue
                     groups.setdefault(issue_category(issue, ev), []).append(issue)
                 for category, notices in groups.items():
-                    state = _present_issue(state, operation, sanitize_text(display_tool_name(ev.name)) +
-                                           (" · " + context if context else "") + ": " + "; ".join(notices),
-                                           category=category, recovery_identity=recovery_identity)
+                    presentation_label = sanitize_text(display_tool_name(ev.name) +
+                                                       (" · " + context if context else ""))
+                    state = _present_issue(state, operation, presentation_label + ": " + "; ".join(notices),
+                                           category=category, recovery_identity=recovery_identity,
+                                           presentation_label=presentation_label)
             completed = bool(call and ev.status in {"success", "observation"} and not ev.err
                              and all(issue_category(issue, ev) in {"diagnostic", "incomplete"} for issue in issues))
             if completed and ev.name == "workflow":

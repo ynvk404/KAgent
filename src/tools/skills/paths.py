@@ -8,7 +8,7 @@ import hashlib
 import json
 import uuid
 
-from src.tools.common.outcome import ToolOutput
+from src.tools.common.outcome import ErrorKind, ToolOutput
 
 from src.skills.registry import Registry as SkillRegistry
 
@@ -115,15 +115,24 @@ class SkillFilePages:
     def __init__(self):
         self.sources: dict[str, tuple[str, str, str]] = {}
 
-    def preview(self, path: Path, heading: str, args: dict, limit: int) -> ToolOutput:
+    def preview(self, path: Path, heading: str, args: dict, limit: int, *,
+                reader: str, source_args: dict[str, str]) -> ToolOutput:
+        def paging_error(message: str, kind: ErrorKind) -> ToolOutput:
+            recovery = {'tool': reader, 'arguments': {**source_args, 'limit': limit, 'start_char': 0}}
+            return ToolOutput(message + '\nRecovery: ' + json.dumps(recovery)
+                              + '\nRetry this fresh first-page call once, without source_ref. '
+                                'Copy the published Next page arguments exactly; never guess a reference or offset. '
+                                'If recovery still fails, report the limitation instead of repeating calls.',
+                              status='error', error_kind=kind)
+
         start = args.get('start_char', 0)
         ref = args.get('source_ref')
         if type(start) is not int or start < 0:
             return ToolOutput('error: start_char must be a non-negative Unicode character offset',
                               status='error', error_kind='invalid_args')
         if (start and not ref) or (ref is not None and not isinstance(ref, str)):
-            return ToolOutput('error: continuation requires the source_ref published by this reader',
-                              status='error', error_kind='invalid_args')
+            return paging_error('error: continuation requires the source_ref published by this reader',
+                                'invalid_args')
         with path.open('rb') as source:
             data = source.read(MAX_BYTES + 1)
         if len(data) > MAX_BYTES:
@@ -131,8 +140,8 @@ class SkillFilePages:
                               status='error', error_kind='invalid_args')
         identity = (str(path.resolve()), heading, hashlib.sha256(data).hexdigest())
         if ref is not None and self.sources.get(ref) != identity:
-            return ToolOutput('error: auxiliary source_ref unavailable or source changed; request a fresh first page',
-                              status='error', error_kind='reference_unavailable')
+            return paging_error('error: auxiliary source_ref unavailable or source changed; request a fresh first page',
+                                'reference_unavailable')
         raw = data.decode('utf-8')
         if start > len(raw):
             return ToolOutput('error: start_char exceeds this source', status='error', error_kind='invalid_args')
@@ -147,10 +156,21 @@ class SkillFilePages:
         # range metadata accounts for the exact content before its notices.
         if clipped or ref is not None:
             if ref is None:
-                ref = 'sf_' + uuid.uuid4().hex
-                if len(self.sources) >= 256:
-                    del self.sources[next(iter(self.sources))]
-                self.sources[ref] = identity
+                # Re-reading an unchanged first page must not churn its identity.
+                ref = next((key for key, value in self.sources.items() if value == identity), None)
+                if ref is None:
+                    ref = 'sf_' + uuid.uuid4().hex
+                    if len(self.sources) >= 256:
+                        del self.sources[next(iter(self.sources))]
+                    self.sources[ref] = identity
+            if clipped:
+                next_call = {'tool': reader, 'arguments': {
+                    **source_args, 'limit': limit, 'source_ref': ref, 'start_char': end,
+                }}
+                # Keep the actionable continuation ahead of the potentially
+                # bounded body, as well as the legacy detailed footer.
+                title, separator, content = result.partition('\n')
+                result = title + ' | Next page: ' + json.dumps(next_call) + separator + content
             result += '\nContinuation: ' + json.dumps({
                 'source_ref': ref, 'sha256': identity[2], 'offset_unit': 'unicode_characters',
                 'start_char': start, 'end_char': end, 'next_start_char': end if clipped else None, 'source_chars': len(raw),
