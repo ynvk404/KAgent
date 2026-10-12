@@ -1,0 +1,24 @@
+"""Small action hints supplement the existing planner without routing work."""
+from src.agent.decision_planner import PlannerContext
+from src.tools.workflow.action_view import ActionView
+
+
+def render_action_guidance(view: ActionView, context: PlannerContext) -> str:
+    lines = [
+        "Workflow action guidance:",
+        "Available = exposed for consideration, not permission or guaranteed execution. "
+        "Recommended = conditional on current runtime state. "
+        "Excluded = incompatible with the verified objective contract.",
+    ]
+    if view.excluded:
+        lines.append("Excluded: " + ", ".join(view.excluded) + ".")
+    if any(c.status == "validating" for c in context.candidates):
+        lines.append("Recommended: record_evidence for usable sources; record_result for the active attempt's honest outcome, including unresolved closure.")
+    elif context.candidates:
+        lines.append("Recommended: list to inspect current work; start_validation only with the resolved validator and current prerequisites. Generic restrictions still apply.")
+    else:
+        lines.append("Recommended: record_candidate for an observed hypothesis; list for canonical work.")
+    if context.coverage_sync_candidate_ids or any(c.coverage_synced is False for c in context.candidates):
+        lines.append("Recommended: sync_coverage when the accepted result and proof remain intact.")
+    lines.append("Keep proof repair, exact retries/cleanup updates and explicit retests available; runtime rechecks every call.")
+    return "\n".join(lines)
