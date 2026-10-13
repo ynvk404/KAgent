@@ -13,6 +13,7 @@ from typing import Any
 from src.redaction.redact import apply_evidence as redact
 from src.tools.execution.sensitive import is_sensitive_path
 from src.permission.permission import Prompter, UserControlledRefusal
+from src.workflow.evidence_errors import EvidenceSubmissionError
 
 MAX_EVIDENCE_BYTES = 2_000_000
 
@@ -112,7 +113,7 @@ def check_proof_references(content: bytes, candidate_id: str, parents: list[str]
         if match and values.fullmatch(match[1]):
             claimed.update(re.findall(observation, re.sub(r"\[REDACTED[^\]]*\]", "", match[1])))
     if claimed - set(parents):
-        raise ValueError(
+        raise EvidenceSubmissionError("PROOF_PARENT_MISMATCH",
             "proof observation reference lacks a declared primary parent; "
             "correct the candidate artifact and dependent claims before re-registering"
         )

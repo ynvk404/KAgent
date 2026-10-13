@@ -79,31 +79,63 @@ async def governed_send(client: httpx.AsyncClient, request: httpx.Request, promp
     chunks: list[bytes] = []
     observed = 0
     complete = False
+    advancing = False
+    execution_status = "completed"
+
+    def capture_and_release():
+        nonlocal released
+        if released:
+            return
+        released = True
+        try:
+            response.extensions["runtime_observation_id"] = policy.observations.capture(
+                action, response.status_code, b"".join(chunks), complete=complete,
+                owner=source_owner, response_headers=response.headers.items(),
+                elapsed_ms=(time.monotonic() - sent_at) * 1000,
+                execution_status=execution_status, truncated=observed > cap,
+            )
+        finally:
+            reservation.release()
 
     async def capture_bytes(chunk_size=None):
-        nonlocal observed, complete
-        async for chunk in original_iterator(chunk_size):
-            room = max(0, cap - observed)
-            chunks.append(chunk[:room])
-            observed += len(chunk)
-            yield chunk
-        complete = observed <= cap
+        nonlocal observed, complete, advancing, execution_status
+        iterator = original_iterator(chunk_size)
+        try:
+            while True:
+                advancing = True
+                try:
+                    chunk = await anext(iterator)
+                except StopAsyncIteration:
+                    complete = observed <= cap
+                    break
+                finally:
+                    advancing = False
+                room = max(0, cap - observed)
+                chunks.append(chunk[:room])
+                observed += len(chunk)
+                yield chunk
+        except asyncio.CancelledError:
+            execution_status = "cancelled"
+            raise
+        except Exception:
+            execution_status = "failed"
+            raise
+        finally:
+            # HTTPX auto-closes aiter_raw before decoder/chunker flush and
+            # before the decoded iterator reports EOF. Snapshot only after
+            # that final advance; an external early close still captures
+            # immediately with complete=False.
+            if response.is_closed:
+                capture_and_release()
 
     response.aiter_bytes = capture_bytes
 
     async def release_response():
-        nonlocal released
         try:
             await close()
         finally:
-            if not released:
-                released = True
-                response.extensions["runtime_observation_id"] = policy.observations.capture(
-                    action, response.status_code, b"".join(chunks), complete=complete,
-                    owner=source_owner, response_headers=response.headers.items(),
-                    elapsed_ms=(time.monotonic() - sent_at) * 1000,
-                )
-                reservation.release()
+            if not advancing:
+                capture_and_release()
 
     response.aclose = release_response
     return response

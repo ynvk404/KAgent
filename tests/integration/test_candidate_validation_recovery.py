@@ -153,7 +153,13 @@ def filter_script(runtime, old_id):
     yield "file_write", {"path": str(runtime.policy.root / "filter-proof.md"), "content": proof_text}
     before = deepcopy(runtime.workflow.to_dict())
     wrong_owner = yield "workflow", {**registration, "observation_ids": [old_id]}
-    assert "ownership mismatch" in wrong_owner and runtime.workflow.to_dict() == before
+    assert "ownership mismatch" in wrong_owner
+    assert json.loads(wrong_owner.split('\n', 1)[1])['error']['code'] == 'SOURCE_OWNERSHIP_MISMATCH'
+    after = runtime.workflow.to_dict()
+    budget = after.pop('evidence_recovery')[aid]
+    before.pop('evidence_recovery')
+    assert after == before  # Rejection changes only attempt-scoped repair accounting.
+    assert budget['candidate_id'] == cid and budget['rejections'] == 1 and budget['paused']
     registered = json.loads((yield "workflow", registration))
     assert registered["primary_parents"] == ids
     result = json.loads((yield "workflow", {"action": "record_result", "candidate_id": cid,

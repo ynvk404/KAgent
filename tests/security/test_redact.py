@@ -226,3 +226,14 @@ def test_evidence_preserves_hex_hostname_but_masks_secrets(suffix):
     # Even a hostname-shaped value is secret when it came from credentials.
     credential_redactor = http_credential_redactor([("Cookie", f"sid={host}")])
     assert host not in credential_redactor(f"echo {url}")
+
+
+def test_phase1_scope_preserves_alias_display_and_existing_secret_guards():
+    from src.redaction.redact import apply_evidence
+    digest = "a1b2c3d4e5f67890a1b2c3d4e5f67890"
+    text = 'Password hashes in description field.\n' + json.dumps({'description': digest})
+    assert apply_evidence(text) == text
+    assert redact_payload({'content': text})['content'] == text
+    # Existing labelled credential redaction remains the pre-Phase-1 policy.
+    assert digest not in apply_evidence(f'password_hash: {digest}')
+    assert 'fixture-token' not in apply_evidence('{"token":"fixture-token"}')

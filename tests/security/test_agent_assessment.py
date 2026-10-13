@@ -555,7 +555,7 @@ async def test_unusable_source_identified_and_good_manifest_not_salvaged(runtime
     assert rejected.startswith('error: evidence-admissibility:')
     assert bad_id in rejected
     assert all(reason in rejected for reason in reasons)
-    assert 'Retry at most once' in rejected
+    assert 'Retry at most twice after the initial submission' in rejected
     assert not state.validation_results and not state.eligible_for_finding(candidate.id)
     args['observation_ids'] = [good_id]
     assert json.loads(await registry.execute('workflow', args, None, p))['ok']

@@ -863,6 +863,24 @@ Markdown proof or conversation memory. Check every claimed repetition against
 distinct executed observations: repeating a sentence, registering another
 snapshot or reusing an observation ID does not establish repeatability.
 
+Before writing proof, reconcile every countable claim against that ledger:
+successful exploit executions, complete positive repetitions, controls and errors.
+Use the effective request and actual response to assign each proof label
+(`control`, `positive`, `error`, `incomplete`); do not copy a label from an earlier
+LLM summary or change the controller's source association. A complete control
+cannot become an exploit repeat because its observation ID was cited alongside
+a positive. HTTP 200 alone does not identify a successful exploit. Keep syntax
+errors separate from evidence of controlled evaluation.
+
+For example, one complete UNION positive, two complete benign controls and one
+truncated UNION positive support counts of one complete positive and two controls.
+They do not support "two successful complete exploit repetitions" or "two TRUE
+and two FALSE executions". Keep the truncated positive in the ledger as an
+incomplete capture; do not count it as a successful complete repetition or append
+it to a sufficient terminal manifest. Reconcile repeatability using the applicable
+technique's existing requirements. There is no fixed observation count for every
+SQLi technique; this checkpoint does not alter validation or evidence admissibility.
+
 Before choosing primary sources, check current candidate/attempt ownership,
 capture flags and support for each claim. Metadata-only captures cannot prove
 response content. After an admissibility rejection, inspect already captured
@@ -871,9 +889,9 @@ candidate entry and every dependent claim/excerpt, then call `record_evidence`
 with the correct `observation_ids` to register a new immutable snapshot. Replace
 `evidence_refs` before resubmitting; removing an ID from `record_result` alone
 does not repair its derived proof. Never edit registered snapshots in place or
-reuse a source from another attempt. Allow at most one repair submission within
-the existing recovery budget; do not reset it or send new HTTP probes solely to
-repair a manifest. If a valid repair is unavailable, record
+reuse a source from another attempt. Allow at most two repair submissions after
+the initial submission within the existing recovery budget; do not reset it or
+send new HTTP probes solely to repair a manifest. If a valid repair is unavailable, record
 `insufficient-evidence` and stop.
 
 ### Standard result entry template

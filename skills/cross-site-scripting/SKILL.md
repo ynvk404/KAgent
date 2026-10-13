@@ -76,21 +76,67 @@ permission or proof. Workflow list/prompt rows are summaries; use
 `workflow(action="get_input", input_id="...")` for a selected full canonical
 sanitized input, including after resume or compaction.
 
-Before recording a `confirmed` result, save a minimal redacted proof artifact,
-call `workflow(action="record_evidence", candidate_id="...",
-evidence_path="...")`, and use the returned `ev_...` ID in `evidence_refs`.
+Follow candidate → attempt → observation → evidence → result in that order.
+Record the concrete Candidate, then call `start_validation` before active probes.
+Keep its returned `attempt_id`; it is a controller identity, not one to invent.
+The HTTP evidence envelope supplies real `observation_ids` for captured requests.
+Both `confirmed` and `not-confirmed` require usable primary observations with
+current candidate/attempt ownership and registered immutable evidence. A tested
+negative is bounded to the actual API/sink and completed attempt; absence of
+usable primary evidence is `insufficient-evidence`, not a negative result.
+
+Save a minimal redacted proof artifact, then register it with
+`workflow(action="record_evidence", candidate_id="...", evidence_path="...",
+observation_ids=[...])` using its actual supporting captures. `record_evidence`
+accepts only `action`, `candidate_id`, `evidence_path`, and `observation_ids`;
+omit `attempt_id`. Use the returned `ev_...` ID in `evidence_refs`.
+`record_result` accepts the returned `attempt_id` as an equality check and the
+actual `observation_ids`, plus `assessment` containing `hypothesis`, `criteria`,
+`limitations`, `observed_impact`, and `severity`. For `not-confirmed`, include
+`completed_attempt: true` only when the bounded test actually completed.
 Keep the artifact available through finding creation and session resume.
 If coverage sync is `pending`, retry `workflow(action="sync_coverage",
 candidate_id="...")` before `confirm_finding`.
 
 Consume a matching Candidate with `workflow(action="start_validation",
-candidate_id="...")`. For a concrete direct user request, validation may begin
-immediately; record its supplied details as a Candidate for the result handoff,
+candidate_id="...")`. For a concrete direct user request, record its supplied
+details as a Candidate and start its attempt before active probes,
 without requiring prior recon/analysis. Finish every meaningful attempt
 with `workflow(action="record_result", ...)`, mapping browser-only proof to
 `browser-required` and keeping evidence as references. Use `force=true` only
 for an explicit retest or materially changed input. Call `confirm_finding`
 with the Candidate ID only after the structured outcome is `confirmed`.
+
+Submission examples below use variables returned by production tools, never
+literal placeholder IDs. `sources` contains only real observations supporting
+the proof, and `evidence_id` is the returned registration handle:
+
+```python
+# Registration after the scoped HTTP capture(s) and redacted proof write.
+{"action": "record_evidence", "candidate_id": candidate_id,
+ "evidence_path": proof_path, "observation_ids": sources}
+# Tested API negative; confirmed uses the same primary/evidence contract.
+{"action": "record_result", "candidate_id": candidate_id,
+ "attempt_id": attempt_id, "skill_name": "cross-site-scripting",
+ "outcome": "not-confirmed", "observation_ids": sources,
+ "evidence_refs": [evidence_id], "assessment": {
+     "hypothesis": "The API input reflects into an executable context",
+     "criteria": "Inspect the captured response type, encoding and surrounding syntax",
+     "limitations": "Only this API candidate was tested; DOM execution was not observed",
+     "observed_impact": "Completed probes did not establish executable API reflection",
+     "severity": "info", "completed_attempt": True}}
+# No usable primary evidence: references may be omitted, without fabricating IDs.
+{"action": "record_result", "candidate_id": candidate_id,
+ "skill_name": "cross-site-scripting", "outcome": "insufficient-evidence",
+ "deferred_reason": "The response capture was unavailable or incomplete"}
+```
+
+Every supplied reference is checked, including for unresolved outcomes. Do not
+attach another candidate/attempt's observation or proof to `insufficient-evidence`
+to release the attempt; omit unavailable references and state the limitation.
+Continuation retains the current recovery budget. A valid explicit retest starts
+a separate attempt through the existing controller flow; `force=true` alone does
+not create one or grant new authority.
 
 You have a specific candidate that `web-input-analysis` flagged
 `suspected_class: cross-site-scripting`, or that the user directly supplied
@@ -480,8 +526,9 @@ dependent claims/excerpts, then `record_evidence` with the correct
 `observation_ids` for a new immutable snapshot and replacing `evidence_refs`
 before resubmitting. Removing an observation ID alone leaves derived proof
 stale. Never edit registered snapshots in place or borrow another attempt's
-sources. Use at most one repair submission within the existing recovery budget,
-without new HTTP probes solely for manifest repair or resetting the budget.
+sources. Use at most two repair submissions after the initial submission within
+the existing recovery budget, without new HTTP probes solely for manifest repair
+or resetting the budget.
 If valid repair is unavailable, record `insufficient-evidence` and stop;
 retain `browser-required` when the missing proof is browser execution.
 
@@ -505,6 +552,11 @@ Every candidate gets exactly one outcome:
   that cannot be established reliably with the available HTTP-level
   evidence, and no browser-execution capability is available in this
   runtime to close that gap (see "Workflow at a glance").
+- `insufficient-evidence` — no usable primary observations or required proof
+  are available to support a terminal assessment. Omit unavailable references,
+  explain the limitation, and stop without claiming a negative or completion.
+- `deferred` / `authorization-required` — validation is postponed or blocked by
+  missing authority; record the reason and keep the work outstanding.
 
 An API response candidate and a client-side SPA route are separate sinks. A
 negative JSON reflection test applies only to that API candidate. If a route
@@ -512,11 +564,16 @@ such as `#/search?q=...` may flow into a DOM sink, record a separate DOM
 candidate and use `browser-required` when browser execution cannot be checked.
 Do not transfer the API result to the route. When no marker was reflected, set
 `reflection_type` to `none`; never call that observation `reflected`.
+JSON API reflection alone does not establish an executable HTML/DOM sink.
+For stored XSS, distinguish the write capture from the later rendering/readback
+capture and its observed context; declare related requests before execution
+when their identity differs. Preserve mutation/cleanup bookkeeping and report
+`browser-required` when the later execution still depends on a browser.
 
 ### Standard result entry template
 
 Optionally export every persisted candidate result — confirmed, not-confirmed,
-blocked, or browser-required — to:
+blocked, browser-required, or another honest unresolved outcome — to:
 
 `artifacts/cross-site-scripting/<target>/results.md`
 
@@ -530,7 +587,7 @@ appended in the order tested:
 - **candidate_id:** <structured Workflow Candidate ID>
 - **timestamp:** <ISO 8601 UTC timestamp when this entry was recorded, e.g. 2026-08-27T09:14:32Z>
 - **agent_session_id:** <identifier for the current agent run/session, for audit-trail correlation with logs elsewhere>
-- **outcome:** <confirmed | not-confirmed | blocked | browser-required>
+- **outcome:** <confirmed | not-confirmed | blocked | browser-required | insufficient-evidence | deferred | authorization-required>
 - **reflection_type:** <none | reflected | stored | dom-based>
 - **context:** <html-body | html-attribute | js-string | url | html-comment | css-style-attribute | css-style-block | fully-encoded | unknown>
 - **payload(s) used:** <exact detection marker and/or execution marker used, verbatim>
@@ -547,7 +604,9 @@ appended in the order tested:
 This is the durable record of what was actually tested and what was found,
 independent of whether anything gets turned into a finding. The
 `timestamp` and `agent_session_id` fields exist purely for audit
-traceability — they don't affect gating or outcome logic. `cleanup_performed`
+traceability — they don't affect gating or outcome logic. Populate them only
+from runtime-supplied values; if timestamp/session identity is unavailable,
+write `unavailable`, never invent a value. `cleanup_performed`
 exists so the stored-payload cleanup requirement in step 3 is independently
 auditable rather than trusted to have happened silently.
 

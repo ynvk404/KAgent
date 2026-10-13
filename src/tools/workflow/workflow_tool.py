@@ -39,6 +39,7 @@ from src.workflow.evidence import EvidenceArtifact, verify_evidence_reads, check
 from src.workflow.assessment import (start_attempt, references, resolve_sources, candidate_binding,
                                      seal, accepted_result, check_excerpts, DuplicateRequestAssociation)
 import uuid
+from src.workflow.evidence_errors import EvidenceSubmissionError
 from src.skills.registry import (
     Registry as SkillRegistry,
     Skill,
@@ -948,7 +949,7 @@ class WorkflowTool(Tool):
             check_proof_references((self.evidence_root / artifact.path).read_bytes(), candidate_id, ids)
             previous = self.state.evidence_sources.get(artifact.id)
             if previous is not None and previous != ids:
-                raise ValueError("immutable derived evidence source association changed")
+                raise EvidenceSubmissionError("IMMUTABLE_PARENT_CONFLICT", "immutable derived evidence source association changed")
             self.state.add_evidence(artifact)
             if ids:
                 self.state.evidence_sources[artifact.id] = ids
@@ -958,6 +959,8 @@ class WorkflowTool(Tool):
                 del self.state.selected_sources[next(iter(self.state.selected_sources))]
         except UserControlledRefusal:
             raise
+        except EvidenceSubmissionError as err:
+            return err.response("record_evidence")
         except (OSError, ValueError) as err:
             return f"error: {err}"
         return json.dumps({"ok": True, "evidence": artifact.to_dict(), "evidence_kind": "derived", "primary_parents": ids}, indent=2)
@@ -1009,15 +1012,15 @@ class WorkflowTool(Tool):
                     raise ValueError("generic mutation/impact validation unavailable")
                 snapshot = policy.generic_validation.snapshot(candidate.id)
             if not generic and result.outcome == "confirmed" and not result.evidence_refs:
-                raise ValueError("confirmed result requires an evidence reference")
+                raise EvidenceSubmissionError("MISSING_REGISTERED_EVIDENCE", "confirmed result requires an evidence reference")
             if result.evidence_refs and not self.state.evidence_matches(result.candidate_id, result.evidence_refs):
-                raise ValueError("evidence references must resolve to this candidate")
+                raise EvidenceSubmissionError("EVIDENCE_REFERENCE_MISMATCH", "evidence references must resolve to this candidate")
             evidence_binding = [self.state.evidence[ref].to_dict() for ref in result.evidence_refs]
             if result.evidence_refs and not await verify_evidence_reads(
                 [self.state.evidence[ref] for ref in result.evidence_refs],
                 self.evidence_root, prompter, signal,
             ):
-                raise ValueError("evidence artifact changed or is unavailable")
+                raise EvidenceSubmissionError("EVIDENCE_ARTIFACT_UNAVAILABLE", "evidence artifact changed or is unavailable")
             skill = self.skills.get(result.skill_name) if self.skills else None
             if not generic and self.skills is not None:
                 validator = self._require_unique_validator(candidate.candidate_class)
@@ -1043,9 +1046,11 @@ class WorkflowTool(Tool):
                     or attempt.get("epoch") != (policy.engagement.http_permissions.epoch if policy else self.evidence_epoch)
                     or attempt.get("target_revision") != (self.target.revision if self.target else None)
                     or (attempt.get("status") == "active" and attempt.get("result_position") != sum(r.candidate_id == candidate.id for r in self.state.validation_results))):
-                raise ValueError("stale active attempt ownership/epoch/target/result position")
+                raise EvidenceSubmissionError("ATTEMPT_OWNERSHIP_MISMATCH", "stale active attempt ownership/epoch/target/result position")
             if args.get("attempt_id") is not None and args["attempt_id"] != aid:
-                raise ValueError("stale/wrong attempt identity")
+                missing_start = not attempt or attempt.get("status") != "active"
+                raise EvidenceSubmissionError("MISSING_VALIDATION_START" if missing_start else "ATTEMPT_IDENTITY_MISMATCH",
+                    "stale/wrong attempt identity", validation_step=missing_start)
             latest = self.state.latest_result(candidate.id)
             # A transport retry/cleanup update preserves the exact revision.
             # An explicit new start has a different attempt and never dedups.
@@ -1073,7 +1078,8 @@ class WorkflowTool(Tool):
                     "eligible_for_confirm_finding": self.state.eligible_for_finding(candidate.id),
                     "coverage_sync": "synced" if latest.coverage_synced else "not-pending"})
             if terminal and (not attempt or attempt.get("status") != "active"):
-                raise ValueError("terminal assessment requires successful start_validation")
+                raise EvidenceSubmissionError("MISSING_VALIDATION_START",
+                    "terminal assessment requires successful start_validation", validation_step=True)
             assessment = args.get("assessment", {})
             if not isinstance(assessment, dict) or len(json.dumps(assessment)) > 6000:
                 raise ValueError("assessment must be a bounded object")
@@ -1081,7 +1087,7 @@ class WorkflowTool(Tool):
                 raise ValueError("assessment provenance/binding fields are controller-owned")
             if terminal:
                 if not refs:
-                    raise ValueError("both terminal outcomes require registered evidence")
+                    raise EvidenceSubmissionError("MISSING_REGISTERED_EVIDENCE", "both terminal outcomes require registered evidence")
                 if not all(isinstance(assessment.get(key), str) and assessment[key].strip()
                            for key in ("hypothesis", "criteria", "limitations", "observed_impact", "severity")):
                     raise ValueError("terminal assessment requires hypothesis, criteria, limitations, observed_impact, severity")
@@ -1108,7 +1114,7 @@ class WorkflowTool(Tool):
             if any(not self.state.evidence[ref].is_available_for_resume(self.evidence_root) for ref in refs):
                 raise ValueError("evidence integrity changed during result submission")
             if any(parent not in ids for ref in refs for parent in self.state.evidence_sources.get(ref, [])):
-                raise ValueError("derived evidence requires its declared primary source parents")
+                raise EvidenceSubmissionError("DERIVED_PARENT_MISMATCH", "derived evidence requires its declared primary source parents")
             # Sources are checked again after every evidence permission await.
             result.assessment_contract_version = 2
             result.assessment_source = "agent"
@@ -1149,6 +1155,8 @@ class WorkflowTool(Tool):
             elif (policy is not None and policy.generic_validation.expert_attempt is not None
                   and policy.generic_validation.expert_attempt[0] == candidate.id):
                 policy.generic_validation.expert_attempt = None
+        except EvidenceSubmissionError as err:
+            return err.response("record_result")
         except (TypeError, ValueError) as err:
             return f"error: {err}"
         sync_error: str | None = None

@@ -106,10 +106,10 @@ class RepairClient(ScriptedClient):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('repair,expected,max_calls', [
     ('usable', 'not-confirmed', 11),
-    ('identical', 'insufficient-evidence', 8),
+    ('identical', 'insufficient-evidence', 9),
     ('batch', 'insufficient-evidence', 8),
-    ('schema-retry', 'insufficient-evidence', 8),
-    ('probe-loop', 'insufficient-evidence', 10),
+    ('schema-retry', 'insufficient-evidence', 9),
+    ('probe-loop', 'insufficient-evidence', 13),
     ('missing-step', 'not-confirmed', 12),
     ('missing-after-repair', 'not-confirmed', 13),
 ])
@@ -137,7 +137,7 @@ async def test_agent_terminal_evidence_recovery_is_bounded(
     else:
         assert ex.stop_reason == 'workflow_blocked'
         assert result['evidence_manifest'] == []
-        assert len(mock_http) <= 5
+        assert len(mock_http) <= (8 if repair == 'probe-loop' else 2)
         session = json.loads((tmp_path / '.kagent/sessions' /
             (ex.runtime_metadata['session_id'] + '.json')).read_text())
         calls = {tc['id'] for message in session['messages'] for tc in (message.get('tool_calls') or [])}
@@ -147,9 +147,9 @@ async def test_agent_terminal_evidence_recovery_is_bounded(
         assert all(message['tool_call_id'] in calls for message in recovery_results)
         if repair == 'batch':
             # Candidate creation is excluded: load/start/2 HTTP/write/evidence/
-            # first rejected result/one retry/controller unresolved = 9.
+            # first rejected result/two retries/controller unresolved = 10.
             assert ex.metrics is not None
-            assert ex.metrics['tools']['executed'] == 9
+            assert ex.metrics['tools']['executed'] == 10
 
 
 @pytest.mark.asyncio
@@ -203,7 +203,7 @@ async def test_missing_step_then_schema_error_has_deterministic_closure(
     client = MissingStepSchemaClient(reject_closure)
     ex = await execute_case(op, settings, tmp_path, 'run', 'execution', client)
     agent = built_agents[0]
-    assert client.step == 12 < settings.agent_calls
+    assert client.step == 13 < settings.agent_calls
     assert ex.stop_reason != 'max_steps'
     assert len(mock_http) == 3
     assert mock_http[-1].url.params['q'] == 'readback'
@@ -229,7 +229,7 @@ async def test_missing_step_then_schema_error_has_deterministic_closure(
         assert 'Bounded evidence recovery closure failed' in capsys.readouterr().err
         assert latest is None
         assert recovery_results[0].content.startswith('error:')
-        assert agent._evidence_recovery_rejections[client.candidate] == 2
+        assert agent._evidence_recovery_rejections[client.candidate] == 3
         assert client.candidate in agent._evidence_recovery
         assert agent._evidence_recovery[client.candidate][1] == 1
         assert not any('Validation stopped with insufficient evidence' in m.content for m in messages)

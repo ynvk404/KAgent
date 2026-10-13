@@ -6575,64 +6575,14 @@ def whole_target_max_steps_synthesis() -> ChatResponse:
 
 
 @pytest.mark.asyncio
-async def test_max_steps_direct_default_resolves_to_twenty():
-    echo = EchoTool()
-    responses = [
-        tool_batch(agent_tool_call(f"call-{i}", "echo", {"msg": "test"}))
-        for i in range(20)
-    ]
-    responses.append(direct_mode_synthesis())
-    agent, client = refusal_agent(responses, [echo], AlwaysAllow(), max_steps=None)
-    collector = collect()
-    await agent.run("Explain how SQL injection works", FakeSignal(), collector["sink"])
-    assert collector["events"][-1].stop_reason == "max_steps"
-    assert len(client.requests) == 21
-    assert echo.calls == 20
-
-
-@pytest.mark.asyncio
-async def test_max_steps_whole_target_default_resolves_to_forty():
-    class ContinuousProgressTool(EchoTool):
-        def __init__(self):
-            super().__init__()
-            self.state: WorkflowState | None = None
-
-        async def run(self, args, signal, prompter) -> str:
-            self.calls += 1
-            if self.state is not None and self.state.objective is not None:
-                objective = self.state.objective
-                self.state.add_candidate(Candidate(
-                    candidate_class="sql-injection",
-                    target=objective.target_origin or "https://target.test",
-                    endpoint=f"/route-{self.calls}",
-                    objective_id=objective.id,
-                ))
-            return "ok"
-
-    tool = ContinuousProgressTool()
-    responses = [
-        tool_batch(agent_tool_call(f"fact-{i}", "echo", {"i": i}))
-        for i in range(40)
-    ]
-    responses.append(whole_target_max_steps_synthesis())
-    agent, client = whole_target_agent(responses, [tool], max_steps=None)
-    tool.state = agent.workflow
-    collector = collect()
-    await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
-    assert collector["events"][-1].stop_reason == "max_steps"
-    assert len(client.requests) == 41  # 40 loop iterations + 1 synthesis
-    assert tool.calls == 40
-
-
-@pytest.mark.asyncio
-async def test_max_steps_direct_explicit_override_wins():
+async def test_max_steps_direct_default_resolves_to_thirty():
     echo = EchoTool()
     responses = [
         tool_batch(agent_tool_call(f"call-{i}", "echo", {"msg": "test"}))
         for i in range(30)
     ]
     responses.append(direct_mode_synthesis())
-    agent, client = refusal_agent(responses, [echo], AlwaysAllow(), max_steps=30)
+    agent, client = refusal_agent(responses, [echo], AlwaysAllow(), max_steps=None)
     collector = collect()
     await agent.run("Explain how SQL injection works", FakeSignal(), collector["sink"])
     assert collector["events"][-1].stop_reason == "max_steps"
@@ -6641,7 +6591,7 @@ async def test_max_steps_direct_explicit_override_wins():
 
 
 @pytest.mark.asyncio
-async def test_max_steps_whole_target_explicit_override_wins():
+async def test_max_steps_whole_target_default_resolves_to_sixty():
     class ContinuousProgressTool(EchoTool):
         def __init__(self):
             super().__init__()
@@ -6662,27 +6612,80 @@ async def test_max_steps_whole_target_explicit_override_wins():
     tool = ContinuousProgressTool()
     responses = [
         tool_batch(agent_tool_call(f"fact-{i}", "echo", {"i": i}))
-        for i in range(30)
+        for i in range(60)
     ]
     responses.append(whole_target_max_steps_synthesis())
-    agent, client = whole_target_agent(responses, [tool], max_steps=30)
+    agent, client = whole_target_agent(responses, [tool], max_steps=None)
     tool.state = agent.workflow
     collector = collect()
     await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
     assert collector["events"][-1].stop_reason == "max_steps"
-    assert len(client.requests) == 31  # 30 loop iterations + 1 synthesis
-    assert tool.calls == 30
+    assert len(client.requests) == 61  # 60 loop iterations + 1 synthesis
+    assert tool.calls == 60
 
 
 @pytest.mark.asyncio
-async def test_max_steps_run_options_override_wins():
+@pytest.mark.parametrize('override', [12, 65])
+async def test_max_steps_direct_explicit_override_wins(override):
+    echo = EchoTool()
+    responses = [
+        tool_batch(agent_tool_call(f"call-{i}", "echo", {"msg": "test"}))
+        for i in range(override)
+    ]
+    responses.append(direct_mode_synthesis())
+    agent, client = refusal_agent(responses, [echo], AlwaysAllow(), max_steps=override)
+    collector = collect()
+    await agent.run("Explain how SQL injection works", FakeSignal(), collector["sink"])
+    assert collector["events"][-1].stop_reason == "max_steps"
+    assert len(client.requests) == override + 1
+    assert echo.calls == override
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('override', [12, 65])
+async def test_max_steps_whole_target_explicit_override_wins(override):
+    class ContinuousProgressTool(EchoTool):
+        def __init__(self):
+            super().__init__()
+            self.state: WorkflowState | None = None
+
+        async def run(self, args, signal, prompter) -> str:
+            self.calls += 1
+            if self.state is not None and self.state.objective is not None:
+                objective = self.state.objective
+                self.state.add_candidate(Candidate(
+                    candidate_class="sql-injection",
+                    target=objective.target_origin or "https://target.test",
+                    endpoint=f"/route-{self.calls}",
+                    objective_id=objective.id,
+                ))
+            return "ok"
+
+    tool = ContinuousProgressTool()
+    responses = [
+        tool_batch(agent_tool_call(f"fact-{i}", "echo", {"i": i}))
+        for i in range(override)
+    ]
+    responses.append(whole_target_max_steps_synthesis())
+    agent, client = whole_target_agent(responses, [tool], max_steps=override)
+    tool.state = agent.workflow
+    collector = collect()
+    await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
+    assert collector["events"][-1].stop_reason == "max_steps"
+    assert len(client.requests) == override + 1  # loop iterations + 1 synthesis
+    assert tool.calls == override
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('configured', [None, 5, 80])
+async def test_max_steps_run_options_override_wins(configured):
     echo = EchoTool()
     responses = [
         tool_batch(agent_tool_call(f"call-{i}", "echo", {"msg": "test"}))
         for i in range(10)
     ]
     responses.append(direct_mode_synthesis())
-    agent, client = refusal_agent(responses, [echo], AlwaysAllow(), max_steps=None)
+    agent, client = refusal_agent(responses, [echo], AlwaysAllow(), max_steps=configured)
     collector = collect()
     await agent.run(
         "Explain how SQL injection works",

@@ -569,11 +569,11 @@ async def test_evidence_receipt_uses_existing_readonly_workflow_action(scenario,
     s = scenario
     prepared = []
     original = s.policy.prepare
-    def prepare(tool, args):
+    def prepare(tool, args, **kwargs):
         if tool.name() == 'workflow':
             prepared.append(deepcopy(args))
             assert args['action'] == 'list'
-        return original(tool, args)
+        return original(tool, args, **kwargs)
     monkeypatch.setattr(s.policy, 'prepare', prepare)
     await enrich_cwe(s.app, [s.cand.id])
     assert prepared and s.output[-1].entry.kind == 'system' and s.policy.active == 0

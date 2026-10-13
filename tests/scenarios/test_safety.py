@@ -182,7 +182,7 @@ async def test_s02_same_binding_repeat_annotations_and_explicit_restart(scenario
     await scenario_runner.run(safety_definition("S02", enrichment_script))
 
 
-def misuse_script(runtime, scenario):
+def misuse_script(runtime, scenario, evidence_fault):
     original = direct_script(runtime, scenario)
     feedback = None
     while True:
@@ -198,11 +198,14 @@ def misuse_script(runtime, scenario):
         if name == "workflow" and args["action"] == "start_validation":
             yield from rejected(runtime, name, {**args, "candidate_id": "cand_unknown"}, "unknown candidate")
         if name == "workflow" and args["action"] == "record_evidence":
-            yield from rejected(runtime, name, {**args, "observation_ids": ["obs_" + "f" * 32]}, "primary evidence reference unavailable")
+            if evidence_fault == "unavailable-source":
+                yield from rejected(runtime, name, {**args, "observation_ids": ["obs_" + "f" * 32]}, "primary evidence reference unavailable")
             yield from rejected(runtime, name, {**args, "attempt_id": "model-owner"}, "does not accept attempt_id", kind="invalid_args")
         if name == "workflow" and args["action"] == "record_result":
-            yield from rejected(runtime, name, {**args, "attempt_id": "attempt_unknown"}, "stale/wrong attempt identity")
-            yield from rejected(runtime, name, {**args, "evidence_refs": ["ev_unknown"]}, "evidence references must resolve to this candidate")
+            if evidence_fault == "wrong-attempt":
+                yield from rejected(runtime, name, {**args, "attempt_id": "attempt_unknown"}, "stale/wrong attempt identity")
+            elif evidence_fault == "wrong-proof":
+                yield from rejected(runtime, name, {**args, "evidence_refs": ["ev_unknown"]}, "evidence references must resolve to this candidate")
         feedback = yield name, args
 
 
@@ -210,9 +213,15 @@ def misuse_script(runtime, scenario):
     ("sql-injection", "GET", "/filter", "category", "Gifts", "confirmed"),
     ("ssti", "POST", "/preview", "template", "plain-marker", "not-confirmed"),
 ])
+@pytest.mark.parametrize("evidence_fault", ["unavailable-source", "wrong-attempt", "wrong-proof"])
 async def test_s03_s15_wrong_ids_raw_json_reserved_fields_then_corrected_proof(
-        scenario_runner, cls, method, endpoint, parameter, value, outcome):
-    await scenario_runner.run(safety_definition("S03-S15-" + cls, misuse_script,
+        scenario_runner, cls, method, endpoint, parameter, value, outcome, evidence_fault):
+    # Each evidence fault gets its own production attempt and one corrected
+    # submission. Multiple rejected repairs in one attempt must exhaust the
+    # budget, covered by the recovery contract instead of bypassed here.
+    def script(runtime, scenario):
+        return misuse_script(runtime, scenario, evidence_fault)
+    await scenario_runner.run(safety_definition("S03-S15-" + cls + '-' + evidence_fault, script,
         cls=cls, method=method, endpoint=endpoint, parameter=parameter, value=value, outcome=outcome))
 
 

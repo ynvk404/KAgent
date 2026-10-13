@@ -1068,6 +1068,8 @@ class WorkflowState:
     persisted_findings: dict[str, str] = field(default_factory=dict)
     current_phase: str | None = None
     attempts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Submission repair accounting, separate from immutable attempt declarations.
+    evidence_recovery: dict[str, dict[str, Any]] = field(default_factory=dict)
     selected_sources: dict[str, dict[str, Any]] = field(default_factory=dict)
     evidence_sources: dict[str, list[str]] = field(default_factory=dict)
     mutation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
@@ -2004,6 +2006,7 @@ class WorkflowState:
     def clear(self) -> None:
         self.objective = None
         self.attempts.clear()
+        self.evidence_recovery.clear()
         self.selected_sources.clear()
         self.evidence_sources.clear()
         self.candidates.clear()
@@ -2020,6 +2023,7 @@ class WorkflowState:
 
     def replace_from(self, other: WorkflowState) -> None:
         self.attempts = deepcopy(other.attempts)
+        self.evidence_recovery = deepcopy(other.evidence_recovery)
         self.selected_sources = deepcopy(other.selected_sources)
         self.evidence_sources = deepcopy(other.evidence_sources)
         self.version = other.version
@@ -2042,6 +2046,7 @@ class WorkflowState:
         return {
             "version": self.version,
             "attempts": deepcopy(self.attempts),
+            "evidence_recovery": deepcopy(self.evidence_recovery),
             "selected_sources": deepcopy(self.selected_sources),
             "evidence_sources": deepcopy(self.evidence_sources),
             "objective": self.objective.to_dict() if self.objective else None,
@@ -2093,6 +2098,8 @@ class WorkflowState:
                 if row.get("status") == "active":
                     row["status"] = "interrupted"
         state.objective = WorkflowObjective.from_dict(value.get("objective"))
+        from src.workflow.evidence_recovery import restored_budgets
+        state.evidence_recovery = restored_budgets(value.get("evidence_recovery"), state.attempts)
 
         raw_candidates = value.get("candidates", [])
         if isinstance(raw_candidates, dict):

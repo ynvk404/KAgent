@@ -58,8 +58,12 @@ async def test_corrected_candidate_retry_recovers_owned_issue_once(tmp_path, who
     output = await result(app, tool, 'good', args, call(app, 'good', args))
     assert json.loads(output)['ok'] is True
     assert len(state.candidates) == 1
-    assert app.state.issues[0].recovered
-    assert 'objective_id is assigned by the runtime' in app.state.transcript[0].text
+    issue = app.state.issues[0]
+    assert issue.recovered and issue.count == 1
+    assert 'objective_id is assigned by the runtime' in issue.text
+    recovered_entry = app.state.transcript[issue.index]
+    assert recovered_entry.kind == 'info'
+    assert 'Recovered after 1 failed attempt' in recovered_entry.details
     await result(app, tool, 'again', args, call(app, 'again', args))
     assert len(state.candidates) == 1
     assert len(app.state.issues) == 1

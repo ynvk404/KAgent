@@ -1,4 +1,8 @@
 from src.workflow.assessment import accepted_result
+from src.workflow.evidence_errors import evidence_repair_kind
+from src.workflow.evidence_recovery import (
+    MAX_EVIDENCE_REJECTIONS, MAX_TERMINAL_REPAIR_TURNS, current_budget, closure_args,
+)
 from src.agent.events import Invocation
 from src.agent.scope import runtime_scope
 import traceback
@@ -147,8 +151,8 @@ R = TypeVar("R")
 
 EventSink = Callable[[AgentEvent], None]
 
-DEFAULT_MAX_STEPS = 20
-DEFAULT_WHOLE_TARGET_MAX_STEPS = 40
+DEFAULT_MAX_STEPS = 30
+DEFAULT_WHOLE_TARGET_MAX_STEPS = 60
 MAX_CONSECUTIVE_NO_PROGRESS = 4
 MAX_PHASE_EXPLORATION_STEPS = 8
 REASONING_POLICY_ID = "reasoning-baseline-v1"
@@ -3897,7 +3901,13 @@ class Agent:
         evidence_recovery: dict[str, tuple[int | None, int, dict]] = {}
         self._evidence_recovery = evidence_recovery
         self._evidence_recovery_rejections: dict[str, int] = {}
-
+        for budget in self.workflow.evidence_recovery.values():
+            cid = budget["candidate_id"]
+            if budget["closed"] or current_budget(self.workflow, cid) is not budget:
+                continue
+            self._evidence_recovery_rejections[cid] = budget["rejections"]
+            evidence_recovery[cid] = (None if budget["paused"] else -budget["repair_turns"] - 1,
+                                     budget["rejections"], budget["closure_args"])
         if requested_goals_cancelled:
             return await self._whole_target_synthesis(
                 working, signal, emit,
@@ -3910,6 +3920,12 @@ class Agent:
                 ),
                 max_steps=max_steps,
             )
+
+        exhausted = [(cid, args) for cid, (first, count, args) in evidence_recovery.items()
+                     if count >= MAX_EVIDENCE_REJECTIONS
+                     or (first is not None and first <= -MAX_TERMINAL_REPAIR_TURNS - 1)]
+        if exhausted:
+            return await self._stop_evidence_recovery(exhausted, signal, emit, working, step=0)
 
         for step in range(max_steps):
 
@@ -4309,6 +4325,7 @@ class Agent:
                     emit,
                     working,
                     defer_admission=True,
+                    repair_step=step,
                 )
             finally:
                 if whole_target:
@@ -4320,16 +4337,30 @@ class Agent:
                 return "all_tools_refused"
 
             for execution in execution_batch.calls:
-                if execution.name != "workflow" or execution.args.get("action") != "record_result":
+                if execution.name != "workflow" or execution.args.get("action") not in {"record_result", "record_evidence", "start_validation"}:
                     continue
                 cid = execution.args.get("candidate_id")
                 if not isinstance(cid, str):
                     continue
                 text = str(execution.result.result)
-                if text.startswith("error: evidence-admissibility:"):
-                    first, count, _ = evidence_recovery.get(cid, (step, 0, {}))
-                    evidence_recovery[cid] = (step if first is None else first, count + 1, execution.args)
-                elif text.startswith("error: declared required request lacks completed evidence;"):
+                if execution.args.get("action") == "start_validation":
+                    budget = current_budget(self.workflow, cid)
+                    if budget is not None and not budget["closed"] and budget["rejections"]:
+                        evidence_recovery[cid] = (None if budget["paused"] else step - budget["repair_turns"],
+                                                 budget["rejections"], budget["closure_args"])
+                    continue
+                repair_kind = evidence_repair_kind(text)
+                if repair_kind == "manifest":
+                    registration = execution.args.get("action") == "record_evidence"
+                    first, count, _ = evidence_recovery.get(cid, (None if registration else step, 0, {}))
+                    budget = current_budget(self.workflow, cid)
+                    if budget is not None and not budget["closed"]:
+                        # Registration may precede independent validation work.
+                        # Count its rejections, but start the terminal repair
+                        # clock only when an assessment is actually rejected.
+                        evidence_recovery[cid] = (first if registration else step if first is None else first,
+                                                 count + 1, budget["closure_args"])
+                elif repair_kind == "validation-step":
                     # Workflow identified an independent, predeclared validation
                     # step. Suspend the repair-turn clock, retaining the entry
                     # and consumed submission budget until the next submission.
@@ -4341,60 +4372,27 @@ class Agent:
                         committed = json.loads(text).get("ok") is True
                     except (ValueError, AttributeError):
                         committed = False
-                    if committed:
+                    if committed and execution.args.get("action") == "record_result":
                         evidence_recovery.pop(cid, None)
                         self._evidence_recovery_rejections.pop(cid, None)
-                    elif (cid in evidence_recovery
+                    elif (cid in evidence_recovery and execution.args.get("action") == "record_result"
                             and execution.args.get("outcome") in {"confirmed", "not-confirmed"}):
                         first, count, _ = evidence_recovery[cid]
                         evidence_recovery[cid] = (step if first is None else first, count, execution.args)
+            for cid, (first, _, _) in evidence_recovery.items():
+                budget = current_budget(self.workflow, cid)
+                if budget is not None and not budget["closed"]:
+                    budget["repair_turns"] = min(MAX_TERMINAL_REPAIR_TURNS + 1,
+                                                step - first if first is not None else budget["repair_turns"])
+                    budget["paused"] = first is None
             exhausted_repairs = [
                 (cid, args) for cid, (first, count, args) in evidence_recovery.items()
-                if count >= 2 or self._evidence_recovery_rejections.get(cid, 0) >= 2
-                or (first is not None and step - first >= 3)
+                if count >= MAX_EVIDENCE_REJECTIONS
+                or self._evidence_recovery_rejections.get(cid, 0) >= MAX_EVIDENCE_REJECTIONS
+                or (first is not None and step - first >= MAX_TERMINAL_REPAIR_TURNS)
             ]
             if exhausted_repairs:
-                for cid, args in exhausted_repairs:
-                    # Close through the same registry and workflow contract. Do
-                    # not publish a terminal conclusion or salvage invalid IDs.
-                    unresolved = {key: args[key] for key in (
-                        "skill_name", "techniques", "mutation_performed", "cleanup_state", "cleanup_status"
-                    ) if key in args}
-                    unresolved.update(action="record_result", candidate_id=cid,
-                        outcome="insufficient-evidence",
-                        deferred_reason="Bounded terminal evidence repair exhausted; no admissible conclusion recorded")
-                    repair_calls = [ToolCall(
-                        f"evidence-recovery-{step}-{cid}",
-                        FunctionCall("workflow", json.dumps(unresolved)),
-                    )]
-                    # Controller actions also need a matching assistant tool
-                    # call so the persisted conversation can be resumed.
-                    repair_message = Message("assistant",
-                        "Runtime action: close validation after bounded evidence repair.",
-                        tool_calls=repair_calls)
-                    self.history.append(repair_message)
-                    working.append(repair_message)
-                    closure = await self.execute_tool_calls(
-                        repair_calls, signal, emit, working, defer_admission=True)
-                    closure_text = str(closure.calls[0].result.result)
-                    try:
-                        closure_payload = json.loads(closure_text)
-                    except ValueError as err:
-                        raise RuntimeError(
-                            f"Bounded evidence recovery closure failed for {cid}: {redact(closure_text)}"
-                        ) from err
-                    latest = self.workflow.latest_result(cid)
-                    if (not isinstance(closure_payload, dict) or closure_payload.get("ok") is not True
-                            or latest is None or latest.outcome != "insufficient-evidence"):
-                        raise RuntimeError(f"Bounded evidence recovery closure did not commit for {cid}")
-                    evidence_recovery.pop(cid, None)
-                    self._evidence_recovery_rejections.pop(cid, None)
-                message = Message("assistant", "Validation stopped with insufficient evidence after bounded terminal evidence repair.")
-                self.history.append(message)
-                working.append(message)
-                emit({"type": "assistant-text", "text": message.content})
-                await self.save()
-                return "workflow_blocked"
+                return await self._stop_evidence_recovery(exhausted_repairs, signal, emit, working, step=step)
 
             if whole_target:
                 status, actionable, blockers = self._whole_target_state()
@@ -4541,6 +4539,42 @@ class Agent:
             }
         )
         return "max_steps"
+
+    async def _stop_evidence_recovery(self, repairs, signal, emit, working, *, step):
+        for cid, args in repairs:
+            # Close through the same registry and workflow contract. Never
+            # publish a terminal conclusion or salvage invalid IDs/parents.
+            unresolved = {key: args[key] for key in (
+                "skill_name", "techniques", "mutation_performed", "cleanup_state", "cleanup_status"
+            ) if key in args}
+            unresolved.update(action="record_result", candidate_id=cid,
+                outcome="insufficient-evidence",
+                deferred_reason="Bounded terminal evidence repair exhausted; no admissible conclusion recorded")
+            repair_calls = [ToolCall(f"evidence-recovery-{step}-{cid}",
+                                    FunctionCall("workflow", json.dumps(unresolved)))]
+            # A matching assistant call keeps the saved transcript resumable.
+            repair_message = Message("assistant", "Runtime action: close validation after bounded evidence repair.",
+                                     tool_calls=repair_calls)
+            self.history.append(repair_message)
+            working.append(repair_message)
+            closure = await self.execute_tool_calls(repair_calls, signal, emit, working, defer_admission=True)
+            closure_text = str(closure.calls[0].result.result)
+            try:
+                closure_payload = json.loads(closure_text)
+            except ValueError as err:
+                raise RuntimeError(f"Bounded evidence recovery closure failed for {cid}: {redact(closure_text)}") from err
+            latest = self.workflow.latest_result(cid)
+            if (not isinstance(closure_payload, dict) or closure_payload.get("ok") is not True
+                    or latest is None or latest.outcome != "insufficient-evidence"):
+                raise RuntimeError(f"Bounded evidence recovery closure did not commit for {cid}")
+            self._evidence_recovery.pop(cid, None)
+            self._evidence_recovery_rejections.pop(cid, None)
+        message = Message("assistant", "Validation stopped with insufficient evidence after bounded terminal evidence repair.")
+        self.history.append(message)
+        working.append(message)
+        emit({"type": "assistant-text", "text": message.content})
+        await self.save()
+        return "workflow_blocked"
 
     @staticmethod
     def _sanitize_response(resp: ChatResponse) -> None:
@@ -5028,6 +5062,7 @@ class Agent:
         working: list[Message],
         *,
         defer_admission: bool = False,
+        repair_step: int | None = None,
     ) -> ToolExecutionBatch:
         if len(tool_calls) > 1 and any(
             tc.function.name == "ask_user" for tc in tool_calls
@@ -5112,10 +5147,17 @@ class Agent:
 
                 emit(self._tool_call_event(tc, parsed))
                 cid = parsed.args.get("candidate_id")
+                budget = current_budget(self.workflow, cid) if isinstance(cid, str) else None
+                if budget is not None:
+                    if budget["closed"]:
+                        repair_rejections.pop(cid, None)
+                    else:
+                        repair_rejections[cid] = budget["rejections"]
                 terminal_submission = (tc.function.name == "workflow"
                     and parsed.args.get("action") == "record_result"
                     and parsed.args.get("outcome") in {"confirmed", "not-confirmed"})
-                if terminal_submission and isinstance(cid, str) and repair_rejections.get(cid, 0) >= 2:
+                if (terminal_submission and isinstance(cid, str)
+                        and repair_rejections.get(cid, 0) >= MAX_EVIDENCE_REJECTIONS):
                     result = ToolCallResult(
                         result="error: bounded evidence repair exhausted; submit insufficient-evidence",
                         err_str="bounded evidence repair exhausted", duration_ms=0,
@@ -5131,20 +5173,52 @@ class Agent:
                     except (ValueError, AttributeError):
                         pass
                 if committed:
+                    recovery = getattr(self, "_evidence_recovery", {})
+                    repair = recovery.get(cid)
+                    if budget is not None:
+                        # Include the successful repair turn before clearing its
+                        # clock; paused validation and controller closure do not tick.
+                        if (not budget["closed"] and repair_step is not None
+                                and repair is not None and repair[0] is not None):
+                            budget["repair_turns"] = min(MAX_TERMINAL_REPAIR_TURNS + 1,
+                                                        repair_step - repair[0])
+                        budget["closed"] = True
                     # Clear on commit, including controller closure and an
                     # earlier successful call in this same sequential batch.
                     repair_rejections.pop(cid, None)
-                    getattr(self, "_evidence_recovery", {}).pop(cid, None)
-                elif (terminal_submission and isinstance(cid, str)
-                        and str(result.result).startswith("error: evidence-admissibility:")):
+                    recovery.pop(cid, None)
+                elif (tc.function.name == "workflow" and isinstance(cid, str)
+                        and parsed.args.get("action") in {"record_result", "record_evidence"}
+                        and evidence_repair_kind(str(result.result)) == "manifest"):
                     repair_rejections[cid] = repair_rejections.get(cid, 0) + 1
                 elif (terminal_submission and isinstance(cid, str)
-                        and repair_rejections.get(cid, 0) == 1
-                        and not str(result.result).startswith("error: declared required request lacks completed evidence;")):
-                    # One repair submission, even if it hits another schema
+                        and 0 < repair_rejections.get(cid, 0) < MAX_EVIDENCE_REJECTIONS
+                        and evidence_repair_kind(str(result.result)) != "validation-step"):
+                    # Each repair submission counts, even if it hits another schema
                     # error. A distinct missing validation step may run without
                     # resetting the consumed retry budget.
-                    repair_rejections[cid] = 2
+                    repair_rejections[cid] += 1
+                if isinstance(cid, str) and repair_rejections.get(cid, 0):
+                    budget = current_budget(self.workflow, cid, create=True)
+                    if budget is not None:
+                        budget["rejections"] = min(MAX_EVIDENCE_REJECTIONS, repair_rejections[cid])
+                        if parsed.args.get("action") == "record_result":
+                            budget["closure_args"] = closure_args(parsed.args)
+                        elif not budget["closure_args"]:
+                            candidate = self.workflow.candidates.get(cid)
+                            if candidate is not None:
+                                skill_name = self._goal_validation_route(candidate.candidate_class).skill_name
+                                if skill_name:
+                                    budget["closure_args"] = {"skill_name": skill_name}
+                if tc.function.name == "workflow" and parsed.args.get("action") == "start_validation":
+                    # New retests select their own accounting; continuation
+                    # carries only the consumed budget, never execution rights.
+                    budget = current_budget(self.workflow, cid)
+                    if budget is None or budget["closed"]:
+                        repair_rejections.pop(cid, None)
+                        getattr(self, "_evidence_recovery", {}).pop(cid, None)
+                    elif budget["rejections"]:
+                        repair_rejections[cid] = budget["rejections"]
                 self.record_tool_result(
                     tc,
                     parsed,

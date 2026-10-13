@@ -46,7 +46,7 @@ class DummyTarget:
 
 @dataclass(slots=True)
 class DummyAgent:
-    max_steps: int = 20
+    max_steps: int = 30
     thinking: bool = False
     target: DummyTarget = field(default_factory=DummyTarget)
     sys_prompt: str = ""
@@ -62,7 +62,7 @@ class DummyAgent:
         self.max_steps = n
 
     def reset_max_steps(self) -> None:
-        self.max_steps = 20
+        self.max_steps = 30
 
     def thinking_is_enabled(self) -> bool:
         return self.thinking
@@ -398,16 +398,16 @@ def test_maxsteps_default_resets_to_agent_default():
 
     assert handle_slash(cast(KAgent, app), "/maxsteps default")
 
-    assert app.agent.get_max_steps() == 20
-    assert last_text(app) == "max steps reset to defaults (20 direct, 40 whole-target)"
+    assert app.agent.get_max_steps() == 30
+    assert last_text(app) == "max steps reset to defaults (30 direct, 60 whole-target)"
 
 
 @pytest.mark.parametrize(
     ("prompt", "expected_steps", "expected_reason"),
     [
         # This fixture creates unresolved validation candidates on every step.
-        ("Explain how SQL injection works", 20, "workflow_blocked"),
-        ("Perform a whole-target assessment", 40, "max_steps"),
+        ("Explain how SQL injection works", 30, "workflow_blocked"),
+        ("Perform a whole-target assessment", 60, "max_steps"),
     ],
 )
 async def test_maxsteps_default_restores_runtime_budgets(
@@ -445,7 +445,7 @@ async def test_maxsteps_default_restores_runtime_budgets(
     app = SimpleNamespace(agent=agent, dispatch=actions.append)
 
     assert handle_slash(cast(KAgent, app), "/maxsteps default")
-    assert agent.get_max_steps() == 20
+    assert agent.get_max_steps() == 30
     assert agent.get_max_steps_override() is None
     assert not agent.has_explicit_max_steps()
 
@@ -463,7 +463,7 @@ def test_maxsteps_invalid_argument_shows_usage():
 
     assert handle_slash(cast(KAgent, app), "/maxsteps abc")
 
-    assert app.agent.get_max_steps() == 20
+    assert app.agent.get_max_steps() == 30
     assert last_text(app) == "usage: /maxsteps <n|default>"
 
 

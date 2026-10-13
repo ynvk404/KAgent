@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, urljoin
 import uuid
 
 from src.target.origin import HTTPOrigin
+from src.workflow.evidence_errors import EvidenceSubmissionError
 
 MAX_SOURCES = 32
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -34,7 +35,7 @@ def references(value: Any, name: str, maximum: int = MAX_SOURCES) -> list[str]:
     if (not isinstance(value, list) or len(value) > maximum
             or any(not isinstance(x, str) or not x or x.strip() != x for x in value)
             or len(set(value)) != len(value)):
-        raise ValueError(f"{name} must contain distinct bounded source/reference IDs")
+        raise EvidenceSubmissionError("INVALID_REFERENCE_LIST", f"{name} must contain distinct bounded source/reference IDs")
     return value
 
 
@@ -97,12 +98,12 @@ def source_association(candidate, attempt, row, associations):
     if row.get("source_kind") not in {"native-http", "imported-capture"}:
         raise ValueError("unsupported primary source kind")
     if HTTPOrigin.from_url(row["url"]) != HTTPOrigin.from_url(candidate.target or attempt.get("target_origin")):
-        raise ValueError("primary evidence origin mismatch")
+        raise EvidenceSubmissionError("SOURCE_ORIGIN_MISMATCH", "primary evidence origin mismatch")
     path = urlsplit((candidate.endpoint or "").split(" ")[-1]).path
     direct = (not path or urlsplit(row["url"]).path == path) and (not candidate.method or candidate.method == row["method"])
     request = associations.get((row["method"], row["url"]))
     if request is None and not direct:
-        raise ValueError("undeclared primary request identity/role mismatch")
+        raise EvidenceSubmissionError("SOURCE_REQUEST_MISMATCH", "undeclared primary request identity/role mismatch")
     if request is not None:
         return request["role"], request.get("required", True)
     return ("imported" if row["source_kind"] == "imported-capture" else "probe"), True
@@ -113,8 +114,11 @@ def usable_source(row) -> bool:
             and row.get("execution_status") == "completed")
 
 
-class EvidenceAdmissibilityError(ValueError):
+class EvidenceAdmissibilityError(EvidenceSubmissionError):
     """A manifest repair error, distinct from a missing validation step."""
+
+    def __init__(self, message: str):
+        super().__init__("UNUSABLE_PRIMARY_SOURCE", message)
 
 
 def require_usable_source(row):
@@ -135,7 +139,8 @@ def require_usable_source(row):
         "When parents change, correct the source proof and dependent claims/excerpts, "
         "then record_evidence again with the correct observation_ids for a new immutable snapshot. "
         "Replace evidence_refs before resubmitting; removing a source ID alone cannot repair derived proof. "
-        "Retry at most once using existing evidence. Do not edit registered snapshots in place. "
+        "Retry at most twice after the initial submission using existing evidence. "
+        "Do not edit registered snapshots in place. "
         "Do not add probes just to repair a manifest when existing evidence suffices. "
         "If evidence is insufficient, submit insufficient-evidence; continue validation only "
         "for a separately identified missing validation step."
@@ -157,7 +162,8 @@ def check_source_requirements(candidate, attempt, rows, *, terminal):
                     entry["source"].get("source_kind") in {"native-http", "imported-capture"}
                     and (entry["source"].get("method"), entry["source"].get("url")) == key
                     and usable_source(entry["source"]) for entry in rows):
-                raise ValueError("declared required request lacks completed evidence; submit unresolved")
+                raise EvidenceSubmissionError("MISSING_VALIDATION_STEP",
+                    "declared required request lacks completed evidence; submit unresolved", validation_step=True)
 
 
 def start_attempt(state, candidate, session_id, epoch, *, requests=None, criteria=None, target_origin=None, target_revision=None):
@@ -212,6 +218,8 @@ def start_attempt(state, candidate, session_id, epoch, *, requests=None, criteri
         # Explicit start after a changed identity seals the old attempt. No
         # old sources or execution context are adopted by the new identity.
         previous["status"] = "interrupted"
+    from src.workflow.evidence_recovery import carry_continuation_budget
+    carry_continuation_budget(state, row)
     state.attempts[row["id"]] = row
     return row
 
@@ -259,13 +267,13 @@ def resolve_sources(policy, state, candidate, attempt, ids, *, terminal, negativ
             retained["response_headers"] = tuple(tuple(h) for h in retained.get("response_headers", []))
             item = Observation(**retained, retained_hash=entry["hash"])
         if item is None:
-            raise ValueError("primary evidence reference unavailable: " + key)
+            raise EvidenceSubmissionError("PRIMARY_REFERENCE_UNAVAILABLE", "primary evidence reference unavailable")
         row = source_row(item)
         if not item.retained_hash or digest(row) != item.retained_hash:
-            raise ValueError("source retained representation integrity mismatch")
+            raise EvidenceSubmissionError("SOURCE_INTEGRITY_MISMATCH", "source retained representation integrity mismatch")
         if not attempt or any(row.get(field) != attempt.get(field if field != "attempt_id" else "id") for field in
                               ("candidate_id", "candidate_binding", "session_id", "objective_id", "epoch", "attempt_id")):
-            raise ValueError("source session/epoch/candidate/objective/attempt ownership mismatch")
+            raise EvidenceSubmissionError("SOURCE_OWNERSHIP_MISMATCH", "source session/epoch/candidate/objective/attempt ownership mismatch")
         if item.source_kind in {"native-http", "imported-capture"}:
             row["role"], row["required"] = source_association(candidate, attempt, row, associations)
             boundary = policy.generic_validation if policy else None
@@ -280,7 +288,7 @@ def resolve_sources(policy, state, candidate, attempt, ids, *, terminal, negativ
     if attempt:
         check_source_requirements(candidate, attempt, rows, terminal=terminal)
     if terminal and not rows:
-        raise ValueError("terminal assessment requires usable primary evidence")
+        raise EvidenceSubmissionError("MISSING_PRIMARY_OBSERVATIONS", "terminal assessment requires usable primary evidence")
     if len(json.dumps(rows)) > MAX_MANIFEST_BYTES:
         raise ValueError("selected evidence manifest exceeds bounded storage")
     return rows
@@ -368,7 +376,7 @@ def check_excerpts(assessment, manifest, *, terminal=False):
             raise ValueError("excerpt requires exact primary source, byte range and hash")
         source = parents.get(excerpt["source_id"])
         if source is None:
-            raise ValueError("excerpt parent source unavailable")
+            raise EvidenceSubmissionError("EXCERPT_PARENT_UNAVAILABLE", "excerpt parent source unavailable")
         # Optional request metadata may be retained, but citing its body makes
         # completeness relevant even when the request was not required.
         if terminal:
@@ -377,7 +385,7 @@ def check_excerpts(assessment, manifest, *, terminal=False):
         body = bytes.fromhex(source["body"])
         if (type(start) is not int or type(end) is not int or not 0 <= start < end <= len(body)
                 or hashlib.sha256(body[start:end]).hexdigest() != excerpt["sha256"]):
-            raise ValueError("excerpt range/hash mismatch")
+            raise EvidenceSubmissionError("EXCERPT_MISMATCH", "excerpt range/hash mismatch")
 
 
 def assessment_provenance(state, candidate, result, policy=None) -> dict[str, Any]:

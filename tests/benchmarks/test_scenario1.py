@@ -918,7 +918,8 @@ async def test_isolation_and_permission_boundaries(tmp_path, op, settings, mock_
         assert policy.worker is None and not policy.yolo
         assert len(policy.engagement.allowed_origins) == 1
         with pytest.raises(Exception, match='outside'):
-            await agent.tools.execute('http', {'url': 'http://127.0.0.2:3000/fixture'}, None, agent.prompter)
+            await agent.tools.execute('http', {'url': 'http://127.0.0.2:3000/fixture',
+                                               'phase': 'validation'}, None, agent.prompter)
         with pytest.raises(Exception, match='outside'):
             await agent.tools.execute('file_read', {'path': str(tmp_path / 'truth.csv')}, None, agent.prompter)
         with pytest.raises(Exception):
