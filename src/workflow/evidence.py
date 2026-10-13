@@ -29,7 +29,8 @@ def check_proof_references(content: bytes, candidate_id: str, parents: list[str]
     Unscoped/ambiguous documents and binary artifacts still use structured
     assessment.excerpts. Examples in fences, quotes and indented code are not
     active claims. Full observation handles on their own line or in explicit
-    observation/source ID fields are claims; incidental IDs in prose are not.
+    observation/source ID fields, request headings and table cells are claims;
+    incidental IDs in prose are not.
     """
     try:
         lines = content.decode("utf-8").splitlines()
@@ -112,6 +113,8 @@ def check_proof_references(content: bytes, candidate_id: str, parents: list[str]
         match = field.fullmatch(line)
         if match and values.fullmatch(match[1]):
             claimed.update(re.findall(observation, re.sub(r"\[REDACTED[^\]]*\]", "", match[1])))
+        if re.match(r"^ {0,3}#{1,6}\s+", line) or line.strip().startswith("|"):
+            claimed.update(re.findall(observation, re.sub(r"\[REDACTED[^\]]*\]", "", line)))
     if claimed - set(parents):
         raise EvidenceSubmissionError("PROOF_PARENT_MISMATCH",
             "proof observation reference lacks a declared primary parent; "

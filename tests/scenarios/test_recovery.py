@@ -267,11 +267,15 @@ async def test_s04_s16_native_truncation_immutable_repair_or_bounded_closure(sce
                 assert runtime.policy.observations._items[partial].retained_hash == partial_hash
                 assert len(runtime.scenario_transport.sent) == 7
                 if bounded_stop:
-                    runtime.scenario_model.runtime_stop = (len(runtime.scenario_model.calls) + 1, "evidence-recovery-")
-                    call_id = f"{runtime.scenario_model.prefix}-{len(runtime.scenario_model.calls) + 1}"
-                    runtime.scenario_errors[call_id] = (name, "evidence-admissibility:", "workflow_state")
-                    yield name, invalid
-                    raise AssertionError("runtime repair budget did not stop after two submissions")
+                    runtime.scenario_model.runtime_stop = (len(runtime.scenario_model.calls) + 2, "evidence-recovery-")
+                    for _ in range(2):
+                        call_id = f"{runtime.scenario_model.prefix}-{len(runtime.scenario_model.calls) + 1}"
+                        runtime.scenario_errors[call_id] = (name, "evidence-admissibility:", "workflow_state")
+                        yield name, invalid
+                        assert old_proof.read_bytes() == old_bytes
+                        assert runtime.policy.observations._items[partial].retained_hash == partial_hash
+                        assert len(runtime.scenario_transport.sent) == 7
+                    raise AssertionError("runtime repair budget did not stop after three submissions")
                 repair_path = "artifacts/repaired-proof.md"
                 complete_ids = args["observation_ids"]
                 text = f"# Candidate proof\n- candidate_id: {args['candidate_id']}\n- observation_ids: {', '.join(complete_ids)}\n"
@@ -305,9 +309,9 @@ async def test_s04_s16_native_truncation_immutable_repair_or_bounded_closure(sce
         assert len(closures) == 1
         rejected_boundaries = [b["workflow"] for b in run.oracle.boundaries
             if b["label"] == "record_result" and not b["workflow"]["validation_results"]]
-        assert len(rejected_boundaries) == 2
+        assert len(rejected_boundaries) == 3
         for key in ("attempts", "candidates", "evidence", "evidence_sources", "selected_sources", "persisted_findings"):
-            assert rejected_boundaries[0][key] == rejected_boundaries[1][key]
+            assert all(boundary[key] == rejected_boundaries[0][key] for boundary in rejected_boundaries[1:])
         assert not state.persisted_findings and len(run.transport.sent) == 7
 
 

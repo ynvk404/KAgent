@@ -22,7 +22,7 @@ async def test_loaded_validation_guidance_binds_claims_to_captures_and_new_repai
                      'execution status' if name == 'sql-injection' else 'completed execution',
                      'Metadata-only capture', 'record_evidence', 'correct `observation_ids`',
                      'new immutable snapshot', '`evidence_refs` before resubmitting',
-                     'registered snapshots in place', 'at most one repair submission',
+                     'registered snapshots in place', 'at most two repair submissions',
                      '`insufficient-evidence` and stop'):
         assert contract.lower() in loaded.lower()
     metadata = skills.get(name)

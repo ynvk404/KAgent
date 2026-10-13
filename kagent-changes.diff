@@ -1,0 +1,596 @@
+diff --git a/src/agent/agent.py b/src/agent/agent.py
+index cbcd81d..74f08d9 100644
+--- a/src/agent/agent.py
++++ b/src/agent/agent.py
+@@ -766,6 +766,8 @@ class WholeTargetStallTracker:
+         self.phase_exploration_steps = 0
+         self.phase: str | None = None
+         self.seen_fingerprints: set[str] = set()
++        self.read_ranges: dict[str, list[tuple[int, int]]] = {}
++        self.response_repetitions: dict[str, int] = {}
+         self.completion_recovery_used = False
+ 
+     def set_phase(self, phase: str | None) -> None:
+@@ -786,6 +788,7 @@ class WholeTargetStallTracker:
+             self.consecutive_no_progress = 0
+             self.phase_exploration_steps = 0
+             self.seen_fingerprints.clear()
++            self.response_repetitions.clear()
+             return "structured_progress"
+ 
+         novel_fingerprints = set(activity_fingerprints) - self.seen_fingerprints
+@@ -798,6 +801,97 @@ class WholeTargetStallTracker:
+         self.consecutive_no_progress += 1
+         return "no_progress"
+ 
++    def record_validation_batch(self, calls: list[ExecutedToolCall], *, new_facts: frozenset[str],
++                                target_base_url: str | None, observations=None) -> str:
++        """Direct validation uses returned data, never fresh handles as progress.
++
++        Actual new reader ranges are finite producer-bounded progress. Response
++        novelty is exploration, with the existing finite allowance. Repeats
++        remain possible within the no-progress window for verification/repair.
++        """
++        fingerprints = []
++        new_range = False
++        for execution in calls:
++            result = execution.result
++            if result.status == "error" and result.error_kind in {
++                    "invalid_args", "workflow_state", "reference_unavailable", "tool_exception"}:
++                # Different controller diagnostics can support a bounded
++                # correction sequence. Arguments/error prose are not progress,
++                # and repeated errors cannot renew this finite allowance.
++                diagnostic = {"kind": result.error_kind, "parsed": execution.parsed}
++                if canonical_tool_name(execution.name) == "workflow":
++                    try:
++                        error = json.loads(str(result.result).split("\n", 1)[1])["error"]
++                        diagnostic["code"] = error["code"]
++                    except (ValueError, KeyError, IndexError, TypeError):
++                        pass
++                fingerprints.append(_stable_activity_fingerprint("validation_feedback", diagnostic))
++                continue
++            if not execution.parsed or result.err_str or result.error_kind or result.status not in {"success", "observation"}:
++                continue
++            name = canonical_tool_name(execution.name)
++            text = str(result.result)
++            reader_page = name in {"read_payloads", "read_skill_file"} and text.startswith("# ")
++            if reader_page or name in {"read_http_observation", "read_tool_result"}:
++                try:
++                    if reader_page:
++                        page = json.loads(text.rpartition("\nContinuation: ")[2])
++                        identity = str(page["sha256"])
++                        start, end, total = page["start_char"], page["end_char"], page["source_chars"]
++                    elif name == "read_http_observation":
++                        page = json.loads(text.split("\n", 1)[0])
++                        identity = str(page["retained_hash"])
++                        start, end, total = page["start_char"], page["end_char"], page["source_chars"]
++                    else:
++                        page = json.loads(text)
++                        identity = str(page["sha256"])
++                        start, end, total = page["actual_start"], page["actual_end"], page["total_length"]
++                    if type(start) is not int or type(end) is not int or not 0 <= start <= end <= total:
++                        continue
++                except (ValueError, KeyError, TypeError):
++                    if not reader_page:
++                        continue
++                    identity = _stable_activity_fingerprint(name, text)
++                    start, end = 0, len(text)
++                ranges = self.read_ranges.setdefault(identity, [])
++                cursor = start
++                for left, right in sorted(ranges):
++                    if left > cursor:
++                        break
++                    cursor = max(cursor, right)
++                if end > start and cursor < end:
++                    new_range = True
++                    ranges.append((start, end))
++            elif name == "http":
++                output = result.result
++                sources = getattr(output, "http_sources", ())
++                items = [observations._items.get(key) for key, _ in sources] if observations else []
++                if items and all(item is not None for item in items):
++                    material = [(item.status, item.response_hash, item.complete, item.truncated,
++                                 getattr(item, "elapsed_ms", None))
++                                for item in items]
++                else:
++                    # Exclude opaque IDs and request previews; changed requests
++                    # alone cannot reset a stalled validation.
++                    material = re.sub(r"obs_[0-9a-f]{32}", "obs", text.split(
++                        "[End HTTP response; following text is request metadata]", 1)[0])
++                response = _stable_activity_fingerprint(name, material)
++                repetitions = self.response_repetitions.get(response, 0)
++                self.response_repetitions[response] = repetitions + 1
++                # One bounded verification repeat is exploration, not proof.
++                # Further identical responses cannot renew the allowance.
++                fingerprints.append(f"{response}:sample-{min(repetitions, 1)}")
++            else:
++                fingerprint = _exploration_fingerprint(execution, target_base_url)
++                if fingerprint:
++                    fingerprints.append(fingerprint)
++        if new_range:
++            self.consecutive_no_progress = 0
++            # Pagination must not replenish HTTP's exploration allowance.
++            if not new_facts:
++                return "reader_progress"
++        return self.record_iteration(new_facts=new_facts, activity_fingerprints=fingerprints)
++
+ 
+ def _weighted_window_lengths(total: int) -> list[int]:
+     """Split a source budget deterministically across the five windows."""
+@@ -1062,6 +1156,11 @@ class Agent:
+         else:
+             reader = ReadToolResult(self.result_retention) if self.result_retention.store is not None else None
+             self.tools = self.tools.scoped_tool("read_tool_result", reader)
++        from src.permission.runtime.execution import policy_for
++        from src.tools.common.tool_result import ReadHTTPObservation
++        existing_http_reader = self.tools.get("read_http_observation")
++        if policy_for(self.prompter) is not None and (existing_http_reader is None or type(existing_http_reader) is ReadHTTPObservation):
++            self.tools = self.tools.scoped_tool("read_http_observation", ReadHTTPObservation(self))
+         self.turn_executed_tool = False
+         self._trace_enabled = False
+         self._trace_run_id = ""
+@@ -1579,6 +1678,12 @@ class Agent:
+             # Derivative access inherits the active skill's original capability
+             # boundary; generic validation was already checked above.
+             return self.is_tool_allowed(ref.tool_name)
++
++        if tool_name == "read_http_observation":
++            from src.tools.common.tool_result import ReadHTTPObservation
++            reader = self.tools.get(tool_name)
++            if type(reader) is ReadHTTPObservation and reader.agent is self:
++                return self.is_tool_allowed("http")
+ 
+         tool = self.tools.get(tool_name)
+ 
+@@ -2561,8 +2666,23 @@ class Agent:
+             if goal.status not in {"pending", "in_progress"}:
+                 continue
+             candidates = self.workflow.objective_goal_candidates(goal)
+-            if any(candidate.status in {"new", "queued", "validating", "validated"} for candidate in candidates):
+-                return True
++            for candidate in candidates:
++                if candidate.status not in {"new", "queued", "validating", "validated", "dismissed"}:
++                    continue
++                result = self.workflow.latest_result(candidate.id)
++                if result is not None and result.cleanup_state in {"requires-user-action", "failed"}:
++                    from src.permission.runtime.execution import policy_for
++                    reason = self._validation_completion_error(candidate, policy_for(self.prompter))
++                    if reason == f"mutation cleanup unresolved:{result.cleanup_state}":
++                        # Coverage/finding persistence can still be performed;
++                        # operator cleanup itself cannot be solved by more probes.
++                        if result.coverage_synced is False or (
++                            result.outcome == "confirmed" and not self.workflow.finding_is_persisted(candidate.id)
++                        ):
++                            return True
++                        continue
++                if candidate.status != "dismissed" or (result and result.cleanup_state == "pending"):
++                    return True
+             if goal.status == "pending" and not candidates:
+                 return True
+         return False
+@@ -2596,6 +2716,13 @@ class Agent:
+                     result.outcome if result else None,
+                     result.objective_id if result else None,
+                     tuple(result.evidence_refs) if result else (),
++                    result.cleanup_state if result else None,
++                    result.coverage_synced if result else None,
++                    self.workflow.persisted_findings.get(candidate.id),
++                    tuple((a["id"], a["status"]) for a in self.workflow.attempts.values()
++                          if a.get("candidate_id") == candidate.id and a.get("objective_id") == objective.id),
++                    tuple((e.id, e.sha256) for e in self.workflow.evidence.values()
++                          if e.candidate_id == candidate.id),
+                 ))
+         return tuple(rows)
+ 
+@@ -4256,6 +4383,7 @@ class Agent:
+                         if after_goal_signature == before_goal_signature
+                         else 0
+                     )
++                    stall_tracker.consecutive_no_progress = requested_goal_no_progress
+                     if requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
+                         objective = self.workflow.objective
+                         if objective is not None:
+@@ -4520,6 +4648,51 @@ class Agent:
+                         max_steps=max_steps,
+                     )
+ 
++            if requested_goal_run and not whole_target:
++                statuses = self._reconcile_requested_goals()
++                from src.permission.runtime.execution import policy_for
++                policy = policy_for(self.prompter)
++                progress_kind = stall_tracker.record_validation_batch(
++                    execution_batch.calls,
++                    new_facts=(frozenset({"requested-goal-state-changed"})
++                               if self._requested_goal_progress_signature() != before_goal_signature
++                               else frozenset()),
++                    target_base_url=self.target.base_url() if self.target else None,
++                    observations=policy.observations if policy else None,
++                )
++                requested_goal_no_progress = stall_tracker.consecutive_no_progress
++                self._trace("direct_progress", step=step, progress_kind=progress_kind,
++                            consecutive_no_progress=requested_goal_no_progress,
++                            exploration_steps=stall_tracker.phase_exploration_steps)
++                incomplete = any(status not in {"tested_confirmed", "tested_not_confirmed"}
++                                 for status in statuses.values())
++                # A newly recorded unresolved assessment may legitimately be
++                # revised using existing evidence. Do not preempt that bounded
++                # recovery merely because its candidate is no longer validating.
++                operator_cleanup = any(
++                    (result := self.workflow.latest_result(candidate.id)) is not None
++                    and result.cleanup_state in {"requires-user-action", "failed"}
++                    and self._validation_completion_error(candidate, policy)
++                        == f"mutation cleanup unresolved:{result.cleanup_state}"
++                    for candidate in self.workflow.objective_candidates()
++                )
++                blocked = incomplete and operator_cleanup and not self._has_actionable_requested_goal()
++                stalled = incomplete and requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS
++                if blocked or stalled:
++                    return await self._whole_target_synthesis(
++                        working, signal, emit,
++                        thinking_enabled=turn_request_thinking,
++                        reasoning_level=turn_reasoning_level,
++                        requested_reasoning_level=turn_requested_level,
++                        stop_reason="workflow_blocked" if blocked else "workflow_stalled",
++                        instruction=self._requested_goal_incomplete_instruction(
++                            "Direct validation remains unresolved: " + (
++                                "operator action or an external repair is required."
++                                if blocked else "bounded exploration made no further progress; stop probing."
++                            )
++                        ), max_steps=max_steps,
++                    )
++
+             if requested_goal_run and step == max_steps - 1:
+                 statuses = self._reconcile_requested_goals()
+                 if any(
+@@ -5002,6 +5175,25 @@ class Agent:
+                 replacement, source, elided,
+             )
+ 
++        # Preserve bounded pages whole while they are recent. Retire older
++        # reader outputs as whole pages, never as misleading body fragments.
++        # History stays exact and fresh reads still use producer-owned paging.
++        from src.tools.skills.payloads import ReadPayloadsTool
++        from src.tools.skills.skill_file import ReadSkillFileTool
++        page_indexes = [i for i, message in enumerate(working)
++                        if message.role == "tool" and isinstance(
++                            self.tools.get(message.name or ""), (ReadPayloadsTool, ReadSkillFileTool))]
++        for index in page_indexes[:-MIDTURN_ELISION_KEEP_RECENT]:
++            message = working[index]
++            if message.content.startswith("[Older skill page omitted;"):
++                continue
++            # Do not keep a chain of unbounded originals in the transient guard.
++            replacement = replace(message, content=(
++                "[Older skill page omitted; full output remains in the session transcript. "
++                "Use the same bounded reader to retrieve needed source ranges.]"))
++            self._bounded_results.pop(id(message), None)
++            working[index] = replacement
++
+         if request is None:
+             tools = None if opts is not None and getattr(opts, "tools", True) is False else self.tools.as_llm_tools()
+             request = self._request_for_messages(working, tools)
+@@ -5677,12 +5869,13 @@ class Agent:
+         from src.permission.runtime.execution import policy_for
+         from src.tools.http.http_tool import HTTPTool
+         from src.tools.common.browser_capture import BrowserCaptureGetTool
++        from src.tools.common.tool_result import ReadHTTPObservation
+         from src.workflow.assessment import digest, source_row
+         policy = policy_for(self.prompter)
+         output = res.result
+         tool = self.tools.get(tc.function.name)
+         if (policy is None or not isinstance(output, ToolOutput) or not output.http_sources
+-                or type(tool) not in {HTTPTool, BrowserCaptureGetTool} or res.err_str
++                or type(tool) not in {HTTPTool, BrowserCaptureGetTool, ReadHTTPObservation} or res.err_str
+                 or res.status not in {"success", "observation"}
+                 or output.http_session != (policy.session_id or policy.engagement.http_permissions.session_id)
+                 or output.http_stamp != policy.stamp()
+@@ -5708,6 +5901,15 @@ class Agent:
+                                or output[start:end] != item.body.decode(errors="replace")
+                                for (start, end), item in zip(output.http_body_ranges, items))):
+                     return None
++            elif type(tool) is ReadHTTPObservation:
++                if tool.agent is not self or len(items) != 1 or "http" in policy.revoked:
++                    return None
++                tool.validate_rights(parsed_args(tc.function), self.prompter, receipt=False)
++                row = json.loads(str(output).split("\n", 1)[0])
++                start, end = output.http_body_ranges[0]
++                if (len(output.http_body_ranges) != 1
++                        or output[start:end] != items[0].body.decode(errors="replace")[row["start_char"]:row["end_char"]]):
++                    return None
+             else:
+                 if len(items) != 1 or items[0].source_kind != "imported-capture":
+                     return None
+@@ -5771,6 +5973,14 @@ class Agent:
+                             or (item.source_details or {}).get("analysis_session") != session):
+                         raise ValueError
+                     policy.require_network(item.url)
++                if message.name == "read_http_observation":
++                    from src.tools.common.tool_result import ReadHTTPObservation
++                    reader = self.tools.get(message.name)
++                    if type(reader) is not ReadHTTPObservation or reader.agent is not self:
++                        raise ValueError
++                    header = json.loads(message.content.split("\n", 1)[0])
++                    reader.validate_rights({"observation_id": header["observation_id"],
++                        "start_char": header["start_char"], "max_chars": 2000}, self.prompter, receipt=False)
+                 if any(secret in message.content for secret in self._managed_http_secrets()):
+                     raise ValueError
+             except Exception:
+diff --git a/src/tools/common/tool_result.py b/src/tools/common/tool_result.py
+index 347711f..802ec87 100644
+--- a/src/tools/common/tool_result.py
++++ b/src/tools/common/tool_result.py
+@@ -116,3 +116,142 @@ class ReadToolResult:
+             else:
+                 high = size - 1
+         return best
++
++
++class ReadHTTPObservation:
++    """Session-owned HTTP range access, separate from sanitized tr_ storage."""
++
++    def __init__(self, agent: Any):
++        self.agent = agent
++
++    def name(self) -> str:
++        return "read_http_observation"
++
++    def description(self) -> str:
++        return ("Read a bounded response-body character range of an existing owned obs_ HTTP observation. "
++                "Use the returned next_start_char; offsets count decoded Unicode characters. "
++                "No HTTP is sent. Retrieval grants no evidence acceptance or ownership. "
++                "Unavailable/revoked observations must be reported, never replaced with invented content.")
++
++    def schema(self) -> dict[str, Any]:
++        return {"type": "object", "properties": {
++            "observation_id": {"type": "string"},
++            "start_char": {"type": "integer", "minimum": 0},
++            "max_chars": {"type": "integer", "minimum": 1, "maximum": MAX_READ_CHARS},
++        }, "required": ["observation_id", "start_char", "max_chars"], "additionalProperties": False}
++
++    def requires_permission(self) -> bool:
++        return True
++
++    def permission_hints(self, args: dict[str, Any]) -> PermissionHints:
++        return {"noSessionCache": True, "riskTier": "high-impact",
++                "cacheKey": f"observation:{args.get('observation_id')}:{args.get('start_char')}:{args.get('max_chars')}"}
++
++    def context_reduction_policy(self):
++        return "preserve"
++
++    def validate_args(self, args: dict[str, Any]) -> None:
++        import re
++        if (set(args) != {"observation_id", "start_char", "max_chars"}
++                or not isinstance(args["observation_id"], str)
++                or not re.fullmatch(r"obs_[0-9a-f]{32}", args["observation_id"])
++                or type(args["start_char"]) is not int or args["start_char"] < 0
++                or type(args["max_chars"]) is not int or not 1 <= args["max_chars"] <= MAX_READ_CHARS):
++            raise ValueError("use an obs_ ID and bounded integer character offsets")
++
++    def validate_rights(self, args: dict[str, Any], prompter: Any, *, receipt: bool) -> None:
++        self.validate_args(args)
++        policy = policy_for(prompter)
++        if policy is None or policy is not policy_for(self.agent.prompter):
++            raise ExecutionBlocked("blocked: HTTP observation controller unavailable")
++        if receipt and not policy.nested_allowed():
++            raise ExecutionBlocked("blocked: HTTP observation read without current receipt")
++        if "http" in policy.revoked or self.name() in policy.revoked or "*" in policy.revoked:
++            raise ExecutionBlocked("blocked: HTTP observation capability revoked")
++        item = policy.observations._items.get(args["observation_id"])
++        state = self.agent.workflow
++        objective = state.objective
++        candidate = state.candidates.get(item.candidate_id) if item else None
++        attempt = state.attempts.get(item.attempt_id) if item else None
++        if (item is None or candidate is None or attempt is None or objective is None
++                or item.source_kind not in {"native-http", "imported-capture"}
++                or item.objective_id != objective.id
++                or not state.candidate_belongs_to_objective(candidate, objective)
++                or attempt.get("epoch") != policy.engagement.http_permissions.epoch
++                or attempt.get("target_revision") != self.agent.target.revision
++                or attempt.get("status") not in {"active", "completed"}
++                or objective.target_origin != self.agent.target.origin().as_url()):
++            raise ExecutionBlocked("blocked: HTTP observation ownership/scope unavailable")
++        from src.workflow.assessment import candidate_binding, resolve_sources, attempt_owner
++        if candidate_binding(candidate) != item.candidate_binding:
++            raise ExecutionBlocked("blocked: HTTP observation candidate binding changed")
++        if attempt.get("status") == "active" and attempt_owner(state, attempt["id"],
++                policy.engagement.http_permissions.epoch, self.agent.target.revision, policy.session_id) is None:
++            raise ExecutionBlocked("blocked: HTTP observation active attempt changed")
++        if attempt.get("status") == "completed":
++            latest = state.latest_result(candidate.id)
++            if (latest is None or latest.attempt_id != attempt["id"] or any(
++                    a.get("candidate_id") == candidate.id and a.get("status") == "active"
++                    for a in state.attempts.values())):
++                raise ExecutionBlocked("blocked: HTTP observation belongs to a superseded attempt")
++        session = policy.session_id or policy.engagement.http_permissions.session_id
++        if (item.source_details or {}).get("analysis_session") != session:
++            raise ExecutionBlocked("blocked: HTTP observation analysis session mismatch")
++        policy.require_network(item.url)
++        if not self.agent.is_tool_allowed("http").ok:
++            raise ExecutionBlocked("blocked: HTTP observation skill capability unavailable")
++        resolve_sources(policy, state, candidate, attempt, [item.id], terminal=False, negative=False)
++        body = item.body.decode(errors="replace")
++        # Check the source before slicing. Otherwise individually harmless
++        # ranges could reconstruct a secret hidden in the original response.
++        if any(secret in body for secret in self.agent._managed_http_secrets()):
++            raise ExecutionBlocked("blocked: retained HTTP body contains a known internal secret")
++        if args["start_char"] > len(body):
++            raise ValueError("HTTP observation character offset exceeds retained body")
++
++    async def run(self, args: dict[str, Any], signal: Any, prompter: Any) -> str:
++        check_cancelled(signal)
++        self.validate_rights(args, prompter, receipt=True)
++        policy = policy_for(prompter)
++        assert policy is not None
++        if not policy.yolo:
++            decision = await prompter.ask(PermissionRequest(
++                tool=self.name(), summary="Read an existing HTTP observation range",
++                detail=json.dumps(args), no_session_cache=True, risk_tier="high-impact",
++                cache_key=self.permission_hints(args).get("cacheKey"),
++            ), signal)
++            if decision == Decision.DENY:
++                raise UserControlledRefusal("HTTP observation range read denied")
++        check_cancelled(signal)
++        self.validate_rights(args, prompter, receipt=True)
++        item = policy.observations._items[args["observation_id"]]
++        assert item.retained_hash is not None
++        text = item.body.decode(errors="replace")
++        from src.tools.common.outcome import ToolOutput
++        # Use the same lab HTTP outbound analysis guard as native capture. The
++        # envelope stays small and body offsets describe only retained text.
++        def encode(size):
++            region = read_region(text, args["start_char"], size)
++            body = region.pop("content")
++            header = json.dumps({"observation_id": item.id, "retained_hash": item.retained_hash,
++                "offset_unit": "unicode_characters", "complete": item.complete,
++                "adapter_truncated": item.truncated, "start_char": region["actual_start"],
++                "end_char": region["actual_end"], "source_chars": region["total_length"],
++                "next_start_char": region["next_offset"]}, ensure_ascii=False) + "\n"
++            return header + body, len(header), region
++        low, high = 0, args["max_chars"]
++        best = encode(0)
++        while low <= high:
++            middle = (low + high) // 2
++            value = encode(middle)
++            if len(value[0]) <= MAX_READ_CHARS:
++                best = value
++                low = middle + 1
++            else:
++                high = middle - 1
++        output = ToolOutput(best[0], truncated=bool(best[2]["next_offset"] is not None))
++        output.http_sources = ((item.id, item.retained_hash),)
++        output.http_body_ranges = ((best[1], len(output)),)
++        output.http_session = policy.session_id or policy.engagement.http_permissions.session_id
++        output.http_stamp = policy.stamp()
++        return output
+diff --git a/src/tools/skills/paths.py b/src/tools/skills/paths.py
+index 3681956..7a661c9 100644
+--- a/src/tools/skills/paths.py
++++ b/src/tools/skills/paths.py
+@@ -154,27 +154,26 @@ class SkillFilePages:
+         result = render_file_preview(heading, raw[start:], len(data), limit)
+         # render_file_preview preserves the legacy first-page appearance;
+         # range metadata accounts for the exact content before its notices.
+-        if clipped or ref is not None:
++        # Even a complete first page publishes its identity and EOF. Otherwise
++        # a later smaller read looks like a different source to progress checks.
++        if ref is None:
++            ref = next((key for key, value in self.sources.items() if value == identity), None)
+             if ref is None:
+-                # Re-reading an unchanged first page must not churn its identity.
+-                ref = next((key for key, value in self.sources.items() if value == identity), None)
+-                if ref is None:
+-                    ref = 'sf_' + uuid.uuid4().hex
+-                    if len(self.sources) >= 256:
+-                        del self.sources[next(iter(self.sources))]
+-                    self.sources[ref] = identity
+-            if clipped:
+-                next_call = {'tool': reader, 'arguments': {
+-                    **source_args, 'limit': limit, 'source_ref': ref, 'start_char': end,
+-                }}
+-                # Keep the actionable continuation ahead of the potentially
+-                # bounded body, as well as the legacy detailed footer.
+-                title, separator, content = result.partition('\n')
+-                result = title + ' | Next page: ' + json.dumps(next_call) + separator + content
+-            result += '\nContinuation: ' + json.dumps({
+-                'source_ref': ref, 'sha256': identity[2], 'offset_unit': 'unicode_characters',
+-                'start_char': start, 'end_char': end, 'next_start_char': end if clipped else None, 'source_chars': len(raw),
+-                'source_bytes': len(data), 'preview_bytes': len(body.encode('utf-8')),
+-                'instruction': 'Use this same reader, skill and file/path with source_ref and start_char. Do not pass sf_ references to read_tool_result.',
+-            })
++                ref = 'sf_' + uuid.uuid4().hex
++                if len(self.sources) >= 256:
++                    del self.sources[next(iter(self.sources))]
++                self.sources[ref] = identity
++        if clipped:
++            next_call = {'tool': reader, 'arguments': {
++                **source_args, 'limit': limit, 'source_ref': ref, 'start_char': end,
++            }}
++            # Keep actionable continuation before the body and in the footer.
++            title, separator, content = result.partition('\n')
++            result = title + ' | Next page: ' + json.dumps(next_call) + separator + content
++        result += '\nContinuation: ' + json.dumps({
++            'source_ref': ref, 'sha256': identity[2], 'offset_unit': 'unicode_characters',
++            'start_char': start, 'end_char': end, 'next_start_char': end if clipped else None, 'source_chars': len(raw),
++            'source_bytes': len(data), 'preview_bytes': len(body.encode('utf-8')),
++            'instruction': 'Use this same reader, skill and file/path with source_ref and start_char. Do not pass sf_ references to read_tool_result.',
++        })
+         return ToolOutput(result, truncated=clipped)
+diff --git a/src/tools/skills/payloads.py b/src/tools/skills/payloads.py
+index 46c1ccf..4ab2046 100644
+--- a/src/tools/skills/payloads.py
++++ b/src/tools/skills/payloads.py
+@@ -82,6 +82,9 @@ class ReadPayloadsTool(Tool):
+     def requires_permission(self) -> bool:
+         return False
+ 
++    def context_reduction_policy(self):
++        return "preserve"
++
+     async def run(
+         self,
+         args: dict[str, Any],
+diff --git a/src/tools/skills/skill_file.py b/src/tools/skills/skill_file.py
+index f61e5b6..21e26c9 100644
+--- a/src/tools/skills/skill_file.py
++++ b/src/tools/skills/skill_file.py
+@@ -84,6 +84,9 @@ class ReadSkillFileTool:
+     def requires_permission(self) -> bool:
+         return False
+ 
++    def context_reduction_policy(self):
++        return "preserve"
++
+     async def run(
+         self,
+         args: dict[str, Any],
+diff --git a/src/workflow/evidence.py b/src/workflow/evidence.py
+index 6893872..1c719c1 100644
+--- a/src/workflow/evidence.py
++++ b/src/workflow/evidence.py
+@@ -29,7 +29,8 @@ def check_proof_references(content: bytes, candidate_id: str, parents: list[str]
+     Unscoped/ambiguous documents and binary artifacts still use structured
+     assessment.excerpts. Examples in fences, quotes and indented code are not
+     active claims. Full observation handles on their own line or in explicit
+-    observation/source ID fields are claims; incidental IDs in prose are not.
++    observation/source ID fields, request headings and table cells are claims;
++    incidental IDs in prose are not.
+     """
+     try:
+         lines = content.decode("utf-8").splitlines()
+@@ -112,6 +113,8 @@ def check_proof_references(content: bytes, candidate_id: str, parents: list[str]
+         match = field.fullmatch(line)
+         if match and values.fullmatch(match[1]):
+             claimed.update(re.findall(observation, re.sub(r"\[REDACTED[^\]]*\]", "", match[1])))
++        if re.match(r"^ {0,3}#{1,6}\s+", line) or line.strip().startswith("|"):
++            claimed.update(re.findall(observation, re.sub(r"\[REDACTED[^\]]*\]", "", line)))
+     if claimed - set(parents):
+         raise EvidenceSubmissionError("PROOF_PARENT_MISMATCH",
+             "proof observation reference lacks a declared primary parent; "
+diff --git a/src/workflow/state.py b/src/workflow/state.py
+index 971056f..0a328f8 100644
+--- a/src/workflow/state.py
++++ b/src/workflow/state.py
+@@ -100,8 +100,22 @@ def _text(value: Any, *, limit: int = _MAX_ITEM_LENGTH) -> str | None:
+         return None
+     if not isinstance(value, str):
+         raise ValueError("expected a string")
+-    normalized = redact(" ".join(value.strip().split()))
+-    return normalized[:limit] or None
++    normalized = " ".join(redact(" ".join(value.split())).split())
++    bounded = normalized[:limit].rstrip()
++    # A cap can leave trailing whitespace or split a redaction atom. Keep a
++    # stable prefix rather than remasking that fragment on each hydration.
++    # Every retry shortens the prefix; no secrets or schema fields are added.
++    while bounded:
++        restored = " ".join(redact(bounded).split())
++        if restored == bounded:
++            break
++        common = 0
++        for left, right in zip(bounded, restored):
++            if left != right:
++                break
++            common += 1
++        bounded = bounded[:min(common, len(bounded) - 1)].rstrip()
++    return bounded or None
+ 
+ 
+ def _request_context(value: Any, content_type: str | None = None) -> str | None:

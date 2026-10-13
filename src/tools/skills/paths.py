@@ -154,27 +154,26 @@ class SkillFilePages:
         result = render_file_preview(heading, raw[start:], len(data), limit)
         # render_file_preview preserves the legacy first-page appearance;
         # range metadata accounts for the exact content before its notices.
-        if clipped or ref is not None:
+        # Even a complete first page publishes its identity and EOF. Otherwise
+        # a later smaller read looks like a different source to progress checks.
+        if ref is None:
+            ref = next((key for key, value in self.sources.items() if value == identity), None)
             if ref is None:
-                # Re-reading an unchanged first page must not churn its identity.
-                ref = next((key for key, value in self.sources.items() if value == identity), None)
-                if ref is None:
-                    ref = 'sf_' + uuid.uuid4().hex
-                    if len(self.sources) >= 256:
-                        del self.sources[next(iter(self.sources))]
-                    self.sources[ref] = identity
-            if clipped:
-                next_call = {'tool': reader, 'arguments': {
-                    **source_args, 'limit': limit, 'source_ref': ref, 'start_char': end,
-                }}
-                # Keep the actionable continuation ahead of the potentially
-                # bounded body, as well as the legacy detailed footer.
-                title, separator, content = result.partition('\n')
-                result = title + ' | Next page: ' + json.dumps(next_call) + separator + content
-            result += '\nContinuation: ' + json.dumps({
-                'source_ref': ref, 'sha256': identity[2], 'offset_unit': 'unicode_characters',
-                'start_char': start, 'end_char': end, 'next_start_char': end if clipped else None, 'source_chars': len(raw),
-                'source_bytes': len(data), 'preview_bytes': len(body.encode('utf-8')),
-                'instruction': 'Use this same reader, skill and file/path with source_ref and start_char. Do not pass sf_ references to read_tool_result.',
-            })
+                ref = 'sf_' + uuid.uuid4().hex
+                if len(self.sources) >= 256:
+                    del self.sources[next(iter(self.sources))]
+                self.sources[ref] = identity
+        if clipped:
+            next_call = {'tool': reader, 'arguments': {
+                **source_args, 'limit': limit, 'source_ref': ref, 'start_char': end,
+            }}
+            # Keep actionable continuation before the body and in the footer.
+            title, separator, content = result.partition('\n')
+            result = title + ' | Next page: ' + json.dumps(next_call) + separator + content
+        result += '\nContinuation: ' + json.dumps({
+            'source_ref': ref, 'sha256': identity[2], 'offset_unit': 'unicode_characters',
+            'start_char': start, 'end_char': end, 'next_start_char': end if clipped else None, 'source_chars': len(raw),
+            'source_bytes': len(data), 'preview_bytes': len(body.encode('utf-8')),
+            'instruction': 'Use this same reader, skill and file/path with source_ref and start_char. Do not pass sf_ references to read_tool_result.',
+        })
         return ToolOutput(result, truncated=clipped)

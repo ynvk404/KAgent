@@ -282,7 +282,7 @@ def _message_from_dict(data: Any) -> Message | None:
         tool_http_status = None
     tool_truncated = data.get("tool_truncated") is True
     http_sources = data.get("http_response_sources")
-    if (role != "tool" or name not in {"http", "browser_capture_get"}
+    if (role != "tool" or name not in {"http", "browser_capture_get", "read_http_observation"}
             or not isinstance(http_sources, list) or not 0 < len(http_sources) <= 6
             or any(not isinstance(ref, str) or len(ref) != 36 or not ref.startswith("obs_")
                    or any(c not in string.hexdigits.lower() for c in ref[4:]) for ref in http_sources)):
@@ -561,7 +561,7 @@ def _serialize_session(session_id: str, snapshot: tuple, stage: Callable[[str], 
             serialized["tool_result_scope"] = msg.tool_result_scope
         if msg.http_response_sources:
             serialized["http_response_sources"] = msg.http_response_sources
-        if (msg.role == "tool" and msg.name in {"http", "browser_capture_get"}
+        if (msg.role == "tool" and msg.name in {"http", "browser_capture_get", "read_http_observation"}
                 and msg.http_response_sources):
             http_content[len(serialized_messages)] = msg.content
             serialized["content"] = "[bounded HTTP content retained in private lab session]"

@@ -193,12 +193,13 @@ async def test_agent_closes_exhausted_repair_without_new_probes(runtime, tmp_pat
     registration = {'action': 'record_evidence', 'candidate_id': candidate.id,
                     'evidence_path': 'proof.md', 'observation_ids': [good, bad]}
     ref = json.loads(await registry.execute('workflow', registration, None, p))['evidence']['id']
+    immutable_proof = (tmp_path / state.evidence[ref].path).read_bytes()
     args.update(evidence_refs=[ref], observation_ids=[good, bad], mutation_performed=True,
                 cleanup_state='pending')
     repaired = {**args, 'observation_ids': [good]} if retry == 'stale-parent' else args
     scripted = [ChatResponse(Message('assistant', '', tool_calls=[ToolCall(str(i),
         FunctionCall('workflow', json.dumps(submission)))]), 'tool_calls')
-        for i, submission in enumerate([args, repaired])]
+        for i, submission in enumerate([args, repaired, repaired])]
     client = FakeClient(scripted)
     assert workflow.skills is not None
     agent = Agent(AgentOptions(client=client, tools=registry, skills=workflow.skills,
@@ -213,7 +214,9 @@ async def test_agent_closes_exhausted_repair_without_new_probes(runtime, tmp_pat
     assert result is not None and result.outcome == 'insufficient-evidence'
     assert result.mutation_performed and result.cleanup_state == 'pending'
     assert not state.eligible_for_finding(candidate.id)
-    assert len(client.requests) == 2 and len(sent) == 2
+    assert len(client.requests) == 3 and len(sent) == 2  # Initial + at most two repairs.
+    assert (tmp_path / state.evidence[ref].path).read_bytes() == immutable_proof
+    assert state.evidence_sources[ref] == [good, bad]
     assert agent._evidence_recovery_rejections == {} and agent._evidence_recovery == {}
     closures = [message for message in agent.history if message.role == 'tool'
                 and (message.tool_call_id or '').startswith('evidence-recovery-')]

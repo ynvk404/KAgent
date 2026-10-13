@@ -100,8 +100,22 @@ def _text(value: Any, *, limit: int = _MAX_ITEM_LENGTH) -> str | None:
         return None
     if not isinstance(value, str):
         raise ValueError("expected a string")
-    normalized = redact(" ".join(value.strip().split()))
-    return normalized[:limit] or None
+    normalized = " ".join(redact(" ".join(value.split())).split())
+    bounded = normalized[:limit].rstrip()
+    # A cap can leave trailing whitespace or split a redaction atom. Keep a
+    # stable prefix rather than remasking that fragment on each hydration.
+    # Every retry shortens the prefix; no secrets or schema fields are added.
+    while bounded:
+        restored = " ".join(redact(bounded).split())
+        if restored == bounded:
+            break
+        common = 0
+        for left, right in zip(bounded, restored):
+            if left != right:
+                break
+            common += 1
+        bounded = bounded[:min(common, len(bounded) - 1)].rstrip()
+    return bounded or None
 
 
 def _request_context(value: Any, content_type: str | None = None) -> str | None:

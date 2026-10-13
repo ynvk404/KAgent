@@ -84,6 +84,9 @@ class ReadSkillFileTool:
     def requires_permission(self) -> bool:
         return False
 
+    def context_reduction_policy(self):
+        return "preserve"
+
     async def run(
         self,
         args: dict[str, Any],

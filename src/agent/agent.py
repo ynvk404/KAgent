@@ -766,6 +766,8 @@ class WholeTargetStallTracker:
         self.phase_exploration_steps = 0
         self.phase: str | None = None
         self.seen_fingerprints: set[str] = set()
+        self.read_ranges: dict[str, list[tuple[int, int]]] = {}
+        self.response_repetitions: dict[str, int] = {}
         self.completion_recovery_used = False
 
     def set_phase(self, phase: str | None) -> None:
@@ -786,6 +788,7 @@ class WholeTargetStallTracker:
             self.consecutive_no_progress = 0
             self.phase_exploration_steps = 0
             self.seen_fingerprints.clear()
+            self.response_repetitions.clear()
             return "structured_progress"
 
         novel_fingerprints = set(activity_fingerprints) - self.seen_fingerprints
@@ -797,6 +800,101 @@ class WholeTargetStallTracker:
 
         self.consecutive_no_progress += 1
         return "no_progress"
+
+    def record_validation_batch(self, calls: list[ExecutedToolCall], *, new_facts: frozenset[str],
+                                target_base_url: str | None, observations=None) -> str:
+        """Direct validation uses returned data, never fresh handles as progress.
+
+        Actual new reader ranges are finite producer-bounded progress. Response
+        novelty is exploration, with the existing finite allowance. Repeats
+        remain possible within the no-progress window for verification/repair.
+        """
+        fingerprints = []
+        new_range = False
+        for execution in calls:
+            result = execution.result
+            if result.status == "error" and result.error_kind in {
+                    "invalid_args", "workflow_state", "reference_unavailable", "tool_exception"}:
+                # Different controller diagnostics can support a bounded
+                # correction sequence. Arguments/error prose are not progress,
+                # and repeated errors cannot renew this finite allowance.
+                diagnostic = {"kind": result.error_kind, "parsed": execution.parsed}
+                if canonical_tool_name(execution.name) == "workflow":
+                    try:
+                        error = json.loads(str(result.result).split("\n", 1)[1])["error"]
+                        diagnostic["code"] = error["code"]
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        pass
+                fingerprints.append(_stable_activity_fingerprint("validation_feedback", diagnostic))
+                continue
+            if not execution.parsed or result.err_str or result.error_kind or result.status not in {"success", "observation"}:
+                continue
+            name = canonical_tool_name(execution.name)
+            text = str(result.result)
+            reader_page = name in {"read_payloads", "read_skill_file"} and text.startswith("# ")
+            if reader_page or name in {"read_http_observation", "read_tool_result"}:
+                try:
+                    if reader_page:
+                        page = json.loads(text.rpartition("\nContinuation: ")[2])
+                        identity = str(page["sha256"])
+                        start, end, total = page["start_char"], page["end_char"], page["source_chars"]
+                    elif name == "read_http_observation":
+                        page = json.loads(text.split("\n", 1)[0])
+                        item = observations._items.get(page["observation_id"]) if observations else None
+                        if item is None or item.retained_hash != page["retained_hash"]:
+                            continue
+                        # Integrity binds a capture; progress binds its content.
+                        # New IDs/requests must not make identical bytes unread again.
+                        identity = item.response_hash
+                        start, end, total = page["start_char"], page["end_char"], page["source_chars"]
+                    else:
+                        page = json.loads(text)
+                        identity = str(page["sha256"])
+                        start, end, total = page["actual_start"], page["actual_end"], page["total_length"]
+                    if type(start) is not int or type(end) is not int or not 0 <= start <= end <= total:
+                        continue
+                except (ValueError, KeyError, TypeError):
+                    if not reader_page:
+                        continue
+                    identity = _stable_activity_fingerprint(name, text)
+                    start, end = 0, len(text)
+                ranges = self.read_ranges.setdefault(identity, [])
+                cursor = start
+                for left, right in sorted(ranges):
+                    if left > cursor:
+                        break
+                    cursor = max(cursor, right)
+                if end > start and cursor < end:
+                    new_range = True
+                    ranges.append((start, end))
+            elif name == "http":
+                output = result.result
+                sources = getattr(output, "http_sources", ())
+                items = [observations._items.get(key) for key, _ in sources] if observations else []
+                if items and all(item is not None for item in items):
+                    material = [(item.status, item.response_hash, item.complete, item.truncated)
+                                for item in items]
+                else:
+                    # Exclude opaque IDs and request previews; changed requests
+                    # alone cannot reset a stalled validation.
+                    material = re.sub(r"obs_[0-9a-f]{32}", "obs", text.split(
+                        "[End HTTP response; following text is request metadata]", 1)[0])
+                response = _stable_activity_fingerprint(name, material)
+                repetitions = self.response_repetitions.get(response, 0)
+                self.response_repetitions[response] = repetitions + 1
+                # One bounded verification repeat is exploration, not proof.
+                # Further identical responses cannot renew the allowance.
+                fingerprints.append(f"{response}:sample-{min(repetitions, 1)}")
+            else:
+                fingerprint = _exploration_fingerprint(execution, target_base_url)
+                if fingerprint:
+                    fingerprints.append(fingerprint)
+        if new_range:
+            self.consecutive_no_progress = 0
+            # Pagination must not replenish HTTP's exploration allowance.
+            if not new_facts:
+                return "reader_progress"
+        return self.record_iteration(new_facts=new_facts, activity_fingerprints=fingerprints)
 
 
 def _weighted_window_lengths(total: int) -> list[int]:
@@ -1062,6 +1160,11 @@ class Agent:
         else:
             reader = ReadToolResult(self.result_retention) if self.result_retention.store is not None else None
             self.tools = self.tools.scoped_tool("read_tool_result", reader)
+        from src.permission.runtime.execution import policy_for
+        from src.tools.common.tool_result import ReadHTTPObservation
+        existing_http_reader = self.tools.get("read_http_observation")
+        if policy_for(self.prompter) is not None and (existing_http_reader is None or type(existing_http_reader) is ReadHTTPObservation):
+            self.tools = self.tools.scoped_tool("read_http_observation", ReadHTTPObservation(self))
         self.turn_executed_tool = False
         self._trace_enabled = False
         self._trace_run_id = ""
@@ -1579,6 +1682,12 @@ class Agent:
             # Derivative access inherits the active skill's original capability
             # boundary; generic validation was already checked above.
             return self.is_tool_allowed(ref.tool_name)
+
+        if tool_name == "read_http_observation":
+            from src.tools.common.tool_result import ReadHTTPObservation
+            reader = self.tools.get(tool_name)
+            if type(reader) is ReadHTTPObservation and reader.agent is self:
+                return self.is_tool_allowed("http")
 
         tool = self.tools.get(tool_name)
 
@@ -2561,8 +2670,23 @@ class Agent:
             if goal.status not in {"pending", "in_progress"}:
                 continue
             candidates = self.workflow.objective_goal_candidates(goal)
-            if any(candidate.status in {"new", "queued", "validating", "validated"} for candidate in candidates):
-                return True
+            for candidate in candidates:
+                if candidate.status not in {"new", "queued", "validating", "validated", "dismissed"}:
+                    continue
+                result = self.workflow.latest_result(candidate.id)
+                if result is not None and result.cleanup_state in {"requires-user-action", "failed"}:
+                    from src.permission.runtime.execution import policy_for
+                    reason = self._validation_completion_error(candidate, policy_for(self.prompter))
+                    if reason == f"mutation cleanup unresolved:{result.cleanup_state}":
+                        # Coverage/finding persistence can still be performed;
+                        # operator cleanup itself cannot be solved by more probes.
+                        if result.coverage_synced is False or (
+                            result.outcome == "confirmed" and not self.workflow.finding_is_persisted(candidate.id)
+                        ):
+                            return True
+                        continue
+                if candidate.status != "dismissed" or (result and result.cleanup_state == "pending"):
+                    return True
             if goal.status == "pending" and not candidates:
                 return True
         return False
@@ -2596,6 +2720,13 @@ class Agent:
                     result.outcome if result else None,
                     result.objective_id if result else None,
                     tuple(result.evidence_refs) if result else (),
+                    result.cleanup_state if result else None,
+                    result.coverage_synced if result else None,
+                    self.workflow.persisted_findings.get(candidate.id),
+                    tuple((a["id"], a["status"]) for a in self.workflow.attempts.values()
+                          if a.get("candidate_id") == candidate.id and a.get("objective_id") == objective.id),
+                    tuple((e.id, e.sha256) for e in self.workflow.evidence.values()
+                          if e.candidate_id == candidate.id),
                 ))
         return tuple(rows)
 
@@ -4256,6 +4387,7 @@ class Agent:
                         if after_goal_signature == before_goal_signature
                         else 0
                     )
+                    stall_tracker.consecutive_no_progress = requested_goal_no_progress
                     if requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
                         objective = self.workflow.objective
                         if objective is not None:
@@ -4518,6 +4650,51 @@ class Agent:
                             "recorded so far and remaining work: " + "; ".join(actionable)
                         ),
                         max_steps=max_steps,
+                    )
+
+            if requested_goal_run and not whole_target:
+                statuses = self._reconcile_requested_goals()
+                from src.permission.runtime.execution import policy_for
+                policy = policy_for(self.prompter)
+                progress_kind = stall_tracker.record_validation_batch(
+                    execution_batch.calls,
+                    new_facts=(frozenset({"requested-goal-state-changed"})
+                               if self._requested_goal_progress_signature() != before_goal_signature
+                               else frozenset()),
+                    target_base_url=self.target.base_url() if self.target else None,
+                    observations=policy.observations if policy else None,
+                )
+                requested_goal_no_progress = stall_tracker.consecutive_no_progress
+                self._trace("direct_progress", step=step, progress_kind=progress_kind,
+                            consecutive_no_progress=requested_goal_no_progress,
+                            exploration_steps=stall_tracker.phase_exploration_steps)
+                incomplete = any(status not in {"tested_confirmed", "tested_not_confirmed"}
+                                 for status in statuses.values())
+                # A newly recorded unresolved assessment may legitimately be
+                # revised using existing evidence. Do not preempt that bounded
+                # recovery merely because its candidate is no longer validating.
+                operator_cleanup = any(
+                    (result := self.workflow.latest_result(candidate.id)) is not None
+                    and result.cleanup_state in {"requires-user-action", "failed"}
+                    and self._validation_completion_error(candidate, policy)
+                        == f"mutation cleanup unresolved:{result.cleanup_state}"
+                    for candidate in self.workflow.objective_candidates()
+                )
+                blocked = incomplete and operator_cleanup and not self._has_actionable_requested_goal()
+                stalled = incomplete and requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS
+                if blocked or stalled:
+                    return await self._whole_target_synthesis(
+                        working, signal, emit,
+                        thinking_enabled=turn_request_thinking,
+                        reasoning_level=turn_reasoning_level,
+                        requested_reasoning_level=turn_requested_level,
+                        stop_reason="workflow_blocked" if blocked else "workflow_stalled",
+                        instruction=self._requested_goal_incomplete_instruction(
+                            "Direct validation remains unresolved: " + (
+                                "operator action or an external repair is required."
+                                if blocked else "bounded exploration made no further progress; stop probing."
+                            )
+                        ), max_steps=max_steps,
                     )
 
             if requested_goal_run and step == max_steps - 1:
@@ -5001,6 +5178,25 @@ class Agent:
             self._bounded_results[id(replacement)] = _BoundedToolResult(
                 replacement, source, elided,
             )
+
+        # Preserve bounded pages whole while they are recent. Retire older
+        # reader outputs as whole pages, never as misleading body fragments.
+        # History stays exact and fresh reads still use producer-owned paging.
+        from src.tools.skills.payloads import ReadPayloadsTool
+        from src.tools.skills.skill_file import ReadSkillFileTool
+        page_indexes = [i for i, message in enumerate(working)
+                        if message.role == "tool" and isinstance(
+                            self.tools.get(message.name or ""), (ReadPayloadsTool, ReadSkillFileTool))]
+        for index in page_indexes[:-MIDTURN_ELISION_KEEP_RECENT]:
+            message = working[index]
+            if message.content.startswith("[Older skill page omitted;"):
+                continue
+            # Do not keep a chain of unbounded originals in the transient guard.
+            replacement = replace(message, content=(
+                "[Older skill page omitted; full output remains in the session transcript. "
+                "Use the same bounded reader to retrieve needed source ranges.]"))
+            self._bounded_results.pop(id(message), None)
+            working[index] = replacement
 
         if request is None:
             tools = None if opts is not None and getattr(opts, "tools", True) is False else self.tools.as_llm_tools()
@@ -5677,12 +5873,13 @@ class Agent:
         from src.permission.runtime.execution import policy_for
         from src.tools.http.http_tool import HTTPTool
         from src.tools.common.browser_capture import BrowserCaptureGetTool
+        from src.tools.common.tool_result import ReadHTTPObservation
         from src.workflow.assessment import digest, source_row
         policy = policy_for(self.prompter)
         output = res.result
         tool = self.tools.get(tc.function.name)
         if (policy is None or not isinstance(output, ToolOutput) or not output.http_sources
-                or type(tool) not in {HTTPTool, BrowserCaptureGetTool} or res.err_str
+                or type(tool) not in {HTTPTool, BrowserCaptureGetTool, ReadHTTPObservation} or res.err_str
                 or res.status not in {"success", "observation"}
                 or output.http_session != (policy.session_id or policy.engagement.http_permissions.session_id)
                 or output.http_stamp != policy.stamp()
@@ -5707,6 +5904,15 @@ class Agent:
                         or any(not 0 <= start <= end <= len(output)
                                or output[start:end] != item.body.decode(errors="replace")
                                for (start, end), item in zip(output.http_body_ranges, items))):
+                    return None
+            elif type(tool) is ReadHTTPObservation:
+                if tool.agent is not self or len(items) != 1 or "http" in policy.revoked:
+                    return None
+                tool.validate_rights(parsed_args(tc.function), self.prompter, receipt=False)
+                row = json.loads(str(output).split("\n", 1)[0])
+                start, end = output.http_body_ranges[0]
+                if (len(output.http_body_ranges) != 1
+                        or output[start:end] != items[0].body.decode(errors="replace")[row["start_char"]:row["end_char"]]):
                     return None
             else:
                 if len(items) != 1 or items[0].source_kind != "imported-capture":
@@ -5758,10 +5964,12 @@ class Agent:
         from src.workflow.assessment import digest, source_row
         policy = policy_for(self.prompter)
         for index, message in enumerate(messages):
-            if message.role != "tool" or not message.http_response_sources:
+            if message.role != "tool" or (not message.http_response_sources and (
+                    message.name != "read_http_observation" or message.tool_status == "error")):
                 continue
             try:
-                if (policy is None or "*" in policy.revoked or message.name in policy.revoked
+                if (not message.http_response_sources or policy is None
+                        or "*" in policy.revoked or message.name in policy.revoked
                         or (message.http_runtime_stamp is not None and message.http_runtime_stamp != policy.stamp())):
                     raise ValueError
                 for ref in message.http_response_sources:
@@ -5771,6 +5979,25 @@ class Agent:
                             or (item.source_details or {}).get("analysis_session") != session):
                         raise ValueError
                     policy.require_network(item.url)
+                if message.name == "read_http_observation":
+                    from src.tools.common.tool_result import ReadHTTPObservation
+                    reader = self.tools.get(message.name)
+                    if type(reader) is not ReadHTTPObservation or reader.agent is not self:
+                        raise ValueError
+                    raw_header, content = message.content.split("\n", 1)
+                    header = json.loads(raw_header)
+                    reader.validate_rights({"observation_id": header["observation_id"],
+                        "start_char": header["start_char"], "max_chars": 2000}, self.prompter, receipt=False)
+                    item = policy.observations._items[header["observation_id"]]
+                    body = item.body.decode(errors="replace")
+                    start, end = header["start_char"], header["end_char"]
+                    if (message.http_response_sources != [item.id]
+                            or header["retained_hash"] != item.retained_hash
+                            or type(start) is not int or type(end) is not int
+                            or not 0 <= start <= end <= len(body)
+                            or header["source_chars"] != len(body)
+                            or content != body[start:end]):
+                        raise ValueError
                 if any(secret in message.content for secret in self._managed_http_secrets()):
                     raise ValueError
             except Exception:
