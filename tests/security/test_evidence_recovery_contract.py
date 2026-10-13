@@ -342,8 +342,12 @@ async def test_exhausted_restored_budget_stops_before_model_or_http(runtime, tmp
     assert result is not None and result.outcome == 'insufficient-evidence'
 
 
-async def test_restarting_same_objective_cannot_reset_exhausted_budget(runtime, tmp_path):
+@pytest.mark.parametrize('mode', ['whole_target', 'direct', 'candidate_validation'])
+async def test_restarting_same_objective_cannot_reset_exhausted_budget(runtime, tmp_path, mode):
     state, candidate, workflow, args, _ = await setup(runtime, tmp_path)
+    assert state.objective is not None
+    state.objective.mode = mode
+    state.objective.candidate_id = candidate.id if mode == 'candidate_validation' else None
     registry, p, _, _, sent, *_ = runtime
     agent = agent_for(runtime, workflow, state, {**args, 'observation_ids': []})
     await agent.run('Continue current validation.', FakeSignal(), collect()['sink'])
@@ -352,7 +356,14 @@ async def test_restarting_same_objective_cannot_reset_exhausted_budget(runtime, 
     budget['rejections'] = 3
     agent.client = FakeClient([])
     await agent.run('Continue current validation.', FakeSignal(), collect()['sink'])
-    started = json.loads(await registry.execute('workflow', {'action': 'start_validation', 'candidate_id': candidate.id}, None, p))
+    output = await registry.execute('workflow', {'action': 'start_validation', 'candidate_id': candidate.id}, None, p)
+    if mode == 'whole_target':
+        assert envelope(output)['code'] == 'EXHAUSTED_ATTEMPT'
+        assert current_budget(state, candidate.id) is budget and budget['closed']
+        assert not agent.client.requests and len(sent) == 1
+        assert all(result.outcome == 'insufficient-evidence' for result in state.validation_results)
+        return
+    started = json.loads(output)
     assert started['validation_context']['attempt_id'] != args['attempt_id']
     carried = current_budget(state, candidate.id)
     assert carried is not None and carried['rejections'] == 3 and not carried['closed']

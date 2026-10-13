@@ -3921,11 +3921,23 @@ class Agent:
                 max_steps=max_steps,
             )
 
+        if whole_target and not signal.aborted and _EXPLICIT_GOAL_CANCEL_INTENT.search(user_msg):
+            message = Message("assistant", "Whole-target work stopped at the operator's request; unresolved workflow state is preserved.")
+            self.history.append(message)
+            working.append(message)
+            emit({"type": "assistant-text", "text": message.content})
+            await self.save()
+            return "workflow_blocked"
+
         exhausted = [(cid, args) for cid, (first, count, args) in evidence_recovery.items()
                      if count >= MAX_EVIDENCE_REJECTIONS
                      or (first is not None and first <= -MAX_TERMINAL_REPAIR_TURNS - 1)]
         if exhausted:
-            return await self._stop_evidence_recovery(exhausted, signal, emit, working, step=0)
+            recovery_stop = await self._stop_evidence_recovery(
+                exhausted, signal, emit, working, step=0,
+                allow_continuation=whole_target and max_steps > 0)
+            if recovery_stop is not None:
+                return recovery_stop
 
         for step in range(max_steps):
 
@@ -4392,7 +4404,17 @@ class Agent:
                 or (first is not None and step - first >= MAX_TERMINAL_REPAIR_TURNS)
             ]
             if exhausted_repairs:
-                return await self._stop_evidence_recovery(exhausted_repairs, signal, emit, working, step=step)
+                # A denial/policy failure in this batch is not an attempt-local
+                # evidence error. Close honestly, but never continue past it.
+                denied = any(execution.result.error_kind in {
+                    "permission_denied", "scope_denied", "policy_block", "cancelled",
+                    "permission_pending", "permission_timeout", "permission_stale",
+                } for execution in execution_batch.calls)
+                recovery_stop = await self._stop_evidence_recovery(
+                    exhausted_repairs, signal, emit, working, step=step,
+                    allow_continuation=whole_target and step < max_steps - 1 and not denied)
+                if recovery_stop is not None:
+                    return recovery_stop
 
             if whole_target:
                 status, actionable, blockers = self._whole_target_state()
@@ -4540,7 +4562,73 @@ class Agent:
         )
         return "max_steps"
 
-    async def _stop_evidence_recovery(self, repairs, signal, emit, working, *, step):
+    def _independent_recovery_candidates(self, closed_ids: frozenset[str], signal) -> tuple[str, ...]:
+        """Conservative read-only continuation check, never execution admission.
+
+        Only fresh expert candidates with a usable autonomous target grant are
+        considered. Exact tool calls still pass registry/permission admission.
+        Other work (generic proposals, new grants, discovery/cleanup) stays
+        fail-closed here; normal operator Continue can handle it separately.
+        """
+        from src.permission.runtime.execution import policy_for
+        from src.tools.http.http_tool import HTTPTool
+        from src.workflow.validation_context import resolve_validation_context
+        from src.workflow.validation_route import resolve_validation_route
+
+        objective = self.workflow.objective
+        if objective is None or objective.mode != "whole_target":
+            return ()
+        status, actions, _ = self._whole_target_state()
+        if status != "actionable":
+            return ()
+        policy = policy_for(self.prompter)
+        http = self.tools.get("http")
+        if (signal.aborted
+                or any(goal.status == "cancelled" for goal in objective.requested_goals)
+                or policy is None or not isinstance(http, HTTPTool)
+                or not policy.validation_context_matches(self.workflow, self.skills, self.target)
+                or policy.max_calls is not None and policy.used >= policy.max_calls
+                or {"*", "http", "workflow"} & policy.revoked
+                or any(a.get("status") == "active" for a in self.workflow.attempts.values())):
+            return ()
+        try:
+            policy.require_network(self.target.base_url())
+        except (UserControlledRefusal, OutOfScopeError):
+            return ()
+        rights = policy.engagement.http_permissions
+        origin = self.target.origin()
+        if (origin is None or origin in rights._blocked_gate or origin in rights._suppressed
+                or any(value == origin for value in rights._declined_actions.values())):
+            return ()
+        grant = rights.grants.get(origin)
+        if grant is None or grant.mode != "autonomous":
+            return ()
+        budget = rights._budgets.get(grant.id)
+        if budget is None or budget.expired(rights.clock()) or budget.exhausted():
+            return ()
+        eligible = []
+        for candidate in self.workflow.objective_candidates():
+            if (candidate.id in closed_ids or f"candidate:{candidate.id}" not in actions
+                    or candidate.status not in {"new", "queued"}
+                    or self.workflow.latest_result(candidate.id) is not None
+                    or current_budget(self.workflow, candidate.id) is not None
+                    or resolve_validation_route(self.skills, candidate.candidate_class).kind != "expert"):
+                continue
+            try:
+                context = resolve_validation_context(self.workflow, candidate.id,
+                    target=self.target.base_url(), http_tool=http).to_dict()
+                if (context["resolution"] not in {"resolved", "candidate_only"}
+                        or any(not context.get(field) for field in ("url", "method", "parameter", "location"))
+                        or candidate.baseline_request_ref and context["baseline"]["state"] != "available"
+                        or candidate.auth_context_ref and context["auth"]["state"] != "available"):
+                    continue
+                policy.require_network(context["url"])
+            except (ValueError, UserControlledRefusal, OutOfScopeError):
+                continue
+            eligible.append(candidate.id)
+        return tuple(eligible)
+
+    async def _stop_evidence_recovery(self, repairs, signal, emit, working, *, step, allow_continuation=False):
         for cid, args in repairs:
             # Close through the same registry and workflow contract. Never
             # publish a terminal conclusion or salvage invalid IDs/parents.
@@ -4569,12 +4657,21 @@ class Agent:
                 raise RuntimeError(f"Bounded evidence recovery closure did not commit for {cid}")
             self._evidence_recovery.pop(cid, None)
             self._evidence_recovery_rejections.pop(cid, None)
+        independent = self._independent_recovery_candidates(
+            frozenset(cid for cid, _ in repairs), signal) if allow_continuation else ()
         message = Message("assistant", "Validation stopped with insufficient evidence after bounded terminal evidence repair.")
         self.history.append(message)
         working.append(message)
         emit({"type": "assistant-text", "text": message.content})
+        if independent:
+            working.append(Message("system",
+                "The exhausted attempt is closed with insufficient-evidence and remains unresolved. "
+                "Do not retry it or reset its recovery budget. Whole-target has independent actionable "
+                "candidates under current scope and budgets: " + ", ".join(independent)
+                + ". Continue only safe independent work through normal tool admission. "
+                "This is not assessment completion; preserve every unresolved obligation."))
         await self.save()
-        return "workflow_blocked"
+        return None if independent else "workflow_blocked"
 
     @staticmethod
     def _sanitize_response(resp: ChatResponse) -> None:

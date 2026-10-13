@@ -560,8 +560,10 @@ Every candidate gets exactly one outcome:
 
 An API response candidate and a client-side SPA route are separate sinks. A
 negative JSON reflection test applies only to that API candidate. If a route
-such as `#/search?q=...` may flow into a DOM sink, record a separate DOM
-candidate and use `browser-required` when browser execution cannot be checked.
+such as `#/search?q=...` has an evidenced source-to-sink path in client code,
+record a separate DOM candidate and use `browser-required` when browser
+execution cannot be checked. A route name, parameter name, application type,
+or raw JSON/HTML markup alone does not establish that hypothesis.
 Do not transfer the API result to the route. When no marker was reflected, set
 `reflection_type` to `none`; never call that observation `reflected`.
 JSON API reflection alone does not establish an executable HTML/DOM sink.
@@ -569,6 +571,18 @@ For stored XSS, distinguish the write capture from the later rendering/readback
 capture and its observed context; declare related requests before execution
 when their identity differs. Preserve mutation/cleanup bookkeeping and report
 `browser-required` when the later execution still depends on a browser.
+
+Use the existing Candidate `test_case` field before starting validation to
+distinguish genuinely different API, DOM and stored hypotheses that share an
+endpoint/input. Choose a stable description of the evidenced source/sink path,
+such as `dom:location-search-to-innerhtml` or `stored:comment-to-review`, and
+keep its source references and observed signals on that record. Reuse that
+identity for the same hypothesis; payload variants are not new hypotheses.
+Do not change an active attempt's declaration or Candidate identity to attach
+another sink. Close its honest outcome and register the separately evidenced
+hypothesis instead. A `browser-required` sibling remains unresolved even after
+an API sibling reaches an accepted terminal result. This records identified
+surfaces; it does not attest exhaustive browser or stored-XSS coverage.
 
 ### Standard result entry template
 

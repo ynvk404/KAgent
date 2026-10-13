@@ -290,6 +290,11 @@ class WorkflowTool(Tool):
                     for key in fields if key in properties) + ')'
                 for action, fields in ACTION_INPUTS.items()))
         descriptions = {
+            'phase': 'record_phase_coverage only: recon or enumeration. Input analysis closes through input dispositions and complete_skill.',
+            'coverage_dimension': '; '.join(
+                phase + ': ' + ', '.join(dimensions)
+                for phase, dimensions in PHASE_COVERAGE_DIMENSIONS.items()),
+            'test_case': 'Stable distinct hypothesis/sink identity, not a payload variant. For evidenced API/DOM/stored XSS hypotheses sharing an input, use distinct test_case values before start_validation.',
             'candidate_id': (
                 'Required for record_evidence, start_validation, and record_result. '
                 'For primary-only start_validation, prefer candidate_id alone when the Candidate covers the primary request '
@@ -432,9 +437,9 @@ class WorkflowTool(Tool):
                 if objective.target_origin != normalize_target_origin(self._active_target()):
                     return self._typed_result("error: phase coverage must match the active objective and target")
                 if phase not in PHASE_COVERAGE_DIMENSIONS:
-                    return self._typed_result("error: phase must be recon or enumeration")
+                    return self._coverage_argument_error(phase, dimension)
                 if dimension not in PHASE_COVERAGE_DIMENSIONS[phase]:
-                    return self._typed_result(f"error: unknown {phase} coverage dimension: {dimension}")
+                    return self._coverage_argument_error(phase, dimension)
                 if requested not in PHASE_COVERAGE_STATUSES:
                     return self._typed_result("error: coverage_status is invalid")
                 existing = self.state.phase_coverage_record(
@@ -470,6 +475,8 @@ class WorkflowTool(Tool):
     @staticmethod
     def _typed_result(result: str) -> str:
         """Preserve string compatibility while exposing semantic failures."""
+        if isinstance(result, ToolOutput):
+            return result
         if result.startswith("error:"):
             return ToolOutput(result, status="error", error_kind="workflow_state")
         try:
@@ -479,6 +486,26 @@ class WorkflowTool(Tool):
         if isinstance(payload, dict) and payload.get("ok") is False:
             return ToolOutput(result, status="error", error_kind="tool_exception")
         return result
+
+    @staticmethod
+    def _workflow_error(message: str, *, code: str, category: str,
+                        next_action: str, **context: Any) -> ToolOutput:
+        """Targeted diagnostics; no retry accounting or additional authority."""
+        error = {"code": code, "category": category, "message": redact(message),
+                 "next_action": next_action, **context}
+        return ToolOutput("error: " + redact(message) + "\n" + json.dumps({"ok": False, "error": error}),
+                          status="error", error_kind="invalid_args" if category == "argument_error" else "workflow_state")
+
+    def _coverage_argument_error(self, phase: str, dimension: str) -> ToolOutput:
+        if phase not in PHASE_COVERAGE_DIMENSIONS:
+            return self._workflow_error("phase must be recon or enumeration",
+                code="INVALID_COVERAGE_PHASE", category="argument_error",
+                next_action="Use record_phase_coverage for recon/enumeration only. For input_analysis, inspect list, close input dispositions, then complete_skill(web-input-analysis).",
+                allowed_phases=list(PHASE_COVERAGE_DIMENSIONS))
+        return self._workflow_error(f"unknown {phase} coverage dimension: {dimension}",
+            code="INVALID_COVERAGE_DIMENSION", category="argument_error",
+            next_action="Inspect existing phase coverage with list; use an exact allowed dimension and an honest status/reason. Do not repeat HTTP just to mark coverage.",
+            phase=phase, allowed_dimensions=list(PHASE_COVERAGE_DIMENSIONS[phase]))
 
     def candidate_proposal(self, args: dict[str, Any]) -> Candidate:
         """Read-only canonical proposal; ownership comes from the active runtime.
@@ -746,6 +773,18 @@ class WorkflowTool(Tool):
             self._validate_current_objective_candidate(candidate_id)
             objective = self.state.objective
             candidate = self.state.candidates.get(candidate_id)
+            if objective is not None and objective.mode == "whole_target":
+                from src.workflow.evidence_recovery import current_budget, MAX_EVIDENCE_REJECTIONS, MAX_TERMINAL_REPAIR_TURNS
+                budget = current_budget(self.state, candidate_id)
+                latest = self.state.latest_result(candidate_id)
+                if (budget is not None and budget["closed"] and latest is not None
+                        and latest.outcome == "insufficient-evidence"
+                        and (budget["rejections"] >= MAX_EVIDENCE_REJECTIONS
+                             or budget["repair_turns"] >= MAX_TERMINAL_REPAIR_TURNS)):
+                    return self._workflow_error("candidate evidence recovery exhausted within this whole-target objective",
+                        code="EXHAUSTED_ATTEMPT", category="immutable_state_conflict",
+                        next_action="Leave this unresolved result intact. Continue independent actionable work from list, or obtain an explicit operator-selected candidate retest.",
+                        candidate_id=candidate_id)
             if candidate is None:
                 raise ValueError(f"unknown candidate: {candidate_id}")
             policy = policy_for(prompter)
@@ -874,6 +913,15 @@ class WorkflowTool(Tool):
             return f"error: {err}\n" + json.dumps(envelope, indent=2)
         except ValueError as err:
             message = str(err)
+            if message.startswith("active attempt declaration changed"):
+                attempt = next((a for a in self.state.attempts.values()
+                                if a.get("candidate_id") == candidate_id and a.get("status") == "active"), {})
+                return self._workflow_error(message, code="IMMUTABLE_ATTEMPT_DECLARATION",
+                    category="immutable_state_conflict", candidate_id=candidate_id, attempt_id=attempt.get("id"),
+                    next_action="Resume the existing declaration with start_validation(candidate_id) alone. If the declaration cannot be completed, record its honest unresolved result with a reason; a changed declaration requires an explicit retest. Do not discard required related requests.")
+            if message.startswith("unknown candidate"):
+                return self._workflow_error(message, code="UNKNOWN_CANDIDATE", category="argument_error",
+                    next_action="Use list and copy the exact returned candidate ID for the current objective; do not invent IDs.")
             if message in {"another validation attempt is active", "another generic validation attempt is active"}:
                 message += (
                     '. Use workflow(action="list", status="validating") to identify the active candidate. '
@@ -885,6 +933,9 @@ class WorkflowTool(Tool):
                     'Then retry start_validation for the intended candidate; do not auto-close unrelated work '
                     'or attach a new primary sink through related_requests.'
                 )
+                return self._workflow_error(message, code="ACTIVE_ATTEMPT_CONFLICT",
+                    category="immutable_state_conflict",
+                    next_action='Use list(status="validating") and the active attempt\'s honest result; do not change its declaration or borrow its evidence.')
             return f"error: {message}"
         return json.dumps({"ok": True, "candidate": candidate.to_dict(),
             "validation_context": context,
@@ -1363,7 +1414,11 @@ class WorkflowTool(Tool):
                 no_inputs_discovered=arg_bool(args, "no_inputs_discovered"),
             )
             if not readiness["ready"]:
-                return f"error: {readiness['reason']}"
+                already_completed = readiness["reason"] == f"{workflow_phase} phase is already completed"
+                return self._workflow_error(readiness['reason'], code="PHASE_NOT_READY",
+                    category="immutable_state_conflict" if already_completed else "missing_prerequisite",
+                    next_action="Inspect list and phase readiness. Resolve the stated prerequisite, artifact, coverage or input obligation through its existing contract before retrying complete_skill.",
+                    readiness=readiness)
             artifact_ref = readiness["artifact_ref"]
             phase_coverage = self.state.phase_coverage.get(
                 f"{objective.id}:{workflow_phase}", {}  # type: ignore[union-attr]
@@ -1595,7 +1650,9 @@ class WorkflowTool(Tool):
         status = arg_string(args, "coverage_status")
         reason = arg_string(args, "coverage_reason") or None
         if phase not in PHASE_COVERAGE_DIMENSIONS:
-            return "error: phase must be recon or enumeration"
+            return self._coverage_argument_error(phase, dimension)
+        if dimension not in PHASE_COVERAGE_DIMENSIONS[phase]:
+            return self._coverage_argument_error(phase, dimension)
         if status not in PHASE_COVERAGE_STATUSES:
             return "error: coverage_status is invalid"
         try:

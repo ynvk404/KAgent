@@ -196,7 +196,10 @@ def misuse_script(runtime, scenario, evidence_fault):
             yield from rejected(runtime, name, {**args, "objective_id": "model-owner"}, "objective_id is assigned by the runtime", kind="invalid_args")
             yield from rejected(runtime, name, {**args, "status": "validating"}, "validating is runtime-owned")
         if name == "workflow" and args["action"] == "start_validation":
-            yield from rejected(runtime, name, {**args, "candidate_id": "cand_unknown"}, "unknown candidate")
+            error = yield from rejected(runtime, name, {**args, "candidate_id": "cand_unknown"}, "unknown candidate", kind="invalid_args")
+            diagnostic = json.loads(error.split("\n", 1)[1])["error"]
+            assert diagnostic["code"] == "UNKNOWN_CANDIDATE" and diagnostic["category"] == "argument_error"
+            assert "list" in diagnostic["next_action"]
         if name == "workflow" and args["action"] == "record_evidence":
             if evidence_fault == "unavailable-source":
                 yield from rejected(runtime, name, {**args, "observation_ids": ["obs_" + "f" * 32]}, "primary evidence reference unavailable")

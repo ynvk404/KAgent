@@ -141,6 +141,16 @@ or a response the browser does not render is not an XSS candidate by itself.
 If client-side rendering is unknown, record that ambiguity and stop short of
 an XSS Candidate.
 
+When existing evidence identifies a distinct client-side source-to-sink path,
+or persistence plus a separate rendering/readback sink, retain that DOM/stored
+hypothesis as its own Candidate. For hypotheses sharing the same input geometry,
+set a stable `test_case` describing the evidenced path before validation; reuse
+it for repeated observations of the same path. Keep source references and signals
+on the record. Parameter names, application type and raw markup alone are not
+enough to create siblings. An HTTP/API-only negative cannot resolve these
+separate hypotheses; execution that still needs a browser stays outstanding as
+`browser-required` through the existing validation result contract.
+
 ## 3. Light signal-gathering, in order of intrusiveness (non-destructive)
 
 Try to classify each candidate from context alone first (step 2 + inventory
