@@ -72,7 +72,10 @@ async def test_direct_identical_http_readback_stalls_before_24_steps(runtime, tm
     await agent.run("continue", FakeSignal(), events["sink"])
     assert events["events"][-1].stop_reason == "workflow_stalled"
     assert client.tool_iterations < 24 and len(client.requests) < 24
-    assert not [event for event in events["events"] if event["type"] == "error"]
+    # This fixture has no current session owner/declaration. A terminal stall
+    # now reports explicit closure failure instead of silently leaving it open.
+    errors = [event for event in events["events"] if event["type"] == "error"]
+    assert len(errors) == 1 and "Workflow closure failed" in str(errors[0].err)
     assert not state.validation_results and not state.persisted_findings
     assert state.objective.requested_goals[0].status == "in_progress"
     assert {key: value.to_dict() for key, value in state.evidence.items()} == evidence

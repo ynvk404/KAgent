@@ -243,26 +243,86 @@ def _check_designated_request(request, baseline, op: OperationalCaseInput) -> No
 
 
 class HeadlessPermissions:
-    """Only predeclared exact private-origin and generated artifact grants."""
+    """Exact lab/artifact grants and invocation-scoped owned HTTP readback."""
     def __init__(self, policy, target):
         self.execution_policy = policy
         self.origin = target.origin().as_url()
         self.artifacts = str(policy.root / 'artifacts')
         self.decisions: list[dict] = []
+        self.agent = None
+        self.case_binding = None
+
+    def bind_case(self, agent, op, candidate_id):
+        from src.workflow.assessment import candidate_binding
+        if agent.prompter is not self:
+            raise ValueError('benchmark readback controller mismatch')
+        self.agent = agent
+        self.case_binding = (op.case_id, candidate_id,
+                             candidate_binding(agent.workflow.candidates[candidate_id]),
+                             self.execution_policy.session_id,
+                             self.execution_policy.engagement.http_permissions.epoch,
+                             agent.target.revision)
+
+    def _owned_readback(self, request):
+        from src.target.origin import HTTPOrigin
+        from src.tools.common.tool_result import ReadHTTPObservation
+        from src.workflow.assessment import candidate_binding
+        # Reviewed prose is redacted presentation, not an authority source.
+        # Reconstruct the exact validated range from the reader's cache key.
+        if (self.agent is None or self.case_binding is None
+                or request.risk_tier != 'high-impact' or not request.no_session_cache
+                or request.is_current is None or not request.is_current()):
+            return False
+        try:
+            family, oid, start, maximum = request.cache_key.split(':')
+            args = {'observation_id': oid, 'start_char': int(start), 'max_chars': int(maximum)}
+            reader = self.agent.tools.get('read_http_observation')
+            if (family != 'observation' or not isinstance(reader, ReadHTTPObservation)
+                    or reader.agent is not self.agent
+                    or reader.permission_hints(args).get('cacheKey') != request.cache_key):
+                return False
+            reader.validate_rights(args, self, receipt=False)
+            item = self.execution_policy.observations._items[oid]
+            state = self.agent.workflow
+            objective = state.objective
+            case_id, cid, binding, session_id, epoch, revision = self.case_binding
+            candidate = state.candidates[cid]
+            attempt = state.attempts[item.attempt_id]
+            case = (item.source_details or {}).get('scenario1_case_binding', {})
+            return bool(case_id and session_id
+                and self.execution_policy.session_id == session_id
+                and item.source_kind == 'native-http'
+                and item.candidate_id == cid and candidate_binding(candidate) == binding
+                and item.session_id == session_id
+                and item.epoch == epoch and self.agent.target.revision == revision
+                and case.get('case_id') == case_id and case.get('candidate_id') == cid
+                and case.get('candidate_binding') == binding
+                and objective is not None and objective.mode == 'candidate_validation'
+                and objective.candidate_id == cid and item.objective_id == objective.id
+                and self.execution_policy.generic_validation.durable_attempt == attempt['id']
+                and HTTPOrigin.from_url(item.url).as_url() == self.origin
+                and self.agent.target.origin().as_url() == self.origin
+                and request.is_current())
+        except (AttributeError, KeyError, TypeError, ValueError, PermissionError):
+            return False
 
     async def ask(self, request, signal=None):
         from src.permission.permission import Decision
+        from src.permission.network.grants import check_cancelled
+        check_cancelled(signal)
         allowed = request.risk_tier == 'routine' and (
             request.tool == 'http' and request.cache_key == f'private-declared://{self.origin}'
             or request.tool in {'file_write', 'file_edit'} and request.cache_key == self.artifacts)
+        if request.tool == 'read_http_observation':
+            allowed = self._owned_readback(request)
         self.decisions.append({'tool': request.tool, 'risk_tier': request.risk_tier, 'allowed': allowed})
         return Decision.ALLOW_ONCE if allowed else Decision.DENY
 
 
 class MissingInput:
     async def ask(self, q, signal=None) -> str:
-        from src.permission.permission import UserControlledRefusal
-        raise UserControlledRefusal('headless: operator input unavailable; record unresolved')
+        from src.permission.permission import PermissionPolicyBlocked
+        raise PermissionPolicyBlocked('headless: operator input unavailable; record unresolved')
 
 
 def build_agent(op: OperationalCaseInput, settings: RuntimeSettings, root: Path, client, *, thinking=False):
@@ -362,6 +422,20 @@ def execution_status(done: dict | None, errors: list[str], *, timed_out=False, e
     return 'runtime-error'
 
 
+def case_closure_diagnostic(workflow, candidate_id: str) -> str | None:
+    """Read-only lifecycle check; process completion cannot close an attempt."""
+    for attempt in workflow.attempts.values():
+        if attempt.get('candidate_id') != candidate_id:
+            continue
+        if attempt.get('status') == 'active':
+            return 'active-case-attempt-without-closure'
+        if attempt.get('status') in {'completed', 'unresolved'} and not any(
+                result.candidate_id == candidate_id and result.attempt_id == attempt.get('id')
+                for result in workflow.validation_results):
+            return 'closed-case-attempt-without-result'
+    return None
+
+
 async def execute_case(op: OperationalCaseInput, settings: RuntimeSettings, root: Path,
                        run_id: str, execution_id: str, client, *, thinking=False, generation=None) -> CaseExecution:
     setup_start = time.monotonic()
@@ -375,6 +449,7 @@ async def execute_case(op: OperationalCaseInput, settings: RuntimeSettings, root
     except Exception as err:
         raise BenchmarkSetupError(type(err).__name__) from err
     candidate_id = payload['candidate']['id']
+    cast(HeadlessPermissions, agent.prompter).bind_case(agent, op, candidate_id)
     _bind_benchmark_evidence(policy, op)
     done = None
     errors: list[str] = []
@@ -427,6 +502,10 @@ async def execute_case(op: OperationalCaseInput, settings: RuntimeSettings, root
             errors.extend(type(e).__name__ for e in settled if isinstance(e, Exception))
     execution_end = time.monotonic()
     status = execution_status(done, errors, timed_out=timed_out, exhausted=budget_denial, raised=raised)
+    closure_diagnostic = case_closure_diagnostic(agent.workflow, candidate_id)
+    if closure_diagnostic and status == 'completed':
+        errors.append(closure_diagnostic)
+        status = 'runtime-error'
     canonical = freeze(run_id, op.case_id, execution_id, session_id, candidate_id, agent.workflow, policy, agent.target)
     tools['executed'] = policy.used - 1  # Native policy.start; exclude harness Candidate creation.
     admitted = sum(b.used for b in policy.engagement.http_permissions._budgets.values())
@@ -436,7 +515,8 @@ async def execute_case(op: OperationalCaseInput, settings: RuntimeSettings, root
     metadata = {'capability_profile': CAPABILITY, 'yolo': False, 'provider': client.name(), 'model': client.model(),
                 'thinking_enabled': thinking, 'generation': generation,
                 'permission_decisions': cast(HeadlessPermissions, agent.prompter).decisions, 'session_id': session_id,
-                'candidate_id': candidate_id, 'objective_id': canonical['objective_id']}
+                'candidate_id': candidate_id, 'objective_id': canonical['objective_id'],
+                'closure_diagnostic': closure_diagnostic}
     metrics = RuntimeMetrics(execution_end - execution_start, execution_start - setup_start,
                              time.monotonic() - execution_end, first,
                              llm_metrics(agent.request_metrics.records, done), tools, admitted,
