@@ -1,0 +1,110 @@
+{
+  "readiness": "READY FOR INDEPENDENT VERIFICATION",
+  "baseline": {
+    "exit_code": 1,
+    "passed": 908,
+    "failed": 2,
+    "skipped": 0,
+    "summary": "2 failed, 908 passed in 89.83s (0:01:29)",
+    "failures": [
+      "tests/llm/test_workflow_action_projection.py::test_transport_retry_keeps_encoded_projection_snapshot[anthropic]",
+      "tests/llm/test_workflow_action_projection.py::test_transport_retry_keeps_encoded_projection_snapshot[gemini]"
+    ],
+    "log": "logs/baseline-tests.log"
+  },
+  "baseline_pyright": {
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "informations": 0,
+    "log": "logs/baseline-pyright.log"
+  },
+  "focused": {
+    "exit_code": 0,
+    "passed": 106,
+    "failed": 0,
+    "skipped": 0,
+    "summary": "106 passed in 33.83s",
+    "log": "logs/focused-tests.log"
+  },
+  "broader": {
+    "exit_code": 1,
+    "passed": 908,
+    "failed": 2,
+    "skipped": 0,
+    "summary": "2 failed, 908 passed in 104.57s (0:01:44)",
+    "failures": [
+      "tests/llm/test_workflow_action_projection.py::test_transport_retry_keeps_encoded_projection_snapshot[anthropic]",
+      "tests/llm/test_workflow_action_projection.py::test_transport_retry_keeps_encoded_projection_snapshot[gemini]"
+    ],
+    "log": "logs/broader-tests.log",
+    "new_failures": [],
+    "classification": "Same two pre-edit provider transport projection snapshot failures; no new regression."
+  },
+  "pyright": {
+    "exit_code": 0,
+    "errors": 0,
+    "warnings": 0,
+    "informations": 0,
+    "log": "logs/pyright.log",
+    "note": "Tool prints a preexisting newer-version notice; no install or version change was made."
+  },
+  "diff_checks": [
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "pass"
+    },
+    {
+      "command": "git diff --no-index --check /dev/null tests/agent/test_related_request_contract.py",
+      "exit_code": 1,
+      "result": "pass: diff exists; no whitespace diagnostics"
+    },
+    {
+      "command": "git diff --no-index --check /dev/null tests/security/test_related_request_evidence.py",
+      "exit_code": 1,
+      "result": "pass: diff exists; no whitespace diagnostics"
+    },
+    {
+      "command": "git diff --no-index --check /dev/null tests/tools/test_related_request_associations.py",
+      "exit_code": 1,
+      "result": "pass: diff exists; no whitespace diagnostics"
+    }
+  ],
+  "development_runs": [
+    {
+      "log": "logs/focused-first.log",
+      "exit_code": 1,
+      "passed": 64,
+      "failed": 67,
+      "classification": "Draft new fixture assumptions corrected: endpoint is resolved, registration is queued, restore interrupts active ownership. Existing tests unchanged."
+    },
+    {
+      "log": "logs/focused-second.log",
+      "exit_code": 2,
+      "collection_errors": 1,
+      "classification": "Duplicate basename under existing pytest import mode; new security module renamed to test_related_request_evidence.py."
+    },
+    {
+      "log": "logs/focused-third.log",
+      "exit_code": 1,
+      "passed": 101,
+      "failed": 1,
+      "classification": "New assertion incorrectly expected JSON in the rendered workflow prompt; corrected to the runtime summary contract. Final acceptance pass follows."
+    },
+    {
+      "log": "logs/pyright-first.log",
+      "exit_code": 0,
+      "errors": 0,
+      "classification": "Intermediate configured Pyright pass; final pass also recorded."
+    }
+  ],
+  "not_run": [
+    "live HTTP/target tests",
+    "paid or external LLM tests",
+    "BenchmarkJava",
+    "comprehensive Scenario/E2E verification reserved for phase 2",
+    "full repository pytest suite"
+  ],
+  "baseline_failure_impact": "Cannot claim immutable projected tools when Anthropic/Gemini requests are mutated during transport retries. Required association/Agent/error/schema acceptance is independently demonstrated by passing focused tests, including static-request retries; provider code is unchanged."
+}

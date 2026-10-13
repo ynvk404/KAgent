@@ -1,0 +1,19 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_unadmitted_observation_fields_are_rejected_without_dropping_them[body] __
+/mnt/d/DOANTOTNGHIEP/kagent/tests/tools/test_related_requests_independent.py:22: in test_unadmitted_observation_fields_are_rejected_without_dropping_them
+    assert "related request requires role, method, url" in result
+E   AssertionError: assert 'related request requires role, method, url' in 'error: related_requests needs at most 16 objects with bounded role/method/url and optional boolean required'
+_ test_unadmitted_observation_fields_are_rejected_without_dropping_them[payload] _
+/mnt/d/DOANTOTNGHIEP/kagent/tests/tools/test_related_requests_independent.py:22: in test_unadmitted_observation_fields_are_rejected_without_dropping_them
+    assert "related request requires role, method, url" in result
+E   AssertionError: assert 'related request requires role, method, url' in 'error: related_requests needs at most 16 objects with bounded role/method/url and optional boolean required'
+_ test_unadmitted_observation_fields_are_rejected_without_dropping_them[identity] _
+/mnt/d/DOANTOTNGHIEP/kagent/tests/tools/test_related_requests_independent.py:22: in test_unadmitted_observation_fields_are_rejected_without_dropping_them
+    assert "related request requires role, method, url" in result
+E   AssertionError: assert 'related request requires role, method, url' in 'error: related_requests needs at most 16 objects with bounded role/method/url and optional boolean required'
+=========================== short test summary info ============================
+FAILED tests/tools/test_related_requests_independent.py::test_unadmitted_observation_fields_are_rejected_without_dropping_them[body]
+FAILED tests/tools/test_related_requests_independent.py::test_unadmitted_observation_fields_are_rejected_without_dropping_them[payload]
+FAILED tests/tools/test_related_requests_independent.py::test_unadmitted_observation_fields_are_rejected_without_dropping_them[identity]
+3 failed in 10.08s

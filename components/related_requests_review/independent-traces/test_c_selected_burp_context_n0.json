@@ -1,0 +1,1687 @@
+{
+  "events": [
+    {
+      "type": "controller",
+      "action": "runtime-rights-at-turn-start",
+      "yolo": false,
+      "grant_origins": [
+        "http://127.0.0.1:3101"
+      ]
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-1",
+      "name": "load_skill",
+      "args": {
+        "name": "sql-injection"
+      },
+      "args_json": "{\"name\": \"sql-injection\"}",
+      "invocation": {
+        "id": "79\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202666",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-1",
+      "name": "load_skill",
+      "result": "Runtime authority takes precedence over permission-review wording in this playbook. Read permissions_status for actual rights. YOLO auto-approves covered actions, including impact requests; do not ask_user to approve those again. OFF restores ordinary review. Skill prerequisites, proof requirements and stop conditions still apply; a skill cannot grant rights or enable unavailable adapters. Blocked/pending waits for operator action, not repeated permission questions. Missing accounts/OTP remain real input questions. Runtime validates source provenance, integrity, ownership and scope; Agent/skill assesses vulnerability meaning. Start validation, cite primary observation_ids and immutable evidence_refs for both terminal outcomes. Select complete, non-truncated, completed observations supporting the assessment; do not add unusable sources. Body/content/size comparisons require positive response capture, never max_response_bytes=0. After evidence-admissibility rejection read the source ID/reason and retry at most once using usable existing evidence. Repair derived artifacts if needed; do not add probes merely to repair a sufficient manifest. If evidence is insufficient, submit insufficient-evidence unless a distinct missing validation step is identified. Declare bounded hypothesis, criteria, limitations, observed_impact, severity and completed_attempt for negatives. A proof file alone cannot establish target traffic. Operator /review-result optionally reviews a proof conclusion; that human review is never autonomous verification or tool authorization.\n\n# Skill: sql-injection\n\n# SQL injection playbook\n\n## Runtime completion contract\n\nThe runtime derives validation completion from the current objective and target,\nassigned Candidates, accepted terminal ValidationResults, immut",
+      "err": "",
+      "duration_ms": 0,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "79\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202666",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "skill-active",
+      "name": "sql-injection",
+      "call_id": "scenario-1",
+      "invocation": {
+        "id": "79\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202666",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d"
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-2",
+      "name": "workflow",
+      "args": {
+        "action": "record_candidate",
+        "candidate_class": "sql-injection",
+        "endpoint": "/filter",
+        "method": "GET",
+        "parameter": "category",
+        "location": "query",
+        "signals": [
+          "Concrete fixture input supplied by the operator."
+        ]
+      },
+      "args_json": "{\"action\": \"record_candidate\", \"candidate_class\": \"sql-injection\", \"endpoint\": \"/filter\", \"method\": \"GET\", \"parameter\": \"category\", \"location\": \"query\", \"signals\": [\"Concrete fixture input supplied by the operator.\"]}",
+      "invocation": {
+        "id": "1a\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202605",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-2",
+      "name": "workflow",
+      "result": "{\n  \"ok\": true,\n  \"created\": true,\n  \"candidate\": {\n    \"id\": \"cand_9a10f3a69b31b4d47b44\",\n    \"candidate_class\": \"sql-injection\",\n    \"target\": \"http://127.0.0.1:3101\",\n    \"endpoint\": \"/filter\",\n    \"method\": \"GET\",\n    \"parameter\": \"category\",\n    \"location\": \"query\",\n    \"test_case\": null,\n    \"priority\": null,\n    \"signals\": [\n      \"Concrete fixture input supplied by the operator.\"\n    ],\n    \"baseline_request_ref\": \"baseline:8e\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202621:52\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260f:b6\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202603\",\n    \"auth_context_ref\": null,\n    \"content_type\": null,\n    \"identity_media_type\": \"\",\n    \"request_template\": null,\n    \"source_ref\": \"burp:one\",\n    \"source_skill\": null,\n    \"objective_id\": \"2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d\",\n    \"status\": \"queued\"\n  },\n  \"supported\": true,\n  \"validator_resolution\": \"unique\",\n  \"validator_reason\": \"\",\n  \"recommended_skills\": [\n    \"sql-injection\"\n  ],\n  \"proof_source_path\": null\n}",
+      "err": "",
+      "duration_ms": 1,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "1a\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202605",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": "cand_9a10f3a69b31b4d47b44"
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "f5\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260b",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-3",
+      "name": "read_payloads",
+      "args": {
+        "skill": "sql-injection",
+        "file": "payloads.txt"
+      },
+      "args_json": "{\"skill\": \"sql-injection\", \"file\": \"payloads.txt\"}",
+      "invocation": {
+        "id": "49\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202622",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-3",
+      "name": "read_payloads",
+      "result": "# sql-injection/payloads.txt \u2014 255 line(s), 17977 bytes | Next page: {\"tool\": \"read_payloads\", \"arguments\": {\"skill\": \"sql-injection\", \"file\": \"payloads.txt\", \"limit\": 200, \"source_ref\": \"sf_c305b81f20a248bfb8646ebaba3009e6\", \"start_char\": 13874}}\n# SQL injection payload corpus for skills/sql-injection/SKILL.md \u2014 one\n# file, four phases.\n#\n# This file has four sections, separated by banners below. They carry\n# different authorization requirements even though they're in one file:\n#\n#   - Phase 1 (top section): no checkpoint beyond normal scope\n#     confirmation. Syntax-sensitivity probes only \u2014 used to see whether\n#     the input is parsed as part of a query at all.\n#\n#   - Phase 2 section: boolean-, error-, and time-based confirmation\n#     probes, covering MySQL, Postgres, MSSQL, Oracle, and SQLite. Still\n#     non-destructive and non-extractive; used to turn a Phase 1 signal\n#     into a repeatable, confirmed result. See SKILL.md \"Engine\n#     identification\" before picking which engine's payloads to try \u2014\n#     don't fire every engine's syntax at the same live target\n#     speculatively.\n#\n#   - Phase 2D section: out-of-band (DNS/HTTP callback) confirmation.\n#     Requires its OWN separate ask_user authorization (including the\n#     specific callback domain to use) \u2014 distinct from and in addition to\n#     Phase 3's authorization. Only use after 2a/2b/2c have all been tried\n#     and were inconclusive. Never use a public/shared third-party OOB\n#     service without explicit user confirmation that it's in scope.\n#\n#     IMPORTANT \u2014 CURRENT KAGENT CAPABILITY:\n#     KAgent currently does not expose an OOB callback/listener tool.\n#     Therefore Phase 2D payloads MUST NOT be executed in the current\n#     runtime. Do not invoke them through shell, http, or another\n#     s",
+      "err": "",
+      "duration_ms": 46,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": true,
+      "invocation": {
+        "id": "49\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202622",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "1e\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026a6",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-4",
+      "name": "workflow",
+      "args": {
+        "action": "start_validation",
+        "candidate_id": "cand_9a10f3a69b31b4d47b44"
+      },
+      "args_json": "{\"action\": \"start_validation\", \"candidate_id\": \"cand_9a10f3a69b31b4d47b44\"}",
+      "invocation": {
+        "id": "ae\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20264e",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-4",
+      "name": "workflow",
+      "result": "{\n  \"ok\": true,\n  \"candidate\": {\n    \"id\": \"cand_9a10f3a69b31b4d47b44\",\n    \"candidate_class\": \"sql-injection\",\n    \"target\": \"http://127.0.0.1:3101\",\n    \"endpoint\": \"/filter\",\n    \"method\": \"GET\",\n    \"parameter\": \"category\",\n    \"location\": \"query\",\n    \"test_case\": null,\n    \"priority\": null,\n    \"signals\": [\n      \"Concrete fixture input supplied by the operator.\"\n    ],\n    \"baseline_request_ref\": \"baseline:8e\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202621:52\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260f:b6\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202603\",\n    \"auth_context_ref\": null,\n    \"content_type\": null,\n    \"identity_media_type\": \"\",\n    \"request_template\": null,\n    \"source_ref\": \"burp:one\",\n    \"source_skill\": null,\n    \"objective_id\": \"2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d\",\n    \"status\": \"validating\"\n  },\n  \"validation_context\": {\n    \"candidate_id\": \"cand_9a10f3a69b31b4d47b44\",\n    \"objective_id\": \"2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d\",\n    \"target\": \"http://127.0.0.1:3101\",\n    \"target_origin\": \"http://127.0.0.1:3101\",\n    \"input_ids\": [],\n    \"resolution\": \"candidate_only\",\n    \"method\": \"GET\",\n    \"endpoint\": \"http://127.0.0.1:3101/filter\",\n    \"parameter\": \"category\",\n    \"location\": \"query\",\n    \"content_type\": null,\n    \"baseline_request_ref\": \"baseline:8e\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202621:52\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260f:b6\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202603\",\n    \"auth_context_ref\": null,\n    \"sample_payload\": null,\n    \"url\": \"http://127.0.0.1:3101/filter\",\n    \"media_type\": null,\n    \"sample_state\": \"unknown\",\n    \"request_template\": null,\n    \"template_state\": \"unknown\",\n    \"provenance\": {\n      \"source_skill\": null,\n      \"source_ref\": \"burp:one\"\n    },\n    \"hypothesis\": {\n      \"candidate_class\": \"sql-injection\",\n      \"test_case\": null,\n      \"signals\": [\n        \"Concrete fixture input supplied by the operator.\"\n      ],\n      \"priority\": nul",
+      "err": "",
+      "duration_ms": 1,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "ae\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20264e",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "b1\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026b7",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-5",
+      "name": "http",
+      "args": {
+        "url": "/filter?category=Gifts",
+        "method": "GET",
+        "phase": "validation"
+      },
+      "args_json": "{\"url\": \"/filter?category=Gifts\", \"method\": \"GET\", \"phase\": \"validation\"}",
+      "invocation": {
+        "id": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202630",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-5",
+      "name": "http",
+      "result": "note: private/internal host independently approved (reason: loopback IPv4)\n\nHTTP/1.1 200 OK\ncontent-type: text/plain\nserver: m1-fixture\ncontent-length: 16\nfinal URL: http://127.0.0.1:3101/filter?category=Gifts\ndecoded body bytes retained before redaction: 16\nwire Content-Length: 16\nContent-Encoding: identity\nRuntime HTTP evidence (redacted capture; not a semantic verdict): {\"observation_id\": \"obs_d91caaa0918e45d2955a6ad374f9bf50\", \"method\": \"GET\", \"url\": \"http://127.0.0.1:3101/filter?category=Gifts\", \"status\": 200, \"complete\": true, \"truncated\": false, \"execution_status\": \"completed\", \"response_cap\": 16384, \"retained_body_bytes\": 16, \"request_preview_complete\": true, \"request_body_bytes\": 0}\n\nfixture products\n[End HTTP response; following text is request metadata]\nEffective request preview (redacted):\nGET http://127.0.0.1:3101/filter?category=Gifts\nHost: 127.0.0.1:3101\nuser-agent: KAgent/0.1.0\n\n\nEnd effective request preview\n[runtime observation: obs_d91caaa0918e45d2955a6ad374f9bf50]",
+      "err": "",
+      "duration_ms": 8,
+      "status": "observation",
+      "error_kind": null,
+      "http_status": 200,
+      "truncated": false,
+      "invocation": {
+        "id": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202630",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "d5\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202656",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-6",
+      "name": "http",
+      "args": {
+        "url": "/filter?category=Gifts%27",
+        "method": "GET",
+        "phase": "validation"
+      },
+      "args_json": "{\"url\": \"/filter?category=Gifts%27\", \"method\": \"GET\", \"phase\": \"validation\"}",
+      "invocation": {
+        "id": "be\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202609",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-6",
+      "name": "http",
+      "result": "note: private/internal host independently approved (reason: loopback IPv4)\n\nHTTP/1.1 400 Bad Request\ncontent-type: text/plain\nserver: m1-fixture\ncontent-length: 20\nfinal URL: http://127.0.0.1:3101/filter?category=Gifts%27\ndecoded body bytes retained before redaction: 20\nwire Content-Length: 20\nContent-Encoding: identity\nRuntime HTTP evidence (redacted capture; not a semantic verdict): {\"observation_id\": \"obs_3f9e98be358f43ab8258547dddd4f7eb\", \"method\": \"GET\", \"url\": \"http://127.0.0.1:3101/filter?category=Gifts%27\", \"status\": 400, \"complete\": true, \"truncated\": false, \"execution_status\": \"completed\", \"response_cap\": 16384, \"retained_body_bytes\": 20, \"request_preview_complete\": true, \"request_body_bytes\": 0}\n\nfixture syntax error\n[End HTTP response; following text is request metadata]\nEffective request preview (redacted):\nGET http://127.0.0.1:3101/filter?category=Gifts%27\nHost: 127.0.0.1:3101\nuser-agent: KAgent/0.1.0\n\n\nEnd effective request preview\n[runtime observation: obs_3f9e98be358f43ab8258547dddd4f7eb]",
+      "err": "",
+      "duration_ms": 6,
+      "status": "observation",
+      "error_kind": null,
+      "http_status": 400,
+      "truncated": false,
+      "invocation": {
+        "id": "be\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202609",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "a9\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202642",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-7",
+      "name": "http",
+      "args": {
+        "url": "/filter?category=Gifts%27+AND+1%3D1--",
+        "method": "GET",
+        "phase": "validation"
+      },
+      "args_json": "{\"url\": \"/filter?category=Gifts%27+AND+1%3D1--\", \"method\": \"GET\", \"phase\": \"validation\"}",
+      "invocation": {
+        "id": "e6\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026e6",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-7",
+      "name": "http",
+      "result": "note: private/internal host independently approved (reason: loopback IPv4)\n\nHTTP/1.1 200 OK\ncontent-type: text/plain\nserver: m1-fixture\ncontent-length: 16\nfinal URL: http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--\ndecoded body bytes retained before redaction: 16\nwire Content-Length: 16\nContent-Encoding: identity\nRuntime HTTP evidence (redacted capture; not a semantic verdict): {\"observation_id\": \"obs_adc8c0a4c35f4bfeb662ca499a238e61\", \"method\": \"GET\", \"url\": \"http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--\", \"status\": 200, \"complete\": true, \"truncated\": false, \"execution_status\": \"completed\", \"response_cap\": 16384, \"retained_body_bytes\": 16, \"request_preview_complete\": true, \"request_body_bytes\": 0}\n\nfixture products\n[End HTTP response; following text is request metadata]\nEffective request preview (redacted):\nGET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--\nHost: 127.0.0.1:3101\nuser-agent: KAgent/0.1.0\n\n\nEnd effective request preview\n[runtime observation: obs_adc8c0a4c35f4bfeb662ca499a238e61]",
+      "err": "",
+      "duration_ms": 6,
+      "status": "observation",
+      "error_kind": null,
+      "http_status": 200,
+      "truncated": false,
+      "invocation": {
+        "id": "e6\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026e6",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "90\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202618",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-8",
+      "name": "http",
+      "args": {
+        "url": "/filter?category=Gifts%27+AND+1%3D2--",
+        "method": "GET",
+        "phase": "validation"
+      },
+      "args_json": "{\"url\": \"/filter?category=Gifts%27+AND+1%3D2--\", \"method\": \"GET\", \"phase\": \"validation\"}",
+      "invocation": {
+        "id": "2f\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202659",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-8",
+      "name": "http",
+      "result": "note: private/internal host independently approved (reason: loopback IPv4)\n\nHTTP/1.1 200 OK\ncontent-type: text/plain\nserver: m1-fixture\ncontent-length: 5\nfinal URL: http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D2--\ndecoded body bytes retained before redaction: 5\nwire Content-Length: 5\nContent-Encoding: identity\nRuntime HTTP evidence (redacted capture; not a semantic verdict): {\"observation_id\": \"obs_2f6e6c9209a24effb9ab320978ec79fc\", \"method\": \"GET\", \"url\": \"http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D2--\", \"status\": 200, \"complete\": true, \"truncated\": false, \"execution_status\": \"completed\", \"response_cap\": 16384, \"retained_body_bytes\": 5, \"request_preview_complete\": true, \"request_body_bytes\": 0}\n\nempty\n[End HTTP response; following text is request metadata]\nEffective request preview (redacted):\nGET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D2--\nHost: 127.0.0.1:3101\nuser-agent: KAgent/0.1.0\n\n\nEnd effective request preview\n[runtime observation: obs_2f6e6c9209a24effb9ab320978ec79fc]",
+      "err": "",
+      "duration_ms": 6,
+      "status": "observation",
+      "error_kind": null,
+      "http_status": 200,
+      "truncated": false,
+      "invocation": {
+        "id": "2f\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202659",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "99\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026b9",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-9",
+      "name": "http",
+      "args": {
+        "url": "/filter?category=Gifts%27+AND+1%3D1--",
+        "method": "GET",
+        "phase": "validation"
+      },
+      "args_json": "{\"url\": \"/filter?category=Gifts%27+AND+1%3D1--\", \"method\": \"GET\", \"phase\": \"validation\"}",
+      "invocation": {
+        "id": "ac\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026de",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-9",
+      "name": "http",
+      "result": "note: private/internal host independently approved (reason: loopback IPv4)\n\nHTTP/1.1 200 OK\ncontent-type: text/plain\nserver: m1-fixture\ncontent-length: 16\nfinal URL: http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--\ndecoded body bytes retained before redaction: 16\nwire Content-Length: 16\nContent-Encoding: identity\nRuntime HTTP evidence (redacted capture; not a semantic verdict): {\"observation_id\": \"obs_5e885e7880ba4d288652b262cd34ea49\", \"method\": \"GET\", \"url\": \"http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--\", \"status\": 200, \"complete\": true, \"truncated\": false, \"execution_status\": \"completed\", \"response_cap\": 16384, \"retained_body_bytes\": 16, \"request_preview_complete\": true, \"request_body_bytes\": 0}\n\nfixture products\n[End HTTP response; following text is request metadata]\nEffective request preview (redacted):\nGET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--\nHost: 127.0.0.1:3101\nuser-agent: KAgent/0.1.0\n\n\nEnd effective request preview\n[runtime observation: obs_5e885e7880ba4d288652b262cd34ea49]",
+      "err": "",
+      "duration_ms": 6,
+      "status": "observation",
+      "error_kind": null,
+      "http_status": 200,
+      "truncated": false,
+      "invocation": {
+        "id": "ac\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026de",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "7e\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202673",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-10",
+      "name": "http",
+      "args": {
+        "url": "/filter?category=Gifts%27+AND+1%3D2--",
+        "method": "GET",
+        "phase": "validation"
+      },
+      "args_json": "{\"url\": \"/filter?category=Gifts%27+AND+1%3D2--\", \"method\": \"GET\", \"phase\": \"validation\"}",
+      "invocation": {
+        "id": "5c\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202612",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-10",
+      "name": "http",
+      "result": "note: private/internal host independently approved (reason: loopback IPv4)\n\nHTTP/1.1 200 OK\ncontent-type: text/plain\nserver: m1-fixture\ncontent-length: 5\nfinal URL: http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D2--\ndecoded body bytes retained before redaction: 5\nwire Content-Length: 5\nContent-Encoding: identity\nRuntime HTTP evidence (redacted capture; not a semantic verdict): {\"observation_id\": \"obs_6812a33f400d46b4bb327fc95a42f8b5\", \"method\": \"GET\", \"url\": \"http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D2--\", \"status\": 200, \"complete\": true, \"truncated\": false, \"execution_status\": \"completed\", \"response_cap\": 16384, \"retained_body_bytes\": 5, \"request_preview_complete\": true, \"request_body_bytes\": 0}\n\nempty\n[End HTTP response; following text is request metadata]\nEffective request preview (redacted):\nGET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D2--\nHost: 127.0.0.1:3101\nuser-agent: KAgent/0.1.0\n\n\nEnd effective request preview\n[runtime observation: obs_6812a33f400d46b4bb327fc95a42f8b5]",
+      "err": "",
+      "duration_ms": 6,
+      "status": "observation",
+      "error_kind": null,
+      "http_status": 200,
+      "truncated": false,
+      "invocation": {
+        "id": "5c\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202612",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "32\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20261f",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-11",
+      "name": "file_write",
+      "args": {
+        "path": "/tmp/kagent-related-qa-20261013-final-a/test_c_selected_burp_context_n0/artifacts/scenario-proof/cand_9a10f3a69b31b4d47b44.md",
+        "content": "# Candidate proof\n- candidate_id: cand_9a10f3a69b31b4d47b44\n- observation_ids: obs_d91caaa0918e45d2955a6ad374f9bf50, obs_3f9e98be358f43ab8258547dddd4f7eb, obs_adc8c0a4c35f4bfeb662ca499a238e61, obs_2f6e6c9209a24effb9ab320978ec79fc, obs_5e885e7880ba4d288652b262cd34ea49, obs_6812a33f400d46b4bb327fc95a42f8b5\nobs_d91caaa0918e45d2955a6ad374f9bf50: GET http://127.0.0.1:3101/filter?category=Gifts; HTTP 200; fixture products\nobs_3f9e98be358f43ab8258547dddd4f7eb: GET http://127.0.0.1:3101/filter?category=Gifts%27; HTTP 400; fixture syntax error\nobs_adc8c0a4c35f4bfeb662ca499a238e61: GET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--; HTTP 200; fixture products\nobs_2f6e6c9209a24effb9ab320978ec79fc: GET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D2--; HTTP 200; empty\nobs_5e885e7880ba4d288652b262cd34ea49: GET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--; HTTP 200; fixture products\nobs_6812a33f400d46b4bb327fc95a42f8b5: GET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D2--; HTTP 200; empty\nControlled predicates repeatedly change the fixture product response.\nOffline fixture only; no live target, extraction, introspection or impact validation. No general absence claim.\n"
+      },
+      "args_json": "{\"path\": \"/tmp/kagent-related-qa-20261013-final-a/test_c_selected_burp_context_n0/artifacts/scenario-proof/cand_9a10f3a69b31b4d47b44.md\", \"content\": \"# Candidate proof\\n- candidate_id: cand_9a10f3a69b31b4d47b44\\n- observation_ids: obs_d91caaa0918e45d2955a6ad374f9bf50, obs_3f9e98be358f43ab8258547dddd4f7eb, obs_adc8c0a4c35f4bfeb662ca499a238e61, obs_2f6e6c9209a24effb9ab320978ec79fc, obs_5e885e7880ba4d288652b262cd34ea49, obs_6812a33f400d46b4bb327fc95a42f8b5\\nobs_d91caaa0918e45d2955a6ad374f9bf50: GET http://127.0.0.1:3101/filter?category=Gifts; HTTP 200; fixture products\\nobs_3f9e98be358f43ab8258547dddd4f7eb: GET http://127.0.0.1:3101/filter?category=Gifts%27; HTTP 400; fixture syntax error\\nobs_adc8c0a4c35f4bfeb662ca499a238e61: GET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--; HTTP 200; fixture products\\nobs_2f6e6c9209a24effb9ab320978ec79fc: GET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D2--; HTTP 200; empty\\nobs_5e885e7880ba4d288652b262cd34ea49: GET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--; HTTP 200; fixture products\\nobs_6812a33f400d46b4bb327fc95a42f8b5: GET http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D2--; HTTP 200; empty\\nControlled predicates repeatedly change the fixture product response.\\nOffline fixture only; no live target, extraction, introspection or impact validation. No general absence claim.\\n\"}",
+      "invocation": {
+        "id": "ef\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026ea",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-11",
+      "name": "file_write",
+      "result": "wrote 1217 bytes to /tmp/kagent-related-qa-20261013-final-a/test_c_selected_burp_context_n0/artifacts/scenario-proof/cand_9a10f3a69b31b4d47b44.md",
+      "err": "",
+      "duration_ms": 46,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "ef\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026ea",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "07\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20262c",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-12",
+      "name": "workflow",
+      "args": {
+        "action": "record_evidence",
+        "candidate_id": "cand_9a10f3a69b31b4d47b44",
+        "evidence_path": "artifacts/scenario-proof/cand_9a10f3a69b31b4d47b44.md",
+        "observation_ids": [
+          "obs_d91caaa0918e45d2955a6ad374f9bf50",
+          "obs_3f9e98be358f43ab8258547dddd4f7eb",
+          "obs_adc8c0a4c35f4bfeb662ca499a238e61",
+          "obs_2f6e6c9209a24effb9ab320978ec79fc",
+          "obs_5e885e7880ba4d288652b262cd34ea49",
+          "obs_6812a33f400d46b4bb327fc95a42f8b5"
+        ]
+      },
+      "args_json": "{\"action\": \"record_evidence\", \"candidate_id\": \"cand_9a10f3a69b31b4d47b44\", \"evidence_path\": \"artifacts/scenario-proof/cand_9a10f3a69b31b4d47b44.md\", \"observation_ids\": [\"obs_d91caaa0918e45d2955a6ad374f9bf50\", \"obs_3f9e98be358f43ab8258547dddd4f7eb\", \"obs_adc8c0a4c35f4bfeb662ca499a238e61\", \"obs_2f6e6c9209a24effb9ab320978ec79fc\", \"obs_5e885e7880ba4d288652b262cd34ea49\", \"obs_6812a33f400d46b4bb327fc95a42f8b5\"]}",
+      "invocation": {
+        "id": "78\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20266f",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-12",
+      "name": "workflow",
+      "result": "{\n  \"ok\": true,\n  \"evidence\": {\n    \"id\": \"ev_e19407005d460a4181c5\",\n    \"candidate_id\": \"cand_9a10f3a69b31b4d47b44\",\n    \"path\": \".kagent/evidence/957acfc7efc247b35121ab64/3a\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202673.proof\",\n    \"sha256\": \"3a\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202673\",\n    \"size\": 1217,\n    \"source_path\": \"/tmp/kagent-related-qa-20261013-final-a/test_c_selected_burp_context_n0/artifacts/scenario-proof/cand_9a10f3a69b31b4d47b44.md\"\n  },\n  \"evidence_kind\": \"derived\",\n  \"primary_parents\": [\n    \"obs_d91caaa0918e45d2955a6ad374f9bf50\",\n    \"obs_3f9e98be358f43ab8258547dddd4f7eb\",\n    \"obs_adc8c0a4c35f4bfeb662ca499a238e61\",\n    \"obs_2f6e6c9209a24effb9ab320978ec79fc\",\n    \"obs_5e885e7880ba4d288652b262cd34ea49\",\n    \"obs_6812a33f400d46b4bb327fc95a42f8b5\"\n  ]\n}",
+      "err": "",
+      "duration_ms": 5,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "78\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20266f",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "98\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202635",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-13",
+      "name": "workflow",
+      "args": {
+        "action": "record_result",
+        "candidate_id": "cand_9a10f3a69b31b4d47b44",
+        "attempt_id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+        "skill_name": "sql-injection",
+        "outcome": "confirmed",
+        "evidence_refs": [
+          "ev_e19407005d460a4181c5"
+        ],
+        "observation_ids": [
+          "obs_d91caaa0918e45d2955a6ad374f9bf50",
+          "obs_3f9e98be358f43ab8258547dddd4f7eb",
+          "obs_adc8c0a4c35f4bfeb662ca499a238e61",
+          "obs_2f6e6c9209a24effb9ab320978ec79fc",
+          "obs_5e885e7880ba4d288652b262cd34ea49",
+          "obs_6812a33f400d46b4bb327fc95a42f8b5"
+        ],
+        "assessment": {
+          "hypothesis": "Input reaches a SQL filter",
+          "criteria": "Baseline, syntax signal and two complete TRUE/FALSE pairs",
+          "limitations": "Offline fixture only; no live target, extraction, introspection or impact validation. No general absence claim.",
+          "completed_attempt": true,
+          "observed_impact": "Controlled predicates repeatedly change the fixture product response.",
+          "severity": "medium"
+        },
+        "techniques": [
+          "SQLI-2",
+          "boolean-based"
+        ],
+        "repeatable": true,
+        "confirmation": {
+          "kind": "boolean-differential",
+          "request_template": "http://127.0.0.1:3101/filter?category=Gifts' AND {predicate}--",
+          "true_predicate": "1=1",
+          "false_predicate": "1=2",
+          "pairs": [
+            {
+              "repetition": 1,
+              "true": {
+                "status": 200,
+                "size": 16,
+                "marker": "fixture products"
+              },
+              "false": {
+                "status": 200,
+                "size": 5,
+                "marker": "empty"
+              }
+            },
+            {
+              "repetition": 2,
+              "true": {
+                "status": 200,
+                "size": 16,
+                "marker": "fixture products"
+              },
+              "false": {
+                "status": 200,
+                "size": 5,
+                "marker": "empty"
+              }
+            }
+          ]
+        }
+      },
+      "args_json": "{\"action\": \"record_result\", \"candidate_id\": \"cand_9a10f3a69b31b4d47b44\", \"attempt_id\": \"attempt_27a6c497852c484e8bf6f03a44f89a93\", \"skill_name\": \"sql-injection\", \"outcome\": \"confirmed\", \"evidence_refs\": [\"ev_e19407005d460a4181c5\"], \"observation_ids\": [\"obs_d91caaa0918e45d2955a6ad374f9bf50\", \"obs_3f9e98be358f43ab8258547dddd4f7eb\", \"obs_adc8c0a4c35f4bfeb662ca499a238e61\", \"obs_2f6e6c9209a24effb9ab320978ec79fc\", \"obs_5e885e7880ba4d288652b262cd34ea49\", \"obs_6812a33f400d46b4bb327fc95a42f8b5\"], \"assessment\": {\"hypothesis\": \"Input reaches a SQL filter\", \"criteria\": \"Baseline, syntax signal and two complete TRUE/FALSE pairs\", \"limitations\": \"Offline fixture only; no live target, extraction, introspection or impact validation. No general absence claim.\", \"completed_attempt\": true, \"observed_impact\": \"Controlled predicates repeatedly change the fixture product response.\", \"severity\": \"medium\"}, \"techniques\": [\"SQLI-2\", \"boolean-based\"], \"repeatable\": true, \"confirmation\": {\"kind\": \"boolean-differential\", \"request_template\": \"http://127.0.0.1:3101/filter?category=Gifts' AND {predicate}--\", \"true_predicate\": \"1=1\", \"false_predicate\": \"1=2\", \"pairs\": [{\"repetition\": 1, \"true\": {\"status\": 200, \"size\": 16, \"marker\": \"fixture products\"}, \"false\": {\"status\": 200, \"size\": 5, \"marker\": \"empty\"}}, {\"repetition\": 2, \"true\": {\"status\": 200, \"size\": 16, \"marker\": \"fixture products\"}, \"false\": {\"status\": 200, \"size\": 5, \"marker\": \"empty\"}}]}}",
+      "invocation": {
+        "id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202625",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-13",
+      "name": "workflow",
+      "result": "{\n  \"ok\": true,\n  \"created\": true,\n  \"eligible_for_confirm_finding\": true,\n  \"coverage_status\": \"failed\",\n  \"coverage_sync\": \"synced\",\n  \"coverage_error\": null,\n  \"result\": {\n    \"candidate_id\": \"cand_9a10f3a69b31b4d47b44\",\n    \"skill_name\": \"sql-injection\",\n    \"outcome\": \"confirmed\",\n    \"evidence_refs\": [\n      \"ev_e19407005d460a4181c5\"\n    ],\n    \"techniques\": [\n      \"SQLI-2\",\n      \"boolean-based\"\n    ],\n    \"repeatable\": true,\n    \"confirmation\": {\n      \"kind\": \"boolean-differential\",\n      \"request_template\": \"http://127.0.0.1:3101/filter?category=Gifts' AND {predicate}--\",\n      \"true_predicate\": \"1=1\",\n      \"false_predicate\": \"1=2\",\n      \"pairs\": [\n        {\n          \"repetition\": 1,\n          \"true\": {\n            \"status\": 200,\n            \"size\": 16,\n            \"marker\": \"fixture products\"\n          },\n          \"false\": {\n            \"status\": 200,\n            \"size\": 5,\n            \"marker\": \"empty\"\n          }\n        },\n        {\n          \"repetition\": 2,\n          \"true\": {\n            \"status\": 200,\n            \"size\": 16,\n            \"marker\": \"fixture products\"\n          },\n          \"false\": {\n            \"status\": 200,\n            \"size\": 5,\n            \"marker\": \"empty\"\n          }\n        }\n      ]\n    },\n    \"mutation_performed\": false,\n    \"cleanup_status\": null,\n    \"cleanup_state\": \"not-required\",\n    \"deferred_reason\": null,\n    \"notes\": null,\n    \"coverage_synced\": true,\n    \"recorded_at\": \"2026-10-13T04:41:48.157442+00:00\",\n    \"session_id\": \"qa-C-selected-burp\",\n    \"objective_id\": \"2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d\",\n    \"assessment_source\": \"agent\",\n    \"assessment_contract_version\": 2,\n    \"result_id\": \"result_1b3709545b364d34925fe97b16785f69\",\n    \"attempt_id\": \"attempt_27a6c497852c484e8bf6f03a44f89a93\",\n    \"candidate_binding\": \"3d\u2026[R",
+      "err": "",
+      "duration_ms": 21,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202625",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 sql-injection \u00b7 risk: normal\nmatched: requested goal sql-injection is next in user order",
+      "recommended_skill": "sql-injection",
+      "decision_id": "c1\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f1",
+      "candidate_id": "cand_9a10f3a69b31b4d47b44",
+      "reason": "requested goal sql-injection is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "2b\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260d",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-14",
+      "name": "confirm_finding",
+      "args": {
+        "candidate_id": "cand_9a10f3a69b31b4d47b44",
+        "title": "Offline controlled product filter",
+        "severity": "medium",
+        "url": "http://127.0.0.1:3101/filter",
+        "method": "GET",
+        "parameter": "category",
+        "payload": "Gifts' AND 1=1--",
+        "response_excerpt": "fixture products",
+        "observed_impact": "Controlled predicates repeatedly change the fixture product response.",
+        "potential_impact": "No additional impact assessed.",
+        "curl": "curl 'http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--'",
+        "remediation": "Use parameterized queries for this input; application implementation was not inspected.",
+        "vuln_class": "sqli"
+      },
+      "args_json": "{\"candidate_id\": \"cand_9a10f3a69b31b4d47b44\", \"title\": \"Offline controlled product filter\", \"severity\": \"medium\", \"url\": \"http://127.0.0.1:3101/filter\", \"method\": \"GET\", \"parameter\": \"category\", \"payload\": \"Gifts' AND 1=1--\", \"response_excerpt\": \"fixture products\", \"observed_impact\": \"Controlled predicates repeatedly change the fixture product response.\", \"potential_impact\": \"No additional impact assessed.\", \"curl\": \"curl 'http://127.0.0.1:3101/filter?category=Gifts%27+AND+1%3D1--'\", \"remediation\": \"Use parameterized queries for this input; application implementation was not inspected.\", \"vuln_class\": \"sqli\"}",
+      "invocation": {
+        "id": "f5\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20267a",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-14",
+      "name": "confirm_finding",
+      "result": "Finding \"Offline controlled product filter\" written to /tmp/kagent-related-qa-20261013-final-a/test_c_selected_burp_context_n0/artifacts/findings/offline-controlled-product-filter.md\nClassification: SQL Injection; CWE: CWE-89; OWASP: A03:2021 Injection\nCompact report written to /tmp/kagent-related-qa-20261013-final-a/test_c_selected_burp_context_n0/artifacts/reports/findings/offline-controlled-product-filter.md",
+      "err": "",
+      "duration_ms": 20,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "f5\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20267a",
+        "scope": "36\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c9"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "assistant-text",
+      "text": "Bounded fixture observations recorded; remaining limitations are in the workflow."
+    },
+    {
+      "type": "done",
+      "stop_reason": "final_response",
+      "agent_loop_llm_calls": 15,
+      "compaction_llm_calls": 0,
+      "final_synthesis_llm_calls": 0,
+      "total_llm_calls": 15
+    }
+  ],
+  "snapshots": [
+    {
+      "label": "load_skill",
+      "revision": 0,
+      "candidates": [],
+      "attempts": {},
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "pending",
+            "candidate_ids": [],
+            "reason": null,
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "record_candidate",
+      "revision": 1,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "queued"
+        }
+      ],
+      "attempts": {},
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "pending",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": null,
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "read_payloads",
+      "revision": 2,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "queued"
+        }
+      ],
+      "attempts": {},
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "start_validation",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "http",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "http",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "http",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "http",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "http",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "http",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "file_write",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "record_evidence",
+      "revision": 4,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "record_result",
+      "revision": 6,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validated"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "completed",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": [
+        {
+          "result_id": "result_1b3709545b364d34925fe97b16785f69",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "attempt_id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "outcome": "confirmed",
+          "coverage_synced": true,
+          "cleanup_state": "not-required",
+          "evidence_refs": [
+            "ev_e19407005d460a4181c5"
+          ],
+          "assessment_binding": "e0…[REDACTED:················]…6b"
+        }
+      ]
+    },
+    {
+      "label": "confirm_finding",
+      "revision": 8,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validated"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "completed",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": "confirmed finding persistence pending",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {
+        "cand_9a10f3a69b31b4d47b44": "74…[REDACTED:················]…69"
+      },
+      "unavailable_proofs": [],
+      "results": [
+        {
+          "result_id": "result_1b3709545b364d34925fe97b16785f69",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "attempt_id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "outcome": "confirmed",
+          "coverage_synced": true,
+          "cleanup_state": "not-required",
+          "evidence_refs": [
+            "ev_e19407005d460a4181c5"
+          ],
+          "assessment_binding": "e0…[REDACTED:················]…6b"
+        }
+      ]
+    },
+    {
+      "label": "post-agent",
+      "revision": 9,
+      "candidates": [
+        {
+          "id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_class": "sql-injection",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/filter",
+          "method": "GET",
+          "parameter": "category",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": "baseline:8e…[REDACTED:········]…21:52…[REDACTED:········]…0f:b6…[REDACTED:················]…03",
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": "burp:one",
+          "source_skill": null,
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "status": "validated"
+        }
+      ],
+      "attempts": {
+        "attempt_27a6c497852c484e8bf6f03a44f89a93": {
+          "id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "candidate_binding": "3d…[REDACTED:················]…8d",
+          "session_id": "qa-C-selected-burp",
+          "objective_id": "2b…[REDACTED:········]…0d",
+          "epoch": "c1…[REDACTED:········]…20",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "completed",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "2b…[REDACTED:········]…0d",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_9cd950623fb52be4",
+            "candidate_class": "sql-injection",
+            "status": "tested_confirmed",
+            "candidate_ids": [
+              "cand_9a10f3a69b31b4d47b44"
+            ],
+            "reason": null,
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {
+        "cand_9a10f3a69b31b4d47b44": "74…[REDACTED:················]…69"
+      },
+      "unavailable_proofs": [],
+      "results": [
+        {
+          "result_id": "result_1b3709545b364d34925fe97b16785f69",
+          "candidate_id": "cand_9a10f3a69b31b4d47b44",
+          "attempt_id": "attempt_27a6c497852c484e8bf6f03a44f89a93",
+          "outcome": "confirmed",
+          "coverage_synced": true,
+          "cleanup_state": "not-required",
+          "evidence_refs": [
+            "ev_e19407005d460a4181c5"
+          ],
+          "assessment_binding": "e0…[REDACTED:················]…6b"
+        }
+      ]
+    }
+  ],
+  "errors": []
+}

@@ -37,7 +37,7 @@ from src.workflow.state import (
 )
 from src.workflow.evidence import EvidenceArtifact, verify_evidence_reads, check_proof_references
 from src.workflow.assessment import (start_attempt, references, resolve_sources, candidate_binding,
-                                     seal, accepted_result, check_excerpts)
+                                     seal, accepted_result, check_excerpts, DuplicateRequestAssociation)
 import uuid
 from src.skills.registry import (
     Registry as SkillRegistry,
@@ -157,6 +157,9 @@ class WorkflowTool(Tool):
             "Active-attempt conflict: list validating work; record its honest result "
             "or insufficient-evidence/deferred with reason before starting another candidate. "
             "mutation_performed: verified writes; cleanup needs separate authority. Samples aren't replay baselines.\n"
+            "For primary-only validation, prefer start_validation with candidate_id alone when the Candidate covers "
+            "the primary request and current prerequisites are met; Generic still needs an admitted probe/proposal. "
+            "related_requests is optional supplementary method/URL associations, not individual payload observations.\n"
             '{"action":"record_candidate","candidate_class":"sqli","endpoint":"/login","method":"POST","parameter":"email"}\n'
             '{"action":"start_validation","candidate_id":"<returned candidate.id>"}'
         )
@@ -286,7 +289,12 @@ class WorkflowTool(Tool):
                     for key in fields if key in properties) + ')'
                 for action, fields in ACTION_INPUTS.items()))
         descriptions = {
-            'candidate_id': 'Required for record_evidence, start_validation, and record_result.',
+            'candidate_id': (
+                'Required for record_evidence, start_validation, and record_result. '
+                'For primary-only start_validation, prefer candidate_id alone when the Candidate covers the primary request '
+                'and current prerequisites are met. Runtime resolves Candidate context; do not repeat endpoint/method or '
+                'assign runtime identity, infer missing body/auth/credentials/templates, or bypass Generic probe/proposal admission. '
+                'Example: {"action":"start_validation","candidate_id":"<returned candidate.id>"}'),
             'attempt_id': 'Runtime ID from start_validation; cannot assign an attempt. record_result only; omit from record_evidence.',
             'assessment': 'hypothesis,criteria,limitations,completed_attempt,observed_impact,severity.',
             'evidence_path': 'Project proof; shared Candidate headings; parent observation IDs.',
@@ -294,7 +302,17 @@ class WorkflowTool(Tool):
             'status': 'Registration/list status; not used by record_result. Only start_validation owns validating; never register validating.',
             'observation_ids': 'Exact HTTP/authoritative evidence IDs matching candidate, attempt and request. Terminal sources: complete, untruncated, completed.',
             'outcome': 'Required for record_result.',
-            'related_requests': 'Unique method/URL across roles.',
+            'related_requests': (
+                'Optional supplementary request associations for start_validation; a single legacy explicit primary association remains valid. '
+                'Each normalized method and resolved/redacted URL has one association across all roles and required values. '
+                'Different bodies, payloads or identities on the same key are separate HTTP observations, not associations. '
+                'This is not a list of baseline/TRUE/FALSE/trigger steps or individual HTTP invocations. '
+                'required defaults to true, except cleanup defaults to false; cleanup still needs separate authorization. '
+                'Omit a redundant primary declaration only when the Candidate covers it and no supplementary obligation is lost. '
+                'Preserve required supplementary evidence; resolve conflicts by restating intent, never invent URLs or auto-merge. '
+                'For a Candidate POST /comments with supplementary GET /comments/123 readback: '
+                '{"action":"start_validation","candidate_id":"<returned candidate.id>",'
+                '"related_requests":[{"role":"readback","method":"GET","url":"/comments/123"}]}'),
             'coverage_reason': 'Non-performed: reason; observed: source/limitations.',
             'force': 'Explicit retest only.',
         }
@@ -845,6 +863,14 @@ class WorkflowTool(Tool):
             candidate = self.state.set_candidate_status(candidate_id, "validating")
             if not generic and policy is not None and objective is not None:
                 policy.generic_validation.select_expert(candidate)
+        except DuplicateRequestAssociation as err:
+            # Preserve the legacy text prefix/classification. The JSON is part
+            # of the tool text, so string consumers and the next LLM see it.
+            envelope = {"ok": False, "error": {
+                "code": err.code, "action": "start_validation", "field": err.field,
+                "indices": list(err.indices), "message": str(err), "repair_hint": err.repair_hint,
+            }}
+            return f"error: {err}\n" + json.dumps(envelope, indent=2)
         except ValueError as err:
             message = str(err)
             if message in {"another validation attempt is active", "another generic validation attempt is active"}:

@@ -1,0 +1,985 @@
+{
+  "events": [
+    {
+      "type": "controller",
+      "action": "runtime-rights-at-turn-start",
+      "yolo": false,
+      "grant_origins": [
+        "http://127.0.0.1:3101"
+      ]
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 cross-site-scripting \u00b7 risk: normal\nmatched: requested goal cross-site-scripting is next in user order",
+      "recommended_skill": "cross-site-scripting",
+      "decision_id": "b0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20263b",
+      "candidate_id": null,
+      "reason": "requested goal cross-site-scripting is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-1",
+      "name": "load_skill",
+      "args": {
+        "name": "cross-site-scripting"
+      },
+      "args_json": "{\"name\": \"cross-site-scripting\"}",
+      "invocation": {
+        "id": "67\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260c",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-1",
+      "name": "load_skill",
+      "result": "Runtime authority takes precedence over permission-review wording in this playbook. Read permissions_status for actual rights. YOLO auto-approves covered actions, including impact requests; do not ask_user to approve those again. OFF restores ordinary review. Skill prerequisites, proof requirements and stop conditions still apply; a skill cannot grant rights or enable unavailable adapters. Blocked/pending waits for operator action, not repeated permission questions. Missing accounts/OTP remain real input questions. Runtime validates source provenance, integrity, ownership and scope; Agent/skill assesses vulnerability meaning. Start validation, cite primary observation_ids and immutable evidence_refs for both terminal outcomes. Select complete, non-truncated, completed observations supporting the assessment; do not add unusable sources. Body/content/size comparisons require positive response capture, never max_response_bytes=0. After evidence-admissibility rejection read the source ID/reason and retry at most once using usable existing evidence. Repair derived artifacts if needed; do not add probes merely to repair a sufficient manifest. If evidence is insufficient, submit insufficient-evidence unless a distinct missing validation step is identified. Declare bounded hypothesis, criteria, limitations, observed_impact, severity and completed_attempt for negatives. A proof file alone cannot establish target traffic. Operator /review-result optionally reviews a proof conclusion; that human review is never autonomous verification or tool authorization.\n\n# Skill: cross-site-scripting\n\n# Cross-site scripting playbook\n\n## Runtime completion contract\n\nThe runtime derives validation completion from the current objective and target,\nassigned Candidates, accepted terminal Validation",
+      "err": "",
+      "duration_ms": 0,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "67\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260c",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "skill-active",
+      "name": "cross-site-scripting",
+      "call_id": "scenario-1",
+      "invocation": {
+        "id": "67\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20260c",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      },
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6"
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 cross-site-scripting \u00b7 risk: normal\nmatched: requested goal cross-site-scripting is next in user order",
+      "recommended_skill": "cross-site-scripting",
+      "decision_id": "d6\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202609",
+      "candidate_id": null,
+      "reason": "requested goal cross-site-scripting is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-2",
+      "name": "workflow",
+      "args": {
+        "action": "record_candidate",
+        "candidate_class": "xss",
+        "endpoint": "/reflect",
+        "method": "GET",
+        "parameter": "q",
+        "location": "query",
+        "signals": [
+          "Concrete fixture input supplied by the operator."
+        ]
+      },
+      "args_json": "{\"action\": \"record_candidate\", \"candidate_class\": \"xss\", \"endpoint\": \"/reflect\", \"method\": \"GET\", \"parameter\": \"q\", \"location\": \"query\", \"signals\": [\"Concrete fixture input supplied by the operator.\"]}",
+      "invocation": {
+        "id": "dc\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202608",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-2",
+      "name": "workflow",
+      "result": "{\n  \"ok\": true,\n  \"created\": true,\n  \"candidate\": {\n    \"id\": \"cand_24d75b158e6265f2f042\",\n    \"candidate_class\": \"cross-site-scripting\",\n    \"target\": \"http://127.0.0.1:3101\",\n    \"endpoint\": \"/reflect\",\n    \"method\": \"GET\",\n    \"parameter\": \"q\",\n    \"location\": \"query\",\n    \"test_case\": null,\n    \"priority\": null,\n    \"signals\": [\n      \"Concrete fixture input supplied by the operator.\"\n    ],\n    \"baseline_request_ref\": null,\n    \"auth_context_ref\": null,\n    \"content_type\": null,\n    \"identity_media_type\": \"\",\n    \"request_template\": null,\n    \"source_ref\": null,\n    \"source_skill\": null,\n    \"objective_id\": \"85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6\",\n    \"status\": \"queued\"\n  },\n  \"supported\": true,\n  \"validator_resolution\": \"unique\",\n  \"validator_reason\": \"\",\n  \"recommended_skills\": [\n    \"cross-site-scripting\"\n  ],\n  \"proof_source_path\": null\n}",
+      "err": "",
+      "duration_ms": 0,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "dc\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202608",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      },
+      "accepted_candidate_id": "cand_24d75b158e6265f2f042"
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 cross-site-scripting \u00b7 risk: normal\nmatched: requested goal cross-site-scripting is next in user order",
+      "recommended_skill": "cross-site-scripting",
+      "decision_id": "5a\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202635",
+      "candidate_id": "cand_24d75b158e6265f2f042",
+      "reason": "requested goal cross-site-scripting is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-3",
+      "name": "workflow",
+      "args": {
+        "action": "start_validation",
+        "candidate_id": "cand_24d75b158e6265f2f042"
+      },
+      "args_json": "{\"action\": \"start_validation\", \"candidate_id\": \"cand_24d75b158e6265f2f042\"}",
+      "invocation": {
+        "id": "6c\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026d9",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-3",
+      "name": "workflow",
+      "result": "{\n  \"ok\": true,\n  \"candidate\": {\n    \"id\": \"cand_24d75b158e6265f2f042\",\n    \"candidate_class\": \"cross-site-scripting\",\n    \"target\": \"http://127.0.0.1:3101\",\n    \"endpoint\": \"/reflect\",\n    \"method\": \"GET\",\n    \"parameter\": \"q\",\n    \"location\": \"query\",\n    \"test_case\": null,\n    \"priority\": null,\n    \"signals\": [\n      \"Concrete fixture input supplied by the operator.\"\n    ],\n    \"baseline_request_ref\": null,\n    \"auth_context_ref\": null,\n    \"content_type\": null,\n    \"identity_media_type\": \"\",\n    \"request_template\": null,\n    \"source_ref\": null,\n    \"source_skill\": null,\n    \"objective_id\": \"85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6\",\n    \"status\": \"validating\"\n  },\n  \"validation_context\": {\n    \"candidate_id\": \"cand_24d75b158e6265f2f042\",\n    \"objective_id\": \"85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6\",\n    \"target\": \"http://127.0.0.1:3101\",\n    \"target_origin\": \"http://127.0.0.1:3101\",\n    \"input_ids\": [],\n    \"resolution\": \"candidate_only\",\n    \"method\": \"GET\",\n    \"endpoint\": \"http://127.0.0.1:3101/reflect\",\n    \"parameter\": \"q\",\n    \"location\": \"query\",\n    \"content_type\": null,\n    \"baseline_request_ref\": null,\n    \"auth_context_ref\": null,\n    \"sample_payload\": null,\n    \"url\": \"http://127.0.0.1:3101/reflect\",\n    \"media_type\": null,\n    \"sample_state\": \"unknown\",\n    \"request_template\": null,\n    \"template_state\": \"unknown\",\n    \"provenance\": {\n      \"source_skill\": null,\n      \"source_ref\": null\n    },\n    \"hypothesis\": {\n      \"candidate_class\": \"cross-site-scripting\",\n      \"test_case\": null,\n      \"signals\": [\n        \"Concrete fixture input supplied by the operator.\"\n      ],\n      \"priority\": null\n    },\n    \"conflicting_fields\": [],\n    \"limitations\": [],\n    \"baseline\": {\n      \"state\": \"missing\",\n      \"available\": false,\n      \"reason\": null\n    },\n    \"auth\": {\n      \"state\": \"unk",
+      "err": "",
+      "duration_ms": 1,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "6c\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026d9",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 cross-site-scripting \u00b7 risk: normal\nmatched: requested goal cross-site-scripting is next in user order",
+      "recommended_skill": "cross-site-scripting",
+      "decision_id": "28\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026e8",
+      "candidate_id": "cand_24d75b158e6265f2f042",
+      "reason": "requested goal cross-site-scripting is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-4",
+      "name": "http",
+      "args": {
+        "url": "/reflect?q=xss-qa-marker",
+        "method": "GET",
+        "phase": "validation",
+        "max_response_bytes": 3
+      },
+      "args_json": "{\"url\": \"/reflect?q=xss-qa-marker\", \"method\": \"GET\", \"phase\": \"validation\", \"max_response_bytes\": 3}",
+      "invocation": {
+        "id": "6a\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026a1",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-4",
+      "name": "http",
+      "result": "note: private/internal host independently approved (reason: loopback IPv4)\n\nHTTP/1.1 200 OK\ncontent-type: text/html\nserver: m1-fixture\ncontent-length: 39\nfinal URL: http://127.0.0.1:3101/reflect?q=xss-qa-marker\ndecoded body bytes retained before redaction: 3\nwire Content-Length: 39\nContent-Encoding: identity\nRuntime HTTP evidence (redacted capture; not a semantic verdict): {\"observation_id\": \"obs_9747e211ed7540738ae8d5b33c7c014b\", \"method\": \"GET\", \"url\": \"http://127.0.0.1:3101/reflect?q=xss-qa-marker\", \"status\": 200, \"complete\": false, \"truncated\": true, \"execution_status\": \"completed\", \"response_cap\": 3, \"retained_body_bytes\": 3, \"request_preview_complete\": true, \"request_body_bytes\": 0}\n\n<ht\n[response body truncated at 3 decoded bytes]\n[End HTTP response; following text is request metadata]\nEffective request preview (redacted):\nGET http://127.0.0.1:3101/reflect?q=xss-qa-marker\nHost: 127.0.0.1:3101\nuser-agent: KAgent/0.1.0\n\n\nEnd effective request preview\n[runtime observation: obs_9747e211ed7540738ae8d5b33c7c014b]",
+      "err": "",
+      "duration_ms": 6,
+      "status": "observation",
+      "error_kind": null,
+      "http_status": 200,
+      "truncated": true,
+      "invocation": {
+        "id": "6a\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026a1",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 cross-site-scripting \u00b7 risk: normal\nmatched: requested goal cross-site-scripting is next in user order",
+      "recommended_skill": "cross-site-scripting",
+      "decision_id": "7e\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20265e",
+      "candidate_id": "cand_24d75b158e6265f2f042",
+      "reason": "requested goal cross-site-scripting is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-5",
+      "name": "file_write",
+      "args": {
+        "path": "/tmp/kagent-related-qa-20261013-final-a/test_b_native_incomplete_html_0/artifacts/xss-partial.md",
+        "content": "Candidate cand_24d75b158e6265f2f042; observation_ids: obs_9747e211ed7540738ae8d5b33c7c014b\nOnly a three-byte HTML prefix was retained; no executable context is proved."
+      },
+      "args_json": "{\"path\": \"/tmp/kagent-related-qa-20261013-final-a/test_b_native_incomplete_html_0/artifacts/xss-partial.md\", \"content\": \"Candidate cand_24d75b158e6265f2f042; observation_ids: obs_9747e211ed7540738ae8d5b33c7c014b\\nOnly a three-byte HTML prefix was retained; no executable context is proved.\"}",
+      "invocation": {
+        "id": "ce\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026e8",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-5",
+      "name": "file_write",
+      "result": "wrote 167 bytes to /tmp/kagent-related-qa-20261013-final-a/test_b_native_incomplete_html_0/artifacts/xss-partial.md",
+      "err": "",
+      "duration_ms": 43,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "ce\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026e8",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 cross-site-scripting \u00b7 risk: normal\nmatched: requested goal cross-site-scripting is next in user order",
+      "recommended_skill": "cross-site-scripting",
+      "decision_id": "a7\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20265d",
+      "candidate_id": "cand_24d75b158e6265f2f042",
+      "reason": "requested goal cross-site-scripting is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-6",
+      "name": "workflow",
+      "args": {
+        "action": "record_evidence",
+        "candidate_id": "cand_24d75b158e6265f2f042",
+        "evidence_path": "artifacts/xss-partial.md",
+        "observation_ids": [
+          "obs_9747e211ed7540738ae8d5b33c7c014b"
+        ]
+      },
+      "args_json": "{\"action\": \"record_evidence\", \"candidate_id\": \"cand_24d75b158e6265f2f042\", \"evidence_path\": \"artifacts/xss-partial.md\", \"observation_ids\": [\"obs_9747e211ed7540738ae8d5b33c7c014b\"]}",
+      "invocation": {
+        "id": "d6\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202612",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-6",
+      "name": "workflow",
+      "result": "{\n  \"ok\": true,\n  \"evidence\": {\n    \"id\": \"ev_f34741a59fc48d9de1a6\",\n    \"candidate_id\": \"cand_24d75b158e6265f2f042\",\n    \"path\": \".kagent/evidence/b0857ff06a762cf0a8f7c1b0/41\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202659.proof\",\n    \"sha256\": \"41\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202659\",\n    \"size\": 167,\n    \"source_path\": \"/tmp/kagent-related-qa-20261013-final-a/test_b_native_incomplete_html_0/artifacts/xss-partial.md\"\n  },\n  \"evidence_kind\": \"derived\",\n  \"primary_parents\": [\n    \"obs_9747e211ed7540738ae8d5b33c7c014b\"\n  ]\n}",
+      "err": "",
+      "duration_ms": 3,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "d6\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202612",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 cross-site-scripting \u00b7 risk: normal\nmatched: requested goal cross-site-scripting is next in user order",
+      "recommended_skill": "cross-site-scripting",
+      "decision_id": "a9\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026c6",
+      "candidate_id": "cand_24d75b158e6265f2f042",
+      "reason": "requested goal cross-site-scripting is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-7",
+      "name": "workflow",
+      "args": {
+        "action": "record_result",
+        "candidate_id": "cand_24d75b158e6265f2f042",
+        "attempt_id": "attempt_a6125f9f50fb4754972c7101445b279f",
+        "skill_name": "cross-site-scripting",
+        "outcome": "not-confirmed",
+        "evidence_refs": [
+          "ev_f34741a59fc48d9de1a6"
+        ],
+        "observation_ids": [
+          "obs_9747e211ed7540738ae8d5b33c7c014b"
+        ],
+        "assessment": {
+          "hypothesis": "Reflection may be executable",
+          "criteria": "Complete observed context",
+          "limitations": "Response capture is truncated",
+          "completed_attempt": true,
+          "observed_impact": "No complete context retained",
+          "severity": "info"
+        }
+      },
+      "args_json": "{\"action\": \"record_result\", \"candidate_id\": \"cand_24d75b158e6265f2f042\", \"attempt_id\": \"attempt_a6125f9f50fb4754972c7101445b279f\", \"skill_name\": \"cross-site-scripting\", \"outcome\": \"not-confirmed\", \"evidence_refs\": [\"ev_f34741a59fc48d9de1a6\"], \"observation_ids\": [\"obs_9747e211ed7540738ae8d5b33c7c014b\"], \"assessment\": {\"hypothesis\": \"Reflection may be executable\", \"criteria\": \"Complete observed context\", \"limitations\": \"Response capture is truncated\", \"completed_attempt\": true, \"observed_impact\": \"No complete context retained\", \"severity\": \"info\"}}",
+      "invocation": {
+        "id": "31\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026fd",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-7",
+      "name": "workflow",
+      "result": "error: evidence-admissibility: source obs_9747e211ed7540738ae8d5b33c7c014b unusable (truncated, incomplete). Terminal assessment requires completed usable primary evidence. Read this rejection; select only usable observations supporting the assessment. When parents change, correct the source proof and dependent claims/excerpts, then record_evidence again with the correct observation_ids for a new immutable snapshot. Replace evidence_refs before resubmitting; removing a source ID alone cannot repair derived proof. Retry at most once using existing evidence. Do not edit registered snapshots in place. Do not add probes just to repair a manifest when existing evidence suffices. If evidence is insufficient, submit insufficient-evidence; continue validation only for a separately identified missing validation step.",
+      "err": "error: evidence-admissibility: source obs_9747e211ed7540738ae8d5b33c7c014b unusable (truncated, incomplete). Terminal assessment requires completed usable primary evidence. Read this rejection; select only usable observations supporting the assessment. When parents change, correct the source proof and dependent claims/excerpts, then record_evidence again with the correct observation_ids for a new immutable snapshot. Replace evidence_refs before resubmitting; removing a source ID alone cannot repair derived proof. Retry at most once using existing evidence. Do not edit registered snapshots in place. Do not add probes just to repair a manifest when existing evidence suffices. If evidence is insufficient, submit insufficient-evidence; continue validation only for a separately identified missing validation step.",
+      "duration_ms": 3,
+      "status": "error",
+      "error_kind": "workflow_state",
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "31\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026fd",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "decision",
+      "summary": "Planner \u00b7 cross-site-scripting \u00b7 risk: normal\nmatched: requested goal cross-site-scripting is next in user order",
+      "recommended_skill": "cross-site-scripting",
+      "decision_id": "75\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202676",
+      "candidate_id": "cand_24d75b158e6265f2f042",
+      "reason": "requested goal cross-site-scripting is next in user order",
+      "target_origin": "http://127.0.0.1:3101",
+      "target_revision": 0,
+      "objective_id": "85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6",
+      "context_diagnostics": null
+    },
+    {
+      "type": "tool-call",
+      "id": "scenario-8",
+      "name": "workflow",
+      "args": {
+        "action": "record_result",
+        "candidate_id": "cand_24d75b158e6265f2f042",
+        "attempt_id": "attempt_a6125f9f50fb4754972c7101445b279f",
+        "skill_name": "cross-site-scripting",
+        "outcome": "insufficient-evidence",
+        "deferred_reason": "Native bounded capture lacks complete context; no negative or confirmation claim."
+      },
+      "args_json": "{\"action\": \"record_result\", \"candidate_id\": \"cand_24d75b158e6265f2f042\", \"attempt_id\": \"attempt_a6125f9f50fb4754972c7101445b279f\", \"skill_name\": \"cross-site-scripting\", \"outcome\": \"insufficient-evidence\", \"deferred_reason\": \"Native bounded capture lacks complete context; no negative or confirmation claim.\"}",
+      "invocation": {
+        "id": "49\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202686",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      }
+    },
+    {
+      "type": "tool-result",
+      "id": "scenario-8",
+      "name": "workflow",
+      "result": "{\n  \"ok\": true,\n  \"created\": true,\n  \"eligible_for_confirm_finding\": false,\n  \"coverage_status\": null,\n  \"coverage_sync\": \"not-applicable\",\n  \"coverage_error\": null,\n  \"result\": {\n    \"candidate_id\": \"cand_24d75b158e6265f2f042\",\n    \"skill_name\": \"cross-site-scripting\",\n    \"outcome\": \"insufficient-evidence\",\n    \"evidence_refs\": [],\n    \"techniques\": [],\n    \"repeatable\": null,\n    \"confirmation\": null,\n    \"mutation_performed\": false,\n    \"cleanup_status\": null,\n    \"cleanup_state\": \"not-required\",\n    \"deferred_reason\": \"Native bounded capture lacks complete context; no negative or confirmation claim.\",\n    \"notes\": null,\n    \"coverage_synced\": null,\n    \"recorded_at\": \"2026-10-13T04:41:43.412521+00:00\",\n    \"session_id\": \"qa-B-partial\",\n    \"objective_id\": \"85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6\",\n    \"assessment_source\": \"agent\",\n    \"assessment_contract_version\": 2,\n    \"result_id\": \"result_33a40fde51634c48a4691f97c5d1b273\",\n    \"attempt_id\": \"attempt_a6125f9f50fb4754972c7101445b279f\",\n    \"candidate_binding\": \"c3\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202631\",\n    \"evidence_manifest\": [],\n    \"assessment\": {\n      \"artifacts\": [],\n      \"artifact_sources\": {},\n      \"attempt\": {\n        \"id\": \"attempt_a6125f9f50fb4754972c7101445b279f\",\n        \"candidate_id\": \"cand_24d75b158e6265f2f042\",\n        \"candidate_binding\": \"c3\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202631\",\n        \"session_id\": \"qa-B-partial\",\n        \"objective_id\": \"85\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u2026f6\",\n        \"epoch\": \"fb\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20269f\",\n        \"target_origin\": \"http://127.0.0.1:3101\",\n        \"related_requests\": [],\n        \"criteria\": null,\n        \"target_revision\": 0,\n        \"result_position\": 0\n      }\n    },\n    \"assessment_binding\": \"32\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u20265c\",\n    \"supersedes\": null\n  }\n}",
+      "err": "",
+      "duration_ms": 1,
+      "status": "success",
+      "error_kind": null,
+      "http_status": null,
+      "truncated": false,
+      "invocation": {
+        "id": "49\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202686",
+        "scope": "c0\u2026[REDACTED:\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7]\u202649"
+      },
+      "accepted_candidate_id": null
+    },
+    {
+      "type": "assistant-text",
+      "text": "Validation remains incomplete: cand_24d75b158e6265f2f042: Native bounded capture lacks complete context; no negative or confirmation claim."
+    },
+    {
+      "type": "done",
+      "stop_reason": "workflow_blocked",
+      "agent_loop_llm_calls": 9,
+      "compaction_llm_calls": 0,
+      "final_synthesis_llm_calls": 1,
+      "total_llm_calls": 10
+    }
+  ],
+  "snapshots": [
+    {
+      "label": "load_skill",
+      "revision": 0,
+      "candidates": [],
+      "attempts": {},
+      "objective": {
+        "id": "85…[REDACTED:········]…f6",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_e099407ac5982912",
+            "candidate_class": "cross-site-scripting",
+            "status": "pending",
+            "candidate_ids": [],
+            "reason": null,
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "record_candidate",
+      "revision": 1,
+      "candidates": [
+        {
+          "id": "cand_24d75b158e6265f2f042",
+          "candidate_class": "cross-site-scripting",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/reflect",
+          "method": "GET",
+          "parameter": "q",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": null,
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": null,
+          "source_skill": null,
+          "objective_id": "85…[REDACTED:········]…f6",
+          "status": "queued"
+        }
+      ],
+      "attempts": {},
+      "objective": {
+        "id": "85…[REDACTED:········]…f6",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_e099407ac5982912",
+            "candidate_class": "cross-site-scripting",
+            "status": "pending",
+            "candidate_ids": [
+              "cand_24d75b158e6265f2f042"
+            ],
+            "reason": null,
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "start_validation",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_24d75b158e6265f2f042",
+          "candidate_class": "cross-site-scripting",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/reflect",
+          "method": "GET",
+          "parameter": "q",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": null,
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": null,
+          "source_skill": null,
+          "objective_id": "85…[REDACTED:········]…f6",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_a6125f9f50fb4754972c7101445b279f": {
+          "id": "attempt_a6125f9f50fb4754972c7101445b279f",
+          "candidate_id": "cand_24d75b158e6265f2f042",
+          "candidate_binding": "c3…[REDACTED:················]…31",
+          "session_id": "qa-B-partial",
+          "objective_id": "85…[REDACTED:········]…f6",
+          "epoch": "fb…[REDACTED:········]…9f",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "85…[REDACTED:········]…f6",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_e099407ac5982912",
+            "candidate_class": "cross-site-scripting",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_24d75b158e6265f2f042"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "http",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_24d75b158e6265f2f042",
+          "candidate_class": "cross-site-scripting",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/reflect",
+          "method": "GET",
+          "parameter": "q",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": null,
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": null,
+          "source_skill": null,
+          "objective_id": "85…[REDACTED:········]…f6",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_a6125f9f50fb4754972c7101445b279f": {
+          "id": "attempt_a6125f9f50fb4754972c7101445b279f",
+          "candidate_id": "cand_24d75b158e6265f2f042",
+          "candidate_binding": "c3…[REDACTED:················]…31",
+          "session_id": "qa-B-partial",
+          "objective_id": "85…[REDACTED:········]…f6",
+          "epoch": "fb…[REDACTED:········]…9f",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "85…[REDACTED:········]…f6",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_e099407ac5982912",
+            "candidate_class": "cross-site-scripting",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_24d75b158e6265f2f042"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "file_write",
+      "revision": 3,
+      "candidates": [
+        {
+          "id": "cand_24d75b158e6265f2f042",
+          "candidate_class": "cross-site-scripting",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/reflect",
+          "method": "GET",
+          "parameter": "q",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": null,
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": null,
+          "source_skill": null,
+          "objective_id": "85…[REDACTED:········]…f6",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_a6125f9f50fb4754972c7101445b279f": {
+          "id": "attempt_a6125f9f50fb4754972c7101445b279f",
+          "candidate_id": "cand_24d75b158e6265f2f042",
+          "candidate_binding": "c3…[REDACTED:················]…31",
+          "session_id": "qa-B-partial",
+          "objective_id": "85…[REDACTED:········]…f6",
+          "epoch": "fb…[REDACTED:········]…9f",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "85…[REDACTED:········]…f6",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_e099407ac5982912",
+            "candidate_class": "cross-site-scripting",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_24d75b158e6265f2f042"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "record_evidence",
+      "revision": 4,
+      "candidates": [
+        {
+          "id": "cand_24d75b158e6265f2f042",
+          "candidate_class": "cross-site-scripting",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/reflect",
+          "method": "GET",
+          "parameter": "q",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": null,
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": null,
+          "source_skill": null,
+          "objective_id": "85…[REDACTED:········]…f6",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_a6125f9f50fb4754972c7101445b279f": {
+          "id": "attempt_a6125f9f50fb4754972c7101445b279f",
+          "candidate_id": "cand_24d75b158e6265f2f042",
+          "candidate_binding": "c3…[REDACTED:················]…31",
+          "session_id": "qa-B-partial",
+          "objective_id": "85…[REDACTED:········]…f6",
+          "epoch": "fb…[REDACTED:········]…9f",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "85…[REDACTED:········]…f6",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_e099407ac5982912",
+            "candidate_class": "cross-site-scripting",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_24d75b158e6265f2f042"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "record_result",
+      "revision": 4,
+      "candidates": [
+        {
+          "id": "cand_24d75b158e6265f2f042",
+          "candidate_class": "cross-site-scripting",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/reflect",
+          "method": "GET",
+          "parameter": "q",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": null,
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": null,
+          "source_skill": null,
+          "objective_id": "85…[REDACTED:········]…f6",
+          "status": "validating"
+        }
+      ],
+      "attempts": {
+        "attempt_a6125f9f50fb4754972c7101445b279f": {
+          "id": "attempt_a6125f9f50fb4754972c7101445b279f",
+          "candidate_id": "cand_24d75b158e6265f2f042",
+          "candidate_binding": "c3…[REDACTED:················]…31",
+          "session_id": "qa-B-partial",
+          "objective_id": "85…[REDACTED:········]…f6",
+          "epoch": "fb…[REDACTED:········]…9f",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "active",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "85…[REDACTED:········]…f6",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_e099407ac5982912",
+            "candidate_class": "cross-site-scripting",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_24d75b158e6265f2f042"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": []
+    },
+    {
+      "label": "record_result",
+      "revision": 5,
+      "candidates": [
+        {
+          "id": "cand_24d75b158e6265f2f042",
+          "candidate_class": "cross-site-scripting",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/reflect",
+          "method": "GET",
+          "parameter": "q",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": null,
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": null,
+          "source_skill": null,
+          "objective_id": "85…[REDACTED:········]…f6",
+          "status": "deferred"
+        }
+      ],
+      "attempts": {
+        "attempt_a6125f9f50fb4754972c7101445b279f": {
+          "id": "attempt_a6125f9f50fb4754972c7101445b279f",
+          "candidate_id": "cand_24d75b158e6265f2f042",
+          "candidate_binding": "c3…[REDACTED:················]…31",
+          "session_id": "qa-B-partial",
+          "objective_id": "85…[REDACTED:········]…f6",
+          "epoch": "fb…[REDACTED:········]…9f",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "unresolved",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "85…[REDACTED:········]…f6",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_e099407ac5982912",
+            "candidate_class": "cross-site-scripting",
+            "status": "in_progress",
+            "candidate_ids": [
+              "cand_24d75b158e6265f2f042"
+            ],
+            "reason": "no validation result",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": [
+        {
+          "result_id": "result_33a40fde51634c48a4691f97c5d1b273",
+          "candidate_id": "cand_24d75b158e6265f2f042",
+          "attempt_id": "attempt_a6125f9f50fb4754972c7101445b279f",
+          "outcome": "insufficient-evidence",
+          "coverage_synced": null,
+          "cleanup_state": "not-required",
+          "evidence_refs": [],
+          "assessment_binding": "32…[REDACTED:················]…5c"
+        }
+      ]
+    },
+    {
+      "label": "post-agent",
+      "revision": 6,
+      "candidates": [
+        {
+          "id": "cand_24d75b158e6265f2f042",
+          "candidate_class": "cross-site-scripting",
+          "target": "http://127.0.0.1:3101",
+          "endpoint": "/reflect",
+          "method": "GET",
+          "parameter": "q",
+          "location": "query",
+          "test_case": null,
+          "priority": null,
+          "signals": [
+            "Concrete fixture input supplied by the operator."
+          ],
+          "baseline_request_ref": null,
+          "auth_context_ref": null,
+          "content_type": null,
+          "identity_media_type": "",
+          "request_template": null,
+          "source_ref": null,
+          "source_skill": null,
+          "objective_id": "85…[REDACTED:········]…f6",
+          "status": "deferred"
+        }
+      ],
+      "attempts": {
+        "attempt_a6125f9f50fb4754972c7101445b279f": {
+          "id": "attempt_a6125f9f50fb4754972c7101445b279f",
+          "candidate_id": "cand_24d75b158e6265f2f042",
+          "candidate_binding": "c3…[REDACTED:················]…31",
+          "session_id": "qa-B-partial",
+          "objective_id": "85…[REDACTED:········]…f6",
+          "epoch": "fb…[REDACTED:········]…9f",
+          "target_origin": "http://127.0.0.1:3101",
+          "status": "unresolved",
+          "related_requests": [],
+          "criteria": null,
+          "target_revision": 0,
+          "result_position": 0
+        }
+      },
+      "objective": {
+        "id": "85…[REDACTED:········]…f6",
+        "mode": "direct",
+        "target_origin": "http://127.0.0.1:3101",
+        "candidate_id": null,
+        "requested_goals": [
+          {
+            "id": "goal_e099407ac5982912",
+            "candidate_class": "cross-site-scripting",
+            "status": "deferred",
+            "candidate_ids": [
+              "cand_24d75b158e6265f2f042"
+            ],
+            "reason": "Native bounded capture lacks complete context; no negative or confirmation claim.",
+            "review_artifact_ref": null,
+            "review_binding": null
+          }
+        ]
+      },
+      "persisted_findings": {},
+      "unavailable_proofs": [],
+      "results": [
+        {
+          "result_id": "result_33a40fde51634c48a4691f97c5d1b273",
+          "candidate_id": "cand_24d75b158e6265f2f042",
+          "attempt_id": "attempt_a6125f9f50fb4754972c7101445b279f",
+          "outcome": "insufficient-evidence",
+          "coverage_synced": null,
+          "cleanup_state": "not-required",
+          "evidence_refs": [],
+          "assessment_binding": "32…[REDACTED:················]…5c"
+        }
+      ]
+    }
+  ],
+  "errors": []
+}

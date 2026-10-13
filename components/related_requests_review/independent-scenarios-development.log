@@ -1,0 +1,90 @@
+FFF.F...                                                                 [100%]
+=================================== FAILURES ===================================
+______ test_b_candidate_only_xss_class_specific_proof[xss-html-confirmed] ______
+/mnt/d/DOANTOTNGHIEP/kagent/tests/scenarios/test_related_requests_independent.py:85: in test_b_candidate_only_xss_class_specific_proof
+    await scenario_runner.resume(run)
+/mnt/d/DOANTOTNGHIEP/kagent/tests/helpers/scenarios.py:481: in resume
+    await run.oracle.persisted(run, fresh)
+/mnt/d/DOANTOTNGHIEP/kagent/tests/helpers/scenario_oracle.py:305: in persisted
+    assert rows[0].vulnClass == definition.candidate_class and rows[0].param == definition.parameter
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AssertionError
+____ test_b_candidate_only_xss_class_specific_proof[xss-text-not-confirmed] ____
+/mnt/d/DOANTOTNGHIEP/kagent/tests/scenarios/test_related_requests_independent.py:80: in test_b_candidate_only_xss_class_specific_proof
+    run = await scenario_runner.run(scenario)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/mnt/d/DOANTOTNGHIEP/kagent/tests/helpers/scenarios.py:462: in run
+    await definition.verify(run)
+/mnt/d/DOANTOTNGHIEP/kagent/tests/scenarios/test_safety.py:68: in safety_outcomes
+    assert event["error_kind"] == kind, event
+E   AssertionError: {'type': 'tool-result', 'id': 'scenario-9', 'name': 'confirm_finding', 'result': 'ERROR: candidate is not eligible for confirm_finding: its latest ValidationResult must have outcome=confirmed and registered evidence', ...}
+E   assert 'tool_exception' == 'validation'
+E     
+E     - validation
+E     + tool_exception
+------------------------------ Captured log call -------------------------------
+ERROR    kagent:logger.py:255 agent: tool failed
+_______________ test_b_native_incomplete_html_closes_unresolved ________________
+/mnt/d/DOANTOTNGHIEP/kagent/tests/scenarios/test_related_requests_independent.py:118: in test_b_native_incomplete_html_closes_unresolved
+    run = await scenario_runner.run(scenario)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/mnt/d/DOANTOTNGHIEP/kagent/tests/helpers/scenarios.py:462: in run
+    await definition.verify(run)
+/mnt/d/DOANTOTNGHIEP/kagent/tests/scenarios/test_safety.py:43: in safety_outcomes
+    assert not run.model.errors, repr(run.model.errors)
+E   AssertionError: [AssertionError('assert (not True)')]
+E   assert not [AssertionError('assert (not True)')]
+E    +  where [AssertionError('assert (not True)')] = <tests.helpers.agent_fakes.ScriptedModel object at 0x7eb345486ad0>.errors
+E    +    where <tests.helpers.agent_fakes.ScriptedModel object at 0x7eb345486ad0> = ScenarioRun(definition=ScenarioDefinition(id='qa-B-partial', mode='direct', origin='http://127.0.0.1:3101', endpoint='...ests.helpers.scenario_oracle.InvariantOracle object at 0x7eb345486990>, elapsed=1.4431793520006977, fresh_runtime=None).model
+----------------------------- Captured stderr call -----------------------------
+Traceback (most recent call last):
+  File "/mnt/d/DOANTOTNGHIEP/kagent/src/agent/agent.py", line 3635, in run
+    stop_reason = await self.run_inner(
+                  ^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+    )
+    ^
+  File "/mnt/d/DOANTOTNGHIEP/kagent/src/agent/agent.py", line 3942, in run_inner
+    resp, streamed = await self._chat_for_turn(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "/mnt/d/DOANTOTNGHIEP/kagent/src/agent/agent.py", line 4709, in _chat_for_turn
+    response, streamed = await self.chat(
+                         ^^^^^^^^^^^^^^^^
+        req, signal, emit, stream_buffer=stream_buffer
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/mnt/d/DOANTOTNGHIEP/kagent/src/agent/agent.py", line 5602, in chat
+    resp = await self.client.chat(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+    )
+    ^
+  File "/mnt/d/DOANTOTNGHIEP/kagent/tests/helpers/agent_fakes.py", line 78, in chat
+    name, args = self.script.send(feedback.content)
+                 ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/mnt/d/DOANTOTNGHIEP/kagent/tests/scenarios/test_related_requests_independent.py", line 95, in insufficient_xss_script
+    assert not captured["complete"] and captured["truncated"]
+AssertionError: assert (not True)
+------------------------------ Captured log call -------------------------------
+ERROR    kagent:logger.py:255 agent: panic in Run
+_____ test_d_discovery_handoff_confirmed_plus_unresolved_stays_incomplete ______
+/mnt/d/DOANTOTNGHIEP/kagent/tests/scenarios/test_related_requests_independent.py:184: in test_d_discovery_handoff_confirmed_plus_unresolved_stays_incomplete
+    run = await scenario_runner.run(scenario)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/mnt/d/DOANTOTNGHIEP/kagent/tests/helpers/scenarios.py:462: in run
+    await definition.verify(run)
+/mnt/d/DOANTOTNGHIEP/kagent/tests/scenarios/test_safety.py:82: in safety_outcomes
+    assert len(reports) == expected.findings
+E   AssertionError: assert 0 == 1
+E    +  where 0 = len([])
+E    +  and   1 = ExpectedOutcomes(outcome='insufficient-evidence', findings=1, complete=False, goal_status='deferred', route='expert').findings
+=========================== short test summary info ============================
+FAILED tests/scenarios/test_related_requests_independent.py::test_b_candidate_only_xss_class_specific_proof[xss-html-confirmed]
+FAILED tests/scenarios/test_related_requests_independent.py::test_b_candidate_only_xss_class_specific_proof[xss-text-not-confirmed]
+FAILED tests/scenarios/test_related_requests_independent.py::test_b_native_incomplete_html_closes_unresolved
+FAILED tests/scenarios/test_related_requests_independent.py::test_d_discovery_handoff_confirmed_plus_unresolved_stays_incomplete
+4 failed, 4 passed in 78.45s (0:01:18)

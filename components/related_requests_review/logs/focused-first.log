@@ -1,0 +1,2006 @@
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF..... [ 54%]
+...........................................................              [100%]
+=================================== FAILURES ===================================
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-sqli] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e1ad7f0>, <src.permission.permission.AlwaysAllow object at 0x745c6e1ad940>)
+candidate_class = 'sqli', mode = 'candidate-only'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-xss] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e1ea0d0>, <src.permission.permission.AlwaysAllow object at 0x745c6e1ea210>)
+candidate_class = 'xss', mode = 'candidate-only'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-idor] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e1eb750>, <src.permission.permission.AlwaysAllow object at 0x745c6e1eb890>)
+candidate_class = 'idor', mode = 'candidate-only'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-csrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e0d4050>, <src.permission.permission.AlwaysAllow object at 0x745c6e0d4180>)
+candidate_class = 'csrf', mode = 'candidate-only'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-ssrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e0d55b0>, <src.permission.permission.AlwaysAllow object at 0x745c6e0d56e0>)
+candidate_class = 'ssrf', mode = 'candidate-only'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-ssti] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e28a690>, <src.permission.permission.AlwaysAllow object at 0x745c6e28a7b0>)
+candidate_class = 'ssti', mode = 'candidate-only'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+__ test_primary_only_and_distinct_supplementary_keep_real_routing[empty-sqli] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e1545a0>, <src.permission.permission.AlwaysAllow object at 0x745c6e1546b0>)
+candidate_class = 'sqli', mode = 'empty'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+__ test_primary_only_and_distinct_supplementary_keep_real_routing[empty-xss] ___
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e1559d0>, <src.permission.permission.AlwaysAllow object at 0x745c6e155ae0>)
+candidate_class = 'xss', mode = 'empty'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+__ test_primary_only_and_distinct_supplementary_keep_real_routing[empty-idor] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e213450>, <src.permission.permission.AlwaysAllow object at 0x745c6e213350>)
+candidate_class = 'idor', mode = 'empty'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+__ test_primary_only_and_distinct_supplementary_keep_real_routing[empty-csrf] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e210650>, <src.permission.permission.AlwaysAllow object at 0x745c6e210450>)
+candidate_class = 'csrf', mode = 'empty'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+__ test_primary_only_and_distinct_supplementary_keep_real_routing[empty-ssrf] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e2935c0>, <src.permission.permission.AlwaysAllow object at 0x745c6e2936b0>)
+candidate_class = 'ssrf', mode = 'empty'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+__ test_primary_only_and_distinct_supplementary_keep_real_routing[empty-ssti] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e2907d0>, <src.permission.permission.AlwaysAllow object at 0x745c6e2906e0>)
+candidate_class = 'ssti', mode = 'empty'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-sqli] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e24a6d0>, <src.permission.permission.AlwaysAllow object at 0x745c6e24a890>)
+candidate_class = 'sqli', mode = 'legacy'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+__ test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-xss] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dfc4670>, <src.permission.permission.AlwaysAllow object at 0x745c6dfc4750>)
+candidate_class = 'xss', mode = 'legacy'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-idor] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e191090>, <src.permission.permission.AlwaysAllow object at 0x745c6e1906d0>)
+candidate_class = 'idor', mode = 'legacy'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-csrf] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e1844d0>, <src.permission.permission.AlwaysAllow object at 0x745c6e184590>)
+candidate_class = 'csrf', mode = 'legacy'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-ssrf] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e185190>, <src.permission.permission.AlwaysAllow object at 0x745c6e185250>)
+candidate_class = 'ssrf', mode = 'legacy'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-ssti] __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e251390>, <src.permission.permission.AlwaysAllow object at 0x745c6e2509f0>)
+candidate_class = 'ssti', mode = 'legacy'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-sqli] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e0385d0>, <src.permission.permission.AlwaysAllow object at 0x745c6e038730>)
+candidate_class = 'sqli', mode = 'supplementary'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-xss] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dfc07d0>, <src.permission.permission.AlwaysAllow object at 0x745c6dfc0870>)
+candidate_class = 'xss', mode = 'supplementary'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-idor] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dfc14f0>, <src.permission.permission.AlwaysAllow object at 0x745c6dfc1590>)
+candidate_class = 'idor', mode = 'supplementary'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-csrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e0d8a70>, <src.permission.permission.AlwaysAllow object at 0x745c6e0d8b00>)
+candidate_class = 'csrf', mode = 'supplementary'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-ssrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e00b6d0>, <src.permission.permission.AlwaysAllow object at 0x745c6e00acd0>)
+candidate_class = 'ssrf', mode = 'supplementary'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-ssti] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e03d8d0>, <src.permission.permission.AlwaysAllow object at 0x745c6e03e9d0>)
+candidate_class = 'ssti', mode = 'supplementary'
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("mode", ["candidate-only", "empty", "legacy", "supplementary"])
+    async def test_primary_only_and_distinct_supplementary_keep_real_routing(dispatch, candidate_class, mode):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id}
+        if mode == "empty":
+            args["related_requests"] = []
+        elif mode == "legacy":
+            args["related_requests"] = [declaration()]
+        elif mode == "supplementary":
+            args["related_requests"] = [
+                declaration("readback", "GET", "/comments"),
+                declaration("readback", "GET", "/comments/123"),
+                declaration("auxiliary", "GET", "/comments/123?view=summary"),
+                declaration("auxiliary", "GET", "/comments/123?view=detail"),
+            ]
+        original = deepcopy(args)
+        result = json.loads(await registry.execute("workflow", args, None, p))
+        assert result["ok"] and result["validator_resolution"] == "unique"
+        context = result["validation_context"]
+        assert context["candidate_id"] == candidate.id and context["method"] == "POST"
+>       assert context["endpoint"] == "/comments"
+E       AssertionError: assert 'https://fixt...test/comments' == '/comments'
+E         
+E         - /comments
+E         + https://fixture.test/comments
+
+tests/tools/test_related_request_associations.py:92: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-sqli] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e194280>, <src.permission.permission.AlwaysAllow object at 0x745c6e197e00>)
+candidate_class = 'sqli'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'trigger', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-xss] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e034d70>, <src.permission.permission.AlwaysAllow object at 0x745c6e035240>)
+candidate_class = 'xss'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'trigger', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-idor] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e0220f0>, <src.permission.permission.AlwaysAllow object at 0x745c6e0204d0>)
+candidate_class = 'idor'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'trigger', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-csrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e0217f0>, <src.permission.permission.AlwaysAllow object at 0x745c6e0214f0>)
+candidate_class = 'csrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'trigger', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-ssrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e041b80>, <src.permission.permission.AlwaysAllow object at 0x745c6e040c80>)
+candidate_class = 'ssrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'trigger', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-ssti] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e0429e0>, <src.permission.permission.AlwaysAllow object at 0x745c6e042260>)
+candidate_class = 'ssti'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'trigger', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-sqli] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e043890>, <src.permission.permission.AlwaysAllow object at 0x745c6e043110>)
+candidate_class = 'sqli'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': True}, {'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': False}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-xss] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6e042300>, <src.permission.permission.AlwaysAllow object at 0x745c6e042ee0>)
+candidate_class = 'xss'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': True}, {'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': False}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-idor] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dedda40>, <src.permission.permission.AlwaysAllow object at 0x745c6dedc0a0>)
+candidate_class = 'idor'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': True}, {'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': False}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-csrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dede4e0>, <src.permission.permission.AlwaysAllow object at 0x745c6deddd60>)
+candidate_class = 'csrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': True}, {'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': False}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-ssrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dedf390>, <src.permission.permission.AlwaysAllow object at 0x745c6dedec10>)
+candidate_class = 'ssrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': True}, {'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': False}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-ssti] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dedfe30>, <src.permission.permission.AlwaysAllow object at 0x745c6dedde00>)
+candidate_class = 'ssti'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': True}, {'role': 'baseline', 'method': 'POST', 'url': '/comments', 'required': False}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-sqli] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dedffc0>, <src.permission.permission.AlwaysAllow object at 0x745c6dedecb0>)
+candidate_class = 'sqli'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-xss] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6df5dfe0>, <src.permission.permission.AlwaysAllow object at 0x745c6df5d860>)
+candidate_class = 'xss'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-idor] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6df5ee90>, <src.permission.permission.AlwaysAllow object at 0x745c6df5e710>)
+candidate_class = 'idor'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-csrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6df5fd90>, <src.permission.permission.AlwaysAllow object at 0x745c6df5f700>)
+candidate_class = 'csrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-ssrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6df5f250>, <src.permission.permission.AlwaysAllow object at 0x745c6df5f660>)
+candidate_class = 'ssrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-ssti] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6df75a90>, <src.permission.permission.AlwaysAllow object at 0x745c6df75310>)
+candidate_class = 'ssti'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-sqli] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6df76940>, <src.permission.permission.AlwaysAllow object at 0x745c6df761c0>)
+candidate_class = 'sqli'
+rows = [{'role': 'baseline', 'method': 'post', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-xss] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6df777f0>, <src.permission.permission.AlwaysAllow object at 0x745c6df77070>)
+candidate_class = 'xss'
+rows = [{'role': 'baseline', 'method': 'post', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-idor] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6df76260>, <src.permission.permission.AlwaysAllow object at 0x745c6df75f90>)
+candidate_class = 'idor'
+rows = [{'role': 'baseline', 'method': 'post', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-csrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6ddb54f0>, <src.permission.permission.AlwaysAllow object at 0x745c6ddb4230>)
+candidate_class = 'csrf'
+rows = [{'role': 'baseline', 'method': 'post', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-ssrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6ddb6440>, <src.permission.permission.AlwaysAllow object at 0x745c6ddb5cc0>)
+candidate_class = 'ssrf'
+rows = [{'role': 'baseline', 'method': 'post', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-ssti] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6ddb72f0>, <src.permission.permission.AlwaysAllow object at 0x745c6ddb6b70>)
+candidate_class = 'ssti'
+rows = [{'role': 'baseline', 'method': 'post', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-sqli] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6ddb7d90>, <src.permission.permission.AlwaysAllow object at 0x745c6ddb7fc0>)
+candidate_class = 'sqli'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': 'https://fixture.test/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-xss] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6ddb7a20>, <src.permission.permission.AlwaysAllow object at 0x745c6ddb7de0>)
+candidate_class = 'xss'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': 'https://fixture.test/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-idor] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6ddbdf40>, <src.permission.permission.AlwaysAllow object at 0x745c6ddbd7c0>)
+candidate_class = 'idor'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': 'https://fixture.test/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-csrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6ddbedf0>, <src.permission.permission.AlwaysAllow object at 0x745c6ddbe670>)
+candidate_class = 'csrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': 'https://fixture.test/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-ssrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6ddbfcf0>, <src.permission.permission.AlwaysAllow object at 0x745c6ddbf610>)
+candidate_class = 'ssrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': 'https://fixture.test/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-ssti] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6ddbc6e0>, <src.permission.permission.AlwaysAllow object at 0x745c6ddbe440>)
+candidate_class = 'ssti'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments'}, {'role': 'baseline', 'method': 'POST', 'url': 'https://fixture.test/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-sqli] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dcc9a40>, <src.permission.permission.AlwaysAllow object at 0x745c6dcc92c0>)
+candidate_class = 'sqli'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/discard/../comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-xss] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dcca8f0>, <src.permission.permission.AlwaysAllow object at 0x745c6dcca170>)
+candidate_class = 'xss'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/discard/../comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-idor] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dccb7a0>, <src.permission.permission.AlwaysAllow object at 0x745c6dccb020>)
+candidate_class = 'idor'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/discard/../comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-csrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dcc9f40>, <src.permission.permission.AlwaysAllow object at 0x745c6dccbca0>)
+candidate_class = 'csrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/discard/../comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-ssrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dd214a0>, <src.permission.permission.AlwaysAllow object at 0x745c6dd20140>)
+candidate_class = 'ssrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/discard/../comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-ssti] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dccb840>, <src.permission.permission.AlwaysAllow object at 0x745c6dccb070>)
+candidate_class = 'ssti'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/discard/../comments'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-sqli] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dcca300>, <src.permission.permission.AlwaysAllow object at 0x745c6dccb570>)
+candidate_class = 'sqli'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-alpha'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-beta'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-xss] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dcc8be0>, <src.permission.permission.AlwaysAllow object at 0x745c6dccb980>)
+candidate_class = 'xss'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-alpha'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-beta'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-idor] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dcc83c0>, <src.permission.permission.AlwaysAllow object at 0x745c6dcc9040>)
+candidate_class = 'idor'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-alpha'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-beta'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-csrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dcc8b40>, <src.permission.permission.AlwaysAllow object at 0x745c6dcc9860>)
+candidate_class = 'csrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-alpha'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-beta'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-ssrf] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dcc8320>, <src.permission.permission.AlwaysAllow object at 0x745c6dcc8370>)
+candidate_class = 'ssrf'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-alpha'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-beta'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+_ test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-ssti] _
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6dcca030>, <src.permission.permission.AlwaysAllow object at 0x745c6dcc8140>)
+candidate_class = 'ssti'
+rows = [{'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-alpha'}, {'role': 'baseline', 'method': 'POST', 'url': '/comments?token=fixture-beta'}]
+
+    @pytest.mark.parametrize("candidate_class", CLASSES)
+    @pytest.mark.parametrize("rows", DUPLICATES, ids=["roles", "required", "identical", "method", "resolution", "dot-path", "redaction"])
+    async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dispatch, candidate_class, rows):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch, candidate_class)
+        args = {"action": "start_validation", "candidate_id": candidate.id,
+                "related_requests": [declaration("auxiliary", "GET", "/help"), *deepcopy(rows)]}
+        original = deepcopy(args)
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        error = error_envelope(await registry.execute("workflow", args, None, p))
+        assert error["indices"] == [1, 2]
+        assert "observations" in error["repair_hint"] and "supplementary" in error["repair_hint"]
+        assert state.to_dict() == before and state.committed_revision == revision
+>       assert candidate.status == "new" and not state.attempts and tool.active_attempt is None
+E       AssertionError: assert ('queued' == 'new'
+E         
+E         - new
+E         + queued)
+
+tests/tools/test_related_request_associations.py:130: AssertionError
+__ test_bad_retry_preserves_active_attempt_and_omission_preserves_obligations __
+
+dispatch = (WorkflowState(version=8, objective=WorkflowObjective(id='association-objective', mode='direct', target_origin='https:...s.common.registry.Registry object at 0x745c6eb79ef0>, <src.permission.permission.AlwaysAllow object at 0x745c6eb7a300>)
+
+    async def test_bad_retry_preserves_active_attempt_and_omission_preserves_obligations(dispatch):
+        state, tool, registry, p = dispatch
+        candidate = await candidate_for(dispatch)
+        start = {"action": "start_validation", "candidate_id": candidate.id}
+        rows = [declaration("readback", "GET", "/comments/123")]
+        first = json.loads(await registry.execute("workflow", {**start, "related_requests": rows}, None, p))
+        aid = first["validation_context"]["attempt_id"]
+        before, revision = deepcopy(state.to_dict()), state.committed_revision
+        for _ in range(2):  # No implicit association-specific retry enforcement.
+            error_envelope(await registry.execute("workflow", {**start, "related_requests": rows * 2}, None, p))
+            assert state.to_dict() == before and state.committed_revision == revision
+            assert tool.active_attempt == aid
+        resumed = WorkflowState.from_dict(json.loads(json.dumps(state.to_dict())))
+        tool.state = resumed
+        omitted = json.loads(await registry.execute("workflow", start, None, p))
+>       assert omitted["validation_context"]["attempt_id"] == aid
+E       AssertionError: assert 'attempt_55eb...83b2f3527d9d7' == 'attempt_d09a...0e8b11fe732a1'
+E         
+E         - attempt_d09aa2e3d2384256ae50e8b11fe732a1
+E         + attempt_55eb598c2a3846ccb9a83b2f3527d9d7
+
+tests/tools/test_related_request_associations.py:151: AssertionError
+=========================== short test summary info ============================
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-xss]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-idor]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[candidate-only-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[empty-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[empty-xss]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[empty-idor]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[empty-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[empty-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[empty-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-xss]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-idor]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[legacy-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-xss]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-idor]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_primary_only_and_distinct_supplementary_keep_real_routing[supplementary-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-xss]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-idor]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[roles-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-xss]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-idor]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[required-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-xss]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-idor]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[identical-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-xss]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-idor]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[method-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-xss]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-idor]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[resolution-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-xss]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-idor]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[dot-path-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-sqli]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-xss]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-idor]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-csrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-ssrf]
+FAILED tests/tools/test_related_request_associations.py::test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments[redaction-ssti]
+FAILED tests/tools/test_related_request_associations.py::test_bad_retry_preserves_active_attempt_and_omission_preserves_obligations
+67 failed, 64 passed in 23.94s

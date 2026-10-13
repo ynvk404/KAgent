@@ -45,13 +45,37 @@ def source_row(item) -> dict[str, Any]:
     return json.loads(json.dumps(row))
 
 
+class DuplicateRequestAssociation(ValueError):
+    """A duplicate normalized association, without retaining request material."""
+
+    code = "DUPLICATE_REQUEST_ASSOCIATION"
+    field = "related_requests"
+    repair_hint = (
+        "Declare each normalized method and resolved/redacted URL once with one role and required value. "
+        "Different bodies, payloads or identities on that route are observations, not separate associations. "
+        "Use start_validation with candidate_id alone only when the Candidate already covers the primary request, "
+        "current prerequisites are met, and no required supplementary association is lost. "
+        "For supplementary conflicts, restate the intended role/requirement and preserve evidence obligations. "
+        "Do not invent URLs, merge conflicting declarations, close another attempt or send HTTP to repair arguments."
+    )
+
+    def __init__(self, first_index: int, duplicate_index: int) -> None:
+        self.indices = (first_index, duplicate_index)
+        super().__init__(
+            "ambiguous duplicate related request method/URL association; "
+            "declare each method/URL once with one role and requirement, "
+            "or use distinct actual request URLs"
+        )
+
+
 def request_associations(attempt) -> dict[tuple[str, str], dict[str, Any]]:
     """One exact method/URL has one role and requirement, including on resume."""
     related = attempt.get("related_requests", [])
     if not isinstance(related, list) or len(related) > 16:
         raise ValueError("related_requests must be a bounded list")
     associations = {}
-    for request in related:
+    first_indices = {}
+    for index, request in enumerate(related):
         if (not isinstance(request, dict) or not {"role", "method", "url"} <= set(request)
                 or set(request) - {"role", "method", "url", "required"}
                 or request["role"] not in {"baseline", "control", "trigger", "readback", "cleanup", "auxiliary"}
@@ -61,10 +85,9 @@ def request_associations(attempt) -> dict[tuple[str, str], dict[str, Any]]:
             raise ValueError("invalid related request association")
         key = (request["method"], request["url"])
         if key in associations:
-            raise ValueError("ambiguous duplicate related request method/URL association; "
-                             "declare each method/URL once with one role and requirement, "
-                             "or use distinct actual request URLs")
+            raise DuplicateRequestAssociation(first_indices[key], index)
         associations[key] = request
+        first_indices[key] = index
     return associations
 
 
