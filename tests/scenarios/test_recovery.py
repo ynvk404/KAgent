@@ -242,8 +242,8 @@ async def test_s04_s16_native_truncation_immutable_repair_or_bounded_closure(sce
                 return
             if name == "http" and partial is None:
                 output = yield name, {**args, "max_response_bytes": 3}
-                prefix = "Runtime HTTP evidence (redacted capture; not a semantic verdict): "
-                envelope, _ = json.JSONDecoder().raw_decode(output.split(prefix, 1)[1])
+                line = next(line for line in output.splitlines() if line.startswith("Runtime HTTP evidence ("))
+                envelope, _ = json.JSONDecoder().raw_decode(line.split(": ", 1)[1])
                 partial = envelope["observation_id"]
                 assert envelope["truncated"] and not envelope["complete"]
                 source = runtime.policy.observations._items[partial]

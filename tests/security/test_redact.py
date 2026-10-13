@@ -217,7 +217,8 @@ def test_evidence_preserves_hex_hostname_but_masks_secrets(suffix):
     assert apply_evidence(host) == host
     assert apply_evidence(f"Host: {host}") == f"Host: {host}"
     assert apply_evidence(url) == url
-    assert digest not in apply_evidence(f"opaque proof: {digest}")
+    assert apply_evidence(f"opaque proof: {digest}") == f"opaque proof: {digest}"
+    assert digest not in apply_evidence(f"password_hash: {digest}")
     assert digest not in apply_evidence(f"https://{host}/?token={digest}").split("?", 1)[1]
     redact = http_credential_redactor([("Host", host), ("Cookie", "sid=fixture-cookie")])
     assert redact(url) == url

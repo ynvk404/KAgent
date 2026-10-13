@@ -286,8 +286,9 @@ def test_real_existing_container_logical_reset_between_requests(tmp_path):
             return error.code
     def insert_response(op):
         fixture = request_fixture(decode(OperationalCaseInput, op), settings)
+        body = fixture.get('body')
         request = urllib.request.Request(fixture['url'], method=fixture['method'], headers=fixture['headers'],
-                                         data=fixture['body'].encode() if fixture['body'] else None)
+                                         data=body.encode() if body is not None else None)
         with opener.open(request, timeout=15) as response:
             body = response.read(65537)
             assert response.status == 200 and len(body) <= 65536

@@ -105,7 +105,8 @@ class CaptureAwareClient(Client):
             # Native HTTP returns a JSON envelope followed by the response
             # body. Its producer-issued ID is the primary evidence reference.
             assert last.name == 'http'
-            envelope, _ = json.JSONDecoder().raw_decode(last.content.split('Runtime HTTP evidence (redacted capture; not a semantic verdict): ', 1)[1])
+            line = next(line for line in last.content.splitlines() if line.startswith('Runtime HTTP evidence ('))
+            envelope, _ = json.JSONDecoder().raw_decode(line.split(': ', 1)[1])
             self.observation = envelope['observation_id']
             assert envelope['status'] == 200
             path = self.root / 'artifacts/sql-injection/fixture/results.md'

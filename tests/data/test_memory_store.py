@@ -40,6 +40,18 @@ def test_add_and_list(store):
     assert len(data) == 1
     assert "orders API" in data[0].description
 
+
+def test_explicit_description_is_redacted_before_file_slug_and_index(store):
+    secret = 'fixture-description-credential-123456'
+    fact = store.add(AddMemoryInput(text='Public reusable routing observation',
+                                   description=f'token={secret}'))
+    assert fact is not None
+    assert secret not in fact.description and secret not in store.index()
+    for path in store.project_dir.rglob('*'):
+        assert secret not in path.name
+        if path.is_file():
+            assert secret not in path.read_text()
+
 def test_index_contains_description(store):
     store.add(
         AddMemoryInput(

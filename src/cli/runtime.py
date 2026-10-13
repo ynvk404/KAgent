@@ -809,6 +809,10 @@ async def main() -> int:
     )
     ingest_handle = None
     ingest_token = secrets.token_hex(16)
+    prompter.execution_policy.internal_secret_values = lambda: tuple(value for value in (
+        cfg.api_key, current_runtime_config.api_key, *cfg.api_keys.values(),
+        *cfg.custom_provider_api_keys.values(), ingest_token,
+    ) if value)
 
     def create_bridge(port: int) -> "IngestServerHandle":
         try:

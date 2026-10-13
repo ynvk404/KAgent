@@ -92,8 +92,8 @@ def insufficient_xss_script(runtime, scenario):
     cid = receipt((yield "workflow", record_candidate(scenario)))["candidate"]["id"]
     aid = receipt((yield "workflow", {"action": "start_validation", "candidate_id": cid}))["validation_context"]["attempt_id"]
     output = yield "http", {**scenario.application.request(MARKER), "max_response_bytes": 3}
-    prefix = "Runtime HTTP evidence (redacted capture; not a semantic verdict): "
-    captured, _ = json.JSONDecoder().raw_decode(output.split(prefix, 1)[1])
+    line = next(line for line in output.splitlines() if line.startswith("Runtime HTTP evidence ("))
+    captured, _ = json.JSONDecoder().raw_decode(line.split(": ", 1)[1])
     assert not captured["complete"] and captured["truncated"]
     oid = captured["observation_id"]
     path = runtime.policy.root / "artifacts/xss-partial.md"

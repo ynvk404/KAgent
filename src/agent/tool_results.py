@@ -180,6 +180,10 @@ class ResultRetention:
         self.refresh_scope()
         if self.store is None or message.tool_status not in {"success", "observation"}:
             return
+        # Raw HTTP evidence is already retained by the bounded ObservationStore
+        # and the approved private session. Keep this cache's sanitized contract.
+        if message.http_response_sources:
+            return
         try:
             provenance = source_provenance(self.agent, message.name or "", args)
             if (provenance is not None and execution.retention_generation == self.scope["generation"]

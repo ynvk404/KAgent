@@ -292,8 +292,11 @@ async def test_declared_capture_import_keeps_honest_provenance(runtime, tmp_path
     assert item.source_details is not None
     assert item.source_details["original_owner"] is None and item.source_details["receipt_id"] is None
     assert item.source_details["original_response_hash"] is None
-    assert item.source_details["hash_basis"] == "selected-redacted-import"
-    assert b"fixture-secret-value" not in item.body
+    assert item.source_details["hash_basis"] == "bounded-capture-string-utf8"
+    assert item.body == b'{"password":"fixture-secret-value","ok":true}'
+    import hashlib
+    assert item.response_hash == hashlib.sha256(item.body).hexdigest()
+    assert item.retained_hash == digest(source_row(item))
     args.update(observation_ids=[oid], outcome=outcome)
     output = await registry.execute("workflow", args, None, p)
     if complete:

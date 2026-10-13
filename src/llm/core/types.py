@@ -64,6 +64,11 @@ class Message:
     # Controller-only token-saving descriptors; never evidence or approval.
     tool_result_refs: list[dict[str, Any]] | None = None
     tool_result_scope: dict[str, str] | None = None
+    # Archival HTTP content provenance; never an execution/evidence grant.
+    # Only Agent admission assigns it; private session serialization preserves it.
+    http_response_sources: list[str] | None = None
+    # Transient freshness binding, deliberately absent from saved sessions.
+    http_runtime_stamp: tuple | None = None
     # Internal provenance prevents provider-private state from crossing adapters.
     provider_state_provider: str | None = None
     provider_state_model: str | None = None

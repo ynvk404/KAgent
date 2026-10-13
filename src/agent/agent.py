@@ -1836,6 +1836,7 @@ class Agent:
         return min(soft, hard) if soft > 0 and hard is not None else (hard if hard is not None else soft)
 
     async def _admit_request(self, req: ChatRequest, emit) -> None:
+        self._protect_http_context(req.messages)
         # A completed batch is saved only with the actual next request's mode.
         # Finish this save even if cancellation arrives while persistence waits.
         if self._tool_results_unsaved:
@@ -2046,10 +2047,12 @@ class Agent:
 
         out.append("")
 
-        out.append("## Redacted Conversation Context")
+        out.append("## Conversation Context (bounded lab HTTP bodies may be raw)")
         out.append("")
+        snapshot = self.get_history()
+        self._protect_http_context(snapshot)
         out.append(
-            format_history_for_compaction(self.history[1:])
+            format_history_for_compaction(snapshot[1:])
         )
 
         content = "\n".join(out)
@@ -5439,7 +5442,14 @@ class Agent:
         error = safe_tool_text(
             res.err_str, "Tool execution error; sanitized details unavailable.",
         ) if res.err_str else ""
-        if res.err_str and res.result == f"ERROR: {res.err_str}":
+        if isinstance(res.result, ToolOutput) and res.result.http_sources:
+            # Presentation/debug receive source/status metadata, not a duplicate
+            # body archive. The existing tool outcome and original stay intact.
+            content = ("Bounded HTTP response; body retained for lab analysis. Sources: "
+                       + ", ".join(ref for ref, _ in res.result.http_sources)
+                       if self._http_analysis_content(tc, res, invocation) is not None else
+                       "HTTP response withheld: source admission or internal-secret protection unavailable.")
+        elif res.err_str and res.result == f"ERROR: {res.err_str}":
             # Our display prefix must not hide a header from the shared
             # sanitizer's line-anchored patterns (e.g. short Basic credentials).
             content = f"ERROR: {error}"
@@ -5483,6 +5493,120 @@ class Agent:
                 "accepted_candidate_id": accepted_candidate_id,
             }
 
+    def _managed_http_secrets(self) -> tuple[str, ...]:
+        from src.permission.runtime.execution import policy_for
+        policy = policy_for(self.prompter)
+        values = tuple(policy.internal_secret_values()) if policy is not None else ()
+        key = getattr(self.client, "api_key", None)
+        return tuple(value for value in (*values, key) if isinstance(value, str) and value)
+
+    def _http_analysis_content(self, tc: ToolCall, res: ToolCallResult,
+                               invocation: Invocation | None = None) -> str | None:
+        """Admit actual controller executions, never names/status/payload flags."""
+        from src.permission.runtime.execution import policy_for
+        from src.tools.http.http_tool import HTTPTool
+        from src.tools.common.browser_capture import BrowserCaptureGetTool
+        from src.workflow.assessment import digest, source_row
+        policy = policy_for(self.prompter)
+        output = res.result
+        tool = self.tools.get(tc.function.name)
+        if (policy is None or not isinstance(output, ToolOutput) or not output.http_sources
+                or type(tool) not in {HTTPTool, BrowserCaptureGetTool} or res.err_str
+                or res.status not in {"success", "observation"}
+                or output.http_session != (policy.session_id or policy.engagement.http_permissions.session_id)
+                or output.http_stamp != policy.stamp()
+                or (invocation is not None and invocation.scope != runtime_scope(self))
+                or "*" in policy.revoked or tc.function.name in policy.revoked):
+            return None
+        try:
+            items = []
+            for ref, expected_hash in output.http_sources:
+                item = policy.observations._items[ref]
+                if (item.retained_hash != expected_hash or digest(source_row(item)) != expected_hash
+                        or item.epoch != policy.engagement.http_permissions.epoch
+                        or (item.source_details or {}).get("analysis_session") != output.http_session
+                        or item.response_hash != hashlib.sha256(item.body).hexdigest()):
+                    return None
+                policy.require_network(item.url)
+                items.append(item)
+            if type(tool) is HTTPTool:
+                if (tool.target is not self.target or tool.engagement is not policy.engagement
+                        or len(output.http_body_ranges) != len(items)
+                        or any(item.source_kind != "native-http" or item.producer != "http" for item in items)
+                        or any(not 0 <= start <= end <= len(output)
+                               or output[start:end] != item.body.decode(errors="replace")
+                               for (start, end), item in zip(output.http_body_ranges, items))):
+                    return None
+            else:
+                if len(items) != 1 or items[0].source_kind != "imported-capture":
+                    return None
+                capture_tool = cast(BrowserCaptureGetTool, tool)
+                capture_id = (items[0].source_details or {}).get("capture_id")
+                if not isinstance(capture_id, str):
+                    return None
+                capture = capture_tool.store.get_request(capture_id)
+                if (capture is None or capture.method != items[0].method
+                        or HTTPOrigin.from_url(capture.url) != HTTPOrigin.from_url(items[0].url)
+                        or capture.received_at != (items[0].source_details or {}).get("received_at")
+                        or hashlib.sha256((capture.response_body or "").encode()[:65536]).hexdigest()
+                        != items[0].response_hash):
+                    return None
+            secrets = self._managed_http_secrets()
+            text = str(output)
+            if type(tool) is BrowserCaptureGetTool:
+                row = json.loads(text)
+                # A known infrastructure credential takes precedence over
+                # outbound fidelity. Raw Observation/body hashes stay exact.
+                if any(secret in (row.get("response_body") or "") for secret in secrets):
+                    row["response_body"] = row["responseBody"] = "[HTTP body omitted: known internal secret]"
+                    row["analysis_body_exact"] = False
+                def protect(value):
+                    if isinstance(value, str):
+                        for secret in secrets:
+                            value = value.replace(secret, "[INTERNAL SECRET OMITTED]")
+                        return value
+                    if isinstance(value, dict):
+                        return {protect(k): protect(v) for k, v in value.items()}
+                    if isinstance(value, list):
+                        return [protect(v) for v in value]
+                    return value
+                safe = protect(row)
+                return text if safe == json.loads(text) else json.dumps(safe, ensure_ascii=False)
+            for start, end in reversed(output.http_body_ranges):
+                if any(secret in text[start:end] for secret in secrets):
+                    text = text[:start] + '[HTTP body omitted: known internal secret; analysis is not exact]' + text[end:]
+            for secret in secrets:
+                text = text.replace(secret, "[INTERNAL SECRET OMITTED]")
+            return text
+        except Exception:
+            return None
+
+    def _protect_http_context(self, messages: list[Message]) -> None:
+        """Recheck source access before outbound, including archived lab history."""
+        from src.permission.runtime.execution import policy_for
+        from src.workflow.assessment import digest, source_row
+        policy = policy_for(self.prompter)
+        for index, message in enumerate(messages):
+            if message.role != "tool" or not message.http_response_sources:
+                continue
+            try:
+                if (policy is None or "*" in policy.revoked or message.name in policy.revoked
+                        or (message.http_runtime_stamp is not None and message.http_runtime_stamp != policy.stamp())):
+                    raise ValueError
+                for ref in message.http_response_sources:
+                    item = policy.observations._items[ref]
+                    session = policy.session_id or policy.engagement.http_permissions.session_id
+                    if (digest(source_row(item)) != item.retained_hash
+                            or (item.source_details or {}).get("analysis_session") != session):
+                        raise ValueError
+                    policy.require_network(item.url)
+                if any(secret in message.content for secret in self._managed_http_secrets()):
+                    raise ValueError
+            except Exception:
+                messages[index] = replace(message,
+                    content="[HTTP analysis omitted: source unavailable/revoked or known internal secret]",
+                    http_response_sources=None, http_runtime_stamp=None)
+
     def record_tool_result(
         self, tc: ToolCall, parsed: ParsedToolCall, res: ToolCallResult,
         emit, working: list[Message], *, defer_admission: bool = False,
@@ -5490,6 +5614,9 @@ class Agent:
     ) -> None:
         event = self._tool_result_event(tc, res, parsed.invocation)
         content = event['result']
+        analysis = self._http_analysis_content(tc, res, parsed.invocation)
+        if analysis is not None:
+            content = analysis
         if publish_result:
             emit(event)
 
@@ -5531,6 +5658,10 @@ class Agent:
             tool_error_kind=res.error_kind,
             tool_http_status=res.http_status,
             tool_truncated=res.truncated,
+            http_response_sources=([ref for ref, _ in res.result.http_sources]
+                                   if analysis is not None and isinstance(res.result, ToolOutput) else None),
+            http_runtime_stamp=(res.result.http_stamp
+                                if analysis is not None and isinstance(res.result, ToolOutput) else None),
         )
 
         self.history.append(tool_msg)
@@ -5626,6 +5757,7 @@ class Agent:
             self.result_retention.pending.clear()
             self._tool_checkpoint_request = None
             history_snap = self.get_history()
+            self._protect_http_context(history_snap)
             elide_persisted_workflow_results(history_snap)
 
             if len(history_snap) <= 1:
@@ -5873,6 +6005,7 @@ class Agent:
         signal,
     ) -> bool:
         history_snap = self.get_history()
+        self._protect_http_context(history_snap)
         elide_persisted_workflow_results(history_snap)
 
         if len(history_snap) <= 1:

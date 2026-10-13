@@ -401,14 +401,16 @@ async def test_production_http_capture_receipts_and_bindings_survive_live_view(r
     used_before = policy.used
     events, working = [], []
     agent.record_tool_result(call, parsed, execution, events.append, working)
-    assert SECRET.encode() not in observation.body and observation.complete
+    assert observation.body == body and observation.complete
     assert observation.response_hash == hashlib.sha256(body).hexdigest()
     assert next(iter(policy.observations._items.values())) is observation
     assert observation.id in working[0].content
     assert policy._receipts == receipts_before and policy.used == used_before
     assert not policy.active and len(sent) == 1 and not operator.requests
     assert (working[0].tool_status, working[0].tool_http_status) == ('observation', 403)
-    assert SECRET not in working[0].content + events[0]['result']
+    assert SECRET in working[0].content
+    assert SECRET not in events[0]['result']
+    assert working[0].http_response_sources == [observation.id]
     assert '{INJECTION_POINT}' in working[0].content
 
 

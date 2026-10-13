@@ -5,6 +5,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
+from src.browser.store import BODY_STRING_CAP
 from src.redaction.redact import apply_evidence, http_credential_redactor, redact_payload, redact_request_context
 
 
@@ -65,9 +66,9 @@ def request_view(value: Any) -> dict[str, Any]:
             row[key] = redact(redact_request_context(row[key], content_type))
         elif key in row:
             row[key] = redact_values(redact_payload(row[key]))
-    for key in ("response_body", "responseBody"):
-        if key in row and isinstance(row[key], str):
-            row[key] = redact(redact_request_context(row[key], "application/json"))
+    # Operator-selected response passthrough: preserve captured content,
+    # including credentials and malformed bodies. Request/URL/header guards
+    # above and below remain independent of the response body.
     if isinstance(row.get("url"), str):
         try:
             parsed = urlsplit(cast(str, row["url"]))
@@ -77,6 +78,19 @@ def request_view(value: Any) -> dict[str, Any]:
         except ValueError:
             safe_url = "[Invalid capture URL omitted]"
         row["url"] = redact(safe_url)
+    return row
+
+
+def request_excerpt(value: Any, body_max_chars: Any = None) -> dict[str, Any]:
+    """Shared Native/MCP response excerpt; no response redaction or suffix."""
+    cap = (min(BODY_STRING_CAP, max(0, body_max_chars))
+           if isinstance(body_max_chars, int) and not isinstance(body_max_chars, bool)
+           else 4000)
+    row = request_view(value)
+    body = row.get("response_body", row.get("responseBody"))
+    excerpt = body[:cap] if isinstance(body, str) else body
+    row["response_body"] = row["responseBody"] = excerpt
+    row["response_body_excerpt_truncated"] = isinstance(body, str) and len(body) > cap
     return row
 
 

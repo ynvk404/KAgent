@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from src.browser.store import CaptureStore
-from src.browser.redacted_view import request_view, snapshot_view, issue_view, task_view
+from src.browser.redacted_view import request_excerpt, request_view, snapshot_view, issue_view, task_view
 from src.redaction.redact import apply_evidence
 from src.permission.permission import Prompter
 from src.tools.common.types import Tool, arg_number, arg_string
+from src.tools.common.outcome import ToolOutput
 
 TOOL_PREFIX = "browser_capture_"
 
@@ -216,8 +217,8 @@ class BrowserCaptureGetTool(BaseCaptureTool):
                     "description": "Expected selected baseline reference; rejects ID reuse or changed binding.",
                 },
                 "body_max_chars": {
-                    "type": "number",
-                    "description": "Optional cap for the response body excerpt (default 4000).",
+                    "type": "integer", "minimum": 0, "maximum": 65536,
+                    "description": "Response excerpt character cap (default 4000; bounded to 0..65536).",
                 },
             },
             "required": ["id"],
@@ -233,25 +234,30 @@ class BrowserCaptureGetTool(BaseCaptureTool):
         expected = arg_string(args, "baseline_request_ref")
         if expected and (r.baseline_request_ref != expected or self.store.resolve_baseline(expected) is None):
             return "error: selected capture baseline unavailable or binding changed; recapture required"
-        cap_val = arg_number(args, "body_max_chars")
-        cap = int(cap_val) if cap_val is not None else 4000
-        response_body = request_view(r).get("response_body")
-        if response_body and len(response_body) > cap:
-            response_body = (
-                f"{response_body[:cap]}...<truncated {len(response_body) - cap} chars>"
-            )
         trimmed = {
-            **request_view(r),
-            "responseBody": response_body,
+            **request_excerpt(r, args.get("body_max_chars")),
             "receivedAt": _iso(r.received_at),
         }
         from src.permission.runtime.execution import policy_for
         policy = policy_for(prompter)
-        if policy is not None and policy.observations.owner_provider() is not None:
+        from src.browser.scoped_store import ScopedCaptureStore
+        trusted = (type(self) is BrowserCaptureGetTool and policy is not None
+                   and type(self.store) is ScopedCaptureStore and self.store.policy is policy
+                   and policy.nested_allowed())
+        if trusted:
+            assert policy is not None
             trimmed["runtime_observation_id"] = policy.observations.import_capture(
-                r, owner=policy.observations.owner_provider())
+                r, owner=policy.observations.owner_provider(), runtime_store=self.store)
             trimmed["evidence_source_kind"] = "imported-capture"
-        return json.dumps(trimmed, indent=2)
+        output = ToolOutput(json.dumps(trimmed, indent=2))
+        if trusted:
+            assert policy is not None
+            item = policy.observations._items[trimmed["runtime_observation_id"]]
+            assert item.retained_hash is not None
+            output.http_sources = ((item.id, item.retained_hash),)
+            output.http_stamp = policy.stamp()
+            output.http_session = policy.session_id or policy.engagement.http_permissions.session_id
+        return output
 
 class BrowserCaptureSnapshotTool(BaseCaptureTool):
     def name(self) -> str:

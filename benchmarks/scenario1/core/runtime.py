@@ -32,8 +32,13 @@ def request_fixture(op: OperationalCaseInput, settings: RuntimeSettings) -> dict
         headers['Content-Type'] = op.content_type
     if op.cookies:
         headers['Cookie'] = '; '.join(f'{k}={v}' for k, v in op.cookies.items())
-    return {'method': op.method, 'url': settings.target.rstrip('/') + endpoint + ('?' + query if query else ''),
-            'headers': headers, 'body': urlencode([(p[0], p[1]) for p in op.body]) if op.body else None, 'phase': 'validation'}
+    fixture = {'method': op.method, 'url': settings.target.rstrip('/') + endpoint + ('?' + query if query else ''),
+               'headers': headers, 'phase': 'validation'}
+    # Native HTTP accepts an optional string body, not JSON null. No form
+    # fields means no body argument; blank field values still encode as key=.
+    if op.body:
+        fixture['body'] = urlencode([(p[0], p[1]) for p in op.body])
+    return fixture
 
 
 def candidate_arguments(op: OperationalCaseInput, settings: RuntimeSettings) -> dict:

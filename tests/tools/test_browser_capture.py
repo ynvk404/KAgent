@@ -1,5 +1,6 @@
 
 
+import json
 from typing import Any, cast
 
 import pytest
@@ -38,7 +39,7 @@ def test_capture_view_redacts_api_key_header_variants(name):
     assert secret not in str(view)
 
 
-def test_capture_views_hide_unlabelled_echoes_without_changing_baseline_ref():
+def test_capture_views_hide_request_echoes_and_preserve_response_without_changing_baseline_ref():
     ref = "baseline:generation:nonce:" + "a" * 64
     view = request_view({"baseline_request_ref": ref,
         "request_headers": [{"name": "Cookie", "value": "sid=a"},
@@ -47,11 +48,12 @@ def test_capture_views_hide_unlabelled_echoes_without_changing_baseline_ref():
         "response_body": "echo fixture-private-token", "url": "http://fixture.test/?q=fixture-private-token"})
     assert view['baseline_request_ref'] == ref
     assert [h['name'] for h in view['request_headers']] == ['Cookie', 'Authorization']
-    assert "fixture-private-token" not in str(view)
+    assert view['response_body'] == "echo fixture-private-token"
+    assert "fixture-private-token" not in str({key: value for key, value in view.items() if key != "response_body"})
 
 
 @pytest.mark.asyncio
-async def test_model_capture_views_hide_raw_and_structured_secrets():
+async def test_model_capture_views_preserve_response_and_hide_request_snapshot_issue_secrets():
     store = CaptureStore()
     ingested = store.ingest({
         "id": "secret", "url": "http://target.test/api?token=short-secret",
@@ -71,7 +73,10 @@ async def test_model_capture_views_hide_raw_and_structured_secrets():
                await BrowserCaptureGetTool(store).run({"id": ingested["id"]}, signal, prompter),
                await BrowserCaptureSnapshotTool(store).run({}, signal, prompter),
                await BrowserCaptureBurpIssuesTool(store).run({}, signal, prompter)]
-    combined = "\n".join(outputs)
+    detail = json.loads(outputs[1])
+    assert detail['response_body'] == detail['responseBody'] == '{"access_token":"short-secret","ok":true}'
+    protected_detail = {key: value for key, value in detail.items() if key not in {'response_body', 'responseBody'}}
+    combined = "\n".join([outputs[0], json.dumps(protected_detail), *outputs[2:]])
     for secret in ("short-secret", "sid=private", "csrf-private", "cmF3LXJlcXVlc3Qtc2VjcmV0",
                    "cmF3LXJlc3BvbnNlLXNlY3JldA=="):
         assert secret not in combined

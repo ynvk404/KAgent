@@ -281,6 +281,12 @@ def _message_from_dict(data: Any) -> Message | None:
     if isinstance(tool_http_status, bool) or not isinstance(tool_http_status, int):
         tool_http_status = None
     tool_truncated = data.get("tool_truncated") is True
+    http_sources = data.get("http_response_sources")
+    if (role != "tool" or name not in {"http", "browser_capture_get"}
+            or not isinstance(http_sources, list) or not 0 < len(http_sources) <= 6
+            or any(not isinstance(ref, str) or len(ref) != 36 or not ref.startswith("obs_")
+                   or any(c not in string.hexdigits.lower() for c in ref[4:]) for ref in http_sources)):
+        http_sources = None
     from src.session.tool_results import load_references
     references = [dataclasses.asdict(ref) for ref in load_references(data.get("tool_result_refs"))]
     scope = data.get("tool_result_scope")
@@ -305,6 +311,7 @@ def _message_from_dict(data: Any) -> Message | None:
         tool_truncated=tool_truncated,
         tool_result_refs=references or None,
         tool_result_scope=scope,
+        http_response_sources=http_sources,
     )
 
 
@@ -509,6 +516,7 @@ def _serialize_session(session_id: str, snapshot: tuple, stage: Callable[[str], 
     messages, target, memory, workflow, engagement_state = snapshot
     stage("session.save.serialize_messages")
     serialized_messages = []
+    http_content: dict[int, str] = {}
     from src.llm.providers.gemini import safe_replay_part
     from src.workflow.validation_context import without_transient_validation_context
     for msg in messages:
@@ -551,6 +559,12 @@ def _serialize_session(session_id: str, snapshot: tuple, stage: Callable[[str], 
             serialized["tool_result_refs"] = msg.tool_result_refs
         if msg.tool_result_scope:
             serialized["tool_result_scope"] = msg.tool_result_scope
+        if msg.http_response_sources:
+            serialized["http_response_sources"] = msg.http_response_sources
+        if (msg.role == "tool" and msg.name in {"http", "browser_capture_get"}
+                and msg.http_response_sources):
+            http_content[len(serialized_messages)] = msg.content
+            serialized["content"] = "[bounded HTTP content retained in private lab session]"
         serialized_messages.append(serialized)
 
     data = redact_payload({
@@ -562,6 +576,11 @@ def _serialize_session(session_id: str, snapshot: tuple, stage: Callable[[str], 
         "engagement_state": engagement_state,
         "messages": serialized_messages,
     })
+    # The operator-approved lab policy permits exact bounded target responses
+    # in private sessions. Other content/arguments/provider state still use the
+    # existing guards. Do not scan the admitted HTTP content a second time.
+    for index, content in http_content.items():
+        data["messages"][index]["content"] = content
 
     stage("session.save.json_dumps")
     body = json.dumps(data, ensure_ascii=False) + "\n"

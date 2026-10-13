@@ -1,8 +1,11 @@
 import pytest
 import requests
 import base64
+from email.message import Message
+from types import SimpleNamespace
+from typing import Any, cast
 
-from src.browser.server import IngestServerOptions, start_ingest_server, event_text
+from src.browser.server import Handler, IngestServerOptions, start_ingest_server, event_text
 from src.browser.store import CaptureStore
 
 
@@ -58,7 +61,7 @@ def test_capture_event_text_redacts_query_credentials():
     assert "access_token" in event
 
 
-def test_bridge_request_and_task_reads_are_redacted_but_raw_baseline_remains(store):
+def test_bridge_preserves_response_and_redacts_request_task_fields_without_changing_baseline(store):
     raw = base64.b64encode(b"GET /api HTTP/1.1\r\nHost: fixture.test\r\nCookie: sid=private-cookie\r\n\r\n").decode()
     captured = store.ingest({"kind": "burp", "url": "http://fixture.test/api?token=private-query",
         "requestHeaders": {"Cookie": "sid=private-cookie", "Authorization": "Bearer private-auth"},
@@ -66,20 +69,27 @@ def test_bridge_request_and_task_reads_are_redacted_but_raw_baseline_remains(sto
         "respBody": '{"token":"private-response"}'})
     task = store.ingest_burp_task({"action": "scan", "url": "http://fixture.test/?token=private-query",
         "rawRequestB64": raw, "notes": "Authorization: Bearer private-auth"})
-    handle = start_ingest_server(IngestServerOptions(store=store, port=0, token="bridge-token"))
-    try:
-        for path in ("/requests", "/burp/tasks"):
-            response = requests.get(handle.url + path, headers={"X-KAgent-Token": "bridge-token"})
-            assert response.status_code == 200
-            text = response.text
-            for secret in (raw, "private-query", "private-cookie", "private-auth", "private-password", "private-response"):
-                assert secret not in text
-            assert "raw_request_b64" not in text
-            assert response.json()[0]["baseline_request_ref"]
-        assert store.resolve_baseline(captured["baseline_request_ref"]).raw_request_b64 == raw
-        assert store.resolve_baseline(task["baseline_request_ref"]).raw_request_b64 == raw
-    finally:
-        handle.close()
+    # Exercise real route/authentication with an in-memory IO boundary.
+    handler = cast(Any, object.__new__(Handler))
+    handler.server = SimpleNamespace(store=store, token="bridge-token")
+    handler.headers = Message()
+    handler.headers['Host'] = '127.0.0.1:9999'
+    handler.headers['X-KAgent-Token'] = 'bridge-token'
+    responses = []
+    handler.send_json = lambda payload, **kwargs: responses.append(payload)
+    for path in ("/requests", "/burp/tasks"):
+        handler.path = path
+        handler.do_GET()
+        row = responses[-1][0]
+        if path == '/requests':
+            assert row['response_body'] == '{"token":"private-response"}'
+        text = str({key: value for key, value in row.items() if key != 'response_body'})
+        for secret in (raw, "private-query", "private-cookie", "private-auth", "private-password", "private-response"):
+            assert secret not in text
+        assert "raw_request_b64" not in text
+        assert row["baseline_request_ref"]
+    assert store.resolve_baseline(captured["baseline_request_ref"]).raw_request_b64 == raw
+    assert store.resolve_baseline(task["baseline_request_ref"]).raw_request_b64 == raw
 
 
 def test_rejects_non_loopback_host_headers(store):

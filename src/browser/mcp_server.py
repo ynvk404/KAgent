@@ -14,7 +14,7 @@ from src.logger import logger
 from src.version import VERSION
 from .server import start_ingest_server, IngestServerOptions
 from .store import CaptureStore
-from .redacted_view import request_view
+from .redacted_view import request_excerpt, request_view
 
 log: Any = logger
 
@@ -219,7 +219,7 @@ async def main() -> int:
                     "type": "object",
                     "properties": {
                         "id": {"type": "string", "description": "Request id from browser_capture_requests."},
-                        "body_max_chars": {"type": "integer", "minimum": 0, "description": "Cap for response body excerpt (default 4000)."}
+                        "body_max_chars": {"type": "integer", "minimum": 0, "maximum": 65536, "description": "Response excerpt character cap (default 4000; bounded to 0..65536)."}
                     },
                     "required": ["id"]
                 },
@@ -315,15 +315,7 @@ async def main() -> int:
             if not r:
                 return text_result(f"error: no request with id {req_id}", is_error=True)
 
-            cap = mcp_int_arg(args_dict, "body_max_chars", 4000, 0)
-            r_dict = request_view(r)
-
-            resp_body = r_dict.get("response_body", r_dict.get("responseBody"))
-            if resp_body and isinstance(resp_body, str) and len(resp_body) > cap:
-                resp_body = f"{resp_body[:cap]}...<truncated {len(resp_body) - cap} chars>"
-
-            r_dict["responseBody"] = resp_body
-            r_dict.pop("response_body", None)
+            r_dict = request_excerpt(r, args_dict.get("body_max_chars"))
 
             recv_at = get_val(r, "received_at", "receivedAt")
             if recv_at:

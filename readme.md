@@ -7,6 +7,23 @@ It is intended for explicitly authorized web-security testing in local or
 private labs, such as OWASP Juice Shop and DVWA. A name such as `juice.lab` is
 an operator-defined local alias, not a hard-coded KAgent target.
 
+KAgent uses one lab response policy: bounded HTTP bodies from native requests
+and scoped Browser/Burp getters remain exact for Agent and validator analysis.
+The configured LLM may receive application credentials present in those bodies.
+Scope and execution permissions establish access rights; they do not establish
+that a target is a lab. Operators must use authorized lab applications only.
+
+Private observations, workflow manifests and sessions can retain these bounded
+raw bodies, including target credentials. Hex body encoding is not encryption.
+Body hashes and excerpt offsets describe the retained producer representation:
+native decoded bytes or a bounded captured string, rather than original wire
+bytes. Resume restores retained proof only when its source store is available;
+historical findings remain historical and grant no new execution rights.
+Request credential previews, provider configuration, reusable memory, findings
+and report exports keep their existing protection. A known managed internal
+secret echoed in a body causes outbound analysis to omit that body explicitly;
+the raw source is unchanged. Tool display/debug events show source metadata.
+
 ## Architecture and workflow
 
 The Python 3.11+ runtime provides a CLI and Textual TUI. The CLI loads

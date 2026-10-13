@@ -60,8 +60,9 @@ def probe(config, action, *, opener=None, **kwargs):
 def response(config, op):
     settings = RuntimeSettings(config['target'], '/benchmark', True, 'external-reset')
     fixture = request_fixture(op, settings)
+    body = fixture.get('body')
     req = urllib.request.Request(fixture['url'], method=fixture['method'], headers=fixture['headers'],
-                                 data=fixture['body'].encode() if fixture['body'] else None)
+                                 data=body.encode() if body is not None else None)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     try:
         result = opener.open(req, timeout=15)

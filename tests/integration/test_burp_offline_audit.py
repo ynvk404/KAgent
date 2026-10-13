@@ -77,7 +77,7 @@ def test_bridge_security_precedes_reads_and_mutations(verb, path, token, host, s
     assert store.status() == before
 
 
-def test_extension_to_handler_preserves_traffic_and_redacts_exports(extender):
+def test_extension_to_handler_preserves_response_and_redacts_request_exports(extender):
     store, events = CaptureStore(), []
 
     def post(path, payload):
@@ -96,7 +96,10 @@ def test_extension_to_handler_preserves_traffic_and_redacts_exports(extender):
     endpoint = store.list_endpoints()[0]
     assert endpoint.query_params == ["token"] and endpoint.body_params == ["password", "q"]
     status, _, exported = dispatch(store, "GET", "/requests")
-    assert status == 200 and "private-" not in exported.decode()
+    assert status == 200
+    exported_row = json.loads(exported)[0]
+    assert exported_row['response_body'] == row.response_body
+    assert 'private-' not in json.dumps({key: value for key, value in exported_row.items() if key != 'response_body'})
     assert "raw_request_b64" not in exported.decode() and "private-" not in "".join(events)
     original_ref = row.baseline_request_ref
     assert original_ref is not None
@@ -269,7 +272,8 @@ async def test_standalone_capture_mcp_real_handlers_and_cleanup(monkeypatch, sto
             assert (detail["method"], detail["status"], detail["source"]) == ("POST", 201, "burp")
             assert detail["receivedAt"] == "2023-11-14T22:13:20.123000Z"
             assert "private-" not in result.content[0].text and "raw_request_b64" not in detail
-            assert detail["responseBody"].startswith('{"ma...<truncated')
+            assert detail["responseBody"] == detail["response_body"] == '{"ma'
+            assert detail["response_body_excerpt_truncated"] is True
             assert (await self.call("browser_capture_get", {"id": "missing"})).isError
             assert (await self.call("browser_capture_clear", {"unexpected": True})).isError
             assert len(captured["store"].requests) == 1

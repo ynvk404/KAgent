@@ -104,7 +104,7 @@ class MemoryStore:
             memory.type if memory.type in MEMORY_TYPES else self._infer_type(text)
         )
         created = memory.created_at or datetime.now(timezone.utc).isoformat()
-        description = (memory.description.strip() or self.first_line(text))[:160]
+        description = redact(memory.description.strip() or self.first_line(text))[:160]
 
         name = self._unique_name(folder, self.slugify(description) or "note")
         file = folder / f"{name}.md"

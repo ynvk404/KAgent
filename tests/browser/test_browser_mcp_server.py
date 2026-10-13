@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
+from src.browser.redacted_view import request_excerpt
 
 import pytest
 
@@ -169,10 +170,7 @@ def test_tool_browser_capture_status_output(mock_store):
 
 def test_tool_browser_capture_get_truncation(mock_store):
     req = mock_store.get_request("req_101")
-    cap = 4000
-    resp_body = req["response_body"]
-
-    if len(resp_body) > cap:
-        resp_body = f"{resp_body[:cap]}...<truncated {len(resp_body) - cap} chars>"
-
-    assert "...<truncated 1000 chars>" in resp_body
+    result = request_excerpt(req, 4000)
+    assert result['response_body'] == result['responseBody'] == 'A' * 4000
+    assert result['response_body_excerpt_truncated'] is True
+    assert req['response_body'] == 'A' * 5000

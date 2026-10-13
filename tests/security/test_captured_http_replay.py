@@ -351,7 +351,7 @@ async def test_cancelled_capture_review_leaves_no_authority(replay):
     assert not replay.control.sent and replay.policy.active == 0
 
 
-async def test_credential_echo_is_redacted_in_output_evidence_and_session(replay, tmp_path):
+async def test_lab_credential_echo_retains_body_while_request_and_header_exports_stay_protected(replay, tmp_path):
     from src.session.store import Store
     _, args = replay.baseline({"Cookie": "sid=capture-cookie", "Authorization": "Bearer capture-token"})
     body = b"echo capture-cookie capture-token"
@@ -363,11 +363,18 @@ async def test_credential_echo_is_redacted_in_output_evidence_and_session(replay
     observation = next(iter(replay.policy.observations._items.values()))
     assert observation.response_hash == hashlib.sha256(body).hexdigest()
     assert observation.source_details["baseline_request_ref"]
+    assert observation.body == body and body.decode() in output
+    persisted = json.loads((tmp_path / 'observations.json').read_text())['observations'][0]
+    assert bytes.fromhex(persisted['body']) == body
     session = Store.new_with_id(tmp_path, "capture-session")
     await session.save([], workflow=replay.tool.workflow, target=replay.tool.target)
     retained = output + observation.body.decode() + json.dumps(observation.source_details)
     retained += session.path.read_text() + (tmp_path / "observations.json").read_text()
-    for secret in ("capture-cookie", "capture-token", "new-secret-cookie"):
+    metadata = json.dumps(observation.source_details) + session.path.read_text()
+    metadata += output.replace(body.decode(), '')
+    for secret in ("capture-cookie", "capture-token"):
+        assert secret not in metadata
+    for secret in ("new-secret-cookie",):
         assert secret not in retained
 
 
@@ -455,7 +462,7 @@ def test_permission_preview_hides_credential_echoes_and_keeps_digest(replay):
     assert action.digest == before and b"fixture-private-token" in action.body
 
 
-async def test_short_capture_cookie_redaction_keeps_evidence_ids_retrievable(replay):
+async def test_short_capture_cookie_does_not_change_body_or_evidence_ids(replay):
     candidate, args = replay.baseline({"Cookie": "sid=a"})
     async def respond(request):
         return httpx.Response(200, content=b'echo a', request=request)
@@ -464,7 +471,7 @@ async def test_short_capture_cookie_redaction_keeps_evidence_ids_retrievable(rep
     line = next(line for line in output.splitlines() if line.startswith('Runtime HTTP evidence '))
     envelope = json.loads(line.split(': ', 1)[1])
     observation = replay.policy.observations._items[envelope['observation_id']]
-    assert observation.body == b'echo [REDACTED]'
+    assert observation.body == b'echo a'
     assert observation.source_details['baseline_request_ref'] == candidate.baseline_request_ref
     assert f'[runtime observation: {observation.id}]' in output
 

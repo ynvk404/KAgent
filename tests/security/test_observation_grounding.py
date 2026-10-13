@@ -54,7 +54,9 @@ async def test_effective_requests_statuses_and_roles_stay_with_their_sources(run
             '\nEnd effective request preview\n', 1)[0]
         assert f'GET {item.url}' in preview
         assert item.source_details == {'request_preview_hex': preview.encode().hex(), **{key: receipt[key] for key in (
-            'request_preview_complete', 'request_body_bytes')}}
+            'request_preview_complete', 'request_body_bytes')},
+            'body_representation': 'bounded-native-decoded-bytes',
+            'analysis_session': policy.session_id or policy.engagement.http_permissions.session_id}
         ids.append(oid)
     args.update(outcome='insufficient-evidence', observation_ids=ids, mutation_performed=True,
                 cleanup_state='pending', repeatable=False)

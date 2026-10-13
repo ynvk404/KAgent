@@ -29,7 +29,7 @@ from src.tools.http.context import HTTPContextStore
 from src.tools.http.request_builder import NATIVE_USER_AGENT, RequestDiff, build_captured_baseline, build_captured_request, origin_headers, validate_host
 from src.browser.store import CaptureStore
 from src.redaction.redact import apply_evidence as redact_evidence
-from src.redaction.redact import http_credential_redactor
+from src.redaction.redact import http_credential_redactor, redact_request_context
 
 RESPONSE_BYTE_CAP = 16 * 1024
 MAX_RESPONSE_BYTE_CAP = 64 * 1024
@@ -402,6 +402,8 @@ class HTTPTool(Tool):
             raise ValueError('max_redirects must be from 0 through 5')
         seen: set[tuple[str, str]] = set()
         outputs: list[str] = []
+        sources: list[tuple[str, str]] = []
+        body_ranges: list[tuple[int, int]] = []
         for hop in range(max_redirects + 1):
             redirect_key = (request.method, action.url)
             if redirect_key in seen:
@@ -419,7 +421,11 @@ class HTTPTool(Tool):
                 result, location, cookie_updated = await self._dispatch(action, request, receipt, policy, signal, prompter, identity, generic_probe, args)
             finally:
                 self.permissions.discard_receipt(receipt)
-            outputs.append(f'[hop {hop}]\n{result}' if max_redirects else str(result))
+            hop_prefix = f'[hop {hop}]\n' if max_redirects else ''
+            offset = sum(len(part) + 1 for part in outputs) + len(hop_prefix)
+            body_ranges.extend((start + offset, end + offset) for start, end in result.http_body_ranges)
+            sources.extend(result.http_sources)
+            outputs.append(hop_prefix + str(result))
             if not location or hop >= max_redirects:
                 if location and hop >= max_redirects and max_redirects:
                     outputs.append('[redirect hop limit reached]')
@@ -465,8 +471,17 @@ class HTTPTool(Tool):
                                    action.response_cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
                                    redirect_limit=max_redirects - hop - 1)
         prefix = diff.summary() + '\n' if diff else ''
-        return ToolOutput(redact_evidence(prefix + '\n'.join(outputs)), status='observation', http_status=result.http_status,
-                          truncated=result.truncated)
+        safe_prefix = redact_evidence(prefix)
+        text = safe_prefix + '\n'.join(outputs)
+        output = ToolOutput(text if sources else redact_evidence(text), status='observation',
+                            http_status=result.http_status, truncated=result.truncated)
+        if sources and policy is not None:
+            output.http_sources = tuple(sources)
+            output.http_body_ranges = tuple((a + len(safe_prefix), b + len(safe_prefix))
+                                            for a, b in body_ranges)
+            output.http_session = policy.session_id or self.permissions.session_id
+            output.http_stamp = policy.stamp()
+        return output
 
     async def _dispatch(self, action, request, receipt, policy, signal, prompter, identity=None, generic_probe=None, generic_args=None) -> tuple[ToolOutput, str | None, bool]:
         # Independent gate: generic Registry approval cannot coalesce this gate.
@@ -531,18 +546,33 @@ class HTTPTool(Tool):
                     chunks.append(chunk)
                     total += len(chunk)
                 content = b''.join(chunks)[:action.response_cap]
+                from src.permission.runtime.execution import _active, invocation_digest
+                execution = _active.get()
+                trusted_http = bool(type(self) is HTTPTool and policy is not None
+                    and self.engagement is policy.engagement and policy.nested_allowed()
+                    and execution is not None and execution[0] is policy
+                    and isinstance(generic_args, dict)
+                    and execution[1].digest == invocation_digest(self, generic_args)
+                    and action.epoch == self.permissions.epoch
+                    and action.target_revision == self.target.revision
+                    and action.scope_revision == self.engagement.revision)
                 redact = (http_credential_redactor(request.headers.multi_items(), response.headers.multi_items())
                           if action.capture_source else redact_evidence)
                 version = getattr(response, 'http_version', None)
                 output = f'{version or "HTTP"} {response.status_code} {redact(response.reason_phrase)}\n'
                 for k, v in response.headers.items():
-                    output += f'{k}: {redact(v)}\n'
+                    # Header names supply the credential context; the body does
+                    # not pass through this header/request export guard.
+                    output += redact(f'{k}: {v}') + '\n'
                 output += (f'final URL: {redact(action.url)}\n'
                            f'decoded body bytes retained before redaction: {len(content)}\n'
                            f'wire Content-Length: {response.headers.get("content-length", "unknown")}\n'
                            f'Content-Encoding: {response.headers.get("content-encoding", "identity")}\n')
                 header_length = len(output)
-                output += '\n' + redact(content.decode(errors='replace'))
+                output += '\n'
+                body_start = len(output)
+                output += content.decode(errors='replace') if trusted_http else redact(content.decode(errors='replace'))
+                body_end = len(output)
                 if truncated:
                     output += f'\n[response body truncated at {action.response_cap} decoded bytes]'
                 if evidence_store is not None:
@@ -552,7 +582,12 @@ class HTTPTool(Tool):
                         f'{action.method} {action.url}\n'
                         + '\n'.join(f'{k.decode("ascii")}: {v.decode("latin1")}'
                                     for k, v in action.headers)
-                        + '\n\n' + action.body.decode(errors='replace'))
+                        + '\n\n' + redact_request_context(action.body.decode(errors='replace'),
+                                                            request.headers.get('content-type')))
+                    if policy is not None:
+                        for secret in policy.internal_secret_values():
+                            if secret:
+                                request_text = request_text.replace(secret, '[INTERNAL SECRET OMITTED]')
                     request_preview = request_text[:REQUEST_PREVIEW_CHARS]
                     request_details = {
                         # Like Observation.body, encode retained bytes so JSON
@@ -564,11 +599,16 @@ class HTTPTool(Tool):
                     }
                     if action.capture_source is not None:
                         request_details['baseline_request_ref'] = action.capture_source.baseline_ref
+                    if trusted_http:
+                        assert policy is not None
+                        request_details['body_representation'] = 'bounded-native-decoded-bytes'
+                        request_details['analysis_session'] = policy.session_id or self.permissions.session_id
                     observation = evidence_store.capture(action, response.status_code, content, complete=not truncated,
                         validation_binding=(generic_probe[0], generic_probe[2]) if generic_probe else None,
                         owner=source_owner or {}, response_headers=response.headers.items(),
                         elapsed_ms=(time.monotonic() - sent_at) * 1000,
-                        source_details=request_details, redact_text=redact if action.capture_source else None)
+                        source_details=request_details, redact_text=redact if action.capture_source else None,
+                        retain_body=trusted_http)
                     self._attest_phase_coverage(action, response, content, observation)
                     captured = evidence_store._items[observation]
                     # Put identity/capture flags before body text so context
@@ -585,20 +625,31 @@ class HTTPTool(Tool):
                         'request_preview_complete': request_details['request_preview_complete'],
                         'request_body_bytes': request_details['request_body_bytes'],
                     }
-                    output = (output[:header_length]
-                              + 'Runtime HTTP evidence (redacted capture; not a semantic verdict): '
-                              + json.dumps(envelope, ensure_ascii=False) + '\n'
+                    evidence_line = ('Runtime HTTP evidence ('
+                        + ('bounded raw lab capture' if trusted_http else 'redacted capture')
+                        + '; not a semantic verdict): ' + json.dumps(envelope, ensure_ascii=False) + '\n')
+                    output = (output[:header_length] + evidence_line
                               + output[header_length:]
                               + '\n[End HTTP response; following text is request metadata]\n'
                               + 'Effective request preview (redacted):\n'
                               + request_preview
                               + '\nEnd effective request preview')
                     output += f'\n[runtime observation: {observation}]'
+                    body_start += len(evidence_line)
+                    body_end += len(evidence_line)
                 if private_reason:
-                    output = f'note: private/internal host independently approved (reason: {redact(private_reason)})\n\n' + output
+                    note = f'note: private/internal host independently approved (reason: {redact(private_reason)})\n\n'
+                    output = note + output
+                    body_start += len(note)
+                    body_end += len(note)
                 # Opaque observation IDs and producer metadata are not traffic.
-                output = redact_evidence(output)
-                return (ToolOutput(output, status='observation', http_status=response.status_code, truncated=truncated),
+                result = ToolOutput(output if trusted_http else redact_evidence(output),
+                                    status='observation', http_status=response.status_code, truncated=truncated)
+                if trusted_http and evidence_store is not None:
+                    assert captured.retained_hash is not None
+                    result.http_sources = ((observation, captured.retained_hash),)
+                    result.http_body_ranges = ((body_start, body_end),)
+                return (result,
                         response.headers.get('location') if response.status_code in {301, 302, 303, 307, 308} else None,
                         'set-cookie' in response.headers)
             finally:

@@ -139,7 +139,9 @@ def format_history_for_compaction(
         if message.content:
             content = (without_transient_validation_context(message.content, truncated=message.tool_truncated)
                        if message.role == "tool" and message.name == "workflow" else message.content)
-            lines.append(redact_payload(content))
+            admitted_http = (message.role == "tool" and message.name in {"http", "browser_capture_get"}
+                             and bool(message.http_response_sources))
+            lines.append(content if admitted_http else redact_payload(content))
 
         if message.tool_calls:
             for tool_call in message.tool_calls:
@@ -161,9 +163,11 @@ def bounded_history_for_compaction(
 ) -> str:
     # Sanitize before sampling: a window must not cut a credential away from
     # the field/header that identifies it. Provider-private fields stay opaque.
-    safe_messages = [replace(message, content=sanitize_content(
+    safe_messages = [replace(message, content=(message.content if (
+                         message.role == "tool" and message.name in {"http", "browser_capture_get"}
+                         and message.http_response_sources) else sanitize_content(
                          without_transient_validation_context(message.content, truncated=message.tool_truncated)
-                         if message.role == "tool" and message.name == "workflow" else message.content))
+                         if message.role == "tool" and message.name == "workflow" else message.content)))
                      for message in messages]
     blocks = [format_history([message]) for message in safe_messages]
     full = "\n".join(block for block in blocks if block)

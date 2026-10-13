@@ -177,8 +177,8 @@ def receipt(output: str) -> dict[str, Any]:
 
 
 def http_observation(output: str) -> dict[str, Any]:
-    prefix = "Runtime HTTP evidence (redacted capture; not a semantic verdict): "
-    value, _ = json.JSONDecoder().raw_decode(output.split(prefix, 1)[1])
+    line = next(line for line in output.splitlines() if line.startswith("Runtime HTTP evidence ("))
+    value, _ = json.JSONDecoder().raw_decode(line.split(": ", 1)[1])
     assert value["complete"] and not value["truncated"], output
     return value
 

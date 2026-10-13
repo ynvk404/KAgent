@@ -1,4 +1,8 @@
-"""Producer-recorded redacted evidence; legacy verifier readers are compatibility only."""
+"""Bounded producer evidence; retained hashes always describe the stored body.
+
+Controller-admitted HTTP bodies may be raw under KAgent's lab-only storage
+policy. Other producers and historical records keep their existing contract.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict, replace
@@ -106,7 +110,14 @@ class ObservationStore:
             for field in ('observed_impact', 'response_excerpt'):
                 row[2][field] = apply_evidence(row[2][field])
         temp = self.storage.with_suffix(".tmp")
-        with temp.open("w") as stream:
+        # Raw lab proof needs the same private mode during the temporary write,
+        # not only after publication. Do not follow an incumbent temp symlink.
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "w") as stream:
+            if hasattr(os, "fchmod"):
+                os.fchmod(stream.fileno(), 0o600)
+            else:
+                temp.chmod(0o600)
             # Opaque epochs/IDs/hashes are controller metadata, not secrets.
             # Blanket redaction here corrupts the binding needed on resume.
             stream.write(json.dumps({"observations": rows, "results": results}))
@@ -125,7 +136,7 @@ class ObservationStore:
                 validation_binding: tuple[str, str] | None = None, owner: Any = _OWNER_UNSET,
                 response_headers=(), elapsed_ms=None, source_kind="native-http",
                 producer="http", execution_status="completed", truncated=None, source_details=None,
-                redact_text: Callable[[str], str] | None = None) -> str:
+                redact_text: Callable[[str], str] | None = None, retain_body: bool = False) -> str:
         from src.redaction.redact import apply_evidence
         from src.workflow.assessment import digest, source_row
         # Owner is snapshotted before execution, never assigned from proof prose.
@@ -138,7 +149,7 @@ class ObservationStore:
                            "access-control-allow-methods", "vary", "cache-control"}
         headers = tuple((str(k).lower(), redact(str(v))[:2000])
                         for k, v in response_headers if str(k).lower() in allowed_headers)[:24]
-        retained_body = redact(body.decode(errors="replace")).encode()
+        retained_body = body if retain_body else redact(body.decode(errors="replace")).encode()
         retained_truncated = len(retained_body) > 65536
         complete = complete and not retained_truncated
         item = Observation("obs_" + uuid.uuid4().hex, action.epoch, action.method,
@@ -174,14 +185,21 @@ class ObservationStore:
                            execution_status="completed" if completed else "failed", truncated=truncated)
         return key
 
-    def import_capture(self, capture, *, owner) -> str:
+    def import_capture(self, capture, *, owner, runtime_store=None) -> str:
         """Selected scoped bridge capture: import association, never native execution."""
         from types import SimpleNamespace
         from src.browser.redacted_view import request_view
         from src.workflow.assessment import digest
+        from src.browser.scoped_store import ScopedCaptureStore
+        from src.permission.runtime.execution import current_policy
+        policy = current_policy()
+        trusted = bool(policy is not None and policy.observations is self
+            and type(runtime_store) is ScopedCaptureStore and runtime_store.policy is policy
+            and policy.nested_allowed() and runtime_store.get_request(capture.id) is capture)
         view = request_view(capture)
         body = (view.get("response_body") or "").encode()[:65536]
-        action = SimpleNamespace(epoch=(owner or {}).get("epoch", ""), method=capture.method,
+        action = SimpleNamespace(epoch=(owner or {}).get("epoch", "") or (
+            policy.engagement.http_permissions.epoch if trusted and policy is not None else ""), method=capture.method,
             url=capture.url, transport_address="import", digest=digest({"method": capture.method,
                 "url": view.get("url"), "request_body": view.get("request_body")}), response_cap=65536)
         details = {"import_id": "import_" + uuid.uuid4().hex, "capture_id": capture.id,
@@ -189,13 +207,17 @@ class ObservationStore:
             "time_basis": "local-import", "reported_elapsed_ms": capture.elapsed_ms,
             "original_owner": None, "receipt_id": None,
             "original_request_hash": None, "original_response_hash": None,
-            "hash_basis": "selected-redacted-import",
+            "hash_basis": "bounded-capture-string-utf8" if trusted else "selected-redacted-import",
             "completeness": "source-reported" if capture.response_complete is not None else "unknown"}
+        if trusted:
+            assert policy is not None
+            details["body_representation"] = "bounded-capture-string-utf8"
+            details["analysis_session"] = policy.session_id or policy.engagement.http_permissions.session_id
         return self.capture(action, capture.status or 0, body,
             complete=capture.response_complete is True and capture.status is not None and len(body) < 65536,
             owner=owner or {}, source_kind="imported-capture", producer="scoped-capture-bridge",
             response_headers=[(h.name, h.value) for h in capture.response_headers or []],
-            source_details=details)
+            source_details=details, retain_body=trusted)
 
     def register_verifier(self, candidate_class: str, verifier: Callable) -> None:
         """Explicit legacy/diagnostic adapter use; never a new result admission gate."""

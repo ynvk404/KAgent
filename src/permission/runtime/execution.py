@@ -15,7 +15,7 @@ from pathlib import Path
 import time
 import uuid
 import math
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Callable
 
 from src.permission.permission import UserControlledRefusal
 from src.permission.network.grants import check_cancelled
@@ -111,6 +111,9 @@ class ExecutionPolicy:
         self.generic_validation: Any = None
         from src.permission.runtime.observations import ObservationStore
         self.observations = ObservationStore()
+        # Actual controller-managed credential slots; never payload guesses.
+        # The CLI closure reads current configuration after provider switches.
+        self.internal_secret_values: Callable[[], tuple[str, ...]] = lambda: ()
         self.vetted_ips: dict[str, tuple[str, ...]] = {}
         from src.engagement.state import EngagementState
         from src.permission.network.grants import HTTPLimits
