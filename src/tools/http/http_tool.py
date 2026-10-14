@@ -52,10 +52,10 @@ class _NavigationParser(HTMLParser):
 
 class HTTPTool(Tool):
     def __init__(self, target: Target, engagement: EngagementState,
-                 workflow: WorkflowState | None = None,
-                 capture_store: CaptureStore | None = None,
-                 context_store: HTTPContextStore | None = None,
-                 validation_registry=None):
+                workflow: WorkflowState | None = None,
+                capture_store: CaptureStore | None = None,
+                context_store: HTTPContextStore | None = None,
+                validation_registry=None):
         self.evidence_store: Any = None
         self.dispatch_attempts = 0
         self.target = target
@@ -88,9 +88,9 @@ class HTTPTool(Tool):
             'type': 'object',
             'properties': {
                 'method': {'type': 'string', 'minLength': 1,
-                           'pattern': r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
+                        'pattern': r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
                 'phase': {'type': 'string', 'enum': ['recon', 'validation', 'impact'],
-                          'description': 'Workflow annotation; never permission.'},
+                        'description': 'Workflow annotation; never permission.'},
                 'url': {'type': 'string'},
                 'headers': {'type': 'object', 'additionalProperties': {'type': 'string'}},
                 'body': {'type': 'string'},
@@ -105,12 +105,12 @@ class HTTPTool(Tool):
                 'browser_user_agent': {'type': 'string'},
                 'max_redirects': {'type': 'integer', 'minimum': 0, 'maximum': 5},
                 'max_response_bytes': {'type': 'integer', 'minimum': 0, 'maximum': MAX_RESPONSE_BYTE_CAP,
-                                       'default': RESPONSE_BYTE_CAP,
-                                       'description': 'Decoded byte cap; omit for default. Body/content/size comparisons need >0; '
-                                       'zero requires evidence_mode=metadata-only. '
-                                       'Truncated captures cannot support terminal evidence.'},
+                                    'default': RESPONSE_BYTE_CAP,
+                                    'description': 'Decoded byte cap; omit for default. Body/content/size comparisons need >0; '
+                                    'zero requires evidence_mode=metadata-only. '
+                                    'Truncated captures cannot support terminal evidence.'},
                 'evidence_mode': {'type': 'string', 'enum': ['body', 'metadata-only'],
-                                  'default': 'body', 'description': 'body: content/size comparisons or timing probes needing response content.'},
+                                'default': 'body', 'description': 'body: content/size comparisons or timing probes needing response content.'},
             },
             'required': ['phase'],
         }
@@ -133,7 +133,7 @@ class HTTPTool(Tool):
             if not isinstance(headers, dict):
                 raise ValueError('headers must be an object with string names and values')
             if any(not isinstance(key, str) or not isinstance(value, str)
-                   for key, value in headers.items()):
+                for key, value in headers.items()):
                 raise ValueError('headers must contain only string names and values')
 
     def validate_args(self, args: dict) -> None:
@@ -181,8 +181,8 @@ class HTTPTool(Tool):
             if isinstance(cap, bool) or not isinstance(cap, int) or not 0 <= cap <= MAX_RESPONSE_BYTE_CAP:
                 raise ValueError('invalid response byte cap')
             action = EffectiveHTTP(request.method, str(request.url), tuple(request.headers.raw), request.content,
-                                   cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
-                                   redirect_limit=args.get('max_redirects', 0), capture_source=source)
+                                cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
+                                redirect_limit=args.get('max_redirects', 0), capture_source=source)
             return action, request, diff
         raw_url = arg_string(args, 'url')
         if not raw_url:
@@ -196,7 +196,7 @@ class HTTPTool(Tool):
         if profile not in {'native', 'browser-like'}:
             raise ValueError('profile must be native or browser-like')
         if profile == 'browser-like' and (args.get('browser_context') not in {'navigation', 'fetch'}
-                                          or not arg_string(args, 'browser_user_agent')):
+                                        or not arg_string(args, 'browser_user_agent')):
             raise ValueError('browser-like profile needs context and captured browser_user_agent')
         if profile == 'browser-like' and not (self.capture_store and any(
             snapshot.user_agent == arg_string(args, 'browser_user_agent')
@@ -228,8 +228,8 @@ class HTTPTool(Tool):
             request.url = request.url.copy_with(username=None, password=None)
         self.context_store.add_identity(request, arg_string(args, 'auth_context_ref') or None)
         action = EffectiveHTTP(request.method, str(request.url), tuple(request.headers.raw), request.content,
-                               cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
-                               redirect_limit=args.get('max_redirects', 0))
+                            cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
+                            redirect_limit=args.get('max_redirects', 0))
         self._require_scope(action.url)
         return action, request, None
 
@@ -261,11 +261,11 @@ class HTTPTool(Tool):
                 raise ValueError('baseline provenance is not linked to candidate input')
         baseline = build_captured_baseline(row, candidate)
         credentials = [(key.hex(), value.hex()) for key, value in baseline.headers.raw
-                       if redact_evidence(f'{key.decode("ascii")}: {value.decode("latin1")}')
-                       != f'{key.decode("ascii")}: {value.decode("latin1")}']
+                    if redact_evidence(f'{key.decode("ascii")}: {value.decode("latin1")}')
+                    != f'{key.decode("ascii")}: {value.decode("latin1")}']
         source = CaptureSource(ref, row.source, row.id, HTTPOrigin.from_url(str(baseline.url)),
-                               identity, candidate.source_ref,
-                               hashlib.sha256(json.dumps(credentials).encode()).hexdigest() if credentials else '')
+                            identity, candidate.source_ref,
+                            hashlib.sha256(json.dumps(credentials).encode()).hexdigest() if credentials else '')
         return row, baseline, source
 
     def _resolve_baseline(self, args: dict) -> tuple[httpx.Request, RequestDiff | None, CaptureSource]:
@@ -287,8 +287,8 @@ class HTTPTool(Tool):
         if isinstance(occurrence, bool) or not isinstance(occurrence, int) or occurrence < 0:
             raise ValueError('occurrence must be a non-negative integer')
         request, diff = build_captured_request(row, candidate, args['mutation_value'], occurrence=occurrence,
-                                               input_path=arg_string(args, 'input_path') or None,
-                                               old_value=arg_string(args, 'old_value') if 'old_value' in args else None)
+                                            input_path=arg_string(args, 'input_path') or None,
+                                            old_value=arg_string(args, 'old_value') if 'old_value' in args else None)
         return request, diff, source
 
     def _recheck_capture(self, args, action, request) -> None:
@@ -463,13 +463,13 @@ class HTTPTool(Tool):
             if result.http_status == 303 and method != 'HEAD' or result.http_status in {301, 302} and method == 'POST':
                 method, body = 'GET', b''
             headers = [(k, v) for k, v in origin_headers(list(request.headers.multi_items()))
-                       if k.lower() != 'cookie'
-                       and not (method == 'GET' and k.lower() in {'content-type', 'content-encoding'})]
+                    if k.lower() != 'cookie'
+                    and not (method == 'GET' and k.lower() in {'content-type', 'content-encoding'})]
             request = httpx.Request(method, next_url, headers=headers, content=body)
             self.context_store.add_identity(request, identity)
             action = EffectiveHTTP(request.method, str(request.url), tuple(request.headers.raw), request.content,
-                                   action.response_cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
-                                   redirect_limit=max_redirects - hop - 1)
+                                action.response_cap, self.target.revision, self.engagement.revision, self.permissions.epoch,
+                                redirect_limit=max_redirects - hop - 1)
         prefix = diff.summary() + '\n' if diff else ''
         safe_prefix = redact_evidence(prefix)
         text = safe_prefix + '\n'.join(outputs)
@@ -501,6 +501,10 @@ class HTTPTool(Tool):
         async with httpx.AsyncClient(verify=False, follow_redirects=False, timeout=REQUEST_TIMEOUT, **transport_options) as client:
             reservation = await self.permissions.reserve_when_ready(action, receipt, signal, lambda: self.target.revision)
             response = None
+            dispatch_fact = None
+            captured_observation = None
+            dispatch_cancelled = False
+            dispatch_state = policy.generic_validation.state if policy and policy.generic_validation else None
             try:
                 if policy is not None and not policy.nested_allowed():
                     from src.permission.runtime.execution import ExecutionBlocked
@@ -522,6 +526,13 @@ class HTTPTool(Tool):
                 sent_at = time.monotonic()
                 # This is the native transport handoff. Retries and followed
                 # redirects each enter here again; failed sends still count.
+                if dispatch_state is not None:
+                    from src.workflow.assessment import begin_dispatch
+                    from src.permission.runtime.execution import _active
+                    execution = _active.get()
+                    dispatch_fact = begin_dispatch(dispatch_state, source_owner,
+                                                action.invocation_id or receipt.id, action.digest,
+                                                execution[1].id if execution and execution[0] is policy else None)
                 self.dispatch_attempts += 1
                 response = await client.send(request, stream=True)
                 check_cancelled(signal)
@@ -557,7 +568,7 @@ class HTTPTool(Tool):
                     and action.target_revision == self.target.revision
                     and action.scope_revision == self.engagement.revision)
                 redact = (http_credential_redactor(request.headers.multi_items(), response.headers.multi_items())
-                          if action.capture_source else redact_evidence)
+                        if action.capture_source else redact_evidence)
                 version = getattr(response, 'http_version', None)
                 output = f'{version or "HTTP"} {response.status_code} {redact(response.reason_phrase)}\n'
                 for k, v in response.headers.items():
@@ -565,9 +576,9 @@ class HTTPTool(Tool):
                     # not pass through this header/request export guard.
                     output += redact(f'{k}: {v}') + '\n'
                 output += (f'final URL: {redact(action.url)}\n'
-                           f'decoded body bytes retained before redaction: {len(content)}\n'
-                           f'wire Content-Length: {response.headers.get("content-length", "unknown")}\n'
-                           f'Content-Encoding: {response.headers.get("content-encoding", "identity")}\n')
+                        f'decoded body bytes retained before redaction: {len(content)}\n'
+                        f'wire Content-Length: {response.headers.get("content-length", "unknown")}\n'
+                        f'Content-Encoding: {response.headers.get("content-encoding", "identity")}\n')
                 header_length = len(output)
                 output += '\n'
                 body_start = len(output)
@@ -609,6 +620,7 @@ class HTTPTool(Tool):
                         elapsed_ms=(time.monotonic() - sent_at) * 1000,
                         source_details=request_details, redact_text=redact if action.capture_source else None,
                         retain_body=trusted_http)
+                    captured_observation = observation
                     self._attest_phase_coverage(action, response, content, observation)
                     captured = evidence_store._items[observation]
                     # Put identity/capture flags before body text so context
@@ -618,6 +630,7 @@ class HTTPTool(Tool):
                         'observation_id': observation,
                         'method': captured.method, 'url': captured.url,
                         'status': captured.status, 'complete': captured.complete,
+                        'elapsed_ms': captured.elapsed_ms, 'request_hash': captured.request_hash,
                         'truncated': captured.truncated,
                         'execution_status': captured.execution_status,
                         'response_cap': captured.response_cap,
@@ -629,11 +642,11 @@ class HTTPTool(Tool):
                         + ('bounded raw lab capture' if trusted_http else 'redacted capture')
                         + '; not a semantic verdict): ' + json.dumps(envelope, ensure_ascii=False) + '\n')
                     output = (output[:header_length] + evidence_line
-                              + output[header_length:]
-                              + '\n[End HTTP response; following text is request metadata]\n'
-                              + 'Effective request preview (redacted):\n'
-                              + request_preview
-                              + '\nEnd effective request preview')
+                            + output[header_length:]
+                            + '\n[End HTTP response; following text is request metadata]\n'
+                            + 'Effective request preview (redacted):\n'
+                            + request_preview
+                            + '\nEnd effective request preview')
                     output += f'\n[runtime observation: {observation}]'
                     body_start += len(evidence_line)
                     body_end += len(evidence_line)
@@ -652,7 +665,18 @@ class HTTPTool(Tool):
                 return (result,
                         response.headers.get('location') if response.status_code in {301, 302, 303, 307, 308} else None,
                         'set-cookie' in response.headers)
+            except asyncio.CancelledError:
+                dispatch_cancelled = True
+                raise
             finally:
+                if dispatch_state is not None and dispatch_fact is not None:
+                    from src.workflow.assessment import finish_dispatch
+                    task = asyncio.current_task()
+                    finish_dispatch(dispatch_state, dispatch_fact,
+                        status="completed" if captured_observation else "cancelled" if (
+                            dispatch_cancelled or getattr(signal, "aborted", False)
+                            or task is not None and task.cancelling()) else "failed",
+                        observation_id=captured_observation)
                 try:
                     if response is not None:
                         await response.aclose()

@@ -7,6 +7,7 @@ import pytest
 from src.findings.presentation import EvidenceLink, SummaryContext, artifact_links, render_summary
 from src.findings.store import Finding
 from src.workflow.evidence import EvidenceArtifact
+from src.workflow.state import Candidate, ValidationResult
 
 
 def finding(**changes):
@@ -19,6 +20,17 @@ def finding(**changes):
                   classification_provenance={"origin": "verified-local"}, classification_revision=1)
     values.update(changes)
     return Finding(**values)
+
+
+def test_summary_preserves_unknown_mutation_and_cleanup_without_no_write_claim():
+    candidate = Candidate("sqli", target="https://lab.test", endpoint="/item")
+    result = ValidationResult(candidate.id, "sql-injection", "insufficient-evidence",
+        mutation_performed=None, cleanup_state="unknown", cleanup_status="Effects have not been established")
+    context = SummaryContext.from_validation(candidate, result)
+    assert context.mutation_performed is None and context.cleanup_state == "unknown"
+    summary = render_summary(finding(), context=context)
+    assert "unknown" in summary and "Effects have not been established" in summary
+    assert "not-required" not in summary
 
 
 @pytest.mark.parametrize("kind,cwe,display", [

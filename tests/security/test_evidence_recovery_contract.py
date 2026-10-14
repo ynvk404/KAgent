@@ -336,10 +336,15 @@ async def test_exhausted_restored_budget_stops_before_model_or_http(runtime, tmp
     assert restored is not None and restored[exhaustion] == budget[exhaustion]
     scripted = client_for(args)
     agent.client = scripted
-    await agent.run('Continue current validation.', FakeSignal(), collect()['sink'])
+    output = collect()
+    await agent.run('Continue current validation.', FakeSignal(), output['sink'])
     assert not scripted.requests and len(sent) == 1
     result = state.latest_result(candidate.id)
-    assert result is not None and result.outcome == 'insufficient-evidence'
+    # Hydration interrupted execution ownership. The shared finalizer must not
+    # mint a canonical result with a missing/foreign active selector.
+    assert result is None and state.attempts[args['attempt_id']]['status'] == 'interrupted'
+    assert restored[exhaustion] == budget[exhaustion] and not restored['closed']
+    assert any(event['type'] == 'error' for event in output['events'])
 
 
 @pytest.mark.parametrize('mode', ['whole_target', 'direct', 'candidate_validation'])

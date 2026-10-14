@@ -4040,7 +4040,8 @@ async def test_direct_final_synthesis_rejects_textual_finding_after_last_assessm
     client = FakeClient([
         tool_batch(tool_call('assessment', 'workflow', {'action': 'record_result',
             'candidate_id': candidate.id, 'skill_name': 'cross-site-scripting',
-            'outcome': 'confirmed', 'evidence_refs': [proof.id]})),
+            'outcome': 'confirmed', 'evidence_refs': [proof.id],
+            'mutation_performed': False})),  # The fixture source adapter has no target effects.
         ChatResponse(message=Message(role='assistant', content=malformed), finish_reason='stop'),
         ChatResponse(message=Message(role='assistant', content=clean if retry_clean else malformed),
                      finish_reason='stop'),

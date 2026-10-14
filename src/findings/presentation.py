@@ -24,7 +24,7 @@ class SummaryContext:
     criteria: str | None = None
     limitations: str | None = None
     prerequisites: str | None = None
-    mutation_performed: bool = False
+    mutation_performed: bool | None = False
     cleanup_state: str | None = None
     cleanup_status: str | None = None
 

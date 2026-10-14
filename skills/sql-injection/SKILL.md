@@ -66,6 +66,29 @@ both terminal outcomes, even when no results report is exported.
 
 ## Structured workflow contract
 
+Attempt effects are durable bookkeeping, separate from evidence-repair retries.
+As soon as effects need recording, use `workflow(action="record_attempt_state",
+candidate_id=..., mutation_state=..., effect_basis=..., observation_ids=[...],
+cleanup_state=..., cleanup_status=...)` with the actual attempt's sources.
+Mutation states are `unknown`, `possible`, `reported-write`, `verified-write`,
+and `no-mutation-established`. A server acknowledgement is a reported write,
+not independently verified persistence. Never erase a reported write with false.
+Unknown mutation uses `mutation_performed: null`; cleanup unknown/not-attempted
+does not mean succeeded or not-required. Cleanup success needs owned declared
+cleanup action/verification evidence and separate action authority.
+Explicit `mutation_performed`/cleanup fields remain accepted on `record_result`;
+omitted fields use current attempt bookkeeping and otherwise remain unknown.
+
+Use `workflow(action="list", candidate_id=...)` to copy current observation IDs
+and adapter `elapsed_ms`; `next_observation_offset` paginates this metadata.
+Use `read_http_observation` for `obs_` response ranges, `read_tool_result` only
+for `tr_` references, and registered `ev_` IDs for proof. Retrieval failure is
+not a reason to resend HTTP or invent an ID. Date headers are not timing proof.
+When runtime says probing stopped, use remaining existing budget for local
+effect bookkeeping, proof registration and result disposition. Do not send
+more target actions or infer a negative result from anti-stall. If operator
+input is unavailable, record unresolved; missing input never authorizes writes.
+
 `start_validation` returns the Candidate plus a transient `validation_context`:
 linked canonical input samples in whole-target mode, Candidate context in
 direct mode, and explicit baseline/auth availability and limitations. Keep

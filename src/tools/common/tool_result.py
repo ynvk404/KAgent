@@ -15,6 +15,10 @@ if TYPE_CHECKING:
     from src.agent.tool_results import ResultRetention
 
 
+class HTTPObservationUnavailable(ExecutionBlocked):
+    error_kind = "reference_unavailable"
+
+
 class ReadToolResult:
     def __init__(self, retention: ResultRetention):
         self.retention = retention
@@ -181,7 +185,9 @@ class ReadHTTPObservation:
                 or attempt.get("target_revision") != self.agent.target.revision
                 or attempt.get("status") not in {"active", "completed"}
                 or objective.target_origin != self.agent.target.origin().as_url()):
-            raise ExecutionBlocked("blocked: HTTP observation ownership/scope unavailable")
+            raise HTTPObservationUnavailable(
+                'blocked: HTTP observation ownership/scope unavailable; '
+                'use workflow(action="list") for current owned observation IDs; do not rerun HTTP')
         from src.workflow.assessment import candidate_binding, resolve_sources, attempt_owner
         if candidate_binding(candidate) != item.candidate_binding:
             raise ExecutionBlocked("blocked: HTTP observation candidate binding changed")
@@ -234,6 +240,7 @@ class ReadHTTPObservation:
             region = read_region(text, args["start_char"], size)
             body = region.pop("content")
             header = json.dumps({"observation_id": item.id, "retained_hash": item.retained_hash,
+                "status": item.status, "elapsed_ms": item.elapsed_ms, "request_hash": item.request_hash,
                 "offset_unit": "unicode_characters", "complete": item.complete,
                 "adapter_truncated": item.truncated, "start_char": region["actual_start"],
                 "end_char": region["actual_end"], "source_chars": region["total_length"],

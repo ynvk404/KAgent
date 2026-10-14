@@ -38,7 +38,7 @@ PhaseCoverageStatus = Literal[
     "performed", "observed", "skipped", "not_applicable", "failed", "cancelled"
 ]
 CleanupState = Literal[
-    "not-required", "pending", "succeeded", "failed", "requires-user-action"
+    "not-required", "unknown", "not-attempted", "pending", "succeeded", "failed", "requires-user-action"
 ]
 
 WORKFLOW_MODES = frozenset({"direct", "candidate_validation", "whole_target"})
@@ -48,7 +48,7 @@ PHASE_COVERAGE_STATUSES = frozenset(
     {"performed", "observed", "skipped", "not_applicable", "failed", "cancelled"}
 )
 CLEANUP_STATES = frozenset(
-    {"not-required", "pending", "succeeded", "failed", "requires-user-action"}
+    {"not-required", "unknown", "not-attempted", "pending", "succeeded", "failed", "requires-user-action"}
 )
 PHASE_COVERAGE_DIMENSIONS: dict[str, tuple[str, ...]] = {
     "recon": (
@@ -799,7 +799,7 @@ class ValidationResult:
     techniques: list[str] = field(default_factory=list)
     repeatable: bool | None = None
     confirmation: dict[str, Any] | None = None
-    mutation_performed: bool = False
+    mutation_performed: bool | None = False
     cleanup_status: str | None = None
     deferred_reason: str | None = None
     notes: str | None = None
@@ -848,8 +848,8 @@ class ValidationResult:
             if not isinstance(sanitized, dict):
                 raise ValueError("confirmation must remain an object after redaction")
             self.confirmation = sanitized
-        if not isinstance(self.mutation_performed, bool):
-            raise ValueError("mutation_performed must be a boolean")
+        if self.mutation_performed is not None and not isinstance(self.mutation_performed, bool):
+            raise ValueError("mutation_performed must be a boolean or null (unknown)")
         self.cleanup_status = _text(self.cleanup_status)
         if self.cleanup_state is None:
             self.cleanup_state = _infer_cleanup_state(
@@ -874,6 +874,10 @@ class ValidationResult:
         Neither state grants cleanup authority or attests database contents.
         """
         detail = (self.cleanup_status or "").casefold()
+        if self.mutation_performed is None:
+            if self.cleanup_state not in {"unknown", "not-attempted", "pending", "failed", "requires-user-action"}:
+                raise ValueError("unknown mutation cannot establish cleanup succeeded/not-required")
+            return
         inferred = _infer_cleanup_state(True, self.cleanup_status)
         parent_reset_only = bool(re.search(
             r"\b(?:parent(?: benchmark)?|benchmark|external) reset\b", detail,
@@ -1004,8 +1008,10 @@ def validation_result_fingerprint(result: ValidationResult) -> str:
 
 
 def _infer_cleanup_state(
-    mutation_performed: bool, cleanup_status: str | None,
+    mutation_performed: bool | None, cleanup_status: str | None,
 ) -> CleanupState:
+    if mutation_performed is None:
+        return "unknown"
     if not mutation_performed:
         return "not-required"
     detail = (cleanup_status or "").casefold()
@@ -1822,6 +1828,8 @@ class WorkflowState:
                     f"mutation cleanup requires operator action:{candidate.id}:"
                     f"{result.cleanup_state}"
                 )
+            elif result and result.cleanup_state in {"unknown", "not-attempted"}:
+                blockers.append(f"mutation effects/cleanup unresolved:{candidate.id}:{result.cleanup_state}")
             if (candidate.status in {"new", "queued", "validating"}
                     or candidate.status == "deferred" and result is None
                     and candidate.id in generic_eligible_candidate_ids):

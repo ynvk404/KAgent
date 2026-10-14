@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional
 
 from src.logger.logger import get_logger
@@ -118,6 +119,8 @@ class GeminiClient(StreamingClient, Pinger):
         )
 
     async def chat(self, request: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
+        model = request.model or self.model_id
+        body = deepcopy(encode_request(request, self._gen_opts()))
         retry_count = 0
         retry_wait_ms = 0.0
 
@@ -127,20 +130,19 @@ class GeminiClient(StreamingClient, Pinger):
             retry_wait_ms += info["delay_ms"]
 
         response = await with_retry(
-            lambda: self._chat_once(request, signal),
+            lambda: self._chat_once(body, model, signal),
             RetryOptions(signal=signal, on_retry=on_retry),
         )
         response.retry_count = retry_count
         response.retry_wait_ms = round(retry_wait_ms, 2)
         return response
 
-    async def _chat_once(self, req: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
-        body = encode_request(req, self._gen_opts())
+    async def _chat_once(self, body: Dict[str, Any], model: str, signal: Optional[Any] = None) -> ChatResponse:
         async with new_provider_async_client() as client:
             try:
                 resp = await run_cancellable(
                     client.post(
-                        f"{self.base_url}/{with_models_prefix(req.model or self.model_id)}:generateContent",
+                        f"{self.base_url}/{with_models_prefix(model)}:generateContent",
                         headers={
                             "Content-Type": "application/json",
                             "x-goog-api-key": self.api_key
@@ -200,6 +202,8 @@ class GeminiClient(StreamingClient, Pinger):
         on_delta: Callable[[str], None],
         signal: Optional[Any] = None,
     ) -> ChatResponse:
+        model = request.model or self.model_id
+        body = deepcopy(encode_request(request, self._gen_opts()))
         retry_count = 0
         retry_wait_ms = 0.0
 
@@ -209,7 +213,7 @@ class GeminiClient(StreamingClient, Pinger):
             retry_wait_ms += info["delay_ms"]
 
         client, resp = await with_retry(
-            lambda: self._open_stream(request, signal),
+            lambda: self._open_stream(body, model, signal),
             RetryOptions(signal=signal, on_retry=on_retry),
         )
         
@@ -281,16 +285,14 @@ class GeminiClient(StreamingClient, Pinger):
             retry_wait_ms=round(retry_wait_ms, 2),
         )
 
-    async def _open_stream(self, req: ChatRequest, signal: Optional[Any] = None):
- 
-        body = encode_request(req, self._gen_opts())
+    async def _open_stream(self, body: Dict[str, Any], model: str, signal: Optional[Any] = None):
         client = new_provider_async_client()
         
         try:
 
             req_obj = client.build_request(
                 "POST",
-                f"{self.base_url}/{with_models_prefix(req.model or self.model_id)}:streamGenerateContent?alt=sse",
+                f"{self.base_url}/{with_models_prefix(model)}:streamGenerateContent?alt=sse",
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "text/event-stream",

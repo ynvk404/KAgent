@@ -276,6 +276,14 @@ class ExecutionPolicy:
 
     def validate(self, tool: Any, args: dict[str, Any]) -> None:
         name = tool.name()
+        if self.generic_validation is not None and type(tool).__module__ in {
+                "src.tools.http.http_tool", "src.tools.http.web", "src.tools.execution.shell",
+                "src.tools.execution.plugin", "src.tools.mcp.integration",
+                "src.tools.discovery.content", "src.tools.discovery.service"}:
+            boundary = self.generic_validation
+            attempt = boundary.state.attempts.get(boundary.durable_attempt, {})
+            if attempt.get("status") == "active" and attempt.get("probing_stopped"):
+                raise ExecutionBlocked("blocked: probing stopped; finalize the owned validation attempt")
         if self.generic_validation is not None:
             try:
                 self.generic_validation.validate_tool(tool, args)
@@ -418,6 +426,23 @@ class ExecutionPolicy:
         if ((self.max_calls is not None and self.used >= self.max_calls)
                 or self.active >= self.concurrency):
             raise ExecutionBlocked("pending: execution-budget/concurrency")
+        # Admission remains distinct from transport handoff. It links pending
+        # adapters to the owner so disposition cannot race an admitted action.
+        if self.generic_validation is not None and type(tool).__module__ in {
+                "src.tools.http.http_tool",
+                "src.tools.execution.shell", "src.tools.execution.plugin", "src.tools.mcp.integration",
+                "src.tools.discovery.content", "src.tools.discovery.service", "src.tools.http.web"}:
+            from src.workflow.assessment import source_owner, invalidate_effect_declaration
+            owner = source_owner(self)
+            if owner is not None:
+                state = self.generic_validation.state
+                effects = state.attempts[owner["id"]].get("effects")
+                if effects is None or len(effects["admissions"]) >= 256:
+                    raise ExecutionBlocked("blocked: attempt bookkeeping unavailable")
+                if type(tool).__module__ != "src.tools.http.http_tool":
+                    invalidate_effect_declaration(effects)
+                effects["admissions"].append({"invocation_id": receipt.id, "tool": tool.name()})
+                state.mark_committed()
         self.finish_review(receipt)
         self.used += 1
         self.persist()

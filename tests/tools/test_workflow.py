@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,35 @@ from src.workflow.state import (
 )
 from src.workflow.goals import RequestedGoal
 from tests.helpers.workflow import record_completed_phase, record_phase_coverage_for_test
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", [None, False, True])
+async def test_fixture_retry_preserves_attempt_and_effect_uncertainty(tmp_path, mutation):
+    state = WorkflowState()
+    tool = WorkflowTool(state, Target("https://target.test"), evidence_root=tmp_path)
+    candidate = json.loads(await tool.run({"action": "record_candidate", "candidate_class": "xss",
+        "method": "GET", "endpoint": "/search", "parameter": "q"}, None, AlwaysAllow()))["candidate"]["id"]
+    (tmp_path / "proof.md").write_text("Offline fixed response fixture.")
+    proof = json.loads(await tool.run({"action": "record_evidence", "candidate_id": candidate,
+        "evidence_path": "proof.md"}, None, AlwaysAllow()))["evidence"]["id"]
+    args = {"action": "record_result", "candidate_id": candidate, "skill_name": "cross-site-scripting",
+            "outcome": "not-confirmed", "evidence_refs": [proof]}
+    if mutation is not None:
+        # True exercises a conservative write declaration with unresolved cleanup.
+        args["mutation_performed"] = mutation
+    first = json.loads(await run_workflow_fixture(tool, args, None, AlwaysAllow()))
+    assert first["ok"] and first["created"]
+    assert first["result"]["mutation_performed"] is mutation
+    before = deepcopy(state.to_dict())
+    retry_args = {key: value for key, value in args.items() if key != "mutation_performed"}
+    duplicate = json.loads(await run_workflow_fixture(tool, {**retry_args, "notes": "retry prose"}, None, AlwaysAllow()))
+    assert duplicate["ok"] and not duplicate["created"]
+    assert duplicate["result"]["result_id"] == first["result"]["result_id"]
+    assert duplicate["result"]["attempt_id"] == first["result"]["attempt_id"]
+    assert duplicate["result"]["mutation_performed"] is mutation
+    assert duplicate["result"]["cleanup_state"] == first["result"]["cleanup_state"]
+    assert state.to_dict() == before
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -691,25 +721,31 @@ async def test_cleanup_lifecycle_updates_without_creating_a_new_validation_attem
         "evidence_path": "proof.md",
     }, None, AlwaysAllow()))["evidence"]["id"]
 
-    pending = json.loads(await run_workflow_fixture(tool, {
+    pending_args = {
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting", "outcome": "confirmed",
         "evidence_refs": [evidence], "mutation_performed": True,
         "cleanup_status": "waiting for separate permission",
-    }, None, AlwaysAllow()))
+    }
+    pending = json.loads(await run_workflow_fixture(tool, pending_args, None, AlwaysAllow()))
     assert pending["result"]["cleanup_state"] == "pending"
     assert pending["eligible_for_confirm_finding"] is True
 
-    succeeded = json.loads(await run_workflow_fixture(tool, {
+    retry = json.loads(await run_workflow_fixture(tool, pending_args, None, AlwaysAllow()))
+    assert not retry["created"] and retry["result"]["result_id"] == pending["result"]["result_id"]
+    before = state.to_dict()
+    # A claimed verification cannot promote a probe-only manifest to cleanup
+    # proof. The positive native cleanup/readback lifecycle has its own test.
+    rejected = await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting", "outcome": "confirmed",
         "evidence_refs": [evidence], "mutation_performed": True,
         "cleanup_status": "resource deletion verified",
         "cleanup_state": "succeeded",
-    }, None, AlwaysAllow()))
-    assert succeeded["created"] is False
-    assert succeeded["result"]["cleanup_state"] == "succeeded"
-    assert len(state.validation_results) == 1
+    }, None, AlwaysAllow())
+    assert 'owned cleanup action and subsequent verification readback' in rejected
+    assert state.to_dict() == before and len(state.validation_results) == 1
+    assert state.validation_results[0].cleanup_state == "pending"
 
 
 @pytest.mark.asyncio

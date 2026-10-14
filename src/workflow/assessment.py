@@ -114,6 +114,15 @@ def usable_source(row) -> bool:
             and row.get("execution_status") == "completed")
 
 
+def require_cleanup_evidence(rows):
+    """A declaration cannot substitute for an owned action and later readback."""
+    sources = [entry["source"] for entry in rows if usable_source(entry["source"])]
+    if not any(cleanup.get("role") == "cleanup" and readback.get("role") == "readback"
+               and readback.get("observed_at", -1) >= cleanup.get("observed_at", float("inf"))
+               for cleanup in sources for readback in sources):
+        raise ValueError("cleanup succeeded requires owned cleanup action and subsequent verification readback")
+
+
 class EvidenceAdmissibilityError(EvidenceSubmissionError):
     """A manifest repair error, distinct from a missing validation step."""
 
@@ -204,6 +213,9 @@ def start_attempt(state, candidate, session_id, epoch, *, requests=None, criteri
            "epoch": epoch, "target_origin": origin, "status": "active", "related_requests": normalized,
            "criteria": redact_payload(criteria), "target_revision": target_revision,
            "result_position": sum(r.candidate_id == candidate.id for r in state.validation_results)}
+    # Effects belong to the attempt, not to a rejected evidence submission.
+    # Absence on a historical attempt remains unknown; hydration never invents it.
+    row["effects"] = {"dispatches": [], "admissions": [], "declaration": None}
     for previous in state.attempts.values():
         if previous.get("status") != "active":
             continue
@@ -232,6 +244,111 @@ def source_owner(policy) -> dict[str, Any] | None:
     return attempt_owner(boundary.state, aid, policy.engagement.http_permissions.epoch,
                          boundary.target.revision if boundary.target else None,
                          policy.session_id)
+
+
+def invalidate_effect_declaration(effects):
+    declaration = effects["declaration"]
+    if declaration is not None and declaration["mutation_performed"] is not True:
+        # A bounded no-write interpretation does not cover a later action.
+        effects["declaration"] = None
+    elif declaration is not None and declaration["cleanup_state"] in {"succeeded", "not-required"}:
+        declaration.update(cleanup_state="unknown", cleanup_status="Further target action has not been assessed for cleanup")
+
+
+def begin_dispatch(state, owner, invocation_id, request_hash, admission_id):
+    """Synchronous transport handoff facts; no payload, permission or effect claim."""
+    if owner is None:
+        return None
+    attempt = state.attempts.get(owner["id"])
+    if attempt is None or any(attempt.get(k) != v for k, v in owner.items()):
+        raise ValueError("dispatch attempt ownership changed")
+    effects = attempt.get("effects")
+    if not isinstance(effects, dict):
+        raise ValueError("dispatch attempt bookkeeping unavailable")
+    if not admission_id or not any(row["invocation_id"] == admission_id for row in effects["admissions"]):
+        raise ValueError("dispatch admission linkage unavailable")
+    dispatches = effects["dispatches"]
+    if len(dispatches) >= 256:
+        raise ValueError("bounded attempt dispatch journal exhausted")
+    fact = {"invocation_id": invocation_id, "admission_id": admission_id, "request_hash": request_hash,
+            "status": "dispatched", "observation_id": None}
+    invalidate_effect_declaration(effects)
+    dispatches.append(fact)
+    state.mark_committed()
+    return fact
+
+
+def finish_dispatch(state, fact, *, status, observation_id=None):
+    if fact is not None:
+        fact.update(status=status, observation_id=observation_id)
+        state.mark_committed()
+
+
+def require_idle_attempt(attempt, policy):
+    if policy and any(row["invocation_id"] in policy._active_receipts
+                      for row in attempt["effects"]["admissions"]):
+        raise ValueError("attempt action still in flight")
+
+
+def attempt_effects(state, attempt, observations=None):
+    """Return conservative result fields from current, bounded attempt facts."""
+    effects = attempt.get("effects")
+    if not isinstance(effects, dict) or set(effects) != {"dispatches", "admissions", "declaration"}:
+        raise ValueError("attempt bookkeeping unavailable")
+    dispatches, other = effects["dispatches"], effects["admissions"]
+    if not isinstance(dispatches, list) or len(dispatches) > 256 or not isinstance(other, list) or len(other) > 256:
+        raise ValueError("attempt bookkeeping unavailable")
+    if any(not isinstance(row, dict) or not isinstance(row.get("invocation_id"), str)
+           or not isinstance(row.get("tool"), str) for row in other):
+        raise ValueError("attempt admission bookkeeping unavailable")
+    for row in dispatches:
+        if (not isinstance(row, dict) or not isinstance(row.get("invocation_id"), str)
+                or not isinstance(row.get("request_hash"), str)
+                or row.get("status") not in {"dispatched", "completed", "failed", "cancelled"}):
+            raise ValueError("attempt bookkeeping unavailable")
+        if row["status"] == "dispatched":
+            raise ValueError("attempt dispatch still in flight")
+    declaration = effects["declaration"]
+    # A fresh/retested attempt cannot erase an acknowledged write whose
+    # cleanup is still unresolved. Carry bookkeeping, never old source rights.
+    prior_write = None
+    prior_unresolved = False
+    for previous in reversed(list(state.attempts.values())):
+        if (previous is attempt or previous.get("candidate_binding") != attempt["candidate_binding"]
+                or previous.get("target_origin") != attempt["target_origin"]):
+            continue
+        result = next((r for r in reversed(state.validation_results) if r.attempt_id == previous["id"]), None)
+        prior = ({k: getattr(result, k) for k in ("mutation_performed", "cleanup_state", "cleanup_status")}
+                 if result else previous.get("effects", {}).get("declaration"))
+        facts = previous.get("effects", {})
+        if ((not facts and result is None or facts.get("dispatches")
+             or any(row["tool"] != "http" for row in facts.get("admissions", [])))
+                and (result is None or result.cleanup_state not in {"not-required", "succeeded"})):
+            prior_unresolved = True
+        if prior and prior.get("mutation_performed") is True:
+            if prior.get("cleanup_state") not in {"not-required", "succeeded"}:
+                prior_write = prior
+            break
+    if prior_write and (declaration is None or declaration.get("mutation_performed") is not True):
+        return {k: prior_write[k] for k in ("mutation_performed", "cleanup_state", "cleanup_status")}
+    if declaration is not None:
+        if not isinstance(declaration, dict):
+            raise ValueError("attempt declaration unavailable")
+        return {k: declaration[k] for k in ("mutation_performed", "cleanup_state", "cleanup_status")}
+    has_sources = any(entry.get("source", {}).get("attempt_id") == attempt["id"]
+                      for entry in state.selected_sources.values())
+    has_sources = has_sources or bool(observations and any(
+        item.attempt_id == attempt["id"] for item in observations._items.values()))
+    # HTTP admission is not a transport handoff; finished pre-dispatch
+    # failures have no target effect. Other adapters only attest admission.
+    if not dispatches and not any(row["tool"] != "http" for row in other) and not has_sources:
+        if prior_unresolved:
+            return {"mutation_performed": None, "cleanup_state": "unknown",
+                    "cleanup_status": "Prior attempt effects/cleanup remain unresolved; no current action dispatched"}
+        return {"mutation_performed": False, "cleanup_state": "not-required",
+                "cleanup_status": "No target action dispatched in this attempt"}
+    return {"mutation_performed": None, "cleanup_state": "unknown",
+            "cleanup_status": "Target effects and cleanup have not been established"}
 
 
 def attempt_owner(state, aid, epoch, target_revision, session_id=None):

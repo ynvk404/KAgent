@@ -244,7 +244,13 @@ class InvariantOracle:
             assert len(state.validation_results) == 1
             result = state.latest_result(candidate.id)
             assert result and result.outcome == expected.outcome
-            assert result.cleanup_state == "not-required" and not result.mutation_performed
+            if definition.mode == "generic" and not definition.controller_bound:
+                # Failed start has no owned effect ledger or trusted context.
+                # Zero fixture traffic is a boundary check, not a no-write proof.
+                assert result.mutation_performed is None and result.cleanup_state == "unknown"
+                assert not state.attempts and not run.transport.sent and not state.persisted_findings
+            else:
+                assert result.cleanup_state == "not-required" and result.mutation_performed is False
             if expected.outcome in {"confirmed", "not-confirmed"}:
                 assert result.coverage_synced
                 assert not runtime.workflow_tool.validation_completion_error(candidate.id, runtime.policy)

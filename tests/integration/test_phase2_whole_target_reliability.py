@@ -1,4 +1,5 @@
 """Offline Phase 2 contracts through production Workflow, HTTP and Agent."""
+import asyncio
 import json
 from pathlib import Path
 
@@ -333,6 +334,8 @@ async def test_independent_candidate_can_finish_with_production_evidence(runtime
             'evidence_path': 'independent.md', 'observation_ids': [oid]}))
         result = json.loads((yield 'workflow', {'action': 'record_result', 'candidate_id': other.id,
             'skill_name': 'sql-injection', 'outcome': 'not-confirmed', 'evidence_refs': [registered['evidence']['id']],
+            # The mock transport returns fixed bytes and performs no target writes.
+            'mutation_performed': False,
             'observation_ids': [oid], 'attempt_id': started['validation_context']['attempt_id'], 'assessment': ASSESSMENT.copy()}))
         assert result['ok']
 
@@ -350,6 +353,8 @@ async def test_independent_candidate_can_finish_with_production_evidence(runtime
     await agent.run('Continue current validation.', FakeSignal(), events['sink'])
     assert not model.errors and model.consumed
     assert result_for(state, other.id).outcome == 'not-confirmed'
+    assert result_for(state, other.id).mutation_performed is False
+    assert result_for(state, other.id).cleanup_state == 'not-required'
     assert tool.validation_completion_error(other.id, policy) is None
     assert result_for(state, exhausted.id).outcome == 'insufficient-evidence'
     assert current_budget(state, exhausted.id) is budget and budget['rejections'] == 3 and budget['closed']
@@ -410,6 +415,49 @@ async def test_recovery_continuation_is_fail_closed(runtime, tmp_path, monkeypat
         assert result_for(state, exhausted.id).outcome == 'insufficient-evidence' and budget['closed']
     expected_stop = 'cancelled' if blocker == 'cancelled' else 'runtime_error' if blocker.startswith('closure-') else 'workflow_blocked'
     assert events['events'][-1].stop_reason == expected_stop
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cancellation', ['operator', 'task'])
+async def test_recovery_closure_cancellation_preserves_unresolved_attempt(
+        runtime, tmp_path, monkeypatch, cancellation):
+    state, candidate, tool, _, _ = await setup(runtime, tmp_path)
+    budget = budget_for(state, candidate.id, create=True)
+    budget.update(rejections=3, closure_args={'skill_name': 'cross-site-scripting'})
+    client = FakeClient([])
+    agent = agent_for(runtime, tool, state, client)
+    signal = FakeSignal()
+    events = collect()
+    entered = asyncio.Event()
+    original = tool.run
+    attempt_ids = set(state.attempts)
+
+    async def interrupt_closure(args, active_signal, prompter):
+        if args.get('action') == 'record_result' and args.get('outcome') == 'insufficient-evidence':
+            entered.set()
+            if cancellation == 'operator':
+                active_signal.aborted = True
+                raise asyncio.CancelledError()
+            await asyncio.Event().wait()
+        return await original(args, active_signal, prompter)
+
+    monkeypatch.setattr(tool, 'run', interrupt_closure)
+    task = asyncio.create_task(agent.run('Continue current validation.', signal, events['sink']))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    if cancellation == 'task':
+        # A simultaneous operator abort must not hide real task cancellation.
+        signal.aborted = True
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        await task
+    assert events['events'][-1].stop_reason == 'cancelled'
+    assert not agent.running and not client.requests and len(runtime[4]) == 1
+    assert state.latest_result(candidate.id) is None
+    assert set(state.attempts) == attempt_ids
+    assert not budget['closed'] and budget['rejections'] == 3
+    assert current_budget(state, candidate.id) is budget
 
 
 @pytest.mark.asyncio

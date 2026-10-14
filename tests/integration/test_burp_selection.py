@@ -125,6 +125,7 @@ class CaptureAwareClient(Client):
             self.evidence = data['evidence']['id']
             return self.tool('workflow', {'action': 'record_result', 'candidate_id': self.candidate,
                 'skill_name': 'sql-injection', 'outcome': 'not-confirmed',
+                'mutation_performed': False,  # MockTransport only returns the fixed marker response.
                 'evidence_refs': [self.evidence], 'observation_ids': [self.observation],
                 'attempt_id': self.attempt, 'techniques': ['single quote probe'],
                 'assessment': {'hypothesis': 'A quote in q may cause a SQL error.',

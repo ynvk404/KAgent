@@ -27,6 +27,7 @@ class RepeatedReadbackClient(FakeClient):
     def __init__(self):
         super().__init__([])
         self.tool_iterations = 0
+        self.last_observation = None
 
     async def chat(self, request, signal=None):
         self.requests.append(request)
@@ -38,10 +39,14 @@ class RepeatedReadbackClient(FakeClient):
             name, args = "http", {"url": f"/fixture?q=repeat-{step}", "phase": "validation"}
         else:
             feedback = next(m.content for m in reversed(request.messages) if m.name == "http")
-            line = next(line for line in feedback.splitlines() if line.startswith("Runtime HTTP evidence ("))
-            row, _ = json.JSONDecoder().raw_decode(line.split(": ", 1)[1])
+            line = next((line for line in feedback.splitlines() if line.startswith("Runtime HTTP evidence (")), None)
+            if line is not None:
+                row, _ = json.JSONDecoder().raw_decode(line.split(": ", 1)[1])
+                self.last_observation = row["observation_id"]
+            else:
+                assert "probing stopped" in feedback
             name, args = "read_http_observation", {
-                "observation_id": row["observation_id"], "start_char": 0, "max_chars": 2000,
+                "observation_id": self.last_observation, "start_char": 0, "max_chars": 2000,
             }
         return ChatResponse(Message("assistant", "", tool_calls=[
             ToolCall(str(step), FunctionCall(name, json.dumps(args))),
@@ -72,14 +77,18 @@ async def test_direct_identical_http_readback_stalls_before_24_steps(runtime, tm
     await agent.run("continue", FakeSignal(), events["sink"])
     assert events["events"][-1].stop_reason == "workflow_stalled"
     assert client.tool_iterations < 24 and len(client.requests) < 24
-    # This fixture has no current session owner/declaration. A terminal stall
-    # now reports explicit closure failure instead of silently leaving it open.
+    # The embedded controller has a WorkflowTool session owner. Missing effect
+    # interpretation is now honest unknown, not a forced false or orphan.
     errors = [event for event in events["events"] if event["type"] == "error"]
-    assert len(errors) == 1 and "Workflow closure failed" in str(errors[0].err)
-    assert not state.validation_results and not state.persisted_findings
-    assert state.objective.requested_goals[0].status == "in_progress"
+    assert not errors and not state.persisted_findings
+    result = state.latest_result(candidate.id)
+    assert result is not None and result.attempt_id is not None
+    assert result.outcome == "insufficient-evidence" and result.mutation_performed is None
+    assert result.cleanup_state == "unknown"
+    assert state.objective.requested_goals[0].status not in {"tested_confirmed", "tested_not_confirmed"}
     assert {key: value.to_dict() for key, value in state.evidence.items()} == evidence
-    assert state.attempts == attempts
+    assert set(state.attempts) == set(attempts)
+    assert state.attempts[result.attempt_id]["status"] == "unresolved"
     assert len({item.response_hash for item in runtime[2].observations._items.values()}) == 1
 
 

@@ -9,7 +9,7 @@ ErrorKind = Literal[
     "permission_denied", "scope_denied", "timeout", "network", "tls",
     "invalid_args", "cancelled", "tool_exception",
     "permission_pending", "permission_timeout", "permission_stale", "policy_block",
-    "workflow_state", "reference_unavailable",
+    "workflow_state", "reference_unavailable", "input_unavailable",
 ]
 
 

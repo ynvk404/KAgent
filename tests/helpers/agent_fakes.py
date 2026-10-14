@@ -69,7 +69,11 @@ class ScriptedModel(Client):
                 feedback = next(m for m in reversed(request.messages) if m.role == "tool")
                 if (self.runtime_stop is not None and request.tools is None
                         and len(self.calls) == self.runtime_stop[0]
-                        and (feedback.tool_call_id or "").startswith(self.runtime_stop[1])):
+                        and feedback.name == "workflow"):
+                    payload = json.loads(feedback.content)
+                    result = payload.get("result", {})
+                    assert payload.get("ok") is True and result.get("attempt_id") == self.runtime_stop[1]
+                    assert result.get("outcome") == "insufficient-evidence" and result.get("result_id")
                     self.script.close()
                     self.consumed = True
                     self.summaries += 1

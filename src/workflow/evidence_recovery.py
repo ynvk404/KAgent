@@ -57,26 +57,3 @@ def carry_continuation_budget(state, attempt):
             state.evidence_recovery[attempt["id"]] = deepcopy(budget)
             state.evidence_recovery[attempt["id"]]["closed"] = False
             return
-
-
-def closure_args(args):
-    from src.redaction.redact import redact_payload
-    # Only bounded non-traffic bookkeeping survives resume. No IDs are salvaged
-    # or observations/parents manufactured for the unresolved closure.
-    saved = {k: args[k] for k in ("skill_name", "cleanup_state", "cleanup_status")
-             if isinstance(args.get(k), str) and len(args[k]) <= 2000}
-    if type(args.get("mutation_performed")) is bool:
-        saved["mutation_performed"] = args["mutation_performed"]
-    techniques = args.get("techniques")
-    if isinstance(techniques, list) and len(techniques) <= 16 and all(isinstance(t, str) and len(t) <= 200 for t in techniques):
-        saved["techniques"] = techniques
-    if len(json.dumps(saved)) > 6000:
-        saved.pop("techniques", None)
-        saved.pop("cleanup_status", None)
-    safe = redact_payload(saved)
-    if len(json.dumps(safe)) > 6000:
-        safe.pop("techniques", None)
-        safe.pop("cleanup_status", None)
-        if len(json.dumps(safe)) > 6000:
-            safe = {}
-    return safe

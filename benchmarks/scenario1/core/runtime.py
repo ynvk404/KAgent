@@ -321,8 +321,8 @@ class HeadlessPermissions:
 
 class MissingInput:
     async def ask(self, q, signal=None) -> str:
-        from src.permission.permission import PermissionPolicyBlocked
-        raise PermissionPolicyBlocked('headless: operator input unavailable; record unresolved')
+        from src.permission.permission import OperatorInputUnavailable
+        raise OperatorInputUnavailable('headless: operator input unavailable; record unresolved')
 
 
 def build_agent(op: OperationalCaseInput, settings: RuntimeSettings, root: Path, client, *, thinking=False):

@@ -26,15 +26,53 @@ def protected(runtime):
         "observations": runtime.policy.observations._items, "sent": runtime.scenario_transport.sent})
 
 
-def rejected(runtime, name, args, reason, *, kind="workflow_state"):
+def rejected(runtime, name, args, reason, *, kind="workflow_state", presend_admission=False):
     before = protected(runtime)
     call_id = f"{runtime.scenario_model.prefix}-{len(runtime.scenario_model.calls) + 1}"
     runtime.scenario_errors[call_id] = (name, reason, kind)
     output = yield name, args
     assert reason in output, output
-    assert protected(runtime) == before, "rejection changed protected ledger/ownership/HTTP"
+    after = protected(runtime)
+    if presend_admission:
+        assert name == "http" and kind == "policy_block" and after["owner"] == before["owner"]
+        aid = before["owner"]
+        old_effects = before["attempts"][aid]["effects"]
+        new_effects = after["attempts"][aid]["effects"]
+        old_admissions, new_admissions = old_effects["admissions"], new_effects["admissions"]
+        assert len(new_admissions) == len(old_admissions) + 1 and new_admissions[:-1] == old_admissions
+        assert new_admissions[-1] == {"tool": "http", "invocation_id": runtime.scenario_presend_receipt_id}
+        assert not old_effects["dispatches"] and not new_effects["dispatches"]
+        assert old_effects["declaration"] == new_effects["declaration"]
+        # Normalize only the exactly attested, non-dispatched admission delta;
+        # every other ledger, owner, capture and wire field remains protected.
+        new_effects["admissions"] = old_admissions
+    assert after == before, "rejection changed protected ledger/ownership/HTTP"
     runtime.scenario_snapshots.append((call_id, before))
     return output
+
+
+def unresolved_closures(run, aid):
+    """Bind action, receipt and canonical disposition without opaque ID prefixes."""
+    state = run.runtime.workflow
+    attempt = state.attempts[aid]
+    result = state.latest_result(attempt["candidate_id"])
+    assert result and result.attempt_id == aid and result.outcome == "insufficient-evidence"
+    assert attempt["status"] == "unresolved" and state.candidates[result.candidate_id].status == "deferred"
+    bound = result.to_dict().copy()
+    for key in ("assessment_binding", "coverage_synced", "cleanup_state", "cleanup_status"):
+        bound.pop(key, None)
+    from tests.helpers.scenario_oracle import canonical_hash
+    assert result.assessment_binding == canonical_hash(bound)
+    calls = {e["id"] for e in run.trace.events if e["type"] == "tool-call" and e["name"] == "workflow"
+             and e["args"].get("action") == "record_result" and e["args"].get("attempt_id") == aid
+             and e["args"].get("candidate_id") == result.candidate_id
+             and e["args"].get("outcome") == "insufficient-evidence"}
+    closures = [e for e in run.trace.events if e["type"] == "tool-result" and e["id"] in calls]
+    assert len(closures) == 1 and closures[0]["status"] == "success"
+    payload = json.loads(closures[0]["result"])
+    assert payload["ok"] and payload["result"]["result_id"] == result.result_id
+    assert payload["result"]["attempt_id"] == aid and payload["result"]["assessment_binding"] == result.assessment_binding
+    return closures
 
 
 async def safety_outcomes(run):
@@ -46,10 +84,9 @@ async def safety_outcomes(run):
     elif run.definition.expected_stop is not None:
         assert len(run.model.calls) == run.definition.expected_stop[0]
     else:
-        count, prefix = run.model.runtime_stop
+        count, aid = run.model.runtime_stop
         assert len(run.model.calls) == count
-        closure = [e for e in run.trace.events if e["type"] == "tool-result" and e["id"].startswith(prefix)]
-        assert len(closure) == 1 and closure[0]["status"] == "success"
+        unresolved_closures(run, aid)
         assert runtime.workflow.validation_results[-1].outcome == "insufficient-evidence"
     assert not run.trace.errors, run.trace.errors
     assert not run.transport.errors, run.transport.errors

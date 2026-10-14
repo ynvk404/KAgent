@@ -107,6 +107,7 @@ class GoalLifecycleClient(Client):
             return self._tool("record-result", {
                 "action": "record_result", "candidate_id": candidate.id,
                 "skill_name": skill, "outcome": "not-confirmed",
+                "mutation_performed": False,  # This scripted fixture has no target writes.
                 "evidence_refs": references,
             })
         raise AssertionError(f"planner did not advance from {first_open.candidate_class}")

@@ -1,5 +1,5 @@
 """Offline readback and terminal lifecycle regressions through real gates."""
-from dataclasses import asdict, replace
+from dataclasses import replace
 import asyncio
 from copy import deepcopy
 import hashlib
@@ -11,8 +11,7 @@ from benchmarks.scenario1.core.runtime import (
     _bind_benchmark_evidence, build_agent, candidate_arguments, prompt, request_fixture,
     case_closure_diagnostic, execute_case, HeadlessPermissions,
 )
-from benchmarks.scenario1.core.canonical import freeze
-from benchmarks.scenario1.core.evaluate import evaluate
+from benchmarks.scenario1.core.canonical import freeze, inspect_export
 from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import Decision, PermissionRequest, UserControlledRefusal
 from src.workflow.assessment import digest, source_row
@@ -23,7 +22,6 @@ from src.tools.common.tool_result import ReadHTTPObservation
 from tests.helpers.agent_fakes import FakeSignal, collect
 from tests.benchmarks.test_scenario1 import (
     ASSESSMENT, ScriptedClient, isolated_project_environment, mock_http, op, settings,
-    recorded_run, single_manifest,
 )
 
 
@@ -186,13 +184,14 @@ class StopClient(ScriptedClient):
                     FunctionCall('workflow', json.dumps({'action': 'list'}))))
             return response
         if self.stop_mode == 'write' and self.step == 5:
-            # A rejected proof submission retains the explicit write/cleanup
-            # declaration, but gains no accepted evidence or terminal result.
-            return self.tool('workflow', {'action': 'record_result', 'candidate_id': self.candidate,
-                'attempt_id': self.attempt, 'skill_name': self.skill, 'outcome': 'confirmed',
-                'mutation_performed': True, 'cleanup_state': 'requires-user-action',
+            # Attempt bookkeeping is independent of evidence submissions.
+            # An owned acknowledgement does not verify persistence/cleanup.
+            return self.tool('workflow', {'action': 'record_attempt_state', 'candidate_id': self.candidate,
+                'attempt_id': self.attempt, 'mutation_state': 'reported-write',
+                'effect_basis': 'Controlled fixture acknowledges an update', 'observation_ids': self.observations,
+                'cleanup_state': 'requires-user-action',
                 'cleanup_status': 'Agent cleanup not performed; requires user action',
-                'assessment': ASSESSMENT})
+                })
         if self.stop_mode == 'write':
             return self.tool('workflow', {'action': 'list'})
         return self.tool('http', {'url': 'http://127.0.0.1:3000/benchmark/fixture?q=repeat',
@@ -200,10 +199,10 @@ class StopClient(ScriptedClient):
 
 
 @pytest.mark.parametrize('mode,stop,status', [
-    ('unavailable', 'all_tools_refused', 'completed'),
-    ('reader', 'all_tools_refused', 'runtime-error'),
-    ('mixed', 'workflow_stalled', 'runtime-error'),
-    ('stall', 'workflow_stalled', 'runtime-error'),
+    ('unavailable', 'workflow_blocked', 'completed'),
+    ('reader', 'all_tools_refused', 'completed'),
+    ('mixed', 'workflow_stalled', 'completed'),
+    ('stall', 'workflow_stalled', 'completed'),
     ('write', 'workflow_stalled', 'completed'),
 ])
 async def test_terminal_stop_closes_safely_or_exports_explicit_failure(
@@ -235,18 +234,24 @@ async def test_terminal_stop_closes_safely_or_exports_explicit_failure(
     assert not state['persisted_findings'] and not ex.result['accepted_at_freeze']
     if status == 'completed':
         result = results[-1]
-        assert result['outcome'] == ('blocked' if mode == 'unavailable' else 'insufficient-evidence')
+        assert result['outcome'] == ('blocked' if mode in {'unavailable', 'reader'} else 'insufficient-evidence')
         assert state['attempts'][client.attempt]['status'] == 'unresolved'
         assert result['attempt_id'] == client.attempt
-        assert not result['evidence_manifest'] and not result['evidence_refs']
+        assert not result['evidence_refs']
         assert ex.runtime_metadata['closure_diagnostic'] is None
         if mode == 'write':
             assert result['mutation_performed'] is True
             assert result['cleanup_state'] == 'requires-user-action'
             assert result['cleanup_status'] == 'Agent cleanup not performed; requires user action'
+            assert [entry['source']['id'] for entry in result['evidence_manifest']] == client.observations
             assert len(mock_http) == 2
-        else:
+        elif mode == 'unavailable':
+            assert not result['evidence_manifest']
             assert not result['mutation_performed'] and len(mock_http) == 0
+        else:
+            assert not result['evidence_manifest']
+            assert result['mutation_performed'] is None and result['cleanup_state'] == 'unknown'
+            assert len(mock_http) <= 6
     else:
         assert not results and state['attempts'][client.attempt]['status'] == 'active'
         assert ex.runtime_metadata['closure_diagnostic'] == 'active-case-attempt-without-closure'
@@ -256,13 +261,9 @@ async def test_terminal_stop_closes_safely_or_exports_explicit_failure(
             and json.loads(tc['function']['arguments']).get('action') == 'record_result'
             for m in session['messages'] for tc in (m.get('tool_calls') or []))
         assert len(mock_http) <= 6  # threshold=4 stops probing; no closure HTTP
-    manifest = single_manifest(replace(op, vulnerability_class='cross-site-scripting'), settings)
-    manifest = replace(manifest, operational=[asdict(op)], truth=[{
-        **manifest.truth[0], 'vulnerability_class': op.vulnerability_class, 'cwe': 89}])
-    recorded_run(tmp_path / 'recorded', manifest, ex)
-    report = evaluate(tmp_path / 'recorded')
-    assert report['records'][0]['partition'] == ('unresolved' if status == 'completed' else 'execution-failed')
-    assert report['metrics']['overall']['TP'] == report['metrics']['overall']['TN'] == 0
+    assert inspect_export(ex.result, run_id='run', case_id=op.case_id, execution_id='execution',
+                          candidate_args=candidate_arguments(op, settings),
+                          target=settings.target + settings.context_path) == (result['outcome'], None)
 
 
 async def test_worker_catches_active_orphan_when_agent_skips_closure(tmp_path, monkeypatch, op, settings, mock_http):
@@ -274,7 +275,7 @@ async def test_worker_catches_active_orphan_when_agent_skips_closure(tmp_path, m
     monkeypatch.setattr(Agent, '_close_terminal_attempt', skipped)
     ex = await execute_case(replace(op, vulnerability_class='sql-injection'), settings, tmp_path,
                             'run', 'execution', StopClient('unavailable'))
-    assert ex.status == 'runtime-error' and ex.stop_reason == 'all_tools_refused'
+    assert ex.status == 'runtime-error' and ex.stop_reason == 'workflow_blocked'
     assert ex.error == 'active-case-attempt-without-closure'
     assert ex.result is not None
     assert ex.result['workflow']['validation_results'] == []

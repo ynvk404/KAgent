@@ -64,6 +64,27 @@ both terminal outcomes, even when no results report is exported.
 
 ## Structured workflow contract
 
+Attempt effects are durable bookkeeping, separate from evidence-repair retries.
+Record observed writes or uncertainty before result submission using
+`workflow(action="record_attempt_state", candidate_id=..., mutation_state=...,
+effect_basis=..., observation_ids=[...], cleanup_state=..., cleanup_status=...)`.
+Mutation states are `unknown`, `possible`, `reported-write`, `verified-write`,
+and `no-mutation-established`. Unknown uses `mutation_performed: null`, never
+false by default. A stored payload acknowledgement does not prove persistence;
+cleanup unknown/not-attempted is not completed cleanup. Cleanup success needs
+owned declared cleanup action/verification evidence and separate authority.
+Explicit mutation/cleanup fields remain accepted on `record_result`; omitted
+fields use attempt bookkeeping and otherwise remain unknown.
+
+Copy current owned `obs_` IDs from `workflow(action="list", candidate_id=...)`;
+page metadata using `next_observation_offset`. HTTP/readback metadata includes
+adapter `elapsed_ms`. `read_http_observation` reads `obs_` bodies; `read_tool_result`
+reads `tr_` retained outputs; `ev_` IDs identify registered immutable proof.
+Do not invent IDs or resend HTTP to repair retrieval. Once probing stops,
+use remaining existing budget for local evidence/result finalization, retaining
+this playbook's reflected/stored/DOM and browser-proof requirements. A headless
+input failure grants no authority; record unresolved when operator input is needed.
+
 `start_validation` returns the Candidate plus a transient `validation_context`:
 linked canonical input samples in whole-target mode, Candidate context in
 direct mode, and explicit baseline/auth availability and limitations. Keep

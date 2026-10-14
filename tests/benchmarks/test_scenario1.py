@@ -403,6 +403,7 @@ class ScriptedClient(Client):
         if self.step == 7:
             return self.tool('workflow', {'action': 'record_result', 'candidate_id': self.candidate,
                 'skill_name': self.skill, 'outcome': 'insufficient-evidence' if self.mode == 'revisions' else self.outcome,
+                'mutation_performed': False,  # This mock fixture has no persistent effects.
                 **({'attempt_id': self.attempt} if self.attempt else {}),
                 'observation_ids': self.observations, 'evidence_refs': [self.evidence], 'assessment': ASSESSMENT})
         if self.mode == 'revisions':
@@ -418,6 +419,7 @@ class ScriptedClient(Client):
             if self.step == 12:
                 return self.tool('workflow', {'action': 'record_result', 'candidate_id': self.candidate,
                     'skill_name': 'cross-site-scripting', 'outcome': self.outcome,
+                    'mutation_performed': False,
                     'observation_ids': self.observations[-1:], 'evidence_refs': [self.evidence], 'assessment': ASSESSMENT})
         if self.mode == 'late-error':
             raise ValueError('scripted failure after terminal result')

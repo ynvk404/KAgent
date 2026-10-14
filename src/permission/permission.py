@@ -30,6 +30,11 @@ class PermissionPolicyBlocked(UserControlledRefusal):
     error_kind = 'policy_block'
 
 
+class OperatorInputUnavailable(PermissionPolicyBlocked):
+    """Interaction capability is absent; neither an answer nor a denial."""
+    error_kind = 'input_unavailable'
+
+
 class PermissionReviewCancelled(asyncio.CancelledError):
     """Escape cancels one proposal; whole-turn/task cancellation is separate."""
 

@@ -9,6 +9,8 @@ from benchmarks.scenario1.core.runner import reproducibility, validate_runtime
 from benchmarks.scenario1.core.runtime import build_agent, execute_case, prompt, request_fixture
 from src.llm.core.types import ToolCall
 from src.tools.common.outcome import ToolOutput
+from src.tools.workflow.workflow_tool import WorkflowTool
+from src.workflow.assessment import seal
 from tests.benchmarks.test_scenario1 import (
     ASSESSMENT, ScriptedClient, isolated_project_environment, make_dataset,
     mock_http, op, settings,
@@ -28,6 +30,45 @@ def built_agents(monkeypatch):
 
     monkeypatch.setattr(runtime, 'build_agent', capture)
     return agents
+
+
+def unresolved_closure_receipt(agent, candidate_id, attempt_id):
+    """Link the runtime action to its owned tool receipt, independent of ID format."""
+    calls = []
+    for message in agent.history:
+        for call in message.tool_calls or []:
+            if call.function.name != 'workflow':
+                continue
+            args = json.loads(call.function.arguments)
+            if (args.get('action') == 'record_result' and args.get('outcome') == 'insufficient-evidence'
+                    and args.get('candidate_id') == candidate_id and args.get('attempt_id') == attempt_id):
+                calls.append(call)
+    assert len(calls) == 1
+    receipts = [m for m in agent.history if m.role == 'tool' and m.tool_call_id == calls[0].id]
+    assert len(receipts) == 1
+    return calls[0], receipts[0]
+
+
+def assert_saved_closure(session, call, receipt, latest):
+    saved_calls = [tc for message in session['messages'] for tc in (message.get('tool_calls') or [])
+                   if tc['id'] == call.id]
+    saved_receipts = [m for m in session['messages'] if m.get('tool_call_id') == call.id]
+    assert len(saved_calls) == len(saved_receipts) == 1
+    assert json.loads(saved_calls[0]['function']['arguments']) == json.loads(call.function.arguments)
+    assert saved_receipts[0]['content'] == receipt.content
+    if latest is not None:
+        payload = json.loads(receipt.content)
+        assert payload['ok'] is True
+        assert payload['result']['result_id'] == latest.result_id
+        assert latest.assessment_binding == seal(latest)
+        assert session['workflow']['attempts'][latest.attempt_id]['status'] == 'unresolved'
+        saved_results = session['workflow']['validation_results']
+        assert len(saved_results) == 1
+        assert saved_results[0]['result_id'] == latest.result_id
+        assert saved_results[0]['assessment_binding'] == latest.assessment_binding
+    else:
+        assert receipt.content.startswith('error:')
+        assert session['workflow']['validation_results'] == []
 
 
 class RepairClient(ScriptedClient):
@@ -52,6 +93,7 @@ class RepairClient(ScriptedClient):
             if self.step == 8:
                 return self.tool('workflow', {'action': 'record_result', 'candidate_id': self.candidate,
                     'skill_name': self.skill, 'outcome': self.outcome, 'attempt_id': self.attempt,
+                    'mutation_performed': False,  # Fixed mock responses have no target writes.
                     'observation_ids': self.observations[:1], 'evidence_refs': [self.evidence], 'assessment': ASSESSMENT})
             if self.step == 9:
                 return self.tool('http', {'url': 'http://127.0.0.1:3000/benchmark/fixture?q=readback',
@@ -91,6 +133,7 @@ class RepairClient(ScriptedClient):
                 'phase': 'validation'})
         submission = self.tool('workflow', {'action': 'record_result', 'candidate_id': self.candidate,
             'skill_name': self.skill, 'outcome': self.outcome, 'attempt_id': self.attempt,
+            'mutation_performed': False,  # Fixed mock responses have no target writes.
             'observation_ids': (self.observations[:1] if self.repair == 'usable' else
                                self.observations[:1] + self.observations[2:] if self.repair == 'missing-after-repair'
                                else self.observations),
@@ -140,11 +183,15 @@ async def test_agent_terminal_evidence_recovery_is_bounded(
         assert len(mock_http) <= (8 if repair == 'probe-loop' else 2)
         session = json.loads((tmp_path / '.kagent/sessions' /
             (ex.runtime_metadata['session_id'] + '.json')).read_text())
-        calls = {tc['id'] for message in session['messages'] for tc in (message.get('tool_calls') or [])}
-        recovery_results = [message for message in session['messages']
-                            if str(message.get('tool_call_id') or '').startswith('evidence-recovery-')]
-        assert recovery_results
-        assert all(message['tool_call_id'] in calls for message in recovery_results)
+        agent = built_agents[0]
+        call, receipt = unresolved_closure_receipt(agent, client.candidate, client.attempt)
+        latest = agent.workflow.latest_result(client.candidate)
+        assert latest is not None and latest.attempt_id == client.attempt
+        assert agent.workflow.attempts[client.attempt]['status'] == 'unresolved'
+        assert agent.workflow.candidates[client.candidate].status == 'deferred'
+        # Rejected submissions cannot establish a no-mutation declaration.
+        assert latest.mutation_performed is None and latest.cleanup_state == 'unknown'
+        assert_saved_closure(session, call, receipt, latest)
         if repair == 'batch':
             # Candidate creation is excluded: load/start/2 HTTP/write/evidence/
             # first rejected result/two retries/controller unresolved = 10.
@@ -180,9 +227,8 @@ async def test_successful_terminal_repair_clears_gate_within_batch(
 
 
 class MissingStepSchemaClient(RepairClient):
-    def __init__(self, reject_closure=False):
+    def __init__(self):
         super().__init__('missing-after-repair')
-        self.reject_closure = reject_closure
 
     async def chat(self, request, signal=None):
         response = await super().chat(request, signal)
@@ -190,8 +236,7 @@ class MissingStepSchemaClient(RepairClient):
             return self.tool('workflow', {'action': 'record_result', 'candidate_id': self.candidate,
                 'skill_name': self.skill, 'outcome': self.outcome, 'attempt_id': self.attempt,
                 'observation_ids': self.observations[:1] + self.observations[2:],
-                'evidence_refs': [self.evidence], 'assessment': {},
-                **({'cleanup_state': 'invalid-cleanup-state'} if self.reject_closure else {})})
+                'evidence_refs': [self.evidence], 'assessment': {}})
         return response
 
 
@@ -200,7 +245,27 @@ class MissingStepSchemaClient(RepairClient):
 async def test_missing_step_then_schema_error_has_deterministic_closure(
         tmp_path, monkeypatch, op, settings, mock_http, built_agents, capsys, reject_closure):
     monkeypatch.chdir(tmp_path)
-    client = MissingStepSchemaClient(reject_closure)
+    if reject_closure:
+        from benchmarks.scenario1.core import runtime
+        original_build = runtime.build_agent
+
+        def build_with_closure_failure(*args, **kwargs):
+            built = original_build(*args, **kwargs)
+            workflow = built[0].tools.get('workflow')
+            assert isinstance(workflow, WorkflowTool)
+            original_run = workflow.run
+
+            async def reject_owned_closure(args, signal, prompter):
+                if args.get('action') == 'record_result' and args.get('outcome') == 'insufficient-evidence':
+                    return ToolOutput('error: fixture closure rejected', status='error', error_kind='workflow_state')
+                return await original_run(args, signal, prompter)
+
+            monkeypatch.setattr(workflow, 'run', reject_owned_closure)
+            return built
+
+        # Inject failure into the actual closure, rather than rejected model args.
+        monkeypatch.setattr(runtime, 'build_agent', build_with_closure_failure)
+    client = MissingStepSchemaClient()
     ex = await execute_case(op, settings, tmp_path, 'run', 'execution', client)
     agent = built_agents[0]
     assert client.step == 13 < settings.agent_calls
@@ -212,23 +277,16 @@ async def test_missing_step_then_schema_error_has_deterministic_closure(
     results = [message for message in messages if message.role == 'tool']
     assert any(m.content.startswith('error: evidence-admissibility:') for m in results)
     assert any(m.content.startswith('error: declared required request lacks completed evidence;') for m in results)
-    recovery_results = [m for m in results if (m.tool_call_id or '').startswith('evidence-recovery-')]
-    assert len(recovery_results) == 1
-    matching_calls = [tc for m in messages if m.role == 'assistant' for tc in (m.tool_calls or [])
-                      if tc.id == recovery_results[0].tool_call_id]
-    assert len(matching_calls) == 1
-    assert json.loads(matching_calls[0].function.arguments)['outcome'] == 'insufficient-evidence'
+    call, receipt = unresolved_closure_receipt(agent, client.candidate, client.attempt)
     session = json.loads((tmp_path / '.kagent/sessions' /
                          (ex.runtime_metadata['session_id'] + '.json')).read_text())
-    assert any(m.get('tool_call_id') == recovery_results[0].tool_call_id for m in session['messages'])
-    assert any(tc['id'] == recovery_results[0].tool_call_id for m in session['messages']
-               for tc in (m.get('tool_calls') or []))
     latest = agent.workflow.latest_result(client.candidate)
+    assert_saved_closure(session, call, receipt, latest)
     if reject_closure:
         assert ex.status == 'runtime-error' and ex.stop_reason == 'runtime_error'
-        assert 'Bounded evidence recovery closure failed' in capsys.readouterr().err
+        assert 'Bounded evidence recovery closure did not commit' in capsys.readouterr().err
         assert latest is None
-        assert recovery_results[0].content.startswith('error:')
+        assert receipt.content.startswith('error:')
         assert agent._evidence_recovery_rejections[client.candidate] == 3
         assert client.candidate in agent._evidence_recovery
         assert agent._evidence_recovery[client.candidate][1] == 1
@@ -238,7 +296,7 @@ async def test_missing_step_then_schema_error_has_deterministic_closure(
         assert latest is not None and latest.outcome == 'insufficient-evidence'
         assert ex.result is not None
         assert ex.result['workflow']['validation_results'][-1]['outcome'] == 'insufficient-evidence'
-        assert json.loads(recovery_results[0].content)['ok'] is True
+        assert json.loads(receipt.content)['ok'] is True
         assert agent._evidence_recovery_rejections == {}
         assert agent._evidence_recovery == {}
 

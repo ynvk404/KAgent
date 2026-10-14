@@ -14,6 +14,7 @@ def render_action_guidance(view: ActionView, context: PlannerContext) -> str:
         lines.append("Excluded: " + ", ".join(view.excluded) + ".")
     if any(c.status == "validating" for c in context.candidates):
         lines.append("Recommended: record_evidence for usable sources; record_result for the active attempt's honest outcome, including unresolved closure.")
+        lines.append("Use list for actual owned observation IDs/timing; obs_ is not a read_tool_result reference. Record effects via record_attempt_state before ending; absence is unknown, not false.")
     elif context.candidates:
         lines.append("Recommended: list to inspect current work; start_validation only with the resolved validator and current prerequisites. Generic restrictions still apply.")
         lines.append("Primary-only: prefer start_validation(candidate_id) when Candidate covers the request; related_requests is for unique method/URL associations, not payloads.")

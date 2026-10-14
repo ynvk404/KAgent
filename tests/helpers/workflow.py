@@ -118,7 +118,7 @@ async def run_workflow_fixture(tool, args, signal, prompter):
     if (latest and latest.objective_id == (tool.state.objective.id if tool.state.objective else None) and not args.get("force") and latest.attempt_id == tool.active_attempt
             and tool.state.attempts[latest.attempt_id]["status"] != "active"
             and all(getattr(latest, key) == args.get(key, [] if key in {"evidence_refs", "techniques"}
-                                                   else False if key == "mutation_performed" else None) for key in fields)):
+                                                   else latest.mutation_performed if key == "mutation_performed" else None) for key in fields)):
         args.update(attempt_id=latest.attempt_id, observation_ids=[e["source"]["id"] for e in latest.evidence_manifest],
                     assessment={k:v for k,v in latest.assessment.items() if k not in {"artifacts", "artifact_sources", "attempt"}})
         return await runner(args, signal, prompter)

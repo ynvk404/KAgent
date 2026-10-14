@@ -20,7 +20,7 @@ from tests.helpers.scenarios import (
     SQLI_VALUES, SSTI_FINGERPRINTS, ScenarioRun, dedicated_validation, direct_script, finding_arguments, generic_script, receipt,
 )
 from src.workflow.validation_route import GENERIC_VALIDATOR
-from tests.scenarios.test_safety import protected, rejected, safety_definition, safety_outcomes
+from tests.scenarios.test_safety import protected, rejected, safety_definition, safety_outcomes, unresolved_closures
 
 
 @pytest.mark.parametrize("boundary", ["canonical", "export"])
@@ -267,7 +267,7 @@ async def test_s04_s16_native_truncation_immutable_repair_or_bounded_closure(sce
                 assert runtime.policy.observations._items[partial].retained_hash == partial_hash
                 assert len(runtime.scenario_transport.sent) == 7
                 if bounded_stop:
-                    runtime.scenario_model.runtime_stop = (len(runtime.scenario_model.calls) + 2, "evidence-recovery-")
+                    runtime.scenario_model.runtime_stop = (len(runtime.scenario_model.calls) + 2, args["attempt_id"])
                     for _ in range(2):
                         call_id = f"{runtime.scenario_model.prefix}-{len(runtime.scenario_model.calls) + 1}"
                         runtime.scenario_errors[call_id] = (name, "evidence-admissibility:", "workflow_state")
@@ -305,8 +305,7 @@ async def test_s04_s16_native_truncation_immutable_repair_or_bounded_closure(sce
         assert result.outcome == "insufficient-evidence" and not result.evidence_manifest
         assert state.attempts[result.attempt_id]["status"] == "unresolved"
         assert len(state.validation_results) == 1
-        closures = [e for e in run.trace.events if e["type"] == "tool-result" and e["id"].startswith("evidence-recovery-")]
-        assert len(closures) == 1
+        unresolved_closures(run, result.attempt_id)
         rejected_boundaries = [b["workflow"] for b in run.oracle.boundaries
             if b["label"] == "record_result" and not b["workflow"]["validation_results"]]
         assert len(rejected_boundaries) == 3
@@ -419,7 +418,7 @@ async def test_s06_revoke_during_event_controlled_presend_then_recover(scenario_
                 return
             if name == "http" and first:
                 first = False
-                yield from rejected(rt, name, args, "unknown/replayed receipt", kind="policy_block")
+                yield from rejected(rt, name, args, "unknown/replayed receipt", kind="policy_block", presend_admission=True)
                 rt.scenario_trace.record({"type": "controller", "action": "operator-retry", "origin": sc.origin})
                 permissions.retry(sc.origin)
                 permissions.activate(sc.origin, HTTPLimits(requests=7, rate=1000, burst=100))
@@ -432,6 +431,11 @@ async def test_s06_revoke_during_event_controlled_presend_then_recover(scenario_
         try:
             await asyncio.wait_for(entered.wait(), 10)
             assert not transport.sent
+            # Capture the real registry receipt while the HTTP invocation is
+            # waiting, before revocation invalidates its transport admission.
+            active_receipts = list(runtime.policy._active_receipts)
+            assert len(active_receipts) == 1
+            runtime.scenario_presend_receipt_id = active_receipts[0]
             InvariantOracle(scenario_runner.root).boundary(runtime, "in-flight", quiescent=False)
             permissions.revoke(next(iter(permissions.grants.values())).id)
             release.set()

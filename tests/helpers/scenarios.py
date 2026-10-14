@@ -218,6 +218,7 @@ def dedicated_validation(runtime, definition, cid: str, *, skill_loaded=False) -
     if definition.expected.outcome == "deferred":
         closed = receipt((yield "workflow", {"action": "record_result", "candidate_id": cid,
             "skill_name": skill, "outcome": "deferred", "attempt_id": aid,
+            "mutation_performed": False,  # FakeApplication.render is a pure comparison response.
             "deferred_reason": "Bounded observations collected; comparison review intentionally postponed."}))
         assert closed["eligible_for_confirm_finding"] is False
         return
@@ -276,6 +277,7 @@ def publish_proof(runtime, cid, aid, ids, skill, outcome, assessment, techniques
     assert evidence["evidence_kind"] == "derived" and evidence["primary_parents"] == ids
     return receipt((yield "workflow", {"action": "record_result", "candidate_id": cid,
         "attempt_id": aid, "skill_name": skill, "outcome": outcome,
+        "mutation_performed": False,  # These controlled mock applications have no persistent effects.
         "evidence_refs": [evidence["evidence"]["id"]], "observation_ids": ids,
         "assessment": assessment, "techniques": techniques, **(extra or {})}))
 

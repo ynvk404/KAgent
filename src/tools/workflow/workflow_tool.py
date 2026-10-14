@@ -66,6 +66,7 @@ ACTIONS = (
     "record_candidate",
     "record_evidence",
     "start_validation",
+    "record_attempt_state",
     "record_result",
     "sync_coverage",
     "record_phase_coverage",
@@ -84,6 +85,7 @@ ACTION_REQUIRED = {
     'record_candidate': ('candidate_class',),
     'record_evidence': ('candidate_id', 'evidence_path'),
     'start_validation': ('candidate_id',),
+    'record_attempt_state': ('candidate_id', 'mutation_state', 'effect_basis'),
     'record_result': ('candidate_id', 'skill_name', 'outcome'),
     'sync_coverage': ('candidate_id',),
     'record_phase_coverage': ('phase', 'coverage_dimension', 'coverage_status'),
@@ -105,6 +107,8 @@ ACTION_INPUTS = {
                          'input_id', 'current_phase'),
     'record_evidence': ('candidate_id', 'evidence_path', 'observation_ids'),
     'start_validation': ('candidate_id', 'probe', 'related_requests', 'assessment'),
+    'record_attempt_state': ('candidate_id', 'attempt_id', 'mutation_state', 'effect_basis',
+                             'mutation_performed', 'cleanup_state', 'cleanup_status', 'observation_ids'),
     'record_result': ('candidate_id', 'skill_name', 'outcome', 'attempt_id', 'evidence_refs',
                       'observation_ids', 'techniques', 'repeatable', 'confirmation', 'mutation_performed',
                       'cleanup_status', 'cleanup_state', 'deferred_reason', 'notes', 'assessment', 'force'),
@@ -112,7 +116,7 @@ ACTION_INPUTS = {
     'record_phase_coverage': ('phase', 'coverage_dimension', 'coverage_status', 'coverage_reason'),
     'complete_skill': ('skill_name', 'artifact_ref', 'no_inputs_discovered', 'current_phase'),
     'review_no_candidate': ('goal_id', 'artifact_ref'),
-    'list': ('candidate_id', 'status', 'candidate_class', 'limit'),
+    'list': ('candidate_id', 'status', 'candidate_class', 'limit', 'observation_offset'),
 }
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
 
@@ -241,7 +245,11 @@ class WorkflowTool(Tool):
                 "confirmation": {
                     "type": "object",
                 },
-                "mutation_performed": {"type": "boolean"},
+                "mutation_performed": {"type": ["boolean", "null"]},
+                "mutation_state": {"type": "string", "enum": ["unknown", "possible", "reported-write",
+                                      "verified-write", "no-mutation-established"]},
+                "effect_basis": optional_string,
+                "observation_offset": {"type": "integer", "minimum": 0},
                 "cleanup_status": optional_string,
                 "cleanup_state": {
                     "type": "string",
@@ -387,7 +395,7 @@ class WorkflowTool(Tool):
             policy.bind_validation_context(self.state, self.skills, self.target)
         action = arg_string(args, "action")
         if (policy is not None and policy.session_id is not None and self.session_id != policy.session_id
-                and action in {"start_validation", "record_evidence", "record_result"}):
+                and action in {"start_validation", "record_attempt_state", "record_evidence", "record_result"}):
             return self._typed_result("error: workflow/runtime session identity mismatch")
         if action == "get_input":
             result = self._get_input(args)
@@ -403,6 +411,8 @@ class WorkflowTool(Tool):
             result = await self._record_evidence(args, prompter, signal)
         elif action == "start_validation":
             result = await self._start_validation(args, prompter, signal)
+        elif action == "record_attempt_state":
+            result = self._record_attempt_state(args, policy)
         elif action == "record_result":
             result = await self._record_result(args, prompter, signal)
         elif action == "sync_coverage":
@@ -520,6 +530,23 @@ class WorkflowTool(Tool):
             raise ValueError("record_candidate requires target or an active Agent target")
         objective = self.state.objective
         objective_id: str | None = None
+        assigned = None
+        if objective is not None and objective.mode == "candidate_validation":
+            assigned = self.state.candidates.get(objective.candidate_id or "")
+            if assigned is None:
+                raise ValueError("assigned validation candidate unavailable")
+            if (candidate_origin(candidate_target) != objective.target_origin
+                    or candidate_origin(assigned.target) != objective.target_origin):
+                raise ValueError("candidate target must match the assigned validation origin")
+            # Re-record in the controller-owned identity context. Omitted
+            # request fields retain the assigned context; explicit changes
+            # still face fingerprint and full binding checks below.
+            objective_id = assigned.objective_id
+            args = {**{key: getattr(assigned, key) for key in (
+                "endpoint", "method", "parameter", "location", "test_case",
+                "baseline_request_ref", "auth_context_ref", "content_type",
+                "request_template", "source_ref", "source_skill")},
+                **{key: value for key, value in args.items() if value is not None}}
         requested_input_id = arg_string(args, "input_id")
         input_item = None
         if requested_input_id and (objective is None or objective.mode != "whole_target"):
@@ -550,7 +577,7 @@ class WorkflowTool(Tool):
         )
         if normalization_error:
             raise ValueError(normalization_error)
-        return Candidate(
+        candidate = Candidate(
             candidate_class=candidate_class,
             target=candidate_target,
             endpoint=(
@@ -592,8 +619,18 @@ class WorkflowTool(Tool):
                         else input_item.source_ref if input_item is not None else None),
             source_skill=args.get("source_skill"),
             objective_id=objective_id,
+            identity_media_type=assigned.identity_media_type if assigned else None,
             status=args.get("status", "queued"),
         )
+        if assigned is not None:
+            from dataclasses import replace
+            try:
+                # The constructor validates legacy fingerprints too; no ID is
+                # forced onto a different request or baseline/auth identity.
+                candidate = replace(candidate, id=assigned.id)
+            except ValueError:
+                pass  # Keep the different fingerprint for the assigned gate.
+        return candidate
 
     def _record_candidate(self, args: dict[str, Any], policy=None) -> str:
         try:
@@ -602,6 +639,14 @@ class WorkflowTool(Tool):
             return f"error: {err}"
         candidate_class = candidate.candidate_class
         objective = self.state.objective
+        assigned = self.state.candidates.get(objective.candidate_id or "") if (
+            objective is not None and objective.mode == "candidate_validation") else None
+        if (objective is not None and objective.mode == "candidate_validation"
+                and (assigned is None or candidate.id != assigned.id
+                     or candidate_binding(candidate) != candidate_binding(assigned))):
+            return self._workflow_error("candidate does not match the assigned validation input",
+                code="OBJECTIVE_CANDIDATE_MISMATCH", category="immutable_state_conflict",
+                next_action="Continue the assigned candidate; independent inputs require operator intent in a separate objective.")
         requested_input_id = arg_string(args, "input_id")
         validators = self.skills.validators_for_class(candidate_class) if self.skills else []
         route = resolve_validation_route(self.skills, candidate_class)
@@ -1016,6 +1061,104 @@ class WorkflowTool(Tool):
             return f"error: {err}"
         return json.dumps({"ok": True, "evidence": artifact.to_dict(), "evidence_kind": "derived", "primary_parents": ids}, indent=2)
 
+    def _record_attempt_state(self, args, policy):
+        from src.workflow.assessment import attempt_owner, attempt_effects, require_idle_attempt, require_usable_source, require_cleanup_evidence
+        cid = arg_string(args, "candidate_id")
+        try:
+            self._validate_current_objective_candidate(cid)
+            aid = policy.generic_validation.durable_attempt if policy else self.active_attempt
+            attempt = self.state.attempts.get(aid) if aid is not None else None
+            if (not attempt or attempt["candidate_id"] != cid
+                    or args.get("attempt_id", aid) != aid
+                    or attempt_owner(self.state, aid,
+                        policy.engagement.http_permissions.epoch if policy else self.evidence_epoch,
+                        self.target.revision if self.target else None, self.session_id) is None):
+                raise ValueError("current active attempt ownership required")
+            metadata = attempt_effects(self.state, attempt, policy.observations if policy else self.observations)
+            require_idle_attempt(attempt, policy)
+            mutation = args.get("mutation_state")
+            flags = {"unknown": None, "possible": None, "reported-write": True,
+                     "verified-write": True, "no-mutation-established": False}
+            if (mutation not in flags or not isinstance(args.get("effect_basis"), str)
+                    or not args["effect_basis"].strip() or len(args["effect_basis"]) > 2000):
+                raise ValueError("mutation_state and explicit effect_basis required")
+            flag = flags[mutation]
+            if metadata["mutation_performed"] is True and flag is not True:
+                raise ValueError("unresolved acknowledged writes cannot be erased by a later declaration")
+            if "mutation_performed" in args and args["mutation_performed"] is not flag:
+                raise ValueError("mutation declaration is inconsistent")
+            if self._is_generic(self.state.candidates[cid]) and flag is True:
+                raise ValueError("generic mutation/impact validation unavailable")
+            ids = references(args.get("observation_ids", []), "observation_ids")
+            sources = resolve_sources(policy, self.state, self.state.candidates[cid], attempt, ids,
+                                      terminal=False, negative=False, store=self.observations)
+            if mutation not in {"unknown", "possible"}:
+                if not sources:
+                    raise ValueError("established effects require owned primary observations")
+                for row in sources:
+                    require_usable_source(row["source"])
+            if mutation == "verified-write" and not (
+                    any(row["source"].get("role") == "readback" for row in sources)
+                    and any(row["source"].get("role") != "readback" for row in sources)):
+                raise ValueError("verified mutation requires owned independent readback")
+            if flag is False and any(row["status"] != "completed" for row in attempt["effects"]["dispatches"]):
+                raise ValueError("failed dispatch effects remain unknown")
+            declaration = ValidationResult(cid, "attempt-bookkeeping", "insufficient-evidence",
+                mutation_performed=flag, cleanup_state=args.get("cleanup_state"),
+                cleanup_status=args.get("cleanup_status"))
+            declaration.validate_cleanup_submission()
+            if declaration.cleanup_state == "succeeded":
+                require_cleanup_evidence(sources)
+            from src.redaction.redact import apply_evidence
+            attempt["effects"]["declaration"] = {
+                "mutation_state": mutation, "effect_basis": apply_evidence(args["effect_basis"])[:2000],
+                "mutation_performed": flag, "cleanup_state": declaration.cleanup_state,
+                "cleanup_status": declaration.cleanup_status, "observation_ids": ids}
+            # Pin only selected, checked sources using the existing bounded
+            # evidence storage; eviction must not erase an acknowledged write.
+            for entry in sources:
+                self.state.selected_sources[entry["source"]["id"]] = entry
+            while len(self.state.selected_sources) > 256 or len(json.dumps(self.state.selected_sources)) > 16 * 1024 * 1024:
+                del self.state.selected_sources[next(iter(self.state.selected_sources))]
+            self.state.mark_committed()
+            return json.dumps({"ok": True, "attempt_id": aid, "effects": attempt["effects"]["declaration"]})
+        except (TypeError, ValueError) as err:
+            return f"error: {err}"
+
+    def _result_effect_fields(self, args, policy):
+        from src.workflow.assessment import attempt_effects, require_idle_attempt
+        aid = policy.generic_validation.durable_attempt if policy else self.active_attempt
+        attempt = self.state.attempts.get(aid) if aid is not None else None
+        if attempt and attempt.get("candidate_id") == args.get("candidate_id") and attempt.get("status") == "active":
+            metadata = attempt_effects(self.state, attempt, policy.observations if policy else self.observations)
+            require_idle_attempt(attempt, policy)
+            boundary = policy.generic_validation if policy else None
+            if (metadata["mutation_performed"] is None and boundary is not None
+                    and boundary.started_candidate == attempt["candidate_id"]
+                    and boundary.attempt is not None
+                    and boundary.contexts.get(attempt["candidate_id"]) == boundary.attempt
+                    and not any(row["tool"] != "http" for row in attempt["effects"]["admissions"])):
+                # The existing trusted controller bound these exact input-only
+                # values. This is not a GET/status/model-derived effect claim.
+                metadata = {"mutation_performed": False, "cleanup_state": "not-required",
+                            "cleanup_status": "Controller-verified input-only probe context"}
+        else:
+            metadata = {"mutation_performed": None, "cleanup_state": "unknown", "cleanup_status": None}
+            latest = self.state.latest_result(args.get("candidate_id"))
+            if attempt and latest and latest.attempt_id == aid:
+                metadata = {k: getattr(latest, k) for k in metadata}
+        if "mutation_performed" in args:
+            if metadata["mutation_performed"] is True and args["mutation_performed"] is not True:
+                raise ValueError("mutation submission contradicts owned attempt effects")
+            if args["mutation_performed"] is False and attempt and attempt.get("status") == "active" and any(
+                    row["status"] != "completed" for row in attempt.get("effects", {}).get("dispatches", [])):
+                raise ValueError("failed dispatch effects remain unknown")
+            # Explicit legacy-compatible submissions are declarations, never
+            # effects inferred from GET/200 or from missing fields.
+            return {"mutation_performed": args["mutation_performed"],
+                    "cleanup_state": args.get("cleanup_state"), "cleanup_status": args.get("cleanup_status")}
+        return {k: args.get(k, v) for k, v in metadata.items()}
+
     async def _record_result(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
         try:
             for reserved in ("assessment_source", "assessment_contract_version", "result_id", "assessment_binding", "evidence_manifest", "candidate_binding", "source_kind", "session_id", "objective_id"):
@@ -1031,9 +1174,7 @@ class WorkflowTool(Tool):
                 techniques=args.get("techniques", []),
                 repeatable=args.get("repeatable"),
                 confirmation=args.get("confirmation"),
-                mutation_performed=arg_bool(args, "mutation_performed"),
-                cleanup_status=args.get("cleanup_status"),
-                cleanup_state=args.get("cleanup_state"),
+                **self._result_effect_fields(args, policy_for(prompter)),
                 deferred_reason=args.get("deferred_reason"),
                 notes=args.get("notes"),
                 recorded_at=datetime.now(UTC).isoformat(),
@@ -1121,6 +1262,9 @@ class WorkflowTool(Tool):
                     raise ValueError("stale retry assessment")
                 if terminal and not accepted_result(self.state, candidate, latest, policy):
                     raise ValueError("retry assessment evidence unavailable")
+                if result.cleanup_state == "succeeded":
+                    from src.workflow.assessment import require_cleanup_evidence
+                    require_cleanup_evidence(latest.evidence_manifest)
                 latest.cleanup_status, latest.cleanup_state = result.cleanup_status, result.cleanup_state
                 self.state.set_candidate_status(candidate.id, "validated" if terminal else "deferred")
                 if latest.coverage_synced is False:
@@ -1152,6 +1296,9 @@ class WorkflowTool(Tool):
                     raise ValueError("generic fallback lacks declared criteria; submit unresolved")
             manifest = resolve_sources(policy, self.state, candidate, attempt, ids,
                 terminal=terminal, negative=result.outcome == "not-confirmed", store=self.observations)
+            if result.cleanup_state == "succeeded":
+                from src.workflow.assessment import require_cleanup_evidence
+                require_cleanup_evidence(manifest)
             check_excerpts(assessment, manifest, terminal=terminal)
             if terminal and not any(e["source"]["source_kind"] in {"native-http", "imported-capture"}
                     and e["source"].get("complete") and not e["source"].get("truncated")
@@ -1803,6 +1950,10 @@ class WorkflowTool(Tool):
 
         total = len(candidates)
         selected = candidates[:limit]
+        offset = args.get("observation_offset", 0)
+        if type(offset) is not int or offset < 0:
+            return "error: observation_offset must be a nonnegative integer"
+        observations = self._observation_inventory(policy, selected)
         latest_results = [
             result
             for candidate in selected
@@ -1815,6 +1966,9 @@ class WorkflowTool(Tool):
                 "total": total,
                 "returned": len(selected),
                 "truncated": total > len(selected),
+                "observations": observations[offset:offset + limit],
+                "observations_total": len(observations),
+                "next_observation_offset": offset + limit if offset + limit < len(observations) else None,
                 "current_phase": self.state.current_phase,
                 "objective": objective.to_dict() if objective else None,
                 "requested_goals": [
@@ -1852,6 +2006,42 @@ class WorkflowTool(Tool):
             },
             indent=2,
         )
+
+    def _observation_inventory(self, policy, candidates):
+        """Read-only metadata from the current owner; never publish foreign handles."""
+        from src.workflow.assessment import digest, source_row
+        if (policy is None or self.target is None or not policy.validation_context_matches(self.state, self.skills, self.target)
+                or "http" in policy.revoked or "*" in policy.revoked):
+            return []
+        selected = {c.id: c for c in candidates}
+        rows = []
+        for item in policy.observations._items.values():
+            candidate = selected.get(item.candidate_id)
+            attempt = self.state.attempts.get(item.attempt_id)
+            if (candidate is None or attempt is None or not self.state.objective
+                    or item.attempt_id != policy.generic_validation.durable_attempt
+                    or item.source_kind not in {"native-http", "imported-capture"}
+                    or item.objective_id != self.state.objective.id
+                    or not self.state.candidate_belongs_to_objective(candidate, self.state.objective)
+                    or item.session_id != (policy.session_id or self.session_id)
+                    or item.epoch != policy.engagement.http_permissions.epoch
+                    or attempt.get("target_revision") != self.target.revision
+                    or item.candidate_binding != candidate_binding(candidate)
+                    or digest(source_row(item)) != item.retained_hash):
+                continue
+            try:
+                policy.require_network(item.url)
+                resolve_sources(policy, self.state, candidate, attempt, [item.id],
+                                terminal=False, negative=False)
+            except (ValueError, PermissionError):
+                continue
+            rows.append({"observation_id": item.id, "attempt_id": item.attempt_id,
+                "method": item.method, "url": item.url, "request_hash": item.request_hash,
+                "status": item.status, "elapsed_ms": item.elapsed_ms, "complete": item.complete,
+                "truncated": item.truncated, "retained_body_bytes": len(item.body),
+                "read_available": attempt.get("status") in {"active", "completed"}
+                                  and "read_http_observation" not in policy.revoked})
+        return rows
 
     @staticmethod
     def _candidate_summary(

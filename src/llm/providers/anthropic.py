@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from src.llm.core.client import Client, Pinger
@@ -63,15 +64,13 @@ class AnthropicClient(Client, Pinger):
         )
 
     async def chat(self, request: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
+        body = deepcopy(encode_request(request, request.model or self.model_id, self._gen_opts()))
         return await with_retry(
-            lambda: self._chat_once(request, signal),
+            lambda: self._chat_once(body, signal),
             RetryOptions(signal=signal),
         )
 
-    async def _chat_once(self, req: ChatRequest, signal: Optional[Any] = None) -> ChatResponse:
-        model = req.model or self.model_id
-        body = encode_request(req, model, self._gen_opts())
-
+    async def _chat_once(self, body: Dict[str, Any], signal: Optional[Any] = None) -> ChatResponse:
         async with new_provider_async_client() as client:
             try:
                 resp = await run_cancellable(

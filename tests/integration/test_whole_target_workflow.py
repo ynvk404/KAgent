@@ -10,6 +10,7 @@ from src.agent.agent import Agent, AgentOptions
 from src.agent.decision_planner import build_decision_plan
 from src.coverage.store import CoverageStore
 from src.permission.permission import AlwaysAllow
+from src.skills.artifacts import completion_artifact_path
 from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
 from src.tools.common.registry import Registry as ToolRegistry
@@ -199,6 +200,8 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
         "evidence_refs": [proof_id],
         "action": "record_result", "candidate_id": candidate_id,
         "skill_name": "sql-injection", "outcome": "not-confirmed",
+        # Fixed consumer response bytes; this fixture performs no target writes.
+        "mutation_performed": False,
     }, None, AlwaysAllow()))
     assert result["coverage_sync"] == "synced"
     assert await coverage.list()
@@ -274,15 +277,6 @@ async def test_whole_target_revalidates_when_immutable_proof_disappears(tmp_path
         target_origin="https://target.test",
     )
     state = WorkflowState(objective=objective)
-    for phase in ("recon", "enumeration", "input_analysis"):
-        record_completed_phase(
-            state,
-            phase,  # type: ignore[arg-type]
-            objective_id=objective.id,
-            target_origin="https://target.test",
-            artifact_ref=f"artifacts/{phase}.md",
-            no_inputs_discovered=phase == "input_analysis",
-        )
     candidate, _ = state.add_candidate(Candidate(
         candidate_class="cross-site-scripting", target="https://target.test",
         endpoint="/feedback", parameter="comment", objective_id=objective.id,
@@ -290,6 +284,21 @@ async def test_whole_target_revalidates_when_immutable_proof_disappears(tmp_path
     skills = SkillRegistry()
     skills.load_dir(SKILLS_ROOT)
     workflow_tool = WorkflowTool(state, target, skills=skills, evidence_root=tmp_path)
+    for phase, skill_name in (
+        ("recon", "recon"),
+        ("enumeration", "web-enumeration"),
+        ("input_analysis", "web-input-analysis"),
+    ):
+        skill = skills.get(skill_name)
+        assert skill is not None and skill.completion_artifact
+        artifact = completion_artifact_path(skill.completion_artifact, target.base_url())
+        _artifact(tmp_path, artifact)
+        await record_phase_coverage_for_test(workflow_tool, phase)
+        completed = json.loads(await workflow_tool.run({
+            "action": "complete_skill", "skill_name": skill_name, "artifact_ref": artifact,
+            "no_inputs_discovered": phase == "input_analysis",
+        }, None, AlwaysAllow()))
+        assert completed["ok"]
     tools = ToolRegistry()
     tools.register(workflow_tool)
     agent = Agent(AgentOptions(
@@ -306,6 +315,8 @@ async def test_whole_target_revalidates_when_immutable_proof_disappears(tmp_path
         "action": "record_result", "candidate_id": candidate.id,
         "skill_name": "cross-site-scripting", "outcome": "confirmed",
         "evidence_refs": [evidence["id"]], "repeatable": True,
+        # Fixed consumer response bytes; this fixture performs no target writes.
+        "mutation_performed": False,
     }, None, AlwaysAllow())
 
     status, actionable, _ = agent._whole_target_state()

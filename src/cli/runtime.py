@@ -1548,6 +1548,10 @@ def build_resume_summary(
 def fs_watch(path: str, loop: asyncio.AbstractEventLoop, callback: Callable[[], None]) -> Any | None:
     class _Handler(FileSystemEventHandler):
         def on_any_event(self, event) -> None:
+            # Loading skills opens and reads the watched files. Reacting to
+            # those events would make each reload schedule another reload.
+            if event.event_type not in {"created", "modified", "deleted", "moved"}:
+                return
             loop.call_soon_threadsafe(callback)
 
     handler = _Handler()

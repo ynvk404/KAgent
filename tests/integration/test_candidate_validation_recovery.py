@@ -109,6 +109,7 @@ def product_script(runtime, capture):
         "evidence_path": "product-proof.md", "observation_ids": ids}))
     result = json.loads((yield "workflow", {"action": "record_result", "candidate_id": cid,
         "skill_name": "sql-injection", "outcome": "not-confirmed", "attempt_id": aid,
+        "mutation_performed": False,  # Controlled fixture only returns comparison responses.
         "observation_ids": ids, "evidence_refs": [proof["evidence"]["id"]],
         "techniques": ["syntax-sensitivity", "boolean-based"],
         "assessment": {**ASSESSMENT, "hypothesis": "productId quote may change SQL evaluation",
@@ -164,6 +165,7 @@ def filter_script(runtime, old_id):
     assert registered["primary_parents"] == ids
     result = json.loads((yield "workflow", {"action": "record_result", "candidate_id": cid,
         "skill_name": "sql-injection", "outcome": "confirmed", "attempt_id": aid,
+        "mutation_performed": False,
         "evidence_refs": [registered["evidence"]["id"]], "observation_ids": ids,
         "techniques": ["SQLI-2", "boolean-based"], "repeatable": True, "assessment": ASSESSMENT,
         "confirmation": {"kind": "boolean-differential", "request_template": ORIGIN + "/filter?category=Gifts' AND {predicate}--",

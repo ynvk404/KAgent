@@ -1,7 +1,7 @@
 from src.workflow.assessment import accepted_result
 from src.workflow.evidence_errors import evidence_repair_kind
 from src.workflow.evidence_recovery import (
-    MAX_EVIDENCE_REJECTIONS, MAX_TERMINAL_REPAIR_TURNS, current_budget, closure_args,
+    MAX_EVIDENCE_REJECTIONS, MAX_TERMINAL_REPAIR_TURNS, current_budget,
 )
 from src.agent.events import Invocation
 from src.agent.scope import runtime_scope
@@ -416,7 +416,8 @@ def tool_error_kind(err: Exception, *, invalid_args: bool = False) -> ErrorKind:
     if isinstance(err, OutOfScopeError):
         return "scope_denied"
     if getattr(err, 'error_kind', None) in {
-            'permission_pending', 'permission_timeout', 'permission_stale', 'policy_block', 'invalid_args'}:
+            'permission_pending', 'permission_timeout', 'permission_stale', 'policy_block', 'invalid_args',
+            'input_unavailable', 'reference_unavailable'}:
         return cast(ErrorKind, getattr(err, 'error_kind'))
     from src.session.tool_results import ResultUnavailable
     if isinstance(err, ResultUnavailable):
@@ -1857,6 +1858,14 @@ class Agent:
         workflow = deepcopy(self.workflow, {id(self.workflow.mutation_lock): asyncio.Lock()})
         view = ActionView.for_objective(planner.objective_mode)
         projected = view.project_tools(tools)
+        if any(a.get("status") == "active" and a.get("probing_stopped")
+               and self.workflow.objective and a.get("objective_id") == self.workflow.objective.id
+               for a in self.workflow.attempts.values()):
+            local = {"workflow", "load_skill", "read_payloads", "read_skill_file", "file_read", "file_write",
+                     "file_edit", "read_tool_result", "read_http_observation", "permissions_status",
+                     "ask_user", "coverage", "confirm_finding"}
+            projected = [spec for spec in projected or () if (
+                spec["function"]["name"] if isinstance(spec, dict) else spec.function.name) in local]
         decision = build_decision_plan(user_msg, self.skills.list_enabled(), self.target, planner)
         blocks = []
         if decision is not None:
@@ -2674,12 +2683,12 @@ class Agent:
                 if candidate.status not in {"new", "queued", "validating", "validated", "dismissed"}:
                     continue
                 result = self.workflow.latest_result(candidate.id)
-                if result is not None and result.cleanup_state in {"requires-user-action", "failed"}:
+                if result is not None and result.cleanup_state in {"requires-user-action", "failed", "unknown", "not-attempted"}:
                     from src.permission.runtime.execution import policy_for
                     reason = self._validation_completion_error(candidate, policy_for(self.prompter))
                     if reason == f"mutation cleanup unresolved:{result.cleanup_state}":
                         # Coverage/finding persistence can still be performed;
-                        # operator cleanup itself cannot be solved by more probes.
+                        # Unresolved effects/cleanup cannot be solved by more probes.
                         if result.coverage_synced is False or (
                             result.outcome == "confirmed" and not self.workflow.finding_is_persisted(candidate.id)
                         ):
@@ -2723,7 +2732,9 @@ class Agent:
                     result.cleanup_state if result else None,
                     result.coverage_synced if result else None,
                     self.workflow.persisted_findings.get(candidate.id),
-                    tuple((a["id"], a["status"]) for a in self.workflow.attempts.values()
+                    tuple((a["id"], a["status"], bool(a.get("probing_stopped")),
+                           json.dumps(a.get("effects", {}).get("declaration"), sort_keys=True))
+                          for a in self.workflow.attempts.values()
                           if a.get("candidate_id") == candidate.id and a.get("objective_id") == objective.id),
                     tuple((e.id, e.sha256) for e in self.workflow.evidence.values()
                           if e.candidate_id == candidate.id),
@@ -2991,6 +3002,9 @@ class Agent:
         return None
 
     def _initialize_request_objective(self, user_msg: str, tools_enabled: bool) -> None:
+        #Hàm _initialize_request_objective() có nhiệm vụ phân loại yêu cầu của người dùng
+        #xác định chế độ xử lý (direct, whole_target hoặc candidate_validation)
+        #và khởi tạo mục tiêu kiểm thử (WorkflowObjective) trong trạng thái workflow
         if not tools_enabled:
             return
         registered_classes = tuple(
@@ -2999,6 +3013,7 @@ class Agent:
             if skill.stage == "validation"
             for candidate_class in skill.candidate_classes
         )
+        #
         requested_classes = extract_requested_classes(
             user_msg, registered_classes=registered_classes,
         )
@@ -4310,6 +4325,8 @@ class Agent:
                             max_steps=max_steps,
                         )
                     if stall_tracker.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
+                        if self._begin_validation_finalization(stall_tracker, working, step, max_steps):
+                            continue
                         return await self._whole_target_synthesis(
                             working, signal, emit,
                             thinking_enabled=turn_request_thinking,
@@ -4389,6 +4406,9 @@ class Agent:
                     )
                     stall_tracker.consecutive_no_progress = requested_goal_no_progress
                     if requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
+                        if self._begin_validation_finalization(stall_tracker, working, step, max_steps):
+                            requested_goal_no_progress = 0
+                            continue
                         objective = self.workflow.objective
                         if objective is not None:
                             for goal in objective.requested_goals:
@@ -4478,16 +4498,16 @@ class Agent:
                         self._tool_checkpoint_request.tools = None
 
             input_unavailable = any(
-                call.name == "ask_user" and call.result.error_kind == "policy_block"
-                and call.result.err_str == "headless: operator input unavailable; record unresolved"
+                call.name == "ask_user" and call.result.error_kind == "input_unavailable"
                 for call in execution_batch.calls
             )
             if execution_batch.all_refused or input_unavailable:
+                reason = "workflow_blocked" if input_unavailable else "all_tools_refused"
                 await self._close_terminal_attempt(
-                    "all_tools_refused", signal, emit, working, step=step,
+                    reason, signal, emit, working, step=step,
                     blocker="operator-input-unavailable" if input_unavailable else "permission-denied",
                 )
-                return "all_tools_refused"
+                return reason
 
             for execution in execution_batch.calls:
                 if execution.name != "workflow" or execution.args.get("action") not in {"record_result", "record_evidence", "start_validation"}:
@@ -4618,6 +4638,8 @@ class Agent:
                         max_steps=max_steps,
                     )
                 if stall_tracker.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
+                    if self._begin_validation_finalization(stall_tracker, working, step, max_steps):
+                        continue
                     listed = any(
                         execution.name == "workflow"
                         and execution.args.get("action") == "list"
@@ -4684,13 +4706,15 @@ class Agent:
                 # recovery merely because its candidate is no longer validating.
                 operator_cleanup = any(
                     (result := self.workflow.latest_result(candidate.id)) is not None
-                    and result.cleanup_state in {"requires-user-action", "failed"}
+                    and result.cleanup_state in {"requires-user-action", "failed", "unknown", "not-attempted"}
                     and self._validation_completion_error(candidate, policy)
                         == f"mutation cleanup unresolved:{result.cleanup_state}"
                     for candidate in self.workflow.objective_candidates()
                 )
                 blocked = incomplete and operator_cleanup and not self._has_actionable_requested_goal()
                 stalled = incomplete and requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS
+                if stalled and self._begin_validation_finalization(stall_tracker, working, step, max_steps):
+                    continue
                 if blocked or stalled:
                     return await self._whole_target_synthesis(
                         working, signal, emit,
@@ -4814,6 +4838,33 @@ class Agent:
             eligible.append(candidate.id)
         return tuple(eligible)
 
+    def _begin_validation_finalization(self, tracker, working, step, max_steps):
+        """Spend remaining existing iterations on local disposition, once per attempt."""
+        from src.permission.runtime.execution import policy_for
+        from src.tools.workflow.workflow_tool import WorkflowTool
+        from src.workflow.assessment import attempt_owner
+        policy = policy_for(self.prompter)
+        tool = self.tools.get("workflow")
+        if policy is None or not isinstance(tool, WorkflowTool) or step >= max_steps - 1:
+            return False
+        aid = policy.generic_validation.durable_attempt if policy.generic_validation else None
+        attempt = self.workflow.attempts.get(aid) if aid is not None else None
+        if (not attempt or attempt.get("probing_stopped") or "effects" not in attempt
+                or attempt_owner(self.workflow, aid, policy.engagement.http_permissions.epoch,
+                                 self.target.revision, policy.session_id or tool.session_id) is None):
+            return False
+        attempt["probing_stopped"] = True
+        self.workflow.mark_committed()
+        tracker.consecutive_no_progress = 0
+        working.append(Message("system",
+            f"Bounded probing has stopped for attempt {aid}. No more target actions are available for this attempt. "
+            "Use remaining existing iterations for owned observation metadata/readback, effect declaration, "
+            "minimal proof registration and record_result. Identical controls may support a bounded negative "
+            "only if the playbook's test actually completed; otherwise record insufficient-evidence/blocked. "
+            "Do not invent references, mutation=false, cleanup success or a finding. No extra budget is granted. "
+            "Independent attempts retain their own current scope and admission gates."))
+        return True
+
     async def _submit_unresolved_closure(self, args, signal, emit, working, *, call_id):
         """Submit through normal admission, verify the owned commit, then save."""
         from src.permission.network.grants import check_cancelled
@@ -4826,14 +4877,15 @@ class Agent:
         cid = args["candidate_id"]
         aid = args["attempt_id"]
         tool = self.tools.get("workflow")
+        session_id = (policy.session_id or tool.session_id) if policy and isinstance(tool, WorkflowTool) else None
         if (args.get("action") != "record_result"
                 or args.get("outcome") not in {"blocked", "insufficient-evidence"}
                 or policy is None or not policy.validation_context_matches(self.workflow, self.skills, self.target)
                 or not isinstance(tool, WorkflowTool) or tool.state is not self.workflow
-                or tool.target is not self.target or tool.session_id != policy.session_id
+                or tool.target is not self.target or not session_id or tool.session_id != session_id
                 or policy.generic_validation.durable_attempt != aid
                 or attempt_owner(self.workflow, aid, policy.engagement.http_permissions.epoch,
-                                 self.target.revision, policy.session_id) is None):
+                                 self.target.revision, session_id) is None):
             raise RuntimeError("unresolved closure ownership unavailable")
         attempt = self.workflow.attempts[aid]
         if attempt["candidate_id"] != cid:
@@ -4857,11 +4909,11 @@ class Agent:
             raise RuntimeError("unresolved closure did not commit")
         await self.save()
         check_cancelled(signal)
-        if self._workflow_saved_revision != self.workflow.committed_revision:
+        if self.store is not None and self._workflow_saved_revision != self.workflow.committed_revision:
             raise RuntimeError("unresolved closure persistence unavailable")
 
     async def _close_terminal_attempt(self, stop_reason, signal, emit, working, *, step=None, blocker=None):
-        """Conservative stop disposition; uncertain mutation stays explicitly open.
+        """Conservative disposition from owned attempt facts, including uncertainty.
 
         No extra model/probing turn or new authorization is created. An explicit
         write declaration may carry unresolved cleanup; absence of a declaration
@@ -4869,8 +4921,8 @@ class Agent:
         """
         from src.permission.network.grants import check_cancelled
         from src.permission.runtime.execution import policy_for
-        from src.tools.http.http_tool import HTTPTool
-        from src.workflow.assessment import attempt_owner
+        from src.tools.workflow.workflow_tool import WorkflowTool
+        from src.workflow.assessment import attempt_owner, attempt_effects, require_idle_attempt
         from src.workflow.validation_route import resolve_validation_route
 
         check_cancelled(signal)
@@ -4885,12 +4937,14 @@ class Agent:
         # refusal. They must never be turned into an unresolved disposition.
         policy = policy_for(self.prompter)
         try:
-            if (len(active) != 1 or policy is None or not policy.session_id
+            tool = self.tools.get("workflow")
+            session_id = policy.session_id or tool.session_id if policy and isinstance(tool, WorkflowTool) else None
+            if (len(active) != 1 or policy is None or not session_id
                     or not policy.validation_context_matches(self.workflow, self.skills, self.target)):
                 raise RuntimeError("ownership-unavailable")
-            if any(m.role == "tool" and m.tool_error_kind in {
-                    "permission_pending", "permission_timeout", "permission_stale", "cancelled"
-                    } for m in self.history):
+            last_tool = next((m for m in reversed(self.history) if m.role == "tool"), None)
+            if last_tool is not None and last_tool.tool_error_kind in {
+                    "permission_pending", "permission_timeout", "permission_stale", "cancelled"}:
                 raise RuntimeError("resumable-permission-state")
             attempt = active[0]
             aid, cid = attempt["id"], attempt["candidate_id"]
@@ -4899,40 +4953,15 @@ class Agent:
             if (policy.generic_validation.durable_attempt != aid
                     or not self.workflow.candidate_belongs_to_objective(candidate, objective)
                     or origin is None or objective.target_origin != origin.as_url()
-                    or self.workflow.mutation_lock.locked()
                     or attempt_owner(self.workflow, aid, policy.engagement.http_permissions.epoch,
-                                     self.target.revision, policy.session_id) is None
+                                     self.target.revision, session_id) is None
                     or any(g.status == "cancelled" for g in objective.requested_goals)):
                 raise RuntimeError("ownership-unavailable")
-            budget = self.workflow.evidence_recovery.get(aid)
-            declaration = budget.get("closure_args", {}) if budget else {}
-            metadata = {k: declaration[k] for k in ("mutation_performed", "cleanup_state", "cleanup_status")
-                        if k in declaration}
-            http = self.tools.get("http")
-            # Bookkeeping/readers do not change target state. Other tools may
-            # have side effects even when their returned status is an error.
-            bookkeeping = {"workflow", "load_skill", "read_payloads", "read_skill_file",
-                           "read_http_observation", "read_tool_result", "permissions_status", "ask_user", "http"}
-            no_target_action = (
-                isinstance(http, HTTPTool) and http.dispatch_attempts == 0
-                and not any(b.used for b in policy.engagement.http_permissions._budgets.values())
-                and not policy.observations._items and not self.workflow.selected_sources
-                and all(m.name in bookkeeping for m in self.history if m.role == "tool")
-            )
-            if no_target_action and not metadata:
-                metadata = {"mutation_performed": False, "cleanup_state": "not-required"}
-            elif (metadata.get("mutation_performed") is not True
-                    or metadata.get("cleanup_state") not in {"pending", "failed", "requires-user-action"}
-                    or not metadata.get("cleanup_status")):
-                raise RuntimeError("mutation-cleanup-unknown")
+            metadata = attempt_effects(self.workflow, attempt, policy.observations)
+            require_idle_attempt(attempt, policy)
             route = resolve_validation_route(self.skills, candidate.candidate_class)
             if route.kind != "expert" or route.skill_name is None:
                 raise RuntimeError("validator-unavailable")
-            if blocker is None:
-                blocker = next((m.tool_error_kind for m in reversed(self.history)
-                                if m.role == "tool" and m.tool_error_kind in {
-                                    "permission_denied", "scope_denied", "policy_block"
-                                }), None)
             # A real refusal/input blocker differs from absent admissible proof.
             # A stall by itself supplies no assessment outcome or cleanup fact.
             outcome = "blocked" if blocker else "insufficient-evidence"
@@ -4942,6 +4971,9 @@ class Agent:
             args = {"action": "record_result", "candidate_id": cid, "attempt_id": aid,
                     "skill_name": route.skill_name, "outcome": outcome,
                     "deferred_reason": reason, **metadata}
+            declaration = attempt["effects"]["declaration"]
+            if declaration is not None:
+                args["observation_ids"] = declaration["observation_ids"]
             await self._submit_unresolved_closure(args, signal, emit, working,
                 call_id=f"terminal-closure-{step}-{aid}")
         except asyncio.CancelledError:
@@ -4949,7 +4981,7 @@ class Agent:
         except Exception as err:
             # Fixed codes only: no response bodies, credentials or exception prose.
             code = str(err) if str(err) in {
-                "ownership-unavailable", "mutation-cleanup-unknown", "validator-unavailable", "resumable-permission-state"
+                "ownership-unavailable", "validator-unavailable", "resumable-permission-state"
             } else type(err).__name__
             message = Message("assistant", f"Workflow closure failed ({stop_reason}): {code}. Assessment remains incomplete.")
             self.history.append(message)
@@ -4958,32 +4990,21 @@ class Agent:
             emit({"type": "error", "err": RuntimeError(message.content)})
 
     async def _stop_evidence_recovery(self, repairs, signal, emit, working, *, step, allow_continuation=False):
-        for cid, args in repairs:
-            # Close through the same registry and workflow contract. Never
-            # publish a terminal conclusion or salvage invalid IDs/parents.
-            unresolved = {key: args[key] for key in (
-                "skill_name", "techniques", "mutation_performed", "cleanup_state", "cleanup_status"
-            ) if key in args}
-            unresolved.update(action="record_result", candidate_id=cid,
-                outcome="insufficient-evidence",
-                deferred_reason="Bounded terminal evidence repair exhausted; no admissible conclusion recorded")
-            repair_calls = [ToolCall(f"evidence-recovery-{step}-{cid}",
-                                    FunctionCall("workflow", json.dumps(unresolved)))]
-            # A matching assistant call keeps the saved transcript resumable.
-            repair_message = Message("assistant", "Runtime action: close validation after bounded evidence repair.",
-                                     tool_calls=repair_calls)
-            self.history.append(repair_message)
-            working.append(repair_message)
-            closure = await self.execute_tool_calls(repair_calls, signal, emit, working, defer_admission=True)
-            closure_text = str(closure.calls[0].result.result)
+        for cid, _ in repairs:
+            if signal.aborted:
+                return "cancelled"
             try:
-                closure_payload = json.loads(closure_text)
-            except ValueError as err:
-                raise RuntimeError(f"Bounded evidence recovery closure failed for {cid}: {redact(closure_text)}") from err
+                await self._close_terminal_attempt("workflow_stalled", signal, emit, working, step=step)
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                # Operator aborts use the normal turn result; Task.cancel() must
+                # still propagate after the cancellation-safe checkpoint.
+                if not signal.aborted or (task is not None and task.cancelling()):
+                    raise
+                return "cancelled"
             latest = self.workflow.latest_result(cid)
-            if (not isinstance(closure_payload, dict) or closure_payload.get("ok") is not True
-                    or latest is None or latest.outcome != "insufficient-evidence"):
-                raise RuntimeError(f"Bounded evidence recovery closure did not commit for {cid}")
+            if latest is None or latest.outcome not in {"blocked", "insufficient-evidence"}:
+                raise RuntimeError("Bounded evidence recovery closure did not commit")
             self._evidence_recovery.pop(cid, None)
             self._evidence_recovery_rejections.pop(cid, None)
         independent = self._independent_recovery_candidates(
@@ -5057,7 +5078,14 @@ class Agent:
         max_steps: int,
     ) -> str:
         # The same bounded, buffered tool-free summary also serves direct mode.
-        if stop_reason == "workflow_stalled":
+        # A short invocation may yield during the existing durable repair
+        # window. Keep its owned sources/retry clock resumable; a hard stop
+        # outside that window (including ordinary max_steps) gets disposition.
+        repair_pending = any(not b["closed"] and 0 < b["rejections"] < MAX_EVIDENCE_REJECTIONS
+                             and b["repair_turns"] < MAX_TERMINAL_REPAIR_TURNS
+                             for b in self.workflow.evidence_recovery.values()
+                             if current_budget(self.workflow, b["candidate_id"]) is b)
+        if stop_reason == "workflow_stalled" or stop_reason == "max_steps" and not repair_pending:
             await self._close_terminal_attempt(stop_reason, signal, emit, working)
         if stop_reason == "final_response":
             instruction += "\n\n" + _PLAIN_SUMMARY_INSTRUCTION
@@ -5649,14 +5677,6 @@ class Agent:
                     budget = current_budget(self.workflow, cid, create=True)
                     if budget is not None:
                         budget["rejections"] = min(MAX_EVIDENCE_REJECTIONS, repair_rejections[cid])
-                        if parsed.args.get("action") == "record_result":
-                            budget["closure_args"] = closure_args(parsed.args)
-                        elif not budget["closure_args"]:
-                            candidate = self.workflow.candidates.get(cid)
-                            if candidate is not None:
-                                skill_name = self._goal_validation_route(candidate.candidate_class).skill_name
-                                if skill_name:
-                                    budget["closure_args"] = {"skill_name": skill_name}
                 if tc.function.name == "workflow" and parsed.args.get("action") == "start_validation":
                     # New retests select their own accounting; continuation
                     # carries only the consumed budget, never execution rights.

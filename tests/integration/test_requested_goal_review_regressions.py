@@ -114,7 +114,8 @@ async def test_f07_workflow_retest_records_current_objective_without_force(tmp_p
     }, None, agent.prompter))
     args = {"action": "record_result", "candidate_id": candidate.id,
             "skill_name": "cross-site-scripting", "outcome": "not-confirmed",
-            "evidence_refs": [record["evidence"]["id"]]}
+            # The consumer fixture captures fixed bytes without target writes.
+            "mutation_performed": False, "evidence_refs": [record["evidence"]["id"]]}
     assert json.loads(await registry.execute("workflow", args, None, agent.prompter))["created"]
     assert not json.loads(await registry.execute("workflow", args, None, agent.prompter))["created"]
     agent._initialize_request_objective(f"Retest candidate {candidate.id}", True)

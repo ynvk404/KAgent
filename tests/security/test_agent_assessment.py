@@ -56,6 +56,7 @@ async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, metho
     args = {"action": "record_result", "candidate_id": candidate.id,
             "skill_name": "sql-injection" if candidate_class == "sqli" else "cross-site-scripting",
             "outcome": "confirmed", "evidence_refs": [evidence], "observation_ids": [oid],
+             "mutation_performed": False,  # Explicit declaration for this stateless controlled fixture.
             "attempt_id": started["validation_context"]["attempt_id"], "assessment": ASSESSMENT.copy()}
     return state, candidate, tool, args, oid
 
@@ -763,10 +764,11 @@ async def test_cleanup_consistency_applies_to_initial_submission_and_same_attemp
     invalid_update = {**submission, 'cleanup_state': 'succeeded', 'cleanup_status': 'parent reset succeeded'}
     assert (await registry.execute('workflow', invalid_update, None, p)).startswith('error:')
     assert state.to_dict() == before
-    updated = json.loads(await registry.execute('workflow', {**submission,
-        'cleanup_state': 'succeeded', 'cleanup_status': 'resource deletion verified'}, None, p))
-    assert not updated['created']
-    assert updated['result']['attempt_id'] == payload['result']['attempt_id']
-    assert updated['result']['result_id'] == payload['result']['result_id']
+    # A syntactically consistent claim still cannot replace cleanup/readback
+    # evidence. Positive verified cleanup is exercised through real dispatch.
+    updated = await registry.execute('workflow', {**submission,
+        'cleanup_state': 'succeeded', 'cleanup_status': 'resource deletion verified'}, None, p)
+    assert 'owned cleanup action' in updated
+    assert state.to_dict() == before
     assert len(state.validation_results) == 1 and len(state.attempts) == 1
-    assert latest.cleanup_state == 'succeeded' and accepted_result(state, candidate, latest, policy)
+    assert latest.cleanup_state == 'pending' and accepted_result(state, candidate, latest, policy)

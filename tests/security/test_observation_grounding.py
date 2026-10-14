@@ -212,12 +212,20 @@ async def test_agent_closes_exhausted_repair_without_new_probes(runtime, tmp_pat
         message.content for message in agent.history if message.role == 'tool']
     result = state.latest_result(candidate.id)
     assert result is not None and result.outcome == 'insufficient-evidence'
-    assert result.mutation_performed and result.cleanup_state == 'pending'
+    assert result.attempt_id is not None and result.result_id is not None
+    # Only rejected arguments claim a write; the native fixture response does
+    # not acknowledge one. Recovery bookkeeping is not effect authority.
+    assert result.mutation_performed is None and result.cleanup_state == 'unknown'
+    assert state.attempts[result.attempt_id]['effects']['declaration'] is None
     assert not state.eligible_for_finding(candidate.id)
     assert len(client.requests) == 3 and len(sent) == 2  # Initial + at most two repairs.
     assert (tmp_path / state.evidence[ref].path).read_bytes() == immutable_proof
     assert state.evidence_sources[ref] == [good, bad]
     assert agent._evidence_recovery_rejections == {} and agent._evidence_recovery == {}
-    closures = [message for message in agent.history if message.role == 'tool'
-                and (message.tool_call_id or '').startswith('evidence-recovery-')]
-    assert len(closures) == 1 and json.loads(closures[0].content)['ok']
+    closures = [message for message in agent.history if message.role == 'tool' and message.name == 'workflow'
+                and message.content.startswith('{')
+                and json.loads(message.content).get('result', {}).get('result_id') == result.result_id]
+    assert len(closures) == 1
+    payload = json.loads(closures[0].content)
+    assert payload['ok'] and payload['result']['attempt_id'] == result.attempt_id
+    assert payload['result']['assessment_binding'] == result.assessment_binding
