@@ -11,6 +11,7 @@ from rich.table import Table
 from rich.text import Text
 
 from src.ui.theme import ACCENT, ERROR, MUTED, SUCCESS, WARNING, PRIMARY
+from src.ui.theme import DARK_UI, UIPalette
 
 
 LOGO = [
@@ -96,8 +97,10 @@ class Banner:
         self,
         data: BannerData,
         width: int = 80,
+        ui: UIPalette = DARK_UI,
     ):
         self.data = data
+        self.ui = ui
         self.width = max(
             20,
             width,
@@ -120,10 +123,10 @@ class Banner:
         if data.status:
             fields.append(("Status", data.status))
 
-        lines = [Text("Welcome to KAgent", style=f"bold {ACCENT}")]
+        lines = [Text("Welcome to KAgent", style=f"bold {self.ui.accent}")]
         for label, value in fields:
-            line = Text(f"{label}: ", style=MUTED)
-            line.append(value, style=PRIMARY)
+            line = Text(f"{label}: ", style=self.ui.muted)
+            line.append(value, style=self.ui.text)
             lines.append(line)
         return lines
 
@@ -132,7 +135,7 @@ class Banner:
         details = Group(*self._detail_lines())
         if compact:
             return details
-        logo = Text("\n".join(LOGO), style=ACCENT, no_wrap=True)
+        logo = Text("\n".join(LOGO), style=self.ui.accent, no_wrap=True)
 
         if self.width >= 52:
             content = Table.grid(padding=(0, 2), expand=True)
@@ -144,9 +147,9 @@ class Banner:
 
         return Panel(
             content,
-            title=Text(" Overview ", style=ACCENT),
+            title=Text(" Overview ", style=self.ui.accent),
             title_align="left",
-            border_style=MUTED,
+            border_style=self.ui.border,
             box=box.ROUNDED,
             padding=(0, 1),
             expand=True,

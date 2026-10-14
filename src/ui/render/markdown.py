@@ -10,7 +10,7 @@ from rich.table import Table
 from rich.text import Text
 
 from src.ui.core.terminal_size import terminal_columns
-from src.ui.theme import MUTED
+from src.ui.theme import DARK_UI, UIPalette
 
 from .color_level import color_level
 
@@ -29,12 +29,16 @@ _CODES = {
 }
 
 
-def _style(name: str, text: str) -> str:
+def _style(name: str, text: str, ui: UIPalette = DARK_UI) -> str:
     if not text:
         return text
     if color_level() == 0:
         return text
     code = _CODES[name]
+    if ui.light and name in {"gray", "cyan"}:
+        color = ui.muted if name == "gray" else ui.accent
+        red, green, blue = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+        code = f"38;2;{red};{green};{blue}"
     return f"{_ESC}[{code}m{text}{_RESET}"
 
 
@@ -50,16 +54,16 @@ def _italic(text: str) -> str:
     return _style("italic", text)
 
 
-def _gray(text: str) -> str:
-    return _style("gray", text)
+def _gray(text: str, ui: UIPalette = DARK_UI) -> str:
+    return _style("gray", text, ui)
 
 
 def _magenta(text: str) -> str:
     return _style("magenta", text)
 
 
-def _cyan(text: str) -> str:
-    return _style("cyan", text)
+def _cyan(text: str, ui: UIPalette = DARK_UI) -> str:
+    return _style("cyan", text, ui)
 
 
 def _blue_underline(text: str) -> str:
@@ -68,7 +72,7 @@ def _blue_underline(text: str) -> str:
     return f"{_ESC}[34m{_ESC}[4m{text}{_RESET}"
 
 
-def render_markdown(s: str, *, width: int | None = None) -> str:
+def render_markdown(s: str, *, width: int | None = None, ui: UIPalette = DARK_UI) -> str:
     if not s:
         return s
 
@@ -106,11 +110,11 @@ def render_markdown(s: str, *, width: int | None = None) -> str:
             while j < len(lines) and _is_table_row(lines[j]):
                 block.append(lines[j])
                 j += 1
-            out.append(_render_table(block, width=width))
+            out.append(_render_table(block, width=width, ui=ui))
             i = j
             continue
 
-        out.append(_render_line(raw))
+        out.append(_render_line(raw, ui=ui))
         i += 1
 
     if in_fence and fence_buf:
@@ -186,29 +190,29 @@ _BULLET_RE = re.compile(r"^(\s*)([-*])\s+(.*)$")
 _QUOTE_RE = re.compile(r"^(\s*)>\s?(.*)$")
 
 
-def _render_line(line: str) -> str:
+def _render_line(line: str, *, ui: UIPalette = DARK_UI) -> str:
     heading = _HEADING_RE.match(line)
     if heading:
         indent, hashes, text = heading.group(1), heading.group(2), heading.group(3)
         level = len(hashes)
-        rendered_text = _render_inline(text)
+        rendered_text = _render_inline(text, ui=ui)
         if level == 1:
             return f"{indent}{_bold(_magenta(rendered_text))}"
         if level == 2:
-            return f"{indent}{_bold(_cyan(rendered_text))}"
+            return f"{indent}{_bold(_cyan(rendered_text, ui))}"
         return f"{indent}{_bold(rendered_text)}"
 
     bullet = _BULLET_RE.match(line)
     if bullet:
         indent, _, text = bullet.group(1), bullet.group(2), bullet.group(3)
-        return f"{indent}{_gray('•')} {_render_inline(text)}"
+        return f"{indent}{_gray('•', ui)} {_render_inline(text, ui=ui)}"
 
     quote = _QUOTE_RE.match(line)
     if quote:
         indent, text = quote.group(1), quote.group(2)
-        return f"{indent}{_gray('│ ')}{_dim(_render_inline(text))}"
+        return f"{indent}{_gray('│ ', ui)}{_dim(_render_inline(text, ui=ui))}"
 
-    return _render_inline(line)
+    return _render_inline(line, ui=ui)
 
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
@@ -221,7 +225,7 @@ _TABLE_BREAK_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _CODE_TOKEN_RE = re.compile(r"\ue000(\d+)\ue001")
 
 
-def _render_inline(s: str, *, normalize_table_breaks: bool = False) -> str:
+def _render_inline(s: str, *, normalize_table_breaks: bool = False, ui: UIPalette = DARK_UI) -> str:
     if not s:
         return s
 
@@ -245,7 +249,7 @@ def _render_inline(s: str, *, normalize_table_breaks: bool = False) -> str:
     s = _BOLD_UNDER_RE.sub(lambda m: _bold(m.group(1)), s)
     s = _ITALIC_STAR_RE.sub(lambda m: _italic(m.group(1)), s)
     s = _ITALIC_UNDER_RE.sub(lambda m: _italic(m.group(1)), s)
-    s = _CODE_TOKEN_RE.sub(lambda m: _cyan(code_spans[int(m.group(1))]), s)
+    s = _CODE_TOKEN_RE.sub(lambda m: _cyan(code_spans[int(m.group(1))], ui), s)
     return s
 
 
@@ -273,19 +277,19 @@ def _split_table_row(line: str) -> List[str]:
     return [c.replace("\\|", "|").strip() for c in cells]
 
 
-def _render_table(block: List[str], *, width: int | None = None) -> str:
+def _render_table(block: List[str], *, width: int | None = None, ui: UIPalette = DARK_UI) -> str:
     header = _split_table_row(block[0]) if block else []
     body_rows = [_split_table_row(row) for row in block[1:]]
     cols = max(len(header), max((len(r) for r in body_rows), default=0), 1)
 
     def cell(cells: List[str], column: int) -> Text:
         value = cells[column] if column < len(cells) else ""
-        rendered = _render_inline(value, normalize_table_breaks=True)
+        rendered = _render_inline(value, normalize_table_breaks=True, ui=ui)
         return Text.from_ansi(rendered)
 
     table = Table(
         box=box.ROUNDED,
-        border_style=MUTED,
+        border_style=ui.border,
         collapse_padding=False,
         expand=False,
         header_style="bold",
@@ -301,7 +305,7 @@ def _render_table(block: List[str], *, width: int | None = None) -> str:
     output = StringIO()
     use_color = color_level() != 0
     console = Console(
-        color_system="standard" if use_color else None,
+        color_system=("truecolor" if ui.light else "standard") if use_color else None,
         file=output,
         force_terminal=use_color,
         highlight=False,

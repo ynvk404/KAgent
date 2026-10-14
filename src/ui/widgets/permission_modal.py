@@ -8,7 +8,8 @@ from rich.console import Group, RenderableType
 from rich.text import Text
 
 from src.target.origin import HTTPOrigin
-from src.ui.theme import BOLD_ACCENT, MUTED, WARNING
+from src.ui.theme import BOLD_ACCENT, WARNING
+from src.ui.theme import DARK_UI, UIPalette
 from src.permission.network.grants import WARNING as HTTP_WARNING
 
 from src.tools.common.tool_display import display_tool_name
@@ -356,7 +357,7 @@ class PermissionModal:
             return "trust artifact root" if (self.req.session_scope_display or "").startswith(("writes under ", "edits under ")) else "trust file scope"
         return "trust scope"
 
-    def instructions(self) -> Text:
+    def instructions(self, *, ui: UIPalette = DARK_UI) -> Text:
         grant_review = self.req.tool in {"http_lab_grant", "browser_lab_grant"}
         kind = self._review_kind()
         keys = "y " + ("authorize capture use" if kind == "capture" else "approve conclusion"
@@ -364,9 +365,9 @@ class PermissionModal:
         if self._supports_reuse():
             keys += " · a " + self._reuse_label()
         keys += (" · n decline review" if kind == "conclusion" else " · n deny") + " · Esc cancel"
-        return Text(keys, style=MUTED)
+        return Text(keys, style=ui.muted)
 
-    def render(self, *, include_instructions: bool = True) -> RenderableType:
+    def render(self, *, include_instructions: bool = True, ui: UIPalette = DARK_UI) -> RenderableType:
 
         req = self.req
         supports_reuse = self._supports_reuse()
@@ -423,5 +424,5 @@ class PermissionModal:
             parts.extend((Text(""), Text(redact(preview))))
 
         if include_instructions:
-            parts.extend((Text(""), self.instructions()))
+            parts.extend((Text(""), self.instructions(ui=ui)))
         return Group(*parts)

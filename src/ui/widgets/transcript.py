@@ -12,6 +12,7 @@ from src.ui.render.markdown import render_markdown
 from src.ui.render.sanitize import sanitize_text
 from src.ui.widgets.banner import Banner, BannerData
 from src.ui.theme import ACCENT, BOLD_ACCENT, BOLD_ERROR, MUTED, PRIMARY, WARNING, BOLD_SUCCESS
+from src.ui.theme import DARK_UI, UIPalette
 
 EntryKind = Literal[
     "user",
@@ -66,21 +67,21 @@ class RenderedLine:
 
 _row_cache: dict[
     int,
-    tuple["weakref.ReferenceType[TranscriptEntry]", int | None, list[Row]],
+    tuple["weakref.ReferenceType[TranscriptEntry]", int | None, UIPalette, list[Row]],
 ] = {}
 
 
-def rows_for_entry(entry: TranscriptEntry, width: int | None = None) -> list[Row]:
+def rows_for_entry(entry: TranscriptEntry, width: int | None = None, ui: UIPalette = DARK_UI) -> list[Row]:
     key = id(entry)
     cached = _row_cache.get(key)
     if cached is not None:
-        ref, cached_width, rows = cached
-        if ref() is entry and cached_width == width:
+        ref, cached_width, cached_ui, rows = cached
+        if ref() is entry and cached_width == width and cached_ui == ui:
             return rows
 
     entry_text = _display_text(entry)
     text = (
-        render_markdown(entry_text, width=width)
+        render_markdown(entry_text, width=width, ui=ui)
         if entry.kind in MARKDOWN_KINDS
         else entry_text
     )
@@ -91,7 +92,7 @@ def rows_for_entry(entry: TranscriptEntry, width: int | None = None) -> list[Row
     def _on_collected(_ref: object, key: int = key) -> None:
         _row_cache.pop(key, None)
 
-    _row_cache[key] = (weakref.ref(entry, _on_collected), width, out)
+    _row_cache[key] = (weakref.ref(entry, _on_collected), width, ui, out)
     return out
 
 
@@ -114,9 +115,10 @@ def entry_view(
     entry: TranscriptEntry,
     streaming: bool = False,
     width: int | None = None,
+    ui: UIPalette = DARK_UI,
 ) -> list[RenderedLine]:
     style = ROLE_STYLES[entry.kind]
-    rows = plain_rows_for_entry(entry) if streaming else rows_for_entry(entry, width)
+    rows = plain_rows_for_entry(entry) if streaming else rows_for_entry(entry, width, ui)
 
     lines: list[RenderedLine] = []
     for row in rows:
@@ -128,6 +130,11 @@ def entry_view(
         if (entry.kind in {"validation", "info"} and entry.text.startswith("Validation ")
                 and not row.is_first and row.text.lstrip().startswith("Observed impact · ")):
             color = PRIMARY
+        if color == PRIMARY:
+            color = ui.text
+        elif entry.kind == "user":
+            color = ui.accent
+        # Other role colors, including system notices and recovery, are statuses.
         lines.append(RenderedLine(text=text, color=color,
             trusted_ansi=entry.kind in MARKDOWN_KINDS and not streaming))
     return lines
@@ -143,6 +150,7 @@ class Transcript:
         write_banner: Callable[[BannerData], None] | None = None,
         preserve_viewport: Callable[[], AbstractContextManager[None]] | None = None,
         write_line: Callable[[RenderedLine], None] | None = None,
+        ui: UIPalette = DARK_UI,
     ) -> None:
         self._out: IO[str] = out if out is not None else sys.stdout
         self._width = width
@@ -150,6 +158,7 @@ class Transcript:
         self._write_banner_panel = write_banner
         self._preserve_viewport = preserve_viewport
         self._write_line = write_line
+        self._ui = ui
         self._printed_count = 0
         self._last_generation: object | None = None
         self._banner_printed = False
@@ -219,7 +228,7 @@ class Transcript:
 
     def _write_entry(self, entry: TranscriptEntry) -> None:
         width = self._width() if self._width is not None else None
-        for line in entry_view(entry, width=width):
+        for line in entry_view(entry, width=width, ui=self._ui):
             if self._write_line:
                 self._write_line(line)
             else:

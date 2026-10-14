@@ -5,6 +5,7 @@ from rich.text import Text
 from rich.style import Style
 
 from src.ui.theme import ACCENT, BOLD_ERROR, MUTED, PRIMARY, SUCCESS
+from src.ui.theme import BOLD_ACCENT, DARK_UI, UIPalette
 from src.ui.widgets.ask_modal import AskModal
 from src.ui.widgets.input_box import DEFAULT_PROMPT
 from src.ui.widgets.cursor_static import CARET_STYLE
@@ -27,8 +28,17 @@ def _input_style(
     name: str | None,
     *,
     style_map: dict[str, str] | None = None,
+    ui: UIPalette = DARK_UI,
 ) -> str:
     active_style_map = _INPUT_STYLE_MAP if style_map is None else style_map
+    if ui.light and style_map is None:
+        active_style_map = {
+            **_INPUT_STYLE_MAP,
+            "gray": ui.muted,
+            "prompt": f"bold {ui.accent}",
+            "text": ui.text,
+            "cursor": f"bold {ui.text}",
+        }
     return active_style_map.get(name or "text", name or "")
 
 
@@ -42,10 +52,16 @@ def _modal_text(
     error_style: str = BOLD_ERROR,
     escape_action: str = "cancel",
     compact: bool = False,
+    ui: UIPalette = DARK_UI,
 ) -> RenderableType:
-    input_style_fn = input_style or _input_style
+    input_style_fn = input_style or (
+        (lambda name: _input_style(name, ui=ui)) if ui.light else _input_style
+    )
+    if ui.light:
+        accent_style = ui.accent
+        muted_style = ui.muted
     if isinstance(modal, PermissionModal):
-        return modal.render()
+        return modal.render(ui=ui)
 
     text = Text()
     lines = modal.render()
@@ -76,7 +92,8 @@ def _modal_text(
             else:
                 text.append(value, style=input_style_fn("text"))
         elif isinstance(modal, ProviderPickerModal) and i == 0 and modal.confirming_delete is None:
-            text.append_text(modal.render_header_text())
+            text.append_text(modal.render_header_text(accent_style=accent_style)
+                             if ui.light else modal.render_header_text())
         elif isinstance(modal, ProviderPickerModal) and modal.confirming_delete is not None and ("> [ Delete ]" in line or "> [ Cancel ]" in line):
             if "> [ Delete ]" in line:
                 text.append("> [ Delete ]", style=f"bold {accent_style}")
@@ -124,12 +141,22 @@ def _modal_text(
                 text.append(" — " + desc)
             else:
                 text.append(line, style=f"bold {accent_style}")
+            if ui.light:
+                # Selection is UI, but preserve the existing selected state marker.
+                for marker in ("[on]", "[off]", "[…]"):
+                    if line[2:].startswith(marker):
+                        start = line_start + 2
+                        text.stylize(BOLD_ACCENT, start, start + len(marker))
         elif i == len(lines) - 1 or line.strip().startswith("↑ ") or line.strip().startswith("↓ "):
             text.append(line, style=muted_style)
         elif line.startswith("error: "):
             text.append(line, style=error_style)
         else:
             text.append(line)
+        if ui.light and isinstance(modal, AskModal) and line.startswith("› ") and " — " not in line:
+            start = text.plain.find("● active", line_start)
+            if start >= 0:
+                text.stylize(BOLD_ACCENT, start, start + len("● active"))
         item = getattr(modal, "item_lines", {}).get(i)
         if item is not None:
             text.stylize(Style(meta={"modal_item": item}), line_start, len(text))

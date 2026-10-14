@@ -37,6 +37,33 @@ from src.session.store import Store
 cli_main = importlib.import_module("src.cli.main")
 
 
+def test_theme_flags_are_invocation_only_and_default_to_dark():
+    assert parse_flags([]).theme == "dark"
+    assert parse_flags(["--theme", "dark"]).theme == "dark"
+    flags = parse_flags(["--theme", "light", "--target", "fixture.test", "--burp", "9012",
+                         "--model", "fixture-model"])
+    assert flags.theme == "light"
+    assert flags.target_url == "http://fixture.test"
+    assert flags.burp_port == 9012 and flags.model == "fixture-model"
+
+
+@pytest.mark.parametrize("arguments", [["--theme"], ["--theme", "--model", "fixture"],
+                                      ["--theme", "auto"], ["--theme", "LIGHT"]])
+def test_theme_flags_reject_missing_or_invalid_values(arguments):
+    with pytest.raises(FlagParseError, match="--theme requires"):
+        parse_flags(arguments)
+
+
+async def test_invalid_theme_exits_before_runtime_configuration(monkeypatch, capsys):
+    from unittest.mock import Mock
+    load = Mock(side_effect=AssertionError("runtime must not start"))
+    monkeypatch.setattr(cli_main.config, "load", load)
+    monkeypatch.setattr(cli_main.sys, "argv", ["kagent", "--theme", "auto"])
+    assert await cli_main.main() == 2
+    assert "--theme requires dark or light" in capsys.readouterr().err
+    load.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "flag",
     [

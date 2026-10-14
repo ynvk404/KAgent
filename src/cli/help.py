@@ -15,6 +15,7 @@ Usage:
 Flags:
   --backend |openai|openai-compat|kimi|groq|openrouter|deepseek|gemini
   --model <id>
+  --theme <dark|light>       TUI theme for this invocation (default: dark)
   --base-url <url>
   --target <url>            active target; scopes to its origin by default
   --api-key <key>

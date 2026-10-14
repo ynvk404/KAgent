@@ -177,6 +177,7 @@ from src.ui.core.app import (
 )
 from src.ui.core.custom_provider_adapter import ConfigBackedCustomProviderAdapter
 from src.ui.render.sanitize import sanitize_text
+from src.ui.theme import ThemeChoice
 from src.ui.commands.slash_handler import normalize_target_url
 from src.permission.network.control import parse_lab_spec
 
@@ -272,6 +273,7 @@ class ParsedFlags:
     list_skills: bool = False
     list_tools: bool = False
     max_steps: int = 0
+    theme: ThemeChoice = "dark"
 
 
 class FlagParseError(ValueError):
@@ -317,6 +319,11 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
             out.backend = next_arg(a)
         elif a == "--model":
             out.model = next_arg(a)
+        elif a == "--theme":
+            theme = next_arg(a)
+            if theme not in {"dark", "light"}:
+                raise FlagParseError("--theme requires dark or light")
+            out.theme = cast(ThemeChoice, theme)
         elif a == "--base-url":
             out.base_url = next_arg(a)
         elif a == "--target":
@@ -1327,6 +1334,7 @@ async def main() -> int:
     app = KAgent(
         AppProps(
             agent=agent,
+            theme=flags.theme,
             banner_data=banner_data,
             parent_signal=root_ctl,
             yolo_initial=flags.yolo,

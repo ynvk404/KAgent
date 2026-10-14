@@ -117,6 +117,7 @@ from src.ui.widgets.status_bar import StatusBar, StatusProps
 from src.ui.widgets.transcript import Transcript, entry_view
 from src.ui.widgets.transcript_view import TranscriptView
 from src.ui.theme import ACCENT, BOLD_ERROR, MUTED, PRIMARY, SUCCESS
+from src.ui.theme import DARK_UI, LIGHT_UI, ThemeChoice, UIPalette, light_theme
 
 
 MENTION_LIMIT = 12
@@ -180,6 +181,7 @@ class AppProps:
         Callable[[], Awaitable[BurpBridgeResult]] | None
     ) = None
     resume_summary: str | None = None
+    theme: ThemeChoice = "dark"
 
 @dataclass(slots=True)
 class RunAgentOptions:
@@ -190,9 +192,10 @@ class RunAgentOptions:
 
 class _RichLogWriter:
 
-    def __init__(self, log: RichLog, overview: Static | None = None) -> None:
+    def __init__(self, log: RichLog, overview: Static | None = None, ui: UIPalette = DARK_UI) -> None:
         self._log = log
         self._overview = overview
+        self._ui = ui
 
     def content_width(self) -> int:
         if isinstance(self._log, TranscriptView):
@@ -221,7 +224,7 @@ class _RichLogWriter:
 
     def write_banner(self, data: BannerData) -> None:
         width = self.content_width()
-        banner = Banner(data, width=width).render_panel(compact=self._log.app.size.height < 24)
+        banner = Banner(data, width=width, ui=self._ui).render_panel(compact=self._log.app.size.height < 24)
         if self._overview is not None:
             self._overview.update(banner)
         else:
@@ -438,8 +441,58 @@ class KAgent(App):
     }}
     """
 
+    # Load these overrides only for Light; Dark parses the legacy CSS alone.
+    LIGHT_CSS = """
+    .kagent-light Screen > .screen--selection {
+        background: $ui-selection-background;
+        color: transparent;
+    }
+    .kagent-light #transcript-panel,
+    .kagent-light #input-box,
+    .kagent-light #overlay.modal-panel {
+        border: round $ui-border;
+        border-title-color: $ui-accent;
+    }
+    .kagent-light #input-box {
+        background: $background;
+    }
+    .kagent-light #overlay {
+        background: $panel;
+    }
+    .kagent-light TranscriptView,
+    .kagent-light #overlay-content.permission-content,
+    .kagent-light #overlay-content.remaining-content {
+        scrollbar-color: $ui-muted;
+        scrollbar-color-hover: $ui-accent;
+        scrollbar-color-active: $ui-accent;
+    }
+    .kagent-light StatusBar {
+        background: $panel;
+    }
+    """
+
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        return {
+            "ui-muted": MUTED,
+            "ui-accent": ACCENT,
+            "ui-border": MUTED,
+            "ui-selection-background": f"{ACCENT} 30%",
+        }
+
     def __init__(self, props: AppProps):
         super().__init__()
+        if props.theme not in {"dark", "light"}:
+            raise ValueError("theme must be dark or light")
+        self.ui_palette = LIGHT_UI if props.theme == "light" else DARK_UI
+        if self.ui_palette.light:
+            self.register_theme(light_theme())
+            self.add_class("kagent-light")
+            self.theme = "kagent-light"
+            self.stylesheet.add_source(
+                self.LIGHT_CSS, read_from=(__file__, "KAgent.Light"),
+            )
+        else:
+            self.theme = "textual-dark"
         self.agent = props.agent
         self.banner_data = props.banner_data
         self.parent_signal = props.parent_signal
@@ -549,7 +602,7 @@ class KAgent(App):
             self.live_entry_static = Static(id="live-entry")
             yield self.live_entry_static
 
-        rich_log_writer = _RichLogWriter(self.transcript_log, self.overview_static)
+        rich_log_writer = _RichLogWriter(self.transcript_log, self.overview_static, self.ui_palette)
         self.transcript_writer = Transcript(
             out=cast(IO[str], rich_log_writer),
             width=rich_log_writer.content_width,
@@ -557,6 +610,7 @@ class KAgent(App):
             write_banner=rich_log_writer.write_banner,
             preserve_viewport=self.transcript_log.preserve_viewport,
             write_line=rich_log_writer.write_line,
+            ui=self.ui_palette,
         )
 
         self.overlay_static = Vertical(id="overlay")
@@ -1254,7 +1308,7 @@ class KAgent(App):
 
     def _render_live_entry(self, live: TranscriptEntry) -> None:
         text = Text()
-        for i, ln in enumerate(entry_view(live, streaming=True)):
+        for i, ln in enumerate(entry_view(live, streaming=True, ui=self.ui_palette)):
             if i > 0:
                 text.append("\n")
             text.append(ln.text, style=ln.color)
@@ -1272,7 +1326,11 @@ class KAgent(App):
                 text.append("\n")
             for seg in line.segments:
                 start = len(text)
-                text.append(seg.text, style=_input_style(seg.style))
+                # Disabled gray also represents "agent running"; keep that status.
+                style = _modal_formatter._input_style(
+                    seg.style, ui=DARK_UI if self.state.busy else self.ui_palette,
+                )
+                text.append(seg.text, style=style)
                 if seg.style in {"cursor", "cursor_char"}:
                     text.stylize(CARET_STYLE, start, len(text))
         self.input_static.value = self.input.value
@@ -1287,7 +1345,7 @@ class KAgent(App):
         remaining = isinstance(modal, (TextInputModal, AskModal, ProviderPickerModal, SkillsModal))
         self.permission_hints_static.display = isinstance(modal, (PermissionModal, TurnDetailsModal))
         if isinstance(modal, (PermissionModal, TurnDetailsModal)):
-            self.permission_hints_static.update(modal.instructions())
+            self.permission_hints_static.update(modal.instructions(ui=self.ui_palette))
         self.overlay_static.set_class(
             isinstance(modal, (TextInputModal, AskModal, PermissionModal, SkillsModal, ProviderPickerModal, BridgeCredentialsModal, TurnDetailsModal)),
             "modal-panel",
@@ -1324,11 +1382,12 @@ class KAgent(App):
                 self.overlay_text_static.update(modal.render())
             elif isinstance(modal, TurnDetailsModal):
                 self.overlay_static.border_title = "Turn Details"
-                self.overlay_text_static.update(modal.render())
+                self.overlay_text_static.update(modal.render(ui=self.ui_palette))
             else:
                 self.overlay_text_static.update(_modal_formatter._modal_text(
                     modal, escape_action="stop turn" if self.state.busy else "cancel",
                     compact=True,
+                    ui=self.ui_palette,
                 ))
             self.overlay_static.display = True
             if remaining and self.is_running:
@@ -1397,9 +1456,9 @@ class KAgent(App):
             if i > 0:
                 text.append("\n")
             style = (
-                f"bold {ACCENT}"
+                f"bold {self.ui_palette.accent}"
                 if getattr(ln, "selected", False)
-                else (MUTED if getattr(ln, "dim", False) else "")
+                else (self.ui_palette.muted if getattr(ln, "dim", False) else "")
             )
             text.append(ln.text, style=style)
         return text
@@ -1750,7 +1809,7 @@ class KAgent(App):
         self._render_input()
         if hasattr(self, "overview_static") and self.overview_static is not None and hasattr(self, "state") and self.state.banner_data:
             width = max(1, self.cols - 5)
-            self.overview_static.update(Banner(self.state.banner_data, width=width).render_panel(
+            self.overview_static.update(Banner(self.state.banner_data, width=width, ui=self.ui_palette).render_panel(
                 compact=event.size.height < 24))
         self.refresh()
         self._sync_overlay()

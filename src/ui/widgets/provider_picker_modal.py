@@ -318,18 +318,18 @@ class ProviderPickerModal:
         if item is not None:
             self.idx = item
 
-    def render_header_text(self) -> Text:
+    def render_header_text(self, *, accent_style: str = ACCENT) -> Text:
         header = Text()
         if self.section == SECTION_OFFICIAL:
-            header.append("[ Official ]", style=f"bold {ACCENT}")
+            header.append("[ Official ]", style=f"bold {accent_style}")
             header.append("   Custom   Manual")
         elif self.section == SECTION_CUSTOM:
             header.append("Official   ")
-            header.append("[ Custom ]", style=f"bold {ACCENT}")
+            header.append("[ Custom ]", style=f"bold {accent_style}")
             header.append("   Manual")
         elif self.section == SECTION_MANUAL:
             header.append("Official   Custom   ")
-            header.append("[ Manual ]", style=f"bold {ACCENT}")
+            header.append("[ Manual ]", style=f"bold {accent_style}")
         else:
             header.append("Official   Custom   Manual")
         return header
