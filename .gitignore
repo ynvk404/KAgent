@@ -64,3 +64,7 @@ config.local.json
 
 # Pinned CWE MCP setup output (code/dependencies/corpus are deployment artifacts)
 /cwe-mcp-deployment/
+ruff-benchmark.txt
+ruff-report.txt
+vulture-60.txt
+vulture-100.txt
