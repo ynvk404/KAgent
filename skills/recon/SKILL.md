@@ -45,8 +45,9 @@ request detail; shell requests do not enforce target-origin scope.
 Use `service_discovery` only when the active target's service/port coverage is
 unclear and resolving it is relevant. If the active URL already establishes the
 web port and no broader service question remains, record service discovery as
-`not_applicable` with a reason. In minimal profile it uses bounded native TCP
-checks; full profile may select installed nmap. Do not use generic-shell `nmap`,
+`not_applicable` with a reason. Both minimal and full profiles use bounded native
+TCP checks. Installed nmap is not selected because an enforcing adapter is
+unavailable. Do not use generic-shell `nmap`,
 `subfinder`, `httpx`, `ffuf`, or `gobuster` automatically.
 The semantic tool is limited to the active URL's effective port. It resolves
 the target once, checks every resulting address against the private-host policy,

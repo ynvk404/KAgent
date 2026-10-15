@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from src.engagement.state import EngagementState
+from src.engagement.state import EngagementState, OutOfScopeError
 from src.permission.permission import Decision, PermissionRequest, Prompter, UserControlledRefusal
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
@@ -56,8 +56,8 @@ class ServiceDiscoveryTool(Tool):
     def description(self) -> str:
         return (
             "Check the active target HTTP port on its active hostname or IP. "
-            "Uses native TCP connections by default; full tooling profile may select "
-            "installed nmap when recon coverage is missing. No other ports, CIDR, "
+            "Uses native TCP connections in all tooling profiles. Installed nmap "
+            "is not selected because an enforcing adapter is unavailable. No other ports, CIDR, "
             "host lists, UDP, NSE scripts, OS detection, or "
             "raw scanner flags. A scan validated against the declared active "
             "target is routine reconnaissance and is eligible for YOLO; other "
@@ -82,7 +82,7 @@ class ServiceDiscoveryTool(Tool):
                 "mode": {
                     "type": "string",
                     "enum": ["auto", "socket"],
-                    "description": "auto selects an installed scanner only for a runtime-confirmed recon coverage gap; socket forces native TCP.",
+                    "description": "auto and socket both use native TCP; nmap execution is unsupported without an enforcing adapter.",
                 },
                 "timeout_seconds": {
                     "type": "integer",
@@ -436,26 +436,21 @@ class ServiceDiscoveryTool(Tool):
         return active_origin, host, ports, mode, timeout
 
     def _select_backend(self, mode: str) -> str:
-        if mode == "socket":
-            return "socket"
-        use_nmap = (
-            self.tooling_profile() == "full"
-            and self.capabilities.snapshot().nmap is not None
-            and self.workflow is not None
-            and self.workflow.needs_phase_coverage("recon", "service_discovery")
-        )
-        return "nmap" if use_nmap else "socket"
+        # Binary detection does not establish execution support. The current
+        # policy has no enforcing nmap adapter; select native before review.
+        return "socket"
 
     def _backend_reason(self, mode: str, backend: str) -> str:
         if mode != "auto":
             return f"{backend} backend explicitly selected"
-        if backend == "nmap":
-            return "full profile selected installed nmap for a runtime-confirmed recon coverage gap"
         if self.tooling_profile() != "full":
             return "minimal profile defaults to native TCP discovery"
         if self.capabilities.snapshot().nmap is None:
             return "nmap unavailable; fell back to native TCP discovery"
-        return "no runtime-confirmed recon coverage gap; using native TCP discovery"
+        return (
+            "nmap detected but execution unsupported: enforcing adapter unavailable; "
+            "using native TCP discovery"
+        )
 
     @staticmethod
     def _bounded_int(
@@ -497,9 +492,15 @@ class ServiceDiscoveryTool(Tool):
                         writer.close()
                         try:
                             await writer.wait_closed()
+                        except (UserControlledRefusal, OutOfScopeError):
+                            raise
                         except OSError:
                             pass
                     return {"port": port, "protocol": "tcp", "state": "open", "_completed": True}
+                except (UserControlledRefusal, OutOfScopeError):
+                    # Control failures are not TCP observations. In particular,
+                    # HTTPReviewTimeout also inherits TimeoutError/OSError.
+                    raise
                 except ConnectionRefusedError:
                     return {"port": port, "protocol": "tcp", "state": "closed", "_completed": True}
                 except asyncio.TimeoutError:
@@ -569,11 +570,13 @@ class ServiceDiscoveryTool(Tool):
                 )
                 for task in done:
                     results[tasks[task]] = task.result()
-        except asyncio.CancelledError:
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-            raise
+        finally:
+            # A control failure from one check must not leave sibling checks or
+            # their socket reservations alive after this invocation exits.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         entries = list(results.values())
         if any(entry.get("reason") == "dns_resolution_failed" for entry in entries):
             return entries, "error", "dns_resolution_failed"

@@ -37,7 +37,10 @@ def test_profiles_describe_native_defaults_and_bounded_optional_scanners():
     assert "native semantic discovery" in minimal.helper
     assert "explicit user request" in minimal.helper
     assert "native semantic discovery" in minimal.helper
-    assert "ffuf" in full.description and "nmap" in full.description
+    assert "ffuf" in full.description and "native TCP" in full.description
+    assert "nmap" not in full.label.lower()
+    assert "Nmap execution is unavailable" in full.helper
+    assert "enforcing adapter" in full.helper
     assert "coverage gap" in full.helper
     assert "Other scanners are not enabled automatically" in full.helper
 

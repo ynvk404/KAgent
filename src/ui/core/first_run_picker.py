@@ -29,14 +29,15 @@ OPTIONS: list[ProfileOption] = [
 
     ProfileOption(
         value=ToolingProfile.FULL,
-        label="curl + optional ffuf / nmap",
+        label="curl + optional ffuf / native TCP",
         description=(
-            "allows bounded ffuf path discovery and nmap TCP checks when installed"
+            "allows bounded ffuf path discovery when supported; native TCP service checks"
         ),
         helper=(
-            "The agent may select these semantic backends only for a concrete "
+            "The agent may select ffuf only for a concrete "
             "coverage gap. Each action stays target-scoped, bounded, and subject "
-            "to the permission prompt. Other scanners are not enabled automatically."
+            "to the permission prompt. Nmap execution is unavailable without an "
+            "enforcing adapter. Other scanners are not enabled automatically."
         ),
     ),
 ]

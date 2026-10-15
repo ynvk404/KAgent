@@ -445,7 +445,9 @@ class TestBuildSystemPrompt:
         assert "Tool selection: native scoped tools first" in p
         assert "Tooling profile: full" in p
         assert "installed ffuf through `content_discovery`" in p
-        assert "nmap through `service_discovery`" in p
+        assert "`service_discovery` uses native TCP" in p
+        assert "nmap execution is unavailable without an enforcing adapter" in p
+        assert "or nmap through" not in p
         assert "Full profile does not authorize every scanner" in p
 
     def test_does_not_append_the_scanner_override_when_tooling_profile_is_minimal(self):

@@ -11,8 +11,13 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from src.engagement.state import EngagementState
-from src.permission.permission import AlwaysAllow, Decision, PermissionRequest, UserControlledRefusal, YoloPrompter
+from src.engagement.state import EngagementState, OutOfScopeError
+from src.permission.permission import (
+    AlwaysAllow, Decision, PermissionRequest, UserControlledRefusal, YoloPrompter,
+    PermissionPolicyBlocked, PermissionReviewStale,
+)
+from src.permission.network.grants import HTTPBlocked, HTTPPending, HTTPReviewStale, HTTPReviewTimeout
+from src.permission.runtime.execution import ExecutionBlocked
 from src.target.target import Target
 from src.tools.common.capabilities import CapabilityInventory
 from src.tools.discovery.content import (
@@ -592,12 +597,29 @@ def test_service_target_and_ports_are_constrained():
         unsafe_host.validate_args({})
 
 
-def test_service_profile_selects_external_backend_only_for_runtime_gap():
-    assert make_service_tool(profile="minimal", nmap="/tools/nmap")._select_backend("auto") == "socket"
-    assert make_service_tool(profile="full", nmap="/tools/nmap")._select_backend("auto") == "socket"
-    assert make_service_tool(
-        profile="full", nmap="/tools/nmap", workflow=make_workflow()
-    )._select_backend("auto") == "nmap"
+@pytest.mark.parametrize("profile", ["minimal", "full"])
+@pytest.mark.parametrize("mode", ["auto", "socket"])
+@pytest.mark.parametrize("nmap", [None, "/tools/nmap"])
+@pytest.mark.parametrize("coverage", ["no-workflow", "missing", "performed"])
+def test_service_selects_native_until_nmap_has_an_enforcing_adapter(profile, mode, nmap, coverage):
+    workflow = None if coverage == "no-workflow" else make_workflow()
+    if coverage == "performed":
+        assert workflow is not None and workflow.objective is not None
+        workflow.record_phase_coverage(
+            "recon", "service_discovery", "performed",
+            objective_id=workflow.objective.id,
+            target_origin=workflow.objective.target_origin or "",
+        )
+    tool = make_service_tool(profile=profile, nmap=nmap, workflow=workflow)
+
+    assert tool._select_backend(mode) == "socket"
+    assert "backend: socket" in tool.summarize({"mode": mode})["detail"]
+    display = tool.permission_hints({"mode": mode}).get("sessionScopeDisplay")
+    assert isinstance(display, str) and "using socket" in display
+    assert tool.capabilities.snapshot().nmap == nmap
+
+
+def test_service_cannot_request_nmap_execution_by_mode():
     with pytest.raises(ValueError, match="mode"):
         make_service_tool().validate_args({"mode": "nmap"})
 
@@ -674,9 +696,9 @@ async def test_service_socket_backend_cancels_pending_connections_promptly(monke
 
 @pytest.mark.asyncio
 async def test_service_nmap_argv_is_bounded_and_suggested_http_origin_is_not_authorized(monkeypatch):
+    # Private adapter/parser coverage only: public auto never selects nmap.
     workflow = make_workflow()
     tool = make_service_tool(profile="full", nmap="/tools/nmap", workflow=workflow)
-    monkeypatch.setattr("src.tools.discovery.service.private_host_reason", AsyncMock(return_value=""))
     captured: dict[str, object] = {}
 
     async def fake_nmap(binary: str, argv: list[str], _timeout: float, _signal):
@@ -692,10 +714,11 @@ async def test_service_nmap_argv_is_bounded_and_suggested_http_origin_is_not_aut
         return ToolOutput("exit: 0", status="success")
 
     monkeypatch.setattr("src.tools.discovery.service.run_with_capture", fake_nmap)
-    output = await tool.run(
-        {"mode": "auto", "ports": [8080]},
-        None,
-        AlwaysAllow(),
+    entries, status, reason = await tool._scan_nmap("203.0.113.10", (8080,), 20, None)
+    origin = tool.target.origin()
+    assert origin is not None
+    output = tool._result(
+        origin, "target.test", "nmap", (8080,), entries, time.monotonic(), status, reason,
     )
     payload = json.loads(str(output))
     argv = captured["argv"]
@@ -708,8 +731,7 @@ async def test_service_nmap_argv_is_bounded_and_suggested_http_origin_is_not_aut
     assert payload["ports"][0]["service"] == "http"
     assert payload["http_origin_suggestions"] == ["http://target.test:8080"]
     assert payload["suggestions_authorized"] is False
-    coverage = workflow.phase_coverage_record("recon", "service_discovery")
-    assert coverage is not None and coverage.status == "performed"
+    assert workflow.phase_coverage_record("recon", "service_discovery") is None
     assert tool._select_backend("auto") == "socket"
 
 
@@ -718,13 +740,17 @@ async def test_service_nmap_missing_executable_returns_structured_error(monkeypa
     tool = make_service_tool(
         profile="full", nmap="/tools/nmap", workflow=make_workflow()
     )
-    monkeypatch.setattr("src.tools.discovery.service.private_host_reason", AsyncMock(return_value=""))
     monkeypatch.setattr(
         "src.tools.discovery.service.run_with_capture",
         AsyncMock(side_effect=FileNotFoundError("nmap disappeared")),
     )
 
-    output = await tool.run({}, None, AlwaysAllow())
+    entries, status, reason = await tool._scan_nmap("203.0.113.10", (8080,), 20, None)
+    origin = tool.target.origin()
+    assert origin is not None
+    output = tool._result(
+        origin, "target.test", "nmap", (8080,), entries, time.monotonic(), status, reason,
+    )
     payload = json.loads(str(output))
     assert output.status == "error"
     assert payload["reason"] == "nmap could not be started"
@@ -773,7 +799,7 @@ async def test_service_nmap_extraports_are_only_exact_when_state_mapping_is_unam
 
 
 @pytest.mark.asyncio
-async def test_service_partial_nmap_output_keeps_recon_coverage_retryable(monkeypatch):
+async def test_service_partial_nmap_output_does_not_claim_exact_completion(monkeypatch):
     workflow = make_workflow()
     tool = make_service_tool(profile="full", nmap="/tools/nmap", workflow=workflow)
 
@@ -786,15 +812,21 @@ async def test_service_partial_nmap_output_keeps_recon_coverage_retryable(monkey
         return ToolOutput("exit: 0", status="success")
 
     monkeypatch.setattr("src.tools.discovery.service.run_with_capture", ambiguous_state)
-    output = await tool.run({}, None, AlwaysAllow())
+    entries, status, reason = await tool._scan_nmap("203.0.113.10", (8080,), 20, None)
+    origin = tool.target.origin()
+    assert origin is not None
+    output = tool._result(
+        origin, "target.test", "nmap", (8080,), entries, time.monotonic(), status, reason,
+    )
     payload = json.loads(str(output))
 
     assert output.status == "observation"
     assert payload["ports"][0]["state"] == "unknown"
     assert payload["completed_port_count_exact"] is False
-    coverage = workflow.phase_coverage_record("recon", "service_discovery")
-    assert coverage is not None and coverage.status == "failed"
-    assert tool._select_backend("auto") == "nmap"
+    assert entries[0]["_completed"] is False
+    assert "exact per-port state" in payload["reason"]
+    assert workflow.needs_phase_coverage("recon", "service_discovery")
+    assert tool._select_backend("auto") == "socket"
 
 
 @pytest.mark.asyncio
@@ -1036,6 +1068,42 @@ async def test_socket_connect_timeout_is_counted_as_exact_completion(monkeypatch
     payload = json.loads(str(output))
     assert payload["completed_ports"] == 1
     assert payload["completed_port_count_exact"] is True
+
+
+@pytest.mark.parametrize("stage", ["connect", "close"])
+@pytest.mark.parametrize("failure", [
+    UserControlledRefusal("operator denied"),
+    PermissionPolicyBlocked("policy blocked"),
+    PermissionReviewStale("review stale"),
+    HTTPBlocked("budget exhausted"),
+    HTTPBlocked("operator denied HTTP", explicit_denial=True),
+    HTTPPending("scheduling pending"),
+    HTTPReviewTimeout("permission scheduling timeout"),
+    HTTPReviewStale("HTTP receipt stale"),
+    ExecutionBlocked("execution stale"),
+    OutOfScopeError("origin removed"),
+])
+async def test_native_socket_handlers_preserve_control_exception_identity(monkeypatch, stage, failure):
+    tool = make_service_tool()
+    metadata = (getattr(failure, "error_kind", None), getattr(failure, "explicit_denial", None))
+
+    class Writer(FakeWriter):
+        async def wait_closed(self):
+            raise failure
+
+    async def connect(_host, _port):
+        if stage == "connect":
+            raise failure
+        return object(), Writer()
+
+    # Handler-level coverage only. Production gates are exercised separately
+    # through the registry/policy integration tests without replacement.
+    monkeypatch.setattr(asyncio, "open_connection", connect)
+    with pytest.raises(type(failure)) as raised:
+        await tool._scan_sockets("203.0.113.10", (8080,), 20, None)
+
+    assert raised.value is failure
+    assert (getattr(raised.value, "error_kind", None), getattr(raised.value, "explicit_denial", None)) == metadata
 
 
 def test_permission_cache_keys_are_action_specific():
