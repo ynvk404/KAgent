@@ -326,7 +326,7 @@ class HTTPPermissions:
             self._refresh_yolo()
 
     def set_yolo(self, enabled: bool) -> None:
-        """Operator toggle activates bounded HTTP rights; no phase-based bypass."""
+        """Operator toggle activates session HTTP rights; resource gates remain."""
         self.sync_target()
         if self._yolo_enabled != enabled:
             self._yolo_enabled = enabled
@@ -349,7 +349,7 @@ class HTTPPermissions:
             # Never refill expired/exhausted grants or override operator
             # limits/confirm-each/revocation merely because YOLO remains on.
             if origin not in self.grants and origin not in self._revoked:
-                self.activate(origin.as_url(), HTTPLimits(), activation="yolo")
+                self.activate(origin.as_url(), HTTPLimits.session(), activation="yolo")
 
     def reset(self, *, preserve_denial: bool = False) -> None:
         # Old in-flight reservations retain their own budget for safe release.
@@ -432,16 +432,10 @@ class HTTPPermissions:
         self._clear_receipts(origin)
         carried = self._constraints.get(origin) if activation == "yolo" else None
         if carried is not None:
+            # Current operator YOLO activation supplies authority. Retained
+            # constraints preserve finite limits and accounting without turning
+            # an unconstrained dimension back into an implicit fixed ceiling.
             limits = carried.limits
-            # A journal retains restrictions, never manual positive authority.
-            # Unlimited manual limits cannot become unlimited implicit YOLO.
-            if limits.seconds is None or limits.requests is None:
-                defaults = HTTPLimits()
-                limits = replace(limits, seconds=limits.seconds or defaults.seconds,
-                                 requests=limits.requests or defaults.requests)
-                carried = _Budget(limits, carried.expires_at if carried.expires_at is not None
-                                  else now + float(limits.seconds or 1200),
-                                  carried.tokens, carried.updated_at, carried.used, carried.active)
         grant = HTTPGrant(uuid.uuid4().hex, self.session_id, self.epoch, origin, selected_mode, limits,
                           now, carried.expires_at if carried else (now + limits.seconds if limits.seconds is not None else None),
                           version, activation=activation)

@@ -31,10 +31,10 @@ Flags:
   --browser-ingest [port]    deprecated alias for --burp
   --no-stream                disable streaming chat (fallback for backends
                              whose SSE/ND-JSON path drops tool_calls)
-  --yolo                     activate bounded native HTTP autonomy in operator scope
+  --yolo                     activate session native HTTP autonomy in operator scope
                              without manual grants; accept unknown server effects,
                              including bulk delete/real-data changes. Per origin:
-                             500 requests/20min, 3/s burst 3, concurrency 2,
+                             no request quota or fixed grant TTL; 3/s burst 3, concurrency 2,
                              request 128KiB, retained response 64KiB. Explicit limits,
                              revocation remain enforced. Confirm-each resumes OFF.
                              Profile-covered tools auto-approve; independent resource

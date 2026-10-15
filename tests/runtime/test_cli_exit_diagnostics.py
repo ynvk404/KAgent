@@ -93,7 +93,7 @@ async def test_exit_diagnostics_are_opt_in_and_preserve_permissions(
         for grant in grants.values():
             assert grant.origin.as_url() == ORIGIN
             if "--yolo" in rights_flags:
-                assert grant.activation == "yolo" and grant.limits == HTTPLimits()
+                assert grant.activation == "yolo" and grant.limits == HTTPLimits.session()
             else:
                 assert grant.activation == "manual" and grant.limits.requests == 7
             if debug_enabled:

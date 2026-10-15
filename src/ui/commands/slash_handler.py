@@ -379,7 +379,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                         kind="system",
                         text=(
                             f"YOLO currently {current}. When on, native HTTP runs within "
-                            "operator scope and finite limits. Covered permission gates auto-approve; "
+                            "operator scope and resource limits. Covered permission gates auto-approve; "
                             f"resource checks and revoke remain independent. Unsupported adapters are blocked. Scope: {scope_text}."
                         ),
                     )
@@ -418,8 +418,8 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                 if scope_origins else "no target scope declared; set /target first"
             )
             text = (
-                "YOLO enabled: native HTTP automatically receives bounded rights in operator scope. "
-                "Per origin: 500 requests/20 minutes, 3/s (burst 3), concurrency 2, "
+                "YOLO enabled: native HTTP automatically receives session rights in operator scope. "
+                "Per origin: no request quota or fixed grant TTL; 3/s (burst 3), concurrency 2, "
                 "request 128 KiB, retained response 64 KiB. You accept unknown server effects; "
                 "bulk delete or changes to real data are NOT prevented. "
                 "Existing limits and revocation remain enforced; confirm-each resumes when OFF. "

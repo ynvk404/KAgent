@@ -99,7 +99,7 @@ async def test_yolo_toggle_removes_only_implicit_rights(runtime):
     assert not tool.permissions.grants
     prompter.set_yolo(True)
     implicit = next(iter(tool.permissions.grants.values()))
-    assert implicit.activation == "yolo" and implicit.limits == HTTPLimits()
+    assert implicit.activation == "yolo" and implicit.limits == HTTPLimits.session()
     await registry.execute("http", args(), None, prompter)
     prompter.set_yolo(False)
     assert not tool.permissions.grants
@@ -118,6 +118,8 @@ async def test_yolo_toggle_removes_only_implicit_rights(runtime):
 async def test_yolo_binding_does_not_reset_limits_or_revocation(runtime, restriction):
     tool, registry, sent, _ = runtime
     operator = Operator()
+    if restriction in {"expired", "budget"}:
+        tool.permissions.activate(ORIGIN, HTTPLimits())
     prompter = YoloPrompter(operator, True)
     prompter.bind_http_permissions(tool.permissions)
     grant = next(iter(tool.permissions.grants.values()))
@@ -755,12 +757,9 @@ async def test_parallel_http_dispatch_cannot_exceed_request_budget(runtime, monk
     tool, registry, sent, _ = runtime
     operator = Operator()
     prompter = YoloPrompter(operator, activation == "yolo")
-    if activation == "manual":
-        grant = tool.permissions.activate(ORIGIN, HTTPLimits(requests=1, burst=10))
-    else:
-        prompter.bind_http_permissions(tool.permissions)
-        grant = next(iter(tool.permissions.grants.values()))
-        tool.permissions._budgets[grant.id].used = grant.limits.requests - 1
+    # An explicit operator quota remains enforced even with YOLO enabled.
+    grant = tool.permissions.activate(ORIGIN, HTTPLimits(requests=1, burst=10))
+    prompter.bind_http_permissions(tool.permissions)
     used_before = tool.permissions._budgets[grant.id].used
     started, release = asyncio.Event(), asyncio.Event()
 

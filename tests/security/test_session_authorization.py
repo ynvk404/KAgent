@@ -85,7 +85,7 @@ async def test_concurrent_session_approval_resumes_queued_invocation_and_cancels
     assert not tool.permissions._pending and not tool.permissions._inflight
 
 
-def test_optional_limits_journal_never_restores_positive_authority_or_unlimited_yolo(tmp_path):
+def test_optional_limits_journal_requires_current_yolo_activation(tmp_path):
     state = EngagementState()
     state.initialize_target(ORIGIN)
     policy = ExecutionPolicy(state, tmp_path)
@@ -104,8 +104,7 @@ def test_optional_limits_journal_never_restores_positive_authority_or_unlimited_
     assert not restored_state.http_permissions.grants
     restored_state.http_permissions.set_yolo(True)
     implicit = next(iter(restored_state.http_permissions.grants.values()))
-    assert implicit.limits.requests == 500 and implicit.limits.seconds == 1200
-    assert implicit.expires_at is not None
+    assert implicit.limits == HTTPLimits.session() and implicit.expires_at is None
 
 
 @pytest.mark.parametrize('limit', [None, 10001])

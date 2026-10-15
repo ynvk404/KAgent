@@ -222,6 +222,8 @@ async def test_changes_while_waiting_cannot_dispatch_old_receipt(replay, monkeyp
 
 @pytest.mark.parametrize("change", ["request", "capture-revoke", "http-revoke", "expire", "exhaust"])
 async def test_authorized_request_still_rechecks_every_gate(replay, monkeypatch, change):
+    if change in {"expire", "exhaust"}:
+        replay.tool.permissions.activate(ORIGIN, HTTPLimits())
     candidate, args = replay.baseline({"Authorization": "Bearer approved-token"})
     await replay.send(args | {"mutation_value": "first"})
     authorize = replay.tool.permissions.authorize
@@ -393,6 +395,7 @@ async def test_imported_burp_response_without_completeness_is_not_terminal_evide
 
 @pytest.mark.parametrize("limit", ["expiry", "quota", "bytes"])
 async def test_http_limits_remain_enforced_for_capture(replay, limit):
+    replay.tool.permissions.activate(ORIGIN, HTTPLimits())
     _, args = replay.baseline({"Cookie": "sid=capture-cookie"})
     await replay.send(args)
     grant = next(iter(replay.tool.permissions.grants.values()))
