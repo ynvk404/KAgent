@@ -432,7 +432,7 @@ class TestBuildSystemPrompt:
         assert "grep -P" in p
         assert "grep -E" in p
 
-    def test_full_profile_allows_bounded_semantic_scanners_for_coverage_gaps(self):
+    def test_full_profile_keeps_native_discovery_and_separate_typed_scanners(self):
         p = build_system_prompt(
             BuildOptions(
                 skills=Registry(),
@@ -444,9 +444,11 @@ class TestBuildSystemPrompt:
 
         assert "Tool selection: native scoped tools first" in p
         assert "Tooling profile: full" in p
-        assert "installed ffuf through `content_discovery`" in p
+        assert "`content_discovery` uses native HTTP in every tooling profile" in p
+        assert "installed ffuf through `content_discovery`" not in p
         assert "`service_discovery` uses native TCP" in p
-        assert "nmap execution is unavailable without an enforcing adapter" in p
+        assert "Typed Shell Nmap/ffuf use the separate reviewed trusted-host adapter when ready" in p
+        assert "explicit scope and current phase prerequisites" in p
         assert "or nmap through" not in p
         assert "Full profile does not authorize every scanner" in p
 

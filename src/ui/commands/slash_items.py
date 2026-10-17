@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,8 +46,8 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
         name="/scope",
-        args="[show|add <origin>|remove <origin>|reset]",
-        description="show or edit exact origins for this engagement",
+        args="[show|add <origin>|remove <origin>|tcp-add <ip> <ports>|tcp-remove <ip> [ports]|reset]",
+        description="show or edit exact HTTP origins and explicit TCP IP/ports",
     ),
 
     SlashItem(
@@ -69,23 +68,14 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
         description="plan-only mode without tools",
     ),
 
-    SlashItem(
-        name="/next",
-        args="[objective]",
-        description="coverage-driven next test suggestions",
-    ),
     SlashItem(name="/report", args="[filename.pdf]",
               description="export the current assessment snapshot as PDF"),
-    SlashItem(name="/review-result", args="<candidate-id> <outcome> <severity> <impact>",
-              description="operator review of immutable proof; does not grant tool execution"),
-    SlashItem(name="/enrich-cwe", args="<candidate-id>",
-              description="review pinned CWE classification for a persisted unresolved finding"),
     SlashItem(name="/turn-details", description="view latest turn diagnostics in this UI session"),
 
     SlashItem(
         name="/skills",
         args="[enable|disable|new <name>]",
-        description="list/toggle skills",
+        description="open skill picker, use, toggle, or create skills",
     ),
 
     SlashItem(
@@ -117,7 +107,7 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
         name="/reset",
-        description="clear conversation + saved session",
+        description="clear conversation + saved session; keep target and HTTP/TCP scope",
     ),
 
     SlashItem(
@@ -128,7 +118,6 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
 def filter_slash(
     input_text: str,
-    extras: Sequence[SlashItem] = (),
 ) -> list[SlashItem]:
 
     trimmed = input_text.strip()
@@ -141,22 +130,15 @@ def filter_slash(
         return []
 
 
-    all_items = (
-        list(SLASH_ITEMS) + list(extras)
-        if extras
-        else list(SLASH_ITEMS)
-    )
-
-
     needle = trimmed.lower()
 
 
     if needle == "/":
-        return all_items
+        return list(SLASH_ITEMS)
 
 
     return [
         item
-        for item in all_items
+        for item in SLASH_ITEMS
         if item.name.lower().startswith(needle)
     ]

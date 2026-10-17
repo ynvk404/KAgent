@@ -5,9 +5,7 @@ import hashlib
 import json
 import re
 import secrets
-import tempfile
 import time
-from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, unquote, urljoin, urlsplit
 
@@ -15,7 +13,6 @@ import httpx
 
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter
-from src.redaction.redact import apply as redact
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
 from src.tools.common.capabilities import CapabilityInventory
@@ -28,10 +25,10 @@ from src.tools.discovery.common import (
 )
 from src.tools.common.outcome import ErrorKind, ToolOutput
 from src.tools.http.private_host import gate_private_request, parse_http_url
-from src.tools.execution.shell import run_with_capture
 from src.tools.http.request_builder import NATIVE_USER_AGENT
 from src.tools.common.types import PermissionHints, Tool
 from src.workflow.state import WorkflowState
+from src.workflow.ownership import WorkflowOwner
 from src.permission.runtime.execution import guard_adapter
 from src.permission.network.transport import governed_stream
 
@@ -46,7 +43,6 @@ MAX_PATHS = 500
 MAX_EXTENSIONS = 16
 MAX_RESPONSE_BYTES = 16 * 1024
 MAX_RESULT_ITEMS = 100
-MAX_FFUF_JSON_BYTES = 1024 * 1024
 
 DEFAULT_PATHS = (
     "admin", "api", "api/v1", "api/v2", "auth", "login", "logout",
@@ -67,14 +63,14 @@ class ContentDiscoveryTool(Tool):
         self,
         target: Target,
         engagement: EngagementState,
-        capabilities: CapabilityInventory,
-        tooling_profile: Callable[[], str | None],
+        capabilities: CapabilityInventory | None = None,
+        tooling_profile: Callable[[], str | None] | None = None,
         workflow: WorkflowState | None = None,
     ) -> None:
+        # Accept the former constructor contract without consulting scanner
+        # installation/profile state: semantic discovery always stays native.
         self.target = target
         self.engagement = engagement
-        self.capabilities = capabilities
-        self.tooling_profile = tooling_profile
         self.workflow = workflow
 
     def name(self) -> str:
@@ -83,10 +79,9 @@ class ContentDiscoveryTool(Tool):
     def description(self) -> str:
         return (
             "Discover a bounded list of common web paths on the active target's "
-            "exact HTTP origin. Uses native HTTP by default; full tooling profile "
-            "may select installed ffuf when coverage is still missing. GET only, "
-            "no recursion, no raw scanner flags, redirects are not followed, and "
-            "every ffuf hit is rechecked with native HTTP. Its bounded paths and "
+            "exact HTTP origin using native HTTP in every tooling profile. GET only, "
+            "no recursion, no raw scanner flags, and redirects are not followed. "
+            "Two random baselines filter wildcard/SPA responses. Its bounded paths and "
             "request budget are validated against the active scope; routine "
             "in-scope enumeration is eligible for YOLO."
         )
@@ -115,13 +110,13 @@ class ContentDiscoveryTool(Tool):
                 "mode": {
                     "type": "string",
                     "enum": ["auto", "native"],
-                    "description": "auto selects a runtime-approved backend; native forces built-in HTTP.",
+                    "description": "auto and native both use built-in HTTP; external ffuf requires a typed Shell scanner job.",
                 },
                 "max_requests": {
                     "type": "integer",
                     "minimum": 3,
                     "maximum": MAX_REQUESTS,
-                    "description": f"Total request hard cap, including two baselines and verification (3–{MAX_REQUESTS}).",
+                    "description": f"Total request hard cap, including two baselines (3–{MAX_REQUESTS}).",
                 },
                 "rate_limit": {
                     "type": "integer",
@@ -202,9 +197,10 @@ class ContentDiscoveryTool(Tool):
         prompter: Prompter,
     ) -> ToolOutput:
         guard_adapter(self, args, prompter)
+        owner = WorkflowOwner.capture(self, prompter)
         scope, words, mode, max_requests, rate, timeout = self._parameters(args)
         backend = self._select_backend(mode, max_requests)
-        backend_reason = self._backend_reason(mode, backend, max_requests)
+        backend_reason = self._backend_reason(mode)
         coverage_incomplete_reason: str | None = None
         scanned_paths = 0
 
@@ -224,10 +220,11 @@ class ContentDiscoveryTool(Tool):
             if status in {"success", "observation"} and coverage_incomplete_reason:
                 phase_status = "failed"
                 coverage_reason = coverage_incomplete_reason
-            objective = self.workflow.objective if self.workflow is not None else None
+            objective = owner.objective
             phase_coverage: dict[str, Any] | None = None
             if (
                 phase_status is not None
+                and owner.current()
                 and objective is not None
                 and self.workflow is not None
                 and self.workflow.is_next_phase("enumeration")
@@ -329,125 +326,51 @@ class ContentDiscoveryTool(Tool):
                 baselines.append(baseline)
 
             scan_budget = max_requests - len(baselines)
-            if backend == "ffuf":
-                # Keep enough of the total request budget to verify every hit.
-                scan_budget //= 2
             scan_words = words[:scan_budget]
             scanned_paths = len(scan_words)
             if scanned_paths < len(words):
                 coverage_incomplete_reason = (
                     f"request budget covered {scanned_paths} of {len(words)} requested paths"
                 )
-            hits: list[str] = []
-            if backend == "ffuf":
+            for word in scan_words:
+                if requests_completed >= max_requests:
+                    break
                 if not await sleep_or_abort(1 / rate, signal):
                     return make_result(
-                        scope, backend, len(baselines), requests_completed, start, baselines,
-                        [], [], status="cancelled",
-                        reason="cancelled before ffuf scan",
+                        scope, backend, len(scan_words) + len(baselines), requests_completed,
+                        start, baselines, observations, rejected,
+                        status="cancelled", reason="cancelled during native discovery",
                     )
-                hits, scan_requests, scan_error = await self._run_ffuf(
-                    scope, scan_words, rate, deadline, signal
+                observation, outcome = await self._probe(
+                    client, self._url_for(scope, word), signal, deadline
                 )
-                requests_completed += scan_requests or 0
-                request_count_exact = scan_requests is not None
-                if is_aborted(signal):
-                    return make_result(
-                        scope, backend, len(scan_words) + len(baselines) + len(hits), requests_completed,
-                        start, baselines, [], [], status="cancelled",
-                        reason="cancelled while ffuf was running",
-                        request_count_exact=request_count_exact,
-                    )
-                for word in hits:
-                    if requests_completed >= max_requests:
-                        rejected.append({"path": word, "reason": "request_budget_exhausted"})
-                        continue
-                    if not await sleep_or_abort(1 / rate, signal):
-                        break
-                    url = self._url_for(scope, word)
-                    observation, outcome = await self._probe(client, url, signal, deadline)
-                    if observation is not None:
-                        requests_completed += 1
-                    if outcome == "cancelled":
-                        break
-                    if outcome == "timeout":
-                        return make_result(
-                            scope, backend, len(scan_words) + len(baselines) + len(hits),
-                            requests_completed, start, baselines, observations,
-                            rejected, status="error", reason="operation timeout",
-                            error_kind="timeout",
-                        )
-                    if observation is None:
-                        if outcome not in {"cancelled", "timeout"}:
-                            coverage_incomplete_reason = "one or more verification requests did not complete"
-                        rejected.append({"path": word, "reason": outcome or "verification_failed"})
-                    elif self._matches_baselines(observation, baselines):
-                        rejected.append({"path": word, "reason": "wildcard_or_spa_baseline"})
-                    else:
-                        observation["path"] = word
-                        observation["verified"] = True
-                        observations.append(observation)
-                if is_aborted(signal):
+                if observation is not None:
+                    requests_completed += 1
+                if outcome == "cancelled":
                     return make_result(
                         scope, backend, len(scan_words) + len(baselines), requests_completed,
-                        start, baselines, observations, rejected, status="cancelled",
-                        reason="cancelled during hit verification",
+                        start, baselines, observations, rejected,
+                        status="cancelled", reason="cancelled during native request",
                     )
-                if scan_error:
+                if outcome == "timeout":
                     return make_result(
                         scope, backend, len(scan_words) + len(baselines), requests_completed,
-                        start, baselines, observations, rejected, status="error",
-                        reason=scan_error,
-                        request_count_exact=request_count_exact,
-                        error_kind=(
-                            "timeout" if scan_error.startswith("timeout")
-                            else "tool_exception"
-                        ),
+                        start, baselines, observations, rejected,
+                        status="error", reason="operation timeout",
+                        error_kind="timeout",
                     )
-            else:
-                for word in scan_words:
-                    if requests_completed >= max_requests:
-                        break
-                    if not await sleep_or_abort(1 / rate, signal):
-                        return make_result(
-                            scope, backend, len(scan_words) + len(baselines), requests_completed,
-                            start, baselines, observations, rejected,
-                            status="cancelled", reason="cancelled during native discovery",
-                        )
-                    observation, outcome = await self._probe(
-                        client, self._url_for(scope, word), signal, deadline
-                    )
-                    if observation is not None:
-                        requests_completed += 1
-                    if outcome == "cancelled":
-                        return make_result(
-                            scope, backend, len(scan_words) + len(baselines), requests_completed,
-                            start, baselines, observations, rejected,
-                            status="cancelled", reason="cancelled during native request",
-                        )
-                    if outcome == "timeout":
-                        return make_result(
-                            scope, backend, len(scan_words) + len(baselines), requests_completed,
-                            start, baselines, observations, rejected,
-                            status="error", reason="operation timeout",
-                            error_kind="timeout",
-                        )
-                    if observation is None:
-                        if outcome not in {"cancelled", "timeout"}:
-                            coverage_incomplete_reason = "one or more path requests did not complete"
-                        rejected.append({"path": word, "reason": outcome or "request_failed"})
-                    elif self._matches_baselines(observation, baselines):
-                        rejected.append({"path": word, "reason": "wildcard_or_spa_baseline"})
-                    else:
-                        observation["path"] = word
-                        observation["verified"] = True
-                        observations.append(observation)
+                if observation is None:
+                    if outcome not in {"cancelled", "timeout"}:
+                        coverage_incomplete_reason = "one or more path requests did not complete"
+                    rejected.append({"path": word, "reason": outcome or "request_failed"})
+                elif self._matches_baselines(observation, baselines):
+                    rejected.append({"path": word, "reason": "wildcard_or_spa_baseline"})
+                else:
+                    observation["path"] = word
+                    observation["verified"] = True
+                    observations.append(observation)
 
-        requested_requests = (
-            len(scan_words) + len(baselines) + len(hits)
-            if backend == "ffuf"
-            else len(scan_words) + len(baselines)
-        )
+        requested_requests = len(scan_words) + len(baselines)
         result_reasons = [
             reason for reason in (coverage_incomplete_reason,
                                   f"private/internal target approved: {private_reason}" if private_reason else None)
@@ -508,41 +431,16 @@ class ContentDiscoveryTool(Tool):
         )
         return scope, words, str(mode), max_requests, rate, timeout
 
-    def _select_backend(self, mode: str, max_requests: int | None = None) -> str:
-        if mode == "native":
-            return "native"
-        use_ffuf = (
-            self.tooling_profile() == "full"
-            and self.capabilities.snapshot().ffuf is not None
-            and self.workflow is not None
-            and self.workflow.needs_phase_coverage(
-                "enumeration", "active_content_discovery"
-            )
-        )
-        # Two independent baselines, at least one scan word, and one verification.
-        if max_requests is not None and max_requests < 4:
-            use_ffuf = False
-        return "ffuf" if use_ffuf else "native"
+    @staticmethod
+    def _select_backend(mode: str, max_requests: int | None = None) -> str:
+        # Adapter hook used by the shared execution policy. Scanners use typed Shell.
+        return "native"
 
-    def _backend_reason(self, mode: str, backend: str, max_requests: int) -> str:
-        if mode != "auto":
-            return f"{backend} backend explicitly selected"
-        if backend == "ffuf":
-            return (
-                "full profile selected installed ffuf for a runtime-confirmed "
-                "enumeration coverage gap"
-            )
-        if self.tooling_profile() != "full":
-            return "minimal profile defaults to native HTTP discovery"
-        if self.capabilities.snapshot().ffuf is None:
-            return "ffuf unavailable; fell back to native HTTP discovery"
-        if self.workflow is None or not self.workflow.needs_phase_coverage(
-            "enumeration", "active_content_discovery"
-        ):
-            return "no runtime-confirmed enumeration coverage gap; using native HTTP discovery"
-        if max_requests < 4:
-            return "native selected because the request cap leaves no safe ffuf verification budget"
-        return "native selected by the runtime's bounded backend policy"
+    @staticmethod
+    def _backend_reason(mode: str) -> str:
+        if mode == "native":
+            return "native backend explicitly selected"
+        return "native HTTP discovery; external ffuf uses typed Shell scanner jobs"
 
     @staticmethod
     def _bounded_int(
@@ -711,106 +609,6 @@ class ContentDiscoveryTool(Tool):
             for baseline in baselines
         )
 
-    async def _run_ffuf(
-        self,
-        scope: DiscoveryScope,
-        words: list[str],
-        rate: int,
-        deadline: float,
-        signal: Any,
-    ) -> tuple[list[str], int | None, str | None]:
-        binary = self.capabilities.snapshot().ffuf
-        if binary is None:
-            return [], 0, "ffuf is no longer available"
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return [], 0, "operation timeout before ffuf started"
-        from src.permission.runtime.execution import current_policy
-        policy = current_policy()
-        worker = policy.worker if policy is not None else None
-        with tempfile.TemporaryDirectory(prefix="kagent-content-", dir=worker.output_root if worker else None) as directory:
-            root = Path(directory)
-            wordlist = root / "paths.txt"
-            result_file = root / "results.json"
-            wordlist.write_text("\n".join(words) + "\n", encoding="utf-8")
-            argv = [
-                "-w", str(wordlist),
-                "-u", scope.base_url.rstrip("/") + "/FUZZ",
-                "-rate", str(rate),
-                "-t", "1",
-                "-timeout", str(min(10, max(1, int(remaining)))),
-                "-maxtime", str(max(1, int(remaining))),
-                "-of", "json",
-                "-o", str(result_file),
-                "-mc", "all",
-                "-s",
-                "-noninteractive",
-            ]
-            try:
-                if worker is not None:
-                    assert policy is not None
-                    from src.permission.worker.broker import broker_directory
-                    argv[1] = '/work/' + wordlist.relative_to(policy.root).as_posix()
-                    argv[argv.index('-o') + 1] = '/work/' + result_file.relative_to(policy.root).as_posix()
-                    argv += ['-x', 'http://127.0.0.1:18080']
-                    async with broker_directory(signal) as broker:
-                        executable, wrapped = await worker.prepare(binary, argv, broker=broker, scanner=True, signal=signal)
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            return [], 0, "operation timeout before ffuf started"
-                        output = await run_with_capture(executable, wrapped, remaining, signal)
-                else:
-                    output = await run_with_capture(binary, argv, remaining, signal)
-            except OSError:
-                self.capabilities.mark_unavailable("ffuf", binary)
-                return [], 0, "ffuf could not be started (missing or not executable)"
-            if output.status == "cancelled" or is_aborted(signal):
-                return [], None, "cancelled"
-            if output.status != "success":
-                if output.error_kind == "timeout":
-                    return [], None, "timeout during ffuf scan; partial results are not trusted"
-                diagnostic = self._safe_diagnostic(str(output))
-                reason = "ffuf failed; partial results are not trusted"
-                if diagnostic:
-                    reason += f": {diagnostic}"
-                return [], None, reason
-            scan_requests = len(words)
-            error: str | None = None
-            try:
-                if not result_file.exists():
-                    raise ValueError("ffuf did not produce JSON output")
-                if result_file.stat().st_size > MAX_FFUF_JSON_BYTES:
-                    raise ValueError("ffuf JSON output exceeded the size limit")
-                document = json.loads(result_file.read_text(encoding="utf-8"))
-                raw_results = document.get("results") if isinstance(document, dict) else None
-                if not isinstance(raw_results, list):
-                    raise ValueError("ffuf JSON has no results list")
-                allowed = set(words)
-                hits: list[str] = []
-                for result in raw_results:
-                    if not isinstance(result, dict):
-                        continue
-                    inputs = result.get("input")
-                    word = inputs.get("FUZZ") if isinstance(inputs, dict) else None
-                    if isinstance(word, bytes):
-                        word = word.decode("utf-8", errors="replace")
-                    if isinstance(word, str):
-                        normalized = validate_relative_path(word)
-                        if normalized in allowed and normalized not in hits:
-                            hits.append(normalized)
-                return hits, scan_requests, error
-            except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
-                return [], scan_requests, error or "malformed or missing ffuf JSON output"
-
-    @staticmethod
-    def _safe_diagnostic(value: str) -> str:
-        # Scanner output contains no user-supplied headers, but keep diagnostics
-        # short and strip terminal/control characters before exposing them.
-        printable = " ".join(
-            "".join(char for char in line if char.isprintable()).strip()
-            for line in value.splitlines()
-        )
-        return redact(printable)[:240]
 
     @staticmethod
     def _result(

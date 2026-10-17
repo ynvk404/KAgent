@@ -8,9 +8,9 @@ import pytest
 
 from src.permission.permission import Decision, PermissionRequest
 from src.permission.permission import PermissionReviewCancelled, YoloPrompter
+from src.permission.network.grants import HTTPLimits
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest, BridgedPrompter
 from src.ui.widgets.permission_modal import PermissionModal
-from src.ui.commands.result_review import review_result
 from src.tools.common.registry import Registry
 from src.tools.execution.file import (FileReadTool, FileWriteTool, FileEditTool, FileWriteToolAlias,
                                       FileEditToolAlias, gate_sensitive_path)
@@ -33,7 +33,6 @@ from tests.ui.test_permission_review import _content_text
 from tests.ui.test_permission_modal import make_req, rendered
 from tests.security.test_captured_http_replay import replay
 from tests.security.test_execution_policy import runtime
-from tests.security.test_operator_review import command, setup_review
 from tests.security.test_browser_local import rig, ORIGIN as BROWSER_ORIGIN
 from tests.security.test_browser_yolo import call, yolo
 
@@ -525,7 +524,10 @@ def bridged(request: PermissionRequest) -> BridgedPermissionRequest:
                                     resolve=Mock(), reject=Mock())
 
 
-async def test_capture_use_wording_comes_from_real_authorization_proposal(replay):
+@pytest.mark.parametrize("grant_kind", ["session", "bounded"])
+async def test_capture_use_wording_comes_from_real_authorization_proposal(replay, grant_kind):
+    if grant_kind == "bounded":
+        replay.tool.permissions.activate(replay.tool.target.base_url(), HTTPLimits(seconds=60, requests=10))
     _, args = replay.baseline({"Authorization": "Bearer fixture-secret"}, identity="fixture-user")
     seen = []
 
@@ -538,7 +540,12 @@ async def test_capture_use_wording_comes_from_real_authorization_proposal(replay
         assert "bounded reuse" in frame and "immutable capture" in frame
         assert "baseline:" in frame and "POST " in frame and '"keep"' in frame
         assert "No redirects or shared HTTP context import" in frame
-        assert "configured lifetime:" in frame and "expires in" not in frame
+        if grant_kind == "bounded":
+            assert "configured lifetime: 60s" in frame and "requests <= 10" in frame
+        else:
+            assert "session lifetime" in frame and "no request quota" in frame
+            assert "configured, not remaining" in frame
+        assert "expires in" not in frame
         assert "remaining lifetime" not in frame and "fixture-secret" not in frame
         assert request == original and replay.tool.permissions._capture_grants == before_grants
         assert not replay.control.sent
@@ -555,42 +562,9 @@ async def test_capture_use_wording_comes_from_real_authorization_proposal(replay
     assert len(replay.tool.permissions._capture_grants) == 1
 
 
-@pytest.mark.parametrize("decision", [Decision.ALLOW_ONCE, Decision.DENY])
-async def test_conclusion_review_uses_real_proof_and_decline_semantics(runtime, tmp_path, decision):
-    _, _, policy, operator, _, _, _ = runtime
-    app, state, candidate, _, _, output = await setup_review(runtime, tmp_path)
-    prior = deepcopy(state.to_dict())
-    checked = []
-
-    async def review(request, signal=None):
-        original = deepcopy(request)
-        modal = PermissionModal(bridged(request))
-        frame = rendered(modal, width=200)
-        assert "y approve conclusion" in frame and "n decline review" in frame
-        assert "current invocation only" not in frame and "no execution rights" in frame
-        assert "Exact result:" in frame and "Evidence:" in frame and "Impact:" in frame
-        assert "Designated private fixture resource" in frame
-        assert request == original and state.to_dict() == prior
-        app.agent.save.assert_not_called()
-        modal.handle_key("n" if decision == Decision.DENY else "y")
-        modal.req.resolve.assert_called_once_with(decision)
-        operator.requests.append(request)
-        checked.append(decision)
-        return decision
-
-    operator.ask = review
-    await review_result(app, command(candidate))
-    assert checked == [decision]
-    if decision == Decision.DENY:
-        assert state.to_dict() == prior and output[-1].entry.kind == "error"
-        app.agent.save.assert_not_called()
-    else:
-        result = state.latest_result(candidate.id)
-        assert result is not None and result.outcome == "confirmed"
-        assert output[-1].entry.kind == "system"
 
 
-@pytest.mark.parametrize("tool", ["http_capture_credentials", "review_result"])
+@pytest.mark.parametrize("tool", ["http_capture_credentials", "custom_action"])
 def test_special_name_with_unknown_producer_format_keeps_generic_preview(tool):
     req = make_req(tool=tool, summary="Custom action", detail="UNKNOWN_PREVIEW_TAIL")
     modal = PermissionModal(req)

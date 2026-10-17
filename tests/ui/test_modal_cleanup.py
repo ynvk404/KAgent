@@ -197,8 +197,11 @@ async def test_long_lists_navigation_scroll_resize_and_wrapped_click(monkeypatch
         await pilot.pause()
         assert modal.idx == 12 and not resolved and not toggled
         assert_control_visible(app, "modal_item", 12)
-        if kind != "provider":
+        if kind == "ask":
             assert "UNTRUNCATED_END" in _content_text(app)
+        elif kind == "skills":
+            assert "UNTRUNCATED_END" not in _content_text(app)
+            assert all(len(control_rows(app, "modal_item", i)) == 1 for i in modal.item_lines.values())
         await pilot.press("pagedown")
         await pilot.pause()
         manual_scroll = app.overlay_content_static.scroll_y

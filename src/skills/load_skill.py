@@ -91,7 +91,7 @@ class LoadSkillTool:
             raise ValueError(
                 f'skill "{name}" is marked '
                 f"disable-model-invocation: true. "
-                f"Only the user can load it via /{name}."
+                "Only the user can load it via /skills (select it and press Enter)."
             )
 
         from src.permission.runtime.execution import policy_for
@@ -112,6 +112,5 @@ class LoadSkillTool:
                       "Repair derived artifacts if needed; do not add probes merely to repair a sufficient manifest. "
                       "If evidence is insufficient, submit insufficient-evidence unless a distinct missing validation step is identified. "
                       "Declare bounded hypothesis, criteria, limitations, observed_impact, severity and completed_attempt for negatives. "
-                      "A proof file alone cannot establish target traffic. Operator /review-result optionally reviews a proof "
-                      "conclusion; that human review is never autonomous verification or tool authorization.\n\n")
+                      "A proof file alone cannot establish target traffic.\n\n")
         return prefix + materialize_skill_body(skill)

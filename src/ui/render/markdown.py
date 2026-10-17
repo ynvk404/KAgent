@@ -281,26 +281,41 @@ def _render_table(block: List[str], *, width: int | None = None, ui: UIPalette =
     header = _split_table_row(block[0]) if block else []
     body_rows = [_split_table_row(row) for row in block[1:]]
     cols = max(len(header), max((len(r) for r in body_rows), default=0), 1)
+    available = max(1, (width if width is not None else terminal_columns()) - 2)
 
     def cell(cells: List[str], column: int) -> Text:
         value = cells[column] if column < len(cells) else ""
         rendered = _render_inline(value, normalize_table_breaks=True, ui=ui)
         return Text.from_ansi(rendered)
 
-    table = Table(
-        box=box.ROUNDED,
-        border_style=ui.border,
-        collapse_padding=False,
-        expand=False,
-        header_style="bold",
-        highlight=False,
-        padding=(0, 1),
-        show_lines=False,
-    )
-    for column in range(cols):
-        table.add_column(cell(header, column))
-    for row in body_rows:
-        table.add_row(*(cell(row, column) for column in range(cols)))
+    # Each horizontal cell needs content, two padding cells and a border. Rich
+    # can otherwise compress columns to zero, silently losing their contents.
+    if cols * 4 + 1 > available:
+        table = Table.grid(padding=(0, 2), expand=True)
+        table.add_column(ratio=2, overflow="fold")
+        table.add_column(ratio=3, overflow="fold")
+        for index, row in enumerate(body_rows or [[]]):
+            if index:
+                table.add_row(Text(""), Text(""))
+            for column in range(cols):
+                label = cell(header, column)
+                label.stylize("bold")
+                table.add_row(label, cell(row, column))
+    else:
+        table = Table(
+            box=box.ROUNDED,
+            border_style=ui.border,
+            collapse_padding=False,
+            expand=False,
+            header_style="bold",
+            highlight=False,
+            padding=(0, 1),
+            show_lines=False,
+        )
+        for column in range(cols):
+            table.add_column(cell(header, column), overflow="fold")
+        for row in body_rows:
+            table.add_row(*(cell(row, column) for column in range(cols)))
 
     output = StringIO()
     use_color = color_level() != 0
@@ -310,7 +325,7 @@ def _render_table(block: List[str], *, width: int | None = None, ui: UIPalette =
         force_terminal=use_color,
         highlight=False,
         markup=False,
-        width=max(10, (width or terminal_columns()) - 2),
+        width=available,
     )
     console.print(table, end="")
     return output.getvalue().rstrip("\n")

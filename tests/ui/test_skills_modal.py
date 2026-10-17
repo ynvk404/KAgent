@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from rich.cells import cell_len
 
 from src.ui.widgets.skills_modal import SkillsModal
 
@@ -43,10 +45,20 @@ class FakeAgent:
 
     def __init__(self):
         self.skills = FakeSkills()
+        self.pending_skills = set()
+        self.running = False
+        self.inject_skill = AsyncMock(side_effect=self._inject)
         self.set_skill_enabled = AsyncMock(
             side_effect=self._set
         )
 
+    async def _inject(self, name: str):
+        if self.running:
+            raise RuntimeError("cannot load a skill while a turn is in flight")
+        if self.skills.is_disabled(name):
+            raise RuntimeError(f'skill "{name}" is disabled - enable it from /skills first')
+        self.pending_skills.add(name)
+        return name
 
     async def _set(
         self,
@@ -60,6 +72,12 @@ class FakeAgent:
             self.skills.disabled.add(name)
 
         return True
+
+
+async def press_action(modal: SkillsModal, key: str) -> None:
+    action = modal.handle_key(key)
+    assert action is not None
+    await action
 
 def test_render_skills():
 
@@ -260,3 +278,129 @@ def test_skills_modal_long_list_windowing():
     assert "› [on]  skill_10" in frame
     assert "skill_13" in frame
     assert "skill_14" not in frame
+
+
+async def test_space_only_toggles_one_skill_and_persists():
+    agent = FakeAgent()
+    persist, loaded, close = AsyncMock(), Mock(), Mock()
+    modal = SkillsModal(agent, close, persist, loaded)
+    modal.handle_key("down")
+    await press_action(modal, "space")
+    assert agent.skills.disabled == {"nmap"}
+    agent.set_skill_enabled.assert_awaited_once_with("nmap", False)
+    persist.assert_awaited_once_with(["nmap"])
+    agent.inject_skill.assert_not_called()
+    loaded.assert_not_called()
+    close.assert_not_called()
+
+
+async def test_enter_uses_selection_without_toggle_or_config_write_and_closes_once():
+    agent = FakeAgent()
+    persist, loaded, close = AsyncMock(), Mock(), Mock()
+    modal = SkillsModal(agent, close, persist, loaded)
+    modal.handle_key("tab")
+    await press_action(modal, "enter")
+    assert modal.handle_key("enter") is None
+    await modal.load()  # Also ignore stale async activation after closure.
+    agent.inject_skill.assert_awaited_once_with("nmap")
+    assert agent.skills.disabled == set() and agent.pending_skills == {"nmap"}
+    agent.set_skill_enabled.assert_not_called()
+    persist.assert_not_called()
+    loaded.assert_called_once_with("nmap")
+    close.assert_called_once()
+
+
+async def test_disabled_enter_stays_open_until_space_enables_it():
+    agent = FakeAgent()
+    agent.skills.disabled.add("web_scan")
+    close = Mock()
+    modal = SkillsModal(agent, close)
+    await press_action(modal, "enter")
+    assert agent.skills.disabled == {"web_scan"} and not agent.pending_skills
+    assert "disabled" in (modal.error or "")
+    agent.set_skill_enabled.assert_not_called()
+    close.assert_not_called()
+    await press_action(modal, "space")
+    await press_action(modal, "enter")
+    assert agent.pending_skills == {"web_scan"}
+    close.assert_called_once()
+
+
+@pytest.mark.parametrize("key,enabled", [("a", True), ("d", False)])
+async def test_bulk_keys_preserve_persistence_and_do_not_load(key, enabled):
+    agent = FakeAgent()
+    agent.skills.disabled = {skill.name for skill in agent.skills.list()} if enabled else set()
+    persist = AsyncMock()
+    modal = SkillsModal(agent, Mock(), persist)
+    await press_action(modal, key)
+    assert agent.skills.disabled == (set() if enabled else {"web_scan", "nmap", "report"})
+    persist.assert_awaited_once_with(agent.skills.disabled_names())
+    agent.inject_skill.assert_not_called()
+
+
+@pytest.mark.parametrize("key", ["escape", "esc", "q"])
+def test_close_keys_never_mutate_or_load(key):
+    agent, close = FakeAgent(), Mock()
+    modal = SkillsModal(agent, close)
+    modal.handle_key(key)
+    modal.handle_key("enter")
+    close.assert_called_once()
+    agent.inject_skill.assert_not_called()
+    agent.set_skill_enabled.assert_not_called()
+
+
+async def test_pending_skill_is_not_injected_again_when_picker_reopens():
+    agent = FakeAgent()
+    await SkillsModal(agent, Mock()).load()
+    await SkillsModal(agent, Mock()).load()
+    agent.inject_skill.assert_awaited_once_with("web_scan")
+
+
+async def test_overlapping_enter_loads_only_once():
+    agent, close = FakeAgent(), Mock()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_load(name):
+        entered.set()
+        await release.wait()
+        return await agent._inject(name)
+
+    agent.inject_skill.side_effect = slow_load
+    modal = SkillsModal(agent, close)
+    first = asyncio.create_task(modal.load())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        assert modal.handle_key("enter") is None
+        await modal.load()
+        agent.inject_skill.assert_awaited_once_with("web_scan")
+    finally:
+        release.set()
+        await first
+    assert agent.pending_skills == {"web_scan"}
+    close.assert_called_once()
+
+
+@pytest.mark.parametrize("pending", [False, True])
+async def test_in_flight_turn_keeps_agent_load_guard(pending):
+    agent, close = FakeAgent(), Mock()
+    agent.running = True
+    if pending:
+        agent.pending_skills.add("web_scan")
+    modal = SkillsModal(agent, close)
+    await modal.load()
+    assert "in flight" in (modal.error or "")
+    agent.inject_skill.assert_awaited_once_with("web_scan")
+    close.assert_not_called()
+
+
+@pytest.mark.parametrize("width", [155, 95, 43])
+def test_summary_is_one_terminal_line_and_preserves_description(width):
+    agent = FakeAgent()
+    original = "Long summary 測試 with whitespace\n\n" * 50 + "DESCRIPTION_END"
+    agent.skills.items[0].description = original
+    modal = SkillsModal(agent, Mock(), width=width)
+    lines = modal.render()
+    row = next(line for line in lines if "web_scan" in line)
+    assert "\n" not in row and "DESCRIPTION_END" not in row
+    assert cell_len(row) <= width and row.endswith("…")
+    assert agent.skills.items[0].description == original

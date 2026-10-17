@@ -5,6 +5,8 @@ No source-binding or publication proposal is installed in production here.
 import json
 import os
 from pathlib import Path
+from contextlib import contextmanager
+from src.workflow.evidence_source import EvidenceSource
 
 import pytest
 
@@ -39,11 +41,13 @@ async def test_unresolved_source_namespace_race_remains_real_policy_blocker(tmp_
     prompter.bind_execution_policy(policy)
     registry = Registry()
     registry.register(tool)
-    original = Path.open
+    original = EvidenceSource.open
     swapped = False
-    def open_file(path, *args, **kwargs):
+    @contextmanager
+    def open_file(binding):
+        path = binding.path
         nonlocal swapped
-        mode = args[0] if args else kwargs.get("mode", "r")
+        mode = "rb"
         if path == source and mode == "rb" and not swapped:
             swapped = True
             if swap == "leaf":
@@ -52,17 +56,15 @@ async def test_unresolved_source_namespace_race_remains_real_policy_blocker(tmp_
             else:
                 parent.rename(lab / "retired")
                 parent.symlink_to(outside_dir, target_is_directory=True)
-        return original(path, *args, **kwargs)
-    monkeypatch.setattr(Path, "open", open_file)
-    result = json.loads(await registry.execute("workflow", {
+        with original(binding) as handle:
+            yield handle
+    monkeypatch.setattr(EvidenceSource, "open", open_file)
+    result = await registry.execute("workflow", {
         "action": "record_evidence", "candidate_id": cid, "evidence_path": "parent/proof.txt",
-    }, None, prompter))
-    assert result["ok"] and swapped
-    artifact = tool.state.evidence[result["evidence"]["id"]]
-    assert (lab / artifact.path).read_bytes() == b"synthetic outside"
-    assert artifact.source_path == str(source)
+    }, None, prompter)
+    assert str(result).startswith("error:") and swapped
+    assert not tool.state.evidence and not list(lab.rglob("*.proof"))
     assert not policy.active and not tool.state.mutation_lock.locked()
-
 
 def test_design_rooted_descriptor_does_not_lease_namespace_membership(tmp_path):
     if not _ROOTED_OPEN_AVAILABLE:

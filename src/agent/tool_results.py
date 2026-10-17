@@ -43,6 +43,10 @@ def source_provenance(agent: Agent, name: str, args: dict[str, Any]) -> dict[str
     source: dict[str, Any] = {"module": type(tool).__module__, "class": type(tool).__name__,
                               "policy_required": policy_for(agent.prompter) is not None}
     if type(tool) in (ShellTool, BashTool):
+        if 'scanner' in args:
+            # Scanner shards are admitted only by the concrete producer hook,
+            # including useful observations of failed jobs. Text is no proof.
+            return None
         source.update(kind="shell", adapter=digest_text(str(cast(ShellTool, tool).shell_path)))
         policy = policy_for(agent.prompter)
         if policy is not None:
@@ -180,8 +184,7 @@ class ResultRetention:
         self.refresh_scope()
         if self.store is None or message.tool_status not in {"success", "observation"}:
             return
-        # Raw HTTP evidence is already retained by the bounded ObservationStore
-        # and the approved private session. Keep this cache's sanitized contract.
+        # Raw HTTP evidence retains its separate ObservationStore contract.
         if message.http_response_sources:
             return
         try:
@@ -190,8 +193,58 @@ class ResultRetention:
                     and execution.retention_provenance == provenance):
                 self.pending[id(message)] = PendingResult(message, message.content, provenance)
         except Exception:
-            # Optimization must never change the successful execution outcome.
             return
+
+    def retain_scanner(self, produced, call_id: str) -> list[str]:
+        """Producer-only bounded shards; never convert a job failure to success."""
+        from src.tools.execution.scanner_runner import ScannerResult
+        if type(produced) is not ScannerResult:
+            raise ValueError('scanner retention requires a runtime producer object')
+        self.refresh_scope()
+        envelope = produced.envelope
+        artifacts = envelope['artifacts']
+        if self.store is None or produced.manifest_sha256 is None or not artifacts.get('manifest') or not produced.dataset:
+            if not produced.dataset and produced.manifest_sha256 is not None:
+                artifacts['retrieval'] = 'empty'
+            elif artifacts.get('retrieval') != 'retrieval_limited':
+                artifacts['retrieval'] = 'unavailable'
+            return []
+        provenance = {'kind': 'scanner', 'module': ShellTool.__module__, 'class': ShellTool.__name__,
+            'policy_required': True, 'job_id': envelope['job_id'], 'origin': produced.plan.origin.as_url(),
+            'semantic_key': produced.plan.semantic_key, 'dataset_sha256': artifacts.get('dataset_sha256'),
+            # Scope changes include explicit TCP removal. Do not mistake an
+            # unchanged logical HTTP origin for current TCP source rights.
+            # HTTP grant replacement/expiry/usage are intentionally excluded.
+            'scope_revision': produced.plan.authority_revision[2]}
+        # Leave header room below the unchanged one-MiB total-file bound.
+        from src.session.tool_results import PER_RESULT_BYTES, MAX_HEADER_BYTES
+        cap = PER_RESULT_BYTES - MAX_HEADER_BYTES
+        shards: list[bytes] = []
+        current = bytearray()
+        for line in produced.dataset.splitlines(keepends=True):
+            if current and len(current) + len(line) > cap:
+                shards.append(bytes(current))
+                current.clear()
+            current.extend(line)
+        if current:
+            shards.append(bytes(current))
+        refs = []
+        try:
+            for shard in shards:
+                ref = self.store.put(shard.decode(), generation=self.scope['generation'], provenance=provenance,
+                    tool_name='shell', tool_call_id=call_id, status='observation', error_kind=None,
+                    http_status=None, truncated=False)
+                if ref is None:
+                    artifacts['retrieval'] = 'retrieval_limited'
+                    break
+                self.references[ref.result_ref] = ref
+                refs.append(ref.result_ref)
+            else:
+                artifacts['retrieval'] = 'available'
+        except (ResultUnavailable, OSError, ValueError):
+            artifacts['retrieval'] = 'retrieval_limited'
+        artifacts['result_refs'] = refs
+        return refs
 
     def admit(self, working: list[Message], tools_tokens: int, *, request: ChatRequest | None = None, threshold: int | None = None, strict: bool = False) -> str | None:
         from .agent import (MIDTURN_MIN_SAFETY_TOKENS,
@@ -299,6 +352,28 @@ class ResultRetention:
                 raise ExecutionBlocked("blocked: tool result file provenance invalid")
             if policy is not None:
                 policy.require_path(provenance["path"])
+        elif ref.source_kind == 'scanner':
+            if type(tool) is not ShellTool or policy is None:
+                raise ExecutionBlocked('blocked: scanner result adapter unavailable')
+            binding = cast(ShellTool, tool).scanner_binding
+            job = self.agent.workflow.scanner_jobs.get(str(provenance.get('job_id', '')))
+            objective = self.agent.workflow.objective
+            if (binding is None or binding.policy is not policy or job is None
+                    or job.semantic_key != provenance.get('semantic_key')
+                    or job.target_origin != provenance.get('origin')
+                    or provenance.get('scope_revision') != policy.engagement.revision
+                    or job.objective_id != (objective.id if objective else None)
+                    or job.artifacts.get('dataset_sha256') != provenance.get('dataset_sha256')):
+                raise ExecutionBlocked('blocked: scanner result current source ownership unavailable')
+            binding.check_authority()
+            policy.require_network(job.target_origin)
+            if policy.generic_validation is not None:
+                policy.generic_validation.validate_tool(tool, {'scanner': job.scanner})
+            try:
+                assert self.store is not None
+                job.dataset(self.store.project)
+            except (OSError, ValueError, ExecutionBlocked):
+                raise ResultUnavailable('scanner source artifact integrity/unavailability') from None
         elif ref.source_kind == "shell":
             if type(tool) not in (ShellTool, BashTool) or digest_text(str(cast(ShellTool, tool).shell_path)) != provenance.get("adapter"):
                 raise ExecutionBlocked("blocked: tool result process adapter changed")

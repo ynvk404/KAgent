@@ -73,6 +73,7 @@ async def test_invalid_theme_exits_before_runtime_configuration(monkeypatch, cap
         "--target",
         "--api-key",
         "--skills",
+        "--scanner-wordlist",
         "--resume",
         "--log",
         "--debug-session-path",

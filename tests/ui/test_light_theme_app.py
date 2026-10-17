@@ -76,7 +76,7 @@ async def test_startup_colors_layout_and_permission_selection(choice, size):
         assert app.screen.styles.background.hex == ("#FAF8F2" if choice == "light" else "#121212")
         assert app.transcript_log.styles.background.hex == ("#F2F0E8" if choice == "light" else "#1E1E1E")
         assert app.transcript_log.styles.color.hex == (ui.text if choice == "light" else "#E0E0E0")
-        for widget in (app.transcript_panel, app.input_static):
+        for widget in (app.transcript_panel, app.input_panel):
             assert widget.styles.border.top[0] == "round"
             assert widget.styles.border.top[1].hex == ui.border
             assert widget.styles.border_title_color.hex == ui.accent

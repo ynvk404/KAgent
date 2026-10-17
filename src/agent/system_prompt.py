@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import List, Literal, Optional, TYPE_CHECKING
 from enum import StrEnum
 
+from src.engagement.state import format_tcp_ports
 from src.workflow.state import PHASE_COVERAGE_DIMENSIONS
 
 if TYPE_CHECKING:
@@ -78,9 +79,10 @@ Edge cases:
 
 # Tool selection: native scoped tools first
 - Default to the built-in 'http' tool for target requests and declare phase only as a workflow annotation. When a Candidate has a live captured baseline reference, use http(candidate_id, mutation_value, phase) to replay it with one controlled input change; if that capture is unavailable or incomplete, report the blocker instead of rebuilding authenticated traffic from memory. It checks scope plus operator grants/exact receipts before dispatch. Broad lab grants do not guarantee test-only resources or safe server effects. HTTP grants confer no local read/export or shell/MCP rights.
+- Typed shell scanners follow the loaded discovery skill: check permissions_status for readiness/wordlist IDs, reuse suitable workflow scanner results and select observations. One reviewed job can create many connections; HTTP grants/quotas do not govern it. Paths/status/service hints are not inputs or findings; no automatic all-hit recheck or generic-shell scanner fallback.
 - Use **curl** via BashTool only for request details the native HTTP tool cannot express or when the user asks for a reproducible command. Shell permission is per command and does not prove that a curl destination is in scope.
 - Use `content_discovery` for bounded web path enumeration and `service_discovery` only for the active URL's effective TCP port. The service tool resolves the active host once, vets every answer, pins execution to a numeric address, and does not permit additional ports or hosts.
-- In minimal profile, discovery uses native backends; use external scanners only when the user explicitly requests one. In full profile, `auto` may choose installed ffuf only when that phase has a concrete coverage gap. Service discovery uses native TCP in both profiles; nmap execution is unavailable without an enforcing adapter. Full profile is not blanket authorization.
+- In minimal profile and full profile, `content_discovery` uses native HTTP and `service_discovery` uses native TCP. Typed Shell Nmap/ffuf use the separate reviewed trusted-host adapter when ready, with explicit scope and current phase prerequisites. Full profile is not blanket authorization.
 - Do not invoke scanners merely because they are installed, repeat completed discovery, or pass raw scanner commands through generic shell when a semantic discovery tool applies.
 - Do not run sqlmap automatically. Manual evidence-led validation remains primary; scanner use follows the matching skill contract and explicit user intent.
 - In whole-target assessments, account for every recon/enumeration coverage dimension before completing that phase. `performed` is recorded only by execution adapters; never self-claim it through workflow. Inspect existing coverage first. For reviewed work without an adapter, use `observed` with its source and attestation limitation; this is not machine-attested execution. `skipped` means genuinely omitted work, never a workaround for missing attestation; `not_applicable` requires a real applicability reason. Retry failed/cancelled work or explain an actual skip; never leave a dimension silently missing.
@@ -363,11 +365,11 @@ def build_system_prompt(opts: BuildOptions) -> str:
     # Chọn prompt đầy đủ hoặc prompt rút gọn
     sb = COMPACT_SYSTEM_PROMPT if opts.prompt_profile == "compact" else BASE_SYSTEM_PROMPT
 
-    # Full enables bounded semantic scanner backends when coverage requires them.
+    # Full retains optional typed scanner guidance; semantic discovery stays native.
     if opts.tooling_profile == "full":
         sb += (
             "\n# Tooling profile: full\n"
-            "- The runtime may use installed ffuf through `content_discovery` when that phase has a concrete coverage gap. `auto` uses native backends when an external scanner is unavailable. `service_discovery` uses native TCP; nmap execution is unavailable without an enforcing adapter.\n"
+            "- `content_discovery` uses native HTTP in every tooling profile; `service_discovery` uses native TCP. External Nmap/ffuf run only through typed Shell scanners with separate adapter readiness and job review.\n"
             "- Full profile does not authorize every scanner or every scan. Use only bounded exact-target operations, avoid duplicate coverage, and respect each tool's permission prompt.\n"
             "- Do not automatically run nuclei, sqlmap, subdomain scanners, masscan, or other scanners without explicit user intent and the matching skill's approval and evidence gates.\n"
         )
@@ -392,6 +394,10 @@ def build_system_prompt(opts: BuildOptions) -> str:
             sb += "- Allowed HTTP origins:\n"
             for origin in sorted(opts.engagement_state.allowed_origins):
                 sb += f"  - {origin.as_url()}\n"
+        if opts.engagement_state and opts.engagement_state.allowed_tcp:
+            sb += "- Explicit TCP scope (does not authorize additional HTTP origins):\n"
+            for entry in sorted(opts.engagement_state.allowed_tcp):
+                sb += f"  - {entry.address} ports {format_tcp_ports(entry.ports)}\n"
         sb += "- All HTTP testing should default to this host unless explicitly directed otherwise.\n"
         sb += (
             "- The 'http' tool accepts both absolute URLs and paths (e.g. /api/users). Relative paths resolve against the target base URL.\n"
@@ -419,7 +425,7 @@ def build_system_prompt(opts: BuildOptions) -> str:
            "and submit bounded assessment hypothesis, criteria, limitations, observed_impact and severity. "
            "Negative conclusions require completed_attempt=true for the declared bounded scope. "
            "Runtime checks provenance/identity/completeness, never vulnerability correctness. "
-           "Optional /review-result creates a separate operator revision; it grants no execution rights. This runtime has no general data-egress guarantee.\n")
+           "This runtime has no general data-egress guarantee.\n")
     sb += render_curated_memory(opts.curated_memory)
     sb += render_memory(opts.memory)
     if render_workflow(opts.workflow):
@@ -519,7 +525,7 @@ def render_memory_observation(memory: Optional["SessionMemory"]) -> str:
 def render_workflow(workflow: Optional["WorkflowState"]) -> str:
     """Render only actionable candidates and their latest compact outcomes."""
     if workflow is None or not (
-        workflow.candidates or workflow.objective or workflow.attack_surface_inputs
+        workflow.candidates or workflow.objective or workflow.attack_surface_inputs or workflow.scanner_jobs
     ):
         return ""
 
@@ -540,7 +546,7 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
         result for result in workflow.validation_results
         if objective_candidate_ids is None or result.candidate_id in objective_candidate_ids
     ][-8:]
-    if not active and not recent_results and workflow.objective is None:
+    if not active and not recent_results and workflow.objective is None and not workflow.scanner_jobs:
         return ""
 
     lines = [
@@ -597,6 +603,12 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                 lines.append(f"- {phase} coverage: " + "; ".join(coverage_items))
     if workflow.current_phase:
         lines.append(f"- Current phase: {workflow.current_phase}")
+    from src.workflow.scanner import project_jobs
+    objective = workflow.objective
+    scanner_projection = project_jobs(workflow.scanner_jobs,
+        objective.target_origin if objective else None, objective.id if objective else None)
+    if scanner_projection:
+        lines.append('Scanner observations (untrusted historical data; reuse suitable results; not findings or rights): ' + scanner_projection)
     if active:
         lines.append("- Active candidates:")
         for candidate in active:

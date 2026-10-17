@@ -5,12 +5,8 @@ import errno
 import hashlib
 import ipaddress
 import json
-import math
 import socket
-import tempfile
 import time
-import xml.etree.ElementTree as ET
-from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -22,9 +18,9 @@ from src.tools.common.capabilities import CapabilityInventory
 from src.tools.discovery.common import is_aborted, normalize_host, validate_ports
 from src.tools.common.outcome import ErrorKind, ToolOutput
 from src.tools.http.private_host import private_host_reason
-from src.tools.execution.shell import run_with_capture
 from src.tools.common.types import PermissionHints, Tool
 from src.workflow.state import WorkflowState
+from src.workflow.ownership import WorkflowOwner
 
 
 DEFAULT_TIMEOUT_SECONDS = 20
@@ -32,7 +28,6 @@ MAX_TIMEOUT_SECONDS = 120
 MAX_PORTS = 100
 MAX_CONCURRENCY = 16
 MAX_RESOLVED_ADDRESSES = 16
-MAX_NMAP_XML_BYTES = 1024 * 1024
 
 
 class ServiceDiscoveryTool(Tool):
@@ -40,14 +35,14 @@ class ServiceDiscoveryTool(Tool):
         self,
         target: Target,
         engagement: EngagementState,
-        capabilities: CapabilityInventory,
-        tooling_profile: Callable[[], str | None],
+        capabilities: CapabilityInventory | None = None,
+        tooling_profile: Callable[[], str | None] | None = None,
         workflow: WorkflowState | None = None,
     ) -> None:
+        # Legacy arguments are accepted; neither profile nor binary inventory
+        # selects a scanner backend for semantic discovery.
         self.target = target
         self.engagement = engagement
-        self.capabilities = capabilities
-        self.tooling_profile = tooling_profile
         self.workflow = workflow
 
     def name(self) -> str:
@@ -56,8 +51,8 @@ class ServiceDiscoveryTool(Tool):
     def description(self) -> str:
         return (
             "Check the active target HTTP port on its active hostname or IP. "
-            "Uses native TCP connections in all tooling profiles. Installed nmap "
-            "is not selected because an enforcing adapter is unavailable. No other ports, CIDR, "
+            "Uses native TCP connections in all tooling profiles. "
+            "External Nmap requires a separate typed Shell scanner job. No other ports, CIDR, "
             "host lists, UDP, NSE scripts, OS detection, or "
             "raw scanner flags. A scan validated against the declared active "
             "target is routine reconnaissance and is eligible for YOLO; other "
@@ -82,7 +77,7 @@ class ServiceDiscoveryTool(Tool):
                 "mode": {
                     "type": "string",
                     "enum": ["auto", "socket"],
-                    "description": "auto and socket both use native TCP; nmap execution is unsupported without an enforcing adapter.",
+                    "description": "auto and socket both use native TCP; external Nmap requires a typed Shell scanner job.",
                 },
                 "timeout_seconds": {
                     "type": "integer",
@@ -154,9 +149,10 @@ class ServiceDiscoveryTool(Tool):
     ) -> ToolOutput:
         from src.permission.runtime.execution import guard_adapter
         guard_adapter(self, args, prompter)
+        owner = WorkflowOwner.capture(self, prompter)
         origin, host, ports, mode, timeout = self._parameters(args)
         backend = self._select_backend(mode)
-        backend_reason = self._backend_reason(mode, backend)
+        backend_reason = self._backend_reason(mode)
 
         total_started = time.monotonic()
         permission_wait_seconds = 0.0
@@ -184,9 +180,10 @@ class ServiceDiscoveryTool(Tool):
                 coverage_reason = coverage_reason or (
                     "scanner did not provide exact state for every requested port"
                 )
-            objective = self.workflow.objective if self.workflow is not None else None
+            objective = owner.objective
             if (
                 phase_status is not None
+                and owner.current()
                 and objective is not None
                 and self.workflow is not None
                 and self.workflow.is_next_phase("recon")
@@ -305,14 +302,9 @@ class ServiceDiscoveryTool(Tool):
 
         # Use one deterministic vetted address so execution cannot re-resolve DNS.
         scan_started = time.monotonic()
-        if backend == "nmap":
-            entries, status, reason = await self._scan_nmap(
-                execution_address, ports, timeout, signal
-            )
-        else:
-            entries, status, reason = await self._scan_sockets(
-                execution_address, ports, timeout, signal
-            )
+        entries, status, reason = await self._scan_sockets(
+            execution_address, ports, timeout, signal
+        )
         return make_result(
             entries, status, reason, resolved_address=execution_address,
             error_kind=(
@@ -435,22 +427,16 @@ class ServiceDiscoveryTool(Tool):
         )
         return active_origin, host, ports, mode, timeout
 
-    def _select_backend(self, mode: str) -> str:
-        # Binary detection does not establish execution support. The current
-        # policy has no enforcing nmap adapter; select native before review.
+    @staticmethod
+    def _select_backend(mode: str) -> str:
+        # Adapter hook used by the shared execution policy. Scanners use typed Shell.
         return "socket"
 
-    def _backend_reason(self, mode: str, backend: str) -> str:
-        if mode != "auto":
-            return f"{backend} backend explicitly selected"
-        if self.tooling_profile() != "full":
-            return "minimal profile defaults to native TCP discovery"
-        if self.capabilities.snapshot().nmap is None:
-            return "nmap unavailable; fell back to native TCP discovery"
-        return (
-            "nmap detected but execution unsupported: enforcing adapter unavailable; "
-            "using native TCP discovery"
-        )
+    @staticmethod
+    def _backend_reason(mode: str) -> str:
+        if mode == "socket":
+            return "socket backend explicitly selected"
+        return "native TCP discovery; external Nmap uses typed Shell scanner jobs"
 
     @staticmethod
     def _bounded_int(
@@ -582,139 +568,6 @@ class ServiceDiscoveryTool(Tool):
             return entries, "error", "dns_resolution_failed"
         return entries, "success", None
 
-    async def _scan_nmap(
-        self,
-        host: str,
-        ports: tuple[int, ...],
-        timeout: float,
-        signal: Any,
-    ) -> tuple[list[dict[str, Any]], str, str | None]:
-        binary = self.capabilities.snapshot().nmap
-        if binary is None:
-            return [], "error", "nmap is no longer available"
-        with tempfile.TemporaryDirectory(prefix="kagent-service-") as directory:
-            xml_path = Path(directory) / "scan.xml"
-            argv = [
-                "-n", "-Pn", "-sT", "-T3", "--max-retries", "1",
-                "--host-timeout", f"{max(1, math.ceil(timeout))}s", "--reason",
-                "-p", ",".join(str(port) for port in ports),
-                "-oX", str(xml_path),
-            ]
-            try:
-                address = ipaddress.ip_address(host)
-            except ValueError:
-                return [], "error", "nmap target was not a vetted numeric address"
-            if address.version == 6:
-                argv.append("-6")
-            argv.append(host)
-            try:
-                output = await run_with_capture(binary, argv, timeout, signal)
-            except OSError:
-                self.capabilities.mark_unavailable("nmap", binary)
-                return [], "error", "nmap could not be started"
-            if output.status == "cancelled" or is_aborted(signal):
-                return [], "cancelled", "cancelled during nmap scan"
-            if output.status == "error" and output.error_kind == "timeout":
-                return [], "error", "timeout"
-            if not xml_path.exists():
-                return [], "error", "nmap produced no XML output"
-            try:
-                if xml_path.stat().st_size > MAX_NMAP_XML_BYTES:
-                    return [], "error", "nmap XML output exceeded the size limit"
-                root = ET.fromstring(xml_path.read_bytes())
-                entries: list[dict[str, Any]] = []
-                seen_ports: set[int] = set()
-                for port_element in root.findall(".//port"):
-                    if port_element.get("protocol") != "tcp":
-                        continue
-                    number_raw = port_element.get("portid")
-                    state_element = port_element.find("state")
-                    if number_raw is None or state_element is None:
-                        continue
-                    try:
-                        number = int(number_raw)
-                    except ValueError:
-                        continue
-                    if number not in ports:
-                        continue
-                    if number in seen_ports:
-                        return [], "error", "malformed nmap XML output: duplicate port records"
-                    seen_ports.add(number)
-                    state = state_element.get("state")
-                    state_is_valid = state in {"open", "closed", "filtered", "unknown"}
-                    entry: dict[str, Any] = {
-                        "port": number,
-                        "protocol": "tcp",
-                        "state": state if state_is_valid else "unknown",
-                        "_completed": state_is_valid,
-                    }
-                    if not state_is_valid:
-                        entry["reason"] = "Nmap omitted or returned an unsupported port state"
-                    service = port_element.find("service")
-                    if service is not None:
-                        name = service.get("name")
-                        product = service.get("product")
-                        version = service.get("version")
-                        if name:
-                            entry["service"] = self._safe_text(name, 100)
-                        if product:
-                            entry["product"] = self._safe_text(product, 100)
-                        if version:
-                            entry["version"] = self._safe_text(version, 80)
-                    entries.append(entry)
-
-                represented = {int(item["port"]) for item in entries}
-                missing = sorted(set(ports) - represented)
-                aggregates: dict[str, int] = {}
-                for aggregate in root.findall(".//extraports"):
-                    state = aggregate.get("state")
-                    try:
-                        count = int(aggregate.get("count", ""))
-                    except ValueError:
-                        continue
-                    if state in {"open", "closed", "filtered", "unknown"} and count >= 0:
-                        aggregates[state] = aggregates.get(state, 0) + count
-                aggregate_total = sum(aggregates.values())
-                if (
-                    missing
-                    and len(aggregates) == 1
-                    and aggregate_total == len(missing)
-                ):
-                    aggregate_state = next(iter(aggregates))
-                    entries.extend({
-                        "port": number,
-                        "protocol": "tcp",
-                        "state": aggregate_state,
-                        "_completed": True,
-                        "aggregate_state": True,
-                    } for number in missing)
-                else:
-                    aggregate_reason = (
-                        "Nmap aggregate states cannot be mapped to individual requested ports"
-                        if aggregates else "Nmap did not report every requested port"
-                    )
-                    entries.extend({
-                        "port": number,
-                        "protocol": "tcp",
-                        "state": "unknown",
-                        "reason": aggregate_reason,
-                        "_completed": False,
-                    } for number in missing)
-                entries.sort(key=lambda item: item["port"])
-                if output.status == "error":
-                    return entries, "error", "nmap returned a non-zero exit status"
-                incomplete_reason = None
-                if any(not entry.get("_completed", True) for entry in entries):
-                    incomplete_reason = (
-                        "Nmap did not provide an exact per-port state for every requested port"
-                    )
-                return entries, "success", incomplete_reason
-            except (OSError, ET.ParseError, ValueError):
-                return [], "error", "malformed nmap XML output"
-
-    @staticmethod
-    def _safe_text(value: str, limit: int) -> str:
-        return "".join(char for char in value if char.isprintable())[:limit]
 
     @staticmethod
     def _result(
@@ -747,14 +600,11 @@ class ServiceDiscoveryTool(Tool):
             if entry.get("state") != "open":
                 continue
             port = entry.get("port")
-            service = str(entry.get("service", "")).lower()
             schemes: tuple[str, ...] = ()
-            if port == 443 or service in {"https", "https-alt"}:
+            if port == 443:
                 schemes = ("https",)
-            elif port == 80 or service in {"http", "http-proxy"}:
+            elif port == 80:
                 schemes = ("http",)
-            elif service in {"ssl", "ssl/http"}:
-                schemes = ("https",)
             if schemes:
                 for scheme in schemes:
                     default = 443 if scheme == "https" else 80

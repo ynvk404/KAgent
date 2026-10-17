@@ -78,13 +78,13 @@ def resolve_discovery_scope(
     )
 
 
-def validate_relative_path(value: object) -> str:
+def validate_relative_path(value: object, *, max_length: int | None = 200) -> str:
     if not isinstance(value, str):
         raise ValueError("paths must contain strings")
     path = value.strip().lstrip("/")
     if (
         not path
-        or len(path) > 200
+        or (max_length is not None and len(path) > max_length)
         or any(ord(char) < 32 for char in path)
         or "\\" in path
         or "?" in path

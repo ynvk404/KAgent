@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from src.async_io import run_sync
+from src.workflow.evidence_source import bind_source
+
 import json
 import hashlib
 import re
@@ -36,6 +39,7 @@ from src.workflow.state import (
     validation_result_fingerprint,
 )
 from src.workflow.evidence import EvidenceArtifact, verify_evidence_reads, check_proof_references
+from src.workflow.evidence_source import EvidenceSource
 from src.workflow.assessment import (start_attempt, references, resolve_sources, candidate_binding,
                                      seal, accepted_result, check_excerpts, DuplicateRequestAssociation)
 import uuid
@@ -59,6 +63,7 @@ from src.tools.http.http_tool import HTTPTool
 
 
 ACTIONS = (
+    "triage_scanner_results",
     "get_input",
     "record_input",
     "set_input_disposition",
@@ -79,6 +84,7 @@ MAX_LIST_LIMIT = 25
 MAX_LIST_COMPLETED_SKILLS = 20
 LIST_TEXT_LIMIT = 200
 ACTION_REQUIRED = {
+    'triage_scanner_results': ('job_id', 'scanner_disposition', 'scanner_reason'),
     'get_input': ('input_id',),
     'set_input_disposition': ('input_id', 'disposition'),
     'link_input_candidate': ('input_id', 'candidate_id'),
@@ -93,6 +99,7 @@ ACTION_REQUIRED = {
     'review_no_candidate': ('goal_id',),
 }
 ACTION_INPUTS = {
+    'triage_scanner_results': ('job_id', 'record_ids', 'scanner_disposition', 'scanner_reason', 'remaining'),
     'get_input': ('input_id',),
     # Legacy ownership fields are equality assertions; source is an ignored
     # informational label retained for existing validation-feedback callers.
@@ -116,7 +123,7 @@ ACTION_INPUTS = {
     'record_phase_coverage': ('phase', 'coverage_dimension', 'coverage_status', 'coverage_reason'),
     'complete_skill': ('skill_name', 'artifact_ref', 'no_inputs_discovered', 'current_phase'),
     'review_no_candidate': ('goal_id', 'artifact_ref'),
-    'list': ('candidate_id', 'status', 'candidate_class', 'limit', 'observation_offset'),
+    'list': ('candidate_id', 'status', 'candidate_class', 'limit', 'observation_offset', 'job_id', 'scanner_offset'),
 }
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
 
@@ -175,6 +182,11 @@ class WorkflowTool(Tool):
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": list(ACTIONS)},
+                "job_id": optional_string,
+                "record_ids": {"type": "array", "maxItems": 128, "items": {"type": "string"}},
+                "scanner_disposition": {"type": "string", "enum": ['selected', 'handled', 'deferred', 'dropped']},
+                "scanner_reason": {"type": "string", "maxLength": 240},
+                "remaining": {"type": "boolean"},
                 "candidate_id": {
                     "type": "string",
                 },
@@ -250,6 +262,8 @@ class WorkflowTool(Tool):
                                       "verified-write", "no-mutation-established"]},
                 "effect_basis": optional_string,
                 "observation_offset": {"type": "integer", "minimum": 0},
+                "scanner_offset": {"type": "integer", "minimum": 0,
+                    "description": "list: page scanner jobs, or dispositions when job_id is supplied."},
                 "cleanup_status": optional_string,
                 "cleanup_state": {
                     "type": "string",
@@ -342,7 +356,10 @@ class WorkflowTool(Tool):
         return "preserve"
 
     async def run(self, args, signal, prompter):
+        generation = self.state.generation
         async with self.state.mutation_lock:
+            if self.state.generation != generation:
+                return self._typed_result("error: workflow generation changed while waiting")
             before = self.state.to_dict()
             revision = self.state.committed_revision
             try:
@@ -350,7 +367,8 @@ class WorkflowTool(Tool):
             finally:
                 # Also cover attempt/evidence/coverage metadata committed by
                 # actions that exit through cancellation rather than a receipt.
-                if self.state.committed_revision == revision and self.state.to_dict() != before:
+                if (self.state.generation == generation and self.state.committed_revision == revision
+                        and self.state.to_dict() != before):
                     self.state.mark_committed()
 
     async def _run(
@@ -397,7 +415,31 @@ class WorkflowTool(Tool):
         if (policy is not None and policy.session_id is not None and self.session_id != policy.session_id
                 and action in {"start_validation", "record_attempt_state", "record_evidence", "record_result"}):
             return self._typed_result("error: workflow/runtime session identity mismatch")
-        if action == "get_input":
+        if action == 'triage_scanner_results':
+            job = self.state.scanner_jobs.get(args['job_id'])
+            objective = self.state.objective
+            if (job is None or job.objective_id != (objective.id if objective else None)
+                    or job.target_origin != candidate_origin(self._active_target())):
+                return self._typed_result('error: scanner job does not belong to the current target/objective')
+            if policy is not None:
+                retiring_selected = job.can_retire_selected(args.get('record_ids', []),
+                    args['scanner_disposition'], remaining=args.get('remaining', False))
+                # Closing known historical work is a local state mutation. It
+                # grants no source rights; triage still checks artifact integrity.
+                if not retiring_selected:
+                    policy.require_network(job.target_origin)
+                if '*' in policy.revoked or ('shell' in policy.revoked and not retiring_selected):
+                    return self._typed_result('error: scanner source capability revoked')
+            try:
+                if type(args.get('remaining', False)) is not bool:
+                    raise ValueError('remaining must be boolean')
+                job.triage(self.evidence_root, args.get('record_ids', []), args['scanner_disposition'],
+                           args['scanner_reason'], remaining=args.get('remaining', False))
+            except (ValueError, OSError) as exc:
+                return self._typed_result('error: scanner triage unavailable: ' + str(exc))
+            self.state.mark_committed()
+            result = json.dumps({'ok': True, 'scanner_job': job.projection()})
+        elif action == "get_input":
             result = self._get_input(args)
         elif action == "record_input":
             result = self._record_input(args)
@@ -428,12 +470,12 @@ class WorkflowTool(Tool):
             if candidate is None or not accepted_result(self.state, candidate, latest, policy):
                 return self._typed_result("error: inadmissible result cannot sync tested coverage")
             assert latest is not None
-            before = deepcopy(self.state.to_dict())
+            before = (self.state.generation, deepcopy(self.state.to_dict()))
             stamp = policy.stamp() if policy else None
             if not await verify_evidence_reads([self.state.evidence[ref] for ref in latest.evidence_refs],
                     self.evidence_root, prompter, signal):
                 return self._typed_result("error: coverage evidence changed/unavailable")
-            if self.state.to_dict() != before or (policy and policy.stamp() != stamp):
+            if (self.state.generation, self.state.to_dict()) != before or (policy and policy.stamp() != stamp):
                 return self._typed_result("error: coverage submission changed during evidence read")
             result = await self._sync_coverage_action(args)
         elif action == "record_phase_coverage":
@@ -880,7 +922,7 @@ class WorkflowTool(Tool):
                     # Evidence permission can yield. Do not commit against the
                     # pre-await records if canonical state or runtime ownership
                     # changed. Capture/auth availability is read only afterwards.
-                    before = deepcopy(self.state.to_dict())
+                    before = (self.state.generation, deepcopy(self.state.to_dict()))
                     policy_stamp = policy.stamp() if policy else None
                     target_revision = self.target.revision if self.target is not None else None
                     route = resolve_validation_route(self.skills, candidate.candidate_class)
@@ -891,7 +933,7 @@ class WorkflowTool(Tool):
                     ], self.evidence_root, prompter, signal)
                     if (self.state.objective is not objective
                             or self.state.candidates.get(candidate_id) is not candidate
-                            or self.state.to_dict() != before
+                            or (self.state.generation, self.state.to_dict()) != before
                             or (self.target.revision if self.target is not None else None) != target_revision
                             or resolve_validation_route(self.skills, candidate.candidate_class) != route
                             or policy_for(prompter) is not policy
@@ -999,6 +1041,7 @@ class WorkflowTool(Tool):
             policy = policy_for(prompter)
             candidate = self.state.candidates[candidate_id]
             identity = candidate_binding(candidate)
+            generation = self.state.generation
             objective = self.state.objective
             target_revision = self.target.revision if self.target else None
             route = resolve_validation_route(self.skills, candidate.candidate_class)
@@ -1022,37 +1065,46 @@ class WorkflowTool(Tool):
                 assert policy is not None
                 if source.absolute() != policy.generic_validation.proof_path(candidate):
                     raise ValueError("generic evidence source restricted to candidate proof.md")
-            real = await gate_sensitive_path(prompter, str(source), "read evidence source", signal)
-            if (self.state.candidates.get(candidate_id) is not candidate
-                    or candidate_binding(candidate) != identity or self.state.objective is not objective
-                    or (self.target.revision if self.target else None) != target_revision
-                    or resolve_validation_route(self.skills, candidate.candidate_class) != route
-                    or policy_for(prompter) is not policy or (policy and policy.stamp() != policy_stamp)):
-                raise ValueError("candidate/objective/route/policy changed during evidence read")
-            artifact = EvidenceArtifact.capture_immutable_snapshot(
-                candidate_id, real, self.evidence_root, sensitive_read_approved=True,
-                original_path=str(source),
-            )
-            if snapshot is not None:
-                assert policy is not None
-                policy.generic_validation.unchanged(candidate_id, snapshot)
-            if "source_kind" in args or "assessment_source" in args:
-                raise ValueError("proof file provenance cannot be promoted by model labels")
-            ids = references(args.get("observation_ids", []), "observation_ids")
-            aid = policy.generic_validation.durable_attempt if policy else self.active_attempt
-            selected = resolve_sources(policy, self.state, candidate, self.state.attempts.get(aid) if aid is not None else None, ids,
-                terminal=False, negative=False, store=self.observations) if ids else []
-            check_proof_references((self.evidence_root / artifact.path).read_bytes(), candidate_id, ids)
-            previous = self.state.evidence_sources.get(artifact.id)
-            if previous is not None and previous != ids:
-                raise EvidenceSubmissionError("IMMUTABLE_PARENT_CONFLICT", "immutable derived evidence source association changed")
-            self.state.add_evidence(artifact)
-            if ids:
-                self.state.evidence_sources[artifact.id] = ids
-            for entry in selected:
-                self.state.selected_sources[entry["source"]["id"]] = entry
-            while len(self.state.selected_sources) > 256 or len(json.dumps(self.state.selected_sources)) > 16 * 1024 * 1024:
-                del self.state.selected_sources[next(iter(self.state.selected_sources))]
+            async with bind_source(source, self.evidence_root) as source_binding:
+                real = await gate_sensitive_path(prompter, str(source), "read evidence source", signal)
+                def ensure_current():
+                    from src.permission.network.grants import check_cancelled
+                    check_cancelled(signal)
+                    if (self.state.generation != generation
+                            or self.state.candidates.get(candidate_id) is not candidate
+                            or candidate_binding(candidate) != identity or self.state.objective is not objective
+                            or (self.target.revision if self.target else None) != target_revision
+                            or resolve_validation_route(self.skills, candidate.candidate_class) != route
+                            or policy_for(prompter) is not policy or (policy and policy.stamp() != policy_stamp)):
+                        raise ValueError("candidate/objective/route/policy changed during evidence read")
+                ensure_current()
+                artifact = await EvidenceArtifact.capture_immutable_snapshot_async(
+                    candidate_id, real, self.evidence_root, sensitive_read_approved=True,
+                    original_path=str(source), source_binding=source_binding, publication_check=ensure_current,
+                )
+                ensure_current()
+                if snapshot is not None:
+                    assert policy is not None
+                    policy.generic_validation.unchanged(candidate_id, snapshot)
+                if "source_kind" in args or "assessment_source" in args:
+                    raise ValueError("proof file provenance cannot be promoted by model labels")
+                ids = references(args.get("observation_ids", []), "observation_ids")
+                aid = policy.generic_validation.durable_attempt if policy else self.active_attempt
+                selected = resolve_sources(policy, self.state, candidate, self.state.attempts.get(aid) if aid is not None else None, ids,
+                    terminal=False, negative=False, store=self.observations) if ids else []
+                check_proof_references(await artifact.read_verified_async(self.evidence_root, sensitive_read_approved=True), candidate_id, ids)
+                previous = self.state.evidence_sources.get(artifact.id)
+                if previous is not None and previous != ids:
+                    raise EvidenceSubmissionError("IMMUTABLE_PARENT_CONFLICT", "immutable derived evidence source association changed")
+                await run_sync(source_binding.validate)
+                ensure_current()
+                self.state.add_evidence(artifact)
+                if ids:
+                    self.state.evidence_sources[artifact.id] = ids
+                for entry in selected:
+                    self.state.selected_sources[entry["source"]["id"]] = entry
+                while len(self.state.selected_sources) > 256 or len(json.dumps(self.state.selected_sources)) > 16 * 1024 * 1024:
+                    del self.state.selected_sources[next(iter(self.state.selected_sources))]
         except UserControlledRefusal:
             raise
         except EvidenceSubmissionError as err:
@@ -1188,7 +1240,7 @@ class WorkflowTool(Tool):
             self._validate_current_objective_candidate(result.candidate_id)
             generic = result.skill_name == GENERIC_VALIDATOR or self._is_generic(candidate)
             policy = policy_for(prompter)
-            before = deepcopy(self.state.to_dict())
+            before = (self.state.generation, deepcopy(self.state.to_dict()))
             candidate_object = candidate
             target_revision = self.target.revision if self.target else None
             route_before = resolve_validation_route(self.skills, candidate.candidate_class)
@@ -1258,7 +1310,7 @@ class WorkflowTool(Tool):
                 expected_assessment = {k: v for k, v in latest.assessment.items() if k not in {"artifacts", "artifact_sources", "attempt"}}
                 if ids != expected_ids or args.get("assessment", {}) != expected_assessment:
                     raise ValueError("closed attempt assessment changed; start an explicit retest")
-                if self.state.to_dict() != before or latest.assessment_binding != seal(latest):
+                if (self.state.generation, self.state.to_dict()) != before or latest.assessment_binding != seal(latest):
                     raise ValueError("stale retry assessment")
                 if terminal and not accepted_result(self.state, candidate, latest, policy):
                     raise ValueError("retry assessment evidence unavailable")
@@ -1304,7 +1356,7 @@ class WorkflowTool(Tool):
                     and e["source"].get("complete") and not e["source"].get("truncated")
                     and e["source"].get("execution_status") == "completed" for e in manifest):
                 raise ValueError("tool output claims alone cannot establish target request/response evidence")
-            if (self.state.to_dict() != before or self.state.candidates.get(candidate.id) is not candidate_object
+            if ((self.state.generation, self.state.to_dict()) != before or self.state.candidates.get(candidate.id) is not candidate_object
                     or (self.target.revision if self.target else None) != target_revision
                     or resolve_validation_route(self.skills, candidate.candidate_class) != route_before
                     or policy_for(prompter) is not policy or (policy and policy.stamp() != policy_stamp)):
@@ -1406,9 +1458,10 @@ class WorkflowTool(Tool):
             raise ValueError("coverage candidate differs from active target origin")
         target_revision = self.target.revision if self.target is not None else None
         fingerprint = validation_result_fingerprint(result)
+        generation = self.state.generation
         previous = deepcopy(await self.coverage.get(endpoint=endpoint, param=parameter,
             vulnClass=candidate.candidate_class, context=context))
-        if (self.state.latest_result(candidate.id) is not result
+        if (self.state.generation != generation or self.state.latest_result(candidate.id) is not result
                 or not accepted_result(self.state, candidate, result, policy)
                 or any(not self.state.evidence[ref].is_available_for_resume(self.evidence_root) for ref in result.evidence_refs)):
             raise ValueError("canonical assessment changed before coverage persistence")
@@ -1429,7 +1482,7 @@ class WorkflowTool(Tool):
         )
         # Loading/flushing the projection may yield. A durable historical row
         # cannot mark a replaced or changed canonical outcome/context synced.
-        if (self.state.latest_result(candidate.id) is not result
+        if (self.state.generation != generation or self.state.latest_result(candidate.id) is not result
                 or validation_result_fingerprint(result) != fingerprint
                 or project_candidate_coverage(self.state, candidate, result) != (endpoint, parameter, context)
                 or (self.target.revision if self.target is not None else None) != target_revision
@@ -1623,6 +1676,7 @@ class WorkflowTool(Tool):
         }, indent=2)
 
     async def _review_no_candidate(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
+        generation = self.state.generation
         objective = self.state.objective
         goal_id = arg_string(args, "goal_id")
         if objective is None or objective.mode != "whole_target":
@@ -1648,7 +1702,7 @@ class WorkflowTool(Tool):
             if not artifact.is_file() or artifact.stat().st_size <= 0:
                 return "error: input-analysis review artifact is unavailable"
             await gate_sensitive_path(prompter, str(artifact), "read input-analysis review artifact", signal)
-            if (self.state.objective is not objective or self.target is None
+            if (self.state.generation != generation or self.state.objective is not objective or self.target is None
                     or normalize_target_origin(self.target.base_url()) != objective.target_origin):
                 return "error: objective or target changed during no-candidate review"
             policy = policy_for(prompter)
@@ -1911,6 +1965,26 @@ class WorkflowTool(Tool):
         return self.target.base_url() or self.target.name()
 
     def _list(self, args: dict[str, Any], policy=None) -> str:
+        from src.workflow.scanner import relevant_jobs
+        objective = self.state.objective
+        scanner_jobs = relevant_jobs(self.state.scanner_jobs, candidate_origin(self._active_target()),
+                                     objective.id if objective else None)
+        scanner_offset = args.get('scanner_offset', 0)
+        if type(scanner_offset) is not int or scanner_offset < 0:
+            return 'error: scanner_offset must be a nonnegative integer'
+        if args.get('job_id'):
+            job = next((row for row in scanner_jobs if row.job_id == args['job_id']), None)
+            if job is None:
+                return 'error: scanner job unavailable for the current target/objective'
+            # Read historical triage, never raw scanner output or authority.
+            from src.tools.discovery.scanner_results import clean
+            dispositions = [{'record_id': key, 'disposition': row['disposition'], 'reason': clean(row['reason'], 240)}
+                            for key, row in sorted(job.dispositions.items())]
+            selected = dispositions[scanner_offset:scanner_offset + 8]
+            detail = job.projection(detail=True)
+            return json.dumps({'ok': True, 'scanner_job': detail, 'scanner_dispositions': selected,
+                'dispositions_total': len(dispositions), 'next_scanner_offset': scanner_offset + len(selected)
+                if scanner_offset + len(selected) < len(dispositions) else None})
         candidate_id = arg_string(args, "candidate_id")
         status = arg_string(args, "status")
         candidate_class = arg_string(args, "candidate_class")
@@ -1970,6 +2044,9 @@ class WorkflowTool(Tool):
                 "observations_total": len(observations),
                 "next_observation_offset": offset + limit if offset + limit < len(observations) else None,
                 "current_phase": self.state.current_phase,
+                "scanner_jobs": [row.projection() for row in scanner_jobs[scanner_offset:scanner_offset + 5]],
+                "scanner_jobs_total": len(scanner_jobs),
+                "next_scanner_offset": scanner_offset + 5 if scanner_offset + 5 < len(scanner_jobs) else None,
                 "objective": objective.to_dict() if objective else None,
                 "requested_goals": [
                     goal.to_dict() for goal in objective.requested_goals

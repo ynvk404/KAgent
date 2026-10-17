@@ -12,10 +12,8 @@ import os
 import signal
 import sys
 from contextlib import asynccontextmanager
-import tempfile
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from mcp import ClientSession
@@ -23,12 +21,10 @@ from mcp import ClientSession
 from components.cwe_mcp.contract import EXPECTED_CORPUS, SEARCH_SCHEMA, GET_SCHEMA, LookupResponse, SearchResponse
 from src.config.config import MCPServerConfig
 from src.engagement.state import EngagementState
-from src.findings.cwe_enrichment import Enrichment, TrustedSource, parse_response
-from src.findings.store import Store, read_report
+from src.findings.cwe_enrichment import TrustedSource, parse_response
 from src.permission.permission import Decision, YoloPrompter, UserControlledRefusal
 from src.permission.runtime.execution import default_execution_policy
 from src.permission.worker.worker import OfflineWorker
-from src.skills.registry import Registry as Skills
 from src.tools.common.registry import Registry
 from src.tools.mcp import integration
 from src.tools.mcp.cwe_deployment import (
@@ -37,10 +33,6 @@ from src.tools.mcp.cwe_deployment import (
     CWE_MCP_LAUNCH_PATH,
     CWE_MCP_SERVER_NAME,
 )
-from src.tools.workflow.finding import ConfirmFindingTool
-from src.tools.workflow.workflow_tool import WorkflowTool
-from src.ui.commands.result_review import review_result
-from src.workflow.state import Candidate, ValidationResult, WorkflowState
 
 CONFIG_ENTRY = {'name': CWE_MCP_SERVER_NAME, 'command': CWE_MCP_COMMAND,
                 'args': list(CWE_MCP_ARGS)}
@@ -236,73 +228,6 @@ async def checks(root, deployment):
         await session.close()
 
 
-async def operator_flow(root, deployment):
-    origin = 'http://127.0.0.1:65534'  # Synthetic state only: no target interaction.
-    registry, prompter, policy, operator, session, metrics = await connect(root, deployment, scope=origin)
-    try:
-        state = WorkflowState()
-        candidate, _ = state.add_candidate(Candidate(candidate_class='access-control', target=origin,
-                                                     endpoint='/synthetic-resource', method='GET'))
-        skills = Skills()
-        skills.load_dir(Path(__file__).resolve().parents[1] / 'skills')
-        workflow_tool = WorkflowTool(state, skills=skills, evidence_root=root)
-        registry.register(workflow_tool)
-        proof = root / 'synthetic-proof.txt'
-        proof.write_text('Synthetic reproducible authorization bypass through user-controlled resource key. No HTTP traffic, tokens or credentials.')
-        payload = json.loads(await registry.execute('workflow', {'action': 'record_evidence',
-            'candidate_id': candidate.id, 'evidence_path': proof.name}, None, prompter))
-        ref = payload['evidence']['id']
-        state.add_validation_result(ValidationResult(candidate.id, 'access-control', 'confirmed',
-                                                     evidence_refs=[ref], repeatable=True))
-        async def save():
-            (root / 'test-session.json').write_text(json.dumps(state.to_dict()))
-        output = []
-        agent = SimpleNamespace(workflow=state, tools=registry, prompter=prompter, skills=skills, save=save)
-        app = SimpleNamespace(agent=agent, dispatch=output.append)
-        operator.decision = Decision.ALLOW_ONCE
-        await review_result(app, [candidate.id, 'confirmed', 'low', 'Synthetic authorization bypass through user-controlled key.'])
-        assert output[-1].entry.kind == 'system', output[-1]
-        store = Store(project_directory=root)
-        notifications = []
-        finding_tool = ConfirmFindingTool(store, lambda f, p: notifications.append(f), state)
-        registry.register(finding_tool)
-        await registry.execute('confirm_finding', dict(candidate_id=candidate.id, title='Authorization Bypass Through User-Controlled Key',
-            severity='low', url=origin+'/synthetic-resource', observed_impact='Synthetic mechanism.',
-            potential_impact='No additional impact assessed.'), None, prompter)
-        path = store.report_for_candidate(candidate.id)
-        assert read_report(path).cwe is None
-        operator.requests.clear()
-        selected = 0
-        async def abstain(candidates):
-            nonlocal selected
-            selected += 1
-            return None
-        await Enrichment(agent, store, candidate.id).run(abstain, lambda *_: None)
-        assert read_report(path).cwe is None and not operator.requests and selected == 1
-        # YOLO retrieval still cannot bypass operator selection/fit review.
-        operator.decision = Decision.DENY
-        async def choose(candidates):
-            assert candidates and all(c.mapping_usage == 'Allowed' for c in candidates)
-            return next(i for i, c in enumerate(candidates, 1) if c.id == 639)
-        await Enrichment(agent, store, candidate.id).run(choose, lambda *_: None)
-        assert read_report(path).cwe is None and operator.requests == ['enrich_cwe_review']
-        operator.decision = Decision.ALLOW_ONCE
-        result = await Enrichment(agent, store, candidate.id).run(choose, lambda f, p: notifications.append(f))
-        committed = read_report(path)
-        assert committed.cwe and committed.classification_provenance is not None
-        assert committed.classification_provenance['origin'] == 'promoted-external'
-        assert notifications[-1] == committed
-        retry = await registry.execute('confirm_finding', dict(candidate_id=candidate.id, title='Retry proposal',
-            severity='low', url=origin+'/synthetic-resource', observed_impact='Synthetic mechanism.',
-            potential_impact='No additional impact assessed.'), None, prompter)
-        assert committed.cwe[0] in retry and read_report(path) == committed
-        metrics.update(explicit_operator_flow=True, yolo_cannot_promote=True, persisted_retry=True,
-                       promoted_cwe=committed.cwe[0], commit_message=result)
-        return metrics
-    finally:
-        await session.close()
-
-
 INSPECT = """import hashlib, zipfile, time
 from pathlib import Path
 root = Path(__import__('sys').argv[1])
@@ -436,9 +361,6 @@ async def main(deployment: Path):
     ClientSession.initialize = measured_initialize
     try:
         report = {'deployment_path': str(deployment), 'external_deployment': await checks(repository, deployment)}
-        with tempfile.TemporaryDirectory(prefix='kagent-cwe-acceptance-') as directory:
-            root = Path(directory)
-            report['isolated_operator_flow'] = await operator_flow(root, deployment)
         report['initialization_samples'] = initializations
     finally:
         ClientSession.initialize = original_initialize

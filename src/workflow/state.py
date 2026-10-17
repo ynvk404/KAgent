@@ -4,6 +4,9 @@ import asyncio
 import hashlib
 import json
 import re
+import uuid
+import threading
+from dataclasses import fields
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -651,6 +654,9 @@ class AttackSurfaceInput:
 class PhaseCoverage:
     status: PhaseCoverageStatus
     reason: str | None = None
+    # Trusted native producers only; prose and opaque observation IDs are never
+    # novelty. Keep a bounded, non-evicting ledger of canonical source content.
+    source_fingerprints: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.status not in PHASE_COVERAGE_STATUSES:
@@ -658,9 +664,15 @@ class PhaseCoverage:
         self.reason = _text(self.reason, limit=300)
         if self.status != "performed" and not self.reason:
             raise ValueError(f"{self.status} phase coverage requires a reason")
+        self.source_fingerprints = tuple(dict.fromkeys(
+            value for value in self.source_fingerprints
+            if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value)))[:128]
 
     def to_dict(self) -> dict[str, Any]:
-        return {"status": self.status, "reason": self.reason}
+        value: dict[str, Any] = {"status": self.status, "reason": self.reason}
+        if self.source_fingerprints:
+            value['source_fingerprints'] = list(self.source_fingerprints)
+        return value
 
     @classmethod
     def from_dict(cls, value: Any) -> PhaseCoverage | None:
@@ -670,7 +682,8 @@ class PhaseCoverage:
         if not isinstance(status, str) or status not in PHASE_COVERAGE_STATUSES:
             return None
         try:
-            return cls(status, value.get("reason"))  # type: ignore[arg-type]
+            sources = value.get('source_fingerprints', [])
+            return cls(status, value.get("reason"), tuple(sources) if isinstance(sources, list) else ())  # type: ignore[arg-type]
         except (TypeError, ValueError):
             return None
 
@@ -1074,6 +1087,10 @@ def _merge_compatible_context(
 
 @dataclass(slots=True)
 class WorkflowState:
+    # Runtime identity only: equal restored values are a different owner.
+    generation: str = field(default_factory=lambda: uuid.uuid4().hex, init=False, repr=False, compare=False)
+    retired: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False, compare=False)
+    lifecycle_lock: Any = field(default_factory=threading.RLock, init=False, repr=False, compare=False)
     version: int = 8
     objective: WorkflowObjective | None = None
     candidates: dict[str, Candidate] = field(default_factory=dict)
@@ -1087,6 +1104,8 @@ class WorkflowState:
     completed_artifacts: dict[str, str] = field(default_factory=dict)
     persisted_findings: dict[str, str] = field(default_factory=dict)
     current_phase: str | None = None
+    scanner_jobs: dict[str, Any] = field(default_factory=dict)
+    scanner_observations: dict[str, str] = field(default_factory=dict)
     attempts: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Submission repair accounting, separate from immutable attempt declarations.
     evidence_recovery: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -1099,6 +1118,27 @@ class WorkflowState:
     def mark_committed(self) -> None:
         """Make a canonical mutation checkpoint-eligible before the next await."""
         self.committed_revision += 1
+
+    def add_scanner_job(self, job, *, observation_fingerprints: tuple[str, ...] = ()) -> bool:
+        from .scanner import MAX_JOBS, MAX_OBSERVATION_FACTS, observation_scope
+        if job.job_id not in self.scanner_jobs and len(self.scanner_jobs) >= MAX_JOBS:
+            replaceable = next((key for key, row in self.scanner_jobs.items()
+                                if not row.unresolved_selected and row.execution.get('status') != 'running'), None)
+            if replaceable is None:
+                return False
+            self.scanner_jobs.pop(replaceable)
+        self.scanner_jobs[job.job_id] = job
+        owner = observation_scope(job.objective_id, job.target_origin)
+        # Only the trusted producer supplies minimized normalized JSONL here.
+        # Canonical content includes stable identity and meaningful row fields;
+        # dataset ordering, job IDs and paths never participate in novelty.
+        for content_digest in observation_fingerprints:
+            if len(self.scanner_observations) >= MAX_OBSERVATION_FACTS:
+                break
+            fingerprint = hashlib.sha256((owner + content_digest).encode()).hexdigest()
+            self.scanner_observations.setdefault(fingerprint, owner)
+        self.mark_committed()
+        return True
 
     @staticmethod
     def _media_enrichment_match(existing: Any, incoming: Any, *, candidate: bool) -> bool:
@@ -1414,6 +1454,7 @@ class WorkflowState:
         objective_id: str,
         target_origin: str,
         reason: str | None = None,
+        source_fingerprint: str | None = None,
     ) -> bool:
         objective = self.objective
         marker = PhaseCoverage(status, reason)
@@ -1432,6 +1473,11 @@ class WorkflowState:
         if key in self.phase_completions:
             raise ValueError("phase coverage cannot change after phase completion")
         records = self.phase_coverage.setdefault(key, {})
+        existing = records.get(dimension)
+        marker.source_fingerprints = tuple(dict.fromkeys((
+            *(existing.source_fingerprints if existing else ()),
+            *((source_fingerprint,) if source_fingerprint and re.fullmatch(r'[0-9a-f]{64}', source_fingerprint) else ()),
+        )))[:128]
         if records.get(dimension) == marker:
             return False
         records[dimension] = marker
@@ -1628,10 +1674,17 @@ class WorkflowState:
         if objective is None or objective.mode != "whole_target":
             return frozenset()
         facts: set[str] = set()
+        from .scanner import observation_scope
+        owner = observation_scope(objective.id, objective.target_origin or '')
+        facts.update('scanner-observations:' + key for key, scope in self.scanner_observations.items() if scope == owner)
+        for job in self.scanner_jobs.values():
+            if job.objective_id == objective.id and job.target_origin == objective.target_origin:
+                for record_id, row in job.dispositions.items():
+                    facts.add(f"scanner-triage:{job.semantic_key}:{record_id}:{row['disposition']}")
         for goal in objective.requested_goals:
             facts.add(
                 f"requested-goal:{goal.id}:{goal.status}:{','.join(sorted(goal.candidate_ids))}:"
-                f"{goal.reason or ''}:{goal.review_artifact_ref or ''}"
+                f"{goal.review_artifact_ref or ''}"
             )
         for item in self.objective_inputs():
             facts.add(f"input:{item.id}")
@@ -1648,17 +1701,21 @@ class WorkflowState:
                 facts.add(f"phase:{marker.objective_id}:{marker.phase}:{marker.artifact_ref}")
                 facts.update(
                     f"phase-coverage:{marker.objective_id}:{marker.phase}:"
-                    f"{dimension}:{item.status}:{item.reason or ''}"
+                    f"{dimension}:{item.status}"
                     for dimension, item in marker.coverage.items()
                 )
+                facts.update(f'phase-source:{objective.id}:{marker.phase}:{dimension}:{fingerprint}'
+                    for dimension, item in marker.coverage.items() for fingerprint in item.source_fingerprints)
         for key, records in self.phase_coverage.items():
             owner_id, separator, _phase = key.rpartition(":")
             if separator and owner_id == objective.id:
                 facts.update(
                     f"phase-coverage-pending:{key}:{dimension}:"
-                    f"{item.status}:{item.reason or ''}"
+                    f"{item.status}"
                     for dimension, item in records.items()
                 )
+                facts.update(f'phase-source:{key}:{dimension}:{fingerprint}'
+                    for dimension, item in records.items() for fingerprint in item.source_fingerprints)
         objective_candidates = {candidate.id: candidate for candidate in self.objective_candidates()}
         for candidate in objective_candidates.values():
             facts.add(f"candidate:{candidate.id}")
@@ -1771,6 +1828,10 @@ class WorkflowState:
 
         actionable: list[str] = []
         blockers: list[str] = []
+        for job in self.scanner_jobs.values():
+            if (job.objective_id == objective.id and job.target_origin == current_origin
+                    and job.unresolved_selected):
+                blockers.append('selected scanner observations unresolved:' + job.job_id)
         normalized_validators = frozenset(
             normalize_candidate_class(item) for item in validator_classes
         )
@@ -2025,7 +2086,25 @@ class WorkflowState:
         self.persisted_findings[candidate_id] = validation_result_fingerprint(result)
         self.mark_committed()
 
+    def __deepcopy__(self, memo):
+        # Request snapshots never own live waiters or filesystem commit locks.
+        other = type(self)()
+        memo[id(self)] = other
+        for item in fields(self):
+            if item.name not in {"mutation_lock", "retired", "lifecycle_lock"}:
+                setattr(other, item.name, deepcopy(getattr(self, item.name), memo))
+        return other
+
+    def retire_generation(self) -> None:
+        with self.lifecycle_lock:
+            self.retired.set()
+            self.generation = uuid.uuid4().hex
+            self.retired = asyncio.Event()
+
     def clear(self) -> None:
+        self.retire_generation()
+        self.scanner_jobs.clear()
+        self.scanner_observations.clear()
         self.objective = None
         self.attempts.clear()
         self.evidence_recovery.clear()
@@ -2044,6 +2123,9 @@ class WorkflowState:
         self.current_phase = None
 
     def replace_from(self, other: WorkflowState) -> None:
+        self.retire_generation()
+        self.scanner_jobs = deepcopy(other.scanner_jobs)
+        self.scanner_observations = dict(other.scanner_observations)
         self.attempts = deepcopy(other.attempts)
         self.evidence_recovery = deepcopy(other.evidence_recovery)
         self.selected_sources = deepcopy(other.selected_sources)
@@ -2066,6 +2148,8 @@ class WorkflowState:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "scanner_jobs": [row.to_dict() for row in self.scanner_jobs.values()],
+            "scanner_observations": dict(self.scanner_observations),
             "version": self.version,
             "attempts": deepcopy(self.attempts),
             "evidence_recovery": deepcopy(self.evidence_recovery),
@@ -2102,6 +2186,18 @@ class WorkflowState:
         state = cls()
         if not isinstance(value, dict):
             return state
+        from .scanner import ScannerJob, MAX_JOBS, MAX_OBSERVATION_FACTS
+        raw_observations = value.get('scanner_observations', {})
+        if isinstance(raw_observations, dict) and len(raw_observations) <= MAX_OBSERVATION_FACTS:
+            state.scanner_observations = {key: scope for key, scope in raw_observations.items()
+                if isinstance(key, str) and re.fullmatch(r'[0-9a-f]{64}', key)
+                and isinstance(scope, str) and re.fullmatch(r'[0-9a-f]{64}', scope)}
+        raw_jobs = value.get('scanner_jobs', [])
+        if isinstance(raw_jobs, list):
+            for raw_job in raw_jobs[-MAX_JOBS:]:
+                job = ScannerJob.from_dict(raw_job)
+                if job is not None:
+                    state.scanner_jobs[job.job_id] = job
         version = value.get("version", 1)
         if isinstance(version, int) and not isinstance(version, bool) and version > 0:
             # Version 1 had no registered evidence or independent subcases.

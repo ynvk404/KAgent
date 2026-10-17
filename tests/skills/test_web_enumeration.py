@@ -200,7 +200,7 @@ def test_web_enumeration_only_allows_low_noise_tools():
 
     text = collapse_ws(body)
     assert "Use `content_discovery` only when steps 2–5 leave a concrete path-coverage gap." in text
-    assert "Minimal profile uses native HTTP; full profile may select installed ffuf" in text
+    assert "`content_discovery` uses native HTTP in every tooling profile." in text
 
 
 def test_web_enumeration_execution_rule_uses_real_substitution():
@@ -230,9 +230,6 @@ def test_web_enumeration_prefers_passive_discovery_before_probing():
     for phrase in [
         "Prefer routes the application already exposes before guessing "
         "paths.",
-        "$TARGET/robots.txt",
-        "$TARGET/sitemap.xml",
-        "$TARGET/.well-known/security.txt",
         "Follow same-origin links one level deep when necessary to "
         "collect additional application routes.",
         "Do not recursively crawl the entire application here.",
@@ -309,7 +306,7 @@ def test_web_enumeration_static_and_js_enumeration_does_not_deobfuscate():
         "This step extracts route and endpoint strings already known by "
         "the frontend.",
         "Do not deobfuscate or reverse-engineer bundles",
-        '"/(api|rest)/[A-Za-z0-9/_-]+"',
+        'Resolve relative sources against the referencing page URL',
     ]:
         assert phrase in text, f"Missing static/JS enumeration rule: {phrase}"
 
@@ -329,7 +326,8 @@ def test_web_enumeration_focused_discovery_is_optional_and_bounded():
         "Requests remain GET-only and target paths on the active origin.",
         "Call `content_discovery` with `mode=\"auto\"` when a bounded discovery pass is justified.",
         "checks two independent random nonexistent paths and compares modest normalized response fingerprints",
-        "Minimal profile uses native HTTP. In full profile, runtime may select installed",
+        "Both tooling profiles use native HTTP through `content_discovery`.",
+        "External ffuf uses only the typed Shell scanner path.",
         "If coverage is already sufficient, record a `skipped` or `not_applicable` reason",
         "If enumeration begins to resemble testing for a particular "
         "vulnerability class rather than discovering paths or "

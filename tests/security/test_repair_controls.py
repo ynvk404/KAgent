@@ -1,7 +1,5 @@
 import asyncio
 import json
-from types import SimpleNamespace
-from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import httpx
@@ -10,7 +8,6 @@ import pytest
 from src.browser.store import CaptureStore
 from src.tools.common.browser_capture import register_browser_capture_tools
 from src.tools.discovery.content import ContentDiscoveryTool
-from src.tools.common.capabilities import CapabilityInventory
 from src.permission.runtime.execution import ExecutionBlocked, default_execution_policy
 from src.permission.permission import UserControlledRefusal, Decision, YoloPrompter
 from src.engagement.state import EngagementState
@@ -21,11 +18,9 @@ from tests.helpers.workflow import adopt_fixture_assessment
 from src.workflow.state import Candidate, WorkflowState
 from src.coverage.store import CoverageStore
 from src.findings.store import Store as FindingsStore
-from src.skills.registry import Registry as SkillRegistry
 from src.target.target import Target
-from src.ui.commands.slash_handler import handle_slash
 from src.findings.classification import classify
-from tests.security.test_repair_runtime import lab, Operator, worker_for
+from tests.security.test_repair_runtime import lab, Operator
 
 
 @pytest.mark.asyncio
@@ -53,7 +48,7 @@ async def test_discovery_reader_obeys_policy_response_cap(lab):
     rights = policy.engagement.http_permissions
     grant = next(iter(rights.grants.values()))
     rights.grants[grant.origin] = replace(grant, limits=replace(grant.limits, response_bytes=4))
-    tool = ContentDiscoveryTool(Target(origin), policy.engagement, CapabilityInventory(), lambda:'minimal')
+    tool = ContentDiscoveryTool(Target(origin), policy.engagement)
     receipt = policy.prepare(tool, {'paths':['new'], 'backend':'native'})
     token = policy.start(receipt, tool, {'paths':['new'], 'backend':'native'}, None)
     try:
@@ -68,18 +63,26 @@ async def test_discovery_reader_obeys_policy_response_cap(lab):
 
 
 @pytest.mark.asyncio
-async def test_real_ffuf_runs_through_scoped_broker(lab):
-    import shutil
+@pytest.mark.parametrize("mode", ["auto", "native"])
+async def test_content_discovery_uses_native_http_without_worker(lab, monkeypatch, mode):
     registry, p, policy, operator, origin, requests = lab
-    await worker_for(policy)
-    assert shutil.which('ffuf'), 'existing installed ffuf required for this acceptance'
     from tests.tools.test_discovery_tools import make_workflow
-    workflow = make_workflow(phase='enumeration', origin=origin)
-    registry.register(ContentDiscoveryTool(Target(origin), policy.engagement, CapabilityInventory(), lambda:'full', workflow))
-    result = await registry.execute('content_discovery', {'paths':['new'], 'mode':'auto', 'max_requests':6, 'rate_limit':2}, None, p)
-    assert '"backend": "ffuf"' in result or '"backend":"ffuf"' in result
-    assert 'ffuf failed' not in result and len(requests) >= 3
+    workflow = make_workflow(phase="enumeration", origin=origin)
+    assert policy.worker is None
+    launch = AsyncMock(side_effect=AssertionError("content discovery must not spawn"))
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    registry.register(ContentDiscoveryTool(Target(origin), policy.engagement, workflow=workflow))
+    result = await registry.execute("content_discovery", {
+        "paths": ["new"], "mode": mode, "max_requests": 3, "rate_limit": 10,
+    }, None, p)
+    payload = json.loads(result)
+    assert result.status == "observation" and payload["backend"] == "native"
+    assert payload["completed_requests"] == len(requests) == 3
+    assert payload["phase_coverage"]["status"] == "performed"
+    assert policy.worker is None and policy.active == 0
+    assert not policy.engagement.http_permissions._inflight
     assert operator.calls == 0
+    launch.assert_not_awaited()
 
 
 CLASSES = ['sql-injection','cross-site-scripting','access-control','authentication','csrf','ssrf','ssti','xxe','path-traversal','command-injection','file-upload','nosql-injection','jwt-misconfiguration','cors-misconfiguration','open-redirect']
@@ -87,11 +90,10 @@ CLASSES = ['sql-injection','cross-site-scripting','access-control','authenticati
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', CLASSES)
-async def test_operator_proof_review_separate_from_yolo_tool_approval(lab, tmp_path, kind):
+async def test_finding_classification_requires_accepted_evidence(lab, tmp_path, kind):
     registry, p, policy, operator, origin, _ = lab
     state = WorkflowState()
     candidate, _ = state.add_candidate(Candidate(candidate_class=kind, target=origin, endpoint='/review', method='GET'))
-    skills = SkillRegistry()
     coverage = CoverageStore(str(tmp_path / '.kagent/coverage.json'))
     registry.register(WorkflowTool(state, evidence_root=tmp_path, coverage=coverage))
     registry.register(ConfirmFindingTool(FindingsStore(project_directory=tmp_path), workflow=state))
@@ -114,24 +116,20 @@ async def test_operator_proof_review_separate_from_yolo_tool_approval(lab, tmp_p
     prior.outcome = 'insufficient-evidence'
     prior.assessment_binding = seal(prior)
     state.add_validation_result(prior)
-    output = []
-    agent = SimpleNamespace(prompter=p, workflow=state, tools=registry, skills=skills, save=AsyncMock())
-    app = SimpleNamespace(agent=agent, dispatch=output.append)
-    operator.decision = Decision.ALLOW_ONCE
-    assert handle_slash(cast(Any, app), f'/review-result {candidate.id} confirmed low Synthetic observed impact')
-    for _ in range(50):
-        if output:
-            break
-        await asyncio.sleep(.01)
-    latest = state.latest_result(candidate.id)
-    assert output and latest is not None and latest.outcome == 'confirmed', output
-    latest = state.latest_result(candidate.id)
-    assert latest is not None and latest.assessment_source == 'operator'
-    assert operator.calls == 1  # conclusion review even in YOLO, not a tool dialog
+    with pytest.raises(Exception, match='not eligible'):
+        await registry.execute('confirm_finding', finding_args, None, p)
+    assert not state.finding_is_persisted(candidate.id) and operator.calls == 0
+    # Consumer fixture for a native accepted result; no manual conclusion path.
+    accepted = adopt_fixture_assessment(state, ValidationResult(candidate.id, kind, 'confirmed', evidence_refs=[ref]),
+        policy=policy, assessment={'observed_impact': 'Synthetic observed impact', 'severity': 'low'})
+    state.add_validation_result(accepted, force=True)
+    tool = registry.get('workflow')
+    await tool._sync_coverage(candidate, accepted)
+    assert accepted.assessment_source == 'agent'
     assert (await coverage.list())[0].status == 'failed'
     found = await registry.execute('confirm_finding', finding_args, None, p)
     assert 'written to' in found and state.finding_is_persisted(candidate.id)
-    assert operator.calls == 1
+    assert operator.calls == 0
     classification = classify(kind)
     assert classification is not None
     reports = list((tmp_path / 'artifacts/findings').glob('*.md'))
@@ -148,7 +146,7 @@ async def test_operator_proof_review_separate_from_yolo_tool_approval(lab, tmp_p
     # Retry through the same production gates preserves the original snapshot.
     await registry.execute('confirm_finding', {**finding_args, 'title': 'Retry renamed'}, None, p)
     assert reports[0].read_text(encoding='utf-8') == report
-    assert len(list(reports[0].parent.glob('*.md'))) == 1 and operator.calls == 1
+    assert len(list(reports[0].parent.glob('*.md'))) == 1 and operator.calls == 0
 
 
 @pytest.mark.asyncio

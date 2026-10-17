@@ -119,9 +119,6 @@ class DummyAgent:
             self.permission_cache_clears += 1
         return origin, changed
 
-    async def coverage_context(self, signal) -> str:
-        return "coverage fixture"
-
     def rebuild_system_prompt(self) -> None:
         # Mirrors the real agent's contract: rebuild_system_prompt() runs
         # synchronously and refreshes sys_prompt from current target state.
@@ -251,13 +248,14 @@ def test_help_groups_commands_and_keeps_runtime_summary_compact():
     assert "Everyday" in text
     assert "Workflow" in text
     assert "Advanced" in text
-    assert "Installed skills" in text
+    assert "Skill picker" in text
     assert "/exit (/quit)" in text
     assert "/burp [port|stop|status|credentials|list|use [id|cancel]|all]" in text
     assert "at most 50 most recent requests" in text
     assert any(line.startswith('  /memory [add <text>|list|forget <text>|clear|intel]') and line.endswith('manage saved/session memory') for line in text.splitlines())
     assert "/model <id|list>" in text
-    assert any(line.startswith('  /skills [<name>|enable|disable <name>|new <name>]') and line.endswith('list, toggle, or create skills') for line in text.splitlines())
+    assert any(line.startswith('  /skills [<name>|enable|disable <name>|new <name>]') and line.endswith('pick/use, toggle, or create skills') for line in text.splitlines())
+    assert "/<skill-name>" not in text
     assert "/ then Tab, Tab" in text
     assert "browser_capture_*" not in text
     assert "coverage(action=" not in text
@@ -735,6 +733,7 @@ async def test_scope_show_and_add_are_canonical_and_deterministic():
         "Allowed origins:\n"
         "  - http://juice.lab:3000\n"
         "  - http://juice.lab:4000\n"
+        "Allowed TCP destinations:\n"
         f"Engagement revision: {baseline_revision + 1}"
     )
 
@@ -759,7 +758,7 @@ async def test_scope_duplicate_add_is_noop_including_default_port_equivalence():
         ("/scope add", "usage: /scope add <origin>"),
         ("/scope remove", "usage: /scope remove <origin>"),
         ("/scope add ftp://juice.lab", "invalid scope origin: ftp://juice.lab"),
-        ("/scope unknown", "usage: /scope [show|add <origin>|remove <origin>|reset]"),
+        ("/scope unknown", "usage: /scope [show|add <origin>|remove <origin>|tcp-add <ip> <ports>|tcp-remove <ip> [ports]|reset]"),
     ],
 )
 def test_scope_invalid_or_missing_arguments(command, message):
@@ -836,26 +835,6 @@ def test_plan_turn_disables_agent_tools():
         assert opts is not None
         assert opts.transcript_user_text == "/plan fix auth flow"
         assert opts.system_text == "planning only — tools disabled"
-        assert opts.run_options is not None
-        assert opts.run_options.tools is False
-
-    asyncio.run(run())
-
-
-def test_next_turn_disables_agent_tools():
-    async def run() -> None:
-        app = DummyApp()
-
-        assert handle_slash(cast(KAgent, app), "/next test checkout")
-        await asyncio.sleep(0)
-
-        assert len(app.turns) == 1
-        prompt, opts = app.turns[0]
-        assert "Objective for next steps:" in prompt
-        assert "coverage fixture" in prompt
-        assert opts is not None
-        assert opts.transcript_user_text == "/next test checkout"
-        assert opts.system_text == "coverage-driven next steps — tools disabled"
         assert opts.run_options is not None
         assert opts.run_options.tools is False
 

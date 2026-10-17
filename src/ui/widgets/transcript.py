@@ -9,6 +9,7 @@ from typing import IO, Callable, Literal
 from src.ui.core.state import TranscriptEntry
 from src.ui.core.terminal_size import get_terminal_size
 from src.ui.render.markdown import render_markdown
+from src.ui.render.help import render_help
 from src.ui.render.sanitize import sanitize_text
 from src.ui.widgets.banner import Banner, BannerData
 from src.ui.theme import ACCENT, BOLD_ACCENT, BOLD_ERROR, MUTED, PRIMARY, WARNING, BOLD_SUCCESS
@@ -80,7 +81,7 @@ def rows_for_entry(entry: TranscriptEntry, width: int | None = None, ui: UIPalet
             return rows
 
     entry_text = _display_text(entry)
-    text = (
+    text = render_help(entry.help_document, width) if entry.help_document is not None else (
         render_markdown(entry_text, width=width, ui=ui)
         if entry.kind in MARKDOWN_KINDS
         else entry_text
@@ -151,6 +152,8 @@ class Transcript:
         preserve_viewport: Callable[[], AbstractContextManager[None]] | None = None,
         write_line: Callable[[RenderedLine], None] | None = None,
         ui: UIPalette = DARK_UI,
+        line_count: Callable[[], int] | None = None,
+        replace_lines: Callable[[int, int, list[RenderedLine]], int] | None = None,
     ) -> None:
         self._out: IO[str] = out if out is not None else sys.stdout
         self._width = width
@@ -159,6 +162,10 @@ class Transcript:
         self._preserve_viewport = preserve_viewport
         self._write_line = write_line
         self._ui = ui
+        self._line_count = line_count
+        self._replace_lines = replace_lines
+        self._entries: list[TranscriptEntry] = []
+        self._ranges: list[tuple[int, int]] = []
         self._printed_count = 0
         self._last_generation: object | None = None
         self._banner_printed = False
@@ -177,7 +184,8 @@ class Transcript:
         if width != self._last_width and self._clear is not None:
             self._last_generation = None
         self._last_width = width
-        changed = generation != self._last_generation or len(committed) != self._printed_count
+        changed = (generation != self._last_generation or len(committed) != self._printed_count
+                   or any(left is not right and left != right for left, right in zip(committed, self._entries)))
         with self._preserve_viewport() if changed and self._preserve_viewport else nullcontext():
             self._flush(committed, banner_data, generation, clear_message)
 
@@ -194,6 +202,30 @@ class Transcript:
             self._printed_count = 0
             self._banner_printed = False
             self._last_generation = generation
+            self._entries = []
+            self._ranges = []
+
+        if (self._replace_lines is not None and self._line_count is not None
+                and len(committed) >= self._printed_count and len(self._ranges) == self._printed_count):
+            heights = [end - start for start, end in self._ranges]
+            for index in range(self._printed_count - 1, -1, -1):
+                if committed[index] is not self._entries[index] and committed[index] != self._entries[index]:
+                    start, end = self._ranges[index]
+                    width = self._width() if self._width is not None else None
+                    heights[index] = self._replace_lines(start, end, entry_view(committed[index], width=width, ui=self._ui))
+            if self._ranges:
+                position = self._ranges[0][0]
+                self._ranges = []
+                for height in heights:
+                    self._ranges.append((position, position + height))
+                    position += height
+        elif self._printed_count and (len(committed) < self._printed_count or any(
+                a is not b and a != b for a, b in zip(committed, self._entries))):
+            if self._clear is not None:
+                self._clear()
+            self._printed_count = 0
+            self._banner_printed = False
+            self._ranges = []
 
         if not self._banner_printed:
             if clear_message is not None:
@@ -214,9 +246,13 @@ class Transcript:
 
         new_entries = committed[self._printed_count :]
         for entry in new_entries:
+            start = self._line_count() if self._line_count is not None else 0
             self._write_entry(entry)
+            if self._line_count is not None:
+                self._ranges.append((start, self._line_count()))
 
         self._printed_count = len(committed)
+        self._entries = list(committed)
 
     def _write_banner(self, banner_data: BannerData, columns: int) -> None:
         if self._write_banner_panel is not None:

@@ -56,10 +56,22 @@ Prefer the built-in `http` tool with `phase: recon` for known-source
 enumeration. Use `curl` only when the native tool cannot express a necessary
 request detail; shell requests do not enforce target-origin scope.
 Use `content_discovery` only when steps 2–5 leave a concrete path-coverage gap.
-Minimal profile uses native HTTP; full profile may select installed ffuf through
-the semantic tool. Discovery stays on the active origin, is bounded, and requires
+`content_discovery` uses native HTTP in every tooling profile.
+Discovery stays on the active origin, is bounded, and requires
 permission. Do not run generic-shell `ffuf`, `gobuster`, or `dirsearch`
 automatically.
+
+For a path gap, `shell(scanner="ffuf", url=active_origin_plus_FUZZ_path,
+wordlist_id=approved_id)` is also available when `permissions_status` reports a
+tested build ready. Select an existing file by its catalog ID, path, size and
+applicability. Installed DIRB files appear as `dirb-small` and `dirb-common`;
+additional existing files can be registered with `--scanner-wordlist ID=FILE`.
+`web-common` is a small bundled text file for a smoke pass. Do not generate
+wordlists or pass arbitrary file paths to the scanner. See step 6 for examples.
+A typed job can be the
+first call of an enumeration turn with valid recon prerequisites; native HTTP
+first and no scanner are equally valid when known/documented/captured inventory
+is sufficient. There is no mandatory Nmap/ffuf/HTTP sequence.
 
 Execution rule: substitute the real target into commands before running them.
 Never write literal placeholders such as `<TARGET>`, `<HOST>`, or `<endpoint>`
@@ -153,16 +165,22 @@ anything, check whether `recon`'s summary already recorded a definitive
 result for it (e.g. `/robots.txt` status, `/graphql` presence); only
 re-probe if that result was inconclusive or missing.
 
+The JSON examples below name the KAgent tool and its arguments. Relative URLs
+resolve on the active target. Preserve its supplied base path where relevant;
+never copy an example origin or path as an authorization declaration.
+
 If recon output is unavailable, perform one lightweight request:
 
-```sh
-TARGET="http://localhost:3000"  # replace with the real target
-
-curl -ksS \
-  -o /tmp/body \
-  -w '%{http_code}\t%{url_effective}\n' \
-  --max-time 8 \
-  "$TARGET/"
+```json
+{
+  "tool": "http",
+  "arguments": {
+    "method": "GET",
+    "url": "/",
+    "phase": "recon",
+    "max_response_bytes": 8192
+  }
+}
 ```
 
 Record the API style only when it is already apparent from recon or this
@@ -175,22 +193,47 @@ Prefer routes the application already exposes before guessing paths.
 Check high-signal discovery files first — skip any of these already recorded
 with a definitive result in `artifacts/recon/<target>/summary.md`:
 
-```sh
-TARGET="http://localhost:3000"  # replace with the real target
+```json
+{
+  "tool": "http",
+  "arguments": {
+    "method": "GET",
+    "url": "/robots.txt",
+    "phase": "recon",
+    "max_response_bytes": 8192
+  }
+}
+```
 
-curl -ksS --max-time 5 "$TARGET/robots.txt"
-curl -ksS --max-time 5 "$TARGET/sitemap.xml"
-curl -ksS --max-time 5 "$TARGET/.well-known/security.txt"
+```json
+{
+  "tool": "http",
+  "arguments": {
+    "method": "GET",
+    "url": "/sitemap.xml",
+    "phase": "recon",
+    "max_response_bytes": 8192
+  }
+}
+```
+
+```json
+{
+  "tool": "http",
+  "arguments": {
+    "method": "GET",
+    "url": "/.well-known/security.txt",
+    "phase": "recon",
+    "max_response_bytes": 8192
+  }
+}
 ```
 
 Parse the landing page for internal links, form actions, and script sources:
 
-```sh
-curl -ksS --max-time 8 "$TARGET/" \
-  | grep -oE '(href|src|action)="[^"]+"' \
-  | sed -E 's/^(href|src|action)="//; s/"$//' \
-  | sort -u
-```
+Use the already retained landing-page body: collect `href`, `src` and `action` values,
+resolve them against that page URL, and deduplicate the same-origin references.
+Parsing the retained response does not require another request.
 
 Follow same-origin links one level deep when necessary to collect additional
 application routes. Do not recursively crawl the entire application here.
@@ -220,9 +263,19 @@ access failure. A `403` may reflect an intermediary noted by recon.
 
 For each relevant HTML page already collected, extract form structure:
 
-```sh
-curl -ksS --max-time 8 "$TARGET/login" \
-  | grep -oE '<(form|input|select|textarea)[^>]*>'
+Reuse retained HTML first. If a previously linked `/login` page has not been
+collected, a bounded fetch looks like this:
+
+```json
+{
+  "tool": "http",
+  "arguments": {
+    "method": "GET",
+    "url": "/login",
+    "phase": "recon",
+    "max_response_bytes": 8192
+  }
+}
 ```
 
 For each form, record:
@@ -256,19 +309,20 @@ actual submitted values, credentials, tokens, or session material.
 Check common API documentation and entry points with lightweight requests —
 again, skip any already recorded with a definitive result by `recon`:
 
-```sh
-TARGET="http://localhost:3000"
+Choose only unresolved paths that fit the observed application, such as
+`/api`, `/api/v1`, `/swagger.json`, `/swagger/v1/swagger.json`, `/openapi.json`, `/api-docs`, `/graphql`, `/.well-known/openapi.json`.
+Do not run them as a blind batch. For example, retrieve a relevant spec once:
 
-for p in /api /api/v1 /swagger.json /swagger/v1/swagger.json \
-         /openapi.json /api-docs /graphql /.well-known/openapi.json; do
-  code=$(curl -ksS \
-    -o /tmp/api_body \
-    -w "%{http_code}" \
-    --max-time 5 \
-    "$TARGET$p")
-
-  echo "$code $p"
-done
+```json
+{
+  "tool": "http",
+  "arguments": {
+    "method": "GET",
+    "url": "/openapi.json",
+    "phase": "recon",
+    "max_response_bytes": 8192
+  }
+}
 ```
 
 If a Swagger/OpenAPI document is found, parse documented routes, methods,
@@ -280,10 +334,9 @@ For an API-only target with a useful specification, inventory the documented
 surface before considering focused discovery. Do not run a default wordlist
 pass while the specification covers the route gap.
 
-```sh
-curl -ksS --max-time 8 "$TARGET/swagger.json" \
-  | jq -r '.paths | keys[]' 2>/dev/null
-```
+Read operation keys from the retained `.paths` object and record supported
+request shapes incrementally. Reuse the same retained response for parsing;
+do not fetch a specification again merely to list its paths.
 
 If a GraphQL endpoint is identified, record:
 
@@ -295,12 +348,20 @@ If a GraphQL endpoint is identified, record:
 A minimal check may be used only to determine whether introspection is
 enabled:
 
-```sh
-curl -ksS \
-  -X POST \
-  "$TARGET/graphql" \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"{__schema{types{name}}}"}'
+```json
+{
+  "tool": "http",
+  "arguments": {
+    "method": "POST",
+    "url": "/graphql",
+    "phase": "recon",
+    "max_response_bytes": 8192,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"query\":\"{__schema{types{name}}}\"}"
+  }
+}
 ```
 
 Recording that introspection succeeded or is disabled is still enumeration.
@@ -313,44 +374,27 @@ vulnerability-specific skill when justified.
 Collect JavaScript and static resources referenced by pages already fetched.
 Extract route/API clues that the application itself exposes.
 The src value may be an absolute URL, root-relative path, or relative path,
-so normalize it before requesting. Note: this resolution assumes the JS was
-referenced from a page fetched at the target root; if you later parse pages
-under a subpath, resolve relative paths against that page's own URL instead
-of `$TARGET`.
+so normalize it against the referencing page URL before requesting.
 
-```sh
-TARGET="http://localhost:3000"  # no trailing slash
+Resolve relative sources against the referencing page URL, including its
+subpath. For example, if a retained page actually references the same-origin
+`/assets/app.js`, fetch that resource once:
 
-resolve_js_url() {
-  src="$1"
-
-  case "$src" in
-    http://*|https://*)
-      printf '%s\n' "$src"
-      ;;
-    /*)
-      printf '%s%s\n' "$TARGET" "$src"
-      ;;
-    *)
-      printf '%s/%s\n' "$TARGET" "$src"
-      ;;
-  esac
+```json
+{
+  "tool": "http",
+  "arguments": {
+    "method": "GET",
+    "url": "/assets/app.js",
+    "phase": "recon",
+    "max_response_bytes": 8192
+  }
 }
-
-grep -oE 'src="[^"]+\.js"' /tmp/body \
-  | sed -E 's/^src="//; s/"$//' \
-  | while IFS= read -r js; do
-      url=$(resolve_js_url "$js")
-
-      case "$url" in
-        "$TARGET"/*)
-          curl -ksS --max-time 8 "$url" \
-            | grep -oE '"/(api|rest)/[A-Za-z0-9/_-]+"' \
-            | sort -u
-          ;;
-      esac
-    done
 ```
+
+Inspect bounded retained content for fetch/XHR/axios calls, API base URLs
+and router definitions. Keep surrounding call-site evidence; a path string
+alone is insufficient. Apply the large-response strategy if content is cut.
 
 Skip JavaScript or other resources that resolve to clearly unauthorized
 cross-origin domains.
@@ -387,13 +431,131 @@ and target paths on the active origin. Call `content_discovery` with `mode="auto
 when a bounded discovery pass is justified. The runtime uses a curated wordlist,
 checks two independent random nonexistent paths and compares modest normalized
 response fingerprints to identify wildcard/SPA responses, does not
-follow redirects, and verifies scanner hits over native HTTP. The tool's hard
+follow redirects, and records observations directly from native HTTP. The tool's hard
 limits are 1,000 total requests, 10 requests/second, and 120 seconds; use a
 smaller budget when sufficient. It does not recurse or accept raw scanner flags.
 
-Minimal profile uses native HTTP. In full profile, runtime may select installed
-ffuf only when workflow state confirms this remaining coverage gap; a model
-argument cannot force the scanner. If coverage is already sufficient, record a `skipped`
+Those limits and wildcard calibration describe the native `content_discovery`
+tool. Typed ffuf is one exact reviewed scanner job, with default 40 threads,
+optional native rate/calibration/status/size filters and a finite deadline.
+HTTP quotas/confirm-each do not govern its traffic. It pins a numeric destination
+while preserving the reviewed Host/SNI, sends no Native HTTP credentials, and
+does not recurse or follow redirects. Do not fall back to generic-shell ffuf.
+
+### Choose a file and a URL template from the observed gap
+
+Read the catalog and existing workflow jobs first. The model chooses the file
+ID, URL template and supported ffuf options; the selected file supplies the
+words. Prefer the smallest applicable file: `dirb-small` for a narrow path gap,
+or `dirb-common` for a justified wider pass. Choose a registered API-specific
+file when available for an observed API surface. Do not assume these IDs exist
+on every machine: use only catalog entries with `available: true`. Availability
+is a file check; contents are validated and frozen before job review.
+
+Use `/FUZZ` for a root path gap. Use `/api/FUZZ` only when recon, documentation,
+or captures actually establish `/api/`; the file should contain relative child
+names, not another `api/` prefix. One FUZZ may also occur in a filename template
+when the observed application gives a concrete reason. Changing the prefix,
+file or filters is a new job and requires its own review. Never create a file
+to bypass the catalog or choose a large list merely because it is installed.
+
+### ffuf examples through the Shell tool
+
+These are tool-call examples, not shell command strings. They assume the
+operator's active authorized origin is `http://127.0.0.1:3000`. Substitute the
+actual active origin and a suitable available file ID before calling. Do not
+execute all examples as a sequence.
+
+**Small root discovery:** when known sources leave a concrete root path gap,
+choose the installed small DIRB file and a finite request rate/deadline:
+
+```json
+{
+  "tool": "shell",
+  "arguments": {
+    "scanner": "ffuf",
+    "url": "http://127.0.0.1:3000/FUZZ",
+    "wordlist_id": "dirb-small",
+    "threads": 10,
+    "rate": 10,
+    "timeout_seconds": 180,
+    "request_timeout_seconds": 5,
+    "match_status": "all"
+  }
+}
+```
+
+Budget for the selected file: roughly entry count divided by rate, plus time
+for slow responses and calibration. The small DIRB file has about 1,000 entries;
+at 10 requests/second a 180-second deadline allows a complete pass under normal
+responses. A shorter deliberate pass must retain its partial coverage.
+
+**Children of an observed API prefix:** assume the operator has registered an
+existing file as `api-words` and that ID appears available in the catalog:
+
+```json
+{
+  "tool": "shell",
+  "arguments": {
+    "scanner": "ffuf",
+    "url": "http://127.0.0.1:3000/api/FUZZ",
+    "wordlist_id": "api-words",
+    "threads": 10,
+    "rate": 5,
+    "timeout_seconds": 60,
+    "request_timeout_seconds": 5,
+    "match_status": "all"
+  }
+}
+```
+
+**Filter an established wildcard response:** if nonexistent controls really
+returned a stable 1234-byte wildcard body, a separately reviewed pass may use
+calibration and that observed size. Replace 1234 with the actual measurement:
+
+```json
+{
+  "tool": "shell",
+  "arguments": {
+    "scanner": "ffuf",
+    "url": "http://127.0.0.1:3000/FUZZ",
+    "wordlist_id": "dirb-small",
+    "threads": 10,
+    "rate": 10,
+    "timeout_seconds": 180,
+    "calibration": true,
+    "match_status": "all",
+    "filter_size": [
+      1234
+    ]
+  }
+}
+```
+
+`url` maps to ffuf `-u`; the reviewed file snapshot supplies `-w`.
+`threads`, `rate`, `request_timeout_seconds` and `timeout_seconds` map to `-t`,
+`-rate`, `-timeout` and `-maxtime`. `calibration`, `match_status`, `filter_status`
+and `filter_size` map to `-ac`, `-mc`, `-fc` and `-fs`. Use only these typed
+fields; the adapter owns executable, Host/SNI, pinning, output and redirects.
+Size/status filters can hide real routes: retain the selection rationale and
+coverage limitation. A 401/403/500 may be useful; do not blindly filter it away.
+Valid ffuf JSON or exit 0 does not prove the intended pass completed.
+
+Inspect workflow scanner jobs and reuse suitable results before requesting a
+new pass; changed wordlist/options/scope, partial results, or explicit retest
+justify a new job and approval. Each retained row is `scanner_reported`.
+Do not Native-verify every hit. Select useful record IDs, read bounded
+`read_tool_result` ranges, and record `triage_scanner_results` dispositions with
+reasons. Remaining rows may be deferred/dropped with an aggregate reason; this
+does not claim they were analyzed or verified. A path, 401/403/500, or size is
+not a parameter, request schema, candidate or finding. Use documentation,
+captures or selected native requests to establish actual input context. Preserve
+job failure/partial/coverage uncertainty in the canonical inventory; unavailable
+refs are retrieval limitations, never permission to rerun the scanner.
+
+Both tooling profiles use native HTTP through `content_discovery`.
+External ffuf uses only the typed Shell scanner path.
+If coverage is already sufficient, record a `skipped`
 or `not_applicable` reason instead of repeating the pass. Stop when additional
 requests stop producing useful new routes.
 

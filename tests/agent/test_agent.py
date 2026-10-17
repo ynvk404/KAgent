@@ -5968,33 +5968,6 @@ async def test_incomplete_coverage_page_stays_explicit_under_context_pressure(tm
     assert raw != llm_facing
 
 
-@pytest.mark.asyncio
-async def test_coverage_context_keeps_next_flow_compatible_with_paginated_results(tmp_path):
-    coverage_store = CoverageStore(str(tmp_path / "coverage.json"))
-    coverage_store.loaded = True
-    for index in range(11):
-        coverage_store.entries[str(index)] = CoverageEntry(
-            endpoint=f"GET /next/{index:02d}",
-            param="id",
-            vulnClass="access-control",
-            status="tried",
-            count=1,
-            firstSeen=index,
-            lastSeen=index,
-        )
-    agent = make_agent([])
-    agent.tools.register(CoverageTool(coverage_store))
-
-    context = await agent.coverage_context(FakeSignal())
-
-    assert "Coverage summary:" in context
-    assert "Coverage entries:" in context
-    assert '"total_count": 11' in context
-    assert '"returned_count": 10' in context
-    assert '"complete": false' in context
-    assert '"next_cursor": "10"' in context
-
-
 def _source_with_canaries(size: int = 12_000) -> tuple[str, list[str]]:
     chars = ["."] * size
     canaries = ["HEAD-CANARY", "Q1-CANARY", "MID-CANARY", "Q3-CANARY", "TAIL-CANARY"]

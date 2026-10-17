@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from typing import Callable, Awaitable
+from src.skills.transactions import skill_changes
+
+from rich.cells import cell_len
+from rich.text import Text
 
 from src.ui.commands.menu_window import compute_menu_window
 
@@ -17,10 +21,15 @@ class SkillsModal:
         agent,
         on_close: Callable[[], None],
         persist_disabled_skills: PersistDisabledSkills | None = None,
+        on_loaded: Callable[[str], None] | None = None,
+        width: int = 80,
     ):
         self.agent = agent
         self.on_close = on_close
         self.persist_disabled_skills = persist_disabled_skills
+        self.on_loaded = on_loaded
+        self.width = width
+        self.closed = False
 
         self.idx = 0
         self.busy_name: str | None = None
@@ -44,6 +53,35 @@ class SkillsModal:
 
         return skills[safe_idx]
 
+    async def load(self) -> None:
+        current = self.current_skill()
+        if current is None or self.busy_name or self.closed:
+            return
+
+        self.busy_name = current.name
+        self.error = None
+        try:
+            async with skill_changes(self.agent):
+                # Reopening the picker before the next prompt must not inject the
+                # same playbook again. Keep disabled/in-flight checks on the Agent.
+                already_pending = (
+                    current.name in getattr(self.agent, "pending_skills", set())
+                    and not self.agent.skills.is_disabled(current.name)
+                    and not getattr(self.agent, "running", False)
+                )
+                name = current.name if already_pending else await self.agent.inject_skill(current.name)
+        except Exception as err:
+            self.error = str(err)
+        else:
+            if self.closed:
+                return
+            self.closed = True
+            if self.on_loaded:
+                self.on_loaded(name)
+            self.on_close()
+        finally:
+            self.busy_name = None
+
     async def toggle(self):
 
         current = self.current_skill()
@@ -51,7 +89,7 @@ class SkillsModal:
         if not current:
             return
 
-        if self.busy_name:
+        if self.busy_name or self.closed:
             return
 
 
@@ -66,20 +104,21 @@ class SkillsModal:
 
 
         try:
+            async with skill_changes(self.agent):
 
-            changed = await self.agent.set_skill_enabled(
-                current.name,
-                target_enabled,
-            )
-
-
-            if (
-                changed
-                and self.persist_disabled_skills
-            ):
-                await self.persist_disabled_skills(
-                    self.agent.skills.disabled_names()
+                changed = await self.agent.set_skill_enabled(
+                    current.name,
+                    target_enabled,
                 )
+
+
+                if (
+                    changed
+                    and self.persist_disabled_skills
+                ):
+                    await self.persist_disabled_skills(
+                        self.agent.skills.disabled_names()
+                    )
 
 
         except Exception as err:
@@ -98,7 +137,7 @@ class SkillsModal:
         enabled: bool,
     ):
 
-        if self.busy_name:
+        if self.busy_name or self.closed:
             return
 
 
@@ -107,30 +146,31 @@ class SkillsModal:
 
 
         try:
+            async with skill_changes(self.agent):
 
-            for skill in self.skills():
+                for skill in self.skills():
 
-                disabled = (
-                    self.agent.skills
-                    .is_disabled(skill.name)
-                )
-
-
-                if disabled == (not enabled):
-                    continue
+                    disabled = (
+                        self.agent.skills
+                        .is_disabled(skill.name)
+                    )
 
 
-                await self.agent.set_skill_enabled(
-                    skill.name,
-                    enabled,
-                )
+                    if disabled == (not enabled):
+                        continue
 
 
-            if self.persist_disabled_skills:
+                    await self.agent.set_skill_enabled(
+                        skill.name,
+                        enabled,
+                    )
 
-                await self.persist_disabled_skills(
-                    self.agent.skills.disabled_names()
-                )
+
+                if self.persist_disabled_skills:
+
+                    await self.persist_disabled_skills(
+                        self.agent.skills.disabled_names()
+                    )
 
 
         except Exception as err:
@@ -148,18 +188,15 @@ class SkillsModal:
         key: str,
     ):
 
-        if self.busy_name:
+        if key in ("escape", "esc", "q"):
+            if not self.closed:
+                self.closed = True
+                self.on_close()
             return
-
-
+        if self.busy_name or self.closed:
+            return
         skills = self.skills()
         total = len(skills)
-
-
-        if key in ("escape", "esc", "q"):
-            self.on_close()
-            return
-
 
         if total == 0:
             return
@@ -183,7 +220,10 @@ class SkillsModal:
             return
 
 
-        if key in ("enter", "space"):
+        if key == "enter":
+            return self.load()
+
+        if key == "space":
 
             return self.toggle()
 
@@ -240,7 +280,7 @@ class SkillsModal:
         )
 
         lines.append(
-            "Toggle skills available to the agent"
+            "Select a skill to use or toggle"
         )
 
         lines.append("")
@@ -286,12 +326,14 @@ class SkillsModal:
 
 
             self.item_lines[len(lines)] = i
-            lines.append(
-                f"{cursor}"
-                f"{state} "
-                f"{skill.name}"
-                f" — {skill.description}"
-            )
+            label = f"{cursor}{state} {skill.name}"
+            # Description metadata may contain paragraphs (up to 1024 chars).
+            # Only presentation is shortened; the registry/body stay intact.
+            summary_width = min(64, self.width - cell_len(label) - 3)
+            if summary_width > 3:
+                summary = truncate(" ".join(skill.description.split()), summary_width)
+                label += f" — {summary}"
+            lines.append(truncate(label, self.width))
 
         if window.hidden_below > 0:
             lines.append(f"  ↓ {window.hidden_below} more")
@@ -306,11 +348,9 @@ class SkillsModal:
 
         lines.extend([
             "",
-            (
-                "↑↓/Tab select · Space/Enter toggle · "
-                "a enable all · d disable all · "
-                "Esc/q close"
-            )
+            "↑↓/Tab select · Space toggle",
+            "Enter use · a enable all · d disable all",
+            "Esc/q close",
         ])
 
 
@@ -321,7 +361,6 @@ def truncate(
     n: int,
 ) -> str:
 
-    if len(text) <= n:
-        return text
-
-    return text[:n - 1] + "…"
+    value = Text(text)
+    value.truncate(max(0, n), overflow="ellipsis")
+    return value.plain

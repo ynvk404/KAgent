@@ -4,7 +4,6 @@ import asyncio
 import json
 import socket
 import time
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
@@ -24,7 +23,6 @@ from src.tools.discovery.content import (
     ContentDiscoveryTool,
     MAX_REQUESTS,
 )
-from src.tools.common.outcome import ToolOutput
 from src.tools.discovery.service import ServiceDiscoveryTool
 from src.tools.common.registry import Registry
 from src.workflow.state import WorkflowObjective, WorkflowState
@@ -45,6 +43,23 @@ def make_workflow(*, phase: str = "recon", origin: str = "http://target.test:808
             artifact_ref="artifacts/recon.md",
         )
     return workflow
+
+
+@pytest.mark.parametrize('tool_type,mode,backend', [
+    (ContentDiscoveryTool, 'auto', 'native'), (ServiceDiscoveryTool, 'auto', 'socket'),
+])
+@pytest.mark.parametrize('legacy_form', ['positional', 'keyword'])
+def test_legacy_constructor_preserves_workflow_without_selecting_scanner(tool_type, mode, backend, legacy_form):
+    target, engagement, workflow = Target('http://target.test:8080'), EngagementState(), make_workflow()
+    def forbidden(*_args):
+        pytest.fail('legacy capabilities/profile must not be consulted by native discovery')
+    inventory = CapabilityInventory(which=forbidden)
+    if legacy_form == 'positional':
+        tool = tool_type(target, engagement, inventory, forbidden, workflow)
+    else:
+        tool = tool_type(target, engagement, capabilities=inventory, tooling_profile=forbidden, workflow=workflow)
+    assert tool.target is target and tool.engagement is engagement and tool.workflow is workflow
+    assert tool._select_backend(mode) == backend
 
 
 class Response:
@@ -112,25 +127,23 @@ class RecordingPrompter:
 
 
 def make_content_tool(
-    *, profile: str = "minimal", ffuf: str | None = None,
+    *,
     workflow: WorkflowState | None = None,
 ) -> ContentDiscoveryTool:
     target = Target("http://target.test:8080/app")
     engagement = EngagementState()
     engagement.initialize_target(target.base_url())
-    inventory = CapabilityInventory(which=lambda name: ffuf if name == "ffuf" else None)
-    return ContentDiscoveryTool(target, engagement, inventory, lambda: profile, workflow)
+    return ContentDiscoveryTool(target, engagement, workflow=workflow)
 
 
 def make_service_tool(
-    *, profile: str = "minimal", nmap: str | None = None,
+    *,
     workflow: WorkflowState | None = None,
 ) -> ServiceDiscoveryTool:
     target = Target("http://target.test:8080")
     engagement = EngagementState()
     engagement.initialize_target(target.base_url())
-    inventory = CapabilityInventory(which=lambda name: nmap if name == "nmap" else None)
-    tool = ServiceDiscoveryTool(target, engagement, inventory, lambda: profile, workflow)
+    tool = ServiceDiscoveryTool(target, engagement, workflow=workflow)
     setattr(
         tool,
         "_resolve_execution_addresses",
@@ -242,17 +255,24 @@ def test_content_base_path_normalization_is_shared_by_permission_and_execution()
     assert default.get("cacheKey") == explicit_80.get("cacheKey")
 
 
-def test_content_discovery_selects_external_backend_only_for_a_runtime_gap():
-    assert make_content_tool(profile="minimal", ffuf="/tools/ffuf")._select_backend("auto") == "native"
-    assert make_content_tool(profile="full", ffuf="/tools/ffuf")._select_backend("auto") == "native"
-    assert make_content_tool(
-        profile="full", ffuf="/tools/ffuf", workflow=make_workflow(phase="enumeration")
-    )._select_backend("auto") == "ffuf"
-    assert make_content_tool(
-        profile="full", ffuf="/tools/ffuf", workflow=make_workflow(phase="enumeration")
-    )._select_backend("auto", max_requests=3) == "native"
+@pytest.mark.parametrize("mode", ["auto", "native"])
+@pytest.mark.parametrize("coverage", ["no-workflow", "missing", "performed"])
+def test_content_discovery_always_selects_native(mode, coverage, monkeypatch):
+    workflow = None if coverage == "no-workflow" else make_workflow(phase="enumeration")
+    if coverage == "performed":
+        assert workflow is not None and workflow.objective is not None
+        workflow.record_phase_coverage(
+            "enumeration", "active_content_discovery", "performed",
+            objective_id=workflow.objective.id,
+            target_origin=workflow.objective.target_origin or "",
+        )
+    # Native discovery must not inspect installed scanner executables.
+    monkeypatch.setattr(CapabilityInventory, "snapshot", lambda self: pytest.fail("scanner lookup"))
+    tool = make_content_tool(workflow=workflow)
+    assert tool._select_backend(mode, max_requests=6) == "native"
+    assert "backend: native" in tool.summarize({"mode": mode})["detail"]
     with pytest.raises(ValueError, match="mode"):
-        make_content_tool().validate_args({"mode": "ffuf"})
+        tool.validate_args({"mode": "ffuf"})
 
 
 def test_content_permission_summary_and_cache_key_cover_scope_and_budget():
@@ -323,7 +343,7 @@ async def test_content_discovery_filters_spa_wildcard_and_reports_bounded_struct
     assert payload["completed_request_count_exact"] is True
     assert payload["rejected"][0]["reason"] == "wildcard_or_spa_baseline"
     assert all("body" not in item for item in payload["discovered"])
-    assert payload["backend_reason"] == "minimal profile defaults to native HTTP discovery"
+    assert payload["backend_reason"] == "native HTTP discovery; external ffuf uses typed Shell scanner jobs"
 
 
 @pytest.mark.asyncio
@@ -350,14 +370,14 @@ async def test_content_discovery_uses_two_random_baselines_and_normalizes_dynami
 
 
 @pytest.mark.asyncio
-async def test_content_auto_fallback_explains_missing_ffuf():
-    tool = make_content_tool(profile="full")
+async def test_content_auto_explains_native_discovery():
+    tool = make_content_tool()
     output = await tool.run(
         {"paths": ["admin"], "max_requests": 3}, None, AlwaysAllow()
     )
     payload = json.loads(str(output))
     assert payload["backend"] == "native"
-    assert payload["backend_reason"] == "ffuf unavailable; fell back to native HTTP discovery"
+    assert payload["backend_reason"] == "native HTTP discovery; external ffuf uses typed Shell scanner jobs"
 
 
 @pytest.mark.asyncio
@@ -413,56 +433,40 @@ async def test_content_discovery_cancels_an_inflight_baseline(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_content_ffuf_output_is_parsed_and_every_hit_is_verified(monkeypatch):
+@pytest.mark.parametrize("mode", ["auto", "native"])
+async def test_native_content_preserves_paths_extensions_budget_and_coverage(mode, monkeypatch):
     workflow = make_workflow(phase="enumeration")
-    tool = make_content_tool(profile="full", ffuf="/tools/ffuf", workflow=workflow)
-    FakeHTTPClient.responses = {"admin": Response(200, b"admin page")}
-    captured: dict[str, object] = {}
-
-    async def fake_ffuf(binary: str, argv: list[str], timeout: float, signal):
-        captured["binary"] = binary
-        captured["argv"] = list(argv)
-        output_path = Path(argv[argv.index("-o") + 1])
-        output_path.write_text(
-            json.dumps({"results": [{"input": {"FUZZ": "admin"}}]}),
-            encoding="utf-8",
-        )
-        return ToolOutput("exit: 0", status="success")
-
-    monkeypatch.setattr("src.tools.discovery.content.run_with_capture", fake_ffuf)
+    tool = make_content_tool(workflow=workflow)
+    FakeHTTPClient.responses = {
+        "admin": Response(200, b"admin page"),
+        "admin.json": Response(200, b"admin metadata"),
+    }
+    launch = AsyncMock(side_effect=AssertionError("native discovery must not spawn"))
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
     output = await tool.run(
-        {"paths": ["admin", "settings"], "mode": "auto", "max_requests": 6},
-        None,
-        AlwaysAllow(),
+        {"paths": ["admin", "settings"], "extensions": ["json"], "mode": mode, "max_requests": 6},
+        None, AlwaysAllow(),
     )
     payload = json.loads(str(output))
-
-    assert captured["binary"] == "/tools/ffuf"
-    argv = captured["argv"]
-    assert isinstance(argv, list)
-    assert "-u" in argv and "-rate" in argv and "-maxtime" in argv
-    assert "-recursion" not in argv and "-H" not in argv
-    assert payload["backend"] == "ffuf"
-    assert payload["backend_reason"] == (
-        "full profile selected installed ffuf for a runtime-confirmed enumeration coverage gap"
-    )
-    assert payload["requested_requests"] == 5
-    assert payload["completed_requests"] == 5
-    assert payload["discovered"][0]["path"] == "admin"
-    assert payload["discovered"][0]["verified"] is True
-    coverage = workflow.phase_coverage_record("enumeration", "active_content_discovery")
-    assert coverage is not None and coverage.status == "performed"
+    assert payload["backend"] == "native"
+    assert payload["requested_requests"] == payload["completed_requests"] == 6
+    assert payload["completed_request_count_exact"] is True
+    assert {urlsplit(url).path for url in FakeHTTPClient.seen[2:]} == {
+        "/app/admin", "/app/settings", "/app/admin.json", "/app/settings.json",
+    }
+    assert [item["path"] for item in payload["discovered"]] == ["admin", "admin.json"]
+    assert all(item["verified"] for item in payload["discovered"])
     assert payload["phase_coverage"] == {
         "phase": "enumeration", "dimension": "active_content_discovery",
         "status": "performed", "changed": True, "source": "content_discovery",
     }
-    assert tool._select_backend("auto") == "native"
+    launch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_content_discovery_reports_unscanned_paths_and_keeps_coverage_retryable():
     workflow = make_workflow(phase="enumeration")
-    tool = make_content_tool(profile="minimal", workflow=workflow)
+    tool = make_content_tool(workflow=workflow)
     output = await tool.run(
         {"paths": ["one", "two", "three"], "max_requests": 3},
         None,
@@ -505,67 +509,20 @@ async def test_content_discovery_omits_attestation_when_recording_fails(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_content_ffuf_malformed_json_returns_error_and_cleans_temp_directory(monkeypatch):
-    tool = make_content_tool(
-        profile="full", ffuf="/tools/ffuf", workflow=make_workflow(phase="enumeration")
-    )
-    observed_dir: list[Path] = []
-
-    async def fake_ffuf(_binary: str, argv: list[str], _timeout: float, _signal):
-        output_path = Path(argv[argv.index("-o") + 1])
-        observed_dir.append(output_path.parent)
-        output_path.write_text("{bad json", encoding="utf-8")
-        return ToolOutput("exit: 0", status="success")
-
-    monkeypatch.setattr("src.tools.discovery.content.run_with_capture", fake_ffuf)
-    output = await tool.run({"paths": ["admin"], "mode": "auto"}, None, AlwaysAllow())
-
-    assert output.status == "error"
-    assert "malformed or missing ffuf JSON" in json.loads(str(output))["reason"]
-    assert observed_dir and not observed_dir[0].exists()
-
-
-@pytest.mark.asyncio
-async def test_content_discovery_reports_missing_or_unexecutable_ffuf(monkeypatch):
-    tool = make_content_tool(
-        profile="full", ffuf="/tools/ffuf", workflow=make_workflow(phase="enumeration")
-    )
-    monkeypatch.setattr(
-        "src.tools.discovery.content.run_with_capture",
-        AsyncMock(side_effect=FileNotFoundError("ffuf disappeared")),
-    )
-    output = await tool.run(
-        {"paths": ["admin"], "mode": "auto", "max_requests": 4},
-        None,
-        AlwaysAllow(),
-    )
+@pytest.mark.parametrize("stage", ["baseline", "path"])
+async def test_native_content_timeout_preserves_failure_and_coverage(stage, monkeypatch):
+    tool = make_content_tool(workflow=make_workflow(phase="enumeration"))
+    original = tool._probe
+    async def timeout_probe(client, url, signal, deadline):
+        if stage == "baseline" or ".kagent-missing-" not in url:
+            return None, "timeout"
+        return await original(client, url, signal, deadline)
+    monkeypatch.setattr(tool, "_probe", timeout_probe)
+    output = await tool.run({"paths": ["admin"], "max_requests": 3}, None, AlwaysAllow())
     payload = json.loads(str(output))
-    assert output.status == "error"
-    assert "could not be started" in payload["reason"]
-    assert tool._select_backend("auto") == "native"
-
-
-@pytest.mark.asyncio
-async def test_content_discovery_preserves_ffuf_timeout_classification(monkeypatch):
-    tool = make_content_tool(
-        profile="full", ffuf="/tools/ffuf", workflow=make_workflow(phase="enumeration")
-    )
-    monkeypatch.setattr(
-        "src.tools.discovery.content.run_with_capture",
-        AsyncMock(return_value=ToolOutput(
-            "exit: timeout after 5s", status="error", error_kind="timeout"
-        )),
-    )
-
-    output = await tool.run(
-        {"paths": ["admin"], "mode": "auto", "max_requests": 4},
-        None,
-        AlwaysAllow(),
-    )
-
-    assert output.status == "error"
-    assert output.error_kind == "timeout"
-    assert json.loads(str(output))["completed_request_count_exact"] is False
+    assert output.status == "error" and output.error_kind == "timeout"
+    assert payload["completed_requests"] == (0 if stage == "baseline" else 2)
+    assert payload["phase_coverage"]["status"] == "failed"
 
 
 def test_service_target_and_ports_are_constrained():
@@ -590,18 +547,14 @@ def test_service_target_and_ports_are_constrained():
     target = Target("http://-oN-output.xml")
     engagement = EngagementState()
     engagement.initialize_target(target.base_url())
-    unsafe_host = ServiceDiscoveryTool(
-        target, engagement, CapabilityInventory(which=lambda _name: None), lambda: "minimal"
-    )
+    unsafe_host = ServiceDiscoveryTool(target, engagement)
     with pytest.raises(ValueError, match="valid hostname"):
         unsafe_host.validate_args({})
 
 
-@pytest.mark.parametrize("profile", ["minimal", "full"])
 @pytest.mark.parametrize("mode", ["auto", "socket"])
-@pytest.mark.parametrize("nmap", [None, "/tools/nmap"])
 @pytest.mark.parametrize("coverage", ["no-workflow", "missing", "performed"])
-def test_service_selects_native_until_nmap_has_an_enforcing_adapter(profile, mode, nmap, coverage):
+def test_service_always_selects_native(mode, coverage, monkeypatch):
     workflow = None if coverage == "no-workflow" else make_workflow()
     if coverage == "performed":
         assert workflow is not None and workflow.objective is not None
@@ -610,13 +563,12 @@ def test_service_selects_native_until_nmap_has_an_enforcing_adapter(profile, mod
             objective_id=workflow.objective.id,
             target_origin=workflow.objective.target_origin or "",
         )
-    tool = make_service_tool(profile=profile, nmap=nmap, workflow=workflow)
-
+    monkeypatch.setattr(CapabilityInventory, "snapshot", lambda self: pytest.fail("scanner lookup"))
+    tool = make_service_tool(workflow=workflow)
     assert tool._select_backend(mode) == "socket"
     assert "backend: socket" in tool.summarize({"mode": mode})["detail"]
     display = tool.permission_hints({"mode": mode}).get("sessionScopeDisplay")
     assert isinstance(display, str) and "using socket" in display
-    assert tool.capabilities.snapshot().nmap == nmap
 
 
 def test_service_cannot_request_nmap_execution_by_mode():
@@ -649,18 +601,14 @@ async def test_service_socket_backend_reports_open_and_closed_without_subprocess
 
 
 @pytest.mark.asyncio
-async def test_service_auto_fallback_explains_missing_nmap(monkeypatch):
-    tool = make_service_tool(profile="full")
+async def test_service_auto_explains_native_tcp(monkeypatch):
+    tool = make_service_tool()
     monkeypatch.setattr("src.tools.discovery.service.private_host_reason", AsyncMock(return_value=""))
-    monkeypatch.setattr(
-        tool,
-        "_scan_sockets",
-        AsyncMock(return_value=([], "success", None)),
-    )
+    monkeypatch.setattr(tool, "_scan_sockets", AsyncMock(return_value=([], "success", None)))
     output = await tool.run({}, None, AlwaysAllow())
     payload = json.loads(str(output))
     assert payload["backend"] == "socket"
-    assert payload["backend_reason"] == "nmap unavailable; fell back to native TCP discovery"
+    assert payload["backend_reason"] == "native TCP discovery; external Nmap uses typed Shell scanner jobs"
 
 
 @pytest.mark.asyncio
@@ -694,164 +642,17 @@ async def test_service_socket_backend_cancels_pending_connections_promptly(monke
     assert payload["completed_port_count_exact"] is True
 
 
-@pytest.mark.asyncio
-async def test_service_nmap_argv_is_bounded_and_suggested_http_origin_is_not_authorized(monkeypatch):
-    # Private adapter/parser coverage only: public auto never selects nmap.
-    workflow = make_workflow()
-    tool = make_service_tool(profile="full", nmap="/tools/nmap", workflow=workflow)
-    captured: dict[str, object] = {}
-
-    async def fake_nmap(binary: str, argv: list[str], _timeout: float, _signal):
-        captured["binary"] = binary
-        captured["argv"] = list(argv)
-        xml_path = Path(argv[argv.index("-oX") + 1])
-        xml_path.write_text(
-            '<nmaprun><host><ports><port protocol="tcp" portid="8080">'
-            '<state state="open"/><service name="http" product="test" version="1"/>'
-            '</port></ports></host></nmaprun>',
-            encoding="utf-8",
-        )
-        return ToolOutput("exit: 0", status="success")
-
-    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", fake_nmap)
-    entries, status, reason = await tool._scan_nmap("203.0.113.10", (8080,), 20, None)
+@pytest.mark.parametrize("port,scheme", [(80, "http"), (443, "https")])
+def test_native_service_origin_suggestions_do_not_authorize_origins(port, scheme):
+    tool = make_service_tool()
     origin = tool.target.origin()
     assert origin is not None
-    output = tool._result(
-        origin, "target.test", "nmap", (8080,), entries, time.monotonic(), status, reason,
-    )
+    entries = [{"port": port, "protocol": "tcp", "state": "open", "_completed": True}]
+    output = tool._result(origin, "target.test", "socket", (port,), entries, time.monotonic(), "success", None)
     payload = json.loads(str(output))
-    argv = captured["argv"]
-    assert captured["binary"] == "/tools/nmap"
-    assert isinstance(argv, list)
-    assert argv[argv.index("-p") + 1] == "8080"
-    assert "-Pn" in argv and "-n" in argv and "-sT" in argv
-    assert not any(option in argv for option in ("-sV", "-sU", "-O", "--script", "-p-"))
-    assert argv[-1] == "203.0.113.10"
-    assert payload["ports"][0]["service"] == "http"
-    assert payload["http_origin_suggestions"] == ["http://target.test:8080"]
+    assert payload["http_origin_suggestions"] == [scheme + "://target.test"]
     assert payload["suggestions_authorized"] is False
-    assert workflow.phase_coverage_record("recon", "service_discovery") is None
-    assert tool._select_backend("auto") == "socket"
-
-
-@pytest.mark.asyncio
-async def test_service_nmap_missing_executable_returns_structured_error(monkeypatch):
-    tool = make_service_tool(
-        profile="full", nmap="/tools/nmap", workflow=make_workflow()
-    )
-    monkeypatch.setattr(
-        "src.tools.discovery.service.run_with_capture",
-        AsyncMock(side_effect=FileNotFoundError("nmap disappeared")),
-    )
-
-    entries, status, reason = await tool._scan_nmap("203.0.113.10", (8080,), 20, None)
-    origin = tool.target.origin()
-    assert origin is not None
-    output = tool._result(
-        origin, "target.test", "nmap", (8080,), entries, time.monotonic(), status, reason,
-    )
-    payload = json.loads(str(output))
-    assert output.status == "error"
-    assert payload["reason"] == "nmap could not be started"
-    assert payload["completed_port_count_exact"] is False
-    assert tool._select_backend("auto") == "socket"
-
-
-@pytest.mark.asyncio
-async def test_service_nmap_extraports_are_only_exact_when_state_mapping_is_unambiguous(monkeypatch):
-    tool = make_service_tool(profile="full", nmap="/tools/nmap")
-
-    async def aggregate_output(_binary: str, argv: list[str], _timeout: float, _signal):
-        path = Path(argv[argv.index("-oX") + 1])
-        path.write_text(
-            '<nmaprun><host><ports><extraports state="closed" count="2"/>'
-            '</ports></host></nmaprun>',
-            encoding="utf-8",
-        )
-        return ToolOutput("exit: 0", status="success")
-
-    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", aggregate_output)
-    entries, status, reason = await tool._scan_nmap(
-        "203.0.113.10", (8080, 8081), 20, None
-    )
-    assert status == "success" and reason is None
-    assert [(item["port"], item["state"]) for item in entries] == [
-        (8080, "closed"), (8081, "closed")
-    ]
-    assert all(item["_completed"] and item["aggregate_state"] for item in entries)
-
-    async def ambiguous_output(_binary: str, argv: list[str], _timeout: float, _signal):
-        path = Path(argv[argv.index("-oX") + 1])
-        path.write_text(
-            '<nmaprun><host><ports><extraports state="closed" count="1"/>'
-            '<extraports state="filtered" count="1"/></ports></host></nmaprun>',
-            encoding="utf-8",
-        )
-        return ToolOutput("exit: 0", status="success")
-
-    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", ambiguous_output)
-    entries, status, _reason = await tool._scan_nmap(
-        "203.0.113.10", (8080, 8081), 20, None
-    )
-    assert status == "success"
-    assert all(item["state"] == "unknown" and not item["_completed"] for item in entries)
-
-
-@pytest.mark.asyncio
-async def test_service_partial_nmap_output_does_not_claim_exact_completion(monkeypatch):
-    workflow = make_workflow()
-    tool = make_service_tool(profile="full", nmap="/tools/nmap", workflow=workflow)
-
-    async def ambiguous_state(_binary: str, argv: list[str], _timeout: float, _signal):
-        Path(argv[argv.index("-oX") + 1]).write_text(
-            '<nmaprun><host><ports><port protocol="tcp" portid="8080">'
-            '<state state="open|filtered"/></port></ports></host></nmaprun>',
-            encoding="utf-8",
-        )
-        return ToolOutput("exit: 0", status="success")
-
-    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", ambiguous_state)
-    entries, status, reason = await tool._scan_nmap("203.0.113.10", (8080,), 20, None)
-    origin = tool.target.origin()
-    assert origin is not None
-    output = tool._result(
-        origin, "target.test", "nmap", (8080,), entries, time.monotonic(), status, reason,
-    )
-    payload = json.loads(str(output))
-
-    assert output.status == "observation"
-    assert payload["ports"][0]["state"] == "unknown"
-    assert payload["completed_port_count_exact"] is False
-    assert entries[0]["_completed"] is False
-    assert "exact per-port state" in payload["reason"]
-    assert workflow.needs_phase_coverage("recon", "service_discovery")
-    assert tool._select_backend("auto") == "socket"
-
-
-@pytest.mark.asyncio
-async def test_service_nmap_timeout_and_cancel_classification_survive_partial_xml(monkeypatch):
-    tool = make_service_tool(profile="full", nmap="/tools/nmap")
-
-    async def partial_timeout(_binary: str, argv: list[str], _timeout: float, _signal):
-        Path(argv[argv.index("-oX") + 1]).write_text(
-            '<nmaprun><host><ports><port protocol="tcp" portid="8080">'
-            '<state state="open"/></port></ports></host></nmaprun>',
-            encoding="utf-8",
-        )
-        return ToolOutput("partial", status="error", error_kind="timeout")
-
-    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", partial_timeout)
-    entries, status, reason = await tool._scan_nmap("203.0.113.10", (8080,), 20, None)
-    assert entries == [] and status == "error" and reason == "timeout"
-
-    async def partial_cancel(_binary: str, argv: list[str], _timeout: float, _signal):
-        Path(argv[argv.index("-oX") + 1]).write_text("<nmaprun>", encoding="utf-8")
-        return ToolOutput("partial", status="cancelled", error_kind="cancelled")
-
-    monkeypatch.setattr("src.tools.discovery.service.run_with_capture", partial_cancel)
-    entries, status, reason = await tool._scan_nmap("203.0.113.10", (8080,), 20, None)
-    assert entries == [] and status == "cancelled" and reason == "cancelled during nmap scan"
+    assert tool.engagement.allowed_origins == {origin}
 
 
 @pytest.mark.asyncio

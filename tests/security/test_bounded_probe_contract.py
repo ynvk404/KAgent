@@ -19,7 +19,6 @@ from src.permission.runtime.execution import ExecutionBlocked
 from src.skills.registry import Registry as Skills
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.tools.workflow.finding import ConfirmFindingTool
-from src.ui.commands.result_review import review_result
 from src.workflow.probe import ProbeProposal
 from src.workflow.state import AttackSurfaceInput, WorkflowState, WorkflowObjective, WorkflowMode
 from src.workflow.validation_route import GENERIC_VALIDATOR
@@ -27,7 +26,7 @@ from tests.helpers.agent_fakes import FakeSignal, FakeClient
 from tests.helpers.workflow import record_completed_phase
 from tests.security.test_execution_policy import runtime, ORIGIN
 from tests.security.test_agent_assessment import ASSESSMENT
-from tests.security.test_generic_validation import app_for, review_args, result, certificate, agent_for, expert
+from tests.security.test_generic_validation import result, certificate, agent_for, expert
 
 
 async def custom_env(runtime, tmp_path, shape="json", mode: WorkflowMode="direct") -> Any:
@@ -102,8 +101,8 @@ def http_args(env, value=None):
 
 
 @pytest.mark.parametrize("shape", ["json", "form", "header", "query"])
-@pytest.mark.parametrize("reviewed_outcome", ["confirmed", "not-confirmed"])
-async def test_custom_shapes_native_evidence_human_review_and_result(runtime, tmp_path, shape, reviewed_outcome):
+@pytest.mark.parametrize("outcome", ["confirmed", "not-confirmed"])
+async def test_custom_shapes_native_evidence_and_agent_result(runtime, tmp_path, shape, outcome):
     env, probe = await custom_env(runtime, tmp_path, shape)
     assert env[7]["validator_resolution"] == "generic" and env[5].status == "deferred"
     assert not env[7]["supported"]
@@ -134,22 +133,18 @@ async def test_custom_shapes_native_evidence_human_review_and_result(runtime, tm
     assert "fake-lab-secret" not in original and "fake-cookie" not in original
     proof.write_text("changed mutable source")
     assert (tmp_path / artifact.path).read_text() == original
-    unverified = json.loads(await result(env, refs=[ref], repeatable=True, force=True))
-    assert unverified["result"]["outcome"] == "confirmed"
-    assert not unverified["result"]["mutation_performed"]  # Input variation is not persistent mutation.
-    assert (await env[6].coverage.list())[0].status == "failed" and certificate(env, ref) is not None
-    app, output = app_for(env)
-    app.agent.save.side_effect = lambda **kwargs: None
-    await review_result(app, review_args(env[5], reviewed_outcome))
-    assert output[-1].entry.kind == "system", output[-1]
+    assessed = json.loads(await result(env, outcome, refs=[ref], repeatable=True, force=True))
+    assert assessed["result"]["outcome"] == outcome
+    assert not assessed["result"]["mutation_performed"]  # Input variation is not persistent mutation.
+    assert (await env[6].coverage.list())[0].status == ("failed" if outcome == "confirmed" else "passed")
     trusted = certificate(env, ref)
     assert trusted is not None
-    assert trusted.outcome == reviewed_outcome
-    assert [r.tool for r in env[3].requests] == ["review_result"]
+    assert trusted.outcome == outcome
+    assert not env[3].requests
     assert env[5].source_skill == "web-input-analysis" and env[5].objective_id == env[4].objective.id
     assert GENERIC_VALIDATOR not in env[4].completed_skills
     env[2].generic_validation.contexts.clear()  # Finalization needs proof, not new probe rights.
-    if reviewed_outcome == "confirmed":
+    if outcome == "confirmed":
         assert agent_for(env)._generic_completion_blockers()
         store = Store(project_directory=tmp_path)
         env[0].register(ConfirmFindingTool(store, workflow=env[4]))
@@ -328,14 +323,14 @@ async def test_planner_context_and_explicit_start_without_auto_requeue(runtime, 
     assert json.loads(await start(env, probe))["ok"]
 
 
-async def test_resume_evidence_review_without_proposal_does_not_restore_execution(runtime, tmp_path):
+async def test_resume_accepted_evidence_without_proposal_does_not_restore_execution(runtime, tmp_path):
     env, probe = await custom_env(runtime, tmp_path, "header")
     bind(env, probe)
     await start(env, probe)
     await env[0].execute("http", http_args(env, "Lab-A"), None, env[1])
     from tests.security.test_generic_validation import evidence
     ref = await evidence(env, tmp_path)
-    await result(env, refs=[ref])
+    await result(env, "not-confirmed", refs=[ref])
     raw = json.loads(json.dumps(env[4].to_dict()))
     assert "probe" not in raw and "contexts" not in raw
     restored = WorkflowState.from_dict(raw)
@@ -345,9 +340,6 @@ async def test_resume_evidence_review_without_proposal_does_not_restore_executio
     env = cast(Any, (*env[:4], restored, restored.candidates[env[5].id], *env[6:]))
     assert env[2].generic_validation.contexts == {} and env[2].generic_validation.attempt is None
     assert (await start(env, probe)).startswith("error:")
-    app, output = app_for(env)
-    await review_result(app, review_args(env[5], "not-confirmed"))
-    assert output[-1].entry.kind == "system", output[-1]
     trusted = certificate(env, ref)
     assert trusted is not None
     assert trusted.outcome == "not-confirmed"
@@ -492,9 +484,7 @@ async def test_direct_completion_requires_latest_outcome_matching_certificate(ru
     bind(env, probe)
     await start(env, probe)
     ref = await evidence(env, tmp_path)
-    await result(env, refs=[ref])
-    app, _ = app_for(env)
-    await review_result(app, review_args(env[5], "not-confirmed"))
+    await result(env, "not-confirmed", refs=[ref])
     assert not agent_for(env)._generic_completion_blockers()
     # A raw restored/latest result cannot borrow the older negative certificate.
     env[4].latest_result(env[5].id).outcome = outcome

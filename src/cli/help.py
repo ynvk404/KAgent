@@ -20,6 +20,8 @@ Flags:
   --target <url>            active target; scopes to its origin by default
   --api-key <key>
   --skills <dirs>            comma-separated extra skill directories
+  --scanner-wordlist ID=FILE register an existing local wordlist for this session
+                             (repeatable; model selects its ID via permissions_status)
   --resume <session-id>
   --browser                  enable verified persistent trusted-local Browser MCP
                              on Linux/WSL for this session; operator manages Chrome/Extension.
@@ -39,8 +41,9 @@ Flags:
                              revocation remain enforced. Confirm-each resumes OFF.
                              Profile-covered tools auto-approve; independent resource
                              checks remain. Linux workers support brokered HTTP;
-                             local stdio MCP/HTTP ffuf need compatible configuration;
-                             CONNECT, nmap and remote MCP unavailable;
+                             ordinary Shell/local stdio MCP need compatible configuration;
+                             typed Nmap/ffuf require their own ready adapter and job review;
+                             CONNECT and remote MCP unavailable;
                              phase never grants HTTP authority.
                              (alias: --dangerously-skip-permissions)
   --http-lab-grant <spec>     ORIGIN,MODE,SECONDS,REQUESTS,RATE,BURST,CONCURRENCY,

@@ -223,6 +223,15 @@ async def test_load_skill_user_only():
     ):
         await tool.run({"name": "beta"})
 
+
+@pytest.mark.asyncio
+async def test_user_only_error_points_to_skill_picker():
+    _, reg = make_tmp_skills()
+    with pytest.raises(ValueError) as error:
+        await LoadSkillTool(reg).run({"name": "beta"})
+    assert "/skills" in str(error.value) and "Enter" in str(error.value)
+    assert "/beta" not in str(error.value)
+
 @pytest.mark.asyncio
 async def test_available_excludes_hidden():
     _, reg = make_tmp_skills()

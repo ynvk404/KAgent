@@ -30,7 +30,8 @@ def test_complete_matrix_and_copy_projection(mode):
     assert projected is not None
     schema = projected[0]["function"]["parameters"]
     action_field = schema["properties"]["action"]
-    assert len(ACTIONS) == 14
+    assert len(ACTIONS) == 15
+    assert ACTION_REQUIRED['triage_scanner_results'] == ('job_id', 'scanner_disposition', 'scanner_reason')
     assert "record_attempt_state" in view.available
     assert ACTION_REQUIRED["record_attempt_state"] == ("candidate_id", "mutation_state", "effect_basis")
     assert set(view.excluded) == excluded

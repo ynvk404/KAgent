@@ -160,7 +160,9 @@ def test_recon_describes_supported_service_backend():
     text = collapse_ws(body)
 
     assert "Both minimal and full profiles use bounded native TCP checks" in text
-    assert "Installed nmap is not selected because an enforcing adapter is unavailable" in text
+    assert 'typed `shell(scanner="nmap", target=numeric_ip, ports=explicit_ports)` path' in text
+    assert 'explicitly declared TCP scope' in text
+    assert 'do not establish an HTTP origin' in text
     assert "full profile may select installed nmap" not in text
 
 

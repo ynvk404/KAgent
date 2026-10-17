@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from src.async_io import run_sync, check_worker
+from typing import Callable
+
 import hashlib
 import os
 import re
 import stat
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -14,6 +18,7 @@ from src.redaction.redact import apply_evidence as redact
 from src.tools.execution.sensitive import is_sensitive_path
 from src.permission.permission import Prompter, UserControlledRefusal
 from src.workflow.evidence_errors import EvidenceSubmissionError
+from src.workflow.evidence_source import EvidenceSource
 
 MAX_EVIDENCE_BYTES = 2_000_000
 
@@ -130,21 +135,18 @@ def _stat_signature(value: os.stat_result) -> tuple[int, int, int, int]:
     return value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
 
 
-def _read_captured_value(path: Path) -> tuple[bytes, tuple[int, int, int, int]]:
-    """Bound one read and reject detected changes on that open descriptor.
-
-    This is captured-value consistency, not a source authorization lease or
-    namespace binding. Existing controller scope/read gates still precede it.
-    fstat stability cannot prove a point-in-time snapshot against every writer.
-    """
+def _read_captured_value(path: Path, *, source_binding: EvidenceSource | None = None) -> tuple[bytes, tuple[int, int, int, int]]:
+    """Read only the bound single-link inode while its namespace stays current."""
     # Unbuffered reads prevent implicit read-ahead beyond the byte budget.
-    with path.open("rb", buffering=0) as handle:
+    source = source_binding if source_binding is not None else EvidenceSource(path, path.parent)
+    with (nullcontext(source) if source_binding is not None else source), source.open() as handle:
         before = os.fstat(handle.fileno())
         if not stat.S_ISREG(before.st_mode):
             raise ValueError("evidence artifact must be a regular file")
         captured = bytearray()
         remaining = MAX_EVIDENCE_BYTES + 1
         while remaining:
+            source.validate()
             chunk = handle.read(remaining)
             if not chunk:
                 break
@@ -152,6 +154,7 @@ def _read_captured_value(path: Path) -> tuple[bytes, tuple[int, int, int, int]]:
             remaining -= len(chunk)
         raw = bytes(captured)
         after = os.fstat(handle.fileno())
+        source.validate()
     if not 0 < len(raw) <= MAX_EVIDENCE_BYTES:
         raise ValueError("evidence artifact must be nonempty and at most 2 MB")
     if (_stat_signature(before) != _stat_signature(after)
@@ -212,7 +215,8 @@ class EvidenceArtifact:
         cls, candidate_id: str, path: str, root: Path, *, sensitive_read_approved: bool = False,
     ) -> EvidenceArtifact:
         artifact, relative = _checked_capture_path(path, root, sensitive_read_approved)
-        raw, signature = _read_captured_value(artifact)
+        with EvidenceSource(artifact, root) as binding:
+            raw, signature = _read_captured_value(artifact, source_binding=binding)
         digest = hashlib.sha256(raw).hexdigest()
         if sensitive_read_approved and is_sensitive_path(str(artifact)):
             _remember_sensitive(artifact, digest, signature)
@@ -223,8 +227,11 @@ class EvidenceArtifact:
     def capture_immutable_snapshot(
         cls, candidate_id: str, path: str, root: Path, *, sensitive_read_approved: bool = False,
         original_path: str | None = None,
+        source_binding: EvidenceSource | None = None,
+        publication_check: Callable[[], None] | None = None,
     ) -> EvidenceArtifact:
         """Snapshot a project proof into content-addressed, read-only storage."""
+        check_worker()
         base = root.resolve()
         source = (base / path).resolve()
         try:
@@ -240,7 +247,13 @@ class EvidenceArtifact:
             raise UserControlledRefusal("sensitive evidence snapshot requires permission")
         if not source.is_file():
             raise ValueError("evidence artifact does not exist")
-        raw, _ = _read_captured_value(source)
+        if source_binding is not None and source_binding.path != source:
+            raise ValueError('authorized evidence source path changed')
+        if source_binding is None:
+            with EvidenceSource(source, base) as binding:
+                raw, _ = _read_captured_value(source, source_binding=binding)
+        else:
+            raw, _ = _read_captured_value(source, source_binding=source_binding)
         try:
             snapshot = redact(raw.decode("utf-8")).encode("utf-8")
         except UnicodeDecodeError:
@@ -279,13 +292,8 @@ class EvidenceArtifact:
         if destination.is_symlink():
             raise ValueError("evidence snapshot file cannot be a symbolic link")
         try:
-            file_descriptor = os.open(
-                destination,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-            with os.fdopen(file_descriptor, "wb") as handle:
-                handle.write(snapshot)
+            from .evidence_publication import publish
+            publish(destination, snapshot, check=publication_check)
         except FileExistsError:
             try:
                 existing, _ = _read_captured_value(destination)
@@ -295,7 +303,8 @@ class EvidenceArtifact:
                 raise ValueError("evidence snapshot hash collision") from exc
             if existing != snapshot:
                 raise ValueError("evidence snapshot hash collision")
-        destination.chmod(0o400)
+            if destination.stat(follow_symlinks=False).st_mode & 0o777 != 0o400:
+                raise ValueError("evidence snapshot integrity conflict")
         verified, relative = _checked_capture_path(relative.as_posix(), base, sensitive_read_approved)
         if verified.stem != digest:
             raise ValueError("evidence snapshot integrity conflict")
@@ -308,6 +317,23 @@ class EvidenceArtifact:
         # different value under the original content-addressed filename.
         return cls(_content_id(candidate_id, relative, digest), candidate_id,
                    relative.as_posix(), digest, len(snapshot), source_path=provenance_path)
+
+    @classmethod
+    async def capture_immutable_snapshot_async(cls, candidate_id: str, path: str, root: Path,
+                                               **kwargs) -> EvidenceArtifact:
+        return await run_sync(cls.capture_immutable_snapshot, candidate_id, path, root, **kwargs)
+
+    async def read_verified_async(self, root: Path, *, sensitive_read_approved: bool = False) -> bytes:
+        return await run_sync(self.read_verified, root, sensitive_read_approved=sensitive_read_approved)
+
+    def read_verified(self, root: Path, *, sensitive_read_approved: bool = False) -> bytes:
+        check_worker()
+        path, _ = _checked_capture_path(self.path, root, sensitive_read_approved)
+        with EvidenceSource(path, root) as binding:
+            raw, _ = _read_captured_value(path, source_binding=binding)
+        if len(raw) != self.size or hashlib.sha256(raw).hexdigest() != self.sha256:
+            raise ValueError('evidence snapshot integrity conflict')
+        return raw
 
     def is_resolvable(self, root: Path, *, sensitive_read_approved: bool = False) -> bool:
         if self.requires_read_permission(root) and not sensitive_read_approved:
@@ -358,7 +384,7 @@ class EvidenceArtifact:
             if managed:
                 assert policy is not None
                 policy.require_evidence(self, base)
-            if self.is_resolvable(base, sensitive_read_approved=True):
+            if await run_sync(self.is_resolvable, base, sensitive_read_approved=True):
                 return True
         return False
 

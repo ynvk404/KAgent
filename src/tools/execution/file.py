@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import codecs
+from src.async_io import run_sync, check_worker
 import os
 import time
 from pathlib import Path
@@ -88,12 +89,10 @@ async def gate_sensitive_path(
     verb: str,
     signal,
 ):
-    real = real_resolve(
-        abs_path
-    )
+    real = await run_sync(real_resolve, abs_path)
     policy = policy_for(p)
     check_cancelled(signal)
-    version = file_resource_identity(abs_path)
+    version = await run_sync(file_resource_identity, abs_path)
     active_check = policy.active_review_check() if policy is not None else lambda: True
     guard = capture_review(signal=signal, clock=policy.clock if policy else time.monotonic,
                            timeout=policy.review_timeout if policy else REVIEW_TIMEOUT_SECONDS,
@@ -224,9 +223,7 @@ class FileReadTool(Tool):
                 "path is required"
             )
 
-        abs_path = str(
-            Path(path).resolve()
-        )
+        abs_path = await run_sync(lambda: str(Path(path).resolve()))
 
         real = await gate_sensitive_path(
             prompter,
@@ -235,35 +232,40 @@ class FileReadTool(Tool):
             signal
         )
 
-        policy = policy_for(prompter)
-        if policy is not None:
-            policy.revalidate_active(self, args, signal)
+        def operation():
+            check_worker()
+            check_cancelled(signal)
+            policy = policy_for(prompter)
+            if policy is not None:
+                policy.revalidate_active(self, args, signal)
 
-        size = os.path.getsize(
-            real
-        )
+            size = os.path.getsize(
+                real
+            )
 
-        with open(
-            real,
-            "rb"
-        ) as f:
-            data = f.read(
+            with open(
+                real,
+                "rb"
+            ) as f:
+                data = f.read(
+                    READ_BYTE_CAP
+                )
+
+            content = decode_utf8_capped(
+                data,
                 READ_BYTE_CAP
             )
 
-        content = decode_utf8_capped(
-            data,
-            READ_BYTE_CAP
-        )
+            if size > READ_BYTE_CAP:
+                return ToolOutput(
+                    content
+                    + f"\n[... truncated {size-READ_BYTE_CAP} bytes ...]",
+                    truncated=True,
+                )
 
-        if size > READ_BYTE_CAP:
-            return ToolOutput(
-                content
-                + f"\n[... truncated {size-READ_BYTE_CAP} bytes ...]",
-                truncated=True,
-            )
+            return content
 
-        return content
+        return await run_sync(operation)
 
 class FileWriteTool(Tool):
     def __init__(
@@ -346,9 +348,7 @@ class FileWriteTool(Tool):
                 "path is required"
             )
 
-        abs_path = str(
-            Path(path).resolve()
-        )
+        abs_path = await run_sync(lambda: str(Path(path).resolve()))
 
         real = await gate_sensitive_path(
             prompter,
@@ -357,38 +357,45 @@ class FileWriteTool(Tool):
             signal
         )
 
-        policy = policy_for(prompter)
-        if policy is not None:
-            policy.revalidate_active(self, args, signal)
+        def operation():
+            check_worker()
+            check_cancelled(signal)
+            policy = policy_for(prompter)
+            if policy is not None:
+                policy.revalidate_active(self, args, signal)
 
-        parent = Path(real).parent
-        file_existed = Path(real).exists()
+            parent = Path(real).parent
+            file_existed = Path(real).exists()
 
-        parent.mkdir(
-            parents=True,
-            exist_ok=True,
-            mode=WRITE_DIR_MODE,
-        )
+            parent.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=WRITE_DIR_MODE,
+            )
 
-        if policy is not None:
-            policy.revalidate_active(self, args, signal)
+            if policy is not None:
+                policy.revalidate_active(self, args, signal)
 
-        Path(real).write_text(
-            content,
-            encoding="utf-8"
-        )
+            check_worker()
+            check_cancelled(signal)
+            Path(real).write_text(
+                content,
+                encoding="utf-8"
+            )
 
-        if not file_existed:
-            try:
-                os.chmod(real, WRITE_FILE_MODE)
-            except OSError:
-                pass
+            if not file_existed:
+                try:
+                    os.chmod(real, WRITE_FILE_MODE)
+                except OSError:
+                    pass
 
-        return (
-            f"wrote "
-            f"{len(content.encode('utf-8'))} bytes "
-            f"to {real}"
-        )
+            return (
+                f"wrote "
+                f"{len(content.encode('utf-8'))} bytes "
+                f"to {real}"
+            )
+
+        return await run_sync(operation)
 
 class FileEditTool(Tool):
     def __init__(
@@ -494,9 +501,7 @@ class FileEditTool(Tool):
                 "path and old_string are required"
             )
 
-        abs_path = str(
-            Path(path).resolve()
-        )
+        abs_path = await run_sync(lambda: str(Path(path).resolve()))
 
         real = await gate_sensitive_path(
             prompter,
@@ -505,47 +510,54 @@ class FileEditTool(Tool):
             signal
         )
 
-        policy = policy_for(prompter)
-        if policy is not None:
-            policy.revalidate_active(self, args, signal)
+        def operation():
+            check_worker()
+            check_cancelled(signal)
+            policy = policy_for(prompter)
+            if policy is not None:
+                policy.revalidate_active(self, args, signal)
 
-        content = Path(real).read_text(
-            encoding="utf-8"
-        )
-
-        count = count_occurrences(
-            content,
-            old
-        )
-
-        if count == 0:
-            raise ValueError(
-                f"old_string not found in {real}"
+            content = Path(real).read_text(
+                encoding="utf-8"
             )
 
-        if count > 1 and not replace_all:
-            raise ValueError(
-                f"old_string appears {count} times in {real}; pass "
-                "replace_all=true or use a longer unique snippet"
+            count = count_occurrences(
+                content,
+                old
             )
 
-        updated = content.replace(
-            old,
-            new
-        )
+            if count == 0:
+                raise ValueError(
+                    f"old_string not found in {real}"
+                )
 
-        if policy is not None:
-            policy.revalidate_active(self, args, signal)
+            if count > 1 and not replace_all:
+                raise ValueError(
+                    f"old_string appears {count} times in {real}; pass "
+                    "replace_all=true or use a longer unique snippet"
+                )
 
-        Path(real).write_text(
-            updated,
-            encoding="utf-8"
-        )
+            updated = content.replace(
+                old,
+                new
+            )
 
-        return (
-            f"edited {real} "
-            f"({count} replacement(s))"
-        )
+            if policy is not None:
+                policy.revalidate_active(self, args, signal)
+
+            check_worker()
+            check_cancelled(signal)
+            Path(real).write_text(
+                updated,
+                encoding="utf-8"
+            )
+
+            return (
+                f"edited {real} "
+                f"({count} replacement(s))"
+            )
+
+        return await run_sync(operation)
 
 class FileReadToolAlias(FileReadTool):
     def __init__(self):

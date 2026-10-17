@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from rich.segment import Segment
-from textual.geometry import Offset
+from textual.geometry import Offset, Size
 from textual.message import Message
 from textual.selection import Selection
 from textual.strip import Strip
@@ -51,6 +51,31 @@ class TranscriptView(RichLog):
     def __init__(self, **kwargs) -> None:
         super().__init__(wrap=True, markup=False, highlight=False, **kwargs)
         self._viewport_height = 0
+        self._line_changes: list[tuple[int, int, int]] = []
+
+    def clear(self):
+        # Keep the previous strips available to the viewport owner during reflow.
+        self.lines = []
+        return super().clear()
+
+    def replace_transcript_lines(self, start: int, end: int, lines: list[Strip]) -> None:
+        selection = self.text_selection
+        self.lines[start:end] = lines
+        self._line_changes.append((start, end, len(lines)))
+        self._line_cache.clear()
+        self.virtual_size = Size(self._widest_line_width, len(self.lines))
+        if selection is not None:
+            def move(offset: Offset | None) -> Offset | None:
+                if offset is None or offset.y < start:
+                    return offset
+                if offset.y >= end:
+                    return Offset(offset.x, offset.y + len(lines) - (end - start))
+                y = start + min(offset.y - start, max(0, len(lines) - 1))
+                width = len(self.lines[y].text) if y < len(self.lines) else 0
+                return Offset(min(offset.x, width), y)
+            self.screen.selections = {**self.screen.selections,
+                self: Selection(move(selection.start), move(selection.end))}
+        self.refresh(layout=True)
 
     @property
     def transcript_content_width(self) -> int:
@@ -65,27 +90,16 @@ class TranscriptView(RichLog):
         follow_tail = auto_scroll and self.is_vertical_scroll_end
         offset = self.scroll_offset
         old_count = len(self.lines)
+        old_lines = self.lines
         old_first = self.lines[0] if self.lines else None
-        anchors: list[tuple[int, str, int]] = []
-        reading_anchor: tuple[int, str, int] | None = None
-        if not follow_tail:
-            texts = [line.text for line in self.lines]
-            for index in range(offset.y, min(len(texts), offset.y + self.size.height)):
-                if texts[index].strip():
-                    anchors.append((index - offset.y, texts[index], texts[:index].count(texts[index])))
-                    if reading_anchor is None:
-                        # Locate text across new wrap boundaries, including a
-                        # viewport starting in the middle of a long paragraph.
-                        needle = "".join(texts[index].split())[:32]
-                        preceding = "".join("".join(text.split()) for text in texts[:index])
-                        reading_anchor = (index - offset.y, needle, preceding.count(needle))
+        self._line_changes = []
         # Batch writes must not schedule a scroll for every rendered line.
         self.auto_scroll = False
         try:
             yield
         finally:
             self.auto_scroll = auto_scroll
-            changed = (old_count != len(self.lines) or
+            changed = (bool(self._line_changes) or old_count != len(self.lines) or
                        (bool(self.lines) and self.lines[0] is not old_first))
             if changed:
                 if follow_tail:
@@ -94,29 +108,57 @@ class TranscriptView(RichLog):
                     # during the same dispatch. Follow its final layout as well.
                     self.scroll_end(animate=False, immediate=False, x_axis=False)
                 else:
-                    top = offset.y
-                    for delta, text, occurrence in anchors:
-                        matches = [index for index, line in enumerate(self.lines) if line.text == text]
-                        if occurrence < len(matches):
-                            top = matches[occurrence] - delta
-                            break
-                    if reading_anchor is not None:
-                        delta, needle, occurrence = reading_anchor
-                        compact = ["".join(line.text.split()) for line in self.lines]
-                        joined = "".join(compact)
-                        position = -1
-                        for _ in range(occurrence + 1):
-                            position = joined.find(needle, position + 1)
-                            if position < 0:
-                                break
-                        if position >= 0:
-                            ends: list[int] = []
-                            total = 0
-                            for text in compact:
-                                total += len(text)
-                                ends.append(total)
-                            top = bisect_right(ends, position) - delta
-                    self.scroll_to(x=offset.x, y=max(0, top), animate=False, immediate=True, force=True)
+                    self._restore_viewport(offset, old_lines)
+
+    def _restore_viewport(self, offset: Offset, old_lines: list[Strip]) -> None:
+        anchors: list[tuple[int, str, int]] = []
+        reading_anchor: tuple[int, str, int] | None = None
+        top = offset.y
+        if self._line_changes:
+            delta = 0
+            for start, end, count in sorted(self._line_changes):
+                if offset.y >= end:
+                    delta += count - (end - start)
+                elif offset.y >= start:
+                    top = start + min(offset.y - start, max(0, count - 1))
+                    break
+            self.scroll_to(x=offset.x, y=max(0, top + delta), animate=False, immediate=True, force=True)
+            return
+        if self.lines is old_lines:
+            # Appending leaves every previously visible strip in
+            # place; no text search or history concatenation needed.
+            self.scroll_to(x=offset.x, y=offset.y, animate=False, immediate=True, force=True)
+            return
+        texts = [line.text for line in old_lines]
+        for index in range(offset.y, min(len(texts), offset.y + self.size.height)):
+            if texts[index].strip():
+                anchors.append((index - offset.y, texts[index], texts[:index].count(texts[index])))
+                if reading_anchor is None:
+                    needle = "".join(texts[index].split())[:32]
+                    preceding = "".join("".join(text.split()) for text in texts[:index])
+                    reading_anchor = (index - offset.y, needle, preceding.count(needle))
+        for delta, text, occurrence in anchors:
+            matches = [index for index, line in enumerate(self.lines) if line.text == text]
+            if occurrence < len(matches):
+                top = matches[occurrence] - delta
+                break
+        if reading_anchor is not None:
+            delta, needle, occurrence = reading_anchor
+            compact = ["".join(line.text.split()) for line in self.lines]
+            joined = "".join(compact)
+            position = -1
+            for _ in range(occurrence + 1):
+                position = joined.find(needle, position + 1)
+                if position < 0:
+                    break
+            if position >= 0:
+                ends: list[int] = []
+                total = 0
+                for text in compact:
+                    total += len(text)
+                    ends.append(total)
+                top = bisect_right(ends, position) - delta
+        self.scroll_to(x=offset.x, y=max(0, top), animate=False, immediate=True, force=True)
 
     def render_line(self, y: int):
         scroll_x, scroll_y = self.scroll_offset

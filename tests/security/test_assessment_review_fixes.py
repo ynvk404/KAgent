@@ -2,20 +2,16 @@
 from copy import deepcopy
 from dataclasses import replace
 import json
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
 from src.agent.agent import Agent, AgentOptions
 from src.findings.store import Store
-from src.permission.permission import Decision
 from src.report.builder import build_report
 from src.report.model import Resources, SourceSnapshot
 from src.session.store import Store as SessionStore
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.ui.commands.report_handler import capture_workflow
-from src.ui.commands.result_review import review_result
 from src.workflow.assessment import accepted_result, digest, seal, source_row
 from src.workflow.state import WorkflowObjective
 from tests.helpers.agent_fakes import FakeClient
@@ -107,7 +103,7 @@ async def test_f1_complete_required_with_native_optional_partial(runtime, tmp_pa
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("outcome", ["confirmed", "not-confirmed"])
 @pytest.mark.parametrize("malformed", ["duplicate", "missing-required", "role-override"])
-async def test_f1_historical_malformed_manifest_resume_and_review(runtime, tmp_path, reverse, outcome, malformed):
+async def test_f1_historical_malformed_manifest_resume_and_finding(runtime, tmp_path, reverse, outcome, malformed):
     # Build the old defect from real optional truncated output. Only persisted
     # association metadata is injected; native Observation bytes stay untouched.
     state, candidate, tool, args, _ = await setup(runtime, tmp_path,
@@ -138,14 +134,14 @@ async def test_f1_historical_malformed_manifest_resume_and_review(runtime, tmp_p
     # Resume the workflow tool too, so rejection must come from evidence
     # admissibility rather than a mismatched tool/runtime state object.
     tool.state = restored
-    output = []
-    app = SimpleNamespace(agent=SimpleNamespace(prompter=p, workflow=restored, tools=registry,
-                         save=AsyncMock()), dispatch=output.append)
-    operator.decision = Decision.ALLOW_ONCE
-    await review_result(app, [candidate.id, "confirmed", "low", "Reviewed fixture."])
-    assert output[-1].entry.kind == "error"
-    assert "operator review cannot repair inadmissible primary evidence" in output[-1].entry.text
-    assert len(operator.requests) == 1 and operator.requests[0].no_session_cache
+    finding_store = Store(project_directory=tmp_path)
+    registry.register(ConfirmFindingTool(finding_store, workflow=restored))
+    with pytest.raises(Exception, match="not eligible|accepted confirmed assessment"):
+        await registry.execute("confirm_finding", {
+            "candidate_id": candidate.id, "title": "Malformed historical assessment",
+            "url": ORIGIN + "/fixture", "severity": "low", "observed_impact": "Fixture response.",
+            "potential_impact": "No additional impact assessed."}, None, p)
+    assert not list(finding_store.dir.glob("*.md")) and not operator.requests
     assert len(restored.validation_results) == 1
     assert not accepted_result(restored, restored.candidates[candidate.id], restored.latest_result(candidate.id), policy)
     assert policy.observations._items[oid].truncated

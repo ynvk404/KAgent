@@ -22,7 +22,6 @@ from src.tools.execution.file import FileReadTool, FileWriteTool
 from src.tools.execution.shell import ShellTool
 from src.tools.execution.plugin import CommandPluginTool
 from src.tools.mcp.integration import MCPTool
-from src.tools.common.capabilities import CapabilityInventory
 from src.tools.discovery.content import ContentDiscoveryTool
 from src.tools.discovery.service import ServiceDiscoveryTool
 from src.config.config import PluginConfig
@@ -39,7 +38,7 @@ def test_canonical_discovery_adapters_keep_native_backend_validation(tmp_path, t
     state = EngagementState()
     state.add_origin(ORIGIN)
     target = Target(ORIGIN)
-    tool = tool_type(target, state, CapabilityInventory(which=lambda _: None), lambda: "minimal")
+    tool = tool_type(target, state)
     policy = ExecutionPolicy(state, tmp_path)
     grant = state.http_permissions.activate(ORIGIN, HTTPLimits())
 
@@ -87,7 +86,7 @@ def runtime(tmp_path, monkeypatch):
     policy.vetted_ips["https://html.duckduckgo.com:443"] = ("1.1.1.1",)
     registry = Registry()
     for tool in [HTTPTool(target, state), WebFetchTool(state, target), WebSearchTool(), FileReadTool(), FileWriteTool(),
-                 ContentDiscoveryTool(target, state, CapabilityInventory(which=lambda _: None), lambda: "minimal")]:
+                 ContentDiscoveryTool(target, state)]:
         registry.register(tool)
     sent, responses = [], []
 

@@ -13,22 +13,19 @@ from typing import Any, cast, IO
 
 from rich.console import RenderableType
 from rich.segment import Segment
+from rich.style import Style
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual import events
+from textual import events, on
+from textual.message import Message
 from textual.containers import Vertical
 from textual.selection import Selection
 from textual.strip import Strip
 from textual.widgets import RichLog, Static
 
 from src.agent.agent import Agent, AgentRunOptions
-from src.agent.events import AgentEvent, DoneEvent, MaxStepsError
+from src.agent.events import AgentEvent, AssistantDeltaEvent, DoneEvent, MaxStepsError
 from src.agent.agent import AddMemoryInput
-from src.agent.mentions import (
-    find_active_mention,
-    list_mention_dir,
-    parse_mention_path,
-)
 from src.tools.common.ask import Option, Question
 from src.config.config import ToolingProfile
 from src.llm.core.models import list_models
@@ -61,9 +58,9 @@ from src.ui.commands.menu_window import compute_menu_window
 from src.ui.commands.slash_items import SLASH_ITEMS, SlashItem, filter_slash
 from src.ui.commands.slash_handler import (
     handle_slash,
+    REMOVED_SLASH_COMMANDS,
     build_help_text,
     build_plan_prompt,
-    build_coverage_next_prompt,
     suggest_closest,
 )
 from src.ui.core.state import (
@@ -104,7 +101,6 @@ from src.ui.widgets.ask_modal import ASK_MODAL_VISIBLE_CAP, AskModal
 from src.ui.widgets.banner import Banner, BannerData
 from src.ui.widgets.input_box import DEFAULT_PROMPT, InputBox
 from src.ui.widgets.cursor_static import CARET_STYLE, CursorStatic
-from src.ui.widgets.mention_menu import MentionMenu
 from src.ui.widgets.permission_modal import PermissionModal
 from src.ui.widgets.details_modal import BridgeCredentialsModal
 from src.ui.widgets.turn_details_modal import TurnDetailsModal
@@ -120,7 +116,6 @@ from src.ui.theme import ACCENT, BOLD_ERROR, MUTED, PRIMARY, SUCCESS
 from src.ui.theme import DARK_UI, LIGHT_UI, ThemeChoice, UIPalette, light_theme
 
 
-MENTION_LIMIT = 12
 CLEAR_SCREEN = "\x1b[2J\x1b[3J\x1b[H"
 CONTEXT_SNAPSHOT_INTERVAL = 5 * 60
 
@@ -222,6 +217,15 @@ class _RichLogWriter:
         text.style = line.color
         self._log.write(text, width=self.content_width())
 
+    def replace_lines(self, start: int, end: int, lines) -> int:
+        before = len(self._log.lines)
+        for line in lines:
+            self.write_line(line)
+        rendered = self._log.lines[before:]
+        del self._log.lines[before:]
+        cast(TranscriptView, self._log).replace_transcript_lines(start, end, rendered)
+        return len(rendered)
+
     def write_banner(self, data: BannerData) -> None:
         width = self.content_width()
         banner = Banner(data, width=width, ui=self._ui).render_panel(compact=self._log.app.size.height < 24)
@@ -298,9 +302,32 @@ class _InputStatic(CursorStatic):
     def get_selection(self, selection: Selection) -> tuple[str, str] | None:
         return _input_selection_text(self.value, selection), "\n"
 
+    def on_resize(self) -> None:
+        self.call_after_refresh(self.reveal_caret)
+
+    def reveal_caret(self) -> None:
+        scroll = self.parent
+        if not self.display or not isinstance(scroll, Vertical):
+            return
+        self._render_content()
+        for y, line in enumerate(self._render_cache.lines):
+            if any(segment.style and segment.style.meta.get("kagent_caret") for segment in line):
+                first = int(scroll.scroll_y)
+                height = scroll.scrollable_content_region.height
+                if y < first or y >= first + height:
+                    scroll.scroll_to(y=y if y < first else y - height + 1,
+                                     animate=False, immediate=True)
+                return
+
 
 class _PermissionStatic(CursorStatic):
     """A selectable Static for permission renderables such as Rich Panels."""
+
+    class Reflow(Message):
+        """Overlay text has received its settled layout size."""
+
+    def on_resize(self) -> None:
+        self.post_message(self.Reflow())
 
     def __init__(self) -> None:
         super().__init__(id="overlay-text")
@@ -380,11 +407,21 @@ class KAgent(App):
         margin-left: 1;
     }}
 
-    #input-box {{
+    #input-panel {{
         width: 100%;
+        height: auto;
         border: round {MUTED};
         border-title-color: {ACCENT};
         padding: 0 1;
+        max-height: 30vh;
+        overflow-y: auto;
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 0;
+    }}
+
+    #input-box {{
+        width: 100%;
+        height: auto;
     }}
 
     #overlay.modal-panel {{
@@ -401,7 +438,8 @@ class KAgent(App):
         height: auto;
     }}
 
-    #overlay-content.permission-content {{
+    #overlay-content.permission-content,
+    #overlay-content.completion-content {{
         max-height: 30vh;
         overflow-y: auto;
         scrollbar-size-vertical: 1;
@@ -448,11 +486,12 @@ class KAgent(App):
         color: transparent;
     }
     .kagent-light #transcript-panel,
-    .kagent-light #input-box,
+    .kagent-light #input-panel,
     .kagent-light #overlay.modal-panel {
         border: round $ui-border;
         border-title-color: $ui-accent;
     }
+    .kagent-light #input-panel,
     .kagent-light #input-box {
         background: $background;
     }
@@ -533,17 +572,11 @@ class KAgent(App):
 
         self.input = TextField("")
         self.slash_idx = 0
-        self.mention_idx = 0
         self.text_input = None
         self.slash_matches: list[SlashItem] = []
-        self.mention_matches: list = []
-        self.mention_ctx: dict | None = None
         self._prev_slash_match_count: int | None = None
         self._slash_tab_completion: str | None = None
-        self._prev_mention_match_count: int | None = None
         self.run_task: asyncio.Task | None = None
-        self._cwe_enrichment_tasks: set[asyncio.Task[None]] = set()
-        self._cwe_enrichment_closing = False
         self.run_abort_event: AbortEvent | None = None
         self.snapshot_task: asyncio.Task | None = None
         self.cols: int = 80
@@ -557,6 +590,7 @@ class KAgent(App):
         self.parent_abort_task: asyncio.Task | None = None
 
         self.snapshot_saving = False
+        self._initial_snapshot_task: asyncio.Task | None = None
         self.resume_summary_shown = False
 
         self.history: list[str] = []
@@ -577,6 +611,7 @@ class KAgent(App):
         self._provider_modal: ProviderPickerModal | None = None
         self._perm_modal: PermissionModal | None = None
         self._skills_modal: SkillsModal | None = None
+        self._skill_task: asyncio.Task | None = None
         self._local_modal: BridgeCredentialsModal | TurnDetailsModal | None = None
 
         self._status_cache_key: tuple | None = None
@@ -587,6 +622,7 @@ class KAgent(App):
         self._elapsed_start: float = 0.0
         self._monotonic: Callable[[], float] = time.monotonic
         self._modal_view_intent: tuple | None = None
+        self._completion_view_intent: tuple | None = None
 
 
     def compose(self) -> ComposeResult:
@@ -610,6 +646,8 @@ class KAgent(App):
             write_banner=rich_log_writer.write_banner,
             preserve_viewport=self.transcript_log.preserve_viewport,
             write_line=rich_log_writer.write_line,
+            line_count=lambda: len(self.transcript_log.lines),
+            replace_lines=rich_log_writer.replace_lines,
             ui=self.ui_palette,
         )
 
@@ -623,9 +661,11 @@ class KAgent(App):
             self.permission_hints_static.display = False
             yield self.permission_hints_static
 
-        self.input_static = _InputStatic()
-        self.input_static.border_title = "Input"
-        yield self.input_static
+        self.input_panel = Vertical(id="input-panel")
+        self.input_panel.border_title = "Input"
+        with self.input_panel:
+            self.input_static = _InputStatic()
+            yield self.input_static
 
         self.status_bar = StatusBar()
         yield self.status_bar
@@ -637,6 +677,22 @@ class KAgent(App):
         self,
         action: Action,
     ) -> None:
+        if isinstance(action, SetSkillsPicker) and not action.open and self._skills_modal is not None:
+            self._skills_modal.closed = True
+        if isinstance(action, AgentEventAction) and isinstance(action.event, AssistantDeltaEvent) and action.facts is None:
+            previous = self.state
+            self.state = reducer(self.state, action)
+            # Chunks only extend the credential-safe buffer. The visible live
+            # row is a constant placeholder until the sanitized final message.
+            # All semantic events and explicit status refreshes still rebuild
+            # fresh state, including in-place schema/configuration mutations.
+            if hasattr(self, "live_entry_static") and self.state.transcript is not previous.transcript:
+                live = self.state.transcript[-1]
+                self.live_entry_static.display = True
+                self._render_live_entry(live)
+            if hasattr(self, "status_bar") and self._status_info and self.state.phase != previous.phase:
+                self._apply_status_bar()
+            return
         if isinstance(action, AgentEventAction) and action.facts is None:
             action = replace(action, facts=runtime_facts(self.agent, action.event, self.state.call_history))
         elif isinstance(action, SetBusy) and action.busy and not self.state.busy and action.facts is None:
@@ -752,48 +808,14 @@ class KAgent(App):
 
         value = self.input.value
 
-        skill_slash_items: list[SlashItem] = (
-            [
-                SlashItem(
-                    name=f"/{s.name}",
-                    description=(
-                        f"[skill] {s.description[:70]}"
-                        f"{'…' if len(s.description) > 70 else ''}"
-                    ),
-                )
-                for s in self.agent.skills.list_enabled()
-            ]
-            if value.startswith("/")
-            else []
-        )
-
-        slash_matches = filter_slash(value, skill_slash_items)
-
-        mention_ctx = find_active_mention(value)
-        mention_dir_base = (
-            parse_mention_path(mention_ctx["partial"]) if mention_ctx else None
-        )
-        mention_matches = (
-            list_mention_dir(
-                mention_dir_base[0], mention_dir_base[1], MENTION_LIMIT
-            )
-            if mention_dir_base
-            else []
-        )
+        slash_matches = filter_slash(value)
 
         self.slash_matches = slash_matches
-        self.mention_matches = mention_matches
-        self.mention_ctx = mention_ctx
 
         if len(slash_matches) != self._prev_slash_match_count:
             if len(slash_matches) > 0:
                 self.slash_idx = 0
         self._prev_slash_match_count = len(slash_matches)
-
-        if len(mention_matches) != self._prev_mention_match_count:
-            if len(mention_matches) > 0:
-                self.mention_idx = 0
-        self._prev_mention_match_count = len(mention_matches)
 
     async def on_key(self, event: events.Key) -> None:
 
@@ -869,12 +891,6 @@ class KAgent(App):
             event.stop()
             return
 
-        if self.mention_matches:
-            self.mention_idx = min(len(self.mention_matches) - 1, self.mention_idx + 1)
-            self._sync_overlay()
-            event.stop()
-            return
-
     def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         modal = self._get_active_modal()
         if modal is not None:
@@ -894,12 +910,6 @@ class KAgent(App):
 
         if self.slash_matches:
             self.slash_idx = max(0, self.slash_idx - 1)
-            self._sync_overlay()
-            event.stop()
-            return
-
-        if self.mention_matches:
-            self.mention_idx = max(0, self.mention_idx - 1)
             self._sync_overlay()
             event.stop()
             return
@@ -982,6 +992,22 @@ class KAgent(App):
 
         elif self.slash_matches:
             region = self.overlay_text_static.region
+            if self.is_running:
+                if not self.overlay_content_static.scrollable_content_region.contains(event.screen_x, event.screen_y):
+                    return
+                # Completion rows can span multiple terminal rows, just as
+                # picker rows do. Metadata follows both wrapping and scrolling.
+                cell = 0
+                for segment in self.overlay_text_static.render_line(event.screen_y - region.y):
+                    meta = segment.style.meta if segment.style else {}
+                    if cell <= event.screen_x - region.x < cell + segment.cell_length:
+                        if "completion_item" in meta:
+                            self.slash_idx = meta["completion_item"]
+                        break
+                    cell += segment.cell_length
+                self._sync_overlay()
+                event.stop()
+                return
             rel_y = event.y - region.y
             window = compute_menu_window(len(self.slash_matches), self.slash_idx)
             header_offset = 1 if window.hidden_above > 0 else 0
@@ -1016,25 +1042,6 @@ class KAgent(App):
 
         if await self._handle_modal_key(key, raw_input):
             return
-
-        if len(self.mention_matches) > 0:
-            if key == "up":
-                self.mention_idx = (self.mention_idx - 1 + len(self.mention_matches)) % len(self.mention_matches)
-                return
-            if key == "down":
-                self.mention_idx = (self.mention_idx + 1) % len(self.mention_matches)
-                return
-            if key == "tab" or key == "enter":
-                picked = self.mention_matches[self.mention_idx] if self.mention_idx < len(self.mention_matches) else None
-                if picked and self.mention_ctx:
-                    head = self.input.value[: self.mention_ctx["at"]]
-                    suffix = "" if picked.is_dir else " "
-                    self.input.set_value(f"{head}@{picked.insert}{suffix}")
-                return
-            if key == "escape":
-                if self.mention_ctx:
-                    self.input.set_value(self.input.value[: self.mention_ctx["at"]])
-                return
 
         if len(self.slash_matches) > 0:
             if key == "up":
@@ -1207,11 +1214,16 @@ class KAgent(App):
 
         if self.state.pending_skills:
             if self._skills_modal is None:
-                self._skills_modal = SkillsModal(
+                created = SkillsModal(
                     agent=self.agent,
-                    on_close=lambda: self.dispatch(SetSkillsPicker(open=False)),
+                    on_close=lambda: self.dispatch(SetSkillsPicker(open=False))
+                        if self._skills_modal is created else None,
                     persist_disabled_skills=self.persist_disabled_skills,
+                    on_loaded=lambda name: self.dispatch(Append(entry=TranscriptEntry(
+                        kind="system", text=f"loaded skill {name} — it'll apply to your next prompt.",
+                    ))) if self._skills_modal is created else None,
                 )
+                self._skills_modal = created
             return self._skills_modal
         self._skills_modal = None
 
@@ -1276,10 +1288,24 @@ class KAgent(App):
         else:
             result = modal.handle_key(key)
         if asyncio.iscoroutine(result):
-            await result
+            if isinstance(modal, SkillsModal):
+                if self._skill_task is not None and not self._skill_task.done():
+                    result.close()
+                else:
+                    self._skill_task = asyncio.create_task(self._run_skill_action(modal, result))
+            else:
+                await result
 
         self._sync_overlay()
         return True
+
+    async def _run_skill_action(self, modal: SkillsModal, action) -> None:
+        try:
+            await action
+        finally:
+            if self._skills_modal is modal and not modal.closed:
+                self._sync_overlay()
+                self._sync_status_bar()
 
     def _recompute_view(self) -> None:
 
@@ -1289,7 +1315,7 @@ class KAgent(App):
         live = last if (last and last.kind == "assistant" and last.streaming) else None
         committed = transcript[:-1] if live else transcript
 
-        generation = f"{self.state.clear_gen}:{self.state.transcript_revision}"
+        generation = self.state.clear_gen
         self.transcript_writer.flush(
             list(committed),
             self.state.banner_data,
@@ -1335,6 +1361,8 @@ class KAgent(App):
                     text.stylize(CARET_STYLE, start, len(text))
         self.input_static.value = self.input.value
         self.input_static.update(text)
+        if self.is_running:
+            self.call_after_refresh(self.input_static.reveal_caret)
 
     def _sync_overlay(self) -> None:
         if not hasattr(self, "overlay_static"):
@@ -1343,6 +1371,7 @@ class KAgent(App):
         modal = self._get_active_modal()
         scrollable = isinstance(modal, (PermissionModal, TurnDetailsModal))
         remaining = isinstance(modal, (TextInputModal, AskModal, ProviderPickerModal, SkillsModal))
+        completion = modal is None and bool(self.slash_matches)
         self.permission_hints_static.display = isinstance(modal, (PermissionModal, TurnDetailsModal))
         if isinstance(modal, (PermissionModal, TurnDetailsModal)):
             self.permission_hints_static.update(modal.instructions(ui=self.ui_palette))
@@ -1359,6 +1388,7 @@ class KAgent(App):
             "permission-content",
         )
         self.overlay_content_static.set_class(remaining, "remaining-content")
+        self.overlay_content_static.set_class(completion, "completion-content")
         self.overlay_static.border_subtitle = "PgUp/PgDn scroll" if remaining else ""
 
         if modal is not None:
@@ -1384,6 +1414,9 @@ class KAgent(App):
                 self.overlay_static.border_title = "Turn Details"
                 self.overlay_text_static.update(modal.render(ui=self.ui_palette))
             else:
+                if isinstance(modal, SkillsModal):
+                    # Borders, padding and the vertical scrollbar share five cells.
+                    modal.width = max(1, self.cols - 5)
                 self.overlay_text_static.update(_modal_formatter._modal_text(
                     modal, escape_action="stop turn" if self.state.busy else "cancel",
                     compact=True,
@@ -1400,15 +1433,6 @@ class KAgent(App):
                                  or intent[2:4] != self._modal_view_intent[2:4])
                     self._modal_view_intent = intent
                     self.call_after_refresh(self._reveal_modal_control, modal, new_modal)
-        elif self.mention_matches:
-            self.overlay_static.border_title = ""
-            menu = MentionMenu(
-                cwd=(self.mention_ctx or {}).get("dir", ""),
-                candidates=self.mention_matches,
-                selected=self.mention_idx,
-            )
-            self.overlay_text_static.update(self._menu_lines_to_text(menu.render()))
-            self.overlay_static.display = True
         elif self.slash_matches:
             self.overlay_static.border_title = ""
             menu = SlashMenu(items=self.slash_matches, selected=self.slash_idx)
@@ -1420,8 +1444,33 @@ class KAgent(App):
             self.overlay_static.display = False
 
         self.input_static.display = modal is None
+        if hasattr(self, "input_panel"):
+            self.input_panel.display = modal is None
         if not remaining:
             self._modal_view_intent = None
+        if completion and self.is_running:
+            intent = (id(self.slash_matches), self.slash_idx, self.size)
+            if intent != self._completion_view_intent:
+                self._completion_view_intent = intent
+                self.call_after_refresh(self._reveal_completion_selection, intent)
+        else:
+            self._completion_view_intent = None
+
+    def _reveal_completion_selection(self, intent: tuple) -> None:
+        if intent != self._completion_view_intent:
+            return
+        widget = self.overlay_text_static
+        widget._render_content()
+        scroll = self.overlay_content_static
+        for y, line in enumerate(widget._render_cache.lines):
+            if any(segment.style and segment.style.meta.get("completion_item") == intent[1]
+                   for segment in line):
+                first = int(scroll.scroll_y)
+                height = scroll.scrollable_content_region.height
+                if y < first or y >= first + height:
+                    scroll.scroll_to(y=y if y < first else y - height + 1,
+                                     animate=False, immediate=True)
+                return
 
     def _reveal_modal_control(self, modal, new_modal: bool = False) -> None:
         """Reveal the selected label/caret only after navigation, editing or resize.
@@ -1460,7 +1509,11 @@ class KAgent(App):
                 if getattr(ln, "selected", False)
                 else (self.ui_palette.muted if getattr(ln, "dim", False) else "")
             )
+            start = len(text)
             text.append(ln.text, style=style)
+            item_index = getattr(ln, "item_index", None)
+            if item_index is not None:
+                text.stylize(Style(meta={"completion_item": item_index}), start, len(text))
         return text
 
     def _sync_status_bar(self) -> None:
@@ -1474,6 +1527,9 @@ class KAgent(App):
             "request_tokens": self.agent.idle_request_estimate().estimated_total,
             "compact_threshold": self.agent.get_auto_compact_threshold(),
         }
+        self._apply_status_bar()
+
+    def _apply_status_bar(self) -> None:
         # Permission requests do not identify a tool call. With overlapping
         # operations, keep the wait truthful without guessing its candidate.
         ambiguous_wait = self.state.phase == "waiting-approval" and len(self.state.pending_calls) > 1
@@ -1519,7 +1575,9 @@ class KAgent(App):
 
     def _tick_elapsed(self) -> None:
         if self._elapsed_active:
-            self.status_bar.elapsed_seconds = self._monotonic() - self._elapsed_start
+            scanners = [call for call in self.state.pending_calls if call.started_monotonic is not None]
+            since = scanners[-1].started_monotonic if len(scanners) == 1 else self._elapsed_start
+            self.status_bar.elapsed_seconds = max(0.0, self._monotonic() - (since if since is not None else self._elapsed_start))
 
 
     async def run_agent_turn(
@@ -1527,7 +1585,10 @@ class KAgent(App):
         value: str,
         opts: RunAgentOptions | None = None,
     ) -> None:
-        if self.agent.is_running():
+        if self._skill_task is not None and not self._skill_task.done():
+            self.dispatch(Append(TranscriptEntry(kind="system", text="Skill settings are finishing; retry the prompt when they complete.")))
+            return
+        if self.agent.is_running() or self.run_abort_event is not None:
             self.dispatch(
                 Append(
                     entry=TranscriptEntry(
@@ -1540,51 +1601,6 @@ class KAgent(App):
                 )
             )
             return
-
-        self._start_turn_timer()
-
-        if self.session_debug:
-            self.session_debug.write(
-                "turn_start",
-                {
-                    "prompt": value,
-                    "transcript_user_text": (
-                        opts.transcript_user_text if opts else None
-                    ),
-                    "system_text": (opts.system_text if opts else None),
-                },
-            )
-
-        if opts and opts.transcript_user_text:
-            self.dispatch(
-                Append(
-                    entry=TranscriptEntry(
-                        kind="user",
-                        text=opts.transcript_user_text,
-                    ),
-                )
-            )
-
-        if opts and opts.system_text:
-            self.dispatch(
-                Append(
-                    entry=TranscriptEntry(
-                        kind="system",
-                        text=opts.system_text,
-                    ),
-                )
-            )
-
-        self.dispatch(
-            SetBusy(
-                busy=True,
-            )
-        )
-        self.dispatch(
-            SetActiveSkill(
-                name=None,
-            )
-        )
 
         abort_event = AbortEvent()
         self.run_abort_event = abort_event
@@ -1684,6 +1700,51 @@ class KAgent(App):
             self.dispatch(AgentEventAction(event=ev))
 
         try:
+            self._start_turn_timer()
+
+            if self.session_debug:
+                self.session_debug.write(
+                    "turn_start",
+                    {
+                        "prompt": value,
+                        "transcript_user_text": (
+                            opts.transcript_user_text if opts else None
+                        ),
+                        "system_text": (opts.system_text if opts else None),
+                    },
+                )
+
+            if opts and opts.transcript_user_text:
+                self.dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="user",
+                            text=opts.transcript_user_text,
+                        ),
+                    )
+                )
+
+            if opts and opts.system_text:
+                self.dispatch(
+                    Append(
+                        entry=TranscriptEntry(
+                            kind="system",
+                            text=opts.system_text,
+                        ),
+                    )
+                )
+
+            self.dispatch(
+                SetBusy(
+                    busy=True,
+                )
+            )
+            self.dispatch(
+                SetActiveSkill(
+                    name=None,
+                )
+            )
+
             await self.agent.run(
                 value,
                 signal=abort_event,
@@ -1714,6 +1775,8 @@ class KAgent(App):
         finally:
             if self.run_abort_event is abort_event:
                 self.run_abort_event = None
+                if self.run_task is asyncio.current_task():
+                    self.run_task = None
                 self._stop_turn_timer()
                 self.dispatch(
                     SetBusy(
@@ -1724,24 +1787,11 @@ class KAgent(App):
 
     def run_agent_compact(self) -> None:
         """Fire-and-forget compact, giống `void agent.compact(...)` trong TS."""
-
-        if self.session_debug:
-            self.session_debug.write("compact_start")
-
-        self.dispatch(
-            Append(
-                entry=TranscriptEntry(
-                    kind="system",
-                    text="Compacting conversation...",
-                )
-            )
-        )
-
-        self.dispatch(
-            SetBusy(
-                busy=True,
-            )
-        )
+        if self._skill_task is not None and not self._skill_task.done():
+            self.dispatch(Append(TranscriptEntry(kind="system", text="Skill settings are finishing; retry compact when they complete.")))
+            return
+        if self.run_abort_event is not None or (self.run_task is not None and not self.run_task.done()):
+            return
 
         self.run_task = asyncio.create_task(
             self._run_agent_compact(),
@@ -1761,6 +1811,10 @@ class KAgent(App):
             self.dispatch(AgentEventAction(event=event))
 
         try:
+            if self.session_debug:
+                self.session_debug.write("compact_start")
+            self.dispatch(Append(TranscriptEntry(kind="system", text="Compacting conversation...")))
+            self.dispatch(SetBusy(busy=True))
             await self.agent.compact(
                 signal=abort_event,
                 emit=handle_event,
@@ -1822,6 +1876,14 @@ class KAgent(App):
             self.transcript_log.scroll_end(animate=False, immediate=True, x_axis=False)
         self._recompute_view()
 
+    @on(_PermissionStatic.Reflow)
+    def _on_overlay_reflow(self) -> None:
+        modal = self._get_active_modal()
+        if isinstance(modal, (AskModal, SkillsModal, ProviderPickerModal)):
+            self._reveal_modal_control(modal)
+        elif self._completion_view_intent is not None:
+            self._reveal_completion_selection(self._completion_view_intent)
+
     def on_mount(self) -> None:
 
         if self.hang_diagnostics is not None:
@@ -1869,40 +1931,47 @@ class KAgent(App):
                 self._wait_parent_abort()
             )
 
-        asyncio.create_task(self._save_snapshot())
+        self._initial_snapshot_task = asyncio.create_task(self._save_snapshot())
 
         self.snapshot_task = asyncio.create_task(
             self._snapshot_loop()
         )
 
-    def start_cwe_enrichment(self, rest: list[str]) -> None:
-        from src.ui.commands.cwe_enrichment import enrich_cwe
-        if self._cwe_enrichment_closing:
-            return
-        task = asyncio.create_task(enrich_cwe(self, rest))
-        self._cwe_enrichment_tasks.add(task)
-        task.add_done_callback(self._cwe_enrichment_tasks.discard)
-
     async def on_unmount(self) -> None:
-        # Cancel before the first shutdown await. Drain preparation/worker and
-        # review cleanup before allowing the runtime to close its resources.
-        self._cwe_enrichment_closing = True
-        tasks = tuple(self._cwe_enrichment_tasks)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-
+        from src.agent.ownership import join
+        if self.run_abort_event is not None:
+            self.run_abort_event.set()
+        if isinstance(self.agent, Agent):
+            from src.agent.ownership import retire, join
+            retired = retire(self.agent)
+            if retired is not None:
+                await join(retired)
+        if self._skills_modal is not None:
+            self._skills_modal.closed = True
+        if self._skill_task is not None and not self._skill_task.done():
+            from src.agent.ownership import join
+            self._skill_task.cancel()
+            await join(self._skill_task)
+        from src.permission.runtime.execution import policy_for
+        from src.tools.execution.scanner_runner import ScannerRuntime
+        policy = policy_for(getattr(self.agent, 'prompter', None))
+        scanner_runtime = policy.scanner_runtime if policy is not None else None
+        if isinstance(scanner_runtime, ScannerRuntime):
+            await scanner_runtime.drain(close=True)
         if self.hang_diagnostics is not None:
             await self.hang_diagnostics.stop()
 
-        if self.snapshot_task:
-            self.snapshot_task.cancel()
-
-        if self.parent_abort_task is not None:
-            self.parent_abort_task.cancel()
+        for task in (self.run_task, self.snapshot_task, self._initial_snapshot_task, self.parent_abort_task):
+            if task is not None and task is not asyncio.current_task():
+                if not task.done():
+                    task.cancel()
+                await join(task)
 
         if self.ping_task is not None:
             await self.ping_task.stop()
+
+        if isinstance(self.session_debug, SessionDebugLog):
+            await self.session_debug.aclose()
 
     async def _save_snapshot(self) -> None:
         if self.agent.is_running():
@@ -2044,12 +2113,13 @@ class KAgent(App):
             asyncio.create_task(save_memory())
             return
 
-        if agent_value.startswith("/"):
+        command = agent_value.split(maxsplit=1)
+        if agent_value.lstrip().startswith("/") or (command and command[0] in REMOVED_SLASH_COMMANDS):
             handled = handle_slash(self, agent_value)
             if handled:
                 return
 
-        asyncio.create_task(
+        self.run_task = asyncio.create_task(
             self.run_agent_turn(
                 agent_value,
                 RunAgentOptions(

@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, parse_qsl
 import httpx
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter, UserControlledRefusal, PermissionPolicyBlocked, YoloPrompter
@@ -20,6 +20,7 @@ from src.permission.network.transport import pin_request
 from src.target.target import Target
 from src.target.origin import HTTPOrigin
 from src.workflow.state import WorkflowPhase, WorkflowState, normalize_target_origin
+from src.workflow.ownership import invocation as workflow_invocation
 from src.tools.http.private_host import gate_private_request, parse_http_url, PrivateHostDeclined
 from src.tools.common.types import Tool, PermissionHints, arg_string
 from src.tools.common.outcome import ToolOutput
@@ -330,6 +331,7 @@ class HTTPTool(Tool):
         return await self.run(args, signal, prompter)
 
     @permission_invocation
+    @workflow_invocation
     async def run(self, args: dict, signal: Any, prompter: Prompter) -> ToolOutput:
         if signal is None:
             return await self._run_invocation(args, signal, prompter)
@@ -688,9 +690,12 @@ class HTTPTool(Tool):
 
         Even an HTTP error or a capped body attests reachability/metadata. HTML
         navigation needs a parsed navigation reference within captured bytes.
-        Only the first observation for a dimension is retained so duplicate
-        requests cannot manufacture semantic progress with fresh observation IDs.
+        Source novelty uses a bounded content ledger, so duplicate requests
+        cannot manufacture progress with fresh observation IDs.
         """
+        from src.workflow.ownership import current
+        if not current(self):
+            return
         state = self.workflow
         objective = state.objective if state is not None else None
         if (state is None or objective is None or objective.mode != 'whole_target'
@@ -723,14 +728,26 @@ class HTTPTool(Tool):
             phase = 'enumeration'
         else:
             return
+        parsed_url = urlsplit(action.url)
+        # Stable request shape + observed response content. Fresh request IDs,
+        # query values, timestamps and reason wording cannot mint new facts.
+        source_fingerprint = hashlib.sha256(json.dumps([
+            action.method, parsed_url.path,
+            sorted({name for name, _ in parse_qsl(parsed_url.query, keep_blank_values=True)}),
+            response.status_code, response.headers.get('content-type', '').split(';')[0].strip().lower(),
+            hashlib.sha256(content).hexdigest(),
+        ], separators=(',', ':')).encode()).hexdigest()
         for dimension in dimensions:
             existing = state.phase_coverage_record(phase, dimension)
-            if existing is not None and existing.status == 'performed':
+            if (existing is not None and existing.status == 'performed'
+                    and (source_fingerprint in existing.source_fingerprints
+                         or len(existing.source_fingerprints) >= 128)):
                 continue
             state.record_phase_coverage(
                 phase, dimension, 'performed', objective_id=objective.id,
                 target_origin=objective.target_origin or '',
                 reason=f'runtime HTTP observation: {observation}',
+                source_fingerprint=source_fingerprint,
             )
 
     def _require_scope(self, url: str) -> None:

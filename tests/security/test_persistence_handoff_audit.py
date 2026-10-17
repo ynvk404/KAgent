@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from contextlib import contextmanager
+from src.workflow.evidence_source import EvidenceSource
 import socket
 import tempfile
 import threading
@@ -184,34 +186,41 @@ def test_c3_path_swap_after_scope_check_reads_outside_project(scratch, monkeypat
     source.write_text("original proof")
     outside = scratch / "outside"
     outside.write_text("outside synthetic proof")
-    original = Path.open
-    def read(path, *args, **kwargs):
+    original = EvidenceSource.open
+    @contextmanager
+    def read(binding):
+        path = binding.path
         if path == source and not source.is_symlink():
             source.unlink()
             source.symlink_to(outside)
-        return original(path, *args, **kwargs)
-    monkeypatch.setattr(Path, "open", read)
-    artifact = EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, lab)
-    assert (lab / artifact.path).read_bytes() == b"outside synthetic proof"
-    observed("C3-source-path-swap", "FAIL", "PRODUCTION")
-
+        with original(binding) as handle:
+            yield handle
+    monkeypatch.setattr(EvidenceSource, "open", read)
+    with pytest.raises((OSError, ValueError)):
+        EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, lab)
+    assert not list(lab.rglob("*.proof"))
+    observed("C3-source-path-swap", "PASS", "PRODUCTION")
 
 def test_c3_postwrite_verification_rejects_content_address_mismatch(scratch, monkeypatch):
     source = scratch / "proof.txt"
     source.write_text("original proof")
-    original = Path.open
-    def read(path, *args, **kwargs):
+    original = EvidenceSource.open
+    @contextmanager
+    def read(binding):
+        path = binding.path
+        args = ("rb",)
         if path.suffix == ".proof" and args and args[0] == "rb":
             path.chmod(0o600)
             path.write_text("changed proof")
-        return original(path, *args, **kwargs)
-    monkeypatch.setattr(Path, "open", read)
-    with pytest.raises(ValueError, match="integrity conflict"):
+        with original(binding) as handle:
+            yield handle
+    monkeypatch.setattr(EvidenceSource, "open", read)
+    with pytest.raises(ValueError, match="integrity|changed"):
         EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, scratch)
     observed("C3-content-address-mismatch", "PASS", "PRODUCTION_ACCEPTANCE")
 
 
-def test_c3_write_failure_leaves_partial_published_proof_and_breaks_retry(scratch, monkeypatch):
+def test_c3_write_failure_leaves_no_published_proof_and_retry_recovers(scratch, monkeypatch):
     source = scratch / "proof.txt"
     source.write_text("complete proof")
     original = os.fdopen
@@ -231,13 +240,14 @@ def test_c3_write_failure_leaves_partial_published_proof_and_breaks_retry(scratc
         with pytest.raises(OSError):
             EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, scratch)
     proofs = list((scratch / ".kagent/evidence").rglob("*.proof"))
-    assert len(proofs) == 1 and proofs[0].read_bytes() == b"com"
-    with pytest.raises(ValueError, match="hash collision"):
-        EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, scratch)
-    observed("C3-partial-proof-retry", "FAIL", "PRODUCTION")
+    assert not proofs and not list(scratch.rglob("*.proof-tmp"))
+    artifact = EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, scratch)
+    assert artifact.is_resolvable(scratch)
+    assert (scratch / artifact.path).read_bytes() == b"complete proof"
+    observed("C3-partial-proof-retry", "PASS", "PRODUCTION")
 
 
-async def test_c3_concurrent_same_hash_reader_sees_incomplete_writer(scratch, monkeypatch):
+async def test_c3_concurrent_same_hash_writers_publish_complete_proof(scratch, monkeypatch):
     source = scratch / "proof.txt"
     source.write_text("complete proof")
     entered, release = threading.Event(), threading.Event()
@@ -245,13 +255,17 @@ async def test_c3_concurrent_same_hash_reader_sees_incomplete_writer(scratch, mo
     class Held:
         def __init__(self, *args, **kwargs):
             self.handle = original(*args, **kwargs)
+            self.first = not entered.is_set()
         def __enter__(self):
             return self
         def __exit__(self, *args):
             self.handle.close()
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
         def write(self, data):
-            entered.set()
-            assert release.wait(5)
+            if self.first:
+                entered.set()
+                assert release.wait(5)
             return self.handle.write(data)
     monkeypatch.setattr(os, "fdopen", Held)
     # Test-local offload exposes a new concurrent window; production WorkflowTool
@@ -259,12 +273,12 @@ async def test_c3_concurrent_same_hash_reader_sees_incomplete_writer(scratch, mo
     first = asyncio.create_task(_joined_thread(EvidenceArtifact.capture_immutable_snapshot, "candidate", source.name, scratch))
     try:
         assert await asyncio.to_thread(entered.wait, 5)
-        with pytest.raises(ValueError, match="hash collision"):
-            await asyncio.to_thread(EvidenceArtifact.capture_immutable_snapshot, "candidate", source.name, scratch)
+        other = await asyncio.to_thread(EvidenceArtifact.capture_immutable_snapshot, "candidate", source.name, scratch)
         release.set()
         artifact = await first
-        assert artifact.is_resolvable(scratch)
-        observed("C3-naive-concurrent-publish", "FAIL", "DESIGN_ONLY")
+        assert artifact == other and artifact.is_resolvable(scratch)
+        assert not list(scratch.rglob("*.proof-tmp"))
+        observed("C3-naive-concurrent-publish", "PASS", "PRODUCTION")
     finally:
         await finish(first, release)
 
@@ -607,6 +621,8 @@ async def test_c3_proposed_cancelled_snapshot_drains_without_metadata_commit(scr
     class Held:
         def __init__(self, *args, **kwargs):
             self.handle = original(*args, **kwargs)
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
         def __enter__(self):
             return self
         def __exit__(self, *args):

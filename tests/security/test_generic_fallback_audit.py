@@ -8,7 +8,6 @@ from src.permission.runtime.execution import ExecutionBlocked
 from src.permission.permission import UserControlledRefusal
 from src.permission.runtime.observations import ObservationStore, VerifiedResult
 from src.skills.registry import Registry as Skills
-from src.ui.commands.result_review import review_result
 from src.workflow.state import WorkflowState
 from src.agent.decision_planner import PlannerCandidate, PlannerContext, build_decision_plan
 from src.target.target import Target
@@ -16,8 +15,8 @@ from src.workflow.validation_route import ValidationRoute
 from pathlib import Path
 from tests.security.test_execution_policy import runtime
 from tests.security.test_generic_validation import (
-    agent_for, app_for, bind_context, certificate, evidence, expert, request,
-    result, review_args, setup, start,
+    agent_for, bind_context, certificate, evidence, expert, request,
+    result, setup, start,
 )
 
 
@@ -55,14 +54,12 @@ async def test_expert_status_alone_cannot_release_generic_boundary(runtime, tmp_
     ("content_type", "application/json"),
     ("request_template", '{"term":"{INJECTION_POINT}"}'),
 ])
-async def test_review_certificate_does_not_survive_request_context_change(runtime, tmp_path, field, value):
+async def test_assessment_does_not_survive_request_context_change(runtime, tmp_path, field, value):
     env = await setup(runtime, tmp_path)
     await start(env)
     await env[0].execute("http", request(env[5]), None, env[1])
     ref = await evidence(env, tmp_path)
-    await result(env, refs=[ref])
-    app, _ = app_for(env)
-    await review_result(app, review_args(env[5], "not-confirmed"))
+    await result(env, "not-confirmed", refs=[ref])
     assert certificate(env, ref) is not None
     setattr(env[5], field, value)
     assert certificate(env, ref) is None
@@ -152,16 +149,14 @@ async def test_new_attempt_does_not_depend_on_legacy_certificate_invalidation(ru
     env = await setup(runtime, tmp_path)
     await start(env)
     ref = await evidence(env, tmp_path)
-    await result(env, refs=[ref])
-    app, _ = app_for(env)
-    await review_result(app, review_args(env[5], "not-confirmed"))
+    await result(env, "not-confirmed", refs=[ref])
     previous = certificate(env, ref)
     agent_for(env)._initialize_request_objective(f"Retest candidate {env[5].id}", True)
     bind_context(env)
     monkeypatch.setattr(env[2].observations, "persist", lambda: (_ for _ in ()).throw(OSError("fixture failure")))
     response = await start(env)
     assert json.loads(response)["ok"]
-    assert env[4].latest_result(env[5].id).assessment_source == "operator"
+    assert env[4].latest_result(env[5].id).assessment_source == "agent"
     assert certificate(env, ref) is None  # prior objective remains historical
     assert env[5].status == "validating" and env[2].generic_validation.attempt is not None
     assert env[4].objective.id not in env[2].generic_validation.retest_objectives
@@ -229,9 +224,7 @@ async def test_explicit_generic_retest_cannot_reuse_old_certificate_or_complete_
     env = await setup(runtime, tmp_path)
     await start(env)
     ref = await evidence(env, tmp_path)
-    await result(env, refs=[ref])
-    app, _ = app_for(env)
-    await review_result(app, review_args(env[5], "not-confirmed"))
+    await result(env, "not-confirmed", refs=[ref])
     agent = agent_for(env)
     assert not agent._generic_completion_blockers()
     agent._initialize_request_objective(f"Retest candidate {env[5].id}", True)

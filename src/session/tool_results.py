@@ -81,7 +81,7 @@ class ResultReference:
                 or (ref.http_status is not None and type(ref.http_status) is not int)
                 or type(ref.truncated) is not bool
                 or not isinstance(ref.source_kind, str)
-                or ref.source_kind not in {"shell", "http", "research", "file"}):
+                or ref.source_kind not in {"shell", "scanner", "http", "research", "file"}):
             return None
         return ref
 

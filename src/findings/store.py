@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.async_io import run_sync, publication
+
 import asyncio
 import os
 import re
@@ -128,13 +130,13 @@ class Store:
     ) -> str:
         """Regenerate one derivative under the canonical mutation lock.
 
-        Background work only prepares a private temp file. Cancellation drains
-        preparation before releasing the lock; visibility happens on this loop.
+        Owned background work prepares and publishes the derivative. Cancellation
+        drains the worker before releasing the lock; publication rechecks ownership.
         Canonical writes and CWE promotion cannot race this snapshot/publication.
         """
         from src.findings.presentation import artifact_links, relative_link, render_summary
 
-        async with self._save_lock:
+        def export():
             path = self.report_for_candidate(candidate_id)
             raw = report_bytes(path)
             finding = read_report_bytes(raw, slug=path.stem)
@@ -144,45 +146,24 @@ class Store:
             directory = project_artifact_root(self.project_dir) / "reports" / "findings"
             source = relative_link(path, directory, self.project_dir)
             destination = _summary_destination(self.project_dir, directory, path.name, source)
-            content = render_summary(
-                finding, context=context,
-                evidence=artifact_links(artifacts, self.project_dir, directory),
-                source=source,
-            )
-            pending = asyncio.create_task(asyncio.to_thread(
-                _prepare_summary, self.project_dir, destination, content,
-            ))
-            temporary = None
+            content = render_summary(finding, context=context,
+                evidence=artifact_links(artifacts, self.project_dir, directory), source=source)
+            temporary = _prepare_summary(self.project_dir, destination, content)
             try:
-                try:
-                    temporary = await asyncio.shield(pending)
-                except asyncio.CancelledError:
-                    while not pending.done():
-                        try:
-                            await asyncio.shield(pending)
-                        except asyncio.CancelledError:
-                            continue
-                        except Exception:
-                            break
-                    # A preparation failure must not replace cancellation and
-                    # become a recoverable export notice in the caller.
-                    if not pending.cancelled() and pending.exception() is None:
-                        temporary = pending.result()
-                    raise
-                guard(finding)
                 if report_bytes(path) != raw:
                     raise ValueError("canonical finding changed during summary export")
-                task = asyncio.current_task()
-                if task is not None and task.cancelling():
-                    raise asyncio.CancelledError
                 _check_summary_destination(self.project_dir, destination)
-                os.replace(temporary, destination)
+                with publication(lambda: guard(finding)):
+                    os.replace(temporary, destination)
                 temporary = None
                 _fsync_directory(directory)
                 return str(destination)
             finally:
                 if temporary is not None:
                     temporary.unlink(missing_ok=True)
+
+        async with self._save_lock:
+            return await run_sync(export)
 
     async def promote_classification(
         self, path: Path, *, expected_digest: str, expected_revision: int,

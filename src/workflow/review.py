@@ -1,4 +1,4 @@
-"""Transient snapshots for detecting state changes during operator review."""
+"""Snapshots for detecting workflow changes during persistence and reporting."""
 from __future__ import annotations
 
 import hashlib

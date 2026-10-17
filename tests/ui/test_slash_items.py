@@ -1,6 +1,5 @@
 from src.ui.commands.slash_items import (
     SLASH_ITEMS,
-    SlashItem,
     filter_slash,
 )
 
@@ -15,16 +14,16 @@ def test_menu_orders_help_first_then_related_commands():
         "/help",
         "/provider", "/model", "/thinking", "/maxsteps",
         "/target", "/scope", "/permissions", "/yolo",
-        "/plan", "/next", "/report", "/review-result", "/enrich-cwe", "/turn-details", "/skills", "/burp",
+        "/plan", "/report", "/turn-details", "/skills", "/burp",
         "/memory", "/compact", "/snapshot",
         "/clear", "/reset", "/exit",
     ]
 
 
-def test_skill_commands_follow_builtin_commands():
-    skill = SlashItem(name="/recon", description="reconnaissance skill")
-
-    assert filter_slash("/", extras=[skill]) == [*SLASH_ITEMS, skill]
+def test_catalog_contains_only_builtin_commands():
+    assert filter_slash("/") == list(SLASH_ITEMS)
+    assert not filter_slash("/recon")
+    assert not filter_slash("/csrf")
     assert [item.name for item in filter_slash("/m")] == [
         "/model", "/maxsteps", "/memory",
     ]
@@ -48,7 +47,7 @@ def test_prefix_matches_command_names():
     assert [
         s.name for s in filter_slash("/re")
     ] == [
-        "/report", "/review-result", "/reset"
+        "/report", "/reset"
     ]
 
 
@@ -112,8 +111,13 @@ def test_target_catalog_entry():
 def test_scope_catalog_entry():
     item = next(s for s in SLASH_ITEMS if s.name == "/scope")
 
-    assert item.args == "[show|add <origin>|remove <origin>|reset]"
-    assert item.description == "show or edit exact origins for this engagement"
+    assert item.args == "[show|add <origin>|remove <origin>|tcp-add <ip> <ports>|tcp-remove <ip> [ports]|reset]"
+    assert item.description == "show or edit exact HTTP origins and explicit TCP IP/ports"
+
+
+def test_reset_help_states_scope_is_preserved():
+    item = next(s for s in SLASH_ITEMS if s.name == '/reset')
+    assert 'keep target and HTTP/TCP scope' in item.description
 
 
 def test_maxsteps_catalog_entry():

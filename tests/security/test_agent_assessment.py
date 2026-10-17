@@ -1,23 +1,20 @@
 """Offline native production dispatch; no target or model is contacted."""
-import asyncio
 from dataclasses import replace
+import uuid
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.coverage.store import CoverageStore
 from src.findings.store import Store, read_report
 from src.permission.runtime.observations import ObservationStore
-from src.permission.permission import Decision
 from src.skills.registry import Registry as Skills
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.tools.workflow.finding import ConfirmFindingTool
-from src.ui.commands.result_review import review_result
-from src.workflow.assessment import accepted_result, digest, source_row, candidate_binding
+from src.workflow.assessment import accepted_result, digest, source_row, seal, candidate_binding
 from src.workflow.state import Candidate, WorkflowState, WorkflowObjective
 from tests.security.test_execution_policy import runtime, ORIGIN
 
@@ -156,46 +153,22 @@ async def test_finding_adopts_revision_and_rejects_historical_report(runtime, tm
     assert saved.assessment_source == "agent" and saved.severity == "low"
     assert saved.observed_impact == ASSESSMENT["observed_impact"]
     assert await registry.execute("confirm_finding", finding_args, None, p) == first
-    output = []
-    app = SimpleNamespace(agent=SimpleNamespace(prompter=p, workflow=state, tools=registry,
-                        save=AsyncMock()), dispatch=output.append)
-    operator.decision = Decision.ALLOW_ONCE
-    await review_result(app, [candidate.id, "confirmed", "medium", "Reviewed fixture response."])
-    assert output[-1].entry.kind == "system", output[-1]
+    # Seed a persisted newer assessment for this finding-consumer regression.
+    previous = state.latest_result(candidate.id)
+    assert previous is not None
+    revision = replace(previous, result_id="result_" + uuid.uuid4().hex,
+        supersedes=previous.result_id,
+        assessment={**previous.assessment, "severity": "medium", "observed_impact": "Reassessed fixture response."})
+    revision.assessment_binding = seal(revision)
+    state.add_validation_result(revision, force=True)
+    assert accepted_result(state, candidate, revision, runtime[2])
     latest = state.latest_result(candidate.id)
     assert latest is not None
-    assert latest.assessment_source == "operator"
+    assert latest.assessment_source == "agent"
     with pytest.raises(ValueError, match="historical report"):
         await registry.execute("confirm_finding", finding_args, None, p)
     assert not state.finding_is_persisted(candidate.id)
     assert len(notifications) == 2
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["save", "coverage", "cancel"])
-async def test_private_operator_revision_failure_preserves_agent(runtime, tmp_path, monkeypatch, failure):
-    state, candidate, tool, args, _ = await setup(runtime, tmp_path)
-    registry, p, policy, operator, *_ = runtime
-    await registry.execute("workflow", args, None, p)
-    previous = state.latest_result(candidate.id)
-    output = []
-    save = AsyncMock(side_effect=OSError("checkpoint failure") if failure == "save" else None)
-    if failure == "cancel":
-        save.side_effect = [asyncio.CancelledError(), None]
-    if failure == "coverage":
-        monkeypatch.setattr(WorkflowTool, "_sync_coverage", AsyncMock(side_effect=OSError("projection failure")))
-    app = SimpleNamespace(agent=SimpleNamespace(prompter=p, workflow=state, tools=registry, save=save), dispatch=output.append)
-    operator.decision = Decision.ALLOW_ONCE
-    if failure == "cancel":
-        with pytest.raises(asyncio.CancelledError):
-            await review_result(app, [candidate.id, "confirmed", "medium", "Reviewed response."])
-    else:
-        await review_result(app, [candidate.id, "confirmed", "medium", "Reviewed response."])
-        assert output[-1].entry.kind == "error"
-    assert previous is not None
-    assert state.latest_result(candidate.id) is previous and previous.assessment_source == "agent"
-    assert accepted_result(state, candidate, previous, policy)
-    assert not policy.observations._results and not policy.observations._reviews
 
 
 @pytest.mark.asyncio
@@ -335,23 +308,6 @@ async def test_actual_session_checkpoint_and_source_redaction_resume(runtime, tm
     assert not accepted_result(restored, restored.candidates[candidate.id], restored.latest_result(candidate.id), resumed_policy)
 
 
-@pytest.mark.asyncio
-async def test_operator_checkpoint_failure_from_unresolved_removes_projection(runtime, tmp_path):
-    state, candidate, tool, args, _ = await setup(runtime, tmp_path)
-    registry, p, policy, operator, *_ = runtime
-    await registry.execute("workflow", {**args, "outcome": "insufficient-evidence"}, None, p)
-    previous = state.latest_result(candidate.id)
-    output = []
-    app = SimpleNamespace(agent=SimpleNamespace(prompter=p, workflow=state, tools=registry,
-        save=AsyncMock(side_effect=OSError("checkpoint failure"))), dispatch=output.append)
-    operator.decision = Decision.ALLOW_ONCE
-    await review_result(app, [candidate.id, "confirmed", "low", "Observed fixture response."])
-    assert output[-1].entry.kind == "error"
-    assert state.latest_result(candidate.id) is previous and not state.eligible_for_finding(candidate.id)
-    assert tool.coverage is not None and not await tool.coverage.list()
-    assert not await CoverageStore(str(tool.coverage.path)).list()
-
-
 def test_absent_owner_snapshot_cannot_be_assigned_at_response_time():
     store = ObservationStore()
     store.owner_provider = lambda: {"candidate_id": "new-candidate", "id": "new-attempt"}
@@ -395,71 +351,6 @@ def test_v1_binding_vectors_and_honest_certificate_view(tmp_path):
     state.add_validation_result(repeated, force=True)
     assert assessment_provenance(state, candidate, result, policy)["source"] == "legacy/unknown"
     assert not accepted_result(state, candidate, result, policy)
-
-
-@pytest.mark.asyncio
-async def test_review_checkpoint_serializes_ordinary_agent_save(runtime, tmp_path):
-    from src.agent.agent import Agent, AgentOptions
-    from tests.helpers.agent_fakes import FakeClient
-    state, candidate, tool, args, _ = await setup(runtime, tmp_path)
-    registry, p, _, operator, *_, target = runtime
-    await registry.execute("workflow", args, None, p)
-    previous = state.latest_result(candidate.id)
-    entered, release = asyncio.Event(), asyncio.Event()
-    saved_sources = []
-    async def checkpoint(history, target, memory, workflow, engagement):
-        if not entered.is_set():
-            entered.set()
-            await release.wait()
-        latest = workflow.latest_result(candidate.id)
-        assert latest is not None
-        saved_sources.append(latest.assessment_source)
-    assert tool.skills is not None
-    agent = Agent(AgentOptions(client=FakeClient([]), tools=registry, skills=tool.skills,
-        prompter=p, target=target, workflow=state, store=None))
-    from src.session.store import Store as SessionStore
-    agent.store = MagicMock(spec=SessionStore)
-    agent.store.save = AsyncMock(side_effect=checkpoint)
-    output = []
-    app = SimpleNamespace(agent=agent, dispatch=output.append)
-    operator.decision = Decision.ALLOW_ONCE
-    review = asyncio.create_task(review_result(app, [candidate.id, "confirmed", "low", "Reviewed fixture."]))
-    await asyncio.wait_for(entered.wait(), 2)
-    ordinary = asyncio.create_task(agent.save())
-    await asyncio.sleep(0)
-    assert state.latest_result(candidate.id) is previous and not ordinary.done()
-    release.set()
-    await asyncio.gather(review, ordinary)
-    assert output[-1].entry.kind == "system", output[-1]
-    assert saved_sources == ["operator", "operator"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("fault", ["artifact", "primary"])
-async def test_review_rechecks_evidence_after_checkpoint(runtime, tmp_path, fault):
-    state, candidate, tool, args, oid = await setup(runtime, tmp_path)
-    registry, p, policy, operator, *_ = runtime
-    await registry.execute("workflow", args, None, p)
-    previous = state.latest_result(candidate.id)
-    checkpoints, output = [], []
-    async def save(*, workflow_override=None, _workflow_locked=False):
-        snapshot = workflow_override if workflow_override is not None else state
-        latest = snapshot.latest_result(candidate.id)
-        assert latest is not None
-        checkpoints.append(latest.assessment_source)
-        if workflow_override is not None:
-            if fault == "artifact":
-                path = tmp_path / state.evidence[args["evidence_refs"][0]].path
-                path.chmod(0o600)
-                path.write_text("changed during checkpoint")
-            else:
-                policy.observations._items[oid] = replace(policy.observations._items[oid], body=b"substituted")
-    app = SimpleNamespace(agent=SimpleNamespace(prompter=p, workflow=state, tools=registry, save=save), dispatch=output.append)
-    operator.decision = Decision.ALLOW_ONCE
-    await review_result(app, [candidate.id, "confirmed", "low", "Reviewed response."])
-    assert output[-1].entry.kind == "error" and state.latest_result(candidate.id) is previous
-    assert checkpoints == ["operator", "agent"]
-    assert not any(r.assessment_source == "operator" for r in state.validation_results)
 
 
 @pytest.mark.asyncio

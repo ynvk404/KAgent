@@ -146,7 +146,6 @@ async def test_wire_chunked_gzip_eof_through_production_dispatch(tmp_path, produ
     from src.permission.permission import AlwaysAllow, YoloPrompter
     from src.permission.network.grants import HTTPLimits
     from src.tools.common.registry import Registry
-    from src.tools.common.capabilities import CapabilityInventory
     from src.tools.discovery.content import ContentDiscoveryTool
     from src.tools.http.http_tool import HTTPTool
     from src.target.target import Target
@@ -183,7 +182,7 @@ async def test_wire_chunked_gzip_eof_through_production_dispatch(tmp_path, produ
         p.bind_execution_policy(policy)
         registry = Registry()
         registry.register(HTTPTool(target, state))
-        registry.register(ContentDiscoveryTool(target, state, CapabilityInventory(which=lambda _: None), lambda: 'minimal'))
+        registry.register(ContentDiscoveryTool(target, state))
         args = ({'url': '/fixture', 'phase': 'recon', 'max_response_bytes': 8} if producer == 'http' else
                 {'paths': ['fixture'], 'mode': 'native', 'max_requests': 3, 'rate_limit': 10})
         await registry.execute(producer, args, None, p)

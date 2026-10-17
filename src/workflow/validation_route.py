@@ -40,7 +40,7 @@ def resolve_validation_route(registry: Registry | None, candidate_class: str) ->
 
 def generic_admission(candidate: Candidate, state: WorkflowState, registry: Registry | None,
                       target: Target | None, policy) -> str | None:
-    """Current route/provenance/scope binding, also used by stored proof review.
+    """Current route/provenance/scope binding for validation and persisted results.
 
     This is not execution admission. The native boundary separately requires
     an enforceable proposal and controller-verified endpoint/action context.

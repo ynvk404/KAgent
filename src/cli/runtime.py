@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from src.async_io import run_sync
+from src.skills.reload import SkillReloader, publish_snapshot
+
 import json
 import copy
 import shutil
@@ -259,6 +262,7 @@ class ParsedFlags:
     target_url: str = ""
     api_key: str = ""
     skills_dirs: list[str] = field(default_factory=list)
+    scanner_wordlists: list[tuple[str, Path]] = field(default_factory=list)
     resume_id: str = ""
     yolo: bool = False
     http_lab_grants: list[str] = field(default_factory=list)
@@ -340,6 +344,15 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
             out.skills_dirs = [
                 s.strip() for s in next_arg(a).split(",") if s.strip()
             ]
+        elif a == '--scanner-wordlist':
+            from src.tools.execution.wordlists import parse_wordlist_spec, wordlist_files
+            spec = next_arg(a)
+            try:
+                entry = parse_wordlist_spec(spec)
+                wordlist_files(tuple([*out.scanner_wordlists, entry]))
+            except ValueError as err:
+                raise FlagParseError(str(err)) from err
+            out.scanner_wordlists.append(entry)
         elif a == "--resume":
             out.resume_id = next_arg(a)
             try:
@@ -478,16 +491,23 @@ async def close_runtime_resources(
     watchers: list[Any],
     mcp_sessions: list[MCPSession],
     close_burp_bridge: Callable[[], Any],
+    scanner_runtime: Any = None,
+    skill_reloader: SkillReloader | None = None,
 ) -> None:
     root_ctl.set()
+    if scanner_runtime is not None:
+        await scanner_runtime.drain(close=True)
 
     if reload_timer is not None:
         reload_timer.cancel()
 
+    if skill_reloader is not None:
+        await skill_reloader.close()
+
     for observer in watchers:
         observer.stop()
     for observer in watchers:
-        observer.join(timeout=1)
+        await run_sync(observer.join, timeout=1)
 
     await asyncio.gather(
         *(session.close() for session in mcp_sessions),
@@ -730,7 +750,9 @@ async def main() -> int:
     scanner_capabilities = CapabilityInventory()
 
     tools = ToolRegistry()
-    tools.register(ShellTool())
+    from src.tools.execution.scanners import ScannerBinding
+    tools.register(ShellTool(scanner_binding=ScannerBinding(
+        prompter.execution_policy, target, scanner_capabilities, wordlists=tuple(flags.scanner_wordlists))))
     tools.register(BashTool())
     tools.register(FileReadTool())
     tools.register(FileReadToolAlias())
@@ -742,20 +764,8 @@ async def main() -> int:
     tools.register(GrepTool())
     http_tool = HTTPTool(target, engagement_state, workflow, capture_store, validation_registry=skills)
     tools.register(http_tool)
-    tools.register(ContentDiscoveryTool(
-        target,
-        engagement_state,
-        scanner_capabilities,
-        lambda: cfg.tooling_profile.value if cfg.tooling_profile is not None else None,
-        workflow,
-    ))
-    tools.register(ServiceDiscoveryTool(
-        target,
-        engagement_state,
-        scanner_capabilities,
-        lambda: cfg.tooling_profile.value if cfg.tooling_profile is not None else None,
-        workflow,
-    ))
+    tools.register(ContentDiscoveryTool(target, engagement_state, workflow=workflow))
+    tools.register(ServiceDiscoveryTool(target, engagement_state, workflow=workflow))
     tools.register(WebFetchTool(engagement_state, target))
     tools.register(WebSearchTool())
     tools.register(AskUserTool(bridged_ask))
@@ -1115,31 +1125,27 @@ async def main() -> int:
     watchers: list[Any] = []
     reload_timer: asyncio.TimerHandle | None = None
 
+    def publish_skills(snapshot) -> None:
+        # Consumers retain this registry identity. Publish its complete maps in
+        # one non-suspending controller step, rebuilding the prompt atomically.
+        publish_snapshot(agent, snapshot)
+        report_skill_validation()
+        count = len(skills.list_enabled())
+        if getattr(notice_holder, "publish", None):
+            notice_holder.publish(f"skills: reloaded ({count} enabled)")
+        logger.info("skills reloaded", {"enabled": count, "total": len(skills.list())})
+
+    skill_reloader = SkillReloader(lambda: tuple(skill_dirs_to_watch), publish_skills)
+
     def trigger_reload() -> None:
         nonlocal reload_timer
-        loop = asyncio.get_event_loop()
-
         if reload_timer is not None:
             reload_timer.cancel()
-
-        def _do_reload() -> None:
+        def start_reload():
             nonlocal reload_timer
             reload_timer = None
-            try:
-                skills.clear()
-                for d in skill_dirs_to_watch:
-                    skills.load_dir(d)
-                skills.set_disabled_names(cfg.disabled_skills)
-                report_skill_validation()
-                agent.rebuild_from_skills()
-                count = len(skills.list_enabled())
-                if getattr(notice_holder, "publish", None):
-                    notice_holder.publish(f"skills: reloaded ({count} enabled)")
-                logger.info("skills reloaded", {"enabled": count, "total": len(skills.list())})
-            except Exception as err:
-                logger.warn("skills reload failed", {"err": str(err)})
-
-        reload_timer = loop.call_later(0.25, _do_reload)
+            skill_reloader.request()
+        reload_timer = loop.call_later(0.25, start_reload)
     def watch_dir(d: str) -> None:
         if d in watched_dirs or not os.path.exists(d):
             return
@@ -1411,13 +1417,19 @@ async def main() -> int:
     try:
         await app.run_async()
     finally:
-        await close_runtime_resources(
-            root_ctl,
-            reload_timer,
-            watchers,
-            mcp_sessions,
-            close_burp_bridge,
-        )
+        try:
+            await close_runtime_resources(
+                root_ctl,
+                reload_timer,
+                watchers,
+                mcp_sessions,
+                close_burp_bridge,
+                scanner_runtime=prompter.execution_policy.scanner_runtime,
+                skill_reloader=skill_reloader,
+            )
+        finally:
+            await session_debug.aclose()
+            await logger.aclose()
 
     return 0
 

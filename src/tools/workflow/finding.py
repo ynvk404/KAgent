@@ -73,10 +73,12 @@ class ConfirmFindingTool:
         latest = state.latest_result(candidate_id)
         assert latest is not None
         snapshot = review_snapshot(state, candidate_id)
+        generation = state.generation
         artifacts = [state.evidence[ref] for ref in latest.evidence_refs]
 
         def guard(finding: Finding) -> None:
-            if (review_snapshot(state, candidate_id) != snapshot
+            if (self.workflow is not state or state.generation != generation
+                    or review_snapshot(state, candidate_id) != snapshot
                     or not state.finding_is_persisted(candidate_id)
                     or not state.eligible_for_finding(candidate_id)
                     or finding.candidate_id != candidate_id

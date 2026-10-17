@@ -206,7 +206,7 @@ class MCPSession:
         return self._closed
 
     async def list_tools(self) -> list[dict[str, Any]]:
-        resp = await self._session.list_tools()
+        resp = await asyncio.wait_for(self._session.list_tools(), MCP_CALL_TIMEOUT_S)
         tools = []
         for t in resp.tools:
             tools.append(
@@ -295,6 +295,8 @@ async def _cancel_and_drain_owner(task: asyncio.Task) -> None:
             await asyncio.shield(task)
         except asyncio.CancelledError:
             continue
+        except Exception:
+            break
     # Retrieve exceptions without moving AnyIO teardown into another task.
     await asyncio.gather(task, return_exceptions=True)
 
@@ -305,6 +307,7 @@ class OwnedMCPSession:
         self.queue: asyncio.Queue = asyncio.Queue()
         self.task: asyncio.Task | None = None
         self.closed = False
+        self.pending: set[asyncio.Future] = set()
 
     @classmethod
     async def open(cls, server, *, worker, broker, signal=None):
@@ -325,7 +328,8 @@ class OwnedMCPSession:
                     if future.cancelled():
                         continue
                     try:
-                        result = await getattr(session, method)(*args)
+                        async with asyncio.timeout(MCP_CALL_TIMEOUT_S):
+                            result = await getattr(session, method)(*args)
                         if not future.done():
                             future.set_result(result)
                     except Exception as exc:
@@ -334,9 +338,24 @@ class OwnedMCPSession:
             except BaseException as exc:
                 if not ready.done():
                     ready.set_exception(exc)
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
             finally:
-                if session is not None:
-                    await session.close()
+                proxy.closed = True
+                try:
+                    if session is not None:
+                        async with asyncio.timeout(CLOSE_DEADLINE_S):
+                            await session.close()
+                finally:
+                    # The owner owns every enqueued future, including the RPC
+                    # interrupted by BaseException and calls behind it. Settle
+                    # them after teardown so callers cannot release its lease
+                    # while the isolated child still owns transport contexts.
+                    for pending in tuple(proxy.pending):
+                        if not pending.done():
+                            pending.cancel()
+                    while not proxy.queue.empty():
+                        proxy.queue.get_nowait()
 
         proxy.task = asyncio.create_task(owner())
         try:
@@ -350,14 +369,17 @@ class OwnedMCPSession:
         if self.closed or self.task is None or self.task.done():
             raise RuntimeError('isolated MCP session closed')
         future = asyncio.get_running_loop().create_future()
-        await self.queue.put((method, args, future))
+        self.pending.add(future)
+        self.queue.put_nowait((method, args, future))
         try:
-            return await future
-        except asyncio.CancelledError:
+            async with asyncio.timeout(MCP_CALL_TIMEOUT_S):
+                return await future
+        except (asyncio.CancelledError, TimeoutError):
             # A cancelled RPC must not retain an isolated process/lease.
-            if not self.task.cancelling():
-                self.task.cancel()
+            await _cancel_and_drain_owner(self.task)
             raise
+        finally:
+            self.pending.discard(future)
 
     def is_closed(self):
         return self.closed
@@ -369,15 +391,17 @@ class OwnedMCPSession:
         return await self.invoke('call_tool', name, args, cancel_event)
 
     async def close(self):
-        if self.closed or self.task is None:
+        if self.task is None:
             return
-        self.closed = True
-        await self.queue.put(('close', (), None))
+        if not self.closed:
+            self.closed = True
+            self.queue.put_nowait(('close', (), None))
         try:
-            async with asyncio.timeout(CLOSE_DEADLINE_S):
-                await asyncio.shield(self.task)
-        except asyncio.TimeoutError:
-            await _cancel_and_drain_owner(self.task)
+            done, _ = await asyncio.wait({self.task}, timeout=CLOSE_DEADLINE_S)
+            if not done:
+                await _cancel_and_drain_owner(self.task)
+            else:
+                await asyncio.gather(self.task, return_exceptions=True)
         except asyncio.CancelledError:
             await _cancel_and_drain_owner(self.task)
             raise
@@ -539,6 +563,7 @@ class MCPTool:
     ) -> str:
         from src.permission.runtime.execution import policy_for, ExecutionBlocked
         policy = policy_for(prompter)
+        evt = cancel_event if cancel_event is not None else (signal if isinstance(signal, asyncio.Event) else None)
         if policy is not None:
             if self._execution_policy is not policy or self._server is None or not policy.nested_allowed():
                 raise ExecutionBlocked('blocked: enforcement-unavailable; MCP worker identity/receipt unavailable')
@@ -563,7 +588,7 @@ class MCPTool:
                     policy.revalidate_active(self, args, signal)
                     if self._server.name == CWE_MCP_SERVER_NAME:
                         require_matching_cwe_deployment(policy, policy.worker)
-                    result = await session.call_tool(self._remote_name, args, cancel_event)
+                    result = await session.call_tool(self._remote_name, args, evt)
                 finally:
                     await session.close()
             return self._render_policy_result(result, policy, source_owner)

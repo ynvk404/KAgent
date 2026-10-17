@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.tools.execution.scanner_runner import ScannerResult
 
 ToolStatus = Literal["success", "observation", "error", "cancelled", "pending"]
 ErrorKind = Literal[
@@ -25,6 +28,7 @@ class ToolOutput(str):
     http_session: str | None
     http_stamp: tuple | None
     http_body_ranges: tuple[tuple[int, int], ...]
+    scanner_result: ScannerResult | None
 
     def __new__(
         cls,
@@ -44,4 +48,5 @@ class ToolOutput(str):
         value.http_session = None
         value.http_stamp = None
         value.http_body_ranges = ()
+        value.scanner_result = None
         return value

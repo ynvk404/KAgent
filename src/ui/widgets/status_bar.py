@@ -182,6 +182,8 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
         else ""
     )
 
+    model = Text(p.model or "", style=MUTED)
+
     def build(
         *,
         include_extras: bool = True,
@@ -194,7 +196,8 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
 
         line.append(f" · {phase_text}", style=MUTED)
         if p.model:
-            line.append(f" · {p.model}", style=MUTED)
+            line.append(" · ", style=MUTED)
+            line.append_text(model)
         if pill:
             text, color = pill
             line.append(f" [{text}]", style=color)
@@ -217,9 +220,16 @@ def idle_line(p: StatusProps, width: int | None = None) -> Text:
     if width is None or full.cell_len <= width:
         return full
 
-    return build(
+    compact = build(
         include_extras=False,
     )
+    if p.model and compact.cell_len > width:
+        # Prefer shortening model metadata over losing context/time or pushing
+        # the separately budgeted AutoApprove badge outside this one-row widget.
+        model.truncate(max(1, model.cell_len - (compact.cell_len - width)), overflow="ellipsis")
+        compact = build(include_extras=False)
+    compact.truncate(width, overflow="ellipsis")
+    return compact
 
 class StatusBar(Widget):
     """Right-aligned AutoApprove badge + left-aligned status content."""

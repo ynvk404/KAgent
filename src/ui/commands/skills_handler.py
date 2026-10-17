@@ -72,7 +72,7 @@ def handle_skills_command(
                         kind="system",
                         text=(
                             f'created skill "{name}" at {skill_file}\n'
-                            f"edit it (hot-reloads on save), then invoke with /{name}."
+                            "edit it (hot-reloads on save), then select it in /skills and press Enter."
                         ),
                     )
                 )

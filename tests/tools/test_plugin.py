@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from src.config.config import PluginConfig
@@ -50,8 +52,8 @@ async def test_truncates_large_plugin_output() -> None:
     tool = CommandPluginTool(
         PluginConfig(
             name="big_plugin",
-            # Giống TypeScript: chỉ dùng tên executable.
-            command="python",
+            # Use the pytest interpreter independently of the shell PATH.
+            command=sys.executable,
             args=[
                 "-c",
                 "import sys; sys.stdout.write('a' * 300000)",

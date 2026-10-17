@@ -5,6 +5,7 @@ from src.workflow.evidence_recovery import (
 )
 from src.agent.events import Invocation
 from src.agent.scope import runtime_scope
+from src.agent import ownership
 import traceback
 import asyncio
 import hashlib
@@ -34,7 +35,6 @@ from typing import (
 )
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from .mentions import expand_file_mentions
 from .context_estimate import (
     ContextEstimate, approximate_message_tokens, estimate_request, schema_tokens, text_tokens,
 )
@@ -82,7 +82,7 @@ from src.memory.store import (
 )
 
 from src.permission.permission import Prompter, UserControlledRefusal, PermissionReviewCancelled
-from src.engagement.state import EngagementState, OutOfScopeError
+from src.engagement.state import EngagementState, OutOfScopeError, format_tcp_ports
 
 from src.session.store import (
     SessionMemory,
@@ -124,6 +124,7 @@ from src.agent.events import (
     AssistantDeltaEvent,
     ToolCallEvent,
     ToolResultEvent,
+    ToolStartedEvent,
     ErrorEvent,
     DoneEvent,
     DecisionEvent,
@@ -162,6 +163,7 @@ _EVENT_FACTORIES = {
     "assistant-delta": AssistantDeltaEvent,
     "tool-call": ToolCallEvent,
     "tool-result": ToolResultEvent,
+    "tool-started": ToolStartedEvent,
     "error": ErrorEvent,
     "compact": CompactEvent,
     "decision": DecisionEvent,
@@ -738,6 +740,11 @@ def _exploration_fingerprint(
             return None
         material = _normalize_activity_url(url, target_base_url)
     elif tool_name == "shell":
+        if 'scanner' in args:
+            produced = result.result.scanner_result if isinstance(result.result, ToolOutput) else None
+            material = produced.plan.semantic_key if produced is not None else {
+                key: value for key, value in args.items() if key not in {'job_id', 'output_path'}}
+            return _stable_activity_fingerprint(tool_name, material)
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return None
@@ -747,6 +754,14 @@ def _exploration_fingerprint(
             material = curl_shape if curl_shape is not None else shlex.join(tokens)
         except ValueError:
             material = re.sub(r"\s+", " ", command.strip())
+    elif tool_name == 'read_tool_result':
+        try:
+            page = json.loads(str(result.result))
+            # Four bounded page regions per retained payload can be novel;
+            # shifting offsets/endpoints forever cannot manufacture progress.
+            material = [page['sha256'], min(3, max(0, page['actual_start']) // 2000)]
+        except (ValueError, KeyError, TypeError):
+            return None
     elif tool_name in {"file_write", "file_edit"}:
         path = args.get("path")
         if not isinstance(path, str) or not path.strip():
@@ -761,15 +776,25 @@ def _exploration_fingerprint(
 class WholeTargetStallTracker:
     """Transient per-phase exploration allowance; structured facts remain authoritative."""
 
+    MAX_NOVELTY_FACTS: int = 8192
+
     def __init__(self, exploration_cap: int = MAX_PHASE_EXPLORATION_STEPS) -> None:
         self.exploration_cap = exploration_cap
         self.consecutive_no_progress = 0
         self.phase_exploration_steps = 0
         self.phase: str | None = None
+        self.seen_facts: set[str] = set()
         self.seen_fingerprints: set[str] = set()
         self.read_ranges: dict[str, list[tuple[int, int]]] = {}
         self.response_repetitions: dict[str, int] = {}
         self.completion_recovery_used = False
+        self.scope: tuple | None = None
+
+    def set_scope(self, generation: str, objective_id: str | None) -> None:
+        scope = (generation, objective_id)
+        if self.scope != scope:
+            self.__init__(self.exploration_cap)
+            self.scope = scope
 
     def set_phase(self, phase: str | None) -> None:
         if phase == self.phase:
@@ -785,15 +810,23 @@ class WholeTargetStallTracker:
         new_facts: frozenset[str],
         activity_fingerprints: list[str],
     ) -> str:
-        if new_facts:
+        # A state transition can reintroduce an old fact (for example scanner
+        # selected -> deferred -> selected). Credit each fact once per run.
+        # Never evict: a forgotten fact could become artificial progress again.
+        # Saturation conservatively stops granting additional novelty credit.
+        available = max(0, self.MAX_NOVELTY_FACTS - len(self.seen_facts))
+        novel_facts = sorted(new_facts - self.seen_facts)[:available]
+        self.seen_facts.update(novel_facts)
+        if novel_facts:
             self.consecutive_no_progress = 0
             self.phase_exploration_steps = 0
             self.seen_fingerprints.clear()
             self.response_repetitions.clear()
             return "structured_progress"
 
-        novel_fingerprints = set(activity_fingerprints) - self.seen_fingerprints
-        self.seen_fingerprints.update(activity_fingerprints)
+        available = max(0, self.MAX_NOVELTY_FACTS - len(self.seen_fingerprints))
+        novel_fingerprints = sorted(set(activity_fingerprints) - self.seen_fingerprints)[:available]
+        self.seen_fingerprints.update(novel_fingerprints)
         if novel_fingerprints and self.phase_exploration_steps < self.exploration_cap:
             self.phase_exploration_steps += 1
             self.consecutive_no_progress = 0
@@ -893,7 +926,7 @@ class WholeTargetStallTracker:
         if new_range:
             self.consecutive_no_progress = 0
             # Pagination must not replenish HTTP's exploration allowance.
-            if not new_facts:
+            if not new_facts - self.seen_facts:
                 return "reader_progress"
         return self.record_iteration(new_facts=new_facts, activity_fingerprints=fingerprints)
 
@@ -1137,6 +1170,7 @@ class Agent:
         )
 
         self.running = False
+        self._active_turn = None
         self.pending_capture_selection: CaptureSelection | None = None
 
         self.active_skills: set[str] = set()
@@ -1631,7 +1665,7 @@ class Agent:
             Message(
                 role="system",
                 content=(
-                    f"The user invoked /{name}. "
+                    f"The user selected skill {name} via /skills. "
                     f"Apply this skill to the next request:\n\n{body}"
                 ),
             )
@@ -1855,7 +1889,10 @@ class Agent:
         planner = deepcopy(self._planner_context())
         # Request facts copy canonical records, not the live lock's queued
         # Futures. The snapshot never executes mutations or owns that lock.
-        workflow = deepcopy(self.workflow, {id(self.workflow.mutation_lock): asyncio.Lock()})
+        workflow = deepcopy(self.workflow, {
+            id(self.workflow.mutation_lock): asyncio.Lock(),
+            id(self.workflow.retired): asyncio.Event(),
+        })
         view = ActionView.for_objective(planner.objective_mode)
         projected = view.project_tools(tools)
         if any(a.get("status") == "active" and a.get("probing_stopped")
@@ -1923,6 +1960,7 @@ class Agent:
         The workflow lock covers only fact collection, never admission or the
         provider/network call. Transport retries stay inside the provider.
         """
+        ownership.check(self)
         if req.tools is None:
             await self._admit_request(req, emit)
             return
@@ -1989,6 +2027,7 @@ class Agent:
         iteration limit); completed workflow gates also select synthesis mode.
         Normal dispatch replaces this snapshot with its fully assembled request.
         """
+        ownership.check(self)
         req = self._tool_checkpoint_request
         workflow_dirty = self.workflow.committed_revision != self._workflow_saved_revision
         if not workflow_dirty and (req is None or not self._tool_results_unsaved):
@@ -2026,8 +2065,12 @@ class Agent:
             raise asyncio.CancelledError()
 
     async def reset(self) -> None:
+        retired_turn = ownership.retire(self)
+        if retired_turn is not None:
+            await ownership.join(retired_turn)
         self.cancel_capture_selection()
         self.engagement_state.http_permissions.reset()
+        await self.drain_scanners()
         self.memory = None
         self.workflow.clear()
         self.result_retention.scope = {}
@@ -2075,6 +2118,7 @@ class Agent:
             return False
 
     def resume_saved(self) -> None:
+        ownership.retire(self)
         self.cancel_capture_selection()
         if self.store is None:
             return
@@ -2116,6 +2160,7 @@ class Agent:
         )
 
     async def save(self, *, workflow_override=None, _workflow_locked=False) -> None:
+        ownership.check(self)
         if not _workflow_locked:
             async with self.workflow.mutation_lock:
                 await self._save_unlocked(workflow_override)
@@ -2123,6 +2168,7 @@ class Agent:
         await self._save_unlocked(workflow_override)
 
     async def _save_unlocked(self, workflow_override=None) -> None:
+        ownership.check(self)
         if self.store is None:
             self._tool_results_unsaved = False
             self._workflow_saved_revision = self.workflow.committed_revision
@@ -2139,11 +2185,13 @@ class Agent:
             workflow_override if workflow_override is not None else self.workflow,
             self.engagement_state,
         )
+        ownership.check(self)
         self._tool_results_unsaved = False
         if workflow_override is None or workflow_override is self.workflow:
             self._workflow_saved_revision = workflow_revision
 
     async def save_context_snapshot(self, reason: str = "periodic") -> str:
+        ownership.check(self)
         if self.store is None:
             return ""
 
@@ -3515,9 +3563,26 @@ class Agent:
             self.refresh_scope_context()
         return removed_origin, changed
 
+    def update_tcp_scope(self, address: str, ports: object = None, *, remove: bool = False) -> bool:
+        """Operator command only; not exposed as an LLM tool."""
+        if self.target.empty():
+            raise ValueError("no active engagement")
+        changed = (self.engagement_state.remove_tcp(address, ports) if remove
+                   else self.engagement_state.add_tcp(address, ports)[1])
+        if changed:
+            self._clear_permission_cache()
+            self.refresh_scope_context()
+        return changed
+
     def reset_scope_to_target(self) -> tuple[HTTPOrigin, bool]:
         if self.target.empty():
             raise ValueError("no active engagement")
+        # Explicit reset retires scanner work even when scope is already equal.
+        # This changes no Native HTTP quota/grant or ordinary-shell admission.
+        from src.permission.runtime.execution import policy_for
+        policy = policy_for(self.prompter)
+        if policy is not None and policy.scanner_runtime is not None:
+            policy.scanner_runtime.invalidate()
         origin, changed = self.engagement_state.reset_to_origin(
             self.target.base_url()
         )
@@ -3553,71 +3618,13 @@ class Agent:
                     "do not treat one as out of scope because of an earlier "
                     "conversation message. Runtime tool validation remains "
                     "authoritative.\n"
-                    f"{origins}"
+                    f"{origins}" + (
+                        "\nExplicit TCP scope (does not authorize additional HTTP origins):\n" +
+                        "\n".join(f"- {entry.address}:" + format_tcp_ports(entry.ports)
+                                  for entry in sorted(self.engagement_state.allowed_tcp))
+                        if self.engagement_state.allowed_tcp else "")
                 ),
             )
-        )
-
-    async def coverage_context(self, signal) -> str:
-        if self.tools.get("coverage") is None:
-            return "Coverage tool is not available in this session."
-
-        try:
-            summary = await self.tools.execute(
-                "coverage",
-                {"action": "summary"},
-                signal,
-                self.prompter,
-            )
-        except Exception as err:
-            summary = f"error: {err_message(err)}"
-
-        try:
-            entries = await self.tools.execute(
-                "coverage",
-                {"action": "list"},
-                signal,
-                self.prompter,
-            )
-        except Exception as err:
-            entries = f"error: {err_message(err)}"
-
-        return "\n".join(
-            [
-                "Coverage summary:",
-                str(summary),
-                "",
-                "Coverage entries:",
-                str(entries),
-                "",
-                "Workflow candidates:",
-                *[
-                    (
-                        f"- {candidate.id} {candidate.candidate_class} "
-                        f"{candidate.status} {candidate.method or ''} "
-                        f"{candidate.endpoint or ''}; latest="
-                        f"{(result.outcome if result else 'none')}; "
-                        f"reason={(result.deferred_reason if result else None) or 'none'}; "
-                        f"coverage_sync={(result.coverage_synced if result else None)}"
-                    )
-                    for candidate in sorted(
-                        self.workflow.candidates.values(), key=lambda item: item.id
-                    )[:25]
-                    for result in [self.workflow.latest_result(candidate.id)]
-                ],
-                "",
-                (
-                    "Coverage collection results are paginated. "
-                    "complete=false means the displayed page is not the full "
-                    "matching set; has_more/next_cursor describe continuation."
-                ),
-                (
-                    "Use exact contextual coverage to choose next variants. "
-                    "Legacy tuples and summaries do not prove sibling variants tested. "
-                    "Canonical candidates/results determine completion; pending work stays outstanding. "
-                    "A blocked/deferred candidate may be revisited only when its blocker changes."
-                ),
-            ]
         )
 
     def _reset_llm_call_counts(self) -> None:
@@ -3747,6 +3754,7 @@ class Agent:
         )
 
     @permission_turn
+    @ownership.owned_turn
     async def run(
         self,
         user_msg: str,
@@ -3754,7 +3762,11 @@ class Agent:
         emit,
         opts: AgentRunOptions | None = None,
     ) -> None:
-        safe_emit = make_safe_emit(signal, emit)
+        original_emit = make_safe_emit(signal, emit)
+        turn_owner = ownership.capture(self)
+        def safe_emit(event):
+            if turn_owner is None or turn_owner.current():
+                original_emit(event)
         if self.running:
             safe_emit({"type": "error", "err": AgentRuntimeError("a turn is already running")})
             return
@@ -3781,6 +3793,7 @@ class Agent:
             # Keep runtime switching blocked while a failed checkpoint is
             # retried, and never discard its originals before the save succeeds.
             await self._finish_tool_results()
+            ownership.check(self)
             self._bounded_working = None
             self._bounded_results.clear()
             self.result_retention.pending.clear()
@@ -3839,26 +3852,30 @@ class Agent:
             )
 
         finally:
-            try:
-                await self._finish_tool_results()
-            except Exception as err:
-                if stop_reason != "cancelled":
-                    raise
-                # Keep the committed revision dirty for retry and preserve the
-                # original cancellation even if the final checkpoint fails.
-                log_error("agent: cancellation checkpoint failed", {"err": err_message(err)})
-                safe_emit({"type": "error", "err": Exception(f"save session: {err}")})
-            finally:
-                if not self._tool_results_unsaved:
-                    self.result_retention.pending.clear()
-                    self._tool_checkpoint_request = None
-                self._bounded_working = None
-                self._bounded_results.clear()
+            if not ownership.current(self):
                 self.running = False
                 self._pending_context = None
+            else:
+                try:
+                    await self._finish_tool_results()
+                except Exception as err:
+                    if stop_reason != "cancelled":
+                        raise
+                    # Keep the committed revision dirty for retry and preserve the
+                    # original cancellation even if the final checkpoint fails.
+                    log_error("agent: cancellation checkpoint failed", {"err": err_message(err)})
+                    safe_emit({"type": "error", "err": Exception(f"save session: {err}")})
+                finally:
+                    if not self._tool_results_unsaved:
+                        self.result_retention.pending.clear()
+                        self._tool_checkpoint_request = None
+                    self._bounded_working = None
+                    self._bounded_results.clear()
+                    self.running = False
+                    self._pending_context = None
 
-                self._trace("terminal", stop_reason=stop_reason)
-                safe_emit(self._done_event(stop_reason))
+                    self._trace("terminal", stop_reason=stop_reason)
+                    safe_emit(self._done_event(stop_reason))
 
     async def run_inner(
         self,
@@ -3900,6 +3917,7 @@ class Agent:
             return "capture_unavailable"
         if tools_enabled and not requested_goals_cancelled:
             self._initialize_request_objective(user_msg, tools_enabled)
+        ownership.adopt_initial_state(self)
 
         self.active_skills = set(self.pending_skills)
         self.pending_skills.clear()
@@ -3926,10 +3944,6 @@ class Agent:
             self.sys_prompt,
         )
 
-        expanded_user_msg = expand_file_mentions(
-            user_msg, policy=getattr(self.prompter, "execution_policy", None)
-        )
-
         actual_tools = deepcopy(self.tools.as_llm_tools()) if tools_enabled and not requested_goals_cancelled else None
         # Prepare the actual turn once. Reconciliation belongs to preparation;
         # all subsequent projections reuse this snapshot and do no searching,
@@ -3951,7 +3965,7 @@ class Agent:
         recall = self.recall_curated_memory(user_msg, recall_events.append)
         if recall:
             injections.append(Message("user", recall))
-        context = self._snapshot_context(expanded_user_msg, ChatRequest(
+        context = self._snapshot_context(user_msg, ChatRequest(
             model=self.client.model(), messages=[], tools=actual_tools,
             thinking_enabled=turn_request_thinking, reasoning_level=turn_reasoning_level,
         ), tuple(injections))
@@ -4003,7 +4017,6 @@ class Agent:
             )
         )
 
-        # History persists raw @file input; only this working request expands it.
         working = self._projection_request(self.history[:-1], self.memory, context).messages
         if view is not None:
             owned = {id(message) for message in view.blocks}
@@ -4086,6 +4099,10 @@ class Agent:
                 return recovery_stop
 
         for step in range(max_steps):
+
+            ownership.check(self)
+            stall_tracker.set_scope(self.workflow.generation,
+                                    self.workflow.objective.id if self.workflow.objective else None)
 
             if signal.aborted:
                 raise Exception("aborted")
@@ -4687,10 +4704,11 @@ class Agent:
                 statuses = self._reconcile_requested_goals()
                 from src.permission.runtime.execution import policy_for
                 policy = policy_for(self.prompter)
+                after_goal_signature = self._requested_goal_progress_signature()
                 progress_kind = stall_tracker.record_validation_batch(
                     execution_batch.calls,
-                    new_facts=(frozenset({"requested-goal-state-changed"})
-                               if self._requested_goal_progress_signature() != before_goal_signature
+                    new_facts=(frozenset({_stable_activity_fingerprint('requested-goal-state', after_goal_signature)})
+                               if after_goal_signature != before_goal_signature
                                else frozenset()),
                     target_base_url=self.target.base_url() if self.target else None,
                     observations=policy.observations if policy else None,
@@ -5037,6 +5055,7 @@ class Agent:
         emit_text: bool = True,
         stream_buffer: list[str] | None = None,
     ) -> None:
+        ownership.check(self)
         blockers = self._validation_completion_blockers() if not resp.message.tool_calls else ()
         if blockers:
             resp.message.content = "Validation remains incomplete: " + "; ".join(blockers)
@@ -5539,6 +5558,7 @@ class Agent:
         defer_admission: bool = False,
         repair_step: int | None = None,
     ) -> ToolExecutionBatch:
+        ownership.check(self)
         if len(tool_calls) > 1 and any(
             tc.function.name == "ask_user" for tc in tool_calls
         ):
@@ -5639,7 +5659,7 @@ class Agent:
                         status="error", error_kind="tool_exception",
                     )
                 else:
-                    result = await self.run_parsed_tool_call(tc, parsed, signal)
+                    result = await self.run_parsed_tool_call(tc, parsed, signal, emit=emit)
                 committed = False
                 if (tc.function.name == "workflow" and parsed.args.get("action") == "record_result"
                         and isinstance(cid, str)):
@@ -5734,7 +5754,7 @@ class Agent:
         published: set[int] = set()
 
         async def run_and_publish(tc, index):
-            result = await self.run_parsed_tool_call(tc, parsed_all[index], signal)
+            result = await self.run_parsed_tool_call(tc, parsed_all[index], signal, emit=emit)
             completed[index] = result
             # Completion visibility follows actual completion; history/state
             # commits below retain submitted order and occur exactly once.
@@ -5826,7 +5846,9 @@ class Agent:
         tc: ToolCall,
         parsed: ParsedToolCall,
         signal,
+        *, emit=None,
     ) -> ToolCallResult:
+        ownership.check(self)
         if signal.aborted:
             return ToolCallResult(
                 result="ERROR: aborted",
@@ -5889,12 +5911,14 @@ class Agent:
                                 dispatch_args = {**parsed.args, "baseline_request_ref": selected.baseline_request_ref}
                         if selection is not None and tc.function.name == "workflow":
                             dispatch_args = self._selected_capture_workflow_args(dispatch_args)
-                        result = await self.tools.execute(
-                            tc.function.name,
-                            dispatch_args,
-                            signal,
-                            self.prompter,
-                        )
+                        from src.tools.execution.scanner_runner import hooks
+                        hook_token = hooks.set(self._scanner_hooks(tc, parsed, retention_generation, emit))
+                        try:
+                            result = await self.tools.execute(
+                                tc.function.name, dispatch_args, signal, self.prompter,
+                            )
+                        finally:
+                            hooks.reset(hook_token)
                     except Exception as err:
                         run_err = err
                     except PermissionReviewCancelled:
@@ -5948,11 +5972,12 @@ class Agent:
             http_status = result.http_status
             truncated = result.truncated
             if status in {"error", "pending"}:
-                err_str = (
+                err_str = (str(result.scanner_result.envelope.get('error', {}).get('message', 'scanner job incomplete'))
+                    if result.scanner_result is not None else (
                     "fetch failed"
                     if tc.function.name in ("web_fetch", "web_search")
                     else str(result).strip() or (error_kind or "tool failed")
-                )
+                ))
             elif status == "cancelled":
                 err_str = "cancelled"
 
@@ -5970,7 +5995,117 @@ class Agent:
             retention_provenance=retention_provenance,
         )
 
+    async def drain_scanners(self, *, close: bool = False) -> None:
+        from src.permission.runtime.execution import policy_for
+        policy = policy_for(self.prompter)
+        if policy is not None and policy.scanner_runtime is not None:
+            await policy.scanner_runtime.drain(close=close)
+
+    def _scanner_hooks(self, tc, parsed, generation, emit):
+        """Per-invocation hooks; no model payload installs callbacks or job facts."""
+        from src.tools.execution.shell import ShellTool
+        from src.tools.execution.scanner_runner import ScannerHooks
+        from src.workflow.scanner import ScannerJob, MAX_JOBS
+        from src.permission.runtime.execution import ExecutionBlocked
+        from copy import deepcopy
+        tool = self.tools.get(tc.function.name)
+        if type(tool) is not ShellTool or 'scanner' not in parsed.args or tool.scanner_binding is None:
+            return None
+        state = self.workflow
+        if len(state.scanner_jobs) >= MAX_JOBS and all(
+                row.unresolved_selected or row.execution.get('status') == 'running' for row in state.scanner_jobs.values()):
+            raise ExecutionBlocked('blocked: scanner workflow history full of unresolved work')
+        objective_id = state.objective.id if state.objective else None
+        revision = self.target.revision
+        scope = runtime_scope(self)
+        phase = state.current_phase
+        running_job = None
+
+        def current():
+            self.result_retention.refresh_scope()
+            return (self.workflow is state and self.target.revision == revision and runtime_scope(self) == scope
+                and self.result_retention.scope['generation'] == generation
+                and (state.objective.id if state.objective else None) == objective_id)
+
+        async def started(job_id, plan, monotonic):
+            nonlocal running_job
+            if not current():
+                return
+            from src.engagement.state import format_tcp_ports
+            job = ScannerJob(job_id, plan.semantic_key, plan.origin.as_url(), objective_id, plan.scanner,
+                {'status': 'running'}, {'status': 'pending', 'partial': True, 'coverage_complete': False},
+                {'unique_records': 0}, {'retrieval': 'unavailable', 'result_refs': []}, None,
+                {'id': plan.wordlist.name, 'sha256': plan.wordlist.sha256} if plan.wordlist else None,
+                format_tcp_ports(plan.ports)[:512])
+            if not state.add_scanner_job(job):
+                raise ExecutionBlocked('blocked: scanner workflow history full of unresolved work')
+            running_job = job
+            self._tool_results_unsaved = True
+            # The runner owns/awaits this checkpoint; cancellation cannot leave
+            # a detached session writer or resume a process from its snapshot.
+            await self.save()
+            if current() and emit is not None and parsed.invocation is not None:
+                emit({'type': 'tool-started', 'id': tc.id, 'name': 'shell', 'invocation': parsed.invocation,
+                      'scanner': plan.scanner, 'job_id': job_id, 'started_monotonic': monotonic})
+
+        def finished(produced):
+            if not current():
+                # Retired scope cannot publish observations. It may still close
+                # the exact checkpoint this invocation created, without adding
+                # a job to reset/replaced state or retaining stale evidence.
+                if (self.workflow is state and running_job is not None
+                        and state.scanner_jobs.get(produced.envelope['job_id']) is running_job):
+                    running_job.execution = deepcopy(produced.envelope['execution'])
+                    running_job.parse.update(status='discarded', partial=True, coverage_complete=False)
+                    state.mark_committed()
+                    self._tool_results_unsaved = True
+                return
+            envelope = produced.envelope
+            if envelope['parse']['status'] == 'discarded' and envelope['job_id'] not in state.scanner_jobs:
+                return
+            job = ScannerJob(envelope['job_id'], produced.plan.semantic_key, produced.plan.origin.as_url(),
+                objective_id, produced.plan.scanner, deepcopy(envelope['execution']), deepcopy(envelope['parse']),
+                deepcopy(envelope['summary']), deepcopy(envelope['artifacts']), produced.manifest_sha256,
+                deepcopy(envelope['wordlist']), envelope['target']['port_set'],
+                [row['id'] for row in envelope['records']])
+            job.options = deepcopy(envelope['options'])
+            job.binary = deepcopy(envelope['binary'])
+            previous = state.scanner_jobs.get(job.job_id)
+            if previous is not None:
+                job.dispositions = deepcopy(previous.dispositions)
+                job.remaining = deepcopy(previous.remaining)
+            if not state.add_scanner_job(job, observation_fingerprints=produced.observation_fingerprints):
+                envelope['artifacts']['workflow_limited'] = True
+                envelope['artifacts']['retrieval'] = 'unavailable'
+                return
+            self.result_retention.retain_scanner(produced, tc.id)
+            job.artifacts = deepcopy(envelope['artifacts'])
+            # Only the relevant current phase can receive bounded execution
+            # facts. A service hint never attests HTTP/input/vulnerability work.
+            phase_name, dimension = (('recon', 'service_discovery') if job.scanner == 'nmap'
+                                     else ('enumeration', 'active_content_discovery'))
+            if (state.objective is not None and state.objective.mode == 'whole_target'
+                    and state.current_phase == phase and phase in {None, phase_name}
+                    and state.is_next_phase(phase_name)):
+                current_objective_id = state.objective.id
+                try:
+                    if job.execution['status'] == 'completed' and job.parse['coverage_complete'] is True:
+                        state.record_phase_coverage(phase_name, dimension, 'performed', objective_id=current_objective_id,
+                            target_origin=job.target_origin)
+                    elif job.execution['status'] in {'failed', 'cancelled', 'partial'}:
+                        state.record_phase_coverage(phase_name, dimension, 'failed', objective_id=current_objective_id,
+                            target_origin=job.target_origin, reason='Scanner job incomplete: ' + job.job_id)
+                    else:
+                        state.record_phase_coverage(phase_name, dimension, 'observed', objective_id=current_objective_id,
+                            target_origin=job.target_origin, reason='Scanner observations; full-pass coverage unproven: ' + job.job_id)
+                except ValueError:
+                    pass
+            self._tool_results_unsaved = True
+
+        return ScannerHooks(started, finished)
+
     def _tool_call_event(self, tc: ToolCall, parsed: ParsedToolCall) -> dict[str, Any]:
+        ownership.check(self)
         self._sync_permission_target()
         parsed.invocation = Invocation(uuid.uuid4().hex, runtime_scope(self))
         return {"type": "tool-call", "id": tc.id, "name": tc.function.name,
@@ -6004,6 +6139,13 @@ class Agent:
                 "do not repeat the action solely to recover its output.",
             )
         accepted_candidate_id = None
+        scanner_summary = None
+        if (tc.function.name == 'shell' and isinstance(res.result, ToolOutput)
+                and res.result.scanner_result is not None and invocation is not None
+                and invocation.scope == runtime_scope(self)):
+            envelope = res.result.scanner_result.envelope
+            scanner_summary = {key: envelope[key] for key in
+                ('job_id', 'scanner', 'target', 'wordlist', 'execution', 'parse', 'summary', 'records', 'artifacts', 'error')}
         if (tc.function.name == 'workflow' and invocation is not None
                 and invocation.scope == runtime_scope(self) and res.status == 'success'
                 and not res.err_str and not res.error_kind):
@@ -6032,6 +6174,7 @@ class Agent:
                 "truncated": res.truncated,
                 "invocation": invocation,
                 "accepted_candidate_id": accepted_candidate_id,
+                "scanner_summary": scanner_summary,
             }
 
     def _managed_http_secrets(self) -> tuple[str, ...]:
@@ -6184,6 +6327,7 @@ class Agent:
         emit, working: list[Message], *, defer_admission: bool = False,
         publish_result: bool = True,
     ) -> None:
+        ownership.check(self)
         event = self._tool_result_event(tc, res, parsed.invocation)
         content = event['result']
         analysis = self._http_analysis_content(tc, res, parsed.invocation)
@@ -6262,6 +6406,7 @@ class Agent:
         emit,
         stream_buffer: list[str] | None = None,
     ) -> tuple[ChatResponse, bool]:
+        ownership.check(self)
         if (
             self.streaming_enabled
             and is_streaming(self.client)
@@ -6271,15 +6416,18 @@ class Agent:
                 self.client,
             )
             filter = ThinkingStreamFilter()
+            turn_owner = ownership.capture(self)
 
             def on_delta(delta: str):
+                if turn_owner is not None and not turn_owner.current():
+                    return
                 visible = filter.push(delta)
                 if visible:
                     if stream_buffer is not None:
                         stream_buffer.append(visible)
                     else:
                         emit({"type": "assistant-delta", "text": visible})
-            resp = await c.chat_stream(
+            resp = await ownership.await_owned(self, c.chat_stream(
                 ChatRequest(
                     model=req.model,
                     messages=req.messages,
@@ -6291,7 +6439,7 @@ class Agent:
                 ),
                 on_delta,
                 signal,
-            )
+            ))
 
             tail = filter.flush()
             if tail:
@@ -6302,19 +6450,24 @@ class Agent:
 
             return resp, True
 
-        resp = await self.client.chat(
+        resp = await ownership.await_owned(self, self.client.chat(
             req,
             signal,
-        )
+        ))
 
         return resp, False
 
+    @ownership.owned_turn
     async def compact(
         self,
         signal,
         emit,
     ) -> None:
-        safe_emit = make_safe_emit(signal, emit)
+        original_emit = make_safe_emit(signal, emit)
+        turn_owner = ownership.capture(self)
+        def safe_emit(event):
+            if turn_owner is None or turn_owner.current():
+                original_emit(event)
         compact_started = time.monotonic()
         previous_request_id = (
             self.request_metrics.records[-1].request_id
@@ -6557,7 +6710,7 @@ class Agent:
         status: Literal["success", "error", "cancelled"] = "success"
         try:
             self._count_llm_call("compaction_llm_calls")
-            response = await self.client.chat(req, signal)
+            response = await ownership.await_owned(self, self.client.chat(req, signal))
             return response
         except BaseException as err:
             status = "cancelled" if isinstance(err, asyncio.CancelledError) or getattr(signal, "aborted", False) else "error"
@@ -6628,6 +6781,7 @@ class Agent:
         history_snap: list[Message],
         snapshot_reason: str,
     ) -> tuple[int, int]:
+        ownership.check(self)
         next_memory = remove_workflow_duplicates(
             merge_memory(self.memory, summary),
             self.workflow,

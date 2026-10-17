@@ -1,7 +1,7 @@
 """Generic admissibility and controller bindings; no vulnerability interpretation.
 
 Source snapshots are bounded redacted representations, not execution permissions.
-Only producers and the optional operator transaction can assign provenance.
+Producers assign live provenance; persisted historical sources remain distinct.
 """
 from __future__ import annotations
 

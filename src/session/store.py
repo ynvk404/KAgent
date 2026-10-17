@@ -442,9 +442,9 @@ class Store:
             return
 
         # Snapshot before the first await: queued checkpoints own their inputs.
-        # Workflow/engagement projection stays on the controller loop; locks and
-        # live state never cross into the worker. Copies below have sole worker
-        # ownership and are never modified by the caller after submission.
+        # Workflow/engagement projection stays on the controller loop. Workers
+        # serialize only these frozen payloads; a transient ownership fence is
+        # checked separately at the atomic filesystem commit.
         snapshot = (
             copy.deepcopy(messages),
             copy.deepcopy(target.to_dict()) if target and not target.is_empty() else None,
@@ -614,7 +614,9 @@ def _write_session(path: Path, body: str, need_fsync: bool, stage: Callable[[str
                 os.fsync(f.fileno())
 
         stage("session.save.replace")
-        os.replace(tmp, path)
+        from src.agent.ownership import checkpoint
+        with checkpoint(path):
+            os.replace(tmp, path)
 
         stage("session.save.chmod")
         _restrict_permissions(path)
@@ -648,7 +650,9 @@ def _write_context_snapshot(out: Path, markdown: str) -> str:
             f.flush()
             os.fsync(f.fileno())
 
-        os.replace(tmp, out)
+        from src.agent.ownership import checkpoint
+        with checkpoint(out):
+            os.replace(tmp, out)
 
         _restrict_permissions(out)
 

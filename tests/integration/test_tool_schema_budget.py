@@ -10,7 +10,6 @@ from src.engagement.state import EngagementState
 from src.tools.common.ask import AskUserTool
 from src.tools.common.browser_capture import register_browser_capture_tools
 from src.tools.workflow.coverage import CoverageTool
-from src.tools.common.capabilities import CapabilityInventory
 from src.tools.discovery.content import ContentDiscoveryTool
 from src.tools.execution.file import (
     FileEditTool,
@@ -42,7 +41,6 @@ def _default_tool_registry(tmp_path):
     target = Target()
     workflow = WorkflowState()
     engagement = EngagementState()
-    capabilities = CapabilityInventory(which=lambda _: None)
     registry = Registry()
     core = [
         ShellTool(),
@@ -56,8 +54,8 @@ def _default_tool_registry(tmp_path):
         GlobTool(),
         GrepTool(),
         HTTPTool(target, engagement),
-        ContentDiscoveryTool(target, engagement, capabilities, lambda: "minimal"),
-        ServiceDiscoveryTool(target, engagement, capabilities, lambda: "minimal"),
+        ContentDiscoveryTool(target, engagement),
+        ServiceDiscoveryTool(target, engagement),
         WebFetchTool(engagement),
         WebSearchTool(),
         AskUserTool(None),  # type: ignore[arg-type]

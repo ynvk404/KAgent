@@ -13,6 +13,7 @@ class SlashMenuLine:
     text: str
     selected: bool = False
     dim: bool = False
+    item_index: int | None = None
 
 
 class SlashMenu:
@@ -83,6 +84,7 @@ class SlashMenu:
                     text=text,
                     selected=is_selected,
                     dim=not is_selected,
+                    item_index=absolute_idx,
                 )
             )
 

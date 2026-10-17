@@ -101,6 +101,29 @@ The module entry point is also available for a checkout-based run:
 python -m src.cli.main --help
 ```
 
+### Scanner wordlist files
+
+The typed ffuf tool selects existing files from `permissions_status` by ID.
+Installed DIRB `small.txt` and `common.txt` under `/usr/share/dirb/wordlists`
+are detected as `dirb-small` and `dirb-common`. No wordlist package is installed
+or downloaded automatically. The small fallback file is
+`src/tools/execution/wordlists/web-common.txt`.
+
+Register additional existing files for a session with the repeatable
+`--scanner-wordlist ID=FILE` flag. For example, if this DIRB file exists:
+
+```bash
+kagent --scanner-wordlist directory-paths=/usr/share/dirb/wordlists/common.txt
+```
+
+The same flag can register a SecLists file you already have. IDs must be
+unique; `web-common` is reserved. LLM calls use `wordlist_id`, not file paths
+or generated words. Registration supplies local input data; target scope and
+the separate permission review for each exact scanner job still apply.
+Files are bounded UTF-8 relative-path lists; unsafe paths, changed files and
+symlink/hardlink indirection are rejected before execution. Re-register extra
+files on resume; session history never restores resource authorization.
+
 ## Select captured Burp requests
 
 Start the local bridge with `/burp [port]` and configure the Burp extension's

@@ -6,13 +6,17 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from src.logger.logger import get_logger
 from src.permission.permission import Prompter
 from src.tools.execution.file import decode_utf8_capped
 from src.tools.common.types import PermissionHints, Tool, arg_string
 from src.tools.common.outcome import ToolOutput
+
+if TYPE_CHECKING:
+    from src.permission.runtime.execution import ExecutionPolicy
+    from src.tools.execution.scanners import ScannerBinding, ScannerPlan
 
 log = get_logger("tools.shell")
 
@@ -107,10 +111,14 @@ GREP_P_RE = re.compile(
 class ShellTool(Tool):
     def freeze_for_execution(self):
         from copy import copy
-        return copy(self)
-    def __init__(self, shell: str = "/bin/sh", tool_name: str = "shell"):
+        frozen = copy(self)
+        frozen.scanner_plan = None
+        return frozen
+    def __init__(self, shell: str = "/bin/sh", tool_name: str = "shell", *, scanner_binding: ScannerBinding | None = None):
         self.shell_path = shell
         self.tool_name = tool_name
+        self.scanner_binding = scanner_binding
+        self.scanner_plan: ScannerPlan | None = None
 
     def name(self) -> str:
         return self.tool_name
@@ -151,6 +159,9 @@ class ShellTool(Tool):
                 "prefer grep -E, awk, sed, perl -ne or jq.",
                 "Use semantic tools for bounded path/service discovery; "
                 "generic-shell scanners require an explicit user request.",
+                "On Linux/WSL, shell(scanner=nmap|ffuf, typed fields) uses an exact reviewed "
+                "trusted-host job, without a shell. Check permissions_status for build/wordlist readiness; "
+                "HTTP grants/quotas do not authorize or limit scanner traffic. No fallback command.",
             )
         )
 
@@ -158,6 +169,23 @@ class ShellTool(Tool):
         return {
             "type": "object",
             "properties": {
+                **({} if self.tool_name != "shell" else {
+                    "scanner": {"type": "string", "enum": ["nmap", "ffuf"],
+                        "description": "One trusted Linux scanner job per exact-plan approval; may create many connections. HTTP quotas do not limit scanner traffic."},
+                    "target": {"type": "string", "description": "Nmap: one numeric IP."},
+                    "ports": {"type": ["string", "array"], "items": {"type": "integer"},
+                        "description": "Nmap: explicit TCP ports/ranges, e.g. 80,443,8000-8100."},
+                    "url": {"type": "string", "description": "ffuf: exact active origin, one FUZZ in path."},
+                    "wordlist_id": {"type": "string", "description": "ffuf: choose an existing file's ID from permissions_status. No arbitrary file paths or generated wordlists."},
+                    "threads": {"type": "integer", "minimum": 1, "maximum": 256, "default": 40},
+                    "rate": {"type": "number", "exclusiveMinimum": 0,
+                        "description": "Optional native scanner rate; omit for native defaults. ffuf requires integer."},
+                    "request_timeout_seconds": {"type": "integer", "minimum": 1, "default": 10},
+                    "calibration": {"type": "boolean"},
+                    "match_status": {"type": "string"},
+                    "filter_status": {"type": "string"},
+                    "filter_size": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+                }),
                 "command": {
                     "type": "string",
                     "description": (
@@ -171,13 +199,55 @@ class ShellTool(Tool):
                     "description": "Optional timeout in seconds (default 300, max 1800).",
                 },
             },
-            "required": ["command"],
+            "required": ["command"] if self.tool_name != "shell" else [],
+            "additionalProperties": False,
+            **({} if self.tool_name != "shell" else {"oneOf": [
+                {"required": ["command"]}, {"required": ["scanner"]}]}),
         }
+
+    def validate_args(self, args: dict[str, Any]) -> None:
+        if "scanner" in args:
+            from src.tools.execution.scanners import validate_scanner_args
+            if self.tool_name != "shell":
+                raise ValueError("scanner form is only available on shell")
+            validate_scanner_args(args)
+        elif not arg_string(args, "command"):
+            raise ValueError("command is required")
+
+    async def prepare_scanner(self, args: dict[str, Any], policy: ExecutionPolicy | None, signal: Any) -> None:
+        from src.permission.runtime.execution import ExecutionBlocked
+        self.validate_args(args)
+        if policy is None or self.scanner_binding is None or self.scanner_binding.policy is not policy:
+            raise ExecutionBlocked("blocked: controller scanner binding unavailable")
+        # Preserve generic validation/revoke gates before DNS or resource access.
+        if policy.generic_validation is not None:
+            policy.generic_validation.validate_tool(self, args)
+        if "*" in policy.revoked or self.name() in policy.revoked:
+            raise ExecutionBlocked("blocked: tool/session-revoked")
+        try:
+            self.scanner_plan = await self.scanner_binding.prepare(args, signal)
+        except ExecutionBlocked:
+            raise
+        except OSError as exc:
+            raise ExecutionBlocked("blocked: scanner preparation resource/resolution unavailable") from exc
+
+    def validate_scanner(self, policy: ExecutionPolicy, args: dict[str, Any]) -> None:
+        from src.permission.runtime.execution import ExecutionBlocked
+        if self.scanner_binding is None or self.scanner_binding.policy is not policy or self.scanner_plan is None:
+            raise ExecutionBlocked("blocked: scanner requires a controller-prepared plan")
+        from src.tools.execution.scanners import arguments_digest
+        if self.scanner_plan.arguments_digest != arguments_digest(args):
+            raise ExecutionBlocked("blocked: scanner arguments differ from prepared plan")
+        self.scanner_binding.validate(self.scanner_plan)
 
     def requires_permission(self) -> bool:
         return True
 
     def permission_hints(self, args: dict[str, Any]) -> PermissionHints:
+        if "scanner" in args:
+            return {"noSessionCache": True, "riskTier": "high-impact",
+                    "cacheKey": self.scanner_plan.digest if self.scanner_plan else "unprepared-scanner",
+                    "sessionScopeDisplay": "this exact reviewed scanner plan only"}
         return {
             "noSessionCache": True,
             "riskTier": "high-impact",
@@ -186,6 +256,9 @@ class ShellTool(Tool):
         }
 
     def summarize(self, args: dict[str, Any]) -> dict[str, str]:
+        if "scanner" in args:
+            return {"summary": f"shell: trusted {args['scanner']} scanner job (exact plan)",
+                    "detail": self.scanner_plan.display() if self.scanner_plan else "Scanner plan unavailable"}
         cmd = rewrite_portable_command(arg_string(args, "command") or "")
         first_line = cmd.split("\n", 1)[0]
         truncated = f"{first_line[:117]}..." if len(first_line) > 120 else first_line
@@ -203,6 +276,15 @@ class ShellTool(Tool):
         prompter: Prompter,
     ) -> ToolOutput:
         from src.permission.runtime.execution import guard_process
+        if "scanner" in args:
+            from src.permission.runtime.execution import policy_for, ExecutionBlocked
+            self.validate_args(args)
+            policy = policy_for(prompter)
+            if policy is None:
+                raise ExecutionBlocked("blocked: scanner requires a bound execution policy")
+            policy.revalidate_active(self, args, signal)
+            assert self.scanner_binding is not None
+            return await self.scanner_binding.runtime.run(self.scanner_binding, self, args, signal)
         worker = guard_process(prompter, self, args)
         original_cmd = arg_string(args, "command") or ""
         cmd_str = rewrite_portable_command(original_cmd)

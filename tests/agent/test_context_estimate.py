@@ -110,23 +110,27 @@ async def test_each_injected_component_changes_projected_gate_once(monkeypatch, 
     assert estimate_request(request).estimated_total > agent.get_auto_compact_threshold()
 
 
-async def test_expanded_file_input_counted_once_and_raw_input_persisted(monkeypatch):
+@pytest.mark.parametrize("filename", ["fixture.txt", ".env", "missing.txt"])
+async def test_at_file_input_stays_literal_in_request_accounting_and_history(monkeypatch, tmp_path, filename):
+    referenced_file = tmp_path / filename
+    file_content = "file-content-must-not-be-inlined " * 500
+    if filename != "missing.txt":
+        referenced_file.write_text(file_content)
+    user_input = f"Review @{referenced_file}"
     agent = make_agent()
     agent.history.append(Message("user", "h" * 24000))
-    agent.set_auto_compact_threshold(agent.approx_tokens() + 200)
-    expanded = "expanded-file-marker " * 500
-    calls = []
-    monkeypatch.setattr("src.agent.agent.expand_file_mentions", lambda *args, **kwargs: (calls.append(True) or expanded))
+    agent.set_auto_compact_threshold(1)
     projections = []
     async def compact(signal, emit, **kwargs):
         projections.append(kwargs["trigger_tokens"])
     monkeypatch.setattr(agent, "auto_compact", compact)
-    await agent.run("@fixture.txt", FakeSignal(), lambda _: None, AgentRunOptions(tools=False))
+    await agent.run(user_input, FakeSignal(), lambda _: None, AgentRunOptions(tools=False))
     request = cast(SnapshotClient, agent.client).requests[0]
-    assert calls == [True]
-    assert sum(message.content == expanded for message in request.messages) == 1
+    assert request.messages[-1].content == user_input
+    assert sum(message.content == user_input for message in request.messages) == 1
+    assert all(file_content not in message.content for message in request.messages)
     assert projections == [estimate_request(request).estimated_total]
-    assert agent.history[-2].content == "@fixture.txt"
+    assert agent.history[-2].content == user_input
 
 
 async def test_material_compaction_reestimated_with_new_memory_before_dispatch(monkeypatch):

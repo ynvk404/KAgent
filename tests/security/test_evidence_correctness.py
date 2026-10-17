@@ -3,6 +3,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from contextlib import contextmanager
+from src.workflow.evidence_source import EvidenceSource
 
 import pytest
 
@@ -18,7 +20,7 @@ class ReadLog(list):
 
 
 def instrument_source(monkeypatch, source, *, before_read=None, short_reads=False):
-    original = Path.open
+    original = EvidenceSource.open
     requests = ReadLog()
     class Reader:
         def __init__(self, handle):
@@ -36,13 +38,15 @@ def instrument_source(monkeypatch, source, *, before_read=None, short_reads=Fals
             raw = self.handle.read(min(size, 2) if short_reads and size >= 0 else size)
             requests.received += len(raw)
             return raw
-    def open_file(path, *args, **kwargs):
-        handle = original(path, *args, **kwargs)
-        if path == source and (args[0] if args else kwargs.get("mode", "r")) == "rb":
-            requests.opened += 1
-            return Reader(handle)
-        return handle
-    monkeypatch.setattr(Path, "open", open_file)
+    @contextmanager
+    def open_file(binding):
+        with original(binding) as handle:
+            if binding.path == source:
+                requests.opened += 1
+                yield Reader(handle)
+            else:
+                yield handle
+    monkeypatch.setattr(EvidenceSource, "open", open_file)
     return requests
 
 
@@ -149,26 +153,25 @@ def test_snapshot_keeps_bounded_nonempty_source_with_unknown_stat_size(tmp_path,
 def test_capture_io_failure_closes_source_and_does_not_publish(tmp_path, monkeypatch, failure):
     source = tmp_path / "proof.txt"
     source.write_bytes(b"synthetic proof")
-    original_open, original_stat = Path.open, os.fstat
+    original_open, original_stat = os.open, os.fstat
     opened = []
-    def opened_file(path, *args, **kwargs):
-        handle = original_open(path, *args, **kwargs)
-        if path == source:
-            opened.append(handle.fileno())
-        return handle
-    monkeypatch.setattr(Path, "open", opened_file)
+    def opened_file(*args, **kwargs):
+        fd = original_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+    monkeypatch.setattr(os, "open", opened_file)
     def fail(*_, **kw):
         raise OSError("synthetic capture failure")
     if failure == "stat":
         monkeypatch.setattr(os, "fstat", fail)
     else:
-        # Fail after the descriptor has been opened and statted.
         instrument_source(monkeypatch, source, before_read=fail)
     with pytest.raises(OSError, match="synthetic capture failure"):
         EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, tmp_path)
-    assert len(opened) == 1
-    with pytest.raises(OSError):
-        original_stat(opened[0])
+    assert opened
+    for fd in opened:
+        with pytest.raises(OSError):
+            original_stat(fd)
     assert not list(tmp_path.rglob("*.proof"))
 
 
@@ -237,15 +240,18 @@ async def test_permission_denial_precedes_actual_open(tmp_path, monkeypatch):
 def test_destination_change_is_conflict_not_a_new_snapshot_identity(tmp_path, monkeypatch):
     source = tmp_path / "proof.txt"
     source.write_bytes(b"synthetic proof")
-    original = Path.open
-    def changed(path, *args, **kwargs):
-        mode = args[0] if args else kwargs.get("mode", "r")
+    original = EvidenceSource.open
+    @contextmanager
+    def changed(binding):
+        path = binding.path
+        mode = "rb"
         if path.suffix == ".proof" and mode == "rb":
             path.chmod(0o600)
             path.write_bytes(b"different proof")
-        return original(path, *args, **kwargs)
-    monkeypatch.setattr(Path, "open", changed)
-    with pytest.raises(ValueError, match="integrity|collision"):
+        with original(binding) as handle:
+            yield handle
+    monkeypatch.setattr(EvidenceSource, "open", changed)
+    with pytest.raises(ValueError, match="integrity|collision|changed"):
         EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, tmp_path)
 
 
@@ -257,12 +263,14 @@ def test_postwrite_read_preserves_existing_scope_and_sensitive_guards(tmp_path, 
     source.write_bytes(b"synthetic proof")
     sensitive = lab / ".env"
     sensitive.write_bytes(b"synthetic proof")
-    original = Path.chmod
+    import src.workflow.evidence_publication as publication
+    original = publication._rename_noreplace
     changed = False
-    def chmod(path, *args, **kwargs):
+    def publish(directory, temporary, destination):
         nonlocal changed
-        result = original(path, *args, **kwargs)
-        if path.suffix == ".proof" and not changed:
+        result = original(directory, temporary, destination)
+        path = next(lab.rglob(destination))
+        if not changed:
             changed = True
             if change == "outside":
                 parent = path.parent
@@ -273,9 +281,9 @@ def test_postwrite_read_preserves_existing_scope_and_sensitive_guards(tmp_path, 
                 path.unlink()
                 path.symlink_to(sensitive)
         return result
-    monkeypatch.setattr(Path, "chmod", chmod)
+    monkeypatch.setattr(publication, "_rename_noreplace", publish)
     if change == "outside":
-        with pytest.raises(ValueError, match="inside the project"):
+        with pytest.raises(ValueError, match="inside the project|namespace changed"):
             EvidenceArtifact.capture_immutable_snapshot("candidate", source.name, lab)
     else:
         with pytest.raises(UserControlledRefusal):

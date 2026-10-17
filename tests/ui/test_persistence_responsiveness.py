@@ -1,7 +1,7 @@
 """Controlled freeze reproductions; no claim about the historical live cause.
 
-Run with --runxfail to see the remaining known responsiveness failures. Only
-ResponsivenessFailure is expected; integrity/harness failures remain failures.
+Filesystem latency is held independently of the UI loop. Responsiveness and
+integrity are both required; these production boundaries no longer use XFAIL.
 """
 from dataclasses import dataclass, asdict
 import asyncio
@@ -38,7 +38,7 @@ BOUNDARIES = ("file_write", "session_save", "evidence_snapshot", "finding_post_r
 
 
 class ResponsivenessFailure(AssertionError):
-    """Only the known responsiveness defect may be an expected failure."""
+    """A measured heartbeat or input responsiveness failure."""
 
 
 @dataclass
@@ -136,9 +136,9 @@ async def measure(boundary: str, control: bool, root: Path, monkeypatch) -> Meas
             elif boundary == "evidence_snapshot":
                 original = evidence_module._read_captured_value
                 if not control:
-                    patcher.setattr(evidence_module, "_read_captured_value", lambda p:
-                                    slow(original, p) if p == source else original(p))
-                artifact = EvidenceArtifact.capture_immutable_snapshot("cand_synthetic", str(source), root)
+                    patcher.setattr(evidence_module, "_read_captured_value", lambda p, *a, **k:
+                                    slow(original, p, *a, **k) if p == source else original(p, *a, **k))
+                artifact = await EvidenceArtifact.capture_immutable_snapshot_async("cand_synthetic", str(source), root)
                 snapshot = (root / artifact.path).read_bytes()
                 assert hashlib.sha256(snapshot).hexdigest() == artifact.sha256
                 assert artifact.size == len(snapshot) and snapshot == b"synthetic proof\n"
@@ -239,12 +239,7 @@ def assert_responsive(result: Measurement):
         raise ResponsivenessFailure(json.dumps(asdict(result), sort_keys=True))
 
 
-@pytest.mark.parametrize("boundary", [
-    boundary if boundary in {"session_save", "finding_post_read"} else pytest.param(boundary, marks=pytest.mark.xfail(
-        strict=True, raises=ResponsivenessFailure,
-        reason="confirmed synchronous persistence boundary awaiting its implementation checkpoint"))
-    for boundary in BOUNDARIES
-])
+@pytest.mark.parametrize("boundary", BOUNDARIES)
 async def test_production_boundary_keeps_textual_responsive(boundary, scratch, monkeypatch):
     assert_responsive(await measure(boundary, False, scratch, monkeypatch))
 

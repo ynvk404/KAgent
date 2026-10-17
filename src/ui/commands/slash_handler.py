@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.engagement.state import format_tcp_ports
+
 import asyncio
 import ipaddress
 import re
@@ -16,12 +18,28 @@ from src.config.config import Backend
 from src.llm.core.models import list_models
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.state import Append, Clear, TranscriptEntry
+from src.ui.render.help import HelpDocument, HelpSection
+from src.ui.render.permissions import permissions_summary
+from src.ui.render.sanitize import sanitize_text
 from src.ui.widgets.text_input_modal import TextInputRequest
 from src.permission.network.control import parse_lab_spec, GRANT_SYNTAX
 
 if TYPE_CHECKING:
     from src.agent.agent import Agent
     from src.ui.core.app import KAgent, RunAgentOptions
+
+# Reserved only to stop retired commands from falling through to an agent turn.
+REMOVED_SLASH_COMMANDS = frozenset({"/review-result", "/enrich-cwe", "/next"})
+# Reserve shipped aliases even if skill discovery fails or a skill is removed.
+# Custom aliases still present in the registry are handled below.
+MOVED_SKILL_SLASH_COMMANDS = frozenset({
+    "/access-control", "/authentication", "/command-injection",
+    "/cors-misconfiguration", "/cross-site-scripting", "/csrf", "/file-upload",
+    "/jwt-misconfiguration", "/nosql-injection", "/open-redirect",
+    "/path-traversal", "/recon", "/sql-injection", "/ssrf", "/ssti",
+    "/web-enumeration", "/web-input-analysis", "/xxe",
+})
+SKILL_SLASH_MOVED_NOTICE = "Skill slash commands moved to /skills."
 
 DEFAULT_THINKING_ENABLED = False
 DEFAULT_YOLO_ENABLED = False
@@ -32,7 +50,6 @@ _DOMAIN_LABEL_RE = re.compile(
 
 _KEYBINDINGS: list[tuple[str, str]] = [
     ("/ then Tab, Tab", "complete a slash command, then run it"),
-    ("@<file> then Tab", "attach a file to the next turn"),
     ("#<text> / #!<text>", "save project / personal memory"),
     (
         "↑ / ↓",
@@ -45,7 +62,7 @@ _KEYBINDINGS: list[tuple[str, str]] = [
 
 _COMMAND_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     ("Everyday", ("/help", "/target", "/scope", "/plan", "/provider", "/model", "/clear", "/reset", "/exit")),
-    ("Workflow", ("/report", "/next", "/review-result", "/enrich-cwe", "/turn-details", "/compact", "/memory", "/skills", "/snapshot")),
+    ("Workflow", ("/report", "/turn-details", "/compact", "/memory", "/skills", "/snapshot")),
     ("Advanced", ("/permissions", "/burp", "/maxsteps", "/thinking", "/yolo")),
 ]
 
@@ -64,13 +81,13 @@ _HELP_OVERRIDES: dict[str, tuple[str, str]] = {
     "/model": ("<id|list>", "switch model; list also accepts ls"),
     "/skills": (
         "[<name>|enable|disable <name>|new <name>]",
-        "list, toggle, or create skills",
+        "pick/use, toggle, or create skills",
     ),
 }
 
 
 
-def build_help_text(agent: "Agent", read_config) -> str:
+def build_help_document(agent: "Agent", read_config) -> HelpDocument:
     cfg = read_config()
 
     enabled = len(agent.skills.list_enabled())
@@ -108,32 +125,29 @@ def build_help_text(agent: "Agent", read_config) -> str:
     )
     out.append("")
 
+    summary = sanitize_text("\n".join(out).rstrip())
+    sections: list[HelpSection] = []
     items = {item.name: item for item in SLASH_ITEMS}
     for group, names in _COMMAND_GROUPS:
-        out.append(group)
         rows: list[tuple[str, str]] = []
         for name in names:
             item = items[name]
             args, description = _HELP_OVERRIDES.get(name, (item.args or "", item.description))
             rows.append((f"{name} {args}".rstrip(), description))
-        w = max(len(name) for name, _ in rows) + 2
-        for name, description in rows:
-            out.append(f"  {name.ljust(w)}{description}")
-        out.append("")
+        sections.append(HelpSection(group, tuple(rows)))
+    sections.append(HelpSection("Skill picker", (
+        ("↑↓ / Tab", "select a skill"),
+        ("Space", "enable or disable the selected skill"),
+        ("Enter", "use the selected enabled skill for the next prompt; close on success"),
+        ("a / d", "enable all / disable all"),
+        ("Esc / q", "close the picker"),
+    )))
+    sections.append(HelpSection("Input & navigation", tuple(_KEYBINDINGS)))
+    return HelpDocument(summary, tuple(sections), "Type / for the live command menu.")
 
-    out.append("Installed skills")
-    out.append("  /<skill-name>  load an installed skill for the next prompt")
-    out.append("")
 
-    out.append("Input & navigation")
-    kw = max((len(k) for k, _ in _KEYBINDINGS), default=0) + 2
-    for keys, desc in _KEYBINDINGS:
-        out.append(f"  {keys.ljust(kw)}{desc}")
-    out.append("")
-
-    out.append("Type / for the live command menu.")
-
-    return "\n".join(out)
+def build_help_text(agent: "Agent", read_config) -> str:
+    return build_help_document(agent, read_config).plain_text()
 
 
 def normalize_target_url(raw: str) -> str | None:
@@ -202,31 +216,6 @@ When you are ready to finalize, return the plan wrapped exactly in:
 Use Markdown inside the block. Prefer these sections: Summary, Key Changes, Test Plan, Assumptions."""
 
 
-def build_coverage_next_prompt(objective: str, coverage_context: str) -> str:
-    subject = (
-        f"Objective for next steps:\n\n{objective}"
-        if objective
-        else "Objective for next steps: choose the highest-value tests to run next from the current engagement context."
-    )
-
-    return f"""{subject}
-
-You are in coverage-driven planning mode for this turn.
-
-Coverage state:
-{coverage_context}
-
-Rules:
-- Do not call tools, run commands, fetch URLs, scan targets, or modify files.
-- Use the coverage state before suggesting any test.
-- Prioritize endpoint/parameter/vulnerability-class combinations that are not already covered.
-- Do not repeat passed or failed validation without a reason. Revisit blocked or deferred candidates only when the blocker has changed.
-- Use structured workflow candidates and their latest outcomes before proposing new tests.
-- If no actionable candidate exists, suggest targeted discovery or explain why testing should stop.
-- Output up to 10 concrete next tests with endpoint, parameter, vuln class, why it is next, and the exact coverage mark to record after testing.
-- Keep it concise and actionable."""
-
-
 def suggest_closest(target: str, known: list[str]) -> str | None:
     needle = target.lower()
     best_name: str | None = None
@@ -259,6 +248,14 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
     cmd, *rest = parts
 
+    if cmd in REMOVED_SLASH_COMMANDS:
+        app.dispatch(Append(entry=TranscriptEntry(kind="system", text=f"{cmd}: command has been removed.")))
+        return True
+
+    if cmd in MOVED_SKILL_SLASH_COMMANDS:
+        app.dispatch(Append(entry=TranscriptEntry(kind="system", text=SKILL_SLASH_MOVED_NOTICE)))
+        return True
+
     agent = app.agent
     dispatch = app.dispatch
 
@@ -271,15 +268,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         start_report(app, rest)
         return True
 
-    if cmd == "/review-result":
-        from src.ui.commands.result_review import review_result
-        asyncio.create_task(review_result(app, rest))
-        return True
-
-    if cmd == "/enrich-cwe":
-        app.start_cwe_enrichment(rest)
-        return True
-
     if cmd == "/permissions":
         rights = agent.engagement_state.http_permissions
         from src.permission.runtime.execution import policy_for
@@ -288,9 +276,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         try:
             sub = rest[0] if rest else "show"
             if sub == "show" and len(rest) <= 1:
-                text = (policy.status() + "\n" if policy is not None else "") + rights.status() + "\nGrant format: " + GRANT_SYNTAX
-                if policy is not None and policy.browser_local is not None:
-                    text += '\n' + policy.browser_local.grant_status()
+                text = permissions_summary(rights, policy)
             elif sub == 'browser' and policy is not None:
                 binding = policy.browser_local
                 if binding is None:
@@ -321,7 +307,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                 policy.max_calls, policy.concurrency = calls, concurrency
                 policy.revision += 1
                 policy.persist()
-                text = policy.status()
+                text = permissions_summary(rights, policy)
             elif sub == "deny" and len(rest) == 1:
                 rights.deny_session()
                 text = "HTTP denied for session; active grants revoked. Explicit retry/new grant required."
@@ -341,7 +327,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                         grant = await rights.review_grant(origin, limits, mode, review)
                         if policy is not None:
                             policy.persist()
-                        result = rights.status() if grant else "HTTP grant declined; no rights issued."
+                        result = permissions_summary(rights, policy) if grant else "HTTP grant declined; no rights issued."
                         dispatch(Append(entry=TranscriptEntry(kind="system", text=result)))
                     except Exception as err:
                         dispatch(Append(entry=TranscriptEntry(kind="error", text=f"HTTP permissions: {err}")))
@@ -456,9 +442,10 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         return True
 
     if cmd == "/help":
+        document = build_help_document(agent, app.read_config)
         dispatch(
             Append(
-                entry=TranscriptEntry(kind="system", text=build_help_text(agent, app.read_config))
+                entry=TranscriptEntry(kind="system", text=document.plain_text(), help_document=document)
             )
         )
         return True
@@ -638,32 +625,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         return True
 
 
-    if cmd == "/next":
-        if agent.is_running():
-            dispatch(Append(entry=TranscriptEntry(kind="error", text="next: a turn is already running")))
-            return True
-
-        objective = " ".join(rest).strip()
-
-        async def _next():
-            try:
-                signal = asyncio.Event() 
-                coverage_context = await agent.coverage_context(signal)
-
-                await app.run_agent_turn(
-                    build_coverage_next_prompt(objective, coverage_context),
-                    _run_opts(
-                        transcript_user_text=f"/next {objective}" if objective else "/next",
-                        system_text="coverage-driven next steps — tools disabled",
-                        run_options=AgentRunOptions(tools=False),
-                    ),
-                )
-            except Exception as err:
-                dispatch(Append(entry=TranscriptEntry(kind="error", text=f"/next: {err}")))
-
-        asyncio.create_task(_next())
-        return True
-    
     if cmd == "/plan":
         objective = " ".join(rest).strip()
         prompt = build_plan_prompt(objective)
@@ -710,18 +671,21 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                     f"Active target: {agent.target.base_url()}",
                     "Allowed origins:",
                     *(f"  - {origin.as_url()}" for origin in origins),
+                    "Allowed TCP destinations:",
+                    *(f"  - {entry.address} ports {format_tcp_ports(entry.ports)}"
+                      for entry in sorted(agent.engagement_state.allowed_tcp)),
                     f"Engagement revision: {agent.engagement_state.revision}",
                 ]
                 text = "\n".join(lines)
             dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
             return True
 
-        if sub not in {"add", "remove", "reset"}:
+        if sub not in {"add", "remove", "reset", "tcp-add", "tcp-remove"}:
             dispatch(
                 Append(
                     entry=TranscriptEntry(
                         kind="error",
-                        text="usage: /scope [show|add <origin>|remove <origin>|reset]",
+                        text="usage: /scope [show|add <origin>|remove <origin>|tcp-add <ip> <ports>|tcp-remove <ip> [ports]|reset]",
                     )
                 )
             )
@@ -738,7 +702,19 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             )
             return True
 
-        if sub == "reset":
+        if sub in {"tcp-add", "tcp-remove"}:
+            if len(rest) not in ({3} if sub == "tcp-add" else {2, 3}):
+                dispatch(Append(entry=TranscriptEntry(kind="error", text=(
+                    "usage: /scope tcp-add <ip> <ports> | /scope tcp-remove <ip> [ports]"))))
+                return True
+            try:
+                changed = agent.update_tcp_scope(rest[1], rest[2] if len(rest) == 3 else None,
+                                                 remove=sub == "tcp-remove")
+                text = f"TCP scope {'updated' if changed else 'unchanged'}: {rest[1]}"
+            except ValueError as err:
+                dispatch(Append(entry=TranscriptEntry(kind="error", text=f"invalid TCP scope: {err}")))
+                return True
+        elif sub == "reset":
             if len(rest) != 1:
                 dispatch(
                     Append(
@@ -1015,20 +991,9 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
     skill_name = cmd[1:] if cmd.startswith("/") else ""
     if skill_name and agent.skills.has(skill_name):
-        async def _inject():
-            try:
-                n = await agent.inject_skill(skill_name)
-                dispatch(
-                    Append(
-                        entry=TranscriptEntry(
-                            kind="system", text=f"loaded /{n} — it'll apply to your next prompt."
-                        )
-                    )
-                )
-            except Exception as err:
-                dispatch(Append(entry=TranscriptEntry(kind="error", text=f"/{skill_name}: {err}")))
-                
-        asyncio.create_task(_inject())
+        dispatch(Append(entry=TranscriptEntry(
+            kind="system", text=SKILL_SLASH_MOVED_NOTICE,
+        )))
         return True
 
     return False

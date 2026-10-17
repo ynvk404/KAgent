@@ -22,7 +22,7 @@ skills/
 | `candidate-classes` | no | Canonical lowercase-kebab vulnerability classes handled by the skill. Common aliases such as `sqli`, `xss`, `idor`, and `bola` are normalized. |
 | `requires` | no | Other skill names that provide useful prior context. These are soft ranking signals, not mandatory dependencies. |
 | `allowed-tools` | yes | Declared capability list for permission-requiring tools (e.g. `http`, `shell`, `file_write`). An empty list is unrestricted. Legacy alias: `tools`. |
-| `disable-model-invocation` | no | `true` = user-only: hidden from the model, invoked only via the `/<name>` slash command. |
+| `disable-model-invocation` | no | `true` = user-only: hidden from the model, selected manually with Enter in `/skills`. |
 
 Everything after the frontmatter is the playbook body, delivered to the
 model verbatim when it calls `load_skill`. `${SKILL_DIR}` in the body is
@@ -89,15 +89,23 @@ Just drop a `<name>/SKILL.md` into one of these — no config needed. Skills
 ## Creating a skill
 
 - **Scaffold:** run `/skills new <name>` in the TUI — it writes a templated
-  `./.kagent/skills/<name>/SKILL.md` and loads it immediately.
+  `./.kagent/skills/<name>/SKILL.md` and registers it immediately. Edit it,
+  then select it in `/skills` and press Enter to use it.
 - **By hand:** copy [`_template/SKILL.md`](_template/SKILL.md) into
   `<name>/SKILL.md` and edit.
 
 ## Managing skills
 
-- `/skills` — interactive enable/disable picker.
+- `/skills` — the entry point for manual skill selection and management.
+  Use ↑↓ or Tab to select, Space to enable/disable, and Enter to load the
+  selected enabled skill for the next prompt. Loading closes the picker;
+  a disabled skill stays disabled and shows an error until enabled with Space.
+  Use `a`/`d` to enable/disable all, and Esc or `q` to close.
 - `/skills enable|disable <name>` — toggle from the prompt.
-- `/<name>` — invoke a skill explicitly for your next turn.
+
+Individual `/<name>` skill commands have moved to `/skills` and are absent
+from the slash menu. Descriptions in the picker are one-line summaries;
+the full playbook and automatic agent-driven `load_skill` path are unchanged.
 
 Shipped skill handoffs, help examples, and payload references are validated
 by `tests/skills/test_conformance.py`, so stale runtime references fail CI.

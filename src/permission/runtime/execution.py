@@ -66,6 +66,9 @@ def invocation_digest(tool: Any, args: dict[str, Any]) -> str:
     material = [tool.name(), type(tool).__module__, args,
                 asdict(config) if is_dataclass(config) and not isinstance(config, type) else None,
                 getattr(tool, "shell_path", None), resource]
+    if type(tool).__module__ == "src.tools.execution.shell" and "scanner" in args:
+        plan = getattr(tool, 'scanner_plan', None)
+        material.append(plan.digest if plan is not None else None)
     return hashlib.sha256(json.dumps(material, sort_keys=True, default=str,
                                      separators=(",", ":")).encode()).hexdigest()
 
@@ -106,6 +109,9 @@ class ExecutionPolicy:
         self.journal: Path | None = None
         self.session_id: str | None = None
         self.worker: Any = None
+        # Lifecycle ownership only; this is not a scanner grant/quota store.
+        self.scanner_runtime: Any = None
+        self.scanner_binding: Any = None
         # Only the CLI controller can install this session-only Browser binding.
         self.browser_local: Any = None
         self.generic_validation: Any = None
@@ -306,7 +312,11 @@ class ExecutionPolicy:
                 self.browser_local.validate_tool(tool, args)
             elif self.worker is None or getattr(tool, '_execution_policy', None) is not self:
                 raise ExecutionBlocked('blocked: enforcement-unavailable; MCP isolated executor identity unavailable')
-        if module in {"src.tools.execution.shell", "src.tools.execution.plugin"} and self.worker is None:
+        scanner = module == "src.tools.execution.shell" and "scanner" in args
+        if scanner:
+            tool.validate_args(args)
+            tool.validate_scanner(self, args)
+        if not scanner and module in {"src.tools.execution.shell", "src.tools.execution.plugin"} and self.worker is None:
             raise ExecutionBlocked("blocked: enforcement-unavailable; isolated filesystem/network/process adapter required")
         if module not in {"src.tools.http.http_tool", "src.tools.http.web", "src.tools.execution.file", "src.tools.execution.search",
                           "src.tools.discovery.content", "src.tools.discovery.service", "src.tools.workflow.workflow_tool",
@@ -497,6 +507,9 @@ class ExecutionPolicy:
                           args: dict[str, Any] | None = None) -> bool:
         """UI callback check; do not consult the callback task's review context."""
         try:
+            if (tool is not None and args is not None and 'scanner' in args
+                    and type(tool).__module__ == 'src.tools.execution.shell'):
+                tool.validate_scanner(self, args)
             return (self._receipts.get(receipt.id) is receipt and receipt.revision == self.stamp()
                     and self.clock() < receipt.expires
                     and (receipt.review_guard is None or receipt.review_guard.is_current())
@@ -508,7 +521,7 @@ class ExecutionPolicy:
         limit = str(self.max_calls) if self.max_calls is not None else 'no session quota'
         return (f"Execution profile: {self.root}; YOLO: {self.yolo}; calls: {self.used}/{limit}; "
                 f"active: {self.active}/{self.concurrency}; revoked: {', '.join(sorted(self.revoked)) or '(none)'}\n"
-                f"Worker: {self.worker.summary() if self.worker is not None else 'enforcement-unavailable'}; local stdio MCP/HTTP ffuf need compatible configuration; nmap/remote MCP unavailable.\n"
+                f"Worker: {self.worker.summary() if self.worker is not None else 'enforcement-unavailable'}; ordinary Shell/local stdio MCP need compatible configuration; remote MCP unavailable. Typed scanner readiness is in the controller catalog.\n"
                 "Read and export assumptions: lab root is operator-approved input; no general context egress guarantee.")
 
 

@@ -1,6 +1,8 @@
 """Read-only controller authority query; cannot grant or restore rights."""
 from __future__ import annotations
 
+import json
+
 from src.permission.runtime.execution import policy_for
 
 
@@ -24,4 +26,6 @@ class PermissionStatusTool:
         if policy is None:
             return "Execution profile unavailable; legacy permission gates apply."
         return (policy.status() + "\n" + policy.engagement.http_permissions.status()
+                + ('\nTrusted scanner catalog: ' + json.dumps(policy.scanner_binding.catalog())
+                   if policy.scanner_binding is not None else '')
                 + ("\n" + policy.browser_local.grant_status() if policy.browser_local is not None else ""))

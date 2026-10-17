@@ -445,7 +445,6 @@ class TestRegistryIntegration:
         from src.tools.execution.shell import ShellTool
         from src.tools.execution.file import FileWriteTool
         from src.tools.http.http_tool import HTTPTool
-        from src.tools.common.capabilities import CapabilityInventory
         from src.tools.discovery.content import ContentDiscoveryTool
         from src.tools.discovery.service import ServiceDiscoveryTool
         from src.tools.common.ask import AskUserTool
@@ -467,9 +466,8 @@ class TestRegistryIntegration:
         from src.engagement.state import EngagementState
         reg.register(HTTPTool(target, EngagementState()))
         engagement = EngagementState()
-        inventory = CapabilityInventory(which=lambda _name: None)
-        reg.register(ContentDiscoveryTool(target, engagement, inventory, lambda: "minimal"))
-        reg.register(ServiceDiscoveryTool(target, engagement, inventory, lambda: "minimal"))
+        reg.register(ContentDiscoveryTool(target, engagement))
+        reg.register(ServiceDiscoveryTool(target, engagement))
         reg.register(AskUserTool(StubPrompter()))
         reg.register(ConfirmFindingTool(Store(str(tmp_path / "findings"))))
         reg.register(WorkflowTool(WorkflowState()))

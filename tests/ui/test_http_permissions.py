@@ -77,6 +77,9 @@ async def test_slash_grant_requires_operator_review(decision):
     assert request.tool == "http_lab_grant" and not request.yolo_auto_approve
     assert "bulk delete" in request.detail and "500" in request.detail
     assert bool(engagement.http_permissions.grants) is (decision == Decision.ALLOW_ONCE)
+    if decision == Decision.ALLOW_ONCE:
+        assert "HTTP grants: 1 active" in app.state.transcript[-1].text
+        assert "Grant format" not in app.state.transcript[-1].text
 
 
 def test_operator_show_revoke_deny_retry_commands():
@@ -88,6 +91,8 @@ def test_operator_show_revoke_deny_retry_commands():
     grant = rights.activate(ORIGIN, HTTPLimits())
     assert handle_slash(app, "/permissions show")
     assert grant.id in app.state.transcript[-1].text
+    assert 'HTTP grants: 1 active' in app.state.transcript[-1].text
+    assert 'HTTP grants do not approve scanner jobs.' in app.state.transcript[-1].text
     assert handle_slash(app, "/permissions revoke " + grant.id)
     assert not rights.grants
     assert handle_slash(app, "/permissions deny")

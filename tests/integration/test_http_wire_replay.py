@@ -15,7 +15,6 @@ from src.permission.permission import Decision
 from src.target.target import Target
 from src.tools.http.http_tool import HTTPTool
 from src.tools.discovery.content import ContentDiscoveryTool
-from src.tools.common.capabilities import CapabilityInventory
 from src.tools.http.request_builder import NATIVE_USER_AGENT
 from src.tools.http.web import _do_fetch, _do_search
 from src.version import VERSION
@@ -141,7 +140,7 @@ async def test_localhost_wire_capture_and_approval_invariant(monkeypatch):
         native_headers = {key.lower(): value for key, value in wire[-1][2]}
         assert native_headers["user-agent"] == expected_native_ua
         profile_headers = {"native": native_headers}
-        discovery = ContentDiscoveryTool(target, engagement, CapabilityInventory(), lambda: "minimal")
+        discovery = ContentDiscoveryTool(target, engagement)
         await discovery.run({"paths": ["content-discovery"], "mode": "native", "max_requests": 3,
                              "rate_limit": 10, "timeout_seconds": 5}, None, Approve())
         discovered = [entry for entry in wire if entry[1] == "/content-discovery"]

@@ -65,7 +65,6 @@ def runtime_inventory(tmp_path, monkeypatch, profile):
     workflow = WorkflowState()
     engagement = runtime.EngagementState()
     captures = runtime.CaptureStore(max_entries=10)
-    capabilities = runtime.CapabilityInventory(which=lambda _: None)
     coverage = runtime.CoverageStore(str(tmp_path / "coverage.json"))
     registry = Registry()
     constructors = [
@@ -73,8 +72,8 @@ def runtime_inventory(tmp_path, monkeypatch, profile):
         runtime.FileReadToolAlias(), runtime.FileWriteTool(), runtime.FileWriteToolAlias(),
         runtime.FileEditTool(), runtime.FileEditToolAlias(), runtime.GlobTool(), runtime.GrepTool(),
         runtime.HTTPTool(target, engagement, workflow, captures, validation_registry=skills),
-        runtime.ContentDiscoveryTool(target, engagement, capabilities, lambda: "minimal", workflow),
-        runtime.ServiceDiscoveryTool(target, engagement, capabilities, lambda: "minimal", workflow),
+        runtime.ContentDiscoveryTool(target, engagement, workflow=workflow),
+        runtime.ServiceDiscoveryTool(target, engagement, workflow=workflow),
         runtime.WebFetchTool(engagement, target), runtime.WebSearchTool(), runtime.AskUserTool(cast(Any, None)),
         PermissionStatusTool(),
         runtime.ConfirmFindingTool(runtime.FindingsStore(str(tmp_path / "findings")), workflow=workflow),

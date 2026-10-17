@@ -16,4 +16,5 @@ def runtime_scope(agent: Any) -> str:
     return hashlib.sha256(str((candidate_origin(agent.target.base_url()),
         getattr(agent.target, 'revision', None), getattr(engagement, 'revision', None),
         getattr(getattr(engagement, 'http_permissions', None), 'epoch', None),
-        getattr(policy, 'session_id', None), objective.id if objective else None)).encode()).hexdigest()
+        getattr(policy, 'session_id', None), objective.id if objective else None,
+        getattr(getattr(agent, 'workflow', None), 'generation', None))).encode()).hexdigest()

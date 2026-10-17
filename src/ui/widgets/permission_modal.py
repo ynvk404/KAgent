@@ -32,10 +32,6 @@ _CAPTURE_SCOPE = (
     "Use only this immutable capture and its identity for input mutations. "
     "No redirects or shared HTTP context import. Rights end on target/scope/session reset."
 )
-_CONCLUSION_SOURCE = (
-    "Source: operator-reviewed, not autonomous. This reviews a conclusion, "
-    "not execution permission.\n"
-)
 _BROWSER_WARNINGS = {
     "read": "Read access may expose page data, screenshots and console logs.",
     "navigate": "Navigation changes the selected tab location.",
@@ -117,9 +113,6 @@ class PermissionModal:
                 and source.startswith("source: ") and "; baseline: " in source
                 and rest.startswith(_CAPTURE_SCOPE + "\n")):
             return "capture"
-        if (req.tool == "review_result" and req.no_session_cache
-                and req.summary.startswith("Review ") and req.detail.startswith(_CONCLUSION_SOURCE)):
-            return "conclusion"
         return ""
 
     def _capture_detail(self, detail: str) -> str:
@@ -360,11 +353,11 @@ class PermissionModal:
     def instructions(self, *, ui: UIPalette = DARK_UI) -> Text:
         grant_review = self.req.tool in {"http_lab_grant", "browser_lab_grant"}
         kind = self._review_kind()
-        keys = "y " + ("authorize capture use" if kind == "capture" else "approve conclusion"
-                       if kind == "conclusion" else "approve grant" if grant_review else "allow once")
+        keys = "y " + ("authorize capture use" if kind == "capture"
+                       else "approve grant" if grant_review else "allow once")
         if self._supports_reuse():
             keys += " · a " + self._reuse_label()
-        keys += (" · n decline review" if kind == "conclusion" else " · n deny") + " · Esc cancel"
+        keys += " · n deny · Esc cancel"
         return Text(keys, style=ui.muted)
 
     def render(self, *, include_instructions: bool = True, ui: UIPalette = DARK_UI) -> RenderableType:
@@ -391,8 +384,6 @@ class PermissionModal:
             scope_row = Text("Allow once: " + redact(req.session_scope_display))
         if kind == "capture":
             scope_row = Text("Scope: selected immutable capture/identity · bounded reuse under reviewed HTTP limits")
-        elif kind == "conclusion":
-            scope_row = Text("Scope: conclusion review · no execution rights")
 
         show_detail = bool(req.detail) and req.detail != req.summary
 

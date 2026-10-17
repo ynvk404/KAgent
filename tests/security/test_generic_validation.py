@@ -28,7 +28,6 @@ from src.tools.common.ask import AskUserTool
 from src.tools.execution.shell import ShellTool
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.tools.workflow.workflow_tool import WorkflowTool
-from src.ui.commands.result_review import review_result
 from src.workflow.assessment import accepted_result
 from tests.security.test_agent_assessment import ASSESSMENT
 from src.workflow.state import AttackSurfaceInput, Candidate, ValidationResult, WorkflowMode, WorkflowObjective, WorkflowPhase, WorkflowState
@@ -125,7 +124,7 @@ def request(candidate, marker=False):
 
 async def evidence(env, tmp_path):
     registry, p, policy, _, _, c, _, _ = env
-    # Optional review fixtures now retain a genuine native response before
+    # Retain a genuine native response before
     # writing derived interpretation; a proof file alone has no authority.
     if policy.generic_validation.started_candidate == c.id and not any(
             item.attempt_id == policy.generic_validation.durable_attempt for item in policy.observations._items.values()):
@@ -149,19 +148,6 @@ async def result(env, outcome="confirmed", refs=(), **extra):
         "skill_name": GENERIC_VALIDATOR, "outcome": outcome, "evidence_refs": list(refs), **extra}, None, p)
 
 
-def app_for(env):
-    registry, p, _, operator, state, _, tool, _ = env
-    output = []
-    operator.decision = Decision.ALLOW_ONCE
-    app = SimpleNamespace(agent=SimpleNamespace(prompter=p, workflow=state, tools=registry,
-        skills=tool.skills, save=AsyncMock()), dispatch=output.append)
-    return app, output
-
-
-def review_args(candidate, outcome="confirmed"):
-    return [candidate.id, outcome, "low", "Observed bounded fixture response."]
-
-
 def certificate(env, ref):
     _, _, policy, _, state, c, _, _ = env
     result = state.latest_result(c.id)
@@ -172,7 +158,6 @@ def certificate(env, ref):
     return SimpleNamespace(outcome=result.outcome, observed_impact=result.assessment['observed_impact'],
         severity=result.assessment['severity'], observation_ids=tuple(e['source']['id'] for e in result.evidence_manifest),
         verification_source='operator-reviewed' if result.assessment_source == 'operator' else 'agent')
-
 
 
 @pytest.mark.parametrize("mapping,expected", [("none", "generic"), ("unique", "expert"),
@@ -388,71 +373,6 @@ async def test_evidence_ownership_and_integrity(runtime, tmp_path, fault):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["confirmed", "not-confirmed"])
-async def test_human_review_commit_precedes_certificate_even_yolo(runtime, tmp_path, outcome):
-    env = await setup(runtime, tmp_path)
-    await start(env)
-    ref = await evidence(env, tmp_path)
-    await result(env, refs=[ref])
-    app, output = app_for(env)
-    async def save(*, workflow_override=None, _workflow_locked=False):
-        latest = env[4].latest_result(env[5].id)
-        assert latest is not None and latest.assessment_source == "agent"
-        assert workflow_override is not None
-        staged_result = workflow_override.latest_result(env[5].id)
-        assert staged_result is not None and staged_result.outcome == outcome
-        assert env[5].id not in env[2].observations._results
-    app.agent.save.side_effect = save
-    await review_result(app, review_args(env[5], outcome))
-    assert output[-1].entry.kind == "system", output[-1]
-    trusted = certificate(env, ref)
-    assert trusted is not None
-    assert trusted.outcome == outcome
-    assert [r.tool for r in env[3].requests] == ["review_result"]
-    assert env[3].requests[0].no_session_cache
-    assert (await env[6].coverage.list())[0].status == ("failed" if outcome == "confirmed" else "passed")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("fault", ["declined", "cancelled", "save", "objective", "registry", "record-error", "persist"])
-async def test_failed_review_never_publishes_certificate(runtime, tmp_path, monkeypatch, fault):
-    env = await setup(runtime, tmp_path)
-    await start(env)
-    ref = await evidence(env, tmp_path)
-    await result(env, refs=[ref])
-    app, output = app_for(env)
-    if fault == "declined":
-        env[3].decision = Decision.DENY
-    elif fault == "cancelled":
-        env[3].ask = AsyncMock(side_effect=asyncio.CancelledError)
-    elif fault == "save":
-        app.agent.save.side_effect = OSError("fixture save failure")
-    elif fault == "record-error":
-        monkeypatch.setattr("src.ui.commands.result_review.accepted_result", lambda *args: False)
-    elif fault == "persist":
-        app.agent.save.side_effect = OSError("canonical workflow persistence failure")
-    else:
-        async def ask(*_):
-            if fault == "objective":
-                env[4].objective.id = "changed"
-            else:
-                env[6].skills.add(expert())
-            return Decision.ALLOW_ONCE
-        env[3].ask = ask
-    if fault == "cancelled":
-        with pytest.raises(asyncio.CancelledError):
-            await review_result(app, review_args(env[5]))
-    else:
-        await review_result(app, review_args(env[5]))
-        assert output[-1].entry.kind == "error"
-        if fault == "record-error":
-            assert "inadmissible primary evidence" in output[-1].entry.text
-    assert env[4].latest_result(env[5].id).assessment_source == "agent"
-    assert not env[2].observations._reviews
-    assert env[2].active == 0
-
-
-@pytest.mark.asyncio
 async def test_inflight_probe_blocks_start_result_and_stale_send(runtime, tmp_path, monkeypatch):
     env = await setup(runtime, tmp_path)
     await start(env)
@@ -664,8 +584,6 @@ async def test_f02_direct_stream_respects_generic_completion_obligations(runtime
     await start(env)
     ref = await evidence(env, tmp_path)
     await result(env, refs=[ref])
-    app, _ = app_for(env)
-    await review_result(app, review_args(env[5]))
     assert certificate(env, ref) is not None
     if pending != "finding":
         finding = ConfirmFindingTool(Store(project_directory=tmp_path), workflow=env[4])
@@ -776,8 +694,6 @@ async def test_verified_finding_pipeline_and_save_failures(runtime, tmp_path, mo
     await start(env)
     ref = await evidence(env, tmp_path)
     await result(env, refs=[ref])
-    app, output = app_for(env)
-    await review_result(app, review_args(env[5]))
     assert certificate(env, ref) is not None
     store = Store(project_directory=tmp_path)
     finding = ConfirmFindingTool(store, workflow=env[4])
@@ -802,7 +718,7 @@ async def test_verified_finding_pipeline_and_save_failures(runtime, tmp_path, mo
         reports = list((tmp_path / "artifacts/findings").glob("*.md"))
         assert len(reports) == 1
         text = reports[0].read_text()
-        assert "**Assessment source:** operator" in text and "critical" not in text and "model claim" not in text
+        assert "**Assessment source:** agent" in text and "critical" not in text and "model claim" not in text
     else:
         with pytest.raises((ValueError, ExecutionBlocked, OSError)):
             await env[0].execute("confirm_finding", args, None, env[1])
@@ -814,9 +730,7 @@ async def test_restored_generic_result_is_not_a_certificate_or_execution_right(r
     env = await setup(runtime, tmp_path, mode="whole_target")
     await start(env)
     ref = await evidence(env, tmp_path)
-    await result(env, refs=[ref])
-    app, _ = app_for(env)
-    await review_result(app, review_args(env[5], "not-confirmed"))
+    await result(env, "not-confirmed", refs=[ref])
     raw = json.loads(json.dumps(env[4].to_dict()))
     restored = WorkflowState.from_dict(raw)
     env[4].replace_from(restored)
@@ -944,38 +858,6 @@ async def test_generic_context_missing_does_not_auto_requeue_old_deferred(runtim
         "location": candidate.location}, None, env[1]))
     assert not output["created"] and candidate.status == "deferred"
     assert json.loads(await start(env))["ok"]  # Explicit start resolves context, never auto-requeues.
-
-
-@pytest.mark.asyncio
-async def test_overlapping_generic_reviews_only_publish_current_ticket(runtime, tmp_path):
-    env = await setup(runtime, tmp_path)
-    await start(env)
-    ref = await evidence(env, tmp_path)
-    await result(env, refs=[ref])
-    app, output = app_for(env)
-    entered, release = asyncio.Event(), asyncio.Event()
-    calls = 0
-    async def ask(*_):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            entered.set()
-            await release.wait()
-        return Decision.ALLOW_ONCE
-    env[3].ask = ask
-    first = asyncio.create_task(review_result(app, review_args(env[5])))
-    await asyncio.wait_for(entered.wait(), 2)
-    # Different exact outcome avoids registry's equivalent-invocation review
-    # suppression, exercising the independent candidate review ticket.
-    await review_result(app, review_args(env[5], "not-confirmed"))
-    release.set()
-    await first
-    trusted = certificate(env, ref)
-    assert trusted is not None
-    assert trusted.outcome == "not-confirmed"
-    assert env[4].latest_result(env[5].id).outcome == "not-confirmed"
-    assert any(item.entry.kind == "error" for item in output)
-    assert not env[2].observations._reviews and env[2].active == 0
 
 
 @pytest.mark.asyncio

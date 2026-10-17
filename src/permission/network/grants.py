@@ -463,6 +463,45 @@ class HTTPPermissions:
                 return
         raise ValueError("unknown active grant id")
 
+    def summary(self) -> str:
+        """Operator-facing state only; do not renew grants or consume budgets."""
+        rows = [f"YOLO: {'on' if self._yolo_enabled else 'off'}",
+                f"HTTP session deny: {'on' if self.denied else 'off'}"]
+        now = self.clock()
+        grants: list[str] = []
+        active = 0
+        for origin, grant in sorted(self.grants.items()):
+            budget = self._budgets[grant.id]
+            review_blocked = (origin in self._suppressed and grant.mode == "confirm-each"
+                              and not self._yolo_enabled)
+            if self.denied or origin in self._revoked or origin in self._blocked_gate or review_blocked:
+                state = "blocked"
+            elif budget.expired(now):
+                state = "expired"
+            elif budget.exhausted():
+                state = "exhausted"
+            else:
+                state = "active"
+                active += 1
+            quota = (f"{max(0, grant.limits.requests - budget.used)} requests left"
+                     if grant.limits.requests is not None else "no request quota")
+            lifetime = (f"{max(0, grant.expires_at - now):.0f}s left"
+                        if grant.expires_at is not None else "session lifetime")
+            grants.extend((
+                f"{origin.as_url()}: {state}; {grant.mode}",
+                f"  {quota}; {lifetime}; {self._inflight.get(origin, 0)}/{grant.limits.concurrency} running",
+                f"  Revoke ID: {grant.id}",
+            ))
+        rows.append(f"HTTP grants: {active} active" if grants else "HTTP grants: none")
+        rows.extend(grants)
+        if self._suppressed:
+            rows.append("HTTP retry needed: " + ", ".join(o.as_url() for o in sorted(self._suppressed)))
+        if self._blocked_gate:
+            rows.append("Private-host review blocked: " + ", ".join(o.as_url() for o in sorted(self._blocked_gate)))
+        if grants:
+            rows.append("HTTP grants do not approve scanner jobs.")
+        return "\n".join(rows)
+
     def status(self) -> str:
         rows = [f"HTTP runtime session {self.session_id}; YOLO: {self._yolo_enabled}; session deny: {self.denied}", WARNING]
         for origin, grant in self.grants.items():
@@ -492,6 +531,15 @@ class HTTPPermissions:
     @property
     def revoked_origins(self) -> frozenset[HTTPOrigin]:
         return frozenset(self._revoked)
+
+    def origin_authority(self, origin: HTTPOrigin) -> tuple[str, int, str | None]:
+        """Read-only invalidation identity, not permission or request accounting.
+
+        The version also observes replacement from no grant to a grant. Callers
+        retain their own operation approval; usage/tokens/inflight are excluded.
+        """
+        grant = self.grants.get(origin)
+        return self.epoch, self._grant_versions.get(origin, 0), grant.id if grant else None
 
     def revocation_state(self) -> dict[str, Any]:
         return {"denied": self.denied, "origins": [o.as_url() for o in sorted(self._revoked)]}

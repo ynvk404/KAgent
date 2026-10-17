@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from contextlib import contextmanager
+from src.workflow.evidence_source import EvidenceSource
 
 import pytest
 
@@ -94,32 +96,25 @@ async def test_source_swap_reaches_workflow_metadata_with_real_policy(scratch, m
     prompter.bind_execution_policy(policy)
     registry = Registry()
     registry.register(tool)
-    original = Path.open
+    original = EvidenceSource.open
 
-    def read(path, *args, **kwargs):
+    @contextmanager
+    def read(binding):
+        path = binding.path
         if path == source and not source.is_symlink():
             source.unlink()
             source.symlink_to(outside)
-        return original(path, *args, **kwargs)
+        with original(binding) as handle:
+            yield handle
 
-    monkeypatch.setattr(Path, "open", read)
-    result = json.loads(await registry.execute("workflow", {
+    monkeypatch.setattr(EvidenceSource, "open", read)
+    result = await registry.execute("workflow", {
         "action": "record_evidence", "candidate_id": cid, "evidence_path": source.name,
-    }, None, prompter))
-    assert result["ok"]
-    artifact = tool.state.evidence[result["evidence"]["id"]]
-    assert (lab / artifact.path).read_bytes() == b"synthetic outside"
-    # Later managed verification rejects the now-outside source; it cannot
-    # erase bytes already read, published and adopted as derived metadata.
-    token = policy.start(policy.prepare(tool, {"action": "status"}), tool, {"action": "status"}, None)
-    try:
-        with pytest.raises(ExecutionBlocked):
-            policy.require_evidence(artifact, lab)
-    finally:
-        policy.stop(token)
-    assert not tool.state.mutation_lock.locked() and policy.active == 0
-    observed("source-swap-workflow-adoption", "FAIL", "PRODUCTION")
-
+    }, None, prompter)
+    assert str(result).startswith("error:")
+    assert not tool.state.evidence and not list(lab.rglob("*.proof"))
+    assert not policy.active and not tool.state.mutation_lock.locked()
+    observed("source-swap-workflow-adoption", "PASS", "PRODUCTION")
 
 def test_capture_postread_growth_is_bounded_and_rejected(scratch, monkeypatch):
     source = scratch / "proof.txt"
@@ -127,7 +122,7 @@ def test_capture_postread_growth_is_bounded_and_rejected(scratch, monkeypatch):
     replacement = b"x" * (MAX_EVIDENCE_BYTES + 1)
     from tests.security.test_evidence_correctness import instrument_source
     reads = instrument_source(monkeypatch, source, before_read=lambda: source.write_bytes(replacement))
-    with pytest.raises(ValueError, match="at most 2 MB"):
+    with pytest.raises(ValueError, match="at most 2 MB|changed during capture"):
         EvidenceArtifact.capture("candidate", source.name, scratch)
     assert reads.received == MAX_EVIDENCE_BYTES + 1
     assert reads[0] == MAX_EVIDENCE_BYTES + 1

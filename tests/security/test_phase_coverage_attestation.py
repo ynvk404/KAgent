@@ -76,7 +76,12 @@ async def test_http_attests_core_dimensions_only_after_observed_response(runtime
     assert state.phase_coverage_record('enumeration', 'html_navigation') is None
     facts = state.progress_facts()
     await registry.execute('http', {'url': '/', 'phase': 'recon'}, None, p)
-    assert state.progress_facts() == facts
+    # Metadata-only -> captured body supplies actual new source content.
+    full_facts = state.progress_facts()
+    assert full_facts - facts
+    assert all(fact.startswith('phase-source:') for fact in full_facts - facts)
+    await registry.execute('http', {'url': '/', 'phase': 'recon'}, None, p)
+    assert state.progress_facts() == full_facts
 
 
 @pytest.mark.asyncio

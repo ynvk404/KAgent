@@ -434,7 +434,13 @@ async def test_submission_failure_exposes_fd_transfer_gap_and_partial_effect(scr
     path.write_bytes(b"original")
     args = {"path": str(path), "content": "new"}
     captured = []
-    async def unavailable(worker, fd, payload):
+    original_to_thread = asyncio.to_thread
+    async def unavailable(worker, *worker_args, **worker_kwargs):
+        # Fault only the prototype's descriptor handoff. Permission gates may
+        # perform their own unrelated, joined filesystem reads in workers.
+        if worker is not write_close:
+            return await original_to_thread(worker, *worker_args, **worker_kwargs)
+        fd, payload = worker_args
         captured.append(fd)
         raise RuntimeError("synthetic executor submission unavailable")
     with active(scratch, args) as (policy, tool, prompter):
@@ -495,7 +501,11 @@ async def test_cancelled_queued_admitted_write_still_runs_only_under_proposed_le
     with ThreadPoolExecutor(max_workers=1) as executor:
         holder = executor.submit(occupy)
         assert busy.wait(2)  # bounded setup only; no operation under test yet
-        async def queued(worker, fd, payload):
+        original_to_thread = asyncio.to_thread
+        async def queued(worker, *worker_args, **worker_kwargs):
+            if worker is not write_close:
+                return await original_to_thread(worker, *worker_args, **worker_kwargs)
+            fd, payload = worker_args
             pending = loop.run_in_executor(executor, worker, fd, payload)
             submitted.set()
             return await pending

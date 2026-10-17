@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import threading
+from src.async_io import run_sync
+from src.logger.writer import BackgroundWriter
 import logging
 import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from src.paths import user_data_root
 from src.redaction.redact import redact_payload
@@ -128,6 +132,59 @@ def _restrict_existing_log_files(target: Path) -> None:
 class SecureRotatingFileHandler(RotatingFileHandler):
     """Rotating file handler that creates every active log with mode 0600."""
 
+    def __init__(self, *args, **kwargs):
+        self._io_lock = threading.RLock()
+        self.writer = BackgroundWriter(self._write_line, drop_record=lambda count: json.dumps({
+            "level": "warning", "message": "log records dropped", "count": count}))
+        super().__init__(*args, **kwargs)
+
+    def emit(self, record):
+        try:
+            line = self.format(record)
+            if self.writer.closed:
+                self.writer.submit(line)
+                return
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                if self.writer.thread is None:
+                    self._write_line(line)
+                else:
+                    self.writer.submit(line)
+                    self.writer.flush()
+            else:
+                self.writer.submit(line)
+        except Exception as error:
+            self.writer.last_error = type(error).__name__
+            self.writer.failed_records += 1
+
+    def _write_line(self, line: str) -> None:
+        # The logging Handler lock belongs only to producers. A slow writer
+        # must never hold it while the Textual thread emits another record.
+        with self._io_lock:
+            stream = self.stream if self.stream is not None else self._open()
+            self.stream = cast(Any, stream)
+            if self.maxBytes > 0:
+                stream.seek(0, 2)
+                if stream.tell() + len((line + "\n").encode("utf-8")) >= self.maxBytes:
+                    self.doRollover()
+                    stream = self.stream
+                    if stream is None:
+                        raise OSError("log rotation did not reopen the private stream")
+            stream.write(line + "\n")
+            stream.flush()
+
+    def flush(self):
+        self.writer.flush()
+        with self._io_lock:
+            if self.stream is not None:
+                self.stream.flush()
+
+    def close(self):
+        self.writer.close()
+        with self._io_lock:
+            super().close()
+
     def _open(self):
         fd = os.open(
             self.baseFilename,
@@ -207,6 +264,11 @@ def _close_handlers(log: logging.Logger) -> None:
     for handler in list(log.handlers):
         log.removeHandler(handler)
         handler.close()
+
+
+async def aclose() -> None:
+    for handler in list(_current_logger.handlers):
+        await run_sync(handler.close)
 
 
 def init_error() -> Exception | None:

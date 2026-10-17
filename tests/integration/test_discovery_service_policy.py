@@ -96,8 +96,7 @@ def runtime_factory(tmp_path, boundary):
         elif coverage == "no-workflow":
             runtime.workflow.objective = None
         runtime.inventory = CapabilityInventory(which=lambda name: nmap if name == "nmap" else None)
-        runtime.service = ServiceDiscoveryTool(
-            runtime.target, runtime.engagement, runtime.inventory, lambda: profile, runtime.workflow)
+        runtime.service = ServiceDiscoveryTool(runtime.target, runtime.engagement, workflow=runtime.workflow)
         runtime.registry.register(runtime.service)
         runtime.grant = runtime.engagement.http_permissions.activate(
             origin, HTTPLimits(requests=10, rate=100, burst=10))
@@ -139,9 +138,10 @@ async def test_registry_selects_native_before_review_and_consumes_socket_budget(
     assert request.tool == "service_discovery" and "backend: socket" in request.detail
     assert "using socket" in request.session_scope_display
     assert runtime.inventory.snapshot().nmap == nmap
-    if profile == "full" and mode == "auto" and nmap:
-        assert "nmap detected" in payload["backend_reason"]
-        assert "execution unsupported" in payload["backend_reason"]
+    assert payload["backend_reason"] == (
+        "socket backend explicitly selected" if mode == "socket"
+        else "native TCP discovery; external Nmap uses typed Shell scanner jobs"
+    )
     budget = runtime.engagement.http_permissions._budgets[runtime.grant.id]
     assert budget.used == 1 and budget.active == 0 and runtime.policy.used == 1
     boundary.writers[0].wait_closed.assert_awaited_once()

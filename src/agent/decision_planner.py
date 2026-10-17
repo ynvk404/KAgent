@@ -692,16 +692,16 @@ def _route_plan(candidate: PlannerCandidate, route: ValidationRoute, *, revalida
             "Register immutable evidence and record_result with skill_name=generic-bounded-validation. "
             "Both terminal outcomes require admissible primary evidence and explicitly declared bounded criteria. "
             "Agent interprets evidence; runtime checks ownership, integrity and execution completeness. "
-            "Without declared criteria or primary sources, record insufficient-evidence; optional /review-result grants no action rights. "
+            "Without declared criteria or primary sources, record insufficient-evidence and identify what is missing. "
             "Covered YOLO actions need no extra ask_user permission question or scope restatement. "
             "Blocked/denied/unavailable actions stop without repeated approval questions; native scheduling handles rate/concurrency. "
             "Ask only for genuinely missing endpoint/input, credentials/OTP or intent; reuse valid session answers."
         )
         reason = f"candidate {candidate.id} admitted for generic bounded validation"
     else:
-        reason = route.reason or candidate.deferred_reason or "generic work unresolved; explicit proof review or retest required"
+        reason = route.reason or candidate.deferred_reason or "generic work unresolved; missing evidence or explicit retest required"
         guidance = (f"Candidate {candidate.id} remains unresolved: {reason}. "
-                    "Retain evidence; use operator /review-result for a proof conclusion when available. "
+                    "Retain evidence, keep the unresolved outcome and identify missing evidence or context. "
                     "Do not restart/probe or repeat permission/review questions while the blocker is unchanged. "
                     "Do not report the objective completed.")
     return DecisionPlan(None, reason, "normal", [], guidance, candidate.id)
