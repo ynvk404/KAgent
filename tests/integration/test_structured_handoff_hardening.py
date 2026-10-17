@@ -84,7 +84,7 @@ async def test_f1_restored_candidate_cannot_alias_reused_capture_id(tmp_path, re
     restored = session.load().workflow
     fresh = CaptureStore()
     assert fresh.ingest(capture_payload(replacement))["id"] == ingested["id"]
-    with pytest.raises(ValueError, match="unavailable.*recapture required"):
+    with pytest.raises(ValueError, match=r"Captured baseline is unavailable or unbound\. Capture the request again\."):
         http_tool(restored, fresh).prepare(replay_args(candidate.id))
 
 

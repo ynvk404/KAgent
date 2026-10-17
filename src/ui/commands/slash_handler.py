@@ -16,7 +16,6 @@ from src.agent.agent import (
 )
 from src.config.config import Backend
 from src.llm.core.models import list_models
-from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.state import Append, Clear, TranscriptEntry
 from src.ui.render.help import HelpDocument, HelpSection
 from src.ui.render.permissions import permissions_summary
@@ -28,19 +27,6 @@ if TYPE_CHECKING:
     from src.agent.agent import Agent
     from src.ui.core.app import KAgent, RunAgentOptions
 
-# Reserved only to stop retired commands from falling through to an agent turn.
-REMOVED_SLASH_COMMANDS = frozenset({"/review-result", "/enrich-cwe", "/next"})
-# Reserve shipped aliases even if skill discovery fails or a skill is removed.
-# Custom aliases still present in the registry are handled below.
-MOVED_SKILL_SLASH_COMMANDS = frozenset({
-    "/access-control", "/authentication", "/command-injection",
-    "/cors-misconfiguration", "/cross-site-scripting", "/csrf", "/file-upload",
-    "/jwt-misconfiguration", "/nosql-injection", "/open-redirect",
-    "/path-traversal", "/recon", "/sql-injection", "/ssrf", "/ssti",
-    "/web-enumeration", "/web-input-analysis", "/xxe",
-})
-SKILL_SLASH_MOVED_NOTICE = "Skill slash commands moved to /skills."
-
 DEFAULT_THINKING_ENABLED = False
 DEFAULT_YOLO_ENABLED = False
 _DOMAIN_LABEL_RE = re.compile(
@@ -49,40 +35,40 @@ _DOMAIN_LABEL_RE = re.compile(
 
 
 _KEYBINDINGS: list[tuple[str, str]] = [
-    ("/ then Tab, Tab", "complete a slash command, then run it"),
-    ("#<text> / #!<text>", "save project / personal memory"),
-    (
-        "↑ / ↓",
-        "browse prompt history at the first / last input line",
-    ),
-    ("Ctrl-N / Ctrl-J", "insert a newline inside the input"),
-    ("Ctrl-A / Ctrl-E", "jump to start / end of the current line"),
-    ("Esc / Ctrl-C", "clear or cancel / quit"),
+    ("/ + Tab", "complete / run command"),
+    ("#text / #!text", "save project / personal memory"),
+    ("↑ / ↓", "prompt history"),
+    ("Ctrl-J / Ctrl-N", "insert newline"),
+    ("Ctrl-A / Ctrl-E", "line start / end"),
+    ("Esc / Ctrl-C", "cancel / quit"),
 ]
 
 _COMMAND_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     ("Everyday", ("/help", "/target", "/scope", "/plan", "/provider", "/model", "/clear", "/reset", "/exit")),
-    ("Workflow", ("/report", "/turn-details", "/compact", "/memory", "/skills", "/snapshot")),
+    ("Workflow", ("/report", "/turn-details", "/compact", "/memory", "/skills")),
     ("Advanced", ("/permissions", "/burp", "/maxsteps", "/thinking", "/yolo")),
 ]
 
-_HELP_OVERRIDES: dict[str, tuple[str, str]] = {
-    "/permissions": (
-        "[show|browser [revoke]|grant <spec>|revoke <id>|deny|retry <origin>]",
-        "view execution profile, Browser grants, limits, tool revokes and HTTP permissions",
-    ),
-    "/burp": ("[port|stop|status|credentials|list|use [id|cancel]|all]",
-              "manage bridge; list captures; use selects one; all selects at most 50 most recent requests"),
-    "/exit": ("(/quit)", "quit kagent"),
-    "/memory": (
-        "[add <text>|list|forget <text>|clear|intel]",
-        "manage saved/session memory",
-    ),
-    "/model": ("<id|list>", "switch model; list also accepts ls"),
-    "/skills": (
-        "[<name>|enable|disable <name>|new <name>]",
-        "pick/use, toggle, or create skills",
-    ),
+_QUICK_HELP: dict[str, tuple[str, str]] = {
+    "/help": ("", "commands + keys"),
+    "/target": ("[url|clear]", "show/set target"),
+    "/scope": ("[...]", "manage HTTP/TCP scope"),
+    "/plan": ("[objective]", "plan without tools"),
+    "/provider": ("", "configure provider"),
+    "/model": ("[id|list]", "switch/list model"),
+    "/clear": ("", "clear transcript"),
+    "/reset": ("", "reset conversation/session"),
+    "/exit": ("", "quit"),
+    "/report": ("[file.pdf]", "export assessment"),
+    "/turn-details": ("", "latest turn diagnostics"),
+    "/compact": ("", "compact conversation"),
+    "/memory": ("[...]", "manage memory"),
+    "/skills": ("[...]", "use/manage skills"),
+    "/permissions": ("[...]", "permissions + grants"),
+    "/burp": ("[...]", "Burp bridge/captures"),
+    "/maxsteps": ("[n]", "tool-call limit"),
+    "/thinking": ("[...]", "reasoning mode"),
+    "/yolo": ("[...]", "auto-approval profile"),
 }
 
 
@@ -92,7 +78,7 @@ def build_help_document(agent: "Agent", read_config) -> HelpDocument:
 
     enabled = len(agent.skills.list_enabled())
     total = len(agent.skills.list())
-    target = agent.target.base_url() or "(none — engagement unset)"
+    target = agent.target.base_url() or "(not set)"
     provider = cfg.get("backend") or "ollama"
     model = cfg.get("model") or agent.client.model() or "(unset)"
     memory = agent.get_memory_stats()
@@ -107,43 +93,37 @@ def build_help_document(agent: "Agent", read_config) -> HelpDocument:
     out.append(f"  provider   {provider}")
     out.append(f"  model      {model}")
     out.append(f"  target     {target}")
-    status_fn = getattr(agent, "reasoning_status", None)
-    status_value = status_fn() if callable(status_fn) else None
-    thinking_status = (
-        status_value if isinstance(status_value, str)
-        else f"thinking {'on' if agent.thinking_is_enabled() else 'off'}"
+    compact_threshold = agent.get_auto_compact_threshold()
+    compact_label = (
+        f"{compact_threshold // 1000}k" if compact_threshold >= 1000
+        else f"{compact_threshold} tok"
     )
     out.append(
-        f"  limits     max-steps {agent.get_max_steps()}"
-        f"  ·  auto-compact {agent.get_auto_compact_threshold()} tok"
-        f"  ·  {thinking_status}"
+        f"  limits     {agent.get_max_steps()} steps"
+        f"  ·  {compact_label} compact"
+        f"  ·  thinking {'on' if agent.thinking_is_enabled() else 'off'}"
     )
     out.append(f"  skills     {enabled}/{total} enabled")
-    out.append(
-        f"  memory     {memory.items} items"
-        f"  ·  compactions {memory.compactions}"
-    )
+    out.append(f"  memory     {memory.items} items")
     out.append("")
 
     summary = sanitize_text("\n".join(out).rstrip())
     sections: list[HelpSection] = []
-    items = {item.name: item for item in SLASH_ITEMS}
     for group, names in _COMMAND_GROUPS:
         rows: list[tuple[str, str]] = []
         for name in names:
-            item = items[name]
-            args, description = _HELP_OVERRIDES.get(name, (item.args or "", item.description))
+            args, description = _QUICK_HELP[name]
             rows.append((f"{name} {args}".rstrip(), description))
         sections.append(HelpSection(group, tuple(rows)))
     sections.append(HelpSection("Skill picker", (
-        ("↑↓ / Tab", "select a skill"),
-        ("Space", "enable or disable the selected skill"),
-        ("Enter", "use the selected enabled skill for the next prompt; close on success"),
-        ("a / d", "enable all / disable all"),
-        ("Esc / q", "close the picker"),
+        ("↑↓ / Tab", "select"),
+        ("Space", "enable / disable"),
+        ("Enter", "use selected skill"),
+        ("a / d", "enable / disable all"),
+        ("Esc / q", "close picker"),
     )))
-    sections.append(HelpSection("Input & navigation", tuple(_KEYBINDINGS)))
-    return HelpDocument(summary, tuple(sections), "Type / for the live command menu.")
+    sections.append(HelpSection("Input", tuple(_KEYBINDINGS)))
+    return HelpDocument(summary, tuple(sections), "Type / for commands.")
 
 
 def build_help_text(agent: "Agent", read_config) -> str:
@@ -248,14 +228,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
     cmd, *rest = parts
 
-    if cmd in REMOVED_SLASH_COMMANDS:
-        app.dispatch(Append(entry=TranscriptEntry(kind="system", text=f"{cmd}: command has been removed.")))
-        return True
-
-    if cmd in MOVED_SKILL_SLASH_COMMANDS:
-        app.dispatch(Append(entry=TranscriptEntry(kind="system", text=SKILL_SLASH_MOVED_NOTICE)))
-        return True
-
     agent = app.agent
     dispatch = app.dispatch
 
@@ -280,10 +252,10 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             elif sub == 'browser' and policy is not None:
                 binding = policy.browser_local
                 if binding is None:
-                    raise ValueError('Browser MCP is not enabled; start with --browser and --target')
+                    raise ValueError('Browser MCP is not enabled. Start with --browser and --target.')
                 if rest == ['browser', 'revoke']:
                     binding.revoke_grant()
-                    text = 'Browser grant revoked. Queued auto-approvals cannot dispatch; already-sent effects are not rolled back.'
+                    text = 'Browser grant revoked. Queued auto-approvals cannot dispatch. Already-sent effects are not rolled back.'
                 elif rest == ['browser']:
                     text = binding.grant_status()
                 else:
@@ -293,13 +265,13 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                 text = f"Tool revoked: {rest[1]}. YOLO and ordinary approval cannot override this rule."
             elif sub == "restore-tool" and len(rest) == 2 and policy is not None:
                 policy.restore_tool(rest[1])
-                text = f"Operator restored tool eligibility: {rest[1]}; resource and adapter checks still apply."
+                text = f"Tool restored: {rest[1]}. Resource and adapter checks still apply."
             elif sub == "retry-tools" and len(rest) == 1 and policy is not None:
                 policy.retry()
-                text = "Operator reopened declined invocation reviews; explicit tool/resource revokes remain."
+                text = "Declined actions can be reviewed again. Explicit tool and resource revocations remain in effect."
             elif sub == "network-refresh" and len(rest) == 1 and policy is not None:
                 policy.refresh_network()
-                text = "Operator cleared vetted DNS bindings; next native connection re-vets its declared origin. No quota refill."
+                text = "DNS bindings cleared. The next native connection rechecks its declared origin. Quotas are unchanged."
             elif sub == "limits" and len(rest) == 3 and policy is not None:
                 calls, concurrency = (None if rest[1] == 'session' else int(rest[1])), int(rest[2])
                 if (calls is not None and calls <= 0) or concurrency <= 0:
@@ -310,15 +282,15 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                 text = permissions_summary(rights, policy)
             elif sub == "deny" and len(rest) == 1:
                 rights.deny_session()
-                text = "HTTP denied for session; active grants revoked. Explicit retry/new grant required."
+                text = "HTTP denied for this session. Active grants revoked. Explicit retry or a new grant is required."
             elif sub == "revoke" and len(rest) == 2:
                 rights.revoke(rest[1])
-                text = "HTTP grant revoked. New dispatch blocked; already-sent effects cannot be undone."
+                text = "HTTP grant revoked. New dispatch blocked. Already-sent effects cannot be undone."
             elif sub == "retry" and len(rest) == 2:
                 rights.retry(rest[1])
-                text = ("Operator reopened HTTP review for this origin. Expired/exhausted exact-only "
-                        "envelope can renew with default limits; lab grant budgets unchanged. "
-                        "No exact request approval issued; active YOLO can reopen scoped autonomy.")
+                text = ("HTTP review reopened for this origin. An expired or exhausted exact-only "
+                        "execution envelope can renew with default limits. Lab grant budgets are unchanged. "
+                        "No exact request was approved. Active YOLO can reopen scoped autonomy.")
             elif sub == "grant" and len(rest) == 2:
                 origin, limits, mode = parse_lab_spec(rest[1])
                 async def _review_http_grant():
@@ -327,7 +299,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                         grant = await rights.review_grant(origin, limits, mode, review)
                         if policy is not None:
                             policy.persist()
-                        result = permissions_summary(rights, policy) if grant else "HTTP grant declined; no rights issued."
+                        result = permissions_summary(rights, policy) if grant else "HTTP grant declined. No permissions were granted."
                         dispatch(Append(entry=TranscriptEntry(kind="system", text=result)))
                     except Exception as err:
                         dispatch(Append(entry=TranscriptEntry(kind="error", text=f"HTTP permissions: {err}")))
@@ -357,16 +329,17 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             )
             scope_text = (
                 ", ".join(origin.as_url() for origin in sorted(scope_origins))
-                if scope_origins else "no target scope declared; set /target first"
+                if scope_origins else "no target scope declared. Set /target first"
             )
             dispatch(
                 Append(
                     entry=TranscriptEntry(
                         kind="system",
                         text=(
-                            f"YOLO currently {current}. When on, native HTTP runs within "
-                            "operator scope and resource limits. Covered permission gates auto-approve; "
-                            f"resource checks and revoke remain independent. Unsupported adapters are blocked. Scope: {scope_text}."
+                            f"YOLO: {current}\nWhen on, native HTTP runs within "
+                            "operator scope and resource limits. Covered permission gates auto-approve. "
+                            "Resource checks and revocation remain independent. Unsupported adapters are blocked.\n"
+                            f"Scope: {scope_text}."
                         ),
                     )
                 )
@@ -401,20 +374,21 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             )
             scope_text = (
                 ", ".join(origin.as_url() for origin in sorted(scope_origins))
-                if scope_origins else "no target scope declared; set /target first"
+                if scope_origins else "no target scope declared. Set /target first"
             )
             text = (
-                "YOLO enabled: native HTTP automatically receives session rights in operator scope. "
-                "Per origin: no request quota or fixed grant TTL; 3/s (burst 3), concurrency 2, "
-                "request 128 KiB, retained response 64 KiB. You accept unknown server effects; "
-                "bulk delete or changes to real data are NOT prevented. "
-                "Existing limits and revocation remain enforced; confirm-each resumes when OFF. "
-                "Use /permissions to view or adjust. Shell/plugin and compatible local stdio MCP use the isolated worker/scoped HTTP broker; "
-                "ffuf has a constrained HTTP adapter. Raw TCP/nmap, CONNECT and remote MCP remain unavailable. "
+                "YOLO enabled. Native HTTP receives session permissions within operator scope.\n"
+                "Per origin: no request quota or fixed grant TTL · 3/s (burst 3) · concurrency 2 · "
+                "request 128 KiB · retained response 64 KiB.\n"
+                "You accept unknown server effects. Bulk delete or changes to real data are NOT prevented.\n"
+                "Existing limits and revocation remain enforced. Confirm-each resumes when OFF.\n"
+                "Use /permissions to view or adjust.\n"
+                "Shell/plugin and compatible local stdio MCP use the isolated worker/scoped HTTP broker. "
+                "ffuf has a constrained HTTP adapter. Raw TCP/nmap, CONNECT and remote MCP remain unavailable.\n"
                 f"Scope: {scope_text}."
             )
         else:
-            text = "YOLO disabled: YOLO HTTP rights removed. Explicit autonomous HTTP grants remain active; confirm-each still prompts."
+            text = "YOLO disabled. YOLO HTTP permissions removed. Explicit autonomous HTTP grants remain active. Confirm-each still prompts."
 
         dispatch(
             Append(
@@ -455,38 +429,20 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         return True
 
 
-    if cmd == "/snapshot":
-        async def _snapshot():
-            try:
-                path = await agent.save_context_snapshot("manual /snapshot")
-                dispatch(
-                    Append(
-                        entry=TranscriptEntry(
-                            kind="system",
-                            text=(f"context snapshot saved: {path}" if path else "no session store configured"),
-                        )
-                    )
-                )
-            except Exception as err:
-                dispatch(Append(entry=TranscriptEntry(kind="error", text=f"/snapshot: {err}")))
-
-        asyncio.create_task(_snapshot())
-        return True
-
     if cmd == "/burp":
         sub = rest[0] if rest else ""
         if sub in {"list", "use", "all"}:
             from src.browser.selection import LIST_DISPLAY_LIMIT, MAX_SELECTED_REQUESTS
             changing = sub != "list"
             if changing and agent.is_running():
-                dispatch(Append(entry=TranscriptEntry(kind="error", text="/burp: a turn is already running; selection cannot change.")))
+                dispatch(Append(entry=TranscriptEntry(kind="error", text="/burp: a turn is already running. Selection cannot change.")))
                 return True
             # Synchronous selection makes a following prompt see exactly this
             # snapshot; no scheduled task can select after that prompt starts.
             if (sub in {"list", "all"} and len(rest) != 1) or (sub == "use" and len(rest) > 2):
                 if changing:
                     agent.cancel_capture_selection()
-                dispatch(Append(entry=TranscriptEntry(kind="error", text="usage: /burp list | /burp use [id|cancel] | /burp all; pending selection cleared." if changing else "usage: /burp list")))
+                dispatch(Append(entry=TranscriptEntry(kind="error", text="usage: /burp list | /burp use [id|cancel] | /burp all\nPending selection cleared." if changing else "usage: /burp list")))
                 return True
             try:
                 if sub == "list":
@@ -498,7 +454,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                         text += "No matching Burp requests for the active target."
                 elif len(rest) == 2 and rest[1] == "cancel":
                     agent.cancel_capture_selection()
-                    text = "Pending Burp selection cancelled; capture store retained."
+                    text = "Pending Burp selection cancelled. Captured requests were kept."
                 else:
                     selection, total = agent.select_burp_captures(
                         rest[1] if len(rest) == 2 else None, all_recent=sub == "all")
@@ -512,7 +468,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                 text = f"/burp: {err}"
                 if changing:
                     agent.cancel_capture_selection()
-                    text += "\nPending selection cleared; Agent was not started."
+                    text += "\nPending selection cleared. Agent was not started."
                 dispatch(Append(entry=TranscriptEntry(kind="error", text=text)))
             return True
 
@@ -542,7 +498,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                         return
                     text = (
                         f"Burp bridge: running at {r.state.url} (port {r.state.port})\n"
-                        "Bridge token hidden; /burp credentials to reveal/copy locally"
+                        "Bridge token hidden. Use /burp credentials to view or copy it locally."
                     )
                 dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
 
@@ -589,17 +545,17 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                         text = (
                             f"Burp bridge stopped on port {r.old_port}, "
                             f"restarted at {r.state.url}\n"
-                            "Bridge token hidden; /burp credentials to reveal/copy locally"
+                            "Bridge token hidden. Use /burp credentials to view or copy it locally."
                         )
                     case "already_running":
                         text = (
                             f"Burp bridge already running at {r.state.url}\n"
-                            "Bridge token hidden; /burp credentials to reveal/copy locally"
+                            "Bridge token hidden. Use /burp credentials to view or copy it locally."
                         )
                     case _:  
                         text = (
                             f"Burp bridge listening at {r.state.url}\n"
-                            "Bridge token hidden; /burp credentials to reveal/copy locally"
+                            "Bridge token hidden. Use /burp credentials to view or copy it locally."
                         )
                 dispatch(Append(entry=TranscriptEntry(kind="system", text=text)))
             except Exception as err:
@@ -989,13 +945,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         handle_skills_command(agent, rest, dispatch, app.persist_disabled_skills, app.on_skill_created)
         return True
 
-    skill_name = cmd[1:] if cmd.startswith("/") else ""
-    if skill_name and agent.skills.has(skill_name):
-        dispatch(Append(entry=TranscriptEntry(
-            kind="system", text=SKILL_SLASH_MOVED_NOTICE,
-        )))
-        return True
-
     return False
 
 
@@ -1111,8 +1060,8 @@ async def _handle_memory(agent, rest: list[str], dispatch) -> None:
                             text=(
                                 f"Intelligence (learned scenarios) — "
                                 f"project: {stats.get('project', 0)} · personal: {stats.get('personal', 0)}\n"
-                                "(auto-capped + pruned to most recent per scope; use "
-                                "/memory intel clear [project|personal|all] to wipe)"
+                                "Keeps the most recent entries within each scope's limit.\n"
+                                "Clear: /memory intel clear [project|personal|all]"
                             ),
                         )
                     )

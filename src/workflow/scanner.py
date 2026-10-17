@@ -192,7 +192,7 @@ class ScannerJob:
         if not set(record_ids) <= ids or (not record_ids and not remaining):
             raise ValueError('scanner record IDs must belong to the verified retained dataset')
         if len(set(self.dispositions) | set(record_ids)) > MAX_TRIAGE:
-            raise ValueError('scanner triage state limit; use aggregate deferred/dropped for remaining records')
+            raise ValueError('Scanner triage state limit reached. Use aggregate deferred/dropped for the remaining records.')
         safe_reason = clean(reason, 240)
         if missing_artifact:
             self.artifacts.update(retrieval='unavailable', retrieval_error='missing_artifact')

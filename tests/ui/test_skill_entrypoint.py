@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, Mock
 
@@ -16,7 +15,7 @@ from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.session.store import Store
 from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry, Skill
-from src.ui.commands.slash_handler import MOVED_SKILL_SLASH_COMMANDS, build_help_text, handle_slash
+from src.ui.commands.slash_handler import build_help_text
 from src.ui.commands.slash_items import SLASH_ITEMS
 from src.ui.core.app import KAgent
 from src.ui.widgets.skills_modal import SkillsModal
@@ -44,7 +43,7 @@ def registry() -> Registry:
 
 @pytest.mark.parametrize("disabled", [False, True])
 @pytest.mark.parametrize("padding", ["", " \t"])
-async def test_all_installed_aliases_are_local_not_agent_turns(registry, disabled, padding):
+async def test_installed_skill_aliases_use_normal_agent_prompt_path(registry, disabled, padding):
     tui = make_app()
     agent = make_agent(skills=registry)
     tui.agent = agent
@@ -54,12 +53,14 @@ async def test_all_installed_aliases_are_local_not_agent_turns(registry, disable
     inject = AsyncMock()
     agent.inject_skill = inject
     before = list(agent.history)
+    prompts = []
     for skill in registry.list():
-        tui.submit(f"{padding}/{skill.name} ignored arguments\n")
-        assert tui.state.transcript[-1].text == "Skill slash commands moved to /skills."
-    await asyncio.sleep(0)
+        prompt = f"{padding}/{skill.name} ignored arguments\n"
+        prompts.append(prompt)
+        tui.submit(prompt)
+        await asyncio.sleep(0)
     inject.assert_not_called()
-    tui.run_agent_turn.assert_not_called()
+    assert [entry.args[0] for entry in tui.run_agent_turn.await_args_list] == prompts
     assert agent.history == before and not agent.pending_skills
 
 
@@ -79,22 +80,18 @@ def test_live_menu_and_help_have_one_skill_entrypoint(registry):
         assert not tui.slash_matches
 
 
-@pytest.mark.parametrize("command", sorted(MOVED_SKILL_SLASH_COMMANDS))
-def test_shipped_legacy_aliases_need_no_runtime_or_registry(command):
-    actions = []
-    assert handle_slash(cast(KAgent, SimpleNamespace(dispatch=actions.append)), command + " args")
-    assert actions[-1].entry.text == "Skill slash commands moved to /skills."
-
-
-async def test_legacy_alias_submit_does_not_fall_through_when_registry_is_empty():
+async def test_legacy_skill_alias_uses_normal_prompt_without_registry():
     tui = make_app()
     tui.agent = make_agent()
     tui.run_agent_turn = AsyncMock()
-    for command in MOVED_SKILL_SLASH_COMMANDS:
-        tui.submit(f" \t{command} previous arguments")
-        assert tui.state.transcript[-1].text == "Skill slash commands moved to /skills."
+    command = "/recon"
+    prompt = f" \t{command} previous arguments"
+    tui.submit(prompt)
     await asyncio.sleep(0)
-    tui.run_agent_turn.assert_not_called()
+    tui.run_agent_turn.assert_awaited_once()
+    awaited = tui.run_agent_turn.await_args
+    assert awaited is not None
+    assert awaited.args[0] == prompt
 
 
 def custom_skill(name="manual-only", *, user_only=True) -> Skill:

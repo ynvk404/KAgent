@@ -367,7 +367,7 @@ async def test_real_scheduler_timeout_is_not_a_filtered_port(runtime_factory, bo
     before = deepcopy(runtime.workflow.to_dict())
     budget = expire_scheduler_window(runtime, monkeypatch)
 
-    with pytest.raises(HTTPReviewTimeout, match="scheduling deadline") as failure:
+    with pytest.raises(HTTPReviewTimeout, match="Rate or concurrency wait timed out") as failure:
         await runtime.registry.execute("service_discovery", {}, None, runtime.prompter)
 
     assert isinstance(failure.value, TimeoutError)

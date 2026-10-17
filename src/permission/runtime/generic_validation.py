@@ -132,7 +132,7 @@ class GenericValidationBoundary:
 
     def idle(self):
         if self.in_flight:
-            raise ValueError("generic probe in-flight; cannot switch or finish validation")
+            raise ValueError('A generic probe is in-flight. Cannot switch or finish validation.')
 
     def bind_probe_context(self, tool, candidate_id, probe, *, verified_input_only: bool):
         """Trusted controller integration for verified lab endpoint/action facts.
@@ -152,7 +152,7 @@ class GenericValidationBoundary:
         if (self.attempt is not None and candidate.status == "validating"
                 and self.started_objective == self.state.objective.id
                 and self.attempt != bound):
-            raise ValueError("generic active proposal/context cannot be replaced; finish or explicitly retest")
+            raise ValueError('The active generic proposal or context cannot be replaced. Finish it or explicitly retest.')
         self.contexts[candidate_id] = bound
         self.http_tool = tool
 
@@ -281,7 +281,7 @@ class GenericValidationBoundary:
             expected = self.proof_path(candidate)
             path = Path(args.get("path", "")).expanduser().absolute()
             if path != expected or path.resolve() != expected:
-                raise ValueError("generic write restricted to candidate proof.md; symlinks unavailable")
+                raise ValueError('Writes in generic validation are restricted to the candidate proof.md. Symlinks are unavailable.')
         elif name == "workflow":
             action = args.get("action")
             if action == "review_no_candidate":
@@ -311,7 +311,7 @@ class GenericValidationBoundary:
                 text = question.get("question", "") if isinstance(question, dict) else ""
                 if (is_authorization_scope_question(text, question.get("header") if isinstance(question, dict) else None)
                         or re.search(r"\b(?:permission|approve|authorize|continue validation|proceed with validation)\b", text, re.I)):
-                    raise ValueError("generic execution permission uses runtime gates; no duplicate ask_user approval")
+                    raise ValueError('Generic execution uses runtime permission gates. Do not request duplicate approval through ask_user.')
         elif name == "confirm_finding":
             self.require(args.get("candidate_id"))
 
@@ -320,7 +320,7 @@ class GenericValidationBoundary:
             _, request, _ = tool.captured_baseline(candidate)
             headers = list(request.headers.multi_items())
             if len({key.lower() for key, _ in headers}) != len(headers):
-                raise ValueError("generic captured baseline has duplicate headers; expert context required")
+                raise ValueError('Generic captured baseline has duplicate headers. Expert context is required.')
         else:
             _, request = tool.prepare({"url": candidate.endpoint, "method": candidate.method,
                                        **({"auth_context_ref": candidate.auth_context_ref}
@@ -328,7 +328,7 @@ class GenericValidationBoundary:
         from src.target.origin import HTTPOrigin
         from urllib.parse import urlsplit
         if candidate.auth_context_ref and not any(k in request.headers for k in ("cookie", "authorization")):
-            raise ValueError("generic runtime identity context unavailable; supply credentials/recapture")
+            raise ValueError('Generic runtime identity context is unavailable. Supply credentials or capture the request again.')
         if (request.method != candidate.method
                 or HTTPOrigin.from_url(str(request.url)) != HTTPOrigin.from_url(candidate.target)
                 or urlsplit(str(request.url)).path != urlsplit(candidate.endpoint).path):
@@ -340,7 +340,7 @@ class GenericValidationBoundary:
             raise ValueError("generic native HTTP executor context differs from admitted proposal")
         candidates = [c for c in self.candidates() if c.status == "validating"]
         if len(candidates) != 1:
-            raise ValueError("generic HTTP requires one started candidate; deferred work must stop")
+            raise ValueError('Generic HTTP requires one started candidate. Deferred work must stop.')
         candidate = self.require(candidates[0].id)
         if candidate.baseline_request_ref:
             _, _, source = tool.captured_baseline(candidate)
@@ -358,7 +358,7 @@ class GenericValidationBoundary:
             raise ValueError("generic HTTP requires native validation, zero redirects and candidate identity")
         if (self.attempt is None or self.started_candidate != candidate.id
                 or self.started_objective != self.state.objective.id):
-            raise ValueError("generic execution proposal unavailable; saved status grants no probe rights")
+            raise ValueError('Generic execution proposal is unavailable. Saved status does not authorize probes.')
         proposal = self.attempt.proposal
         if args.get("candidate_id") and "mutation_value" in args and (
                 args.get("mutation_value") not in proposal.values

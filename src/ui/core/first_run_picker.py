@@ -21,9 +21,8 @@ OPTIONS: list[ProfileOption] = [
             "built-in HTTP, native path discovery and TCP checks"
         ),
         helper=(
-            "The agent uses built-in and native semantic discovery. Optional "
-            "scanners are not selected automatically in this profile; generic "
-            "shell scanner use requires an explicit user request."
+            "Uses built-in HTTP and native semantic discovery. Optional scanners "
+            "are not selected automatically. Shell scanners require an explicit user request."
         ),
     ),
 
@@ -31,7 +30,7 @@ OPTIONS: list[ProfileOption] = [
         value=ToolingProfile.FULL,
         label="curl + optional ffuf / native TCP",
         description=(
-            "allows bounded ffuf path discovery when supported; native TCP service checks"
+            "run native TCP checks and allow bounded ffuf discovery when supported"
         ),
         helper=(
             "The agent may select ffuf only for a concrete "

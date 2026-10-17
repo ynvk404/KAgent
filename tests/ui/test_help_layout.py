@@ -33,7 +33,7 @@ def compact(text: str) -> str:
 def assert_command_cells(lines: list[str], document: HelpDocument, prefix: str = "") -> int:
     """Recover both cells independently; detect lost, crossed, or clipped text."""
     start = next(line for line in lines if line.startswith(prefix + "/help "))
-    description_column = start.index("show keybindings")
+    description_column = start.index("commands + keys")
     section_positions = [lines.index(prefix + section.title) for section in document.sections]
     assert section_positions == sorted(section_positions)
     for section_index, section in enumerate(document.sections[:3]):
@@ -53,22 +53,26 @@ def assert_command_cells(lines: list[str], document: HelpDocument, prefix: str =
 
 def test_help_sections_and_catalog_preserve_current_commands(document: HelpDocument) -> None:
     assert [section.title for section in document.sections] == [
-        "Everyday", "Workflow", "Advanced", "Skill picker", "Input & navigation",
+        "Everyday", "Workflow", "Advanced", "Skill picker", "Input",
     ]
     labels = [label for section in document.sections[:3] for label, _ in section.rows]
     names = [label.split()[0] for label in labels]
     assert len(names) == len(set(names)) == len(SLASH_ITEMS)
     assert set(names) == {item.name for item in SLASH_ITEMS}
     scope = next(item for item in SLASH_ITEMS if item.name == "/scope")
-    assert (f"{scope.name} {scope.args}", scope.description) in document.sections[0].rows
+    assert scope.args is not None and "tcp-add" in scope.args
+    assert ("/scope [...]", "manage HTTP/TCP scope") in document.sections[0].rows
     assert (
-        "/permissions [show|browser [revoke]|grant <spec>|revoke <id>|deny|retry <origin>]",
-        "view execution profile, Browser grants, limits, tool revokes and HTTP permissions",
+        "/permissions [...]",
+        "permissions + grants",
     ) in document.sections[2].rows
     assert (
-        "/burp [port|stop|status|credentials|list|use [id|cancel]|all]",
-        "manage bridge; list captures; use selects one; all selects at most 50 most recent requests",
+        "/burp [...]",
+        "Burp bridge/captures",
     ) in document.sections[2].rows
+    burp = next(item for item in SLASH_ITEMS if item.name == "/burp")
+    assert burp.args is not None and "use [id|cancel]" in burp.args
+    assert "at most 50" not in document.summary
     assert build_help_text(cast(Agent, HelpAgent()), lambda: {"backend": "offline", "model": "fixture"}) == document.plain_text()
 
 

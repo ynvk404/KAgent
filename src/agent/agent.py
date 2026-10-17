@@ -1323,18 +1323,18 @@ class Agent:
         )
         if resolution.effective is None:
             return (
-                f"thinking {'on' if preference else 'off'} requested; provider behavior unverified. "
+                f"Thinking {'on' if preference else 'off'} requested. Provider behavior is unverified. "
                 "System prompt guidance follows this setting."
             )
         if resolution.effective is not requested:
             status = (
-                f"thinking {'on' if preference else 'off'} requested; "
+                f"thinking {'on' if preference else 'off'} requested · "
                 f"model uses {resolution.effective.value} ({resolution.relation})"
             )
             if resolution.relation == "fallback":
                 return f"{status}. System prompt guidance follows this setting."
             return status
-        return f"thinking {'on' if preference else 'off'}; model uses {resolution.effective.value}"
+        return f"thinking {'on' if preference else 'off'} · model uses {resolution.effective.value}"
 
     async def set_thinking_enabled(self, enabled: bool) -> None:
         self.thinking = enabled
@@ -1798,8 +1798,8 @@ class Agent:
         return ToolAllowedResult(
             ok=False,
             reason=(
-                f'tool "{tool_name}" is not in any active skill allowed-tools list. '
-                f'Active skills: {"; ".join(summary)}. '
+                f'Tool "{tool_name}" is not in any active skill allowed-tools list. '
+                f'Active skills: {", ".join(summary)}. '
                 'Load a skill that allows this tool or choose another approach.'
             ),
         )
@@ -1979,7 +1979,7 @@ class Agent:
                 if view.decision is not None and view.decision.recommended_skill:
                     emit(self._planner_event(view.decision))
                 return
-        raise AgentRuntimeError("workflow request context changed repeatedly during admission; retry from current state")
+        raise AgentRuntimeError('Workflow request context changed repeatedly during admission. Retry from the current state.')
 
     def idle_request_estimate(self) -> ContextEstimate:
         """Carried request estimate, without recall/search or pending input."""
@@ -2314,7 +2314,7 @@ class Agent:
 
     def select_burp_captures(self, retrieval_id: str | None = None, *, all_recent: bool = False):
         if self.running:
-            raise ValueError("a turn is already running; Burp selection cannot change")
+            raise ValueError('A turn is already running. Burp selection cannot change.')
         # A failed replacement must never leave the previous source pending.
         self.pending_capture_selection = None
         from src.permission.runtime.execution import policy_for
@@ -2385,7 +2385,7 @@ class Agent:
             )
         selected = matches[0]
         if not selected.baseline_request_ref:
-            raise ValueError("selected capture baseline reference unavailable; recapture required")
+            raise ValueError('Selected capture baseline reference is unavailable. Capture the request again.')
         return {**args, "baseline_request_ref": selected.baseline_request_ref,
                 "source_ref": source or selected.retrieval_id}
 
@@ -4203,9 +4203,7 @@ class Agent:
                 emit({
                     "type": "error",
                     "err": RuntimeError(
-                        "model emitted malformed tool-call text instead of a "
-                        "structured tool call; the intended action was not executed. "
-                        "Retrying once with structured tool calling."
+                        'The model emitted malformed tool-call text instead of a structured tool call. The intended action was not executed. Retrying once with structured tool calling.'
                     ),
                 })
                 retry_instruction = Message(
@@ -5323,8 +5321,8 @@ class Agent:
         self._last_context_pressure_key = key
         explanation = {
             'hard_input_limit_exceeded': 'hard admission blocks this request',
-            'below_hard_input_limit': 'soft pressure remains; request fits hard input budget',
-            'hard_input_limit_unknown': 'soft pressure remains; provider hard limit unknown',
+            'below_hard_input_limit': 'soft pressure remains. The request fits the hard input budget',
+            'hard_input_limit_unknown': 'soft pressure remains. The provider hard limit is unknown',
             'reduction_target_reached': 'reduction target reached',
             'below_reduction_threshold': 'below reduction threshold',
             'soft_threshold_disabled': 'soft threshold disabled',
@@ -6116,12 +6114,12 @@ class Agent:
         # Raw ToolCallResult remains available to transient controller processing
         # and observation bindings. Only event/history/context receive this view.
         error = safe_tool_text(
-            res.err_str, "Tool execution error; sanitized details unavailable.",
+            res.err_str, 'Tool execution error. Sanitized details are unavailable.',
         ) if res.err_str else ""
         if isinstance(res.result, ToolOutput) and res.result.http_sources:
             # Presentation/debug receive source/status metadata, not a duplicate
             # body archive. The existing tool outcome and original stay intact.
-            content = ("Bounded HTTP response; body retained for lab analysis. Sources: "
+            content = ('Bounded HTTP response. Body is retained for lab analysis. Sources: '
                        + ", ".join(ref for ref, _ in res.result.http_sources)
                        if self._http_analysis_content(tc, res, invocation) is not None else
                        "HTTP response withheld: source admission or internal-secret protection unavailable.")
@@ -6132,11 +6130,11 @@ class Agent:
         else:
             content = safe_tool_text(
                 res.result,
-                f"Tool execution completed with status={res.status}; "
-                f"error_kind={res.error_kind}; HTTP status={res.http_status}; "
-                f"truncated={res.truncated}; "
-                "sanitized output unavailable. This is a representation failure; "
-                "do not repeat the action solely to recover its output.",
+                f"Tool execution completed.\n"
+                f"status={res.status} · error_kind={res.error_kind}\n"
+                f"HTTP status={res.http_status} · truncated={res.truncated}\n"
+                "Sanitized output is unavailable due to a representation failure. "
+                "Do not repeat the action solely to recover its output.",
             )
         accepted_candidate_id = None
         scanner_summary = None
@@ -6606,17 +6604,17 @@ class Agent:
         budget = self.input_budget()
         trigger = f"~{displayed_tokens} tokens >= threshold {self.auto_compact_threshold}"
         if budget.input_limit is not None and displayed_tokens > budget.input_limit:
-            trigger = (f"~{displayed_tokens} tokens exceeds hard input budget {budget.input_limit} "
-                       f"({budget.source}); soft threshold {self.auto_compact_threshold}")
+            trigger = (f"~{displayed_tokens} tokens exceed hard input budget {budget.input_limit} "
+                       f"({budget.source}) · soft threshold {self.auto_compact_threshold}")
 
         emit(
             {
                 "type": "compact",
                 "summary": (
-                    f"auto-compact triggered ({trigger}; "
-                    f"history: {displayed_history_tokens}; "
-                    f"input: {incoming_tokens}; "
-                    f"tools: {tools_tokens}; projection includes injections/framing)..."
+                    f"auto-compact triggered · {trigger}\n"
+                    f"History: {displayed_history_tokens} · "
+                    f"input: {incoming_tokens} · "
+                    f"tools: {tools_tokens}\nProjection includes injections/framing."
                 ),
                 "tokensBefore": tokens_before,
             }

@@ -282,7 +282,7 @@ async def test_sanitizer_failure_next_request_preserves_outcome_and_does_not_ret
     view = next(m for m in client.requests[1].messages if m.role == 'tool')
     assert SECRET not in view.content
     assert 'status=observation' in view.content and 'HTTP status=403' in view.content
-    assert 'unavailable' in view.content and 'do not repeat' in view.content
+    assert 'unavailable' in view.content and 'Do not repeat' in view.content
     assert view.tool_status == 'observation' and view.tool_http_status == 403
     assert tool.calls == 1
     assert agent._bounded_working is None and not agent._bounded_results

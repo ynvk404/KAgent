@@ -20,7 +20,7 @@ from src.permission.network.transport import pin_request
 from src.target.target import Target
 from src.target.origin import HTTPOrigin
 from src.workflow.state import WorkflowPhase, WorkflowState, normalize_target_origin
-from src.workflow.ownership import invocation as workflow_invocation
+from src.workflow.ownership import invocation as workflow_invocation, current as workflow_current
 from src.tools.http.private_host import gate_private_request, parse_http_url, PrivateHostDeclined
 from src.tools.common.types import Tool, PermissionHints, arg_string
 from src.tools.common.outcome import ToolOutput
@@ -165,7 +165,7 @@ class HTTPTool(Tool):
         if not isinstance(mode, str) or mode not in {'body', 'metadata-only'}:
             raise ValueError('evidence_mode must be body or metadata-only')
         if cap == 0 and mode == 'body':
-            raise ValueError('body-dependent evidence requires max_response_bytes > 0; omit it for the default')
+            raise ValueError('Body-dependent evidence requires max_response_bytes > 0. Omit it to use the default.')
 
     def prepare(self, args: dict) -> tuple[EffectiveHTTP, httpx.Request]:
         action, request, _ = self._prepare_with_diff(args)
@@ -244,7 +244,7 @@ class HTTPTool(Tool):
         ref = candidate.baseline_request_ref
         row = self.capture_store.resolve_baseline(ref)
         if row is None:
-            raise ValueError('captured baseline unavailable or unbound; recapture required; validation is inconclusive')
+            raise ValueError('Captured baseline is unavailable or unbound. Capture the request again. Validation remains inconclusive.')
         self._require_scope(row.url or '')
         if candidate.target is None or HTTPOrigin.from_url(row.url or '') != HTTPOrigin.from_url(candidate.target):
             raise ValueError('captured baseline origin differs from candidate')
@@ -499,6 +499,26 @@ class HTTPTool(Tool):
             raise
         check_cancelled(signal)
         receipt = self.permissions.dispatch_receipt(receipt, action, signal, self.target.revision)
+        evidence_store = policy.observations if policy else getattr(self, "evidence_store", None)
+        def check_response_current() -> None:
+            # Admission authorizes this dispatch, not publication after an
+            # awaited send/body read has crossed a scope or ownership change.
+            check_cancelled(signal)
+            self.permissions.sync_target()
+            if evidence_store is None:
+                # Legacy standalone callers can receive redacted historical
+                # traffic without publishing an observation. Cookie/context
+                # extraction separately checks the captured request generation.
+                return
+            if (action.epoch != self.permissions.epoch
+                    or action.target_revision != self.target.revision
+                    or action.scope_revision != self.engagement.revision
+                    or receipt.policy_revision != self.permissions.revision
+                    or self.workflow is not None and not workflow_current(self)):
+                raise PermissionPolicyBlocked('blocked: HTTP response owner/scope/permission changed')
+            if policy is not None:
+                policy.revalidate_active(self, generic_args, signal)
+
         transport_options: dict[str, Any] = {'trust_env': False} if policy is not None or action.capture_source is not None else {}
         async with httpx.AsyncClient(verify=False, follow_redirects=False, timeout=REQUEST_TIMEOUT, **transport_options) as client:
             reservation = await self.permissions.reserve_when_ready(action, receipt, signal, lambda: self.target.revision)
@@ -523,7 +543,6 @@ class HTTPTool(Tool):
                 reservation.start()
                 # No suspension between reservation and starting send.
                 import time
-                evidence_store = policy.observations if policy else getattr(self, "evidence_store", None)
                 source_owner = evidence_store.owner_provider() if evidence_store else None
                 sent_at = time.monotonic()
                 # This is the native transport handoff. Retries and followed
@@ -537,8 +556,7 @@ class HTTPTool(Tool):
                                                 execution[1].id if execution and execution[0] is policy else None)
                 self.dispatch_attempts += 1
                 response = await client.send(request, stream=True)
-                check_cancelled(signal)
-                self.permissions.sync_target()
+                check_response_current()
                 self.context_store.sync_target(self.target.revision, self.engagement.revision, self.permissions.epoch)
                 if action.capture_source is None:
                     self.context_store.extract(
@@ -558,6 +576,7 @@ class HTTPTool(Tool):
                         break
                     chunks.append(chunk)
                     total += len(chunk)
+                check_response_current()
                 content = b''.join(chunks)[:action.response_cap]
                 from src.permission.runtime.execution import _active, invocation_digest
                 execution = _active.get()
@@ -757,5 +776,5 @@ class HTTPTool(Tool):
         if raw.lower().startswith(('http://', 'https://')):
             return raw
         if self.target.empty():
-            raise ValueError(f'url "{raw}" is a path with no active target; set /target or pass a full URL')
+            raise ValueError(f'URL "{raw}" is a relative path with no active target. Set /target or pass a full URL.')
         return self.target.base_url().rstrip('/') + (raw if raw.startswith('/') else '/' + raw)

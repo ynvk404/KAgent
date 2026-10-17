@@ -15,7 +15,7 @@ def test_menu_orders_help_first_then_related_commands():
         "/provider", "/model", "/thinking", "/maxsteps",
         "/target", "/scope", "/permissions", "/yolo",
         "/plan", "/report", "/turn-details", "/skills", "/burp",
-        "/memory", "/compact", "/snapshot",
+        "/memory", "/compact",
         "/clear", "/reset", "/exit",
     ]
 
@@ -157,7 +157,7 @@ def test_yolo_catalog_entry():
 
     assert item.args == "[on|off|default]"
     assert item.description == (
-        "toggle profile-based auto-approval; independent resource checks remain"
+        "toggle auto-approval within resource limits"
     )
 
 

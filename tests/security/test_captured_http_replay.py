@@ -441,7 +441,7 @@ async def test_private_gate_decline_still_blocks_captured_replay(replay, monkeyp
     monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", decline)
     with pytest.raises(PrivateHostDeclined):
         await replay.send(args)
-    with pytest.raises(HTTPBlocked, match="private-host permission declined"):
+    with pytest.raises(HTTPBlocked, match="Private-host permission declined"):
         await replay.send(args)
     assert not replay.control.sent and not replay.tool.permissions._receipts
 

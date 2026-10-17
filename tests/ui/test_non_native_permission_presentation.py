@@ -61,7 +61,7 @@ async def test_browser_real_proposal_has_one_complete_scope_and_warning(rig, gro
         assert '"executor"' in frame and '"args"' in frame
         assert request.detail.partition("\n\n")[0] in frame
         assert '"tool": "browser_' + name + '"' in frame
-        assert "Session lifetime; no call quota" in frame
+        assert "Session lifetime · no call quota" in frame
         assert "does not authenticate tab/profile" in frame and "all Chrome traffic" in frame
         assert "browser_snapshot" in scope
         if group != "read":
@@ -120,7 +120,7 @@ async def test_browser_separate_grant_review_keeps_producer_scope_and_decision(r
         frame = rendered(modal, width=300)
         scope = request.summary.removeprefix("Activate ")
         assert frame.count(scope) == 1 and "Tool:" not in frame
-        assert "Session lifetime; no call quota" in frame and "does not authenticate tab/profile" in frame
+        assert "Session lifetime · no call quota" in frame and "does not authenticate tab/profile" in frame
         assert "y approve grant" in frame and " · a " not in frame
         assert request == original and rig.binding.grant is None
         checked.append(request)
@@ -263,10 +263,13 @@ async def test_discovery_producer_scope_preserves_all_bounds_without_repetition(
             assert "http://target.test:8080" in frame
             if kind == "content":
                 assert "2 paths" in frame and "<= 8 requests" in frame
-                assert "recursion: disabled" in frame and "redirects: not followed" in frame
+                assert "GET only" in frame and "no recursion" in frame and "no redirects" in frame
+                assert request.detail.endswith("method: GET; recursion: disabled; redirects: not followed")
                 assert "maximum requests:" not in frame and "base path:" not in frame
             else:
                 assert "ports 8080" in frame and "TCP only" in frame and "active origin:" in frame
+                assert "Disabled: scripts, UDP, OS detection, host ranges" in frame
+                assert request.detail.endswith("protocol: TCP only; scripts, UDP, OS detection, and host ranges: disabled")
                 assert "network scan timeout:" not in frame
             assert request == original
             run.assert_not_called()

@@ -279,7 +279,7 @@ def reducer(state: AppState, action: Action) -> AppState:
                 state,
                 phase=phase,
                 stream_chunks=(text,),
-                transcript=(*state.transcript, TranscriptEntry(kind="assistant", text="Assistant text streaming; awaiting sanitized message", streaming=True)),
+                transcript=(*state.transcript, TranscriptEntry(kind="assistant", text="Receiving response…", streaming=True)),
             )
 
         case SetBusy(busy=busy, facts=facts):
@@ -486,7 +486,7 @@ def _quantity(count: int, singular: str, plural: str | None = None) -> str:
 
 def _examples(records: tuple[ProgressRecord, ...]) -> str:
     labels = list(dict.fromkeys(row.label for row in records))
-    return "; ".join(labels[:3]) + (f"; +{len(labels)-3} more" if len(labels) > 3 else "")
+    return " · ".join(labels[:3]) + (f" · +{len(labels)-3} more" if len(labels) > 3 else "")
 
 
 def _flush_selection(state: AppState) -> AppState:
@@ -494,7 +494,7 @@ def _flush_selection(state: AppState) -> AppState:
     if selected:
         text = f"Selected: {_examples(selected)} ({_quantity(len(selected), 'input')})"
         if captures:
-            text += f"; {_quantity(len(captures), 'captured request')} selected"
+            text += f" · {_quantity(len(captures), 'captured request')} selected"
     elif captures:
         text = f"Selected capture: {_examples(captures)} ({_quantity(len(captures), 'captured request')})"
     else:
@@ -512,7 +512,7 @@ def _flush_progress(state: AppState) -> AppState:
         details = ", ".join(f"{count} {key}" for key, count in dispositions.items() if count)
         state = _progress_row(state, "inventory", f"Attack surface recorded: {_quantity(len(endpoints), 'endpoint')}, "
                               f"{_quantity(len(inputs), 'input')}" + (f" ({details})" if details else "") +
-                              f"; {_examples(inputs or endpoints)}.", "info")
+                              f"\n{_examples(inputs or endpoints)}.", "info")
     state = _flush_selection(state)
     candidates = _new_records(state, "candidate")
     if candidates:

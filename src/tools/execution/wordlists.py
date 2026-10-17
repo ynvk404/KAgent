@@ -19,7 +19,7 @@ def parse_wordlist_spec(value: str) -> tuple[str, Path]:
     if (not separator or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', identifier)
             or identifier == 'web-common' or not filename.strip()
             or any(ord(char) < 32 or ord(char) == 127 for char in filename)):
-        raise ValueError('--scanner-wordlist requires ID=FILE; ID must be unique and web-common is reserved')
+        raise ValueError('Use --scanner-wordlist ID=FILE. IDs must be unique. web-common is reserved.')
     return identifier, Path(os.path.abspath(Path(filename).expanduser()))
 
 

@@ -1309,7 +1309,7 @@ class WorkflowTool(Tool):
                 expected_ids = [entry["source"]["id"] for entry in latest.evidence_manifest]
                 expected_assessment = {k: v for k, v in latest.assessment.items() if k not in {"artifacts", "artifact_sources", "attempt"}}
                 if ids != expected_ids or args.get("assessment", {}) != expected_assessment:
-                    raise ValueError("closed attempt assessment changed; start an explicit retest")
+                    raise ValueError('Closed attempt assessment changed. Start an explicit retest.')
                 if (self.state.generation, self.state.to_dict()) != before or latest.assessment_binding != seal(latest):
                     raise ValueError("stale retry assessment")
                 if terminal and not accepted_result(self.state, candidate, latest, policy):
@@ -1345,7 +1345,7 @@ class WorkflowTool(Tool):
                 if generic and (attempt is None or not isinstance(attempt.get("criteria"), dict)
                         or not all(isinstance(attempt["criteria"].get(k), str) and attempt["criteria"][k].strip()
                                    for k in ("hypothesis", "criteria", "limitations"))):
-                    raise ValueError("generic fallback lacks declared criteria; submit unresolved")
+                    raise ValueError('Generic fallback lacks declared criteria. Submit an unresolved result.')
             manifest = resolve_sources(policy, self.state, candidate, attempt, ids,
                 terminal=terminal, negative=result.outcome == "not-confirmed", store=self.observations)
             if result.cleanup_state == "succeeded":
@@ -1926,8 +1926,8 @@ class WorkflowTool(Tool):
         if route.kind != "expert":
             reason = "ambiguous" if route.kind == "ambiguous" else "unavailable"
             raise ValueError(
-                f"candidate class {candidate_class} has {reason} validator mapping; "
-                "exactly one enabled validation skill is required"
+                f"Candidate class {candidate_class} has {reason} validator mapping. "
+                "Exactly one enabled validation skill is required."
             )
         validator = self.skills.get(route.skill_name or "")
         if validator is None:

@@ -24,7 +24,7 @@ class PermissionStatusTool:
             raise ValueError("permissions_status accepts no arguments or authority updates")
         policy = policy_for(prompter)
         if policy is None:
-            return "Execution profile unavailable; legacy permission gates apply."
+            return 'Execution profile is unavailable. Legacy permission gates apply.'
         return (policy.status() + "\n" + policy.engagement.http_permissions.status()
                 + ('\nTrusted scanner catalog: ' + json.dumps(policy.scanner_binding.catalog())
                    if policy.scanner_binding is not None else '')

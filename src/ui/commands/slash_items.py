@@ -59,7 +59,7 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     SlashItem(
         name="/yolo",
         args="[on|off|default]",
-        description="toggle profile-based auto-approval; independent resource checks remain",
+        description="toggle auto-approval within resource limits",
     ),
 
     SlashItem(
@@ -81,23 +81,18 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
     SlashItem(
         name="/burp",
         args="[port|stop|status|credentials|list|use [id|cancel]|all]",
-        description="manage bridge and capture selection; all selects at most 50 most recent requests",
+        description="manage Burp bridge and captured requests",
     ),
 
     SlashItem(
         name="/memory",
         args="[add <text>|list|forget <text>|clear]",
-        description="saved + session memory; add/list curated facts",
+        description="manage saved and session memory",
     ),
 
     SlashItem(
         name="/compact",
         description="summarize conversation into persistent session memory",
-    ),
-
-    SlashItem(
-        name="/snapshot",
-        description="write the current redacted context snapshot now",
     ),
 
     SlashItem(
@@ -107,7 +102,7 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
 
     SlashItem(
         name="/reset",
-        description="clear conversation + saved session; keep target and HTTP/TCP scope",
+        description="reset conversation and saved session, keep target and HTTP/TCP scope",
     ),
 
     SlashItem(

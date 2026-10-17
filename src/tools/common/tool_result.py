@@ -186,8 +186,7 @@ class ReadHTTPObservation:
                 or attempt.get("status") not in {"active", "completed"}
                 or objective.target_origin != self.agent.target.origin().as_url()):
             raise HTTPObservationUnavailable(
-                'blocked: HTTP observation ownership/scope unavailable; '
-                'use workflow(action="list") for current owned observation IDs; do not rerun HTTP')
+                'HTTP observation ownership or scope is unavailable. Use workflow(action="list") for current owned observation IDs. Do not rerun HTTP.')
         from src.workflow.assessment import candidate_binding, resolve_sources, attempt_owner
         if candidate_binding(candidate) != item.candidate_binding:
             raise ExecutionBlocked("blocked: HTTP observation candidate binding changed")

@@ -406,10 +406,11 @@ class ScenarioRun:
 
 
 class ScenarioRunner:
-    def __init__(self, root: Path, monkeypatch):
+    def __init__(self, root: Path, monkeypatch, *, defer_trace_redaction: bool = False):
         self.root, self.monkeypatch = root, monkeypatch
+        self.defer_trace_redaction = defer_trace_redaction
 
-    def prepare(self, definition: ScenarioDefinition):
+    def prepare(self, definition: ScenarioDefinition, *, transport=None, mock_transport=True):
         from dataclasses import replace
         # Reuse the capture-selection factory; no parallel runtime assembly.
         runtime = make_runtime(self.root, origin=definition.origin, session_id=definition.id,
@@ -422,11 +423,12 @@ class ScenarioRunner:
         runtime.registry.register(ConfirmFindingTool(FindingStore(project_directory=self.root), workflow=runtime.workflow))
         # Real controller-origin grant, transient and bounded. Registry reviews
         # and private-host checks still execute; ALLOW_ONCE never becomes policy.
-        transport = FakeTransport(definition)
+        transport = transport if transport is not None else FakeTransport(definition)
         runtime.engagement.http_permissions.activate(definition.origin, HTTPLimits(
             requests=len(transport.expected) + 1, rate=1000, burst=100, concurrency=1))
-        self.monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: REAL_HTTP_CLIENT(
-            transport=httpx.MockTransport(transport.handle), **kw))
+        if mock_transport:
+            self.monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: REAL_HTTP_CLIENT(
+                transport=httpx.MockTransport(transport.handle), **kw))
         runtime.scenario_errors = {}
         runtime.scenario_agent_errors = []
         runtime.scenario_snapshots = []
@@ -434,22 +436,26 @@ class ScenarioRunner:
         return runtime, transport
 
     async def run(self, definition: ScenarioDefinition, *, runtime=None, transport=None,
-                  oracle=None, prefix="scenario") -> ScenarioRun:
+                  oracle=None, prefix="scenario", drive=None,
+                  model_factory: Callable[..., ScriptedModel] = ScriptedModel) -> ScenarioRun:
         from tests.helpers.scenario_oracle import InvariantOracle, TraceRecorder
         if runtime is None:
             runtime, transport = self.prepare(definition)
         assert transport is not None
-        model = ScriptedModel(definition.script(runtime, definition), prefix=prefix)
+        model = model_factory(definition.script(runtime, definition), prefix=prefix)
         runtime.scenario_model = model
         runtime.agent.set_client(model)
         oracle = oracle or InvariantOracle(self.root)
-        trace = TraceRecorder(runtime, oracle)
+        trace = TraceRecorder(runtime, oracle, defer_redaction=self.defer_trace_redaction)
         runtime.scenario_trace = trace
         trace.record({"type": "controller", "action": "runtime-rights-at-turn-start", "yolo": runtime.prompter.is_yolo(),
                       "grant_origins": [origin.as_url() for origin in runtime.engagement.http_permissions.grants]})
         start = perf_counter()
         try:
-            await asyncio.wait_for(runtime.agent.run(definition.user_input, FakeSignal(), trace.record), definition.timeout)
+            operation = (drive(runtime, definition, trace) if drive is not None else
+                         runtime.agent.run(definition.user_input, FakeSignal(), trace.record))
+            await asyncio.wait_for(operation, definition.timeout)
+            trace.sanitize_pending()
             if runtime.agent._background_tasks:
                 await asyncio.gather(*tuple(runtime.agent._background_tasks))
             oracle.boundary(runtime, "post-agent")

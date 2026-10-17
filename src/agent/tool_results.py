@@ -294,8 +294,7 @@ class ResultRetention:
                 # Security checks still reject this cache write. Checkpoints
                 # save the original sanitized message inline instead; only the
                 # working LLM view may be bounded by the existing context guard.
-                storage_notice = ("Private tool-result cache unavailable; uncached full sanitized output "
-                                  "is kept in session history. LLM context may use bounded excerpts.")
+                storage_notice = ('Private tool-result cache is unavailable. Full sanitized output is kept uncached in session history. LLM context may use bounded excerpts.')
                 continue
             except Exception:
                 if strict:
@@ -318,7 +317,7 @@ class ResultRetention:
         from src.session.tool_results import valid_ref
         if not valid_ref(result_ref):
             from src.session.tool_results import InvalidResultReference
-            raise InvalidResultReference("invalid tool result reference; use a published tr_ identifier")
+            raise InvalidResultReference('Invalid tool result reference. Use a published tr_ identifier.')
         self.refresh_scope()
         ref = self.references.get(result_ref)
         if ref is None or self.store is None:

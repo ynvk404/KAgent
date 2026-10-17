@@ -162,8 +162,8 @@ async def test_compaction_records_requested_off_and_verified_low_fallback(manual
 
 def test_status_distinguishes_requested_and_effective_reasoning():
     deepseek = _agent(OpenAIClient("https://api.deepseek.com", "", "deepseek-flash", "deepseek"))
-    assert deepseek.reasoning_status(True) == "thinking on; model uses low"
-    assert deepseek.reasoning_status(False) == "thinking off; model uses off"
+    assert deepseek.reasoning_status(True) == "thinking on · model uses low"
+    assert deepseek.reasoning_status(False) == "thinking off · model uses off"
 
 
 def test_provider_specific_metrics_and_compaction_keep_unknown_distinct():
@@ -230,12 +230,12 @@ async def test_request_metrics_record_error_and_cancellation_without_fabricating
 
     gemini = _agent(GeminiClient("https://generativelanguage.googleapis.com/v1beta", "", "models/gemini-3.8-flash"))
     assert gemini.reasoning_status(False) == (
-        "thinking off requested; model uses low (fallback). "
+        "thinking off requested · model uses low (fallback). "
         "System prompt guidance follows this setting."
     )
 
     generic = _agent(OpenAIClient("https://gateway.example/v1", "", "deepseek-flash", "openai-compat"))
     assert generic.reasoning_status(False) == (
-        "thinking off requested; provider behavior unverified. "
+        "Thinking off requested. Provider behavior is unverified. "
         "System prompt guidance follows this setting."
     )

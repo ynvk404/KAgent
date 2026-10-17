@@ -336,8 +336,10 @@ class InvariantOracle:
 
 
 class TraceRecorder:
-    def __init__(self, runtime, oracle: InvariantOracle):
+    def __init__(self, runtime, oracle: InvariantOracle, *, defer_redaction: bool = False):
         self.runtime, self.oracle = runtime, oracle
+        self.defer_redaction = defer_redaction
+        self._pending_redaction = 0
         self.events: list[dict[str, Any]] = []
         self.errors: list[str] = []
         self.calls: dict[str, dict[str, Any]] = {}
@@ -355,8 +357,15 @@ class TraceRecorder:
                 elif isinstance(value, BaseException):
                     value = str(value)
                 cleaned[key] = value
-            encoded = apply_evidence(json.dumps(redact_payload(cleaned), default=str))
-            self.events.append(json.loads(encoded))
+            if self.defer_redaction:
+                # Snapshot the exact event without running test-only redaction
+                # inside a measured production callback. Runtime events already
+                # cross its sanitizer; this transient copy is sanitized before
+                # outcomes/export and is never written raw.
+                self.events.append(deepcopy(cleaned))
+            else:
+                encoded = apply_evidence(json.dumps(redact_payload(cleaned), default=str))
+                self.events.append(json.loads(encoded))
             if event["type"] == "tool-call":
                 self.calls[event["id"]] = event["args"]
             elif event["type"] == "tool-result":
@@ -366,9 +375,19 @@ class TraceRecorder:
         except Exception as error:
             self.errors.append(apply_evidence(str(error)))
 
+    def sanitize_pending(self) -> None:
+        if not self.defer_redaction:
+            return
+        while self._pending_redaction < len(self.events):
+            index = self._pending_redaction
+            encoded = apply_evidence(json.dumps(redact_payload(self.events[index]), default=str))
+            self.events[index] = json.loads(encoded)
+            self._pending_redaction += 1
+
     def write(self, path: Path) -> None:
         # Keep structural snapshots, hashes and minimal sanitized diagnostics;
         # full traffic stays only in the production evidence/session stores.
+        self.sanitize_pending()
         events = [{k: (v[:1800] if isinstance(v, str) else v) for k, v in e.items()} for e in self.events]
         snapshots = [{"label": b["label"], "revision": b["revision"],
             "candidates": b["workflow"]["candidates"], "attempts": b["workflow"]["attempts"],

@@ -91,7 +91,7 @@ def linux_listeners() -> list[tuple[str, str]]:
 
 async def check_ports_free() -> None:
     if linux_listeners():
-        raise ExecutionBlocked('blocked: WSL/Linux port 9009 already owned; no kill/adoption')
+        raise ExecutionBlocked('WSL/Linux port 9009 is already in use. The existing process will not be stopped or adopted.')
     if 'microsoft' in Path('/proc/sys/kernel/osrelease').read_text().lower():
         proc = None
         try:
@@ -103,7 +103,7 @@ async def check_ports_free() -> None:
                     env={'PATH': '/usr/bin:/bin', 'WSL_INTEROP': os.environ.get('WSL_INTEROP', '')})
                 out, _ = await proc.communicate()
             if proc.returncode != 0 or out.strip() != b'free':
-                raise ExecutionBlocked('blocked: Windows port 9009 occupied or inspection failed; no listener launched')
+                raise ExecutionBlocked('Windows port 9009 is occupied or could not be checked. No listener was started.')
         except (OSError, TimeoutError) as exc:
             raise ExecutionBlocked('blocked: Windows port 9009 preflight unavailable') from exc
         finally:
@@ -194,7 +194,7 @@ class BrowserOwner:
                     ready.set_exception(exc)
             finally:
                 proxy.closed = True
-                error = RuntimeError('Browser process died/closed; CPU budget may be exhausted; no automatic replay')
+                error = RuntimeError('Browser process stopped. Its CPU budget may be exhausted. No automatic replay.')
                 if current is not None and not current.done():
                     current.set_exception(error)
                 while not proxy.queue.empty():
@@ -214,7 +214,7 @@ class BrowserOwner:
 
     async def request(self, method, *args, guard=None, **kwargs):
         if self.closed or self.task is None or self.task.done():
-            raise RuntimeError('Browser owner unavailable; explicit reset required')
+            raise RuntimeError('Browser owner is unavailable. An explicit reset is required.')
         future = asyncio.get_running_loop().create_future()
         self.queue.put_nowait((method, args, kwargs, guard, future))
         return await future
@@ -463,7 +463,7 @@ class BrowserLocalBinding:
                 if state['connected']:
                     break
                 if asyncio.get_running_loop().time() >= deadline:
-                    raise ExecutionBlocked('blocked: Browser readiness deadline; extension has not connected; no action dispatched')
+                    raise ExecutionBlocked('Browser readiness timed out. The Extension has not connected. No action was sent.')
                 await guarded(asyncio.sleep(STATUS_POLL_S), STATUS_TIMEOUT_S)
             if self.generation != state['generation']:
                 reconnected = bool(self.generation)
@@ -472,13 +472,12 @@ class BrowserLocalBinding:
                 if reconnected:
                     self.revoke_grant()
                     if grant_token is not None:
-                        raise ExecutionBlocked('blocked: reconnect invalidated Browser grant; '
-                                               'review again and request a fresh browser_snapshot')
+                        raise ExecutionBlocked('Reconnection invalidated the Browser grant. Review it again and request a new browser_snapshot.')
             if grant_token is not None:
                 self.check_grant(grant_token).connection_generation = self.generation
             if args.get('ref') is not None and (not self.snapshot_generation
                     or state['snapshotGeneration'] != self.snapshot_generation):
-                raise ExecutionBlocked('blocked: reconnect/stale ref; request a fresh browser_snapshot')
+                raise ExecutionBlocked('Browser connection or reference is stale. Request a new browser_snapshot.')
             mark('ready')
             meta = {'kagentBrowser': {'origin': self.lab_origin, 'generation': self.generation,
                                       'snapshotGeneration': self.snapshot_generation,
@@ -521,7 +520,7 @@ class BrowserLocalBinding:
             await self._drain_retired()
             # Do not restart/replay a dead or ambiguous persistent process.
             if (dispatched or isinstance(exc, RuntimeError)) and not isinstance(exc, ExecutionBlocked):
-                self.fault = 'blocked: Browser process/operation failed; explicit reset required; no replay'
+                self.fault = 'Browser process or operation failed. An explicit reset is required. No replay.'
             if dispatched and tool._remote_name in MUTATING:
                 from src.redaction.redact import apply_evidence
                 cause = apply_evidence(str(exc))[:4096]

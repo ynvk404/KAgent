@@ -14,7 +14,7 @@ def test_fetch_and_pick_model_reports_listing_errors(monkeypatch):
             dispatched.append(action)
 
         def fake_list_models(*_args, **_kwargs):
-            raise RuntimeError("boom")
+            raise RuntimeError("raw-provider-secret")
 
         monkeypatch.setattr(model_picker, "list_models", fake_list_models)
 
@@ -39,6 +39,8 @@ def test_fetch_and_pick_model_reports_listing_errors(monkeypatch):
         # 3. Error reported in transcript
         assert isinstance(dispatched[2], Append)
         assert "groq list-models failed" in dispatched[2].entry.text
+        assert "Enter a model ID with /model <id>." in dispatched[2].entry.text
+        assert "raw-provider-secret" not in dispatched[2].entry.text
 
     asyncio.run(run())
 

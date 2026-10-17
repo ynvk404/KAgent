@@ -239,7 +239,7 @@ async def test_reconnect_with_grant_still_rejects_stale_refs(rig):
     rig.binding.activate_grant('interaction')
     await call(rig, prompter)
     rig.generation[0] += 1
-    with pytest.raises(ExecutionBlocked, match='fresh browser_snapshot'):
+    with pytest.raises(ExecutionBlocked, match='new browser_snapshot'):
         await call(rig, prompter, 'click', {'ref': 's1e1', 'element': 'search'})
     assert len(rig.calls) == 1 and rig.binding.grant is None
 
@@ -299,7 +299,7 @@ async def test_reconnect_revokes_session_read_grant_even_without_element_refs(ri
     rig.binding.activate_grant('read')
     await call(rig, prompter)
     rig.generation[0] += 1
-    with pytest.raises(ExecutionBlocked, match='reconnect invalidated Browser grant'):
+    with pytest.raises(ExecutionBlocked, match='Reconnection invalidated the Browser grant'):
         await call(rig, prompter)
     assert len(rig.calls) == 1 and rig.binding.grant is None and rig.policy.active == 0
 

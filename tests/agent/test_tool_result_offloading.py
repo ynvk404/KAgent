@@ -267,7 +267,7 @@ async def test_http_200_unsafe_cache_checkpoint_preserves_output_and_continues(m
     assert len(represented.content) < len(result['result'])
     assert not agent.result_retention.references and not agent.result_retention.pending
     assert not any(e.get('type') == 'error' for e in events)
-    assert any(e.get('type') == 'decision' and 'cache unavailable' in e.get('summary', '')
+    assert any(e.get('type') == 'decision' and 'cache is unavailable' in e.get('summary', '')
                and 'session history' in e['summary'] for e in events)
     assert not (directory / 'tool-results').exists()
     assert directory.stat().st_mode & 0o777 == 0o777

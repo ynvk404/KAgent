@@ -185,7 +185,7 @@ async def fetch_and_pick_model(
             safe_message = (
                 str(err)
                 if isinstance(err, ProviderControlError)
-                else "model discovery failed; enter a model ID with /model <id>"
+                else "Model discovery failed. Enter a model ID with /model <id>."
             )
             dispatch(
                 Append(

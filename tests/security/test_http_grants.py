@@ -436,7 +436,7 @@ async def test_pending_and_deny_do_not_spam_or_create_session_deny(runtime):
         results = await asyncio.wait_for(asyncio.gather(*queued, return_exceptions=True), 2)
         assert all(isinstance(result, HTTPBlocked) and 'declined' in str(result) for result in results)
         for _ in range(3):
-            with pytest.raises(HTTPBlocked, match="exact action declined"):
+            with pytest.raises(HTTPBlocked, match="Exact action declined"):
                 await registry.execute("http", args(), None, operator)
     assert len(operator.requests) == 1 and not sent and not tool.permissions.denied
     tool.permissions.retry(ORIGIN)
@@ -479,7 +479,7 @@ async def test_private_gate_independent_and_no_repeat_after_deny(runtime, monkey
     operator = Operator()
     with pytest.raises(PermissionError, match="private/internal URL denied"):
         await registry.execute("http", args(), None, operator)
-    with pytest.raises(HTTPBlocked, match="private-host"):
+    with pytest.raises(HTTPBlocked, match="Private-host"):
         await registry.execute("http", args(), None, operator)
     assert len(operator.requests) == 1 and not sent
     assert (operator.requests[0].cache_key or "").startswith("private-declared://")
@@ -666,7 +666,7 @@ def test_session_deny_survives_target_change_until_operator_retry(runtime):
     tool.target.set_base_url(ORIGIN + "/new-base")
     tool.permissions.sync_target()
     assert tool.permissions.denied and not tool.permissions.grants
-    with pytest.raises(HTTPBlocked, match="session deny"):
+    with pytest.raises(HTTPBlocked, match="HTTP is blocked for this session"):
         tool.permissions.activate(ORIGIN, HTTPLimits())
     tool.permissions.retry(ORIGIN)
     assert not tool.permissions.denied and not tool.permissions.grants
@@ -843,7 +843,7 @@ async def test_explicit_grant_review_detects_replacement_only_for_its_origin(run
             tool.permissions.activate(ORIGIN if same_origin else other, HTTPLimits.session())
             return Decision.ALLOW_ONCE
     if same_origin:
-        with pytest.raises(HTTPBlocked, match='policy changed during grant review'):
+        with pytest.raises(HTTPBlocked, match='Policy changed during grant review'):
             await tool.permissions.review_grant(ORIGIN, HTTPLimits(), 'autonomous', Replacing())
         assert next(iter(tool.permissions.grants.values())).limits.requests is None
     else:

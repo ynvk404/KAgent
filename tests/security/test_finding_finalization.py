@@ -47,7 +47,7 @@ async def test_finding_retry_uses_persisted_snapshot_for_notifier_and_tool_resul
     assert accepted_result(state, candidate, revision, runtime[2])
     import src.tools.workflow.finding as finding_module
     monkeypatch.setattr(finding_module, 'classify', lambda _: SimpleNamespace(type='Changed taxonomy', cwe=['CWE-999'], owasp=[]))
-    with pytest.raises(ValueError, match='historical report'):
+    with pytest.raises(ValueError, match='Historical report'):
         await registry.execute('confirm_finding', {**args, 'title': 'New proposed title'}, None, prompter)
     assert not state.finding_is_persisted(candidate.id)
     assert notified[-1][0] == persisted and Path(notified[-1][1]).read_text() == content

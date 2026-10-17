@@ -38,7 +38,7 @@ async def test_expert_status_alone_cannot_release_generic_boundary(runtime, tmp_
         # Historical D1 state remains readable but grants no attempt authority.
         next(row for row in saved["candidates"] if row["id"] == cid)["status"] = "validating"
         env[4].replace_from(WorkflowState.from_dict(saved))
-    with pytest.raises(ExecutionBlocked, match="generic"):
+    with pytest.raises(ExecutionBlocked, match=r"blocked: Generic HTTP requires one started candidate\. Deferred work must stop\."):
         await env[0].execute("http", {"url": "/outside-proposal", "phase": "validation"}, None, env[1])
     assert not runtime[4] and not env[3].requests
     # A real structured expert start still selects independent expert work.
@@ -85,7 +85,7 @@ async def test_finished_expert_cannot_release_boundary_by_requeued_status(runtim
         "action": "record_result", "candidate_id": cid, "skill_name": "expert",
         "outcome": "blocked"}, None, env[1]))["ok"]
     env[4].set_candidate_status(cid, "validating")
-    with pytest.raises(ExecutionBlocked, match="generic"):
+    with pytest.raises(ExecutionBlocked, match=r"blocked: Generic HTTP requires one started candidate\. Deferred work must stop\."):
         await env[0].execute("http", {"url": "/outside-proposal", "phase": "validation"}, None, env[1])
     assert not runtime[4]
 

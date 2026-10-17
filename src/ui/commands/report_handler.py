@@ -31,7 +31,7 @@ def _record(obj: Any, names: tuple[str, ...], **extra: Any) -> Record:
 def capture_workflow(state: WorkflowState, target: str, policy=None) -> dict[str, Any]:
     """Capture allowlisted primitives and opaque joins; never copy specimens."""
     if len(state.candidates) + len(state.attack_surface_inputs) > MAX_RECORDS or len(state.validation_results) > MAX_RESULTS:
-        raise ReportError("Assessment snapshot exceeds report record limits; reduce recorded resources and retry.")
+        raise ReportError("Assessment snapshot exceeds report record limits. Reduce recorded resources and retry.")
     obj = state.objective
     if obj and obj.target_origin and origin(obj.target_origin) != origin(target):
         raise ReportError("active objective and target do not match. Export cannot mix their assessment records.")
@@ -152,7 +152,7 @@ def start_report(app: Any, args: list[str]) -> asyncio.Task | None:
         return None
     try:
         if len(args) > 1:
-            raise ReportError("Use /report [filename.pdf]; reports are saved under artifacts/reports/.")
+            raise ReportError("Use /report [filename.pdf]. Reports are saved under artifacts/reports/.")
         if args:
             validate_filename(args[0])
         now = datetime.now(timezone.utc).isoformat()
@@ -210,13 +210,13 @@ async def _export(app: Any, source: SourceSnapshot, resources: Resources, identi
         if cancelled:
             raise asyncio.CancelledError
         if assessment_identity(app) != identity:
-            raise ReportError("Assessment changed during export; run /report again.")
+            raise ReportError("Assessment changed during export. Run /report again.")
         final = stage.publish()
         warning_count = doc.unavailable_count + doc.unfinalized_count + doc.omitted_count + len(doc.evidence)
         warning_count += sum("incomplete" in text.lower() or "unavailable" in text.lower() for text in doc.limitations)
-        text = f"PDF report saved: {Sanitizer().text(str(final.relative_to(resources.project)))} — {doc.finding_count} findings; {doc.status}"
+        text = f"PDF report saved: {Sanitizer().text(str(final.relative_to(resources.project)))}\n{doc.finding_count} findings · {doc.status}"
         if warning_count:
-            text += f" {warning_count} data-gap/omission warnings; see report limitations."
+            text += f"\n{warning_count} data-gap/omission warnings. See the report limitations."
         _notice(app, text)
     except asyncio.CancelledError:
         _notice(app, "/report: export cancelled. No completed PDF was created.")

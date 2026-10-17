@@ -597,9 +597,9 @@ def test_body_evidence_rejects_zero_capture_before_preparation(mode):
     args = {'url': 'http://example.test', 'phase': 'validation', 'max_response_bytes': 0}
     if mode:
         args['evidence_mode'] = mode
-    with pytest.raises(ValueError, match='body-dependent evidence'):
+    with pytest.raises(ValueError, match='Body-dependent evidence'):
         tool.validate_args(args)
-    with pytest.raises(ValueError, match='body-dependent evidence'):
+    with pytest.raises(ValueError, match='Body-dependent evidence'):
         tool.prepare(args)
 
 

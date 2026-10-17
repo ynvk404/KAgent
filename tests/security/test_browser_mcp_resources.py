@@ -137,7 +137,7 @@ async def test_browser_profile_keeps_environment_and_worker_gates(tmp_path):
     worker = OfflineWorker(tmp_path, (), "/usr/bin/bwrap", "/usr/bin/prlimit")
     server = deepcopy(BROWSER_MCP_SERVER)
     server.env = {"NODE_OPTIONS": "fixture"}
-    with pytest.raises(ValueError, match="environment export adapter unavailable"):
+    with pytest.raises(ValueError, match="environment export adapter is unavailable"):
         await MCPSession._open(server, worker=worker)
     os.mkfifo(tmp_path / "host-fifo")
     with pytest.raises(ExecutionBlocked, match="host-ipc"):

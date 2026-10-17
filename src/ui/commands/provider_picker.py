@@ -109,7 +109,7 @@ async def _prompt_custom_model(
                 preview = "\n".join(models[:20])
                 discovery_note = f"Available models:\n{preview}\n\n"
                 if len(models) > 20:
-                    discovery_note += "Showing the first 20 IDs; unlisted IDs are also accepted.\n"
+                    discovery_note += "Showing 20 model IDs. You can enter another ID.\n"
             else:
                 discovery_note = (
                     "The endpoint returned a valid but empty model list.\n"
@@ -774,7 +774,7 @@ def open_provider_picker(
                         text=(
                             "Custom provider setup cancelled."
                             if was_cancelled
-                            else "Custom provider setup failed; no profile was saved."
+                            else "Custom provider setup failed. No profile was saved."
                         ),
                     )
                 )
@@ -885,7 +885,7 @@ def open_provider_picker(
                         text=(
                             "Provider edit cancelled."
                             if was_cancelled
-                            else "Custom provider edit failed; prior profile/runtime state was retained."
+                            else "Custom provider edit failed. Previous profile and runtime settings were kept."
                         ),
                     )
                 )

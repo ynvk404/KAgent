@@ -97,6 +97,8 @@ async def test_report_preserves_canonical_state_for_all_exports(runtime, monkeyp
     else:
         assert len(pdfs) == (2 if scenario == "repeated" else 1)
         assert any("PDF report saved" in action.entry.text for action in app.notices)
+        for pdf in pdfs:
+            assert any(str(pdf.relative_to(app.root)) in action.entry.text for action in app.notices)
     assert "CONFIG_SECRET" not in str(app.notices)
 
 

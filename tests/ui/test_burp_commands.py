@@ -91,8 +91,8 @@ def test_display_commands_preserve_selection_and_help_is_precise(runtime):
     slash(runtime, '/help')
     assert runtime.agent.pending_capture_selection is selected
     text = build_help_text(runtime.agent, runtime.app.read_config)
-    assert 'at most 50 most recent requests' in text
-    assert 'use [id|cancel]' in text
+    assert '/burp [...]  Burp bridge/captures' in text
+    assert 'at most 50 most recent requests' not in text
 
 
 def test_requires_active_target_and_refuses_policy_deny(runtime):

@@ -42,7 +42,7 @@ def test_delta_changes_planning_to_answering():
 
 
     assert s.phase == "answering"
-    assert "awaiting sanitized message" in s.transcript[-1].text
+    assert s.transcript[-1].text == "Receiving response…"
     assert s.stream_chunks == ("hello",)
 
 

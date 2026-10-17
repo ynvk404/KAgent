@@ -533,8 +533,7 @@ class FileEditTool(Tool):
 
             if count > 1 and not replace_all:
                 raise ValueError(
-                    f"old_string appears {count} times in {real}; pass "
-                    "replace_all=true or use a longer unique snippet"
+                    f"old_string appears {count} times in {real}. Set replace_all=true or use a longer unique snippet."
                 )
 
             updated = content.replace(

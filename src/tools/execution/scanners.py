@@ -44,7 +44,7 @@ def validate_scanner_args(args: dict[str, Any]) -> None:
     if 'rate' in args:
         rate = args['rate']
         if isinstance(rate, bool) or not isinstance(rate, (float, int)) or not math.isfinite(rate) or rate <= 0:
-            raise ValueError('rate must be positive and finite; omit it for scanner defaults')
+            raise ValueError('rate must be positive and finite. Omit it to use scanner defaults.')
         if scanner == 'ffuf' and type(rate) is not int:
             raise ValueError('ffuf rate must be a positive integer')
     if scanner == 'nmap':

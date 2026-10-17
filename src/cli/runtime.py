@@ -413,7 +413,7 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
         i += 1
 
     if out.http_lab_grants and not out.accept_unknown_http_effects:
-        raise FlagParseError("--http-lab-grant requires explicit --accept-unknown-http-effects; lab data may be deleted")
+        raise FlagParseError("--http-lab-grant requires explicit --accept-unknown-http-effects. Lab data may be deleted.")
     return out
 
 
@@ -632,8 +632,8 @@ async def main() -> int:
             sys.stderr.write(f"{err}\n")
             return 1
         sys.stderr.write(
-            "warning: saved custom provider could not be restored; "
-            f"using the configured provider instead: {err}\n"
+            "Warning: could not restore the saved custom provider. "
+            f"Using the configured provider instead. Details: {err}\n"
         )
         try:
             startup_runtime = build_startup_runtime(

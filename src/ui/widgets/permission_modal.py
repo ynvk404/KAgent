@@ -170,7 +170,7 @@ class PermissionModal:
         # Keep the consequence and Extension limitation, without repeating scope
         # or the second generic statement about accepting unknown effects.
         warning = warning.removesuffix(" Accept unknown application effects on this lab.")
-        compact = ("Session lifetime; no call quota. " + warning + "\n"
+        compact = ("Session lifetime · no call quota\n" + warning + "\n"
                    "Extension does not authenticate tab/profile or constrain all Chrome traffic.\n"
                    "Revoke: /permissions browser revoke")
         return (preview + "\n\n" if preview else "") + compact, True
@@ -195,7 +195,7 @@ class PermissionModal:
             expected = (f"content discovery on {origin}{path} using {backend} "
                         f"({paths} paths, <= {maximum} requests, <= {rate}/s, {timeout}s)")
             if req.summary == f"content discovery: {origin}{path}" and req.session_scope_display == expected:
-                return "Content discovery", restriction, True
+                return "Content discovery", "GET only · no recursion · no redirects", True
         elif req.tool == "service_discovery":
             labels = ("active origin: ", "target host: ", "backend: ", "ports: ", "network scan timeout: ")
             restriction = "protocol: TCP only; scripts, UDP, OS detection, and host ranges: disabled"
@@ -209,7 +209,7 @@ class PermissionModal:
                 expected = f"TCP service discovery on {host}, ports {ports} using {backend} (scan timeout {seconds}s)"
                 if (req.summary == f"service discovery: {host} ({len(ports.split(','))} TCP ports)"
                         and req.session_scope_display == expected):
-                    return "Service discovery", "active origin: " + origin + "\n" + restriction, True
+                    return "Service discovery", "active origin: " + origin + "\nTCP only\nDisabled: scripts, UDP, OS detection, host ranges", True
         return req.summary, detail, False
 
     def _other_presentation(self, detail: str, supports_reuse: bool) -> tuple[str, str, bool]:
@@ -308,7 +308,7 @@ class PermissionModal:
                     and re.fullmatch(limits_pattern, limits)):
                 lifetime, quota, _ = limits.split("; ", 2)
                 return ("Grant: all endpoints, methods and payloads on the stated origin\n"
-                        + lifetime + "; " + quota), ()
+                        + lifetime + " · " + quota), ()
         return detail, ()
 
     def _supports_reuse(self) -> bool:
@@ -377,7 +377,7 @@ class PermissionModal:
 
         scope = req.session_scope_display if supports_reuse else "current invocation only"
         if supports_reuse and not scope and req.offer_browser_grant:
-            scope = "Browser " + req.offer_browser_grant + "; review adapter grant scope before activation"
+            scope = "Browser " + req.offer_browser_grant + ". Review adapter grant scope before activation."
         scope_row = Text(("Session trust: " if supports_reuse else "Allow once: ") + redact(scope or ""))
         if (not supports_reuse and action is not None and req.session_scope_display
                 and req.tool in {"file_write", "FileWriteTool", "file_edit", "FileEditTool"}):

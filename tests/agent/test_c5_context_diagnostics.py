@@ -26,7 +26,7 @@ async def test_soft_pressure_reports_estimates_once_but_every_request_is_admitte
     assert diagnostic['reducible_tokens'] == diagnostic['reduction_achieved'] == 0
     assert diagnostic['reason'] == 'below_hard_input_limit'
     assert diagnostic['estimate_only'] and diagnostic['provider_usage'] is None
-    assert 'fits hard input budget' in events[0]['summary']
+    assert 'fits the hard input budget' in events[0]['summary']
     setattr(agent.client, 'input_token_limit', 150)
     with pytest.raises(ContextCapacityError):
         await agent._admit_request(request, events.append)

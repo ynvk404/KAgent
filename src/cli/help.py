@@ -17,40 +17,42 @@ Flags:
   --model <id>
   --theme <dark|light>       TUI theme for this invocation (default: dark)
   --base-url <url>
-  --target <url>            active target; scopes to its origin by default
+  --target <url>            set active target and default origin scope
   --api-key <key>
   --skills <dirs>            comma-separated extra skill directories
   --scanner-wordlist ID=FILE register an existing local wordlist for this session
-                             (repeatable; model selects its ID via permissions_status)
+                             Repeatable. The model selects its ID via permissions_status.
   --resume <session-id>
   --browser                  enable verified persistent trusted-local Browser MCP
-                             on Linux/WSL for this session; operator manages Chrome/Extension.
+                             on Linux/WSL for this session. You manage Chrome and the Extension.
                              Use a separate lab profile without personal accounts/tabs.
                              Actions need --target, exact scope and permission or a bounded
-                             operator Browser grant in YOLO; /permissions browser shows/revokes it.
-                             Extension readiness has a bounded deadline; discovery needs no Chrome.
+                             operator Browser grant in YOLO.
+                             View/revoke: /permissions browser
+                             Extension readiness has a bounded deadline. Discovery needs no Chrome.
   --burp [port]              start local Burp/KAgent bridge (default :8888)
   --browser-ingest [port]    deprecated alias for --burp
   --no-stream                disable streaming chat (fallback for backends
                              whose SSE/ND-JSON path drops tool_calls)
   --yolo                     activate session native HTTP autonomy in operator scope
-                             without manual grants; accept unknown server effects,
+                             without manual grants. You accept unknown server effects,
                              including bulk delete/real-data changes. Per origin:
-                             no request quota or fixed grant TTL; 3/s burst 3, concurrency 2,
-                             request 128KiB, retained response 64KiB. Explicit limits,
-                             revocation remain enforced. Confirm-each resumes OFF.
-                             Profile-covered tools auto-approve; independent resource
-                             checks remain. Linux workers support brokered HTTP;
-                             ordinary Shell/local stdio MCP need compatible configuration;
-                             typed Nmap/ffuf require their own ready adapter and job review;
-                             CONNECT and remote MCP unavailable;
-                             phase never grants HTTP authority.
+                             no request quota or fixed grant TTL · 3/s burst 3 · concurrency 2
+                             request 128KiB · retained response 64KiB
+                             Explicit limits and revocation remain enforced.
+                             Confirm-each resumes when OFF.
+                             Profile-covered tools auto-approve. Independent resource checks remain.
+                             Linux workers support brokered HTTP.
+                             Ordinary Shell/local stdio MCP need compatible configuration.
+                             Typed Nmap/ffuf require their own ready adapter and job review.
+                             CONNECT and remote MCP are unavailable.
+                             A phase never grants HTTP authority.
                              (alias: --dangerously-skip-permissions)
   --http-lab-grant <spec>     ORIGIN,MODE,SECONDS,REQUESTS,RATE,BURST,CONCURRENCY,
                              REQUEST_BYTES,RESPONSE_BYTES (repeatable, in scope only)
   --accept-unknown-http-effects
                              required with lab grant: bulk delete/real-data/server
-                             effects are possible; no test-only or sandbox guarantee
+                             effects are possible. No test-only or sandbox guarantee.
   --list-skills / --list-tools
   --log <path>
   --debug-session             write a complete JSONL session debug log

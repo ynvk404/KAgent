@@ -58,7 +58,6 @@ from src.ui.commands.menu_window import compute_menu_window
 from src.ui.commands.slash_items import SLASH_ITEMS, SlashItem, filter_slash
 from src.ui.commands.slash_handler import (
     handle_slash,
-    REMOVED_SLASH_COMMANDS,
     build_help_text,
     build_plan_prompt,
     suggest_closest,
@@ -1252,7 +1251,7 @@ class KAgent(App):
                             "Burp bridge: received session snapshot", "Burp bridge: received issue for import")):
             return
         if "Token:" in text and "Burp bridge" in text:
-            text = "\n".join("Bridge token hidden; /burp credentials to reveal/copy locally"
+            text = "\n".join("Bridge token hidden. Use /burp credentials to view or copy it locally."
                              if line.startswith("Token:") else line for line in text.splitlines())
         self.dispatch(Append(TranscriptEntry(kind="system", text=text)))
 
@@ -1586,7 +1585,7 @@ class KAgent(App):
         opts: RunAgentOptions | None = None,
     ) -> None:
         if self._skill_task is not None and not self._skill_task.done():
-            self.dispatch(Append(TranscriptEntry(kind="system", text="Skill settings are finishing; retry the prompt when they complete.")))
+            self.dispatch(Append(TranscriptEntry(kind="system", text="Skill settings are updating. Retry your prompt when the update finishes.")))
             return
         if self.agent.is_running() or self.run_abort_event is not None:
             self.dispatch(
@@ -1788,7 +1787,7 @@ class KAgent(App):
     def run_agent_compact(self) -> None:
         """Fire-and-forget compact, giống `void agent.compact(...)` trong TS."""
         if self._skill_task is not None and not self._skill_task.done():
-            self.dispatch(Append(TranscriptEntry(kind="system", text="Skill settings are finishing; retry compact when they complete.")))
+            self.dispatch(Append(TranscriptEntry(kind="system", text="Skill settings are updating. Run /compact when the update finishes.")))
             return
         if self.run_abort_event is not None or (self.run_task is not None and not self.run_task.done()):
             return
@@ -2113,8 +2112,7 @@ class KAgent(App):
             asyncio.create_task(save_memory())
             return
 
-        command = agent_value.split(maxsplit=1)
-        if agent_value.lstrip().startswith("/") or (command and command[0] in REMOVED_SLASH_COMMANDS):
+        if agent_value.lstrip().startswith("/"):
             handled = handle_slash(self, agent_value)
             if handled:
                 return

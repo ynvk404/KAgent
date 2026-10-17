@@ -251,8 +251,7 @@ class ConfirmFindingTool:
         response_excerpt = arg_string(args, "response_excerpt")
         if _UNBOUNDED_OBSERVED_IMPACT.search(observed_impact):
             raise ValueError(
-                "observed_impact contains an unverified broad-impact claim; "
-                "record only the behavior demonstrated by linked evidence"
+                'observed_impact contains an unverified broad-impact claim. Record only the behavior demonstrated by linked evidence.'
             )
         if re.search(r"\b(?:every\s+row|full\s+table)\b", response_excerpt, re.I):
             raise ValueError(
@@ -428,7 +427,7 @@ class ConfirmFindingTool:
                 or finding.assessment_result_id != latest.result_id
                 or (latest.assessment_contract_version >= 2 and finding.assessment_source != source_label)
                 or finding.evidence_refs != latest.evidence_refs):
-            raise ValueError("historical report does not match current assessment revision; Finding remains pending")
+            raise ValueError('Historical report does not match the current assessment revision. Finding remains pending.')
 
         # Store.save() may wait on disk while the workflow advances. A report
         # may already have been written, but it must not be finalized or
@@ -478,8 +477,8 @@ class ConfirmFindingTool:
             raise ValueError("candidate validation result changed during finalization")
 
         return (f'Finding "{finding.title}" written to {path}\n'
-                f'Classification: {finding.vulnerabilityType or "unknown"}; '
-                f'CWE: {", ".join(finding.cwe or []) or "none"}; '
+                f'Classification: {finding.vulnerabilityType or "unknown"} · '
+                f'CWE: {", ".join(finding.cwe or []) or "none"} · '
                 f'OWASP: {", ".join(finding.owasp or []) or "none"}' + summary_notice)
 
 def is_severity(value: str) -> TypeGuard[Severity]:

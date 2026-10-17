@@ -288,7 +288,7 @@ async def test_queued_operations_never_dispatch_after_authority_loss(rig, cause)
 async def test_readiness_deadline_does_not_read_any_tab(rig, monkeypatch):
     rig.connected[0] = False
     monkeypatch.setattr(local, 'READINESS_TIMEOUT_S', 0.05)
-    with pytest.raises(ExecutionBlocked, match='readiness deadline'):
+    with pytest.raises(ExecutionBlocked, match='Browser readiness timed out'):
         await execute(rig, 'navigate', {'url': ORIGIN})
     assert not rig.calls and all(session.closed for session in rig.sessions)
 
@@ -297,7 +297,7 @@ async def test_readiness_deadline_does_not_read_any_tab(rig, monkeypatch):
 async def test_reconnect_invalidates_refs_until_new_snapshot(rig):
     await execute(rig, 'snapshot')
     rig.generation[0] += 1
-    with pytest.raises(ExecutionBlocked, match='fresh browser_snapshot'):
+    with pytest.raises(ExecutionBlocked, match='new browser_snapshot'):
         await execute(rig, 'click', {'ref': 's1e1', 'element': 'search'})
     assert len(rig.calls) == 1
     await execute(rig, 'snapshot')
@@ -364,14 +364,14 @@ async def test_local_missing_modified_or_stale_deployment_blocks_before_spawn(tm
     (root / 'manifest.json').write_text('{}')
     monkeypatch.setattr(deployment, 'BROWSER_LOCAL_ROOT', root)
     monkeypatch.setattr(deployment, '_has_immutable_owner', lambda info: True)
-    with pytest.raises(ExecutionBlocked, match='missing/stale/unsafe'):
+    with pytest.raises(ExecutionBlocked, match='missing, stale or unsafe'):
         await local.local_launch_parameters(BROWSER_LOCAL_SERVER, discovery_only=True)
 
 
 @pytest.mark.asyncio
 async def test_loopback_port_conflict_fails_without_killing(monkeypatch):
     monkeypatch.setattr(local, 'linux_listeners', lambda: [('00000000', '42')])
-    with pytest.raises(ExecutionBlocked, match='already owned; no kill/adoption'):
+    with pytest.raises(ExecutionBlocked, match=r'already in use\. The existing process will not be stopped or adopted'):
         await local.check_ports_free()
 
 
@@ -483,11 +483,11 @@ def test_patched_inventory_changes_fail_closed(local_tree, change):
         else:
             manifest['patch'] = 'other-patch'
         (local_tree / 'manifest.json').write_text(json.dumps(manifest))
-    with pytest.raises(ExecutionBlocked, match='missing/stale/unsafe'):
+    with pytest.raises(ExecutionBlocked, match='missing, stale or unsafe'):
         deployment.verify_browser_local_deployment()
 
 
 def test_node_identity_change_is_not_trusted(local_tree, monkeypatch):
     monkeypatch.setattr(deployment, 'BROWSER_NODE_SHA256', '0' * 64)
-    with pytest.raises(ExecutionBlocked, match='unverified Browser Node'):
+    with pytest.raises(ExecutionBlocked, match='Browser Node or resource limiter is unverified'):
         deployment.verify_browser_local_deployment()

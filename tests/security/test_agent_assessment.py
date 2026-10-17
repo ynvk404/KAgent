@@ -165,7 +165,7 @@ async def test_finding_adopts_revision_and_rejects_historical_report(runtime, tm
     latest = state.latest_result(candidate.id)
     assert latest is not None
     assert latest.assessment_source == "agent"
-    with pytest.raises(ValueError, match="historical report"):
+    with pytest.raises(ValueError, match="Historical report"):
         await registry.execute("confirm_finding", finding_args, None, p)
     assert not state.finding_is_persisted(candidate.id)
     assert len(notifications) == 2

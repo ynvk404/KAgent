@@ -27,7 +27,7 @@ DROP_REQUEST_HEADERS = frozenset({
 def validate_host(headers: Any, url: str) -> None:
     host = headers.get("host")
     if host and HTTPOrigin.from_url(f"{urlsplit(url).scheme}://{host}") != HTTPOrigin.from_url(url):
-        raise ValueError("Host override differs from approved origin; explicit virtual-host scope is required")
+        raise ValueError('Host override differs from the approved origin. Explicit virtual-host scope is required.')
 
 
 def origin_headers(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -93,7 +93,7 @@ def _raw_capture(row: Any) -> tuple[str, str, list[tuple[str, str]], bytes]:
         if "transfer-encoding" in parsed_headers:
             raise ValueError("chunked captured request is not replayable")
         if body and "content-length" not in parsed_headers:
-            raise ValueError("captured raw body has no framing; recapture required")
+            raise ValueError('Captured raw body has no framing. Capture the request again.')
         if "content-length" in parsed_headers and int(parsed_headers["content-length"]) != len(body):
             raise ValueError("captured body length differs from framing")
         return str(row.method).upper(), str(row.url), headers, body
@@ -109,18 +109,18 @@ def _raw_capture(row: Any) -> tuple[str, str, list[tuple[str, str]], bytes]:
         raise ValueError("captured request body is truncated")
     if body is None:
         if int(parsed_headers.get("content-length", "0")) > 0:
-            raise ValueError("captured request body is missing; recapture required")
+            raise ValueError('Captured request body is missing. Capture the request again.')
         payload = b""
     elif isinstance(body, str):
         payload = body.encode("utf-8")
     elif isinstance(body, dict) and body.get("type") == "raw" and isinstance(body.get("data"), str):
         payload = body["data"].encode("utf-8")
     elif isinstance(body, (dict, list)):
-        raise ValueError("structured capture has no original body bytes; raw recapture required")
+        raise ValueError('Structured capture has no original body bytes. Capture the raw request again.')
     else:
         raise ValueError("captured body is not replayable")
     if "content-length" in parsed_headers and int(parsed_headers["content-length"]) != len(payload):
-        raise ValueError("structured capture differs from Content-Length; raw recapture required")
+        raise ValueError('Structured capture does not match Content-Length. Capture the raw request again.')
     return str(row.method).upper(), str(row.url), headers, payload
 
 
@@ -238,7 +238,7 @@ def _validate_form_charset(content_type: str) -> None:
     header["Content-Type"] = content_type
     charsets = [value for name, value in header.get_params() or [] if name.lower() == "charset"]
     if len(charsets) > 1:
-        raise ValueError("ambiguous form charset; recapture required")
+        raise ValueError('Form charset is ambiguous. Capture the request again.')
     if charsets:
         try:
             charset = charsets[0]
@@ -246,7 +246,7 @@ def _validate_form_charset(content_type: str) -> None:
         except (LookupError, TypeError):
             supported = False
         if not supported:
-            raise ValueError("unsupported form charset; UTF-8 recapture required")
+            raise ValueError('Unsupported form charset. A new UTF-8 capture is required.')
 
 
 def _replace_form(body: bytes, parameter: str, value: str, occurrence: int) -> bytes:
@@ -367,7 +367,7 @@ def build_captured_request(row: Any, candidate: Any, value: str, *, occurrence: 
         if "xml" in content_type.lower():
             import xml.etree.ElementTree as ET
             if b"<!--" in body or b"<![CDATA[" in body:
-                raise ValueError("XML comments/CDATA require a dedicated selector; replay unsupported")
+                raise ValueError('XML comments and CDATA require a dedicated selector. Replay is unsupported.')
             try:
                 ET.fromstring(body)
             except ET.ParseError as exc:

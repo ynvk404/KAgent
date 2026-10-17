@@ -20,7 +20,8 @@ class OfflineBoundaryError(RuntimeError):
     pass
 
 
-def _offline_scenario(tmp_path, monkeypatch, *, allowed_root=None):
+def _offline_scenario(tmp_path, monkeypatch, *, allowed_root=None, allowed_address=None, process_check=None,
+                      allowed_special_files=()):
     scratch = (allowed_root or tmp_path).resolve()
     assert tmp_path.resolve().is_relative_to(scratch)
     violations = []
@@ -35,7 +36,7 @@ def _offline_scenario(tmp_path, monkeypatch, *, allowed_root=None):
 
     class OfflineSocket(original_socket):
         def __init__(self, family=socket.AF_INET, *args, **kwargs):
-            if family != socket.AF_UNIX:
+            if family != socket.AF_UNIX and not (allowed_address and family == socket.AF_INET):
                 deny("IPv4/IPv6 socket")()
             super().__init__(family, *args, **kwargs)
 
@@ -44,11 +45,27 @@ def _offline_scenario(tmp_path, monkeypatch, *, allowed_root=None):
     # asyncio's Unix socketpair needs neither bind/connect nor subprocesses.
     for name in ("connect", "connect_ex", "bind", "listen", "sendto", "sendmsg"):
         if hasattr(original_socket, name):
-            monkeypatch.setattr(original_socket, name, deny("socket connection"))
+            original = getattr(original_socket, name)
+            def guarded_socket(self, *args, _name=name, _original=original, **kwargs):
+                address = self.getsockname() if _name == "listen" else args[0] if args else None
+                if not allowed_address or address != allowed_address or _name in {"sendto", "sendmsg"}:
+                    deny("socket connection")()
+                return _original(self, *args, **kwargs)
+            monkeypatch.setattr(original_socket, name, guarded_socket)
     for name in ("getaddrinfo", "gethostbyname", "gethostbyname_ex", "gethostbyaddr", "getnameinfo"):
-        monkeypatch.setattr(socket, name, deny("DNS"))
+        original = getattr(socket, name)
+        def guarded_dns(*args, _original=original, **kwargs):
+            if not allowed_address or not args or args[0] != allowed_address[0]:
+                deny("DNS")()
+            return _original(*args, **kwargs)
+        monkeypatch.setattr(socket, name, guarded_dns)
     monkeypatch.setattr(socket, "create_connection", deny("network connection"))
-    monkeypatch.setattr(subprocess, "Popen", deny("subprocess"))
+    original_popen = subprocess.Popen
+    def guarded_process(*args, **kwargs):
+        if process_check is None or not process_check(args, kwargs):
+            deny("subprocess")()
+        return original_popen(*args, **kwargs)
+    monkeypatch.setattr(subprocess, "Popen", guarded_process)
     for name in ("system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp",
                  "execv", "execve", "execvp", "execvpe", "execl", "execle", "execlp", "execlpe",
                  "spawnv", "spawnve", "spawnvp", "spawnvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe"):
@@ -70,6 +87,8 @@ def _offline_scenario(tmp_path, monkeypatch, *, allowed_root=None):
     def check_file(file, write=False):
         if isinstance(file, (str, bytes, os.PathLike)):
             path = Path(os.fsdecode(file)).resolve()
+            if path in allowed_special_files:
+                return
             if not path.is_relative_to(scratch):
                 durable = ".kagent" in path.parts or path.is_relative_to(REPO / "artifacts")
                 if write or durable:

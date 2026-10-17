@@ -174,10 +174,10 @@ async def test_hydrated_media_ids_never_repair_stale_baselines(tmp_path, lifecyc
     for row in (known, unknown):
         candidate = restored.candidates[row["id"]]
         tool = http_tool(restored, capture)
-        with pytest.raises(ValueError, match="unavailable.*recapture required"):
+        with pytest.raises(ValueError, match=r"Captured baseline is unavailable or unbound\. Capture the request again\."):
             tool.prepare(replay_args(candidate.id))
         boundary = GenericValidationBoundary(None, restored, None, tool.target)
-        with pytest.raises(ValueError, match="unavailable.*recapture required"):
+        with pytest.raises(ValueError, match=r"Captured baseline is unavailable or unbound\. Capture the request again\."):
             boundary.baseline(tool, candidate)
     assert restored.to_dict() == expected
 

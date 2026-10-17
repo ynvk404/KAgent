@@ -223,7 +223,7 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
             pending.append("current assessment/evidence unavailable" if result.outcome in {"confirmed", "not-confirmed"}
                            else "validation " + result.outcome)
             if recorded_pause:
-                blockers.append(sanitize_text(f"{label}: {result.outcome}; {result.deferred_reason or ''}"))
+                blockers.append(sanitize_text(f"{label} · {result.outcome}\nReason: {result.deferred_reason or ''}"))
             if (isinstance(event, ToolResultEvent) and call and call.operation == "record_result"
                     and call.candidate_id == candidate.id and event.status == "success" and not event.err
                     and result.outcome in {"blocked", "authorization-required", "browser-required", "deferred", "insufficient-evidence"}):

@@ -1521,8 +1521,8 @@ async def test_auto_compacts_before_next_turn_when_over_threshold():
     triggered_summary = compact_events[0]["summary"]
     history_tokens = compact_events[0]["tokensBefore"]
     assert "tokens >= threshold 1" in triggered_summary
-    assert f"history: {history_tokens}" in triggered_summary
-    assert "projection includes injections/framing" in triggered_summary
+    assert f"History: {history_tokens}" in triggered_summary
+    assert "Projection includes injections/framing" in triggered_summary
     assert "auto-compacted history" in compact_events[-1]["summary"]
     done = collector["events"][-1]
     assert (done.agent_loop_llm_calls, done.compaction_llm_calls, done.total_llm_calls) == (1, 1, 2)
@@ -3856,7 +3856,7 @@ async def test_private_target_permission_denial_ends_turn_without_synthesis():
 
     assert len(client.requests) == 1
     result = next(event for event in collector["events"] if event.type == "tool-result")
-    assert "permission denied by user for http" in result.err
+    assert "HTTP permission denied by user." in result.err
     assert collector["events"][-1].type == "done"
     assert collector["events"][-1].stop_reason == "all_tools_refused"
 

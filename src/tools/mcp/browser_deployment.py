@@ -61,7 +61,7 @@ def verify_browser_local_deployment(checkpoint=lambda: None) -> None:
                 if not _has_immutable_owner(parent.lstat()):
                     raise ValueError('executable directory mutable')
         except (OSError, ValueError) as exc:
-            raise ExecutionBlocked('blocked: unverified Browser Node/resource limiter; external review required') from exc
+            raise ExecutionBlocked('Browser Node or resource limiter is unverified. External review is required.') from exc
 
 
 def verify_browser_deployment(checkpoint=lambda: None) -> None:
@@ -160,5 +160,4 @@ def _verify_tree(root: Path, anchor: str, patch: str | None, checkpoint) -> None
     except ExecutionBlocked:
         raise
     except (OSError, ValueError, KeyError, TypeError, RecursionError) as error:
-        raise ExecutionBlocked('blocked: missing/stale/unsafe pinned Browser MCP deployment; '
-                               'explicit external preparation required') from error
+        raise ExecutionBlocked('Pinned Browser MCP deployment is missing, stale or unsafe. Explicit external preparation is required.') from error

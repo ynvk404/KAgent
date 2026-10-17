@@ -190,7 +190,7 @@ class ScannerRuntime:
         if self.closed:
             raise ExecutionBlocked('blocked: scanner runtime closed')
         if self.task is not None and not self.task.done():
-            raise ExecutionBlocked('pending: scanner busy; one active job per runtime; retry needs a new invocation')
+            raise ExecutionBlocked('Scanner is busy. Only one job can run at a time. Retry with a new invocation.')
         assert tool.scanner_plan is not None
         task = asyncio.create_task(_execute(binding, tool, args, abort), name='trusted-scanner-job')
         self.task = task
@@ -279,7 +279,7 @@ async def _execute(binding: ScannerBinding, tool: Any, args: dict[str, Any], abo
     session_id = policy.session_id or policy.engagement.http_permissions.session_id
     version = SUPPORTED_BUILDS.get(plan.scanner, {}).get(plan.binary.sha256)
     if version is None:
-        raise ExecutionBlocked('blocked: unsupported scanner build; local binary acceptance required')
+        raise ExecutionBlocked('Unsupported scanner build. Local binary acceptance is required.')
     policy.revalidate_active(tool, args, abort)
     job_id = 'scan_' + uuid.uuid4().hex
     generation = binding.runtime.generation

@@ -1,7 +1,7 @@
 """Keep Shell outcome parsing and uncertainty when deleting raw previews."""
 import pytest
 from src.ui.render.shell_outcome import _parse_shell_result
-from src.ui.core.admission import call_metadata, result_issues
+from src.ui.core.admission import call_metadata, result_issues, issue_category
 from src.agent.events import ToolCallEvent, ToolResultEvent
 
 
@@ -35,10 +35,22 @@ def test_unknown_failure_metadata_never_dumps_arbitrary_json():
     assert result_issues(ToolResultEvent(name="unknown", result='error: adapter unavailable\n{"body":"HIDDEN_PAYLOAD"}'), None) == ["adapter unavailable"]
     assert result_issues(ToolResultEvent(name="unknown", err='could not parse arguments: invalid JSON (raw: HIDDEN_PAYLOAD)',
                                        status="error", error_kind="invalid_args"), None) == ["could not parse arguments: invalid JSON"]
-    assert result_issues(ToolResultEvent(name="unknown", status="partial", result="HIDDEN_PAYLOAD"), None) == ["Unrecognized tool outcome; operation needs review"]
+    assert result_issues(ToolResultEvent(name="unknown", status="partial", result="HIDDEN_PAYLOAD"), None) == ["Unrecognized tool outcome. Review the operation."]
 
 
 def test_mcp_text_envelope_keeps_explicit_warnings_without_dumping_content():
     event = ToolResultEvent(name="mcp_fixture_action", result='[{"type":"text","text":"Hidden routine output\\nWARNING: cleanup required"}]\n[runtime observation: hidden-id]')
     assert result_issues(event, None) == ["WARNING: cleanup required"]
-    assert result_issues(ToolResultEvent(name="mcp_fixture_action", result='[{"type":"text","text":"Hidden data\n[... truncated 500 chars ...]'), None) == ["MCP output truncated; omitted output may limit validation"]
+    assert result_issues(ToolResultEvent(name="mcp_fixture_action", result='[{"type":"text","text":"Hidden data\n[... truncated 500 chars ...]'), None) == ["MCP output truncated. Omitted output may limit validation."]
+
+
+@pytest.mark.parametrize("name,result,truncated", [
+    ("confirm_finding", "Finding persisted; compact report export failed.", False),
+    ("fixture", "RAW_EXTERNAL_OUTPUT; do not rewrite", True),
+])
+def test_presentation_keeps_export_marker_diagnostic_category_and_raw_result(name, result, truncated):
+    event = ToolResultEvent(name=name, result=result, truncated=truncated)
+    issues = result_issues(event, None)
+    assert len(issues) == 1
+    assert issue_category(issues[0], event) == ("export" if name == "confirm_finding" else "diagnostic")
+    assert event.result == result and event.truncated is truncated

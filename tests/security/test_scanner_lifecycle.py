@@ -157,7 +157,7 @@ async def test_R_busy_slot_is_not_a_queue_or_http_quota(tmp_path, wire, processe
     finally:
         hooks.reset(token)
     await asyncio.wait_for(started.wait(), 3)
-    with pytest.raises(ExecutionBlocked, match='scanner busy'):
+    with pytest.raises(ExecutionBlocked, match='Scanner is busy'):
         await rt.registry.execute('shell', args, None, rt.prompter)
     native = await rt.registry.execute('http', {'url': '/hit', 'phase': 'recon'}, None, rt.prompter)
     assert native and not task.done()

@@ -88,7 +88,7 @@ async def test_R_unreviewed_ffuf_hash_cannot_spawn_or_mint_result(tmp_path, wire
     monkeypatch.setitem(scanner_runner.SUPPORTED_BUILDS, 'ffuf', {})
     spawn = AsyncMock(side_effect=AssertionError('unreviewed build reached spawn'))
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
-    with pytest.raises(ExecutionBlocked, match='unsupported scanner build'):
+    with pytest.raises(ExecutionBlocked, match='Unsupported scanner build'):
         await rt.registry.execute('shell', {
             'scanner': 'ffuf', 'url': origin + '/FUZZ', 'wordlist_id': 'fixture',
         }, None, rt.prompter)

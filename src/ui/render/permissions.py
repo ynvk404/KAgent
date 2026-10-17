@@ -15,8 +15,8 @@ def permissions_summary(rights: HTTPPermissions, policy: ExecutionPolicy | None)
     rows = ["Permissions", rights.summary()]
     if policy is not None:
         quota = (f"{policy.used}/{policy.max_calls} used" if policy.max_calls is not None
-                 else f"{policy.used} used; no session quota")
-        rows.append(f"Tool calls: {quota}; {policy.active}/{policy.concurrency} running")
+                 else f"{policy.used} used · no session quota")
+        rows.append(f"Tool calls: {quota} · {policy.active}/{policy.concurrency} running")
         rows.append("Revoked tools: " + (", ".join(sorted(policy.revoked)) or "none"))
         if policy.browser_local is not None:
             rows.extend(_browser_summary(policy.browser_local))
@@ -35,5 +35,5 @@ def _browser_summary(binding: BrowserLocalBinding) -> list[str]:
     quota = f"{grant.remaining} calls left" if grant.remaining is not None else "no call quota"
     lifetime = (f"{max(0, grant.expires - binding.policy.clock()):.0f}s left"
                 if grant.expires is not None else "session lifetime")
-    return [f"Browser grant: {state}; {grant.group}; {grant.origin}",
-            f"  {quota}; {lifetime}"]
+    return [f"Browser grant: {state} · {grant.group}\nOrigin: {grant.origin}",
+            f"  {quota} · {lifetime}"]

@@ -113,6 +113,51 @@ async def test_cancel_is_preserved_when_owner_teardown_fails(monkeypatch):
     await proxy.close()
 
 
+async def test_caller_cancel_stops_owner_with_unconsumed_internal_cancellation(monkeypatch):
+    """A cancellation count is not an acknowledgement of caller shutdown."""
+    entered, stopped = asyncio.Event(), asyncio.Event()
+    class Session:
+        async def call_tool(self, name, args, cancel_event=None):
+            if name == "prime":
+                owner = asyncio.current_task()
+                assert owner is not None
+                owner.cancel()
+                try:
+                    await asyncio.sleep(0)
+                except asyncio.CancelledError:
+                    pass  # Model a nested timeout/adapter swallowing its cancel.
+                return {"isError": False, "content": []}
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                stopped.set()
+        async def close(self):
+            pass
+    async def open_session(*args, **kwargs):
+        return Session()
+    monkeypatch.setattr(module.MCPSession, "_open", open_session)
+    proxy = await module.OwnedMCPSession.open(SimpleNamespace(name="offline"), worker=object(), broker=None)
+    call = None
+    try:
+        await proxy.call_tool("prime", {})
+        assert proxy.task is not None and proxy.task.cancelling() == 1 and not proxy.task.done()
+        call = asyncio.create_task(proxy.call_tool("wait", {}))
+        await asyncio.wait_for(entered.wait(), 1)
+        call.cancel()
+        done, _ = await asyncio.wait({call}, timeout=0.3)
+        assert call in done, "caller drain hung behind an owner that had only internal cancellation"
+        assert call.cancelled() and stopped.is_set() and proxy.task.done()
+        assert not proxy.pending and proxy.queue.empty()
+    finally:
+        # Bound cleanup even on the old implementation, without masking failure.
+        if proxy.task is not None and not proxy.task.done():
+            proxy.task.cancel()
+        if call is not None:
+            await asyncio.gather(call, return_exceptions=True)
+        await proxy.close()
+
+
 @pytest.mark.parametrize("explicit_cancel", [False, True])
 async def test_policy_mcp_forwards_operator_abort_to_rpc(monkeypatch, explicit_cancel):
     from src.config.config import MCPServerConfig

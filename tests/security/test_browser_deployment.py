@@ -74,7 +74,7 @@ def test_closure_change_fails_closed(installed, change):
     else:
         lock.unlink()
         os.mkfifo(lock)
-    with pytest.raises(ExecutionBlocked, match='missing/stale/unsafe'):
+    with pytest.raises(ExecutionBlocked, match='missing, stale or unsafe'):
         deployment.verify_browser_deployment()
 
 
@@ -100,7 +100,7 @@ async def test_missing_deployment_blocks_before_any_child(tmp_path, monkeypatch)
     async def forbidden(*args, **kwargs):
         raise AssertionError('missing deployment launched a process')
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', forbidden)
-    with pytest.raises(ExecutionBlocked, match='missing/stale/unsafe'):
+    with pytest.raises(ExecutionBlocked, match='missing, stale or unsafe'):
         await discover_mcp_tools(BROWSER_MCP_SERVER, execution_policy=policy)
 
 

@@ -999,6 +999,6 @@ async def test_generic_baseline_cannot_resurrect_from_reused_external_id(runtime
         candidate.baseline_request_ref = ingested["id"]
     # Same geometry and external ID cannot prove a replayable baseline binding.
     tool.capture_store.ingest({**payload, "requestHeaders": [{"name": "X-Keep", "value": "changed"}]})
-    with pytest.raises(ValueError, match="baseline unavailable or unbound; recapture required"):
+    with pytest.raises(ValueError, match=r"Captured baseline is unavailable or unbound\. Capture the request again\."):
         boundary.baseline(tool, candidate)
     assert not runtime[4] and not env[3].requests

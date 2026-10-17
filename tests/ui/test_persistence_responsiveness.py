@@ -228,8 +228,9 @@ async def measure(boundary: str, control: bool, root: Path, monkeypatch) -> Meas
         sum(b > stamps["cancel_complete"] for b in beats),
         all(t == ui_thread for t in io_threads) if io_threads else None)
     assert result.operation_ms >= DELAY * 900
-    assert result.recovery_ticks >= 2  # UI resumed, not a permanently stalled harness.
     print("PERSISTENCE_MEASUREMENT " + json.dumps(asdict(result), sort_keys=True))
+    print("PERSISTENCE_TIMELINE " + json.dumps({"stamps": stamps, "beats": beats}, sort_keys=True))
+    assert result.recovery_ticks >= 2  # UI resumed, not a permanently stalled harness.
     return result
 
 

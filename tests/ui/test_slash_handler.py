@@ -244,19 +244,21 @@ def test_help_groups_commands_and_keeps_runtime_summary_compact():
     assert "provider   openrouter" in text
     assert "model      configured-model" in text
     assert "target     https://lab.test" in text
+    assert "limits     20 steps  ·  8k compact  ·  thinking on" in text
     assert "skills     2/3 enabled" in text
+    assert "memory     4 items" in text
+    assert "compactions" not in text
     assert "Everyday" in text
     assert "Workflow" in text
     assert "Advanced" in text
     assert "Skill picker" in text
-    assert "/exit (/quit)" in text
-    assert "/burp [port|stop|status|credentials|list|use [id|cancel]|all]" in text
-    assert "at most 50 most recent requests" in text
-    assert any(line.startswith('  /memory [add <text>|list|forget <text>|clear|intel]') and line.endswith('manage saved/session memory') for line in text.splitlines())
-    assert "/model <id|list>" in text
-    assert any(line.startswith('  /skills [<name>|enable|disable <name>|new <name>]') and line.endswith('pick/use, toggle, or create skills') for line in text.splitlines())
+    assert "/exit  quit" in text
+    assert "/burp [...]  Burp bridge/captures" in text
+    assert "/memory [...]  manage memory" in text
+    assert "/model [id|list]  switch/list model" in text
+    assert "/skills [...]  use/manage skills" in text
     assert "/<skill-name>" not in text
-    assert "/ then Tab, Tab" in text
+    assert "/ + Tab" in text
     assert "browser_capture_*" not in text
     assert "coverage(action=" not in text
     for item in SLASH_ITEMS:
@@ -550,7 +552,7 @@ def test_yolo_without_argument_shows_current_state():
 
     assert handle_slash(cast(KAgent, app), "/yolo")
 
-    assert "YOLO currently off" in last_text(app)
+    assert "YOLO: off" in last_text(app)
     assert "no target scope declared" in last_text(app)
     assert not app.state.yolo
     assert len(app.actions) == 1
@@ -565,15 +567,15 @@ def test_yolo_on_enables_auto_approve():
     assert (
         last_text(app)
         == (
-            "YOLO enabled: native HTTP automatically receives session rights in operator scope. "
-            "Per origin: no request quota or fixed grant TTL; 3/s (burst 3), concurrency 2, "
-            "request 128 KiB, retained response 64 KiB. You accept unknown server effects; "
-            "bulk delete or changes to real data are NOT prevented. "
-            "Existing limits and revocation remain enforced; confirm-each resumes when OFF. "
-            "Use /permissions to view or adjust. Shell/plugin and compatible local stdio MCP use the isolated worker/scoped HTTP broker; "
-            "ffuf has a constrained HTTP adapter. Raw TCP/nmap, CONNECT and remote MCP remain unavailable. "
-            "Scope: no target scope declared; "
-            "set /target first."
+            "YOLO enabled. Native HTTP receives session permissions within operator scope.\n"
+            "Per origin: no request quota or fixed grant TTL · 3/s (burst 3) · concurrency 2 · "
+            "request 128 KiB · retained response 64 KiB.\n"
+            "You accept unknown server effects. Bulk delete or changes to real data are NOT prevented.\n"
+            "Existing limits and revocation remain enforced. Confirm-each resumes when OFF.\n"
+            "Use /permissions to view or adjust.\n"
+            "Shell/plugin and compatible local stdio MCP use the isolated worker/scoped HTTP broker. "
+            "ffuf has a constrained HTTP adapter. Raw TCP/nmap, CONNECT and remote MCP remain unavailable.\n"
+            "Scope: no target scope declared. Set /target first."
         )
     )
     assert len(app.actions) == 1
@@ -595,7 +597,7 @@ def test_yolo_off_disables_auto_approve():
     assert handle_slash(cast(KAgent, app), "/yolo off")
 
     assert not app.state.yolo
-    assert last_text(app) == "YOLO disabled: YOLO HTTP rights removed. Explicit autonomous HTTP grants remain active; confirm-each still prompts."
+    assert last_text(app) == "YOLO disabled. YOLO HTTP permissions removed. Explicit autonomous HTTP grants remain active. Confirm-each still prompts."
     assert len(app.actions) == 1
 
 
@@ -844,8 +846,9 @@ def test_plan_turn_disables_agent_tools():
 def test_report_is_discoverable_in_workflow_help_and_tab_menu():
     from src.ui.commands.slash_items import filter_slash
     text = build_help_text(cast(Agent, HelpAgent()), lambda: {"backend": "openrouter", "model": "model"})
-    assert "/report [filename.pdf]" in text.split("Workflow", 1)[1].split("Advanced", 1)[0]
+    assert "/report [file.pdf]" in text.split("Workflow", 1)[1].split("Advanced", 1)[0]
     assert filter_slash("/rep")[0].name == "/report"
+    assert filter_slash("/rep")[0].args == "[filename.pdf]"
 
 
 def test_invalid_report_is_handled_without_agent_turn():

@@ -121,8 +121,9 @@ def test_native_grant_review_keeps_scope_and_quota_without_details():
     modal = PermissionModal(req)
     frame = rendered(modal, width=160)
     assert "all endpoints, methods and payloads" in frame
-    assert "expires in 60s; requests <= 10" in frame and "bulk delete" not in frame
+    assert "expires in 60s · requests <= 10" in frame and "bulk delete" not in frame
     assert "fixture-session" not in frame and "token bucket" not in frame
+    assert req.detail.startswith("issuer: operator; session: fixture-session\nexpires in 60s; requests <= 10;")
     assert "y approve grant" in frame and "a trust" not in frame
     modal.handle_key("v")
     assert rendered(modal, width=160) == frame

@@ -152,7 +152,7 @@ class MCPSession:
                 raise ValueError('blocked: designated CWE MCP requires an isolated worker')
         if worker is not None:
             if server.env:
-                raise ValueError('blocked: MCP environment export adapter unavailable; no ambient fallback')
+                raise ValueError('MCP environment export adapter is unavailable. No ambient fallback will be used.')
             cwe_deployment_path = None
             if is_cwe_server:
                 cwe_deployment_path = worker.cwe_mcp_deployment_path
@@ -286,9 +286,9 @@ class MCPSession:
             warn("mcp: close deadline exceeded; abandoning child", server=self.server_name)
 
 
-async def _cancel_and_drain_owner(task: asyncio.Task) -> None:
+async def _cancel_and_drain_owner(task: asyncio.Task, *, cancel: bool = True) -> None:
     """Cancel once; repeated caller cancellation must not interrupt teardown."""
-    if not task.done() and not task.cancelling():
+    if cancel and not task.done():
         task.cancel()
     while not task.done():
         try:
@@ -308,6 +308,8 @@ class OwnedMCPSession:
         self.task: asyncio.Task | None = None
         self.closed = False
         self.pending: set[asyncio.Future] = set()
+        self._cancel_requested = False
+        self._owner_tearing_down = False
 
     @classmethod
     async def open(cls, server, *, worker, broker, signal=None):
@@ -341,6 +343,7 @@ class OwnedMCPSession:
                 if isinstance(exc, asyncio.CancelledError):
                     raise
             finally:
+                proxy._owner_tearing_down = True
                 proxy.closed = True
                 try:
                     if session is not None:
@@ -361,9 +364,20 @@ class OwnedMCPSession:
         try:
             await ready
         except BaseException:
-            await _cancel_and_drain_owner(proxy.task)
+            await proxy._stop_owner()
             raise
         return proxy
+
+    async def _stop_owner(self):
+        if self.task is None:
+            return
+        # An inner asyncio.timeout may have requested cancellation without
+        # terminating the owner. Its cancelling() count cannot acknowledge our
+        # shutdown. Send our own cancellation once, preserving entered teardown
+        # against overlapping caller cancellation and close requests.
+        cancel = not self._cancel_requested and not self._owner_tearing_down
+        self._cancel_requested = True
+        await _cancel_and_drain_owner(self.task, cancel=cancel)
 
     async def invoke(self, method, *args):
         if self.closed or self.task is None or self.task.done():
@@ -376,7 +390,7 @@ class OwnedMCPSession:
                 return await future
         except (asyncio.CancelledError, TimeoutError):
             # A cancelled RPC must not retain an isolated process/lease.
-            await _cancel_and_drain_owner(self.task)
+            await self._stop_owner()
             raise
         finally:
             self.pending.discard(future)
@@ -399,11 +413,11 @@ class OwnedMCPSession:
         try:
             done, _ = await asyncio.wait({self.task}, timeout=CLOSE_DEADLINE_S)
             if not done:
-                await _cancel_and_drain_owner(self.task)
+                await self._stop_owner()
             else:
                 await asyncio.gather(self.task, return_exceptions=True)
         except asyncio.CancelledError:
-            await _cancel_and_drain_owner(self.task)
+            await self._stop_owner()
             raise
 
 

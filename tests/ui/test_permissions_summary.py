@@ -44,7 +44,7 @@ def test_default_summary_is_short_and_never_requests_runtime_diagnostics(tmp_pat
     text = app.state.transcript[-1].text
     assert "YOLO: off" in text and "HTTP session deny: off" in text
     assert "HTTP grants: none" in text and "Revoked tools: none" in text
-    assert "1 used; no session quota" in text and "0/16 running" in text
+    assert "1 used · no session quota" in text and "0/16 running" in text
     assert len(text.splitlines()) <= 6
     for internal in (str(tmp_path), rights.session_id, "Worker", "broker", "MiB", "Grant format", "REQUEST_BYTES"):
         assert internal not in text
@@ -86,7 +86,7 @@ def test_grant_summary_reports_actual_state_and_never_refills_or_replaces_grants
     before = (rights.revision, rights.epoch, dict(rights.grants), asdict(budget))
     text = permissions_summary(rights, policy)
     assert f"HTTP grants: {1 if state == 'active' else 0} active" in text
-    assert f"{ORIGIN}: {state}; {mode}" in text and grant.id in text
+    assert f"{ORIGIN}: {state} · {mode}" in text and grant.id in text
     assert f"{0 if state == 'exhausted' else 2} requests left" in text
     assert "1/2 running" in text
     if state == "blocked":
@@ -101,7 +101,7 @@ def test_session_grants_show_no_artificial_expiry_or_quota(tmp_path):
     rights, policy = bind_permissions(app, tmp_path)
     rights.activate(ORIGIN, HTTPLimits.session())
     text = permissions_summary(rights, policy)
-    assert "no request quota; session lifetime" in text
+    assert "no request quota · session lifetime" in text
     assert "HTTP grants do not approve scanner jobs." in text
 
 
@@ -116,11 +116,11 @@ async def test_declined_review_summary_matches_the_existing_authorize_path(tmp_p
     assert await rights.review_grant(ORIGIN, HTTPLimits(), "autonomous", operator) is None
     blocked = mode == "confirm-each" and not yolo
     text = permissions_summary(rights, policy)
-    assert f"{ORIGIN}: {'blocked' if blocked else 'active'}; {mode}" in text
+    assert f"{ORIGIN}: {'blocked' if blocked else 'active'} · {mode}" in text
     assert f"HTTP grants: {0 if blocked else 1} active" in text
     action = EffectiveHTTP("GET", ORIGIN, (), b"", 1024, 0, policy.engagement.revision, rights.epoch)
     if blocked:
-        with pytest.raises(HTTPBlocked, match="lab grant review previously declined"):
+        with pytest.raises(HTTPBlocked, match="Lab grant review was previously declined"):
             await rights.authorize(action, operator, None, lambda: 0)
     else:
         receipt = await rights.authorize(action, operator, None, lambda: 0)
@@ -151,7 +151,7 @@ def test_browser_summary_uses_existing_grant_validation(tmp_path, state):
                 "active" if state == "active" else "expired/exhausted/stale")
     assert "Browser grant: " + expected in text
     if state == "active":
-        assert f"read; {ORIGIN}" in text and "2 calls left; 60s left" in text
+        assert f"active · read\nOrigin: {ORIGIN}" in text and "2 calls left · 60s left" in text
     assert "browser_snapshot" not in text  # No duplicated action catalog.
 
 
@@ -160,7 +160,7 @@ def test_limits_result_is_compact_and_details_does_not_expand_the_command_surfac
     rights, policy = bind_permissions(app, tmp_path)
     assert handle_slash(app, "/permissions limits 7 2")
     assert policy.max_calls == 7 and policy.concurrency == 2
-    assert "0/7 used; 0/2 running" in app.state.transcript[-1].text
+    assert "0/7 used · 0/2 running" in app.state.transcript[-1].text
     assert "Worker" not in app.state.transcript[-1].text
     assert handle_slash(app, "/permissions details")
     assert app.state.transcript[-1].kind == "error"

@@ -181,13 +181,13 @@ def result_issues(ev: ToolResultEvent, call: PendingCall | None) -> list[str]:
                 from src.tools.mcp.integration import extract_mcp_text
                 notice_text = extract_mcp_text(content)
             if re.search(r"\[\.\.\. truncated \d+ chars \.\.\.\]", ev.result):
-                issues.append("MCP output truncated; omitted output may limit validation")
+                issues.append("MCP output truncated. Omitted output may limit validation.")
             issues.extend(line for line in notice_text.splitlines() if line.startswith("ERROR:"))
         issues.extend(line for line in notice_text.splitlines()
                       if line.startswith(("WARNING:", "Warning:")) and line not in issues)
     if ev.truncated:
-        issues.append("Tool output truncated; omitted output may limit validation")
+        issues.append("Tool output truncated. Omitted output may limit validation.")
     if ev.status not in {"success", "observation", "error", "cancelled", "pending"}:
-        issues.append("Unrecognized tool outcome; operation needs review")
+        issues.append("Unrecognized tool outcome. Review the operation.")
     return list(dict.fromkeys(re.sub(r"\b(?:cand(?:idate)?|result|attempt|ev|goal)_[0-9a-f]{12,}\b",
                                     "[reference]", sanitize_text(issue)) for issue in issues))
