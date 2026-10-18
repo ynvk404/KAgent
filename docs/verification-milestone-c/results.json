@@ -1,0 +1,248 @@
+{
+  "source_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+  "runs": {
+    "focused-final": {
+      "command": [
+        "venv-linux/bin/pytest",
+        "-q",
+        "--tb=short",
+        "-ra",
+        "--junitxml=$REPO/docs/verification-stage3/final-corrections/focused-final.xml",
+        "tests/agent/test_target_request_intent.py",
+        "tests/ui/test_light_theme_app.py",
+        "tests/integration/test_requested_goal_lifecycle.py",
+        "tests/state/test_requested_goals.py",
+        "tests/security/test_validation_finalization.py"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 25.342,
+      "started_utc": "2026-10-18T07:52:36.476715+00:00",
+      "finished_utc": "2026-10-18T07:53:01.816166+00:00",
+      "cwd": "$REPO",
+      "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+      "source_unchanged": true,
+      "environment": {
+        "TERM": "xterm-256color",
+        "COLORTERM": null
+      },
+      "junit_valid": true,
+      "log_sha256": "a3d8e779f634f944a4348e4f6f058464956baa330e00d499fce2f38b855085d3",
+      "junit_sha256": "14211d21eb712725f4e77259b6841e149b9de060784312bfd122739823748670",
+      "junit": {
+        "tests": 118,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "skipped": [],
+      "pytest_summary": "118 passed in 24.08s",
+      "source_before_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+      "source_after_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+      "original_manifest_sha256": "72440bce0cebb6c8bec8c61ed306c0a8fecb2db965e65054579b2f162387f358",
+      "original_result_sha256": "e19c6e253ba52262eaeba76a51419db6663859fb3709167ec4f83b0f13235363"
+    },
+    "targeted": {
+      "command": [
+        "venv-linux/bin/pytest",
+        "-q",
+        "--tb=short",
+        "-ra",
+        "--junitxml=$REPO/docs/verification-stage3/final-corrections/targeted.xml",
+        "tests/agent",
+        "tests/runtime/test_tooling_policy.py",
+        "tests/state/test_input_admission.py",
+        "tests/tools/test_workflow_input_paging.py",
+        "tests/state/test_discovery_inventory.py",
+        "tests/state/test_source_frontier.py",
+        "tests/state/test_html_extraction.py",
+        "tests/state/test_openapi_extraction.py",
+        "tests/tools/test_workflow_sources.py",
+        "tests/integration/test_discovery_extraction.py",
+        "tests/integration/test_discovery_scanner_handoff.py",
+        "tests/skills/test_recon.py",
+        "tests/skills/test_web_enumeration.py",
+        "tests/skills/test_web_input_analysis.py"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 72.263,
+      "started_utc": "2026-10-18T07:53:23.341147+00:00",
+      "finished_utc": "2026-10-18T07:54:35.601148+00:00",
+      "cwd": "$REPO",
+      "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+      "source_unchanged": true,
+      "environment": {
+        "TERM": "xterm-256color",
+        "COLORTERM": null
+      },
+      "junit_valid": true,
+      "log_sha256": "09c4bf4038e0659f4b44f30f612a17563c141dbc61e432ce3806f9d4127e8695",
+      "junit_sha256": "a1b19f6f146ae9a1bb194ae6b8caf81f5d680725a163b07d13b1c129f1c1034a",
+      "junit": {
+        "tests": 1296,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "skipped": [],
+      "pytest_summary": "1296 passed in 70.70s (0:01:10)",
+      "source_before_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+      "source_after_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+      "original_manifest_sha256": "72440bce0cebb6c8bec8c61ed306c0a8fecb2db965e65054579b2f162387f358",
+      "original_result_sha256": "fa18e0fd104deb0ee8025c2fd0f44a1e19f9e2dd7fe43797f22c912309dad66b"
+    },
+    "integration": {
+      "command": [
+        "venv-linux/bin/pytest",
+        "-q",
+        "--tb=short",
+        "-ra",
+        "--junitxml=$REPO/docs/verification-stage3/final-corrections/integration.xml",
+        "tests/integration",
+        "tests/security",
+        "tests/runtime",
+        "tests/state",
+        "tests/tools",
+        "tests/skills",
+        "tests/ui",
+        "tests/agent"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 515.557,
+      "started_utc": "2026-10-18T07:54:50.030597+00:00",
+      "finished_utc": "2026-10-18T08:03:25.546603+00:00",
+      "cwd": "$REPO",
+      "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+      "source_unchanged": true,
+      "environment": {
+        "TERM": "xterm-256color",
+        "COLORTERM": null
+      },
+      "junit_valid": true,
+      "log_sha256": "ec1848f8053cd5fe51c2ab71f92e8ec4467e19e697c508aa0ca16f4dd35fe3e7",
+      "junit_sha256": "f744cef66fef5d2284bc9186c71043e9297abc827c0a55c2b9295eda044ea24c",
+      "junit": {
+        "tests": 6730,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 1
+      },
+      "skipped": [
+        {
+          "id": "tests.security.test_ambiguous_mutating_tool_safety::test_live_ambiguous_mutating_tool_characterization",
+          "reason": "set KAGENT_RUN_LIVE_TOOL_CHARACTERIZATION=1 to run live model characterization"
+        }
+      ],
+      "pytest_summary": "6729 passed, 1 skipped, 34 warnings in 511.72s (0:08:31)",
+      "source_before_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+      "source_after_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+      "original_manifest_sha256": "72440bce0cebb6c8bec8c61ed306c0a8fecb2db965e65054579b2f162387f358",
+      "original_result_sha256": "06b461ec2f1ccc762b12b1ac322ec4660faf9c19ba19f3cfc13b34fd30e6a388"
+    },
+    "pyright": {
+      "command": [
+        "venv-linux/bin/pyright"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 66.431,
+      "started_utc": "2026-10-18T08:03:32.830227+00:00",
+      "finished_utc": "2026-10-18T08:04:39.254718+00:00",
+      "cwd": "$REPO",
+      "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+      "source_unchanged": true,
+      "environment": {
+        "TERM": "xterm-256color",
+        "COLORTERM": null
+      },
+      "junit_valid": true,
+      "log_sha256": "f552d237ad0bd249c05f97eb62dbc65d2d0e4a5fe2346608e10fb7838dba9ed1",
+      "source_before_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+      "source_after_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+      "original_manifest_sha256": "72440bce0cebb6c8bec8c61ed306c0a8fecb2db965e65054579b2f162387f358",
+      "original_result_sha256": "3b67d6e4e89b2cc449dc64d22ed464ff74ab72ab907d97cc06cfb8a98e58bf84"
+    },
+    "full": {
+      "command": [
+        "venv-linux/bin/pytest",
+        "-q",
+        "--tb=short",
+        "-ra",
+        "--junitxml=$REPO/docs/verification-stage3/final-corrections/full.xml"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 1150.748,
+      "started_utc": "2026-10-18T08:04:45.588446+00:00",
+      "finished_utc": "2026-10-18T08:23:56.257985+00:00",
+      "cwd": "$REPO",
+      "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+      "source_unchanged": true,
+      "environment": {
+        "TERM": "xterm-256color",
+        "COLORTERM": null
+      },
+      "junit_valid": true,
+      "log_sha256": "a84b7b0f23748349dd3d04ce9e079fdba02113ff32cc9be995b9319f284a455b",
+      "junit_sha256": "e2a4f073e288f3f01e7365f7b33ec5dc9973164e71a65244992baa5d7b1c5b78",
+      "junit": {
+        "tests": 8502,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 12
+      },
+      "skipped": [
+        {
+          "id": "tests.benchmarks.test_scenario1_idle_gate::test_production_gate_idle_and_benchmark_lifecycle[idle]",
+          "reason": "requires cached offline WAR and Tomcat archive for production Java gate tests"
+        },
+        {
+          "id": "tests.benchmarks.test_scenario1_idle_gate::test_production_gate_idle_and_benchmark_lifecycle[transition]",
+          "reason": "requires cached offline WAR and Tomcat archive for production Java gate tests"
+        },
+        {
+          "id": "tests.benchmarks.test_scenario1_idle_gate::test_production_gate_idle_and_benchmark_lifecycle[session]",
+          "reason": "requires cached offline WAR and Tomcat archive for production Java gate tests"
+        },
+        {
+          "id": "tests.benchmarks.test_scenario1_idle_gate::test_production_gate_idle_and_benchmark_lifecycle[reset-failure]",
+          "reason": "requires cached offline WAR and Tomcat archive for production Java gate tests"
+        },
+        {
+          "id": "tests.benchmarks.test_scenario1_idle_gate::test_production_gate_idle_and_benchmark_lifecycle[drain-timeout]",
+          "reason": "requires cached offline WAR and Tomcat archive for production Java gate tests"
+        },
+        {
+          "id": "tests.benchmarks.test_scenario1_idle_gate::test_production_gate_idle_and_benchmark_lifecycle[idle-failure]",
+          "reason": "requires cached offline WAR and Tomcat archive for production Java gate tests"
+        },
+        {
+          "id": "tests.benchmarks.test_scenario1_idle_gate::test_production_gate_idle_and_benchmark_lifecycle[premature]",
+          "reason": "requires cached offline WAR and Tomcat archive for production Java gate tests"
+        },
+        {
+          "id": "tests.benchmarks.test_scenario1_idle_gate::test_production_gate_idle_and_benchmark_lifecycle[crash]",
+          "reason": "requires cached offline WAR and Tomcat archive for production Java gate tests"
+        },
+        {
+          "id": "tests.benchmarks.test_scenario1_idle_gate::test_normal_tui_http_adapter_through_idle_java_gate",
+          "reason": "requires cached offline WAR and Tomcat archive for production Java gate tests"
+        },
+        {
+          "id": "tests.benchmarks.test_scenario1_operator_target::test_real_existing_container_logical_reset_between_requests",
+          "reason": "requires explicitly selected prepared existing lab; never creates or prepares containers"
+        },
+        {
+          "id": "tests.live.test_system_local::test_saved_provider_against_disposable_local_target",
+          "reason": "live system validation requires explicit KAGENT_SYSTEM_LIVE=1"
+        },
+        {
+          "id": "tests.security.test_ambiguous_mutating_tool_safety::test_live_ambiguous_mutating_tool_characterization",
+          "reason": "set KAGENT_RUN_LIVE_TOOL_CHARACTERIZATION=1 to run live model characterization"
+        }
+      ],
+      "pytest_summary": "8490 passed, 12 skipped, 79 warnings in 1146.89s (0:19:06)",
+      "source_before_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+      "source_after_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+      "original_manifest_sha256": "72440bce0cebb6c8bec8c61ed306c0a8fecb2db965e65054579b2f162387f358",
+      "original_result_sha256": "6e1e8543a569cb09358dd110ce6704cbe2252d65e2df9a25763d557cb515267a"
+    }
+  }
+}

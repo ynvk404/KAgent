@@ -28,11 +28,6 @@ class Backend(StrEnum):
     ANTHROPIC = "anthropic"
 
 
-class ToolingProfile(StrEnum):
-    MINIMAL = "minimal"
-    FULL = "full"
-
-
 DEFAULT_AUTO_COMPACT_THRESHOLD = 16000
 
 
@@ -83,7 +78,6 @@ class Config:
     temperature: float | None = None
     max_tokens: int | None = None
     gemini_thinking_budget: int | None = None
-    tooling_profile: ToolingProfile | None = None
     custom_providers: dict[str, CustomProviderConfig] = field(default_factory=dict)
     custom_provider_api_keys: dict[str, str] = field(default_factory=dict)
     active_custom_provider_id: str | None = None
@@ -139,12 +133,6 @@ def config_to_dict(
         data["backend"] = cfg.backend.value
     else:
         data["backend"] = cfg.backend
-
-    if isinstance(
-        cfg.tooling_profile,
-        ToolingProfile,
-    ):
-        data["tooling_profile"] = cfg.tooling_profile.value
 
     return data
 
@@ -222,7 +210,6 @@ def config_from_dict(
             data,
             "gemini_thinking_budget",
         ),
-        tooling_profile=_tooling_profile_field(data),
     )
 
 
@@ -527,20 +514,6 @@ def _number_or_none_field(
     ):
         raise ValueError(f"{name} must be a number or null")
     return value
-
-
-def _tooling_profile_field(
-    data: dict[str, Any],
-) -> ToolingProfile | None:
-    value = data.get("tooling_profile")
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError("tooling_profile must be a string or null")
-    try:
-        return ToolingProfile(value)
-    except ValueError as e:
-        raise ValueError(f"tooling_profile is invalid: {value!r}") from e
 
 
 def _custom_providers_field(

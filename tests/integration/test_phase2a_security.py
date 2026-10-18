@@ -1,6 +1,8 @@
 """Phase 2A canonical reads remain outside generic execution/proof authority."""
 from __future__ import annotations
 
+from tests.helpers.workflow import historical_input
+
 import json
 from copy import deepcopy
 
@@ -70,7 +72,7 @@ async def test_generic_lookup_keeps_objective_and_origin_guards(runtime, tmp_pat
     registry, prompter, _, _, state, _, _, _ = env
     for objective_id, origin, expected in (("old", ORIGIN, "active objective"),
                                           (state.objective.id, "https://other.test", "active target origin")):
-        foreign = AttackSurfaceInput(objective_id, origin, sample_payload="foreign-sample")
+        foreign = historical_input(objective_id, origin, sample_payload="foreign-sample")
         state.attack_surface_inputs[foreign.id] = foreign
         result = await registry.execute("workflow", {"action": "get_input", "input_id": foreign.id}, None, prompter)
         assert result.startswith("error:") and expected in result

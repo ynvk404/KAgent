@@ -1,0 +1,30 @@
+{
+  "command": [
+    "venv-linux/bin/pytest",
+    "-q",
+    "--tb=short",
+    "-ra",
+    "--junitxml=$REPO/docs/verification-stage3/final-corrections/a-repeated.xml",
+    "-p",
+    "docs.verification-stage3.final-corrections.diagnostics",
+    "tests/security/test_validation_finalization.py",
+    "tests/security/test_validation_finalization.py",
+    "tests/security/test_validation_finalization.py",
+    "--keep-duplicates"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 68.59,
+  "source_unchanged": true,
+  "environment": {
+    "TERM": "xterm-256color",
+    "COLORTERM": null
+  },
+  "junit_valid": true,
+  "junit": {
+    "tests": 93,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "skipped": []
+}

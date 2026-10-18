@@ -295,6 +295,16 @@ def _message_from_dict(data: Any) -> Message | None:
     ):
         scope = None
 
+    activation = data.get("skill_activation")
+    if (not isinstance(activation, dict) or set(activation) != {"id", "name", "fingerprint", "source"}
+            or not all(isinstance(value, str) for value in activation.values())
+            or len(activation["id"]) != 32 or len(activation["fingerprint"]) != 64
+            or any(c not in "0123456789abcdef" for c in activation["id"] + activation["fingerprint"])
+            or not 0 < len(activation["name"]) <= 128
+            or activation["source"] not in {"manual", "model", "legacy"}
+            or role not in {"system", "tool"}):
+        activation = None
+
     return Message(
         role=cast(Role, role),
         content=content,
@@ -311,6 +321,8 @@ def _message_from_dict(data: Any) -> Message | None:
         tool_truncated=tool_truncated,
         tool_result_refs=references or None,
         tool_result_scope=scope,
+        skill_activation=activation,
+        skill_admission_required=role == "system" and data.get("skill_admission_required") is True,
         http_response_sources=http_sources,
     )
 
@@ -555,6 +567,10 @@ def _serialize_session(session_id: str, snapshot: tuple, stage: Callable[[str], 
                 serialized["tool_http_status"] = msg.tool_http_status
             if msg.tool_truncated:
                 serialized["tool_truncated"] = True
+        if msg.skill_activation is not None:
+            serialized["skill_activation"] = msg.skill_activation
+        if msg.role == "system" and msg.skill_admission_required:
+            serialized["skill_admission_required"] = True
         if msg.tool_result_refs:
             serialized["tool_result_refs"] = msg.tool_result_refs
         if msg.tool_result_scope:

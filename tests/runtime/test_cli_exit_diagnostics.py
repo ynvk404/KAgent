@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from src.config.config import Backend, Config, ToolingProfile
+from src.config.config import Backend, Config
 from src.llm.runtime.probe import ProbeResult
 from src.permission.network.grants import HTTPLimits
 from src.permission.worker.worker import OfflineWorker
@@ -23,8 +23,7 @@ LAB_GRANT = f"{ORIGIN},autonomous,60,7,1,1,1,4096,8192"
 @pytest.fixture
 async def offline_cli(tmp_path, monkeypatch):
     cli = importlib.import_module("src.cli.runtime")
-    cfg = Config(backend=Backend.DEEPSEEK, model="fake-model",
-                 tooling_profile=ToolingProfile.MINIMAL)
+    cfg = Config(backend=Backend.DEEPSEEK, model="fake-model")
     client = FakeClient([])
     debug_path = tmp_path / "session.jsonl"
     session = SimpleNamespace(close=AsyncMock())

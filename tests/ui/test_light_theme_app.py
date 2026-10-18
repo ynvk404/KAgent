@@ -145,9 +145,24 @@ async def test_status_bar_styles_are_identical_between_themes(phase):
     assert frames[0] == frames[1]
 
 
-async def test_light_first_terminal_frame_uses_selected_theme(monkeypatch):
+@pytest.mark.parametrize("capability,background,dark_background", [
+    ("truecolor", "48;2;250;248;242", "48;2;18;18;18"),
+    ("256", "48;5;231", "48;5;233"),
+])
+async def test_light_first_terminal_frame_uses_selected_theme(
+        monkeypatch, capability, background, dark_background):
     import sys
+    # The recording driver is a sink, not a terminal capability provider.
+    # Declare each emulated terminal before Textual builds its Rich console.
+    monkeypatch.setenv("TERM", "xterm-256color")
+    if capability == "truecolor":
+        monkeypatch.setenv("COLORTERM", "truecolor")
+    else:
+        monkeypatch.delenv("COLORTERM", raising=False)
+    from textual import constants
+    monkeypatch.setattr(constants, "COLOR_SYSTEM", "auto")
     app = make_app("light")
+    assert app.console.color_system == capability
     monkeypatch.setattr(sys, "__stdout__", io.StringIO())
     monkeypatch.setattr(sys, "__stderr__", io.StringIO())
     app.driver_class = RecordingDriver
@@ -155,10 +170,11 @@ async def test_light_first_terminal_frame_uses_selected_theme(monkeypatch):
         await pilot.pause()
         output = cast(RecordingDriver, app._driver).output
         assert output
-        # The first paint itself must contain the light Screen RGB, not a dark flash.
-        paints = [chunk for chunk in output if "48;2;" in chunk]
-        assert paints and "48;2;250;248;242" in paints[0]
-        assert "48;2;18;18;18" not in paints[0]
+        # Check the first paint in the terminal's actual encoding. The 256-color
+        # light Screen maps to index 231; truecolor retains the exact RGB.
+        paints = [chunk for chunk in output if "48;" in chunk]
+        assert paints and background in paints[0]
+        assert dark_background not in paints[0]
 
 
 def test_cli_default_dark_overrides_textual_environment():

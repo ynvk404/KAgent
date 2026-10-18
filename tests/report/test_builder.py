@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.helpers.workflow import historical_input
+
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -201,7 +203,7 @@ def test_ordinary_multiline_prose_is_preserved():
 @pytest.mark.parametrize("endpoint", ["https://foreign.test/private-endpoint", "//foreign.test/private-endpoint"])
 def test_restored_foreign_endpoints_are_withheld_from_all_report_projections(tmp_path, endpoint):
     state = WorkflowState(objective=WorkflowObjective("one", "whole_target", TARGET))
-    item = AttackSurfaceInput("one", TARGET, endpoint=endpoint, method="GET", disposition="analyzed")
+    item = historical_input("one", TARGET, endpoint=endpoint, method="GET", disposition="analyzed")
     state.attack_surface_inputs[item.id] = item
     candidate = Candidate(candidate_class="xss", target=TARGET, objective_id="one", endpoint=endpoint, method="GET")
     state.candidates[candidate.id] = candidate
@@ -227,7 +229,7 @@ def test_restored_foreign_endpoints_are_withheld_from_all_report_projections(tmp
 @pytest.mark.parametrize("endpoint", ["/relative", "relative", TARGET + "/absolute", "//target.test/same-origin"])
 def test_same_origin_and_relative_endpoints_remain_reportable(tmp_path, endpoint):
     state = WorkflowState(objective=WorkflowObjective("one", "whole_target", TARGET))
-    item = AttackSurfaceInput("one", TARGET, endpoint=endpoint)
+    item = historical_input("one", TARGET, endpoint=endpoint)
     state.attack_surface_inputs[item.id] = item
     row = freeze(dict(endpoint=endpoint, param="q", vulnClass="xss", status="passed", count=1,
         firstSeen=0, lastSeen=0, context=dict(objective_id="one", target_origin=TARGET)))

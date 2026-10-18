@@ -3,7 +3,18 @@ from __future__ import annotations
 from typing import Any
 
 from src.permission.permission import AlwaysAllow
-from src.workflow.state import PHASE_COVERAGE_DIMENSIONS, WorkflowPhase, WorkflowState
+from src.workflow.state import (PHASE_COVERAGE_DIMENSIONS, WorkflowPhase, WorkflowState,
+                                AttackSurfaceInput, attack_surface_input_fingerprint)
+
+
+def historical_input(objective_id: str, target_origin: str, **fields: Any) -> AttackSurfaceInput:
+    """Explicit old-session fixture; never routes malformed data through new admission."""
+    fingerprint_fields = {name: fields.get(name) for name in (
+        "method", "endpoint", "parameter", "location", "input_type", "auth_context_ref",
+        "baseline_request_ref", "content_type")}
+    identity = attack_surface_input_fingerprint(objective_id=objective_id, target_origin=target_origin,
+                                                **fingerprint_fields)
+    return AttackSurfaceInput(objective_id, target_origin, id=identity, **fields)
 
 
 def record_completed_phase(

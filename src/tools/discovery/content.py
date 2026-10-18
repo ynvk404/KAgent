@@ -6,6 +6,8 @@ import json
 import re
 import secrets
 import time
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import quote, unquote, urljoin, urlsplit
 
@@ -15,7 +17,6 @@ from src.engagement.state import EngagementState
 from src.permission.permission import Prompter
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
-from src.tools.common.capabilities import CapabilityInventory
 from src.tools.discovery.common import (
     DiscoveryScope,
     is_aborted,
@@ -31,6 +32,20 @@ from src.workflow.state import WorkflowState
 from src.workflow.ownership import WorkflowOwner
 from src.permission.runtime.execution import guard_adapter
 from src.permission.network.transport import governed_stream
+from src.redaction.redact import redact_payload
+from src.session.tool_results import ResultReference
+
+
+@dataclass(slots=True)
+class NativeDiscoveryResult:
+    """Runtime producer metadata, never hydrated from JSON/plugin output."""
+    owner: WorkflowOwner
+    full_text: str
+    reference: ResultReference | None = None
+
+
+result_hook: ContextVar[Callable[[ToolOutput], ToolOutput] | None] = ContextVar(
+    "native_discovery_result_hook", default=None)
 
 
 DEFAULT_MAX_REQUESTS = 120
@@ -42,7 +57,6 @@ MAX_TIMEOUT_SECONDS = 120
 MAX_PATHS = 500
 MAX_EXTENSIONS = 16
 MAX_RESPONSE_BYTES = 16 * 1024
-MAX_RESULT_ITEMS = 100
 
 DEFAULT_PATHS = (
     "admin", "api", "api/v1", "api/v2", "auth", "login", "logout",
@@ -63,12 +77,9 @@ class ContentDiscoveryTool(Tool):
         self,
         target: Target,
         engagement: EngagementState,
-        capabilities: CapabilityInventory | None = None,
-        tooling_profile: Callable[[], str | None] | None = None,
+        *,
         workflow: WorkflowState | None = None,
     ) -> None:
-        # Accept the former constructor contract without consulting scanner
-        # installation/profile state: semantic discovery always stays native.
         self.target = target
         self.engagement = engagement
         self.workflow = workflow
@@ -79,7 +90,7 @@ class ContentDiscoveryTool(Tool):
     def description(self) -> str:
         return (
             "Discover a bounded list of common web paths on the active target's "
-            "exact HTTP origin using native HTTP in every tooling profile. GET only, "
+            "exact HTTP origin using native HTTP. GET only, "
             "no recursion, no raw scanner flags, and redirects are not followed. "
             "Two random baselines filter wildcard/SPA responses. Its bounded paths and "
             "request budget are validated against the active scope; routine "
@@ -253,15 +264,18 @@ class ContentDiscoveryTool(Tool):
                 except ValueError:
                     pass
             result = self._result(*call_args, **call_kwargs)
-            if phase_coverage is None:
-                return result
-            payload = json.loads(str(result))
-            payload["phase_coverage"] = phase_coverage
-            return ToolOutput(
-                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                status=result.status, error_kind=result.error_kind,
-                http_status=result.http_status, truncated=result.truncated,
-            )
+            if phase_coverage is not None:
+                payload = json.loads(str(result))
+                payload["phase_coverage"] = phase_coverage
+                result = ToolOutput(
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                    status=result.status, error_kind=result.error_kind,
+                    http_status=result.http_status, truncated=result.truncated,
+                )
+            # Bind AFTER the phase wrapper so producer metadata cannot be lost.
+            result.native_discovery = NativeDiscoveryResult(owner, str(result))
+            hook = result_hook.get()
+            return hook(result) if hook is not None else result
 
         start = time.monotonic()
         deadline = start + timeout
@@ -287,88 +301,96 @@ class ContentDiscoveryTool(Tool):
         ]
         baselines: list[dict[str, Any]] = []
 
-        async with httpx.AsyncClient(
-            verify=False,
-            follow_redirects=False,
-            timeout=timeout,
-            trust_env=False,
-            headers={"User-Agent": NATIVE_USER_AGENT},
-        ) as client:
-            for baseline_path in baseline_paths:
-                if baselines and not await sleep_or_abort(1 / rate, signal):
-                    return make_result(
-                        scope, backend, len(baseline_paths), requests_completed,
-                        start, baselines, [], [], status="cancelled",
-                        reason="cancelled between wildcard baselines",
+        try:
+            async with httpx.AsyncClient(
+                verify=False,
+                follow_redirects=False,
+                timeout=timeout,
+                trust_env=False,
+                headers={"User-Agent": NATIVE_USER_AGENT},
+            ) as client:
+                for baseline_path in baseline_paths:
+                    if baselines and not await sleep_or_abort(1 / rate, signal):
+                        return make_result(
+                            scope, backend, len(baseline_paths), requests_completed,
+                            start, baselines, [], [], status="cancelled",
+                            reason="cancelled between wildcard baselines",
+                        )
+                    baseline, outcome = await self._probe(
+                        client, self._url_for(scope, baseline_path), signal, deadline
                     )
-                baseline, outcome = await self._probe(
-                    client, self._url_for(scope, baseline_path), signal, deadline
-                )
-                requests_completed += int(baseline is not None)
-                if outcome == "cancelled":
-                    return make_result(
-                        scope, backend, len(baseline_paths), requests_completed,
-                        start, baselines, [], [], status="cancelled",
-                        reason="cancelled during wildcard baseline",
-                    )
-                if outcome == "timeout":
-                    return make_result(
-                        scope, backend, len(baseline_paths), requests_completed,
-                        start, baselines, [], [], status="error",
-                        reason="timeout during wildcard baseline", error_kind="timeout",
-                    )
-                if baseline is None:
-                    return make_result(
-                        scope, backend, len(baseline_paths), requests_completed,
-                        start, baselines, [], [], status="error",
-                        reason="wildcard baseline request failed", error_kind="network",
-                    )
-                baselines.append(baseline)
+                    requests_completed += int(baseline is not None)
+                    if outcome == "cancelled":
+                        return make_result(
+                            scope, backend, len(baseline_paths), requests_completed,
+                            start, baselines, [], [], status="cancelled",
+                            reason="cancelled during wildcard baseline",
+                        )
+                    if outcome == "timeout":
+                        return make_result(
+                            scope, backend, len(baseline_paths), requests_completed,
+                            start, baselines, [], [], status="error",
+                            reason="timeout during wildcard baseline", error_kind="timeout",
+                        )
+                    if baseline is None:
+                        return make_result(
+                            scope, backend, len(baseline_paths), requests_completed,
+                            start, baselines, [], [], status="error",
+                            reason="wildcard baseline request failed", error_kind="network",
+                        )
+                    baselines.append(baseline)
 
-            scan_budget = max_requests - len(baselines)
-            scan_words = words[:scan_budget]
-            scanned_paths = len(scan_words)
-            if scanned_paths < len(words):
-                coverage_incomplete_reason = (
-                    f"request budget covered {scanned_paths} of {len(words)} requested paths"
-                )
-            for word in scan_words:
-                if requests_completed >= max_requests:
-                    break
-                if not await sleep_or_abort(1 / rate, signal):
-                    return make_result(
-                        scope, backend, len(scan_words) + len(baselines), requests_completed,
-                        start, baselines, observations, rejected,
-                        status="cancelled", reason="cancelled during native discovery",
+                scan_budget = max_requests - len(baselines)
+                scan_words = words[:scan_budget]
+                if len(scan_words) < len(words):
+                    coverage_incomplete_reason = (
+                        f"request budget covered {len(scan_words)} of {len(words)} requested paths"
                     )
-                observation, outcome = await self._probe(
-                    client, self._url_for(scope, word), signal, deadline
-                )
-                if observation is not None:
-                    requests_completed += 1
-                if outcome == "cancelled":
-                    return make_result(
-                        scope, backend, len(scan_words) + len(baselines), requests_completed,
-                        start, baselines, observations, rejected,
-                        status="cancelled", reason="cancelled during native request",
+                for word in scan_words:
+                    if requests_completed >= max_requests:
+                        break
+                    if not await sleep_or_abort(1 / rate, signal):
+                        return make_result(
+                            scope, backend, len(scan_words) + len(baselines), requests_completed,
+                            start, baselines, observations, rejected,
+                            status="cancelled", reason="cancelled during native discovery",
+                        )
+                    observation, outcome = await self._probe(
+                        client, self._url_for(scope, word), signal, deadline
                     )
-                if outcome == "timeout":
-                    return make_result(
-                        scope, backend, len(scan_words) + len(baselines), requests_completed,
-                        start, baselines, observations, rejected,
-                        status="error", reason="operation timeout",
-                        error_kind="timeout",
-                    )
-                if observation is None:
-                    if outcome not in {"cancelled", "timeout"}:
-                        coverage_incomplete_reason = "one or more path requests did not complete"
-                    rejected.append({"path": word, "reason": outcome or "request_failed"})
-                elif self._matches_baselines(observation, baselines):
-                    rejected.append({"path": word, "reason": "wildcard_or_spa_baseline"})
-                else:
-                    observation["path"] = word
-                    observation["verified"] = True
-                    observations.append(observation)
+                    if observation is not None:
+                        requests_completed += 1
+                        scanned_paths += 1
+                    if outcome == "cancelled":
+                        return make_result(
+                            scope, backend, len(scan_words) + len(baselines), requests_completed,
+                            start, baselines, observations, rejected,
+                            status="cancelled", reason="cancelled during native request",
+                        )
+                    if outcome == "timeout":
+                        return make_result(
+                            scope, backend, len(scan_words) + len(baselines), requests_completed,
+                            start, baselines, observations, rejected,
+                            status="error", reason="operation timeout",
+                            error_kind="timeout",
+                        )
+                    if observation is None:
+                        if outcome not in {"cancelled", "timeout"}:
+                            coverage_incomplete_reason = "one or more path requests did not complete"
+                        rejected.append({"path": word, "reason": outcome or "request_failed"})
+                    elif self._matches_baselines(observation, baselines):
+                        rejected.append({"path": word, "reason": "wildcard_or_spa_baseline"})
+                    else:
+                        observation["path"] = word
+                        observation["verified"] = True
+                        observations.append(observation)
+        except asyncio.CancelledError:
+            # Completed rows are finalized synchronously through the owned hook.
+            # Cancellation still propagates; no success receipt is manufactured.
+            make_result(scope, backend, min(len(words), max_requests - 2) + 2,
+                        requests_completed, start, baselines, observations, rejected,
+                        status="cancelled", reason="task cancelled during native discovery")
+            raise
 
         requested_requests = len(scan_words) + len(baselines)
         result_reasons = [
@@ -497,7 +519,8 @@ class ContentDiscoveryTool(Tool):
             return None, "network_error"
         except asyncio.CancelledError:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            from src.agent.ownership import join
+            await join(task)
             raise
 
     async def _read_probe(
@@ -632,7 +655,8 @@ class ContentDiscoveryTool(Tool):
         def public_observation(item: dict[str, Any]) -> dict[str, Any]:
             return {key: value for key, value in item.items() if not key.startswith("_")}
 
-        truncated = len(discovered) > MAX_RESULT_ITEMS or len(rejected) > MAX_RESULT_ITEMS
+        # Preview is a controller decision only after successful publication.
+        truncated = False
         if isinstance(baseline, list):
             public_baseline: Any = [public_observation(item) for item in baseline]
         else:
@@ -650,12 +674,16 @@ class ContentDiscoveryTool(Tool):
             "scanned_paths": scanned_paths,
             "duration_seconds": round(time.monotonic() - started, 3),
             "wildcard_baseline": public_baseline,
-            "discovered": [public_observation(item) for item in discovered[:MAX_RESULT_ITEMS]],
-            "rejected": rejected[:MAX_RESULT_ITEMS],
+            "discovered": [public_observation(item) for item in discovered],
+            "rejected": [public_observation(item) for item in rejected],
+            "discovered_total": len(discovered),
+            "rejected_total": len(rejected),
             "reason": reason,
             "truncated": truncated,
         }
-        text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        payload["complete"] = (status == "success" and requested == completed
+                               and requested_paths == scanned_paths)
+        text = json.dumps(redact_payload(payload), ensure_ascii=False, separators=(",", ":"))
         if status == "cancelled":
             return ToolOutput(text, status="cancelled", error_kind="cancelled", truncated=truncated)
         if status == "error":

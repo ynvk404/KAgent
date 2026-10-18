@@ -195,7 +195,7 @@ async def test_foreign_reverse_links_are_not_exposed(tmp_path, fault):
     _, candidate = await linked(registry, sample_payload='{"q":"safe"}')
     foreign = AttackSurfaceInput("other" if fault == "objective" else "handoff2",
                                  "https://other.test" if fault == "origin" else ORIGIN,
-                                 endpoint="/private", sample_payload="foreign-private-sample", candidate_ids=[candidate["id"]])
+                                 method="GET", parameter="q", location="query", endpoint="/private", sample_payload="foreign-private-sample", candidate_ids=[candidate["id"]])
     state.attack_surface_inputs[foreign.id] = foreign
     response = await start(registry, candidate)
     assert response["validation_context"]["resolution"] == "ambiguous"
@@ -210,8 +210,7 @@ async def test_exact_lookup_recovers_full_bound_after_compaction_and_session_res
     sample = "safe-" + "A" * (size - 5)
     item, candidate = await linked(registry, sample_payload=sample)
     listing = json.loads(await call(registry, "list"))
-    assert len(listing["attack_surface_inputs"][0]["sample_payload"]) == 500
-    assert listing["attack_surface_inputs"][0]["sample_payload_truncated"]
+    assert "sample_payload" not in listing["attack_surface_inputs"][0]
     prompt = render_workflow(state)
     assert sample not in prompt and "get_input" in prompt
     memory = SessionMemory(todos=[f"{candidate['id']} duplicate handoff"])

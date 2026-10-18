@@ -280,7 +280,7 @@ def test_whole_target_inventory_is_aggregated_and_exact_origin_scoped(tmp_path):
     assert len(app.state.transcript) == 2 and app.state.transcript[0].text.startswith('Workflow ·')
     assert '0/30 inputs reviewed' in app.state.transcript[0].text
     from src.workflow.state import AttackSurfaceInput
-    foreign = AttackSurfaceInput('foreign', 'http://other.lab:3000', method='GET', endpoint='/outside', parameter='secret')
+    foreign = AttackSurfaceInput('foreign', 'http://other.lab:3000', method='GET', endpoint='/outside', parameter='secret', location='query')
     workflow.attack_surface_inputs[foreign.id] = foreign
     snapshot = copy.deepcopy(workflow.to_dict())
     dispatch(app, ToolCallEvent(id='boundary', name='workflow', args={'action':'complete_skill'}))

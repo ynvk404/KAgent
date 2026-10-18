@@ -20,6 +20,8 @@ from src.redaction.redact import (
     redact_request_context,
 )
 from src.target.origin import HTTPOrigin
+from src.target.input_admission import admit_input_fields, canonical_endpoint
+from .discovery import EndpointRecord, SourceRecord, ProvenanceRecord
 from .evidence import EvidenceArtifact
 from .goals import GoalStatus, RequestedGoal
 
@@ -528,6 +530,14 @@ class AttackSurfaceInput:
     source_ref: str | None = None
 
     def __post_init__(self) -> None:
+        # Hydration with an existing ID preserves historical representations.
+        # New admission validates exact metadata before legacy sanitizers/hash.
+        if not self.id:
+            for name, value in admit_input_fields({name: getattr(self, name) for name in (
+                "objective_id", "target_origin", "method", "endpoint", "parameter", "location",
+                "input_type", "content_type", "baseline_request_ref", "auth_context_ref", "source_ref",
+            )}).items():
+                setattr(self, name, value)
         self.objective_id = _text(self.objective_id, limit=80) or ""
         if not self.objective_id:
             raise ValueError("objective_id is required")
@@ -1097,6 +1107,10 @@ class WorkflowState:
     validation_results: list[ValidationResult] = field(default_factory=list)
     evidence: dict[str, EvidenceArtifact] = field(default_factory=dict)
     attack_surface_inputs: dict[str, AttackSurfaceInput] = field(default_factory=dict)
+    endpoints: dict[str, EndpointRecord] = field(default_factory=dict)
+    discovery_sources: dict[str, SourceRecord] = field(default_factory=dict)
+    discovery_provenance: dict[str, ProvenanceRecord] = field(default_factory=dict)
+    discovery_restore_invalid: bool = False
     phase_completions: dict[str, WorkflowPhaseCompletion] = field(default_factory=dict)
     phase_coverage: dict[str, dict[str, PhaseCoverage]] = field(default_factory=dict)
     active_candidate_ids: set[str] = field(default_factory=set)
@@ -1118,6 +1132,128 @@ class WorkflowState:
     def mark_committed(self) -> None:
         """Make a canonical mutation checkpoint-eligible before the next await."""
         self.committed_revision += 1
+
+    def objective_sources(self) -> tuple[SourceRecord, ...]:
+        objective = self.objective
+        return tuple(row for row in self.discovery_sources.values() if objective is not None
+                     and row.objective_id == objective.id and row.target_origin == objective.target_origin)
+
+    def objective_endpoints(self) -> tuple[EndpointRecord, ...]:
+        objective = self.objective
+        return tuple(row for row in self.endpoints.values() if objective is not None
+                     and row.objective_id == objective.id and row.target_origin == objective.target_origin)
+
+    def discovery_source(self, source_id: str, *, generation: str,
+                         retained_ref: str | None = None) -> SourceRecord:
+        if generation != self.generation:
+            raise ValueError('discovery source generation changed; inspect current source IDs')
+        row = self.discovery_sources.get(source_id)
+        if row is None:
+            raise ValueError('unknown discovery source; use the exact published ID, never guess a replacement')
+        objective = self.objective
+        if (objective is None or objective.mode != 'whole_target' or row.objective_id != objective.id
+                or row.target_origin != objective.target_origin):
+            raise ValueError('discovery source is outside the active objective/origin')
+        if retained_ref is not None and retained_ref != row.retained_ref:
+            raise ValueError('discovery source retained reference mismatch')
+        return row
+
+    def update_discovery_source(self, source_id: str, *, generation: str,
+                                retained_ref: str | None = None, **changes: Any) -> SourceRecord:
+        from dataclasses import replace
+        row = self.discovery_source(source_id, generation=generation, retained_ref=retained_ref)
+        if set(changes) - {'selected', 'disposition', 'limitations', 'stop_reason', 'bounded_stop',
+                           'processing_bounds', 'content_identity'}:
+            raise ValueError('discovery provenance is immutable; re-read the exact admitted source')
+        if row.selected and changes.get('selected') is False:
+            raise ValueError('selected source must be explicitly dispositioned, never silently removed')
+        if 'limitations' in changes:
+            from .discovery import notes
+            changes['limitations'] = notes(tuple(dict.fromkeys((*row.limitations, *notes(changes['limitations'])))))
+        updated = replace(row, **changes)
+        if updated == row:
+            return row
+        self.discovery_sources[row.id] = updated
+        self._invalidate_inventory_reviews(None)
+        self.mark_committed()
+        return updated
+
+    def source_completion_error(self) -> str | None:
+        if self.discovery_restore_invalid:
+            return 'discovery metadata restore failed; restore a valid snapshot or reset the objective before completion'
+        row = next((row for row in self.objective_sources() if row.unresolved), None)
+        return f'selected source {row.id} remains {row.disposition}' if row is not None else None
+
+    def admit_discovery(self, source: SourceRecord, endpoints: tuple[EndpointRecord, ...] = (),
+                        provenance: tuple[ProvenanceRecord, ...] = (), *, scanner_dataset: bytes | None = None) -> SourceRecord:
+        """Synchronous atomic metadata admission under the caller's existing lock.
+
+        Producers must first validate their raw store/owner. This boundary
+        checks object linkage only; a restored source never authorizes a read.
+        """
+        from .discovery import MAX_ENDPOINTS, MAX_SOURCES, MAX_PROVENANCE, MAX_SOURCE_RECORDS
+        objective = self.objective
+        if (objective is None or objective.mode != 'whole_target'
+                or source.objective_id != objective.id or source.target_origin != objective.target_origin):
+            raise ValueError('discovery source must belong to the active whole-target objective/origin')
+        if SourceRecord(**source.to_dict()) != source:
+            raise ValueError('invalid source metadata')
+        proposed_endpoints = dict(self.endpoints)
+        proposed_provenance = dict(self.discovery_provenance)
+        for row in endpoints:
+            if (EndpointRecord(**row.to_dict()) != row or row.objective_id != objective.id
+                    or row.target_origin != objective.target_origin):
+                raise ValueError('endpoint belongs to another objective/origin')
+            proposed_endpoints[row.id] = row
+        for row in provenance:
+            endpoint = proposed_endpoints.get(row.endpoint_id)
+            if (ProvenanceRecord(**row.to_dict()) != row or row.source_id != source.id or endpoint is None
+                    or endpoint.objective_id != source.objective_id or endpoint.target_origin != source.target_origin):
+                raise ValueError('provenance source/endpoint ownership mismatch; use exact published IDs')
+            if row.input_id is not None:
+                item = self.attack_surface_inputs.get(row.input_id)
+                if (item is None or item.objective_id != source.objective_id
+                        or item.target_origin != source.target_origin
+                        or canonical_endpoint(item.endpoint, item.target_origin) != endpoint.url
+                        or item.method != endpoint.method
+                        or (row.media_type is not None and item.content_type is not None
+                            and normalize_media_type(row.media_type) != normalize_media_type(item.content_type))):
+                    raise ValueError('provenance input operation mismatch; no context borrowing')
+            if source.kind in {'ffuf', 'nmap'} and not re.fullmatch(r'sr_[0-9a-f]{24}', row.locator):
+                raise ValueError('scanner provenance requires an exact verified record ID')
+            proposed_provenance[row.id] = row
+        if source.scanner_job_id is not None:
+            job = self.scanner_jobs.get(source.scanner_job_id)
+            if (job is None or job.objective_id != source.objective_id or job.target_origin != source.target_origin
+                    or job.scanner != source.kind or job.artifacts.get('dataset_sha256') != source.retained_hash):
+                raise ValueError('discovery scanner source/job binding mismatch')
+            if provenance:
+                if (scanner_dataset is None
+                        or hashlib.sha256(scanner_dataset).hexdigest() != source.retained_hash):
+                    raise ValueError('scanner provenance requires its verified retained dataset')
+                records = {row['id']: row for row in map(json.loads, scanner_dataset.splitlines())}
+                for link in provenance:
+                    record = records.get(link.locator)
+                    endpoint = proposed_endpoints[link.endpoint_id]
+                    if (record is None or source.kind != 'ffuf' or endpoint.method != 'GET'
+                            or canonical_endpoint(record.get('url'), source.target_origin) != endpoint.url):
+                        raise ValueError('scanner record/operation mismatch; no cross-job provenance')
+        if (len(proposed_endpoints) > MAX_ENDPOINTS or len(proposed_provenance) > MAX_PROVENANCE
+                or len(set(self.discovery_sources) | {source.id}) > MAX_SOURCES
+                or sum(row.source_id == source.id for row in proposed_provenance.values()) > MAX_SOURCE_RECORDS):
+            raise ValueError('discovery metadata bound reached; record an explicit bounded stop')
+        stored = self.discovery_sources.get(source.id, source)
+        if (proposed_endpoints == self.endpoints and proposed_provenance == self.discovery_provenance
+                and source.id in self.discovery_sources):
+            return stored
+        self.endpoints = proposed_endpoints
+        self.discovery_provenance = proposed_provenance
+        self.discovery_sources[source.id] = stored
+        # Equality above already established a real inventory change. Avoid
+        # serializing the full graph twice for every source insertion.
+        self._invalidate_inventory_reviews(None)
+        self.mark_committed()
+        return stored
 
     def add_scanner_job(self, job, *, observation_fingerprints: tuple[str, ...] = ()) -> bool:
         from .scanner import MAX_JOBS, MAX_OBSERVATION_FACTS, observation_scope
@@ -1295,6 +1431,8 @@ class WorkflowState:
         objective = self.objective
         if objective is None or objective.mode != "whole_target":
             return "no-candidate review requires an active whole-target objective"
+        if reason := self.source_completion_error():
+            return reason
         marker = self.phase_completions.get(f"{objective.id}:input_analysis")
         if marker is None or marker.target_origin != objective.target_origin:
             return "input analysis has not completed for the active objective"
@@ -1339,6 +1477,7 @@ class WorkflowState:
             "goal_id": goal.id, "artifact_digest": artifact_digest,
             "input_analysis": marker.to_dict() if marker is not None else None,
             "inputs": [item.to_dict() for item in self.objective_inputs()],
+            "discovery_inventory": self._inventory_signature(),
         }
         return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -1484,10 +1623,15 @@ class WorkflowState:
         return True
 
     def _inventory_signature(self) -> str:
-        return json.dumps([item.to_dict() for item in self.objective_inputs()], sort_keys=True)
+        source_ids = {row.id for row in self.objective_sources()}
+        return json.dumps({'inputs': [item.to_dict() for item in self.objective_inputs()],
+                           'endpoints': [row.to_dict() for row in self.objective_endpoints()],
+                           'sources': [row.to_dict() for row in self.objective_sources()],
+                           'provenance': [row.to_dict() for row in self.discovery_provenance.values()
+                                          if row.source_id in source_ids]}, sort_keys=True)
 
-    def _invalidate_inventory_reviews(self, previous: str) -> None:
-        if self.objective is None or previous == self._inventory_signature():
+    def _invalidate_inventory_reviews(self, previous: str | None) -> None:
+        if self.objective is None or (previous is not None and previous == self._inventory_signature()):
             return
         for goal in self.objective.requested_goals:
             if goal.status == "no_candidate":
@@ -1507,11 +1651,43 @@ class WorkflowState:
             or item.target_origin != objective.target_origin
         ):
             raise ValueError("input must belong to the active whole-target objective")
-        previous = self._inventory_signature()
-        existing = self.attack_surface_inputs.get(item.id)
-        if existing is None:
-            existing = next((row for row in self.attack_surface_inputs.values()
-                             if self._media_enrichment_match(row, item, candidate=False)), None)
+        # Also guard internal producers and mutable/hydrated proposals. Never
+        # rekey an ID or make a historical malformed row executable.
+        if AttackSurfaceInput.from_dict(item.to_dict()) != item:
+            raise ValueError("input id does not match its semantic fingerprint")
+        incoming = self._canonical_input(item)
+        matches = []
+        for row in self.objective_inputs():
+            if any(getattr(row, name) != getattr(incoming, name) for name in (
+                "method", "parameter", "location", "input_type", "auth_context_ref", "baseline_request_ref",
+            )):
+                continue
+            # Canonical-origin absolute URLs have no authority normalization
+            # left to perform, and path/query bytes are deliberately preserved.
+            # Skip distinct URLs before running legacy admission/redaction.
+            if (row.endpoint is not None and row.endpoint.startswith(row.target_origin + "/")
+                    and row.endpoint != incoming.endpoint):
+                continue
+            try:
+                if canonical_endpoint(row.endpoint, row.target_origin) != incoming.endpoint:
+                    continue
+                normalized = self._canonical_input(row)
+            except ValueError:
+                continue  # Historical invalid rows remain readable/retirable.
+            if (normalized.id == incoming.id
+                    or self._media_enrichment_match(normalized, incoming, candidate=False)):
+                matches.append(row)
+        if len(matches) > 1:
+            raise ValueError("ambiguous canonical input match; inspect exact historical IDs and retire invalid work, never guess a replacement")
+        # Only an existing no-candidate review needs an inventory comparison.
+        # Bounded extraction can admit many rows in one detached transaction;
+        # serializing thousands of unrelated endpoints for every row is wasteful.
+        previous = (self._inventory_signature()
+                    if any(goal.status == 'no_candidate' for goal in objective.requested_goals) else None)
+        existing = matches[0] if matches else None
+        occupied = self.attack_surface_inputs.get(item.id)
+        if occupied is not None and occupied is not existing:
+            raise ValueError("input id is occupied by an incompatible historical record; preserve its exact ID and context")
         prospective = deepcopy(existing or item)
         if existing is not None:
             for name in ("content_type", "sample_payload", "baseline_request_ref", "auth_context_ref", "source_ref"):
@@ -1541,6 +1717,17 @@ class WorkflowState:
         self.attack_surface_inputs[item.id] = item
         self._invalidate_inventory_reviews(previous)
         return item, True
+
+    @staticmethod
+    def _canonical_input(item: AttackSurfaceInput) -> AttackSurfaceInput:
+        values = item.to_dict()
+        if AttackSurfaceInput.from_dict(values) != item:
+            raise ValueError("input id does not match its semantic fingerprint")
+        admitted = admit_input_fields(values)
+        values.update(admitted)
+        values["id"] = ""
+        # Canonical matching retains the pinned legacy media identity.
+        return AttackSurfaceInput(**values)
 
     def set_input_disposition(
         self,
@@ -1596,6 +1783,7 @@ class WorkflowState:
             raise ValueError("input and candidate must belong to the active objective")
         if item.target_origin != objective.target_origin or candidate_origin(candidate.target) != objective.target_origin:
             raise ValueError("input and candidate must match the active target origin")
+        admit_input_fields(item.to_dict())
         for name in ("method", "parameter", "location", "content_type", "baseline_request_ref", "auth_context_ref"):
             left, right = getattr(item, name), getattr(candidate, name)
             if name == "content_type":
@@ -1604,14 +1792,10 @@ class WorkflowState:
                 left, right = (left.lower() if left else None), (right.lower() if right else None)
             if left is not None and (right is not None or name in {"baseline_request_ref", "auth_context_ref"}) and left != right:
                 raise ValueError(f"candidate {name} conflicts with input")
-        def geometry(endpoint: str) -> tuple[str, str, str]:
-            url = urljoin(item.target_origin + "/", endpoint)
-            parts = urlsplit(url)
-            return HTTPOrigin.from_url(url).as_url(), parts.path or "/", parts.query
-        for endpoint in (item.endpoint, candidate.endpoint):
-            if endpoint and geometry(endpoint)[0] != item.target_origin:
-                raise ValueError("endpoint origin conflicts with input")
-        if item.endpoint is not None and candidate.endpoint is not None and geometry(item.endpoint) != geometry(candidate.endpoint):
+        self._canonical_input(item)
+        left = canonical_endpoint(item.endpoint, item.target_origin)
+        right = canonical_endpoint(candidate.endpoint, item.target_origin) if candidate.endpoint else None
+        if right is not None and left != right:
             raise ValueError("candidate endpoint conflicts with input")
 
     def link_input_candidate(self, input_id: str, candidate_id: str) -> AttackSurfaceInput:
@@ -1674,6 +1858,16 @@ class WorkflowState:
         if objective is None or objective.mode != "whole_target":
             return frozenset()
         facts: set[str] = set()
+        facts.update('endpoint:' + row.id for row in self.objective_endpoints())
+        from .discovery import source_progress_identity
+        for source in self.objective_sources():
+            # Locator IDs, raw byte hashes (which may cover secret values),
+            # reasons and repeated reads must not manufacture novelty.
+            semantic = f'{source.kind}:{source.document_url}:{source_progress_identity(self, source)}'
+            facts.add('discovery-content:' + semantic)
+            facts.add(f'discovery-state:{semantic}:{source.disposition}:{source.bounded_stop}')
+            if source.selected:
+                facts.add('discovery-selected:' + semantic)
         from .scanner import observation_scope
         owner = observation_scope(objective.id, objective.target_origin or '')
         facts.update('scanner-observations:' + key for key, scope in self.scanner_observations.items() if scope == owner)
@@ -1828,6 +2022,14 @@ class WorkflowState:
 
         actionable: list[str] = []
         blockers: list[str] = []
+        if self.discovery_restore_invalid:
+            blockers.append(self.source_completion_error() or 'discovery metadata restore failed')
+        for source in self.objective_sources():
+            if source.unresolved:
+                if source.disposition == 'pending':
+                    actionable.append('source:' + source.id)
+                else:
+                    blockers.append(f'source:{source.id}:{source.disposition}:{source.stop_reason or "unresolved"}')
         for job in self.scanner_jobs.values():
             if (job.objective_id == objective.id and job.target_origin == current_origin
                     and job.unresolved_selected):
@@ -2114,6 +2316,10 @@ class WorkflowState:
         self.validation_results.clear()
         self.evidence.clear()
         self.attack_surface_inputs.clear()
+        self.endpoints.clear()
+        self.discovery_sources.clear()
+        self.discovery_provenance.clear()
+        self.discovery_restore_invalid = False
         self.phase_completions.clear()
         self.phase_coverage.clear()
         self.active_candidate_ids.clear()
@@ -2136,6 +2342,10 @@ class WorkflowState:
         self.validation_results = list(other.validation_results)
         self.evidence = dict(other.evidence)
         self.attack_surface_inputs = dict(other.attack_surface_inputs)
+        self.endpoints = dict(other.endpoints)
+        self.discovery_sources = dict(other.discovery_sources)
+        self.discovery_provenance = dict(other.discovery_provenance)
+        self.discovery_restore_invalid = other.discovery_restore_invalid
         self.phase_completions = dict(other.phase_completions)
         self.phase_coverage = {
             key: dict(records) for key, records in other.phase_coverage.items()
@@ -2149,6 +2359,10 @@ class WorkflowState:
     def to_dict(self) -> dict[str, Any]:
         return {
             "scanner_jobs": [row.to_dict() for row in self.scanner_jobs.values()],
+            "endpoints": [row.to_dict() for row in self.endpoints.values()],
+            "discovery_sources": [row.to_dict() for row in self.discovery_sources.values()],
+            "discovery_provenance": [row.to_dict() for row in self.discovery_provenance.values()],
+            "discovery_restore_invalid": self.discovery_restore_invalid,
             "scanner_observations": dict(self.scanner_observations),
             "version": self.version,
             "attempts": deepcopy(self.attempts),
@@ -2364,6 +2578,8 @@ class WorkflowState:
                     state.set_requested_goal_status(
                         goal, "pending", reason="Persisted terminal goal lacks valid candidate/result linkage.",
                     )
+        from .discovery import restore_discovery
+        restore_discovery(state, value)
         return state
 
 

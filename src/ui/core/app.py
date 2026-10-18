@@ -27,7 +27,6 @@ from src.agent.agent import Agent, AgentRunOptions
 from src.agent.events import AgentEvent, AssistantDeltaEvent, DoneEvent, MaxStepsError
 from src.agent.agent import AddMemoryInput
 from src.tools.common.ask import Option, Question
-from src.config.config import ToolingProfile
 from src.llm.core.models import list_models
 from src.llm.providers import (
     ANTHROPIC_DEFAULT_BASE_URL,

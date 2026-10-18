@@ -10,7 +10,6 @@ from src.config import config
 from src.config.config import (
     Backend,
     CustomProviderConfig,
-    ToolingProfile,
     MCPServerConfig,
     PluginConfig,
     add_custom_provider,
@@ -644,24 +643,6 @@ async def test_reject_command_substitution(
 
 
 @pytest.mark.asyncio
-async def test_tooling_profile_persist(
-    temp_config,
-):
-    cfg = default_config()
-
-    cfg.tooling_profile = ToolingProfile.FULL
-
-    await save(cfg)
-
-    loaded = load()
-
-    assert (
-        loaded.tooling_profile
-        == ToolingProfile.FULL
-    )
-
-
-@pytest.mark.asyncio
 async def test_accept_gemini(
     temp_config,
 ):
@@ -712,14 +693,6 @@ async def test_accept_deepseek(
     loaded = load()
 
     assert loaded.backend == Backend.DEEPSEEK
-
-
-def test_tooling_profile_default_none(
-    temp_config,
-):
-    cfg = load()
-
-    assert cfg.tooling_profile is None
 
 
 @pytest.mark.asyncio
@@ -862,7 +835,6 @@ async def test_save_does_not_remove_colliding_temp_file(
         ("temperature", "0.5"),
         ("max_tokens", "100"),
         ("gemini_thinking_budget", "512"),
-        ("tooling_profile", 123),
         ("base_url", 123),
         ("model", 123),
     ],

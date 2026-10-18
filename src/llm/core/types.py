@@ -64,6 +64,10 @@ class Message:
     # Controller-only token-saving descriptors; never evidence or approval.
     tool_result_refs: list[dict[str, Any]] | None = None
     tool_result_scope: dict[str, str] | None = None
+    # Archival injection provenance only. Live skill admission is never restored.
+    skill_activation: dict[str, str] | None = None
+    # A persisted restriction survives compaction; this can never grant access.
+    skill_admission_required: bool = False
     # Archival HTTP content provenance; never an execution/evidence grant.
     # Only Agent admission assigns it; private session serialization preserves it.
     http_response_sources: list[str] | None = None

@@ -20,6 +20,8 @@ from src.redaction.redact import apply as redact, redact_payload
 from src.coverage.store import CoverageStore, CoverageStatus
 from src.coverage.context import project_candidate_coverage
 from src.target.target import Target
+from src.target.input_admission import admit_input_fields, identity_text
+from src.workflow.input_view import input_page, input_summary
 from src.workflow.state import (
     CANDIDATE_STATUSES,
     CLEANUP_STATES,
@@ -63,6 +65,11 @@ from src.tools.http.http_tool import HTTPTool
 
 
 ACTIONS = (
+    "process_source",
+    "select_source",
+    "get_source",
+    "get_endpoint",
+    "set_source_disposition",
     "triage_scanner_results",
     "get_input",
     "record_input",
@@ -84,6 +91,11 @@ MAX_LIST_LIMIT = 25
 MAX_LIST_COMPLETED_SKILLS = 20
 LIST_TEXT_LIMIT = 200
 ACTION_REQUIRED = {
+    'process_source': ('discovery_source_id', 'retained_ref', 'extractor'),
+    'select_source': ('discovery_source_id',),
+    'get_source': ('discovery_source_id',),
+    'get_endpoint': ('endpoint_id',),
+    'set_source_disposition': ('discovery_source_id', 'source_disposition', 'source_reason'),
     'triage_scanner_results': ('job_id', 'scanner_disposition', 'scanner_reason'),
     'get_input': ('input_id',),
     'set_input_disposition': ('input_id', 'disposition'),
@@ -99,6 +111,12 @@ ACTION_REQUIRED = {
     'review_no_candidate': ('goal_id',),
 }
 ACTION_INPUTS = {
+    'process_source': ('discovery_source_id', 'retained_ref', 'extractor'),
+    'select_source': ('discovery_source_id', 'retained_ref'),
+    'get_source': ('discovery_source_id',),
+    'get_endpoint': ('endpoint_id',),
+    'set_source_disposition': ('discovery_source_id', 'retained_ref', 'source_disposition', 'source_reason',
+                               'source_limitations', 'source_bounds', 'acknowledge_bounded_stop'),
     'triage_scanner_results': ('job_id', 'record_ids', 'scanner_disposition', 'scanner_reason', 'remaining'),
     'get_input': ('input_id',),
     # Legacy ownership fields are equality assertions; source is an ignored
@@ -123,7 +141,8 @@ ACTION_INPUTS = {
     'record_phase_coverage': ('phase', 'coverage_dimension', 'coverage_status', 'coverage_reason'),
     'complete_skill': ('skill_name', 'artifact_ref', 'no_inputs_discovered', 'current_phase'),
     'review_no_candidate': ('goal_id', 'artifact_ref'),
-    'list': ('candidate_id', 'status', 'candidate_class', 'limit', 'observation_offset', 'job_id', 'scanner_offset'),
+    'list': ('candidate_id', 'status', 'candidate_class', 'limit', 'observation_offset', 'job_id', 'scanner_offset',
+             'view', 'input_limit', 'input_cursor', 'input_disposition', 'discovery_cursor', 'discovery_source_id'),
 }
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
 
@@ -204,6 +223,22 @@ class WorkflowTool(Tool):
                     "required": ['role', 'method', 'url'], "additionalProperties": False}},
                 "assessment": {"type": "object"},
                 "input_id": optional_string,
+                "discovery_source_id": optional_string,
+                "extractor": {"type": "string", "enum": ['html', 'openapi']},
+                "endpoint_id": optional_string,
+                "retained_ref": optional_string,
+                "discovery_cursor": optional_string,
+                "source_disposition": {"type": "string", "enum": ['pending', 'processed', 'partial', 'blocked', 'not_applicable']},
+                "source_reason": optional_string,
+                "source_limitations": {"type": "array", "maxItems": 16, "items": {"type": "string", "maxLength": 240}},
+                "source_bounds": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}},
+                "acknowledge_bounded_stop": {"type": "boolean"},
+                "view": {"type": "string", "enum": ["all", "inputs", "sources", "endpoints", "provenance"],
+                         "description": "list view; inputs returns only a bounded input page (16 KiB maximum)."},
+                "input_limit": {"type": "integer", "minimum": 1, "maximum": 25,
+                                "description": "Inputs per page, default 20; independent of candidate limit."},
+                "input_cursor": optional_string,
+                "input_disposition": {"type": "string", "enum": sorted(INPUT_DISPOSITIONS)},
                 "input_type": optional_string,
                 "content_type": {
                     "type": "string",
@@ -351,6 +386,12 @@ class WorkflowTool(Tool):
     def requires_permission(self) -> bool:
         return False
 
+    def requires_permission_for(self, args: dict[str, Any]) -> bool:
+        return args.get('action') == 'process_source'
+
+    def permission_hints(self, args: dict[str, Any]):
+        return {'noSessionCache': True, 'riskTier': 'high-impact'}
+
     def context_reduction_policy(self) -> str:
         """Keep same-turn workflow mutations intact for the next LLM call."""
         return "preserve"
@@ -439,6 +480,17 @@ class WorkflowTool(Tool):
                 return self._typed_result('error: scanner triage unavailable: ' + str(exc))
             self.state.mark_committed()
             result = json.dumps({'ok': True, 'scanner_job': job.projection()})
+        elif action == 'process_source':
+            try:
+                if candidate_origin(self._active_target()) != (self.state.objective.target_origin if self.state.objective else None):
+                    raise ValueError('source extraction requires the active objective target origin')
+                from src.tools.workflow.source_processing import process_source
+                source = process_source(self, args, signal, prompter)
+                result = json.dumps({'ok': True, 'discovery_source': source.to_dict(), 'unresolved': source.unresolved})
+            except (ValueError, TypeError, KeyError) as err:
+                result = f'error: {err}'
+        elif action in {'select_source', 'get_source', 'get_endpoint', 'set_source_disposition'}:
+            result = self._discovery_action(action, args)
         elif action == "get_input":
             result = self._get_input(args)
         elif action == "record_input":
@@ -745,6 +797,38 @@ class WorkflowTool(Tool):
             indent=2,
         )
 
+    def _discovery_action(self, action: str, args: dict[str, Any]) -> str:
+        try:
+            objective = self.state.objective
+            if (objective is None or objective.mode != 'whole_target'
+                    or candidate_origin(self._active_target()) != objective.target_origin):
+                raise ValueError('discovery metadata requires the active whole-target origin')
+            if action == 'get_endpoint':
+                endpoint = self.state.endpoints.get(args['endpoint_id'])
+                if (endpoint is None or endpoint.objective_id != objective.id
+                        or endpoint.target_origin != objective.target_origin):
+                    raise ValueError('unknown/current-objective endpoint ID; never guess a replacement')
+                return json.dumps({'ok': True, 'endpoint': endpoint.to_dict()})
+            source = self.state.discovery_source(args['discovery_source_id'], generation=self.state.generation,
+                                                  retained_ref=args.get('retained_ref'))
+            if action == 'select_source':
+                source = self.state.update_discovery_source(source.id, generation=self.state.generation, selected=True)
+            elif action == 'set_source_disposition':
+                bounds = args.get('source_bounds', {})
+                if not isinstance(bounds, dict):
+                    raise ValueError('source_bounds must be an object of explicit processing limits')
+                limits = args.get('source_limitations', source.limitations)
+                if not isinstance(limits, (list, tuple)):
+                    raise ValueError('source_limitations must be a bounded list')
+                source = self.state.update_discovery_source(source.id, generation=self.state.generation,
+                    disposition=args['source_disposition'], stop_reason=args['source_reason'],
+                    limitations=tuple(limits),
+                    processing_bounds=tuple(bounds.items()) if bounds else source.processing_bounds,
+                    bounded_stop=args.get('acknowledge_bounded_stop', False))
+            return json.dumps({'ok': True, 'discovery_source': source.to_dict(), 'unresolved': source.unresolved})
+        except (ValueError, TypeError, KeyError) as err:
+            return f'error: {err}'
+
     def _get_input(self, args: dict[str, Any]) -> str:
         input_id = arg_string(args, "input_id")
         if not input_id:
@@ -788,18 +872,29 @@ class WorkflowTool(Tool):
                 return f"error: {err}"
             if supplied_target_origin != target_origin:
                 return "error: supplied target does not match the active whole-target origin"
+        try:
+            # The shorthand parser must not strip unsafe raw identity text
+            # before the shared admission boundary can inspect it.
+            identity_text(args.get("endpoint"), "endpoint", required=True)
+            identity_text(args.get("method"), "method")
+        except ValueError as err:
+            return f"error: {err}"
         endpoint, method, normalization_error = self._normalize_method_endpoint(
             args.get("endpoint"), args.get("method")
         )
         if normalization_error:
             return f"error: {normalization_error}"
         try:
+            admitted = admit_input_fields({
+                **args, "objective_id": objective.id, "target_origin": target_origin,
+                "method": method, "endpoint": endpoint,
+            }, base_url=self.target.base_url())
             item = AttackSurfaceInput(
                 objective_id=objective.id,
                 target_origin=target_origin or "",
-                method=method,
-                endpoint=endpoint,
-                parameter=args.get("parameter"),
+                method=admitted["method"],
+                endpoint=admitted["endpoint"],
+                parameter=admitted["parameter"],
                 location=args.get("location"),
                 input_type=args.get("input_type"),
                 content_type=args.get("content_type"),
@@ -1800,6 +1895,9 @@ class WorkflowTool(Tool):
             if not prerequisite["artifact_valid"] or not prerequisite["prerequisites_valid"]:
                 return reject(f"{prerequisite['phase']} artifact repair required: {prerequisite['reason']}")
         result["prerequisites_valid"] = True
+        if phase in {'enumeration', 'input_analysis'} and (reason := self.state.source_completion_error()):
+            result['prerequisites_valid'] = False
+            return reject(reason)
         if historically_completed:
             return reject(f"{phase} phase is already completed")
         if phase == "input_analysis":
@@ -1965,6 +2063,21 @@ class WorkflowTool(Tool):
         return self.target.base_url() or self.target.name()
 
     def _list(self, args: dict[str, Any], policy=None) -> str:
+        if args.get("view", "all") not in {"all", "inputs", "sources", "endpoints", "provenance"}:
+            return "error: unknown list view"
+        objective = self.state.objective
+        if (objective is not None and objective.mode == "whole_target"
+                and candidate_origin(self._active_target()) != objective.target_origin):
+            return "error: input listing requires the active objective target origin"
+        try:
+            if args.get('view') in {'sources', 'endpoints', 'provenance'}:
+                from src.workflow.discovery import discovery_page
+                return json.dumps(discovery_page(self.state, args), ensure_ascii=True, separators=(',', ':'))
+            inputs = input_page(self.state, args)
+        except (ValueError, TypeError) as err:
+            return f"error: {err}"
+        if args.get("view") == "inputs":
+            return json.dumps(inputs, ensure_ascii=True, separators=(",", ":"))
         from src.workflow.scanner import relevant_jobs
         objective = self.state.objective
         scanner_jobs = relevant_jobs(self.state.scanner_jobs, candidate_origin(self._active_target()),
@@ -2060,10 +2173,7 @@ class WorkflowTool(Tool):
                     for key, records in sorted(self.state.phase_coverage.items())
                     if objective is not None and key.rpartition(":")[0] == objective.id
                 },
-                "attack_surface_inputs": [
-                    self._input_summary(item)
-                    for item in self.state.objective_inputs()
-                ],
+                **{key: value for key, value in inputs.items() if key != "ok"},
                 "completed_skills_total": len(completed_skills),
                 "completed_skills": sorted(completed_skills)[
                     :MAX_LIST_COMPLETED_SKILLS
@@ -2150,29 +2260,7 @@ class WorkflowTool(Tool):
             "objective_id": candidate.objective_id,
         }
 
-    @staticmethod
-    def _input_summary(item: AttackSurfaceInput) -> dict[str, Any]:
-        sample_payload = item.sample_payload or ""
-        return {
-            "id": item.id,
-            "objective_id": item.objective_id,
-            "target_origin": item.target_origin,
-            "method": item.method,
-            "endpoint": WorkflowTool._brief(item.endpoint),
-            "parameter": WorkflowTool._brief(item.parameter),
-            "location": item.location,
-            "input_type": item.input_type,
-            "content_type": item.content_type,
-            "sample_payload": sample_payload[:500] or None,
-            "baseline_request_ref": WorkflowTool._brief(item.baseline_request_ref),
-            "auth_context_ref": WorkflowTool._brief(item.auth_context_ref),
-            "source_ref": WorkflowTool._brief(item.source_ref),
-            "sample_payload_truncated": len(sample_payload) > 500,
-            "disposition": item.disposition,
-            "disposition_reason": WorkflowTool._brief(item.disposition_reason),
-            "disposition_transitions": list(item.disposition_transitions),
-            "candidate_ids": list(item.candidate_ids),
-        }
+    _input_summary = staticmethod(input_summary)
 
     def _result_summary(self, result: ValidationResult) -> dict[str, Any]:
         from src.workflow.assessment import assessment_provenance

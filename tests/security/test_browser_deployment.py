@@ -192,13 +192,14 @@ async def test_actual_browser_registry_dispatch_obeys_permission_and_revocation(
         await discovered['session'].close()
 
 
-def test_browser_tools_keep_active_skill_gate():
-    from src.agent.agent import Agent, AgentOptions
+@pytest.mark.asyncio
+async def test_browser_tools_keep_active_skill_gate():
+    from src.agent.agent import Agent, AgentOptions, AgentRunOptions
     from src.permission.permission import AlwaysAllow
     from src.skills.registry import Registry as SkillRegistry, Skill
     from src.tools.common.registry import Registry
     from src.tools.mcp.integration import MCPTool
-    from tests.helpers.agent_fakes import FakeClient
+    from tests.helpers.agent_fakes import FakeClient, FakeSignal
     from src.target.target import Target
 
     class Session:
@@ -219,6 +220,11 @@ def test_browser_tools_keep_active_skill_gate():
     agent.active_skills.add('fixture')
     assert not agent.is_tool_allowed(tool.name(), {}).ok
     skill.tools.append(tool.name())
+    # A changed definition retires the old contract; editing an allow-list
+    # cannot silently broaden it. An explicit current selection is required.
+    assert not agent.is_tool_allowed(tool.name(), {}).ok
+    await agent.inject_skill('fixture')
+    await agent.run('Describe the selected playbook.', FakeSignal(), lambda event: None, AgentRunOptions(tools=False))
     assert agent.is_tool_allowed(tool.name(), {}).ok
     assert tool.requires_permission()
 

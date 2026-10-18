@@ -194,7 +194,7 @@ async def test_dropped_input_needs_review_or_scope_reason_for_no_candidate(tmp_p
     )
     state = WorkflowState(objective=objective)
     item, _ = state.add_attack_surface_input(AttackSurfaceInput(
-        objective.id, "https://target.test", endpoint="/search", parameter="q",
+        objective.id, "https://target.test", endpoint="/search", parameter="q", method="GET", location="query",
         disposition="dropped", disposition_reason="ignored by analysis",
     ))
     for phase in ("recon", "enumeration", "input_analysis"):
@@ -237,7 +237,7 @@ async def test_pending_or_blocked_input_prevents_no_candidate_review(
     )
     state = WorkflowState(objective=objective)
     input_item, _ = state.add_attack_surface_input(AttackSurfaceInput(
-        objective.id, "https://target.test", endpoint="/search", parameter="q",
+        objective.id, "https://target.test", endpoint="/search", parameter="q", method="GET", location="query",
         disposition=disposition,
         disposition_reason="needs review" if disposition == "blocked" else None,
     ))
@@ -1591,7 +1591,7 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
     candidate_id = candidate["candidate"]["id"]
     assert candidate["candidate"]["objective_id"] == "objective-active"
     assert candidate["candidate"]["method"] == "POST"
-    assert candidate["candidate"]["endpoint"] == "/api/v1/auth/login"
+    assert candidate["candidate"]["endpoint"] == "https://target.test/api/v1/auth/login"
     assert candidate["candidate"]["parameter"] == "email"
     assert candidate["candidate"]["content_type"] == "application/json"
     assert "example-secret" not in candidate["candidate"]["request_template"]
@@ -1609,7 +1609,9 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
     listed_input = listed["attack_surface_inputs"][0]
     listed_candidate = listed["candidates"][0]
     assert listed_input["content_type"] == "application/json"
-    assert listed_input["sample_payload"].startswith('{"email":')
+    assert "sample_payload" not in listed_input
+    detail = json.loads(tool._get_input({"input_id": input_id}))["input"]
+    assert detail["sample_payload"].startswith('{"email":')
     assert listed_candidate["content_type"] == "application/json"
     assert listed_candidate["request_template"] == candidate["candidate"]["request_template"]
     assert listed_candidate["baseline_request_ref"] == "captures/login-baseline.json"

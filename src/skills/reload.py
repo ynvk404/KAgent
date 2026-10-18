@@ -22,6 +22,9 @@ def read_snapshot(directories: tuple[str, ...]) -> Registry:
 def publish_snapshot(agent, snapshot: Registry) -> None:
     """Keep consumer identity and current manual settings across atomic reload."""
     registry = agent.skills
+    agent._reconcile_skill_contracts()
+    contracts = dict(agent._skill_contracts)
+    active, pending, restricted = set(agent.active_skills), set(agent.pending_skills), agent._skill_admission_restricted
     previous = registry.skills, registry.load_errors, registry.disabled
     history, prompt = agent.history, agent.sys_prompt
     try:
@@ -32,6 +35,9 @@ def publish_snapshot(agent, snapshot: Registry) -> None:
     except BaseException:
         registry.skills, registry.load_errors, registry.disabled = previous
         agent.history, agent.sys_prompt = history, prompt
+        agent._skill_contracts = contracts
+        agent.active_skills, agent.pending_skills = active, pending
+        agent._skill_admission_restricted = restricted
         raise
 
 

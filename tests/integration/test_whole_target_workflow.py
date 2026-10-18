@@ -259,7 +259,7 @@ async def test_request_shape_context_survives_input_to_candidate_handoff(
     restored = WorkflowState.from_dict(state.to_dict())
     candidate = restored.candidates[candidate_result["candidate"]["id"]]
     assert candidate.method == method
-    assert candidate.endpoint == endpoint
+    assert candidate.endpoint == "https://target.test" + endpoint
     assert candidate.parameter == parameter
     assert candidate.location == location
     assert candidate.content_type == content_type
@@ -345,7 +345,7 @@ def test_whole_target_status_is_blocked_when_only_blocked_input_remains():
             artifact_ref=f"artifacts/{phase}.md",
         )
     item, _ = state.add_attack_surface_input(AttackSurfaceInput(
-        "assessment-blocked", "https://target.test", endpoint="/search", parameter="q",
+        "assessment-blocked", "https://target.test", endpoint="/search", parameter="q", method="GET", location="query",
         disposition="blocked", disposition_reason="input is inaccessible",
     ))
     status, actionable, blockers = state.whole_target_status(

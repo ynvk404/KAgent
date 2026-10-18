@@ -357,7 +357,7 @@ async def test_f4_late_inventory_review_and_session_semantics(tmp_path, disposit
     review = json.loads(await execute(registry, "review_no_candidate", goal_id=goal.id))
     assert review["goal"]["status"] == "no_candidate"
     original_binding = goal.review_binding
-    item = await record(registry, "record_input", endpoint="/late", parameter="q", location="query")
+    item = await record(registry, "record_input", method="GET", endpoint="/late", parameter="q", location="query")
     assert goal.status == "pending" and goal.review_binding is None
     assert "remains pending" in str(await execute(registry, "review_no_candidate", goal_id=goal.id))
     await execute(registry, "set_input_disposition", input_id=item["id"], disposition="blocked", disposition_reason="dependency unavailable")
@@ -376,7 +376,7 @@ async def test_f4_late_inventory_review_and_session_semantics(tmp_path, disposit
     assert restored.input_inventory_review_error() is None
     # Re-recording identical inventory is a semantic no-op.
     binding = goal.review_binding
-    await record(registry, "record_input", endpoint="/late", parameter="q", location="query")
+    await record(registry, "record_input", method="GET", endpoint="/late", parameter="q", location="query")
     assert goal.review_binding == binding
     # Disposition reason enrichment changes the inventory/review binding.
     await execute(registry, "set_input_disposition", input_id=item["id"], disposition=disposition, disposition_reason="Reviewed late input again")
@@ -397,7 +397,7 @@ def test_f4_other_objective_inventory_does_not_change_review_binding(tmp_path):
     binding = state.no_candidate_review_binding(goal, "a" * 64)
     state.mark_goal_no_candidate(goal.id, artifact_ref="artifacts/review.md", review_binding=binding)
     state.objective = WorkflowObjective("other", "whole_target", "https://other.test")
-    item, _ = state.add_attack_surface_input(AttackSurfaceInput("other", "https://other.test", endpoint="/new"))
+    item, _ = state.add_attack_surface_input(AttackSurfaceInput("other", "https://other.test", endpoint="/new", method="GET", parameter="q", location="query"))
     state.set_input_disposition(item.id, "analyzed")
     state.objective = objective
     assert state.no_candidate_review_binding(goal, "a" * 64) == binding

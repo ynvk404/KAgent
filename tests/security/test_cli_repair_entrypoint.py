@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.config.config import Config, Backend, ToolingProfile
+from src.config.config import Config, Backend
 from src.llm.runtime.probe import ProbeResult
 from src.llm.core.types import ChatResponse, Message, ToolCall, FunctionCall
 from src.permission.runtime.execution import ExecutionBlocked
@@ -54,7 +54,7 @@ async def test_cli_tui_real_factory_evidence_network_off_and_revoke(lab, tmp_pat
     _, _, _, _, origin, requests = lab
     cfg = Config(backend=Backend.DEEPSEEK, model='deepseek-flash', api_keys={'deepseek':'FAKE_TEST_ONLY'},
                  skills_dirs=[str(Path(__file__).resolve().parents[2] / 'skills')],
-                 streaming_enabled=False, tooling_profile=ToolingProfile.MINIMAL)
+                 streaming_enabled=False)
     monkeypatch.setattr(cli.config, 'load', lambda:cfg)
     monkeypatch.setattr(cli.llm_factory, 'new_from_config', lambda config:FakeClient([]))
     probe = AsyncMock(return_value=ProbeResult('yes'))
@@ -115,7 +115,7 @@ async def test_cli_file_then_shell_slow_inspection_ui_and_escape(tmp_path, monke
     cli = cli_runtime
     cfg = Config(backend=Backend.DEEPSEEK, model='deepseek-flash', api_keys={'deepseek':'FAKE_TEST_ONLY'},
         skills_dirs=[str(Path(__file__).resolve().parents[2] / 'skills')],
-        streaming_enabled=False, tooling_profile=ToolingProfile.MINIMAL)
+        streaming_enabled=False)
     proof = tmp_path / 'artifacts/worker/checklist/payloads.txt'
     payload = "' OR 1=1--\n<script>CHECKLIST_FAKE</script>\n{{7*7}}"
     scripted = []

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from dataclasses import replace
 from typing import cast
 from unittest.mock import AsyncMock, Mock
 
@@ -114,7 +115,12 @@ async def test_enter_matches_inject_skill_with_one_persisted_playbook(tmp_path):
     await first.load()
     await first.load()
     await SkillsModal(agent, close).load()  # Reopening before the next prompt.
-    assert agent.history[1:] == reference.history[1:]
+    assert [replace(m, skill_activation=None) for m in agent.history[1:]] == [
+        replace(m, skill_activation=None) for m in reference.history[1:]]
+    actual, expected = agent.history[-1].skill_activation, reference.history[-1].skill_activation
+    assert actual is not None and expected is not None
+    assert actual["id"] != expected["id"]
+    assert {k: v for k, v in actual.items() if k != "id"} == {k: v for k, v in expected.items() if k != "id"}
     assert agent.pending_skills == {"manual-only"} and not agent.active_skills
     assert store.load().messages == agent.history
     assert sum("Full playbook proof gate" in msg.content for msg in agent.history) == 1

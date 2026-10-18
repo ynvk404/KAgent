@@ -68,3 +68,13 @@ ruff-benchmark.txt
 ruff-report.txt
 vulture-60.txt
 vulture-100.txt
+
+# Raw verification history is retained locally; the reviewed portable evidence
+# bundle is versioned under docs/verification-milestone-c/.
+/docs/verification-stage3/
+/docs/verification-milestone-c/runs/
+
+# Additional local Python tool environments/caches
+.venv/
+.mypy_cache/
+.ruff_cache/

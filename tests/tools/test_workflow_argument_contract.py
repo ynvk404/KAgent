@@ -61,7 +61,7 @@ async def test_legacy_input_ownership_assertions_never_override_runtime():
     state = WorkflowState(objective=WorkflowObjective('objective-fixture', 'whole_target', origin))
     tool = WorkflowTool(state, target=Target(origin))
     args = {'action': 'record_input', 'objective_id': 'objective-fixture', 'target_origin': origin,
-            'target': origin, 'endpoint': '/search', 'method': 'GET', 'parameter': 'q',
+            'target': origin, 'endpoint': '/search', 'method': 'GET', 'parameter': 'q', 'location': 'query',
             'source': 'validation-feedback'}
     created = json.loads(await tool.run(args, None, AlwaysAllow()))
     assert created['input']['objective_id'] == 'objective-fixture'

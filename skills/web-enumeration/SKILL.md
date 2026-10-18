@@ -56,7 +56,7 @@ Prefer the built-in `http` tool with `phase: recon` for known-source
 enumeration. Use `curl` only when the native tool cannot express a necessary
 request detail; shell requests do not enforce target-origin scope.
 Use `content_discovery` only when steps 2–5 leave a concrete path-coverage gap.
-`content_discovery` uses native HTTP in every tooling profile.
+`content_discovery` uses native HTTP through the runtime permission gate.
 Discovery stays on the active origin, is bounded, and requires
 permission. Do not run generic-shell `ffuf`, `gobuster`, or `dirsearch`
 automatically.
@@ -114,8 +114,9 @@ For a whole-target objective, record every discovered request input
 surface with `workflow(action="record_input", method=..., endpoint=...,
 parameter=..., location=..., input_type=..., content_type=...,
 sample_payload=...)` when those details are known. Use one compact record per
-method/endpoint/parameter/location/type combination; `content_type` and
-`sample_payload` are optional and do not change the input identity. Store a
+method/endpoint/parameter/location/type/media combination. `content_type` is
+optional, but known media types distinguish input identities; charset and
+multipart boundary parameters do not. `sample_payload` does not change identity. Store a
 small body skeleton, not raw traffic: retain the structure and replace values
 with inert examples or `{INJECTION_POINT}`. Omit passwords, tokens, cookies,
 PII, and unrelated fields. Record query, body, path, header, and cookie inputs
@@ -553,7 +554,7 @@ captures or selected native requests to establish actual input context. Preserve
 job failure/partial/coverage uncertainty in the canonical inventory; unavailable
 refs are retrieval limitations, never permission to rerun the scanner.
 
-Both tooling profiles use native HTTP through `content_discovery`.
+`content_discovery` uses native HTTP.
 External ffuf uses only the typed Shell scanner path.
 If coverage is already sufficient, record a `skipped`
 or `not_applicable` reason instead of repeating the pass. Stop when additional

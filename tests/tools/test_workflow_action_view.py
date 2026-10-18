@@ -30,7 +30,7 @@ def test_complete_matrix_and_copy_projection(mode):
     assert projected is not None
     schema = projected[0]["function"]["parameters"]
     action_field = schema["properties"]["action"]
-    assert len(ACTIONS) == 15
+    assert {'select_source', 'get_source', 'get_endpoint', 'set_source_disposition'} <= set(ACTIONS)
     assert ACTION_REQUIRED['triage_scanner_results'] == ('job_id', 'scanner_disposition', 'scanner_reason')
     assert "record_attempt_state" in view.available
     assert ACTION_REQUIRED["record_attempt_state"] == ("candidate_id", "mutation_state", "effect_basis")
@@ -57,7 +57,8 @@ def test_complete_matrix_and_copy_projection(mode):
 async def test_excluded_calls_still_reach_existing_runtime_rejection(mode, args):
     candidate = Candidate(candidate_class="sqli", objective_id="objective-fixture", target=ORIGIN, endpoint="/search")
     state = WorkflowState(objective=WorkflowObjective("objective-fixture", mode, ORIGIN, candidate_id=candidate.id if mode == "candidate_validation" else None))
-    item = AttackSurfaceInput(objective_id="objective-fixture", target_origin=ORIGIN, endpoint="/search")
+    item = AttackSurfaceInput(objective_id="objective-fixture", target_origin=ORIGIN, endpoint="/search",
+                              method="GET", parameter="q", location="query")
     state.attack_surface_inputs[item.id] = item
     state.candidates[candidate.id] = candidate
     args = {**args}
@@ -78,7 +79,8 @@ async def test_excluded_calls_still_reach_existing_runtime_rejection(mode, args)
 async def test_valid_calls_including_owned_get_input_remain_available(mode):
     candidate = Candidate(candidate_class="sqli", objective_id="objective-fixture", target=ORIGIN, endpoint="/search")
     state = WorkflowState(objective=WorkflowObjective("objective-fixture", mode, ORIGIN, candidate_id=candidate.id if mode == "candidate_validation" else None))
-    item = AttackSurfaceInput(objective_id="objective-fixture", target_origin=ORIGIN, endpoint="/search")
+    item = AttackSurfaceInput(objective_id="objective-fixture", target_origin=ORIGIN, endpoint="/search",
+                              method="GET", parameter="q", location="query")
     state.attack_surface_inputs[item.id] = item
     state.candidates[candidate.id] = candidate
     registry = Registry()

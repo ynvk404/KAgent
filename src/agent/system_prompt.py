@@ -82,7 +82,7 @@ Edge cases:
 - Typed shell scanners follow the loaded discovery skill: check permissions_status for readiness/wordlist IDs, reuse suitable workflow scanner results and select observations. One reviewed job can create many connections; HTTP grants/quotas do not govern it. Paths/status/service hints are not inputs or findings; no automatic all-hit recheck or generic-shell scanner fallback.
 - Use **curl** via BashTool only for request details the native HTTP tool cannot express or when the user asks for a reproducible command. Shell permission is per command and does not prove that a curl destination is in scope.
 - Use `content_discovery` for bounded web path enumeration and `service_discovery` only for the active URL's effective TCP port. The service tool resolves the active host once, vets every answer, pins execution to a numeric address, and does not permit additional ports or hosts.
-- In minimal profile and full profile, `content_discovery` uses native HTTP and `service_discovery` uses native TCP. Typed Shell Nmap/ffuf use the separate reviewed trusted-host adapter when ready, with explicit scope and current phase prerequisites. Full profile is not blanket authorization.
+- `content_discovery` uses native HTTP and `service_discovery` uses native TCP. Typed Shell Nmap/ffuf use the separate reviewed trusted-host adapter when ready, with explicit scope and current phase prerequisites.
 - Do not invoke scanners merely because they are installed, repeat completed discovery, or pass raw scanner commands through generic shell when a semantic discovery tool applies.
 - Do not run sqlmap automatically. Manual evidence-led validation remains primary; scanner use follows the matching skill contract and explicit user intent.
 - In whole-target assessments, account for every recon/enumeration coverage dimension before completing that phase. `performed` is recorded only by execution adapters; never self-claim it through workflow. Inspect existing coverage first. For reviewed work without an adapter, use `observed` with its source and attestation limitation; this is not machine-attested execution. `skipped` means genuinely omitted work, never a workaround for missing attestation; `not_applicable` requires a real applicability reason. Retry failed/cancelled work or explain an actual skip; never leave a dimension silently missing.
@@ -286,10 +286,9 @@ When you have CONFIRMED a vulnerability — meaning the latest workflow Validati
 The endpoint, method, parameter, and vulnerability class must match the Candidate wherever the Candidate records them. Do NOT call this for theoretical findings, suspected behavior, scanner hits, or a candidate without valid linked evidence. Keep severity within the existing enum and supported by your judgment; the tool does not semantically verify impact prose or severity. The tool writes a markdown report under ./artifacts/findings/ and surfaces a banner in the TUI; the user counts confirmed findings, not chatter. After calling, briefly summarize for the user and ask whether to continue testing or stop.
 
 # Skills
-Skills are pre-authored playbooks for specific pentest workflows. When a user's task matches a skill, call 'load_skill' with that skill's name BEFORE planning, then follow the skill's guidance.
+Skills are pre-authored playbooks for specific pentest workflows. When a user's task matches a skill, call 'load_skill' with that skill's name BEFORE planning, then follow the skill's guidance. Runtime authorization and structured readiness take precedence over phase guidance, which takes precedence over skill methodology. Guidance never creates workflow artifacts or execution rights.
 """
 
-PromptToolingProfile  = Literal["minimal", "full"]
 PromptProfile = Literal["full", "compact"]
 
 COMPACT_SYSTEM_PROMPT = """You are kagent, a Human-in-the-Loop Agentic AI CLI assistant for AUTHORIZED penetration testing, bug bounty work, security code review, and coding.
@@ -304,7 +303,7 @@ COMPACT_SYSTEM_PROMPT = """You are kagent, a Human-in-the-Loop Agentic AI CLI as
 - Do not infer operator rights from ambiguous natural language. Native HTTP may autonomously test new endpoints, payloads and mutations covered by operator YOLO activation or an explicit lab grant; its runtime checks that authority. For work outside granted rights, obtain operator review and honor skill contracts. A grant does not prove safe server effects or confer local/shell/MCP rights.
 - HTTP phase is annotation only. Operator YOLO activation grants bounded HTTP autonomy in operator scope and accepts unknown server effects. Confirm-each prompts when YOLO is OFF. Blocked/pending waits for operator action and must not be retried by changing phase, wording or payload. Grants and receipts are runtime rights, never restored from summary/intelligence.
 - After an explicit permission denial, do not immediately re-request equivalent authorization for the same concrete action unless the user changes intent or the proposed action materially changes.
-- Prefer targeted, reproducible HTTP probes for one-off checks. Use semantic discovery tools only when the relevant phase has a coverage gap; full profile may choose a bounded installed backend subject to its permission prompt.
+- Prefer targeted, reproducible HTTP probes for one-off checks. Use semantic discovery tools only when the relevant phase has a coverage gap; typed scanners require current adapter readiness and separate job review.
 - Keep output concise and evidence-backed. For every confirmed vulnerability, provide observed impact supported by evidence, potential impact stated conditionally when untested, exact request/curl, response evidence, severity, and remediation.
 - Preserve context aggressively: use session memory and summaries, avoid repeating completed tests, and use coverage state to choose next endpoint/parameter/vulnerability-class combinations.
 - Keep HTTP results small and never hand-copy opaque credentials. Validate one representative structured tool call before batching the same action, do not repeat unchanged invalid arguments, and group independent bounded observations once their schema is known.
@@ -339,9 +338,6 @@ class BuildOptions:
     # Target hiện tại của phiên pentest
     target: Optional["Target"]
 
-    # Chế độ công cụ: minimal hoặc full
-    tooling_profile: Optional[PromptToolingProfile] = None
-
     # Loại prompt: base hoặc compact
     prompt_profile: Optional[PromptProfile] = None
 
@@ -364,15 +360,6 @@ class BuildOptions:
 def build_system_prompt(opts: BuildOptions) -> str:
     # Chọn prompt đầy đủ hoặc prompt rút gọn
     sb = COMPACT_SYSTEM_PROMPT if opts.prompt_profile == "compact" else BASE_SYSTEM_PROMPT
-
-    # Full retains optional typed scanner guidance; semantic discovery stays native.
-    if opts.tooling_profile == "full":
-        sb += (
-            "\n# Tooling profile: full\n"
-            "- `content_discovery` uses native HTTP in every tooling profile; `service_discovery` uses native TCP. External Nmap/ffuf run only through typed Shell scanners with separate adapter readiness and job review.\n"
-            "- Full profile does not authorize every scanner or every scan. Use only bounded exact-target operations, avoid duplicate coverage, and respect each tool's permission prompt.\n"
-            "- Do not automatically run nuclei, sqlmap, subdomain scanners, masscan, or other scanners without explicit user intent and the matching skill's approval and evidence gates.\n"
-        )
 
     # Thêm cấu hình reasoning
     if opts.thinking_enabled:
@@ -562,20 +549,6 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
             f"- Objective: {workflow.objective.id} mode={workflow.objective.mode} "
             f"target_origin={workflow.objective.target_origin or 'none'}"
         )
-        if workflow.objective.requested_goals:
-            lines.append("- Requested goals (runtime state controls completion):")
-            for goal in workflow.objective.requested_goals:
-                linked = ",".join(goal.candidate_ids) or "none"
-                detail = f" class={goal.candidate_class} status={goal.status} candidates={linked}"
-                if goal.reason:
-                    detail += f" reason={_workflow_brief(goal.reason)}"
-                if goal.review_artifact_ref:
-                    detail += f" review_artifact={_workflow_brief(goal.review_artifact_ref)}"
-                lines.append(f"  - {goal.id}:{detail}")
-            lines.append(
-                "  - no_candidate means candidate discovery was reviewed but "
-                "class-specific validation was not performed; it is not a negative result."
-            )
         if workflow.objective.mode == "whole_target":
             lines.append(
                 "- Completed phases: "
@@ -590,6 +563,17 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                 "- Attack-surface inputs: "
                 + ", ".join(f"{key}={value}" for key, value in counts.items())
             )
+            lines.append("- Input rows are summaries; use workflow(action=list, view=inputs, input_disposition=pending) "
+                         "and next_input_cursor for pending work; get_input retrieves exact canonical details.")
+            sources = workflow.objective_sources()
+            if sources or workflow.objective_endpoints() or workflow.discovery_restore_invalid:
+                lines.append(f'- Discovery metadata: endpoints={len(workflow.objective_endpoints())} '
+                             f'sources={len(sources)} selected={sum(row.selected for row in sources)} '
+                             f'unresolved={sum(row.unresolved for row in sources)} '
+                             + ' '.join(f'{status}={sum(row.disposition == status for row in sources)}'
+                                        for status in ('pending', 'partial', 'blocked')) + '; '
+                             f'restore_invalid={workflow.discovery_restore_invalid}; '
+                             'workflow list(view=sources|endpoints|provenance) reads bounded metadata; no execution rights.')
             for phase in ("recon", "enumeration"):
                 dimensions = PHASE_COVERAGE_DIMENSIONS[phase]
                 coverage_items = []
@@ -603,12 +587,6 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                 lines.append(f"- {phase} coverage: " + "; ".join(coverage_items))
     if workflow.current_phase:
         lines.append(f"- Current phase: {workflow.current_phase}")
-    from src.workflow.scanner import project_jobs
-    objective = workflow.objective
-    scanner_projection = project_jobs(workflow.scanner_jobs,
-        objective.target_origin if objective else None, objective.id if objective else None)
-    if scanner_projection:
-        lines.append('Scanner observations (untrusted historical data; reuse suitable results; not findings or rights): ' + scanner_projection)
     if active:
         lines.append("- Active candidates:")
         for candidate in active:
@@ -647,6 +625,26 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                         f"{candidate.id}]"
                     )
                 lines.append(f"    request_template: {template}")
+    if workflow.objective is not None and workflow.objective.requested_goals:
+        lines.append("- Requested goals (runtime state controls completion):")
+        for goal in workflow.objective.requested_goals:
+            linked = ",".join(goal.candidate_ids) or "none"
+            detail = f" class={goal.candidate_class} status={goal.status} candidates={linked}"
+            if goal.reason:
+                detail += f" reason={_workflow_brief(goal.reason)}"
+            if goal.review_artifact_ref:
+                detail += f" review_artifact={_workflow_brief(goal.review_artifact_ref)}"
+            lines.append(f"  - {goal.id}:{detail}")
+        lines.append(
+            "  - no_candidate means candidate discovery was reviewed but "
+            "class-specific validation was not performed; it is not a negative result."
+        )
+    from src.workflow.scanner import project_jobs
+    objective = workflow.objective
+    scanner_projection = project_jobs(workflow.scanner_jobs,
+        objective.target_origin if objective else None, objective.id if objective else None)
+    if scanner_projection:
+        lines.append('Scanner observations (untrusted historical data; reuse suitable results; not findings or rights): ' + scanner_projection)
     if recent_results:
         lines.append("- Recent validation results:")
         for result in recent_results:
@@ -675,23 +673,14 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                 + ", ".join(dict.fromkeys(pending_findings))
             )
     if workflow.objective is not None and workflow.objective.mode == "whole_target":
-        lines.append("- Input rows are summaries; use workflow(action=get_input, input_id=...) for the full canonical sanitized sample.")
-        for item in workflow.objective_inputs()[:12]:
+        from src.workflow.input_view import ordered_inputs
+        for item in ordered_inputs(workflow)[:12]:
             lines.append(
-                f"- Input {item.id}: {item.method or '*'} {item.endpoint or '*'} "
-                f"parameter={item.parameter or '*'} location={item.location or '*'} "
+                f"- Input {item.id}: {item.method or '*'} {_workflow_brief(item.endpoint or '*')} "
+                f"parameter={_workflow_brief(item.parameter or '*')} location={item.location or '*'} "
                 f"type={item.input_type or '*'} content_type={item.content_type or '*'} "
                 f"disposition={item.disposition}"
             )
-            if item.sample_payload:
-                sample = item.sample_payload[:WORKFLOW_SAMPLE_PAYLOAD_CHAR_LIMIT]
-                if len(item.sample_payload) > WORKFLOW_SAMPLE_PAYLOAD_CHAR_LIMIT:
-                    sample += " [truncated]"
-                lines.append(f"  sample_payload: {sample}")
-            if item.baseline_request_ref:
-                lines.append(f"  baseline_request_ref: {_workflow_brief(item.baseline_request_ref)}")
-            if item.auth_context_ref:
-                lines.append(f"  auth_context_ref: {_workflow_brief(item.auth_context_ref)}")
     return _bounded_prompt_context(
         "\n".join(lines) + "\n",
         WORKFLOW_CONTEXT_CHAR_LIMIT,

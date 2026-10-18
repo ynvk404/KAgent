@@ -7,14 +7,13 @@ import ipaddress
 import json
 import socket
 import time
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlsplit
 
 from src.engagement.state import EngagementState, OutOfScopeError
 from src.permission.permission import Decision, PermissionRequest, Prompter, UserControlledRefusal
 from src.target.origin import HTTPOrigin
 from src.target.target import Target
-from src.tools.common.capabilities import CapabilityInventory
 from src.tools.discovery.common import is_aborted, normalize_host, validate_ports
 from src.tools.common.outcome import ErrorKind, ToolOutput
 from src.tools.http.private_host import private_host_reason
@@ -35,12 +34,9 @@ class ServiceDiscoveryTool(Tool):
         self,
         target: Target,
         engagement: EngagementState,
-        capabilities: CapabilityInventory | None = None,
-        tooling_profile: Callable[[], str | None] | None = None,
+        *,
         workflow: WorkflowState | None = None,
     ) -> None:
-        # Legacy arguments are accepted; neither profile nor binary inventory
-        # selects a scanner backend for semantic discovery.
         self.target = target
         self.engagement = engagement
         self.workflow = workflow
@@ -51,7 +47,7 @@ class ServiceDiscoveryTool(Tool):
     def description(self) -> str:
         return (
             "Check the active target HTTP port on its active hostname or IP. "
-            "Uses native TCP connections in all tooling profiles. "
+            "Uses native TCP connections. "
             "External Nmap requires a separate typed Shell scanner job. No other ports, CIDR, "
             "host lists, UDP, NSE scripts, OS detection, or "
             "raw scanner flags. A scan validated against the declared active "

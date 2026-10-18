@@ -85,7 +85,7 @@ def boundary(monkeypatch):
 
 @pytest.fixture
 def runtime_factory(tmp_path, boundary):
-    def factory(*, profile="full", nmap="/tools/nmap", coverage="missing", yolo=False, client=None, origin=ORIGIN):
+    def factory(*, legacy_config=None, nmap="/tools/nmap", coverage="missing", yolo=False, client=None, origin=ORIGIN):
         runtime = make_runtime(tmp_path, client, origin=origin, yolo=yolo)
         runtime.workflow.objective = WorkflowObjective(
             id="n1-service", mode="whole_target", target_origin=origin)
@@ -100,7 +100,9 @@ def runtime_factory(tmp_path, boundary):
         runtime.registry.register(runtime.service)
         runtime.grant = runtime.engagement.http_permissions.activate(
             origin, HTTPLimits(requests=10, rate=100, burst=10))
-        runtime.agent.tooling_profile = profile
+        if legacy_config is not None:
+            from src.config.config import config_from_dict, config_to_dict
+            assert "tooling_profile" not in config_to_dict(config_from_dict(legacy_config))
         runtime.agent.rebuild_system_prompt()
         return runtime
     return factory
@@ -118,14 +120,14 @@ def assert_idle(runtime, boundary):
     boundary.process.assert_not_awaited()
 
 
-@pytest.mark.parametrize("profile", ["minimal", "full"])
+@pytest.mark.parametrize("legacy_config", [{"tooling_profile": "minimal"}, {"tooling_profile": "full"}, {"tooling_profile": None}, {}])
 @pytest.mark.parametrize("mode", ["auto", "socket"])
 @pytest.mark.parametrize("nmap", [None, "/tools/nmap"])
 @pytest.mark.parametrize("coverage", ["missing", "performed", "no-workflow"])
 async def test_registry_selects_native_before_review_and_consumes_socket_budget(
-    runtime_factory, boundary, profile, mode, nmap, coverage,
+    runtime_factory, boundary, legacy_config, mode, nmap, coverage,
 ):
-    runtime = runtime_factory(profile=profile, nmap=nmap, coverage=coverage)
+    runtime = runtime_factory(legacy_config=legacy_config, nmap=nmap, coverage=coverage)
     result = await runtime.registry.execute("service_discovery", {"mode": mode}, FakeSignal(), runtime.prompter)
     payload = json.loads(result)
 

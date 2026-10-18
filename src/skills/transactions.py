@@ -11,6 +11,8 @@ async def skill_changes(agent):
     disabled = list(registry.disabled_names())
     active = set(getattr(agent, "active_skills", set()))
     pending = set(getattr(agent, "pending_skills", set()))
+    contracts = dict(getattr(agent, "_skill_contracts", {}))
+    restricted = getattr(agent, "_skill_admission_restricted", False)
     history = list(agent.history) if hasattr(agent, "history") else None
     state = getattr(agent, "workflow", None)
     generation = getattr(state, "generation", None)
@@ -30,6 +32,9 @@ async def skill_changes(agent):
                 agent.active_skills = active
             if hasattr(agent, "pending_skills"):
                 agent.pending_skills = pending
+            if hasattr(agent, "_skill_contracts"):
+                agent._skill_contracts = contracts
+                agent._skill_admission_restricted = restricted
             if history is not None:
                 agent.history = history
                 agent.rebuild_from_skills()

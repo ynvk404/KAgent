@@ -1015,7 +1015,7 @@ def test_input_candidate_link_requires_same_objective():
     objective = state.objective
     assert objective is not None
     item, _ = state.add_attack_surface_input(AttackSurfaceInput(
-        objective.id, objective.target_origin or "", endpoint="/search", parameter="q",
+        objective.id, objective.target_origin or "", endpoint="/search", parameter="q", method="POST", location="query",
     ))
     current, _ = state.add_candidate(make_candidate(
         objective_id=objective.id,
@@ -1099,7 +1099,7 @@ def test_completion_and_blocker_contract_and_append_only_result_history():
     state = whole_target_state()
     complete_required_phases(state)
     item, _ = state.add_attack_surface_input(AttackSurfaceInput(
-        "objective-current", "https://target.test", endpoint="/search", parameter="q",
+        "objective-current", "https://target.test", endpoint="/search", parameter="q", method="GET", location="query",
     ))
     state.set_input_disposition(item.id, "blocked", reason="authorization required")
     available = frozenset({"recon", "enumeration", "input_analysis"})
@@ -1192,7 +1192,7 @@ def test_blocker_does_not_stop_objective_while_another_candidate_is_actionable()
     state = whole_target_state()
     complete_required_phases(state)
     item, _ = state.add_attack_surface_input(AttackSurfaceInput(
-        "objective-current", "https://target.test", endpoint="/blocked", parameter="id",
+        "objective-current", "https://target.test", endpoint="/blocked", parameter="id", method="GET", location="query",
         disposition="blocked", disposition_reason="browser required",
     ))
     candidate, _ = state.add_candidate(make_candidate(

@@ -606,7 +606,7 @@ def test_whole_target_dropped_input_with_weak_reason_cannot_allow_goal_completio
     )
     state = WorkflowState(objective=objective)
     state.add_attack_surface_input(AttackSurfaceInput(
-        objective.id, "https://target.test", endpoint="/search", parameter="q",
+        objective.id, "https://target.test", endpoint="/search", parameter="q", method="GET", location="query",
         disposition="dropped", disposition_reason="ignored",
     ))
     for phase in ("recon", "enumeration", "input_analysis"):

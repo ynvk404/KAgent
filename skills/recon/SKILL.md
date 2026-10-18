@@ -45,8 +45,7 @@ request detail; shell requests do not enforce target-origin scope.
 Use `service_discovery` only when the active target's service/port coverage is
 unclear and resolving it is relevant. If the active URL already establishes the
 web port and no broader service question remains, record service discovery as
-`not_applicable` with a reason. Both minimal and full profiles use bounded native
-TCP checks through the legacy semantic tool. For a concrete TCP coverage gap,
+`not_applicable` with a reason. The semantic tool uses bounded native TCP checks. For a concrete TCP coverage gap,
 the typed `shell(scanner="nmap", target=numeric_ip, ports=explicit_ports)` path
 uses a reviewed trusted-host plan and managed Linux lifecycle. It requires the
 active target's effective port or explicitly declared TCP scope. Consult
@@ -162,7 +161,7 @@ Treat each discovered hostname as a separate target for reachability checks.
 Do not automatically escalate to `subfinder`, `amass`, or `assetfinder`.
 Use them only when the operator explicitly authorizes domain/subdomain
 enumeration and identifies the in-scope domain; the active hostname alone
-does not authorize sibling hosts. A coverage gap or full tooling profile is
+does not authorize sibling hosts. A coverage gap is
 not sufficient authorization to broaden the target set.
 
 ## 2. Establish reachability

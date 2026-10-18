@@ -246,6 +246,115 @@ class ResultRetention:
         artifacts['result_refs'] = refs
         return refs
 
+    def retain_native_discovery(self, output, call_id: str, generation: str):
+        """Synchronous producer publication; no detached writer or new store."""
+        from src.tools.discovery.content import ContentDiscoveryTool, NativeDiscoveryResult
+        from src.tools.common.outcome import ToolOutput
+        from src.agent import ownership
+        from src.async_io import publication
+        produced = output.native_discovery if isinstance(output, ToolOutput) else None
+        if type(produced) is not NativeDiscoveryResult:
+            raise ValueError("native discovery retention requires runtime producer metadata")
+        owner = produced.owner
+        tool = self.agent.tools.get("content_discovery")
+
+        def check():
+            self.refresh_scope()
+            if (type(tool) is not ContentDiscoveryTool or owner.tool is not tool
+                    or owner.state is not self.agent.workflow or not owner.current()
+                    or not ownership.current(self.agent) or self.scope["generation"] != generation):
+                raise ExecutionBlocked("blocked: stale native discovery publication owner")
+
+        try:
+            check()
+        except ExecutionBlocked:
+            return ToolOutput("Native discovery result withheld: invocation owner changed; no result was published.",
+                              status="error", error_kind="reference_unavailable")
+        payload = json.loads(produced.full_text)
+        provenance = {"kind": "native-discovery", "module": ContentDiscoveryTool.__module__,
+                      "class": ContentDiscoveryTool.__name__, "policy_required": owner.policy is not None,
+                      "origin": payload["origin"], "objective_id": owner.objective.id if owner.objective else None}
+        ref = None
+        try:
+            if self.store is not None:
+                with publication(check):
+                    # The cache holds an observation of a failed/partial run.
+                    # Its JSON and original ToolOutput keep execution status.
+                    ref = self.store.put(produced.full_text, generation=generation, provenance=provenance,
+                        tool_name="content_discovery", tool_call_id=call_id, status="observation",
+                        error_kind=None, http_status=None, truncated=False, check_cancelled=check)
+                    check()
+                    if ref is not None:
+                        self.references[ref.result_ref] = ref
+                        produced.reference = ref
+        except ExecutionBlocked:
+            return ToolOutput("Native discovery result withheld: publication owner changed.",
+                              status="error", error_kind="reference_unavailable")
+        except Exception:
+            # Retention is optional; even an unexpected store failure must
+            # preserve the already collected sanitized rows inline. Authority
+            # changes are handled separately above and checked again below.
+            pass
+        try:
+            check()
+        except ExecutionBlocked:
+            return ToolOutput("Native discovery result withheld: publication owner changed.",
+                              status="error", error_kind="reference_unavailable")
+        if ref is None:
+            # The hard-bounded native dataset stays inline, including failures.
+            payload["retention"] = {"status": "inline", "limitation":
+                "Full sanitized data kept inline: result store unavailable, quota reached, or publication failed. Do not rerun for a missing ref."}
+            preview = ToolOutput(json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                                 status=output.status, error_kind=output.error_kind)
+        else:
+            payload["retention"] = {"status": "available", "result_ref": ref.result_ref,
+                                    "sha256": ref.sha256, "char_length": ref.char_length}
+            count = 20
+            discovered, rejected = payload["discovered"], payload["rejected"]
+            while True:
+                payload["discovered"] = discovered[:count]
+                payload["rejected"] = rejected[:count]
+                payload["truncated"] = (len(payload["discovered"]) < payload["discovered_total"]
+                                        or len(payload["rejected"]) < payload["rejected_total"])
+                text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                if len(text.encode()) <= 16 * 1024:
+                    break
+                if count == 0:
+                    # Full metadata is already retained. Unbounded fields such
+                    # as base_path/reason/baselines must not defeat the envelope
+                    # budget even after all preview rows have been omitted.
+                    payload = {key: payload[key] for key in (
+                        "status", "complete", "requested_requests", "completed_requests",
+                        "completed_request_count_exact", "requested_paths", "scanned_paths",
+                        "discovered_total", "rejected_total", "retention",
+                    )}
+                    payload.update(discovered=[], rejected=[], truncated=True,
+                        preview_metadata_omitted=True,
+                        preview_notice="Full metadata and rows are retained; use read_tool_result with the published ref.")
+                    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                    break
+                count //= 2
+            preview = ToolOutput(text, status=output.status, error_kind=output.error_kind,
+                                 truncated=payload["truncated"])
+        preview.native_discovery = produced
+        from src.workflow.discovery import native_handoff
+        try:
+            check()
+            native_handoff(self.agent.workflow, produced, call_id)
+        except ValueError:
+            # Metadata bounds/admission cannot destroy retained raw observations.
+            payload['inventory_limitation'] = 'Discovery metadata unavailable; use the retained/inline source.'
+            encoded = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+            if ref is not None and len(encoded.encode()) > 16 * 1024:
+                payload = {key: payload[key] for key in ('status', 'complete', 'retention', 'inventory_limitation')}
+                payload.update(discovered=[], rejected=[], truncated=True)
+                encoded = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+            preview = ToolOutput(encoded, status=output.status, error_kind=output.error_kind,
+                                 truncated=bool(payload.get('truncated')))
+            preview.native_discovery = produced
+        self.agent._tool_results_unsaved = True
+        return preview
+
     def admit(self, working: list[Message], tools_tokens: int, *, request: ChatRequest | None = None, threshold: int | None = None, strict: bool = False) -> str | None:
         from .agent import (MIDTURN_MIN_SAFETY_TOKENS,
                             MIDTURN_SAFETY_RATIO, MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR,
@@ -380,6 +489,22 @@ class ResultRetention:
                 policy.validate(tool, {})
                 if shell_profile(policy) != provenance.get("resource_profile"):
                     raise ExecutionBlocked("blocked: tool result process resource profile changed")
+        elif ref.source_kind == "native-discovery":
+            from src.tools.discovery.content import ContentDiscoveryTool
+            if (type(tool) is not ContentDiscoveryTool or tool.workflow is not self.agent.workflow
+                    or tool.target is not self.agent.target or tool.engagement is not self.agent.engagement_state):
+                raise ExecutionBlocked("blocked: native discovery result adapter unavailable")
+            objective = self.agent.workflow.objective
+            if provenance.get("objective_id") != (objective.id if objective else None):
+                raise ExecutionBlocked("blocked: native discovery objective ownership unavailable")
+            from src.target.origin import HTTPOrigin
+            if HTTPOrigin.from_url(tool.target.base_url()).as_url() != provenance.get("origin"):
+                raise ExecutionBlocked("blocked: native discovery origin ownership unavailable")
+            if policy is not None:
+                policy.require_network(provenance["origin"])
+                policy.validate(tool, {})
+            else:
+                self.agent.engagement_state.require_in_scope(provenance["origin"])
         elif ref.source_kind in {"http", "research"}:
             if type(tool) not in (HTTPTool, WebFetchTool, WebSearchTool):
                 raise ExecutionBlocked("blocked: tool result network provenance invalid")

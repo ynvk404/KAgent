@@ -12,7 +12,19 @@ def render_action_guidance(view: ActionView, context: PlannerContext) -> str:
     ]
     if view.excluded:
         lines.append("Excluded: " + ", ".join(view.excluded) + ".")
-    if any(c.status == "validating" for c in context.candidates):
+    phase = context.structured_phase
+    if phase in {"recon", "enumeration", "input_analysis"}:
+        if phase == "recon":
+            lines.append("Recommended: gather sourced service/technology observations; inspect coverage gaps. Scanner hints are not vulnerabilities.")
+        elif phase == "enumeration":
+            lines.append("Recommended: inventory endpoints/sources/inputs; inspect coverage gaps. Defer hypotheses to input analysis.")
+        else:
+            lines.append("Recommended: analyze inputs; record disposition or record_candidate only with evidenced controllability and compatible input bindings.")
+        lines.append("Use bounded list pages/cursors and get_input/get_source; inspect pending/partial/blocked sources and limitations. Native discovery, scanner endpoints, triage and coverage differ; scanner completion is not discovery completion.")
+        lines.append("Check permissions_status: ready scanner, native or no scanner depends on gaps. complete_skill requires ready state and canonical artifacts; repair blockers or state bounded stops.")
+    elif context.objective_mode == "whole_target" and context.workflow_status in {"completed", "blocked"}:
+        lines.append("Recommended: list current status and blockers; report the bounded outcome or repair the stated dependency. Readiness grants no finding eligibility.")
+    elif any(c.status == "validating" for c in context.candidates):
         lines.append("Recommended: record_evidence for usable sources; record_result for the active attempt's honest outcome, including unresolved closure.")
         lines.append("Use list for actual owned observation IDs/timing; obs_ is not a read_tool_result reference. Record effects via record_attempt_state before ending; absence is unknown, not false.")
     elif context.candidates:

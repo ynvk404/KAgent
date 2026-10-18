@@ -21,7 +21,7 @@ from src.workflow.state import Candidate, WorkflowObjective
 @pytest.mark.parametrize('action', ['record_input', 'set_input_disposition', 'record_candidate', 'link_input_candidate'])
 async def test_workflow_mutations_project_progress_at_result(tmp_path, action):
     app, workflow, tool = runtime(tmp_path, whole=True)
-    args = {'action': 'record_input', 'endpoint': '/search', 'method': 'GET', 'parameter': 'q'}
+    args = {'action': 'record_input', 'endpoint': '/search', 'method': 'GET', 'parameter': 'q', 'location': 'query'}
     if action == 'record_input':
         expected = 'Attack surface recorded'
     else:

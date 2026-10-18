@@ -1,0 +1,25 @@
+{
+  "command": [
+    "venv-linux/bin/pytest",
+    "-q",
+    "--tb=short",
+    "-ra",
+    "--junitxml=$REPO/docs/verification-stage3/final-corrections/c-reproduce.xml",
+    "tests/agent/test_target_request_intent.py"
+  ],
+  "exit_code": 1,
+  "elapsed_seconds": 1.776,
+  "source_unchanged": true,
+  "environment": {
+    "TERM": "xterm-256color",
+    "COLORTERM": null
+  },
+  "junit_valid": true,
+  "junit": {
+    "tests": 36,
+    "failures": 27,
+    "errors": 0,
+    "skipped": 0
+  },
+  "skipped": []
+}

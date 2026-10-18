@@ -14,6 +14,7 @@ from src.workflow.state import (
 from src.workflow.goals import RequestedGoal
 from tests.helpers.workflow import record_completed_phase
 from src.workflow.evidence import EvidenceArtifact
+import pytest
 from src.agent.system_prompt import (
     BuildOptions,
     SESSION_MEMORY_CONTEXT_CHAR_LIMIT,
@@ -25,6 +26,34 @@ from src.agent.system_prompt import (
 )
 
 class TestBuildSystemPrompt:
+    @pytest.mark.parametrize("with_goals", [False, True])
+    def test_wide_inputs_preserve_active_context_and_pending_counts(self, with_goals):
+        workflow = WorkflowState(objective=WorkflowObjective(
+            "prompt-budget", "whole_target", "https://target.test",
+            requested_goals=[RequestedGoal("xss", reason="r" * 300)] if with_goals else [],
+        ))
+        workflow.current_phase = "validation"
+        for index in range(12):
+            row = AttackSurfaceInput("prompt-budget", "https://target.test", method="POST",
+                endpoint=f"/{index}" + "x" * 180, parameter="q" * 200, location="json",
+                input_type="t" * 80, content_type="application/" + "x" * 180)
+            workflow.attack_surface_inputs[row.id] = row
+        candidate, _ = workflow.add_candidate(Candidate("xss", target="https://target.test",
+            objective_id="prompt-budget", method="GET", endpoint="/search", parameter="q",
+            location="query", baseline_request_ref="capture-a", auth_context_ref="user-a",
+            request_template="q={INJECTION_POINT}"))
+        from src.workflow.assessment import start_attempt
+        start_attempt(workflow, candidate, "fixture", "fixture-epoch")
+        workflow.set_candidate_status(candidate.id, "validating")
+        before = workflow.to_dict()
+        rendered = render_workflow(workflow)
+        assert len(rendered) <= WORKFLOW_CONTEXT_CHAR_LIMIT
+        assert candidate.id in rendered and "Current phase: validation" in rendered
+        assert "status=validating" in rendered and "pending=12" in rendered
+        assert "baseline_request_ref=capture-a" in rendered and "auth_context_ref=user-a" in rendered
+        assert "q={INJECTION_POINT}" in rendered and "get_input" in rendered
+        assert workflow.to_dict() == before
+
     def test_requested_goals_render_compact_untrusted_state(self):
         goal = RequestedGoal(
             "xss", status="no_candidate", candidate_ids=["cand_reviewed"],
@@ -187,7 +216,8 @@ class TestBuildSystemPrompt:
         assert 'request_template: {"filter":"{INJECTION_POINT}","limit":10' in rendered
         assert "baseline_request_ref=captures/baseline.json" in rendered
         assert "auth_context_ref=captures/auth-context.md" in rendered
-        assert 'sample_payload: {"auth":{"access_token":"[REDACTED]"}' in rendered
+        assert "sample_payload:" not in rendered
+        assert "get_input" in rendered
         assert "{INJECTION_POINT}" in rendered
         assert "user@example.test" in rendered
         assert "prompt-password-secret" not in rendered
@@ -421,7 +451,7 @@ class TestBuildSystemPrompt:
         assert "declare phase only as a workflow annotation" in p
         assert "content_discovery" in p
         assert "service_discovery" in p
-        assert "minimal profile" in p
+        assert "uses native HTTP" in p
         assert "Tooling profile: full" not in p
 
     def test_warns_against_gnu_only_grep_p_in_shell_commands(self):
@@ -432,36 +462,13 @@ class TestBuildSystemPrompt:
         assert "grep -P" in p
         assert "grep -E" in p
 
-    def test_full_profile_keeps_native_discovery_and_separate_typed_scanners(self):
-        p = build_system_prompt(
-            BuildOptions(
-                skills=Registry(),
-                thinking_enabled=False,
-                target=None,
-                tooling_profile="full",
-            )
-        )
-
-        assert "Tool selection: native scoped tools first" in p
-        assert "Tooling profile: full" in p
-        assert "`content_discovery` uses native HTTP in every tooling profile" in p
-        assert "installed ffuf through `content_discovery`" not in p
+    def test_single_tooling_policy_keeps_native_discovery_and_separate_typed_scanners(self):
+        p = build_system_prompt(BuildOptions(skills=Registry(), thinking_enabled=False, target=None))
+        assert "`content_discovery` uses native HTTP" in p
         assert "`service_discovery` uses native TCP" in p
         assert "Typed Shell Nmap/ffuf use the separate reviewed trusted-host adapter when ready" in p
         assert "explicit scope and current phase prerequisites" in p
-        assert "or nmap through" not in p
-        assert "Full profile does not authorize every scanner" in p
-
-    def test_does_not_append_the_scanner_override_when_tooling_profile_is_minimal(self):
-        p = build_system_prompt(
-            BuildOptions(
-                skills=Registry(),
-                thinking_enabled=False,
-                target=None,
-                tooling_profile="minimal",
-            )
-        )
-        assert "Tooling profile: full" not in p
+        assert "Tooling profile:" not in p
 
     def test_supports_a_compact_profile_for_small_request_budget_providers(self):
         full = build_system_prompt(

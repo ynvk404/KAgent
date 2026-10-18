@@ -48,16 +48,13 @@ def make_workflow(*, phase: str = "recon", origin: str = "http://target.test:808
 @pytest.mark.parametrize('tool_type,mode,backend', [
     (ContentDiscoveryTool, 'auto', 'native'), (ServiceDiscoveryTool, 'auto', 'socket'),
 ])
-@pytest.mark.parametrize('legacy_form', ['positional', 'keyword'])
-def test_legacy_constructor_preserves_workflow_without_selecting_scanner(tool_type, mode, backend, legacy_form):
+def test_native_constructor_preserves_workflow_without_scanner_probe(tool_type, mode, backend, monkeypatch):
+    import shutil
     target, engagement, workflow = Target('http://target.test:8080'), EngagementState(), make_workflow()
     def forbidden(*_args):
-        pytest.fail('legacy capabilities/profile must not be consulted by native discovery')
-    inventory = CapabilityInventory(which=forbidden)
-    if legacy_form == 'positional':
-        tool = tool_type(target, engagement, inventory, forbidden, workflow)
-    else:
-        tool = tool_type(target, engagement, capabilities=inventory, tooling_profile=forbidden, workflow=workflow)
+        pytest.fail('native discovery must not probe installed scanner binaries')
+    monkeypatch.setattr(shutil, 'which', forbidden)
+    tool = tool_type(target, engagement, workflow=workflow)
     assert tool.target is target and tool.engagement is engagement and tool.workflow is workflow
     assert tool._select_backend(mode) == backend
 

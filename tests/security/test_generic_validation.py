@@ -548,7 +548,7 @@ async def test_f11_registry_review_keeps_existing_prerequisite_gates(runtime, tm
         state.phase_completions.pop(marker.key)
     elif fault == "inventory":
         item, _ = state.add_attack_surface_input(AttackSurfaceInput(
-            state.objective.id, ORIGIN, endpoint="/unreviewed", parameter="q",
+            state.objective.id, ORIGIN, endpoint="/unreviewed", parameter="q", method="GET", location="query",
         ))
         state.set_input_disposition(item.id, "blocked", reason="operator action required")
     elif fault == "artifact":

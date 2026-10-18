@@ -28,7 +28,7 @@ from src.version import VERSION, describe
 from src.cli.help import print_help
 
 from src.config import config
-from src.config.config import ToolingProfile, Backend
+from src.config.config import Backend
 
 from src.logger import logger
 from src.logger.session_debug import (
@@ -42,7 +42,7 @@ from src.target.target import new_target
 from src.engagement.state import EngagementState
 
 from src.agent.agent import Agent, AgentOptions
-from src.agent.system_prompt import PromptToolingProfile, PromptProfile
+from src.agent.system_prompt import PromptProfile
 from src.permission.permission import AlwaysAllow
 from src.permission.permission import YoloPrompter
 
@@ -200,10 +200,6 @@ from src.ui.bridges.ask_bridge import (
     AskRequest,
 )
 
-from src.ui.core.first_run_picker import (
-    FirstRunPicker,
-    FirstRunPickerRequest,
-)
 
 
 _USE_COLOR = sys.stdout.isatty()
@@ -1015,33 +1011,6 @@ async def main() -> int:
         await close_burp_bridge()
         return 0
 
-    if cfg.tooling_profile is None:
-        picked = await run_first_run_picker()
-
-        if picked is None:
-            await asyncio.gather(
-                *(session.close() for session in mcp_sessions),
-                return_exceptions=True,
-            )
-
-            await close_burp_bridge()
-
-            print(
-                "first-run setup cancelled — exiting.",
-                file=sys.stderr,
-            )
-            return 0
-
-        cfg.tooling_profile = picked
-
-        try:
-            await config.save(cfg)
-        except Exception as err:
-            print(
-                f"warning: could not persist tooling_profile: {err}",
-                file=sys.stderr,
-            )
-
     opts = AgentOptions(
         client=client,
         tools=tools,
@@ -1060,12 +1029,6 @@ async def main() -> int:
             )
         ),
         auto_compact_threshold=effective_auto_compact_threshold(current_runtime_config, client),
-        tooling_profile=cast(
-            PromptToolingProfile,
-            cfg.tooling_profile.value
-            if cfg.tooling_profile is not None
-            else None,
-        ),
         prompt_profile=effective_prompt_profile(current_runtime_config),
         intelligence=intelligence_store,
         memory_store=memory_store,
@@ -1493,63 +1456,6 @@ def locality_for(backend: str) -> str:
         return "remote"
 
     return "local"
-
-async def run_first_run_picker() -> ToolingProfile | None:
-
-    picked: ToolingProfile | None = None
-    finished = asyncio.Event()
-
-    def on_pick(profile: ToolingProfile) -> None:
-        nonlocal picked
-        picked = profile
-        finished.set()
-
-    def on_cancel() -> None:
-        nonlocal picked
-        picked = None
-        finished.set()
-
-    def exit_app() -> None:
-        finished.set()
-
-    picker = FirstRunPicker(
-        FirstRunPickerRequest(
-            on_pick=on_pick,
-            on_cancel=on_cancel,
-            exit_app=exit_app,
-        )
-    )
-
-    while not finished.is_set():
-
-        print("\033[2J\033[H", end="")
-
-        print(
-            "\n".join(
-                picker.render()
-            )
-        )
-
-        key = await asyncio.to_thread(
-            input,
-            "\n↑↓ select · Enter pick · Esc cancel: "
-        )
-
-        key = key.strip().lower()
-
-        if key in ("up", "w"):
-            picker.handle_key("up")
-
-        elif key in ("down", "s"):
-            picker.handle_key("down")
-
-        elif key in ("", "enter"):
-            picker.handle_key("enter")
-
-        elif key in ("esc", "escape", "q"):
-            picker.handle_key("escape")
-
-    return picked
 
 def build_resume_summary(
     session_id: str,

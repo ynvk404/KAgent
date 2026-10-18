@@ -1,0 +1,106 @@
+{
+  "source_aggregate": "76168e98a362ef43f4636dc745fc356cfa57a425e59f89ec842b5b174bce653c",
+  "A": {
+    "status": "unresolved-root-cause",
+    "production_changed": false,
+    "full_cases": [
+      {
+        "id": "tests.security.test_validation_finalization::test_owned_stop_without_declaration_records_unknown_not_false[stall]",
+        "seconds": 3.597,
+        "passed": true
+      },
+      {
+        "id": "tests.security.test_validation_finalization::test_owned_stop_without_declaration_records_unknown_not_false[reader]",
+        "seconds": 1.195,
+        "passed": true
+      },
+      {
+        "id": "tests.security.test_validation_finalization::test_owned_stop_without_declaration_records_unknown_not_false[mixed]",
+        "seconds": 2.848,
+        "passed": true
+      }
+    ],
+    "conclusion": "Timeout did not recur in this full run. No evidence that it was fixed or that Stage 3/environment caused the old timeout."
+  },
+  "B": {
+    "status": "fixed-test-harness",
+    "production_renderer_changed": false,
+    "full_cases": [
+      {
+        "id": "tests.ui.test_light_theme_app::test_light_first_terminal_frame_uses_selected_theme[truecolor-48;2;250;248;242-48;2;18;18;18]",
+        "seconds": 0.129,
+        "passed": true
+      },
+      {
+        "id": "tests.ui.test_light_theme_app::test_light_first_terminal_frame_uses_selected_theme[256-48;5;231-48;5;233]",
+        "seconds": 0.119,
+        "passed": true
+      }
+    ]
+  },
+  "C": {
+    "status": "fixed-with-regressions",
+    "full_regressions_passed": 51
+  },
+  "M2": {
+    "status": "mutation-reproduced-no-proven-contract-violation",
+    "production_changed": false,
+    "audit": {
+      "no_candidate_read_unchanged": true,
+      "candidate_status": "new",
+      "before_goal": {
+        "id": "goal_9cd950623fb52be4",
+        "candidate_class": "sql-injection",
+        "status": "pending",
+        "candidate_ids": [],
+        "reason": null,
+        "review_artifact_ref": null,
+        "review_binding": null
+      },
+      "after_goal": {
+        "id": "goal_9cd950623fb52be4",
+        "candidate_class": "sql-injection",
+        "status": "in_progress",
+        "candidate_ids": [
+          "cand_4d407869d60650a05970"
+        ],
+        "reason": "no validation result",
+        "review_artifact_ref": null,
+        "review_binding": null
+      },
+      "changed_workflow_keys": [
+        "objective"
+      ],
+      "revision_delta": 1,
+      "repeated_read_idempotent": true,
+      "dirty_before_checkpoint": true,
+      "checkpoint_saved_goal": {
+        "id": "goal_9cd950623fb52be4",
+        "candidate_class": "sql-injection",
+        "status": "in_progress",
+        "candidate_ids": [
+          "cand_4d407869d60650a05970"
+        ],
+        "reason": "no validation result",
+        "review_artifact_ref": null,
+        "review_binding": null
+      },
+      "saved_before_matched": true,
+      "saved_after_matched": true,
+      "no_attempts_or_results": true,
+      "final_goal_status": "in_progress"
+    }
+  },
+  "historical_session_save": [
+    {
+      "id": "tests.ui.test_persistence_responsiveness::test_production_boundary_keeps_textual_responsive[session_save]",
+      "seconds": 0.627,
+      "passed": true
+    },
+    {
+      "id": "tests.ui.test_persistence_responsiveness::test_async_wait_control_keeps_textual_responsive[session_save]",
+      "seconds": 0.635,
+      "passed": true
+    }
+  ]
+}

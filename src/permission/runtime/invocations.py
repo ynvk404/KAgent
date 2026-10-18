@@ -12,6 +12,7 @@ from functools import wraps
 from typing import Any, Awaitable, Callable, Coroutine, ParamSpec, TypeVar
 import uuid
 import time
+import asyncio
 
 from src.permission.permission import PermissionReviewStale
 
@@ -24,6 +25,7 @@ class ReviewTurn:
 
 
 _turn: ContextVar[ReviewTurn | None] = ContextVar('permission_review_turn', default=None)
+_admission: ContextVar[Callable[[], None] | None] = ContextVar('controller_tool_admission', default=None)
 P = ParamSpec('P')
 R = TypeVar('R')
 
@@ -39,8 +41,14 @@ class ReviewGuard:
     expires: float
     clock: Callable[[], float]
     condition: Callable[[], bool] | None = None
+    admission_check: Callable[[], None] | None = None
 
     def owner_is_current(self) -> bool:
+        try:
+            if self.admission_check is not None:
+                self.admission_check()
+        except (Exception, asyncio.CancelledError):
+            return False
         return (not (self.owner is not None and self.owner.closed)
                 and not (getattr(self.signal, 'aborted', False)
                          or getattr(self.signal, 'is_set', lambda: False)()))
@@ -70,7 +78,21 @@ def capture_review(*, signal: Any = None, clock: Callable[[], float] = time.mono
                    timeout: float = REVIEW_TIMEOUT_SECONDS,
                    condition: Callable[[], bool] | None = None) -> ReviewGuard:
     review_id()  # Reject capture by a detached child of an already closed turn.
-    return ReviewGuard(_turn.get(), signal, clock() + timeout, clock, condition)
+    return ReviewGuard(_turn.get(), signal, clock() + timeout, clock, condition, _admission.get())
+
+
+@contextmanager
+def controller_admission(check: Callable[[], None]):
+    """Carry the Agent's skill check through existing review/dispatch guards.
+
+    This transient callback can only restrict admission; it never grants rights
+    and is captured per invocation, including native HTTP's inner reviews.
+    """
+    token = _admission.set(check)
+    try:
+        yield
+    finally:
+        _admission.reset(token)
 
 
 @contextmanager

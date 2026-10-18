@@ -1,0 +1,45 @@
+{
+  "no_candidate_read_unchanged": true,
+  "candidate_status": "new",
+  "before_goal": {
+    "id": "goal_9cd950623fb52be4",
+    "candidate_class": "sql-injection",
+    "status": "pending",
+    "candidate_ids": [],
+    "reason": null,
+    "review_artifact_ref": null,
+    "review_binding": null
+  },
+  "after_goal": {
+    "id": "goal_9cd950623fb52be4",
+    "candidate_class": "sql-injection",
+    "status": "in_progress",
+    "candidate_ids": [
+      "cand_4d407869d60650a05970"
+    ],
+    "reason": "no validation result",
+    "review_artifact_ref": null,
+    "review_binding": null
+  },
+  "changed_workflow_keys": [
+    "objective"
+  ],
+  "revision_delta": 1,
+  "repeated_read_idempotent": true,
+  "dirty_before_checkpoint": true,
+  "checkpoint_saved_goal": {
+    "id": "goal_9cd950623fb52be4",
+    "candidate_class": "sql-injection",
+    "status": "in_progress",
+    "candidate_ids": [
+      "cand_4d407869d60650a05970"
+    ],
+    "reason": "no validation result",
+    "review_artifact_ref": null,
+    "review_binding": null
+  },
+  "saved_before_matched": true,
+  "saved_after_matched": true,
+  "no_attempts_or_results": true,
+  "final_goal_status": "in_progress"
+}

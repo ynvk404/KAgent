@@ -1,6 +1,8 @@
 """Offline response binding and persisted identity regressions through consumers."""
 from __future__ import annotations
 
+from tests.helpers.workflow import historical_input
+
 import base64
 import json
 from copy import deepcopy
@@ -268,7 +270,7 @@ async def test_session_hydration_keeps_malformed_record_filtering_and_goal_error
     }}))
     saved = json.loads(session.path.read_text())
     candidate = Candidate("xss").to_dict()
-    item = AttackSurfaceInput("handoff", ORIGIN).to_dict()
+    item = historical_input("handoff", ORIGIN).to_dict()
     saved["workflow"]["candidates"].append({**candidate, "signals": "bad"})
     saved["workflow"]["attack_surface_inputs"].append({**item, "candidate_ids": "bad"})
     for invalid_id in (None, 42, ""):

@@ -71,6 +71,19 @@ class PlannerContext:
     goal_validation_routes: dict[str, ValidationRoute] = field(default_factory=dict)
     selected_capture_ids: tuple[str, ...] = ()
 
+    @property
+    def structured_phase(self) -> str | None:
+        """Current work, including artifact repair and late inputs; never display phase."""
+        if self.objective_mode != "whole_target":
+            return None
+        readiness = self.phase_completion_readiness or {}
+        if readiness.get("phase") in {"recon", "enumeration", "input_analysis"}:
+            return readiness["phase"]
+        for phase in ("recon", "enumeration", "input_analysis"):
+            if phase not in self.completed_phases:
+                return phase
+        return "input_analysis" if self.pending_input_count or self.blocked_input_count else "validation"
+
 
 class SkillRecommendation(TypedDict):
     name: str
@@ -347,7 +360,7 @@ def build_whole_target_plan(
         ("input_analysis", "web-input-analysis"),
     )
     for phase, skill_name in phase_skills:
-        if phase in context.completed_phases:
+        if phase != context.structured_phase:
             continue
         skill = next(
             (
@@ -357,6 +370,11 @@ def build_whole_target_plan(
             None,
         )
         if skill is None:
+            if phase in context.completed_phases:
+                # An unavailable artifact-repair playbook cannot suppress
+                # existing owned validation/recovery work. Runtime completion
+                # still requires the missing canonical artifact.
+                continue
             return None
         reason = f"whole-target objective {context.objective_id} requires {phase}"
         readiness = context.phase_completion_readiness

@@ -143,7 +143,6 @@ from .sanitize import (
 from .system_prompt import (
     BuildOptions,
     PromptProfile,
-    PromptToolingProfile,
     build_system_prompt,
 )
 
@@ -193,11 +192,59 @@ TOOL_CHECKPOINT_TIMEOUT_SECONDS = 10.0
 AGENT_TRACE_ENV = "KAgent_TRACE_AGENT"
 
 _EXPLICIT_HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
-_OPERATIONAL_TARGET_TERMS = re.compile(
-    r"\b(?:assess|assessment|audit|check|enumerate|exploit|inspect|investigate|"
-    r"pentest|penetration test|probe|recon|reconnaissance|scan|test|validate|verify)\b",
+_TARGET_DIRECTIVE = re.compile(
+    r"^\s*(?:(?:please|then)\s+|(?:can|could|would)\s+you\s+|"
+    r"i\s+want\s+you\s+to\s+)*(?:"
+    r"assess|audit|check|enumerate|exploit|inspect|investigate|pentest|"
+    r"probe|recon|reconnaissance|scan|test|validate|verify|"
+    r"(?:set|switch|change)\s+(?:the\s+)?target\s+to|"
+    r"(?:perform|run|conduct|start|begin)\s+"
+    r"(?:(?:a|an|the|new|full|whole[- ]target|web|security|penetration)\s+)*"
+    r"(?:assessment|audit|pentest|scan|test|recon|reconnaissance|enumeration)"
+    r")\b",
     re.IGNORECASE,
 )
+
+
+def _operator_request_text(text: str) -> str:
+    """Exclude supplied Markdown/quoted examples from local intent detection.
+
+    The original message still reaches the model unchanged. A URL alone in an
+    inline span remains an operand (``scan `https://...` ``), not an instruction.
+    """
+    lines = []
+    fence = None
+    quoted_paragraph = False
+    for line in text.splitlines():
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence is not None:
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                fence = None
+            continue
+        if line.lstrip().startswith(">"):
+            quoted_paragraph = True
+            continue
+        # Markdown permits a paragraph's continuation to omit the '>' marker.
+        # A blank line separates a subsequent operator instruction.
+        if quoted_paragraph and line.strip():
+            continue
+        quoted_paragraph = False
+        if line.startswith(("    ", "\t")):
+            continue
+        if marker:
+            fence = marker[1]
+            continue
+        lines.append(line)
+    text = "\n".join(lines)
+
+    def operand(match: re.Match[str]) -> str:
+        content = match[2].strip()
+        return content if _EXPLICIT_HTTP_URL_RE.fullmatch(content) else " "
+
+    text = re.sub(r"(`+)(.*?)\1", operand, text, flags=re.DOTALL)
+    return re.sub(r"(?<!\w)([\"'])(.*?)\1", operand, text)
+
+
 _WHOLE_TARGET_INTENT = re.compile(
     r"\b(?:whole[- ]target|entire target|full target|full[- ]scope assessment|"
     r"full security assessment|(?:web\s+)?security assessment(?:\s+of\b)?|"
@@ -360,6 +407,19 @@ class ParsedToolCall:
         self.args_json = args_json
         self.parse_err = parse_err
         self.invocation: Invocation | None = None
+        self.skill_load: tuple[str, str, tuple] | None = None
+
+
+@dataclass(frozen=True)
+class _SkillActivation:
+    id: str
+    name: str
+    fingerprint: str
+    source: Literal["manual", "model", "legacy"]
+    owner: tuple
+
+    def provenance(self) -> dict[str, str]:
+        return {"id": self.id, "name": self.name, "fingerprint": self.fingerprint, "source": self.source}
 
 
 class ToolCallResult:
@@ -1043,7 +1103,6 @@ class AgentOptions:
         thinking_enabled: bool = False,
         max_steps: Optional[int] = None,
         auto_compact_threshold: int = 16000,
-        tooling_profile: Optional[PromptToolingProfile] = None,
         prompt_profile: Optional[PromptProfile] = None,
         streaming_enabled: bool = True,
         intelligence: Optional[IntelligenceStore] = None,
@@ -1063,11 +1122,6 @@ class AgentOptions:
         self.max_steps = max_steps
         self.auto_compact_threshold = auto_compact_threshold
 
-        self.tooling_profile: PromptToolingProfile = (
-            tooling_profile
-            if tooling_profile is not None
-            else "minimal"
-        )
         self.prompt_profile: PromptProfile = (
             prompt_profile
             if prompt_profile is not None
@@ -1146,11 +1200,6 @@ class Agent:
 
         self.consecutive_compact_failures = 0
 
-        self.tooling_profile: PromptToolingProfile = (
-            opts.tooling_profile
-            if opts.tooling_profile is not None
-            else "minimal"
-        )
         self.prompt_profile: PromptProfile = (
             opts.prompt_profile
             if opts.prompt_profile is not None
@@ -1175,6 +1224,8 @@ class Agent:
 
         self.active_skills: set[str] = set()
         self.pending_skills: set[str] = set()
+        self._skill_contracts: dict[str, _SkillActivation] = {}
+        self._skill_admission_restricted = False
 
         self.tools_tokens_cache: int = 0
         self.tools_tokens_key: str | None = None
@@ -1209,7 +1260,6 @@ class Agent:
                 skills=self.skills,
                 thinking_enabled=self.thinking,
                 target=self.target,
-                tooling_profile=self.tooling_profile,
                 prompt_profile=self.prompt_profile,
                 memory=self.memory,
                 engagement=self.engagement,
@@ -1622,8 +1672,10 @@ class Agent:
             return False
 
         if not enabled:
+            self._skill_admission_restricted |= bool(self.active_skills or self.pending_skills)
             self.active_skills.discard(name)
             self.pending_skills.discard(name)
+            self._skill_contracts.pop(name, None)
 
         self.rebuild_system_prompt()
         self.history = ensure_system_prompt(
@@ -1635,6 +1687,7 @@ class Agent:
         return True
 
     def rebuild_from_skills(self) -> None:
+        self._reconcile_skill_contracts()
         self.rebuild_system_prompt()
         self.history = ensure_system_prompt(
             self.history,
@@ -1661,6 +1714,7 @@ class Agent:
 
         body = materialize_skill_body(skill)
 
+        activation = self._new_skill_activation(name, "manual", pending=True)
         self.history.append(
             Message(
                 role="system",
@@ -1668,6 +1722,7 @@ class Agent:
                     f"The user selected skill {name} via /skills. "
                     f"Apply this skill to the next request:\n\n{body}"
                 ),
+                skill_activation=activation.provenance(),
             )
         )
 
@@ -1676,11 +1731,97 @@ class Agent:
 
         return name
 
+    def _skill_owner(self) -> tuple:
+        objective = self.workflow.objective
+        return (id(self.workflow), self.workflow.generation, id(self.store),
+                self.store.id if self.store is not None else None,
+                self.target.revision, self.target.base_url(), objective.id if objective else None)
+
+    def _skill_fingerprint(self, name: str) -> str:
+        skill = self.skills.get(name)
+        return hashlib.sha256(json.dumps(asdict(skill), sort_keys=True).encode()).hexdigest() if skill else ""
+
+    def _new_skill_activation(self, name: str, source: Literal["manual", "model", "legacy"],
+                              *, pending: bool = False) -> _SkillActivation:
+        previous = self._skill_contracts.get(name)
+        if source == "model":
+            skill = self.skills.get(name)
+            objective = self.workflow.objective
+            if skill is not None and objective is not None and objective.mode == "whole_target":
+                phase = PlannerContext(objective_mode=objective.mode,
+                    completed_phases=self.workflow.completed_phases(objective),
+                    pending_input_count=sum(i.disposition in {"pending", "blocked"}
+                                            for i in self.workflow.objective_inputs())).structured_phase
+                readiness = self._phase_completion_readiness() or {}
+                stages = {"reconnaissance": "recon", "enumeration": "enumeration",
+                          "analysis": "input_analysis", "validation": "validation"}
+                if skill.stage in stages and stages[skill.stage] in {phase, readiness.get("phase")}:
+                    for old_name, old in list(self._skill_contracts.items()):
+                        old_skill = self.skills.get(old_name)
+                        if (old.source == "model" and old_skill is not None
+                                and old_skill.stage in stages and old_skill.stage != skill.stage):
+                            self.active_skills.discard(old_name)
+                            self._skill_contracts.pop(old_name, None)
+        if (source == "model" and previous is not None and previous.source == "manual"
+                and name in self.active_skills and previous.owner == self._skill_owner()
+                and previous.fingerprint == self._skill_fingerprint(name)):
+            return previous
+        activation = _SkillActivation(uuid.uuid4().hex, name, self._skill_fingerprint(name), source,
+                                      self._skill_owner()[:4] if pending else self._skill_owner())
+        self._skill_contracts[name] = activation
+        self._skill_admission_restricted = True
+        return activation
+
+    def _reconcile_skill_contracts(self) -> None:
+        """Retire methodology/capability contracts, without changing runtime rights."""
+        names = self.active_skills | self.pending_skills
+        self._skill_admission_restricted |= bool(names)
+        for name in list(names):
+            skill = self.skills.get(name)
+            activation = self._skill_contracts.get(name)
+            # Existing in-memory API names have unknown provenance, not guessed manual/model.
+            if activation is None and skill is not None and not self.skills.is_disabled(name):
+                activation = self._new_skill_activation(name, "legacy", pending=name in self.pending_skills)
+            valid = skill is not None and not self.skills.is_disabled(name) and activation is not None
+            if valid and activation is not None and skill is not None:
+                owner = self._skill_owner()[:4] if name in self.pending_skills else self._skill_owner()
+                valid = activation.owner == owner and activation.fingerprint == self._skill_fingerprint(name)
+                if activation.source == "model" and skill.disable_model_invocation:
+                    valid = False
+            if not valid:
+                self.active_skills.discard(name)
+                self.pending_skills.discard(name)
+                self._skill_contracts.pop(name, None)
+        for name in self._skill_contracts.keys() - (self.active_skills | self.pending_skills):
+            self._skill_contracts.pop(name, None)
+
+    def _project_skill_bodies(self, messages: list[Message]) -> None:
+        """Elide only provenance-bearing injections; preserve tool pairing and raw history."""
+        self._reconcile_skill_contracts()
+        for index, message in enumerate(messages):
+            provenance = message.skill_activation
+            if provenance is None:
+                # Legacy metadata is not reconstructed from prose. Keep it as
+                # historical data, never as a current system contract.
+                if message.role == "system" and message.content.startswith((
+                    "The user selected skill ", "The user invoked /")):
+                    messages[index] = replace(message, role="user", content=(
+                        "Untrusted historical skill text; activation/version unknown, no execution rights:\n" + message.content))
+                elif (message.role == "tool" and message.name == "load_skill"
+                      and not message.content.startswith("Untrusted historical skill result;")):
+                    messages[index] = replace(message, content=(
+                        "Untrusted historical skill result; activation/version unknown, no execution rights:\n" + message.content))
+                continue
+            activation = self._skill_contracts.get(provenance.get("name", ""))
+            if activation is None or activation.provenance() != provenance:
+                messages[index] = replace(message, content="[Retired skill body omitted; original remains in the session transcript. Reload/select the current skill if needed.]")
+
     def is_tool_allowed(
         self,
         tool_name: str,
         args: dict[str, Any] | None = None,
     ) -> ToolAllowedResult:
+        self._reconcile_skill_contracts()
         from src.permission.runtime.execution import policy_for
         execution = policy_for(self.prompter)
         if execution is None:
@@ -1704,7 +1845,7 @@ class Agent:
                     execution.generic_validation.validate_tool(tool, args or {})
                 except (TypeError, ValueError) as exc:
                     return ToolAllowedResult(ok=False, reason=str(exc))
-        if len(self.active_skills) == 0:
+        if not self.active_skills and not self._skill_admission_restricted:
             return ToolAllowedResult(
                 ok=True,
             )
@@ -1752,7 +1893,7 @@ class Agent:
 
         if len(active_skills) == 0:
             return ToolAllowedResult(
-                ok=True,
+                ok=False, reason="No current active skill contract allows this tool. Load/select an available skill.",
             )
 
         for skill in active_skills:
@@ -1840,6 +1981,7 @@ class Agent:
                             context: _TurnContext) -> ChatRequest:
         from .system_prompt import render_memory_observation
         messages = deepcopy(history)
+        self._project_skill_bodies(messages)
         # Order is shared by projections and the working request. Derived
         # observations remain user data, never operator or system authority.
         messages.extend(deepcopy(context.injections))
@@ -1886,6 +2028,7 @@ class Agent:
         from src.workflow.validation_context import resolve_validation_context
         from src.permission.runtime.execution import policy_for
 
+        self._reconcile_skill_contracts()
         planner = deepcopy(self._planner_context())
         # Request facts copy canonical records, not the live lock's queued
         # Futures. The snapshot never executes mutations or owns that lock.
@@ -1963,6 +2106,7 @@ class Agent:
         ownership.check(self)
         if req.tools is None:
             await self._admit_request(req, emit)
+            self._project_skill_bodies(req.messages)
             return
         incoming = self._pending_context.incoming if self._pending_context else None
         owned = {id(message) for message in self._workflow_request_blocks}
@@ -1973,6 +2117,7 @@ class Agent:
                 view = self._workflow_request_view(user_msg, self.tools.as_llm_tools())
             self._replace_workflow_request_view(req, view)
             await self._admit_request(req, emit)
+            self._project_skill_bodies(req.messages)
             async with self.workflow.mutation_lock:
                 current = self._workflow_request_view(user_msg, self.tools.as_llm_tools())
             if current.signature == view.signature:
@@ -1996,6 +2141,7 @@ class Agent:
         return min(soft, hard) if soft > 0 and hard is not None else (hard if hard is not None else soft)
 
     async def _admit_request(self, req: ChatRequest, emit) -> None:
+        self._project_skill_bodies(req.messages)
         self._protect_http_context(req.messages)
         # A completed batch is saved only with the actual next request's mode.
         # Finish this save even if cancellation arrives while persistence waits.
@@ -2090,6 +2236,8 @@ class Agent:
 
         self.active_skills.clear()
         self.pending_skills.clear()
+        self._skill_contracts.clear()
+        self._skill_admission_restricted = False
 
         self.consecutive_compact_failures = 0
 
@@ -2125,6 +2273,13 @@ class Agent:
 
         self.engagement_state.http_permissions.reset(preserve_denial=True)
         loaded = self.store.load()
+        self.active_skills.clear()
+        self.pending_skills.clear()
+        self._skill_contracts.clear()
+        self._skill_admission_restricted = any(message.skill_activation is not None or message.skill_admission_required
+            or (message.role == "tool" and message.name == "load_skill")
+            or (message.role == "system" and message.content.startswith(("The user selected skill ", "The user invoked /")))
+            for message in loaded.messages)
         self._tool_checkpoint_request = None
         self._tool_results_unsaved = False
         self._clear_permission_cache()
@@ -2174,6 +2329,8 @@ class Agent:
             self._workflow_saved_revision = self.workflow.committed_revision
             return
 
+        if self.history:
+            self.history[0] = replace(self.history[0], skill_admission_required=self._skill_admission_restricted)
         if self.history and self.result_retention.store is not None:
             self.history[0] = self.result_retention.attach(self.history[0])
 
@@ -2237,7 +2394,6 @@ class Agent:
                 skills=self.skills,
                 thinking_enabled=self.thinking,
                 target=self.target,
-                tooling_profile=self.tooling_profile,
                 prompt_profile=self.prompt_profile,
                 memory=self.memory,
                 engagement=self.engagement,
@@ -2402,16 +2558,20 @@ class Agent:
             clear()
 
     def initialize_target_from_user_request(self, user_msg: str) -> bool:
-        if not _OPERATIONAL_TARGET_TERMS.search(user_msg):
-            return False
-
         origins: list[HTTPOrigin] = []
-        for match in _EXPLICIT_HTTP_URL_RE.finditer(user_msg):
-            candidate = match.group(0).rstrip(".,;!?)]}")
-            try:
-                origins.append(HTTPOrigin.from_url(candidate))
-            except ValueError:
+        operator_text = _operator_request_text(user_msg)
+        # A URL on the next line may be the explicit directive's operand.
+        operator_text = re.sub(r"\n[ \t]*(?=https?://)", " ", operator_text, flags=re.IGNORECASE)
+        clauses = re.split(r"(?<=[.!?;])\s+|\n+|\bthen\s+", operator_text, flags=re.IGNORECASE)
+        for clause in clauses:
+            if not _TARGET_DIRECTIVE.search(clause):
                 continue
+            for match in _EXPLICIT_HTTP_URL_RE.finditer(clause):
+                candidate = match.group(0).rstrip(".,;!?)]}")
+                try:
+                    origins.append(HTTPOrigin.from_url(candidate))
+                except ValueError:
+                    continue
 
         if len(origins) != 1:
             return False
@@ -3904,6 +4064,14 @@ class Agent:
             if turn_resolution.effective is not None
             else turn_thinking
         )
+        # Ordinary per-turn expiry keeps its existing semantics. Retirement
+        # within a turn leaves the empty-set admission boundary in force.
+        self._reconcile_skill_contracts()
+        if self.active_skills:
+            self._skill_admission_restricted = bool(self.pending_skills)
+            self.active_skills.clear()
+            self._skill_contracts = {name: contract for name, contract in self._skill_contracts.items()
+                                     if name in self.pending_skills}
         requested_goals_cancelled = self._cancel_requested_goals(user_msg, tools_enabled)
         if tools_enabled and not requested_goals_cancelled:
             self.initialize_target_from_user_request(user_msg)
@@ -3919,8 +4087,11 @@ class Agent:
             self._initialize_request_objective(user_msg, tools_enabled)
         ownership.adopt_initial_state(self)
 
+        self._reconcile_skill_contracts()
         self.active_skills = set(self.pending_skills)
         self.pending_skills.clear()
+        self._skill_contracts = {name: replace(activation, owner=self._skill_owner())
+            for name, activation in self._skill_contracts.items() if name in self.active_skills}
         for name in sorted(self.active_skills):
             emit(
                 {
@@ -5863,6 +6034,7 @@ class Agent:
 
         self.result_retention.refresh_scope()
         retention_generation = self.result_retention.scope["generation"]
+        self._capture_skill_load(tc, parsed)
         from .tool_results import source_provenance
         try:
             retention_provenance = source_provenance(self, tc.function.name, parsed.args)
@@ -5911,11 +6083,65 @@ class Agent:
                             dispatch_args = self._selected_capture_workflow_args(dispatch_args)
                         from src.tools.execution.scanner_runner import hooks
                         hook_token = hooks.set(self._scanner_hooks(tc, parsed, retention_generation, emit))
+                        from src.tools.discovery.content import ContentDiscoveryTool, result_hook
+                        native_output = None
+                        native_scope = runtime_scope(self)
+                        native_retention = self.result_retention
+                        native_session = (self.store, self.store.id if self.store is not None else None)
+
+                        def retain_native(output):
+                            nonlocal native_output
+                            if (self.result_retention is not native_retention or runtime_scope(self) != native_scope
+                                    or native_session != (self.store, self.store.id if self.store is not None else None)):
+                                return ToolOutput("Native discovery result withheld: runtime scope changed.",
+                                                  status="error", error_kind="reference_unavailable")
+                            native_output = native_retention.retain_native_discovery(output, tc.id, retention_generation)
+                            return native_output
+
+                        native_token = result_hook.set(retain_native if type(self.tools.get(tc.function.name)) is
+                            ContentDiscoveryTool else None)
+                        from src.tools.workflow.source_processing import controller as source_controller
+                        source_token = source_controller.set((self, native_scope))
                         try:
-                            result = await self.tools.execute(
-                                tc.function.name, dispatch_args, signal, self.prompter,
-                            )
+                            admission_owner = self._skill_owner()
+                            admission_tool_name = tc.function.name
+                            admission_args = deepcopy(dispatch_args)
+                            turn_owner = ownership.capture(self)
+
+                            def check_skill_admission():
+                                ownership.check(self)
+                                allowed = self.is_tool_allowed(admission_tool_name, admission_args)
+                                if (not allowed.ok or admission_owner != self._skill_owner()
+                                        or (turn_owner is not None and not turn_owner.current())):
+                                    from src.permission.runtime.execution import ExecutionBlocked
+                                    raise ExecutionBlocked(allowed.reason or "tool blocked by active skills")
+
+                            from src.permission.runtime.invocations import controller_admission
+                            with controller_admission(check_skill_admission):
+                                result = await self.tools.execute(
+                                    admission_tool_name, dispatch_args, signal, self.prompter,
+                                )
+                        except asyncio.CancelledError:
+                            # A native producer finalized completed rows before
+                            # cancellation escaped. Preserve its exact paired
+                            # cancelled receipt in this turn's checkpoint.
+                            pending_call = False
+                            for message in reversed(self.history):
+                                if message.role == "tool" and message.tool_call_id == tc.id:
+                                    break
+                                if message.role == "assistant" and any(call.id == tc.id for call in message.tool_calls or []):
+                                    pending_call = True
+                                    break
+                            if native_output is not None and ownership.current(self) and pending_call:
+                                receipt = ToolCallResult(result=native_output, err_str="cancelled", duration_ms=int((time.monotonic() - start) * 1000),
+                                    status="cancelled", error_kind="cancelled", truncated=native_output.truncated)
+                                working = self._tool_checkpoint_request.messages if self._tool_checkpoint_request is not None else []
+                                self.record_tool_result(tc, parsed, receipt, emit or (lambda event: None), working,
+                                                        defer_admission=True)
+                            raise
                         finally:
+                            source_controller.reset(source_token)
+                            result_hook.reset(native_token)
                             hooks.reset(hook_token)
                     except Exception as err:
                         run_err = err
@@ -6078,6 +6304,13 @@ class Agent:
                 return
             self.result_retention.retain_scanner(produced, tc.id)
             job.artifacts = deepcopy(envelope['artifacts'])
+            if produced.dataset:
+                from src.workflow.discovery import scanner_handoff
+                try:
+                    scanner_handoff(state, job, produced.dataset)
+                except ValueError:
+                    envelope['artifacts']['workflow_limited'] = True
+                    job.artifacts['workflow_limited'] = True
             # Only the relevant current phase can receive bounded execution
             # facts. A service hint never attests HTTP/input/vulnerability work.
             phase_name, dimension = (('recon', 'service_discovery') if job.scanner == 'nmap'
@@ -6102,9 +6335,18 @@ class Agent:
 
         return ScannerHooks(started, finished)
 
+    def _capture_skill_load(self, tc: ToolCall, parsed: ParsedToolCall) -> None:
+        from src.skills.load_skill import LoadSkillTool
+        loader = self.tools.get("load_skill")
+        if (parsed.skill_load is None and tc.function.name == "load_skill" and type(loader) is LoadSkillTool
+                and loader.reg is self.skills and isinstance(parsed.args.get("name"), str)):
+            name = parsed.args["name"]
+            parsed.skill_load = (name, self._skill_fingerprint(name), self._skill_owner())
+
     def _tool_call_event(self, tc: ToolCall, parsed: ParsedToolCall) -> dict[str, Any]:
         ownership.check(self)
         self._sync_permission_target()
+        self._capture_skill_load(tc, parsed)
         parsed.invocation = Invocation(uuid.uuid4().hex, runtime_scope(self))
         return {"type": "tool-call", "id": tc.id, "name": tc.function.name,
                 "args": parsed.args, "argsJSON": parsed.args_json, "invocation": parsed.invocation}
@@ -6331,16 +6573,27 @@ class Agent:
         analysis = self._http_analysis_content(tc, res, parsed.invocation)
         if analysis is not None:
             content = analysis
+            if parsed.invocation is not None and parsed.invocation.scope == runtime_scope(self):
+                from src.workflow.discovery import observation_handoff
+                from src.permission.runtime.execution import policy_for
+                policy = policy_for(self.prompter)
+                if policy is not None and isinstance(res.result, ToolOutput):
+                    for observation_id, _ in res.result.http_sources:
+                        try:
+                            observation_handoff(self.workflow, policy.observations._items[observation_id])
+                        except (ValueError, KeyError):
+                            # Raw observations remain readable through their original gates.
+                            content += '\nDiscovery metadata limited/unavailable; original source retained.'
         if publish_result:
             emit(event)
 
         if not res.err_str:
             self.turn_executed_tool = True
 
+        skill_provenance = None
         if (
             tc.function.name == "load_skill"
             and not res.err_str
-            and (parsed.invocation is None or parsed.invocation.scope == runtime_scope(self))
         ):
             name = (
                 parsed.args.get("name", "")
@@ -6348,20 +6601,35 @@ class Agent:
                 else ""
             )
 
-            if isinstance(name, str) and name:
-                self.active_skills.add(name)
-
-                emit(
-                    {
-                        "type": "skill-active",
-                        "name": name,
-                        "call_id": tc.id,
-                        "invocation": parsed.invocation,
-                        "target_origin": self.target.base_url(),
-                        "target_revision": self.target.revision,
-                        "objective_id": self.workflow.objective.id if self.workflow.objective else None,
-                    }
-                )
+            if isinstance(name, str) and name and parsed.skill_load is not None:
+                loaded_name, fingerprint, owner = parsed.skill_load
+                # A completed old load is still an archival tool result, never
+                # current authority after reload/disable/reset or scope change.
+                skill_provenance = {"id": uuid.uuid4().hex, "name": name,
+                                    "fingerprint": fingerprint, "source": "model"}
+                skill = self.skills.get(name)
+                if (loaded_name != name or owner != self._skill_owner() or skill is None
+                        or (parsed.invocation is not None and parsed.invocation.scope != runtime_scope(self))
+                        or self.skills.is_disabled(name) or skill.disable_model_invocation
+                        or fingerprint != self._skill_fingerprint(name)):
+                    skill = None
+                if skill is not None:
+                    activation = self._new_skill_activation(name, "model")
+                    skill_provenance = activation.provenance()
+                    self.active_skills.add(name)
+                    self._reconcile_skill_contracts()
+                if name in self.active_skills:
+                    emit(
+                        {
+                            "type": "skill-active",
+                            "name": name,
+                            "call_id": tc.id,
+                            "invocation": parsed.invocation,
+                            "target_origin": self.target.base_url(),
+                            "target_revision": self.target.revision,
+                            "objective_id": self.workflow.objective.id if self.workflow.objective else None,
+                        }
+                    )
 
         tool_msg = Message(
             role="tool",
@@ -6372,10 +6640,14 @@ class Agent:
             tool_error_kind=res.error_kind,
             tool_http_status=res.http_status,
             tool_truncated=res.truncated,
+            skill_activation=skill_provenance,
             http_response_sources=([ref for ref, _ in res.result.http_sources]
                                    if analysis is not None and isinstance(res.result, ToolOutput) else None),
             http_runtime_stamp=(res.result.http_stamp
                                 if analysis is not None and isinstance(res.result, ToolOutput) else None),
+            tool_result_refs=([asdict(res.result.native_discovery.reference)]
+                              if isinstance(res.result, ToolOutput) and res.result.native_discovery is not None
+                              and res.result.native_discovery.reference is not None else None),
         )
 
         self.history.append(tool_msg)
@@ -6480,6 +6752,7 @@ class Agent:
             self.result_retention.pending.clear()
             self._tool_checkpoint_request = None
             history_snap = self.get_history()
+            self._project_skill_bodies(history_snap)
             self._protect_http_context(history_snap)
             elide_persisted_workflow_results(history_snap)
 
@@ -6701,7 +6974,15 @@ class Agent:
         signal,
         kind: str,
     ) -> ChatResponse:
+        def skill_stamp():
+            self._reconcile_skill_contracts()
+            return tuple(sorted((name, contract.id, self._skill_fingerprint(name), self.skills.is_disabled(name))
+                                for name, contract in self._skill_contracts.items()))
+
+        skill_context = skill_stamp()
         await self._admit_request(req, lambda event: None)
+        if skill_context != skill_stamp():
+            raise AgentRuntimeError("Skill context changed during compaction admission; retry from current state.")
         llm_started = time.perf_counter()
         started_at = datetime.now(timezone.utc).isoformat()
         response: ChatResponse | None = None
@@ -6709,6 +6990,8 @@ class Agent:
         try:
             self._count_llm_call("compaction_llm_calls")
             response = await ownership.await_owned(self, self.client.chat(req, signal))
+            if skill_context != skill_stamp():
+                raise AgentRuntimeError("Skill context changed during compaction; stale summary discarded.")
             return response
         except BaseException as err:
             status = "cancelled" if isinstance(err, asyncio.CancelledError) or getattr(signal, "aborted", False) else "error"
@@ -6728,6 +7011,7 @@ class Agent:
         signal,
     ) -> bool:
         history_snap = self.get_history()
+        self._project_skill_bodies(history_snap)
         self._protect_http_context(history_snap)
         elide_persisted_workflow_results(history_snap)
 
@@ -6861,7 +7145,6 @@ class Agent:
                 skills=self.skills,
                 thinking_enabled=self.thinking,
                 target=self.target,
-                tooling_profile=self.tooling_profile,
                 prompt_profile=self.prompt_profile,
                 memory=memory,
                 engagement=self.engagement,
@@ -6972,6 +7255,7 @@ def ensure_system_prompt(
 
     return [
         Message(role="system", content=prompt,
+                skill_admission_required=messages[0].skill_admission_required,
                 tool_result_refs=messages[0].tool_result_refs,
                 tool_result_scope=messages[0].tool_result_scope),
         *messages[1:]

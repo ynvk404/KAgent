@@ -159,7 +159,7 @@ def test_recon_describes_supported_service_backend():
     _, body, _ = read_skill()
     text = collapse_ws(body)
 
-    assert "Both minimal and full profiles use bounded native TCP checks" in text
+    assert "The semantic tool uses bounded native TCP checks" in text
     assert 'typed `shell(scanner="nmap", target=numeric_ip, ports=explicit_ports)` path' in text
     assert 'explicitly declared TCP scope' in text
     assert 'do not establish an HTTP origin' in text

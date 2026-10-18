@@ -3628,7 +3628,7 @@ async def test_whole_target_blocker_uses_blocked_stop_reason():
             artifact_ref=f"artifacts/{phase}.md",
         )
     item, _ = state.add_attack_surface_input(AttackSurfaceInput(
-        "objective-blocked", "https://target.test", endpoint="/search", parameter="q",
+        "objective-blocked", "https://target.test", endpoint="/search", parameter="q", method="GET", location="query",
         disposition="blocked", disposition_reason="authorization required",
     ))
     agent, client = whole_target_agent([
@@ -4187,50 +4187,6 @@ async def test_unexpected_run_error_has_runtime_error_reason(monkeypatch):
     assert collector["events"][-1].stop_reason == "runtime_error"
 
 
-class FakeLoadSkillTool(Tool):
-
-    def __init__(self, registry: SkillRegistry):
-        self.registry = registry
-
-    def name(self) -> str:
-        return "load_skill"
-
-    def description(self) -> str:
-        return "load_skill"
-
-    def schema(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                },
-            },
-        }
-
-    def requires_permission(self) -> bool:
-        return False
-
-    async def run(
-        self,
-        args: dict[str, Any],
-        signal,
-        prompter,
-    ) -> str:
-
-        name = args.get("name", "")
-
-        if not isinstance(name, str):
-            name = ""
-
-        skill = self.registry.get(name)
-
-        if skill is None:
-            raise RuntimeError(f"unknown {name}")
-
-        return skill.body
-
-
 def make_agent_with_skill(
     scripted: list[ChatResponse],
     skill_tools: list[str],
@@ -4254,7 +4210,7 @@ def make_agent_with_skill(
         )
     )
 
-    tools.register(FakeLoadSkillTool(skills))
+    tools.register(LoadSkillTool(skills))
 
     agent = Agent(
         AgentOptions(
@@ -4804,7 +4760,7 @@ async def test_allows_bash_tool_when_skill_declares_shell_alias():
         )
     )
 
-    tools.register(FakeLoadSkillTool(skills))
+    tools.register(LoadSkillTool(skills))
 
     agent = Agent(
         AgentOptions(
@@ -6521,7 +6477,11 @@ async def test_pending_skill_promoted_to_active_and_emits_skill_active():
             )
         ]
     )
-    agent.pending_skills.add("cross-site-scripting")
+    agent.skills.add(Skill(
+        name="cross-site-scripting", description="Known manual test contract", tools=["http"],
+        disable_model_invocation=False, path="/fixture/cross-site-scripting/SKILL.md", body="Known playbook",
+    ))
+    await agent.inject_skill("cross-site-scripting")
     assert agent.active_skills == set()
 
     collector = collect()

@@ -47,7 +47,7 @@ async def test_corrected_candidate_retry_recovers_owned_issue_once(tmp_path, who
             'endpoint': '/login', 'method': 'POST', 'parameter': 'email'}
     if whole:
         output = await tool.run({'action': 'record_input', 'endpoint': '/login',
-                                 'method': 'POST', 'parameter': 'email'}, None, AlwaysAllow())
+                                 'method': 'POST', 'parameter': 'email', 'location': 'body'}, None, AlwaysAllow())
         args = {'action': 'record_candidate', 'candidate_class': 'sqli',
                 'input_id': json.loads(output)['input']['id']}
     bad = {**args, 'objective_id': state.objective.id}
