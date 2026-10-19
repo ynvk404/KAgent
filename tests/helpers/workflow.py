@@ -157,3 +157,46 @@ class FixtureWorkflowToolMixin:
     async def _fixture_production_run(self, args, signal, prompter):
         parent: Any = super()
         return await parent.run(args, signal, prompter)
+
+
+async def prepare_validation_prerequisites(tool, candidate_id: str) -> None:
+    """Explicit consumer fixture for the approved Whole-target new-attempt gate.
+
+    No performed coverage, traffic, phase receipt, or analyzed linkage is forged:
+    use the production completion/disposition actions with bounded fixture skips.
+    Tests exercising missing prerequisites must deliberately omit this helper.
+    """
+    import json
+    from src.skills.artifacts import completion_artifact_path
+    objective = tool.state.objective
+    if objective is None or objective.mode != "whole_target":
+        return
+    assert tool.skills is not None
+    for phase, name in (("recon", "recon"), ("enumeration", "web-enumeration")):
+        if phase in tool.state.completed_phases():
+            continue
+        skill = tool.skills.get(name)
+        assert skill is not None and skill.completion_artifact
+        relative = completion_artifact_path(skill.completion_artifact, tool._active_target())
+        path = tool.evidence_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Offline consumer fixture; bounded discovery dimensions explicitly skipped.")
+        await record_phase_coverage_for_test(tool, phase)
+        result = await tool.run({"action": "complete_skill", "skill_name": name}, None, AlwaysAllow())
+        assert json.loads(result)["ok"], result
+    candidate = tool.state.candidates[candidate_id]
+    existing = next((item for item in tool.state.objective_inputs() if candidate_id in item.candidate_ids), None)
+    if existing is None:
+        fields = {name: getattr(candidate, name) for name in (
+            "method", "endpoint", "parameter", "location", "content_type", "baseline_request_ref", "auth_context_ref")
+            if getattr(candidate, name) is not None}
+        result = await tool.run({"action": "record_input", **fields}, None, AlwaysAllow())
+        input_id = json.loads(result)["input"]["id"]
+        result = await tool.run({"action": "link_input_candidate", "input_id": input_id,
+                                 "candidate_id": candidate_id}, None, AlwaysAllow())
+        assert json.loads(result)["ok"], result
+    else:
+        input_id = existing.id
+    result = await tool.run({"action": "set_input_disposition", "input_id": input_id,
+                             "disposition": "analyzed"}, None, AlwaysAllow())
+    assert json.loads(result)["ok"], result

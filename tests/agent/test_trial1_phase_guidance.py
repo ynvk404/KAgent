@@ -1,0 +1,67 @@
+"""Advice respects owned work and the bounded per-input admission contract."""
+from dataclasses import replace
+
+import pytest
+
+from src.agent.decision_planner import PlannerContext, PlannerCandidate, build_whole_target_plan
+from src.skills.registry import Registry
+
+
+def skills():
+    registry = Registry()
+    registry.load_dir('skills')
+    return registry.list_enabled()
+
+
+def frontier(**fields):
+    return PlannerContext(objective_mode='whole_target', workflow_status='actionable',
+        pending_source_count=7, next_source_id='ds_fixture', **fields)
+
+
+@pytest.mark.parametrize('obligation', ['coverage', 'finding', 'active', 'repair'])
+def test_frontier_and_incomplete_phases_cannot_hide_current_obligations(obligation):
+    context = frontier()
+    if obligation == 'coverage': context = replace(context, coverage_sync_candidate_ids=('cand_owned',))
+    if obligation == 'finding': context = replace(context, pending_finding_candidate_ids=('cand_owned',))
+    if obligation == 'active': context = replace(context, candidates=(PlannerCandidate('cand_owned', 'xss', 'validating'),))
+    if obligation == 'repair': context = replace(context, repair_candidate_ids=('cand_owned',))
+    plan = build_whole_target_plan(skills(), context)
+    assert plan is not None and plan.candidate_id == 'cand_owned'
+    assert 'ds_fixture' not in plan.guidance and 'select_source' not in plan.guidance
+
+
+@pytest.mark.parametrize('selected,action', [(False, 'select_source'), (True, 'get_source')])
+def test_exact_frontier_step_and_missing_phase_requirements_are_visible(selected, action):
+    context = frontier(completed_phases=frozenset({'recon'}), next_source_selected=selected,
+        phase_completion_readiness={'phase': 'enumeration', 'ready': False,
+            'artifact_ref': 'artifacts/web-enumeration/target/inventory.md', 'artifact_valid': False,
+            'required_coverage': {'html_navigation': None}, 'reason': 'canonical artifact missing'})
+    plan = build_whole_target_plan(skills(), context)
+    assert plan is not None and plan.recommended_skill == 'web-enumeration'
+    assert action in plan.guidance and 'ds_fixture' in plan.guidance
+    assert 'load_skill' in plan.guidance and 'html_navigation' in plan.guidance
+    assert 'canonical artifact missing' in plan.guidance
+
+
+def test_ready_completion_precedes_unselected_frontier():
+    context = frontier(phase_completion_readiness={'phase': 'recon', 'skill_name': 'recon',
+        'ready': True, 'artifact_ref': 'artifacts/recon/target/summary.md'})
+    plan = build_whole_target_plan(skills(), context)
+    assert plan is not None and 'complete_skill' in plan.guidance
+    assert 'ds_fixture' not in plan.guidance
+
+
+def test_one_ready_analyzed_candidate_can_validate_while_others_pending():
+    context = frontier(completed_phases=frozenset({'recon', 'enumeration'}), pending_input_count=8,
+        candidates=(PlannerCandidate('cand_ready', 'cross-site-scripting', 'new', validation_ready=True),))
+    plan = build_whole_target_plan(skills(), context)
+    assert plan is not None and plan.candidate_id == 'cand_ready'
+    assert 'start_validation' in plan.guidance and 'pending' in plan.guidance
+
+
+def test_validation_result_does_not_suppress_remaining_discovery():
+    context = frontier(completed_phases=frozenset({'recon'}),
+        candidates=(PlannerCandidate('cand_done', 'cross-site-scripting', 'dismissed', latest_outcome='not-confirmed'),))
+    plan = build_whole_target_plan(skills(), context)
+    assert plan is not None and plan.recommended_skill == 'web-enumeration'
+    assert 'ds_fixture' in plan.guidance

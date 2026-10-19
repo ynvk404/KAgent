@@ -13,7 +13,11 @@ def render_action_guidance(view: ActionView, context: PlannerContext) -> str:
     if view.excluded:
         lines.append("Excluded: " + ", ".join(view.excluded) + ".")
     phase = context.structured_phase
-    if phase in {"recon", "enumeration", "input_analysis"}:
+    if context.objective_mode == "whole_target" and (
+        any(c.status == "validating" for c in context.candidates) or context.repair_candidate_ids
+    ):
+        lines.append("Recommended: finish owned Attempt/recovery before discovery; list sources, save proof, record_evidence then record_result. Respect probing_stopped and existing budgets.")
+    elif phase in {"recon", "enumeration", "input_analysis"}:
         if phase == "recon":
             lines.append("Recommended: gather sourced service/technology observations; inspect coverage gaps. Scanner hints are not vulnerabilities.")
         elif phase == "enumeration":

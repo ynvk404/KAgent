@@ -20,6 +20,7 @@ from src.tools.common.registry import Registry
 from src.tools.http.http_tool import HTTPTool
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import AttackSurfaceInput, Candidate, WorkflowMode, WorkflowObjective, WorkflowState
+from tests.helpers.workflow import prepare_validation_prerequisites
 from src.workflow.validation_context import resolve_validation_context
 
 ORIGIN = "https://target.test"
@@ -54,11 +55,17 @@ async def record(registry, action, **args):
 async def linked(registry, **kwargs):
     item = await record(registry, "record_input", method="POST", endpoint="/api", parameter="q", location="body", **kwargs)
     candidate = await record(registry, "record_candidate", candidate_class="xss", input_id=item["id"])
-    item["candidate_ids"] = [candidate["id"]]
+    tool = registry.get("workflow")
+    assert isinstance(tool, WorkflowTool)
+    await prepare_validation_prerequisites(tool, candidate["id"])
+    item = tool.state.attack_surface_inputs[item["id"]].to_dict()
     return item, candidate
 
 
 async def start(registry, candidate):
+    tool = registry.get("workflow")
+    assert isinstance(tool, WorkflowTool)
+    await prepare_validation_prerequisites(tool, candidate["id"])
     response = json.loads(await call(registry, "start_validation", candidate_id=candidate["id"]))
     assert response["ok"], response
     return response

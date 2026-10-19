@@ -18,6 +18,7 @@ from src.agent.events import (
     SkillActiveEvent,
     MemoryRecallEvent,
     DoneEvent,
+    WorkflowProgressEvent,
 )
 
 if TYPE_CHECKING:
@@ -352,6 +353,8 @@ def reducer(state: AppState, action: Action) -> AppState:
             return _finish_outcome(state, state.deferred_outcome, state.deferred_facts)
 
         case AgentEventAction(event=event, facts=facts):
+            if isinstance(event, WorkflowProgressEvent):
+                return state  # Diagnostics must not flush streams or change presentation state.
             if isinstance(event, SkillActiveEvent) and event.call_id:
                 known = invocation_call(state.call_history, event)
                 if (known is not None and known.retired) or (known is None and event.invocation is not None):
@@ -536,6 +539,8 @@ def _flush_progress(state: AppState) -> AppState:
 
 
 def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | None = None) -> AppState:
+    if isinstance(ev, WorkflowProgressEvent):
+        return state
     if not isinstance(ev, (AssistantDeltaEvent, AssistantTextEvent)):
         state = _finish_stream(state)
     match ev:

@@ -147,6 +147,14 @@ class MemoryRecallEvent(BaseEvent):
 
 
 @dataclass(slots=True)
+class WorkflowProgressEvent(BaseEvent):
+    """Controller counters only; no traffic, paths, reasons or user text."""
+    type: Literal["workflow-progress"] = "workflow-progress"
+    stage: str = ""
+    metrics: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class DoneEvent(BaseEvent):
     type: Literal["done"] = "done"
     stop_reason: str | None = None
@@ -154,6 +162,7 @@ class DoneEvent(BaseEvent):
     compaction_llm_calls: int = 0
     final_synthesis_llm_calls: int = 0
     total_llm_calls: int = 0
+    workflow_metrics: dict[str, Any] = field(default_factory=dict)
 
 
 AgentEvent: TypeAlias = (
@@ -168,6 +177,7 @@ AgentEvent: TypeAlias = (
     | SkillActiveEvent
     | MemoryRecallEvent
     | DoneEvent
+    | WorkflowProgressEvent
 )
 
 
@@ -210,6 +220,7 @@ __all__ = [
     "SkillActiveEvent",
     "MemoryRecallEvent",
     "DoneEvent",
+    "WorkflowProgressEvent",
 
     "AssistantText",
     "AssistantDelta",

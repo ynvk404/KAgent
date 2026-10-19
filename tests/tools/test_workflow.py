@@ -1030,7 +1030,8 @@ async def test_start_validation_rejects_terminal_whole_target_candidate_without_
     reopened = await run_workflow_fixture(tool, {
         "action": "start_validation", "candidate_id": candidate.id,
     }, None, AlwaysAllow())
-    assert json.loads(reopened)["candidate"]["status"] == "validating"
+    assert "WHOLE_TARGET_VALIDATION_PREREQUISITE" in reopened
+    assert candidate.status == "queued" and not state.attempts
 
     state.set_candidate_status(candidate.id, "validated")
     state.objective = WorkflowObjective(
@@ -1051,7 +1052,7 @@ async def test_start_validation_allows_broken_terminal_evidence_to_be_repaired(t
     state = WorkflowState(objective=objective)
     candidate, _ = state.add_candidate(Candidate(
         candidate_class="sql-injection", target="https://target.test",
-        endpoint="/search", objective_id=objective.id,
+        endpoint="/search", method="GET", parameter="q", location="query", objective_id=objective.id,
     ))
     proof = tmp_path / "proof.md"
     proof.write_text("first proof bytes", encoding="utf-8")
@@ -1065,6 +1066,11 @@ async def test_start_validation_allows_broken_terminal_evidence_to_be_repaired(t
         state, Target("https://target.test"), evidence_root=tmp_path,
     )
 
+    skills = SkillRegistry()
+    skills.load_dir('skills')
+    tool.skills = skills
+    from tests.helpers.workflow import prepare_validation_prerequisites
+    await prepare_validation_prerequisites(tool, candidate.id)
     reopened = await run_workflow_fixture(tool, {
         "action": "start_validation", "candidate_id": candidate.id,
     }, None, AlwaysAllow())

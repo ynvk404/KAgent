@@ -17,7 +17,7 @@ from src.workflow.goals import RequestedGoal
 from src.workflow.state import Candidate, PHASE_COVERAGE_DIMENSIONS, WorkflowObjective, WorkflowState
 from src.tools.common.outcome import ToolOutput
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, ScriptedModel, collect
-from tests.helpers.workflow import record_phase_coverage_for_test
+from tests.helpers.workflow import record_phase_coverage_for_test, prepare_validation_prerequisites
 from tests.security.test_agent_assessment import ASSESSMENT, setup
 from tests.security.test_execution_policy import ORIGIN, runtime  # noqa: F401
 
@@ -49,6 +49,8 @@ async def complete_discovery(tool: WorkflowTool, root: Path):
         ('enumeration', 'web-enumeration'),
         ('input_analysis', 'web-input-analysis'),
     ):
+        if phase in tool.state.completed_phases():
+            continue
         # Use the runtime's canonical target slug, rather than fixture assumptions.
         from src.skills.artifacts import completion_artifact_path
         record = tool.skills.get(skill)
@@ -59,16 +61,16 @@ async def complete_discovery(tool: WorkflowTool, root: Path):
         path.write_text('Bounded offline discovery review; no additional inputs discovered.')
         await record_phase_coverage_for_test(tool, phase)
         result = json.loads(await tool.run({'action': 'complete_skill', 'skill_name': skill,
-            'artifact_ref': artifact, 'no_inputs_discovered': phase == 'input_analysis'}, None, AlwaysAllow()))
+            'artifact_ref': artifact, 'no_inputs_discovered': phase == 'input_analysis' and not tool.state.objective_inputs()}, None, AlwaysAllow()))
         assert result['ok']
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['whole_target', 'direct', 'candidate_validation'])
 async def test_early_validation_does_not_complete_discovery(runtime, tmp_path, mode):
-    state, candidate, tool, args, _ = await setup(runtime, tmp_path, candidate_class='sqli')
+    state, candidate, tool, args, _ = await setup(runtime, tmp_path, candidate_class='sqli', mode=mode)
     assert state.objective is not None
-    # setup admits validation before any discovery; exercise each assignment mode.
+    # Whole-target now satisfies bounded prerequisites; Direct modes still need no discovery.
     if mode != 'whole_target':
         state.objective.mode = mode
         state.objective.candidate_id = candidate.id if mode == 'candidate_validation' else None
@@ -76,13 +78,14 @@ async def test_early_validation_does_not_complete_discovery(runtime, tmp_path, m
     started = json.loads(await registry.execute('workflow', {'action': 'start_validation', 'candidate_id': candidate.id}, None, p))
     assert started['ok'] and started['validation_context']['attempt_id'] == args['attempt_id']
     result = json.loads(await registry.execute('workflow', {**args, 'outcome': 'not-confirmed'}, None, p))
-    assert result['ok'] and not state.completed_phases()
+    assert result['ok']
+    assert state.completed_phases() == (frozenset({'recon', 'enumeration'}) if mode == 'whole_target' else frozenset())
     assert tool.validation_completion_error(candidate.id, policy) is None
     agent = agent_for(runtime, tool, state)
     assert not agent._validation_completion_blockers()
     if mode == 'whole_target':
         status, actions, _ = agent._whole_target_state()
-        assert status == 'actionable' and actions == ('phase:recon',)
+        assert status == 'actionable' and actions == ('phase:input_analysis',)
     else:
         assert agent._whole_target_state() == ('not_applicable', (), ())
 
@@ -115,6 +118,7 @@ async def test_completion_uses_all_current_obligations(runtime, tmp_path, fault)
     elif fault in {'browser-required', 'insufficient-evidence'}:
         other, _ = state.add_candidate(Candidate('xss', target=ORIGIN, endpoint='/other',
             method='GET', parameter='q', location='query', objective_id=state.objective.id))
+        await prepare_validation_prerequisites(tool, other.id)
         started = json.loads(await registry.execute('workflow', {'action': 'start_validation',
             'candidate_id': other.id}, None, p))
         assert started['ok']
@@ -231,6 +235,7 @@ async def test_xss_distinct_api_dom_stored_hypotheses_use_existing_identity(runt
         duplicate = json.loads(await registry.execute('workflow', request, None, p))
         assert not duplicate['created'] and duplicate['candidate']['id'] == record['candidate']['id']
         cid = record['candidate']['id']
+        await prepare_validation_prerequisites(tool, cid)
         started = json.loads(await registry.execute('workflow', {'action': 'start_validation', 'candidate_id': cid}, None, p))
         assert started['ok']
         closed = json.loads(await registry.execute('workflow', {'action': 'record_result', 'candidate_id': cid,
@@ -262,6 +267,7 @@ async def test_exhaustion_continues_only_independent_whole_target_work(runtime, 
         state.objective.candidate_id = candidate.id if mode == 'candidate_validation' else None
     independent, _ = state.add_candidate(Candidate('sqli', target=ORIGIN, endpoint='/independent',
         method='GET', parameter='q', location='query', objective_id=state.objective.id))
+    await prepare_validation_prerequisites(tool, independent.id)
     budget = budget_for(state, candidate.id, create=True)
     budget.update(rejections=3 if when == 'start' else 2, closure_args={'skill_name': 'cross-site-scripting'})
     client = FakeClient(([response({**args, 'observation_ids': []})] if when == 'batch' else []) + [
@@ -272,7 +278,7 @@ async def test_exhaustion_continues_only_independent_whole_target_work(runtime, 
     agent = agent_for(runtime, tool, state, client)
     # Keep discovery open but unavailable so only the independent candidate is actionable.
     assert tool.skills is not None
-    tool.skills.set_disabled('recon', True)
+    tool.skills.set_disabled('web-input-analysis', True)
     events = collect()
     await agent.run('Continue current validation.', FakeSignal(), events['sink'])
     assert result_for(state, candidate.id).outcome == 'insufficient-evidence'
@@ -319,6 +325,7 @@ async def test_independent_candidate_can_finish_with_production_evidence(runtime
     registry, p, policy, *_ = runtime
     other, _ = state.add_candidate(Candidate('sqli', target=ORIGIN, endpoint='/independent',
         method='GET', parameter='q', location='query', objective_id=state.objective.id))
+    await prepare_validation_prerequisites(tool, other.id)
     await complete_discovery(tool, tmp_path)
     budget = budget_for(state, exhausted.id, create=True)
     budget.update(rejections=3 if when == 'start' else 2, closure_args={'skill_name': 'cross-site-scripting'})
@@ -467,6 +474,7 @@ async def test_policy_failure_in_exhausting_batch_prevents_independent_continuat
     assert state.objective is not None
     independent, _ = state.add_candidate(Candidate('sqli', target=ORIGIN, endpoint='/independent',
         method='GET', parameter='q', location='query', objective_id=state.objective.id))
+    await prepare_validation_prerequisites(tool, independent.id)
     budget = budget_for(state, candidate.id, create=True)
     budget.update(rejections=2, closure_args={'skill_name': 'cross-site-scripting'})
     denied_path = tmp_path.parent / 'outside-fixture.txt'
@@ -512,7 +520,10 @@ async def test_api_json_only_negative_is_bounded_without_forcing_browser(runtime
 
 @pytest.mark.asyncio
 async def test_scripted_agent_corrects_coverage_arguments_without_http(runtime, tmp_path):
-    state, _, tool, _, _ = await setup(runtime, tmp_path)
+    state, _, tool, _, _ = await setup(runtime, tmp_path, mode="direct")
+    # Legacy owned active Attempt recovery keeps discovery independent.
+    assert state.objective is not None
+    state.objective.mode = "whole_target"
     before_requests = len(runtime[4])
 
     def script():

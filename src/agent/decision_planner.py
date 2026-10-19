@@ -34,6 +34,7 @@ class PlannerCandidate:
     evidence_count: int = 0
     coverage_synced: bool | None = None
     generic_startable: bool | None = None
+    validation_ready: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,11 @@ class PlannerContext:
     requested_goals: tuple[PlannerGoal, ...] = ()
     goal_validation_routes: dict[str, ValidationRoute] = field(default_factory=dict)
     selected_capture_ids: tuple[str, ...] = ()
+    repair_candidate_ids: tuple[str, ...] = ()
+    pending_source_count: int = 0
+    selected_pending_source_count: int = 0
+    next_source_id: str | None = None
+    next_source_selected: bool = False
 
     @property
     def structured_phase(self) -> str | None:
@@ -341,10 +347,37 @@ def build_decision_plan(
     )
 
 
+def source_frontier_guidance(context: PlannerContext) -> str:
+    """One exact metadata reference; never select, fetch, or certify a source."""
+    if context.objective_mode != "whole_target" or not context.next_source_id:
+        return ""
+    action = "get_source" if context.next_source_selected else "select_source"
+    timing = "After recon completion, " if context.structured_phase == "recon" else "Next, "
+    return (
+        f"\nFrontier pending={context.pending_source_count}, selected_pending={context.selected_pending_source_count}. "
+        + timing + f'workflow(action="{action}", discovery_source_id="{context.next_source_id}"). '
+        "Then get_source for retained_ref/limitations; process_source with a supported extractor, or "
+        "set_source_disposition with truthful reason/bounds. Truncated bytes remain partial; never fabricate provenance."
+    )
+
+
 def build_whole_target_plan(
     skills: List[Skill], context: PlannerContext
 ) -> DecisionPlan | None:
     """Recommend one bounded next step from current structured workflow state."""
+    active = next((c for c in context.candidates if c.status == "validating"), None)
+    repair_id = active.id if active else next(iter(context.repair_candidate_ids), None)
+    if repair_id:
+        route = context.validation_routes.get(repair_id)
+        return DecisionPlan(
+            route.skill_name if route and route.kind == "expert" else None,
+            "current attempt recovery precedes discovery", "normal", [],
+            "Decision planner guidance for this turn:\n"
+            f"Continue candidate {repair_id}; inspect workflow list for its owned Attempt, observations and recovery status. "
+            "Load its validator playbook if needed. Save minimal proof, record_evidence, copy evidence.id (ev_...), "
+            "then record_result with the honest outcome. Respect probing_stopped and the existing recovery budget. "
+            "Do not start new discovery or borrow sources during this recovery.", candidate_id=repair_id,
+        )
     if context.workflow_status == "blocked":
         for candidate in context.candidates:
             route = context.validation_routes.get(candidate.id)
@@ -353,89 +386,6 @@ def build_whole_target_plan(
         return None
     if context.workflow_status in {"completed", "not_applicable"}:
         return None
-
-    phase_skills = (
-        ("recon", "recon"),
-        ("enumeration", "web-enumeration"),
-        ("input_analysis", "web-input-analysis"),
-    )
-    for phase, skill_name in phase_skills:
-        if phase != context.structured_phase:
-            continue
-        skill = next(
-            (
-                item for item in skills
-                if item.name == skill_name and not item.disable_model_invocation
-            ),
-            None,
-        )
-        if skill is None:
-            if phase in context.completed_phases:
-                # An unavailable artifact-repair playbook cannot suppress
-                # existing owned validation/recovery work. Runtime completion
-                # still requires the missing canonical artifact.
-                continue
-            return None
-        reason = f"whole-target objective {context.objective_id} requires {phase}"
-        readiness = context.phase_completion_readiness
-        completion_guidance = ""
-        if (
-            readiness is not None and readiness.get("ready") is True
-            and readiness.get("phase") == phase
-            and readiness.get("skill_name") == skill.name
-        ):
-            extra = (
-                ", no_inputs_discovered=true"
-                if readiness.get("no_inputs_discovered") else ""
-            )
-            completion_guidance = (
-                "\nThe runtime phase gate is ready. Call "
-                f"workflow(action=\"complete_skill\", skill_name=\"{skill.name}\", "
-                f"artifact_ref=\"{readiness['artifact_ref']}\"{extra}). "
-                "The workflow tool will validate the completion."
-            )
-        return DecisionPlan(
-            recommended_skill=skill.name,
-            reason=reason,
-            risk="normal",
-            checklist=[
-                "Stay within the current target origin.",
-                "Use the phase playbook and commit its bounded result with workflow.",
-            ],
-            guidance=(
-                "Decision planner guidance for this turn:\n"
-                f"Active objective: whole-target assessment {context.objective_id} "
-                f"for {context.target_origin}.\n"
-                f"Next bounded phase: {skill.name} ({phase}).\n"
-                "Follow the skill playbook. Runtime structured state controls "
-                "completion; this recommendation is guidance."
-                + completion_guidance
-            ),
-        )
-
-    if context.pending_input_count > 0:
-        skill = next(
-            (
-                item for item in skills
-                if item.name == "web-input-analysis"
-                and not item.disable_model_invocation
-            ),
-            None,
-        )
-        if skill is not None:
-            return DecisionPlan(
-                recommended_skill=skill.name,
-                reason=f"{context.pending_input_count} discovered inputs remain pending analysis",
-                risk="normal",
-                checklist=["Close each discovered input with a structured disposition."],
-                guidance=(
-                    "Decision planner guidance for this turn:\n"
-                    f"Active objective: whole-target assessment {context.objective_id}.\n"
-                    f"Next bounded phase: {skill.name}; "
-                    f"{context.pending_input_count} inputs remain pending.\n"
-                    "Record candidates and input dispositions through workflow."
-                ),
-            )
 
     if context.coverage_sync_candidate_ids:
         candidate_id = context.coverage_sync_candidate_ids[0]
@@ -528,6 +478,126 @@ def build_whole_target_plan(
                 "cleanup_state=requires-user-action and leave the objective blocked."
             ),
             candidate_id=candidate_id,
+        )
+
+    # A bounded analyzed input can validate while other inputs/sources remain pending.
+    ready = next(iter(sorted(
+        (c for c in context.candidates if c.validation_ready is True and c.status in {"new", "queued"}),
+        key=lambda c: ({"queued": 1, "new": 2}.get(c.status, 3),
+                       {"high": 0, "medium": 1, "low": 2}.get(c.priority or "", 3), c.id),
+    )), None) if context.structured_phase == "input_analysis" else None
+    if ready:
+        route = context.validation_routes.get(ready.id)
+        if route and route.kind != "expert":
+            return _route_plan(ready, route)
+        validators = _validation_skills_for_class(skills, ready.candidate_class)
+        if len(validators) == 1:
+            name = validators[0].name
+            return DecisionPlan(name, "analyzed linked input is ready for bounded validation", "normal", [],
+                "Decision planner guidance for this turn:\n"
+                f'Load load_skill(name="{name}") if needed, then workflow(action="start_validation", candidate_id="{ready.id}"). '
+                "Only this analyzed input is ready; other pending discovery/input obligations remain open. "
+                "Follow the validator, evidence and permission gates.", candidate_id=ready.id)
+
+    source_guidance = source_frontier_guidance(context)
+    phase_skills = (
+        ("recon", "recon"),
+        ("enumeration", "web-enumeration"),
+        ("input_analysis", "web-input-analysis"),
+    )
+    for phase, skill_name in phase_skills:
+        if phase != context.structured_phase:
+            continue
+        skill = next(
+            (
+                item for item in skills
+                if item.name == skill_name and not item.disable_model_invocation
+            ),
+            None,
+        )
+        if skill is None:
+            if phase in context.completed_phases:
+                # An unavailable artifact-repair playbook cannot suppress
+                # existing owned validation/recovery work. Runtime completion
+                # still requires the missing canonical artifact.
+                continue
+            return None
+        reason = f"whole-target objective {context.objective_id} requires {phase}"
+        readiness = context.phase_completion_readiness
+        completion_guidance = ""
+        if (
+            readiness is not None and readiness.get("ready") is True
+            and readiness.get("phase") == phase
+            and readiness.get("skill_name") == skill.name
+        ):
+            extra = (
+                ", no_inputs_discovered=true"
+                if readiness.get("no_inputs_discovered") else ""
+            )
+            completion_guidance = (
+                "\nThe runtime phase gate is ready. Call "
+                f"workflow(action=\"complete_skill\", skill_name=\"{skill.name}\", "
+                f"artifact_ref=\"{readiness['artifact_ref']}\"{extra}). "
+                "The workflow tool will validate the completion."
+            )
+        return DecisionPlan(
+            recommended_skill=skill.name,
+            reason=reason,
+            risk="normal",
+            checklist=[
+                "Stay within the current target origin.",
+                "Use the phase playbook and commit its bounded result with workflow.",
+            ],
+            guidance=(
+                "Decision planner guidance for this turn:\n"
+                f"Active objective: whole-target assessment {context.objective_id} "
+                f"for {context.target_origin}.\n"
+                f"Next bounded phase: {skill.name} ({phase}).\n"
+                + (f'Load the current playbook with load_skill(name="{skill.name}") before phase work. '
+                 if skill.name not in context.active_skills else "")
+                + "Follow the skill playbook. Runtime structured state controls "
+                "completion; this recommendation is guidance."
+                + completion_guidance
+                + ("\nPhase requirements: " + str({
+                    "artifact_ref": readiness.get("artifact_ref"),
+                    "artifact_valid": readiness.get("artifact_valid"),
+                    "coverage": readiness.get("required_coverage"),
+                    "reason": readiness.get("reason"),
+                }) if readiness else "")
+                + (source_guidance if not readiness or not readiness.get("ready") else "")
+            ),
+        )
+
+    if context.pending_input_count > 0:
+        skill = next(
+            (
+                item for item in skills
+                if item.name == "web-input-analysis"
+                and not item.disable_model_invocation
+            ),
+            None,
+        )
+        if skill is not None:
+            return DecisionPlan(
+                recommended_skill=skill.name,
+                reason=f"{context.pending_input_count} discovered inputs remain pending analysis",
+                risk="normal",
+                checklist=["Close each discovered input with a structured disposition."],
+                guidance=(
+                    "Decision planner guidance for this turn:\n"
+                    f"Active objective: whole-target assessment {context.objective_id}.\n"
+                    f"Next bounded phase: {skill.name}; "
+                    f"{context.pending_input_count} inputs remain pending.\n"
+                    "Record candidates and input dispositions through workflow."
+                ),
+            )
+
+    if context.next_source_id and source_guidance:
+        return DecisionPlan(
+            recommended_skill="web-enumeration" if any(s.name == "web-enumeration" for s in skills) else None,
+            reason="pending discovery frontier requires an explicit disposition",
+            risk="normal", checklist=["Inspect the exact admitted source; preserve limitations and bounded stops."],
+            guidance="Decision planner guidance for this turn:" + source_guidance,
         )
 
     goal_plan = _requested_goal_plan(context, skills, whole_target=True)

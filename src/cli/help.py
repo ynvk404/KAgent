@@ -18,6 +18,15 @@ Flags:
   --theme <dark|light>       TUI theme for this invocation (default: dark)
   --base-url <url>
   --target <url>            set active target and default origin scope
+  --prompt-file <path>      UTF-8 user draft, max 64 KiB; TUI waits for Enter
+  --headless                explicit one-turn mode; never inferred from non-TTY
+  --interactive             headless terminal questions/reviews; requires TTY
+  --non-interactive         headless fail-closed input mode (default); never reads stdin
+  --execute-prompt          required with --headless and --prompt-file
+  --headless-output <dir>   private events/metrics directory (headless only)
+                             No operator: reviews/ask_user fail closed.
+                             YOLO remains opt-in and requires a finite HTTP grant.
+                             Headless disables shell/bash/web_search; no auto-continue.
   --api-key <key>
   --skills <dirs>            comma-separated extra skill directories
   --scanner-wordlist ID=FILE register an existing local wordlist for this session

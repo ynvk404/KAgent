@@ -26,7 +26,7 @@ from src.workflow.state import (
     AttackSurfaceInput, Candidate, ValidationResult, WorkflowObjective, WorkflowState,
     validation_result_fingerprint, WorkflowMode,
 )
-from tests.helpers.workflow import record_completed_phase
+from tests.helpers.workflow import record_completed_phase, prepare_validation_prerequisites
 from tests.helpers.agent_fakes import FakeClient
 
 ORIGIN = "https://target.test"
@@ -529,6 +529,7 @@ async def linked_whole_target_retest(tmp_path):
         response = await call(tool, "record_candidate", candidate_class="xss",
                               input_id=item["id"], **geometry)
         c = state.candidates[response["candidate"]["id"]]
+        await prepare_validation_prerequisites(tool, c.id)
         assert (await call(tool, "start_validation", candidate_id=c.id))["ok"]
         assert (await record(tool, c))["coverage_sync"] == "synced"
         candidates.append(c)

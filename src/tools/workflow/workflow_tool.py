@@ -183,13 +183,13 @@ class WorkflowTool(Tool):
             "record_result needs candidate_id, skill_name and outcome. "
             "Runtime owns IDs/scope; record_candidate must omit them and objective_id. "
             "Use returned IDs, real evidence; omit secrets. "
-            "Only start_validation enters validating. Usable sources -> record_evidence -> "
+            "Only start_validation enters validating. Usable owned sources -> file_write redacted proof outside artifacts/findings -> record_evidence -> copy evidence.id (ev_...) -> "
             "record_result -> confirm_finding (accepted confirmed only). "
             "Active-attempt conflict: list validating work; record its honest result "
             "or insufficient-evidence/deferred with reason before starting another candidate. "
             "mutation_performed: verified writes; cleanup needs separate authority. Samples aren't replay baselines.\n"
             "For primary-only validation, prefer start_validation with candidate_id alone when the Candidate covers "
-            "the primary request and current prerequisites are met; Generic still needs an admitted probe/proposal. "
+            "the primary request and current prerequisites are met. Whole-target new Attempts require completed Recon/Enumeration and a linked analyzed input; Direct and owned active Attempt recovery keep their existing admission. Generic still needs an admitted probe/proposal. "
             "related_requests is optional supplementary method/URL associations, not individual payload observations.\n"
             '{"action":"record_candidate","candidate_class":"sqli","endpoint":"/login","method":"POST","parameter":"email"}\n'
             '{"action":"start_validation","candidate_id":"<returned candidate.id>"}'
@@ -360,7 +360,8 @@ class WorkflowTool(Tool):
                 'Example: {"action":"start_validation","candidate_id":"<returned candidate.id>"}'),
             'attempt_id': 'Runtime ID from start_validation; cannot assign an attempt. record_result only; omit from record_evidence.',
             'assessment': 'hypothesis,criteria,limitations,completed_attempt,observed_impact,severity.',
-            'evidence_path': 'Project proof; shared Candidate headings; parent observation IDs.',
+            'evidence_path': 'Existing project proof file, written first with file_write outside artifacts/findings. Registration reads this file; it does not create it. Use returned evidence.id (ev_...) in record_result.evidence_refs, never the path.',
+            'evidence_refs': 'Canonical ev_... IDs returned as evidence.id by record_evidence for this Candidate. Never a file path or obs_ ID.',
             'request_template': 'Redacted body skeleton; mark {INJECTION_POINT}.',
             'status': 'Registration/list status; not used by record_result. Only start_validation owns validating; never register validating.',
             'observation_ids': 'Exact HTTP/authoritative evidence IDs matching candidate, attempt and request. Terminal sources: complete, untruncated, completed.',
@@ -432,6 +433,10 @@ class WorkflowTool(Tool):
                               status='error', error_kind='invalid_args')
         missing = [key for key in ACTION_REQUIRED.get(action, ()) if not arg_string(args, key)]
         if missing:
+            if action == 'record_evidence' and 'evidence_path' in missing:
+                return self._workflow_error('record_evidence requires ' + ', '.join(missing),
+                    code='MISSING_EVIDENCE_PATH', category='argument_error',
+                    next_action='Write minimal redacted proof with file_write outside artifacts/findings, then pass that existing project-relative file as evidence_path. Registration returns evidence.id (ev_...) for record_result.evidence_refs.')
             if action == 'get_input':
                 return ToolOutput('error: get_input requires exact input_id from record_input/list',
                                   status='error', error_kind='invalid_args')
@@ -949,6 +954,58 @@ class WorkflowTool(Tool):
             return f"error: {err}"
         return json.dumps({"ok": True, "input": item.to_dict()}, indent=2)
 
+    def validation_admission_error(self, candidate_id: str, policy=None) -> str | None:
+        """Whole-target new-attempt prerequisites; no mutation or execution authority.
+
+        Historical completion markers retain their existing coverage contract.
+        Late source/input obligations do not reopen those phases or prevent a
+        bounded validation of an already analyzed, compatible linked input.
+        """
+        objective = self.state.objective
+        if objective is None or objective.mode != "whole_target":
+            return None
+        candidate = self.state.candidates.get(candidate_id)
+        if candidate is None:
+            return "Candidate unavailable"
+        try:
+            self._validate_current_objective_candidate(candidate_id)
+        except ValueError:
+            return "Candidate must match the current objective and target"
+        epoch = policy.engagement.http_permissions.epoch if policy else self.evidence_epoch
+        ownership = {
+            "candidate_id": candidate.id, "candidate_binding": candidate_binding(candidate),
+            "session_id": self.session_id, "objective_id": objective.id, "epoch": epoch,
+            "target_origin": candidate_origin(self._active_target()),
+            "target_revision": self.target.revision if self.target else None,
+            "result_position": sum(r.candidate_id == candidate_id for r in self.state.validation_results),
+        }
+        if candidate.status == "validating" and any(
+            row.get("status") == "active" and all(row.get(key) == value for key, value in ownership.items())
+            for row in self.state.attempts.values()
+        ):
+            return None  # Resume only the same owned active attempt; not a status-only bypass.
+        for phase, name in (("recon", "recon"), ("enumeration", "web-enumeration")):
+            marker = self.state.phase_completions.get(f"{objective.id}:{phase}")
+            if marker is None or phase not in self.state.completed_phases(objective):
+                return f"{phase} must complete before a new Whole-target validation attempt"
+            readiness = self.phase_completion_readiness(name, artifact_ref=marker.artifact_ref)
+            if not readiness["artifact_valid"]:
+                return f"{phase} canonical artifact requires repair before new validation"
+        for item in self.state.objective_inputs():
+            if candidate_id not in item.candidate_ids or item.disposition != "analyzed":
+                continue
+            try:
+                self.state.validate_input_candidate(item.id, candidate)
+            except ValueError:
+                continue
+            return None
+        return "Candidate requires a compatible analyzed input linked in the current objective and target"
+
+    def _validation_prerequisite_error(self, reason: str) -> ToolOutput:
+        return self._workflow_error(reason, code="WHOLE_TARGET_VALIDATION_PREREQUISITE",
+            category="missing_prerequisite",
+            next_action="Inspect current phase readiness and load its playbook. Complete Recon/Enumeration through their canonical artifacts and coverage contract; analyze and link this exact input. Early Candidate recording is allowed. Do not invent completion, source_skill or current_phase receipts. Other inputs/sources and the entire Input Analysis phase need not finish. An owned active Attempt keeps its existing recovery path; Direct admission is unchanged.")
+
     async def _start_validation(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
         candidate_id = arg_string(args, "candidate_id")
         try:
@@ -975,6 +1032,11 @@ class WorkflowTool(Tool):
                 if any(c.id != candidate_id and c.status == "validating"
                        for c in policy.generic_validation.candidates()):
                     raise ValueError("another generic validation attempt is active")
+            # Preserve terminal retest/evidence-read refusals before the new gate.
+            latest = self.state.latest_result(candidate_id)
+            if latest is None or latest.outcome not in {"confirmed", "not-confirmed"}:
+                if reason := self.validation_admission_error(candidate_id, policy):
+                    return self._validation_prerequisite_error(reason)
             generic = self._is_generic(candidate)
             if generic:
                 self._require_generic(candidate_id, policy)
@@ -1056,6 +1118,9 @@ class WorkflowTool(Tool):
             context = resolve_validation_context(
                 self.state, candidate_id, target=self._active_target() or None, http_tool=runtime_http,
             ).to_dict()
+            # Recheck current artifacts/linkage after any evidence-read await.
+            if reason := self.validation_admission_error(candidate_id, policy):
+                return self._validation_prerequisite_error(reason)
             attempt = start_attempt(self.state, candidate, self.session_id,
                 policy.engagement.http_permissions.epoch if policy else self.evidence_epoch,
                 requests=args.get("related_requests"), criteria=args.get("assessment"), target_origin=self._active_target() or None, target_revision=self.target.revision if self.target else None)
@@ -1204,6 +1269,10 @@ class WorkflowTool(Tool):
             raise
         except EvidenceSubmissionError as err:
             return err.response("record_evidence")
+        except FileNotFoundError:
+            return self._workflow_error('evidence source file does not exist',
+                code='MISSING_EVIDENCE_FILE', category='missing_prerequisite',
+                next_action='First create the parent directory and write minimal redacted proof with file_write outside artifacts/findings. Then record_evidence with that existing evidence_path and the current Attempt owned observation_ids. Copy returned evidence.id (ev_...) into record_result.evidence_refs. Registration does not create the source file or a Finding.')
         except (OSError, ValueError) as err:
             return f"error: {err}"
         return json.dumps({"ok": True, "evidence": artifact.to_dict(), "evidence_kind": "derived", "primary_parents": ids}, indent=2)

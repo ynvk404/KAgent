@@ -20,6 +20,7 @@ from src.workflow.state import WorkflowState
 from src.tools.http.http_tool import HTTPTool
 from src.tools.common.tool_result import ReadHTTPObservation
 from tests.helpers.agent_fakes import FakeSignal, collect
+from tests.helpers.workflow import prepare_validation_prerequisites
 from tests.benchmarks.test_scenario1 import (
     ASSESSMENT, ScriptedClient, isolated_project_environment, mock_http, op, settings,
 )
@@ -36,8 +37,32 @@ async def active_case(op, settings, root, *, whole=False):
     agent._initialize_request_objective(prompt(cid, op), True)
     if whole:
         assert agent.workflow.objective is not None
+        assert agent.workflow.objective.target_origin is not None
         agent.workflow.objective.mode = 'whole_target'
         agent.workflow.candidates[cid].objective_id = agent.workflow.objective.id
+        # This closure fixture starts a new Whole-target Attempt through real gates.
+        from src.skills.registry import Registry as Skills
+        from src.tools.workflow.workflow_tool import WorkflowTool
+        discovery = Skills()
+        discovery.load_dir('skills')
+        tool = agent.tools.get('workflow')
+        assert isinstance(tool, WorkflowTool) and tool.skills is not None
+        for name in ('recon', 'web-enumeration'):
+            skill = discovery.get(name)
+            assert skill is not None
+            tool.skills.add(skill)
+        # record_input expands relative paths against the application base;
+        # preserve this Candidate's origin-root endpoint as an absolute URL.
+        from src.target.input_admission import canonical_endpoint
+        candidate = agent.workflow.candidates[cid]
+        item = json.loads(await tool.run({'action': 'record_input', 'method': candidate.method,
+            'endpoint': canonical_endpoint(candidate.endpoint, agent.workflow.objective.target_origin),
+            'parameter': candidate.parameter, 'location': candidate.location,
+            'content_type': candidate.content_type}, None, agent.prompter))['input']
+        linked = await tool.run({'action': 'link_input_candidate', 'input_id': item['id'],
+                                 'candidate_id': cid}, None, agent.prompter)
+        assert json.loads(linked)['ok'], linked
+        await prepare_validation_prerequisites(tool, cid)
     agent.active_skills.add(op.vulnerability_class)
     started = json.loads(await agent.tools.execute('workflow', {
         'action': 'start_validation', 'candidate_id': cid, 'assessment': ASSESSMENT}, None, agent.prompter))

@@ -20,7 +20,7 @@ from src.skills.registry import Registry as Skills
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.workflow.probe import ProbeProposal
-from src.workflow.state import AttackSurfaceInput, WorkflowState, WorkflowObjective, WorkflowMode
+from src.workflow.state import AttackSurfaceInput, WorkflowState, WorkflowObjective, WorkflowMode, WorkflowPhase
 from src.workflow.validation_route import GENERIC_VALIDATOR
 from tests.helpers.agent_fakes import FakeSignal, FakeClient
 from tests.helpers.workflow import record_completed_phase
@@ -34,9 +34,23 @@ async def custom_env(runtime, tmp_path, shape="json", mode: WorkflowMode="direct
     skills, state = Skills(), WorkflowState()
     state.objective = WorkflowObjective("custom-objective", mode, ORIGIN)
     if mode == "whole_target":
-        for phase in ("recon", "enumeration", "input_analysis"):
+        from src.skills.artifacts import completion_artifact_path
+        discovery = Skills()
+        discovery.load_dir('skills')
+        phase_skills: tuple[tuple[WorkflowPhase, str], ...] = (
+            ("recon", "recon"), ("enumeration", "web-enumeration"),
+            ("input_analysis", "web-input-analysis"),
+        )
+        for phase, name in phase_skills:
+            skill = discovery.get(name)
+            assert skill is not None and skill.completion_artifact
+            skills.add(skill)
+            ref = completion_artifact_path(skill.completion_artifact, ORIGIN)
+            path = tmp_path / ref
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('Explicit bounded consumer fixture; no performed coverage claimed.')
             record_completed_phase(state, phase, objective_id=state.objective.id,
-                                   target_origin=ORIGIN, artifact_ref="fixture.md")
+                                   target_origin=ORIGIN, artifact_ref=ref)
     tool = WorkflowTool(state, target, skills=skills, evidence_root=tmp_path,
                         coverage=CoverageStore(str(tmp_path / "coverage.json")))
     registry.register(tool)
@@ -71,6 +85,7 @@ async def custom_env(runtime, tmp_path, shape="json", mode: WorkflowMode="direct
             target_origin=ORIGIN, method=method, endpoint=endpoint, parameter=parameter, location=shape,
             content_type=content_type or None, baseline_request_ref=ingested['baseline_request_ref']))
         state.link_input_candidate(item.id, c.id)
+        state.set_input_disposition(item.id, "analyzed")
     assert c.endpoint and c.method and c.location and c.parameter and state.objective.target_origin
     env = registry, p, policy, operator, state, c, tool, recorded
     probe = ProbeProposal(c.id, state.objective.id, state.objective.target_origin,

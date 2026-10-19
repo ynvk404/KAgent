@@ -127,6 +127,7 @@ from src.agent.events import (
     ToolStartedEvent,
     ErrorEvent,
     DoneEvent,
+    WorkflowProgressEvent,
     DecisionEvent,
     MemoryRecallEvent,
     SkillActiveEvent,
@@ -169,6 +170,7 @@ _EVENT_FACTORIES = {
     "skill-active": SkillActiveEvent,
     "memory-recall": MemoryRecallEvent,
     "done": DoneEvent,
+    "workflow-progress": WorkflowProgressEvent,
 }
 
 _KEY_ALIASES = {
@@ -849,6 +851,7 @@ class WholeTargetStallTracker:
         self.response_repetitions: dict[str, int] = {}
         self.completion_recovery_used = False
         self.scope: tuple | None = None
+        self.last_credit: dict[str, int] = {}
 
     def set_scope(self, generation: str, objective_id: str | None) -> None:
         scope = (generation, objective_id)
@@ -877,6 +880,7 @@ class WholeTargetStallTracker:
         available = max(0, self.MAX_NOVELTY_FACTS - len(self.seen_facts))
         novel_facts = sorted(new_facts - self.seen_facts)[:available]
         self.seen_facts.update(novel_facts)
+        self.last_credit = {"credited_new_facts": len(novel_facts), "novel_activities": 0}
         if novel_facts:
             self.consecutive_no_progress = 0
             self.phase_exploration_steps = 0
@@ -887,6 +891,7 @@ class WholeTargetStallTracker:
         available = max(0, self.MAX_NOVELTY_FACTS - len(self.seen_fingerprints))
         novel_fingerprints = sorted(set(activity_fingerprints) - self.seen_fingerprints)[:available]
         self.seen_fingerprints.update(novel_fingerprints)
+        self.last_credit["novel_activities"] = len(novel_fingerprints)
         if novel_fingerprints and self.phase_exploration_steps < self.exploration_cap:
             self.phase_exploration_steps += 1
             self.consecutive_no_progress = 0
@@ -903,6 +908,7 @@ class WholeTargetStallTracker:
         novelty is exploration, with the existing finite allowance. Repeats
         remain possible within the no-progress window for verification/repair.
         """
+        self.last_credit = {"credited_new_facts": 0, "novel_activities": 0}
         fingerprints = []
         new_range = False
         for execution in calls:
@@ -1089,6 +1095,7 @@ class _WorkflowRequestView:
     blocks: tuple[Message, ...]
     signature: str
     decision: Any = None
+    phase_metrics: dict[str, Any] | None = None
 
 
 class AgentOptions:
@@ -1155,6 +1162,7 @@ class Agent:
 
         self._background_tasks: set[asyncio.Task] = set()
         self.request_metrics = MetricsCollector()
+        self._workflow_metrics: dict[str, Any] = {}
         self._llm_call_counts = {
             "agent_loop_llm_calls": 0,
             "compaction_llm_calls": 0,
@@ -2079,7 +2087,15 @@ class Agent:
                                 "tools": projected, "blocks": [(m.role, m.content) for m in blocks]},
                                sort_keys=True, default=lambda value: sorted(value)
                                if isinstance(value, (set, frozenset)) else asdict(value))
-        return _WorkflowRequestView(projected, tuple(blocks), signature, decision)
+        stage = self.skills.get(decision.recommended_skill) if decision and decision.recommended_skill else None
+        readiness = planner.phase_completion_readiness or {}
+        phase_metrics = {
+            "planner_recommended_phase": {"reconnaissance": "recon", "enumeration": "enumeration",
+                "analysis": "input_analysis", "validation": "validation"}.get((stage.stage if stage else None) or ""),
+            "required_phase": planner.structured_phase,
+            "phase_artifact_repair": bool(readiness.get("historically_completed") and not readiness.get("artifact_valid")),
+        }
+        return _WorkflowRequestView(projected, tuple(blocks), signature, decision, phase_metrics)
 
     def _replace_workflow_request_view(self, req: ChatRequest, view: _WorkflowRequestView) -> None:
         owned = {id(message) for message in self._workflow_request_blocks}
@@ -2121,6 +2137,7 @@ class Agent:
             async with self.workflow.mutation_lock:
                 current = self._workflow_request_view(user_msg, self.tools.as_llm_tools())
             if current.signature == view.signature:
+                self._workflow_progress(emit, "request_admitted", **(view.phase_metrics or {}))
                 if view.decision is not None and view.decision.recommended_skill:
                     emit(self._planner_event(view.decision))
                 return
@@ -3527,6 +3544,10 @@ class Agent:
             )
             for goal in (objective.requested_goals if objective is not None else [])
         )
+        pending_sources = sorted(
+            (row for row in self.workflow.objective_sources() if row.disposition == "pending"),
+            key=lambda row: (not row.selected, row.id),
+        ) if whole_target else []
         return PlannerContext(
             selected_capture_ids=tuple(row.retrieval_id for row in selection.requests) if selection else (),
             validation_routes=self._validation_routes(),
@@ -3555,6 +3576,8 @@ class Agent:
                     evidence_count=(len(result.evidence_refs) if result else 0),
                     coverage_synced=(result.coverage_synced if result else None),
                     generic_startable=self._generic_startable(candidate),
+                    validation_ready=(workflow_tool.validation_admission_error(candidate.id, policy_for(self.prompter)) is None
+                                      if whole_target and isinstance(workflow_tool, WorkflowTool) else None),
                 )
                 for candidate in candidates
                 for result in [self.workflow.latest_result(candidate.id)]
@@ -3565,6 +3588,13 @@ class Agent:
             completed_phases=(
                 self.workflow.completed_phases(objective) if whole_target else frozenset()
             ),
+            repair_candidate_ids=tuple(c.id for c in candidates
+                if (budget := current_budget(self.workflow, c.id)) is not None
+                and not budget["closed"] and budget["rejections"] > 0),
+            pending_source_count=len(pending_sources),
+            selected_pending_source_count=sum(row.selected for row in pending_sources),
+            next_source_id=pending_sources[0].id if pending_sources else None,
+            next_source_selected=bool(pending_sources and pending_sources[0].selected),
             pending_input_count=pending_inputs,
             blocked_input_count=blocked_inputs,
             coverage_sync_candidate_ids=sync_candidates,
@@ -3788,6 +3818,7 @@ class Agent:
         )
 
     def _reset_llm_call_counts(self) -> None:
+        self._workflow_metrics = {}
         for name in self._llm_call_counts:
             self._llm_call_counts[name] = 0
 
@@ -3800,6 +3831,7 @@ class Agent:
             "stop_reason": stop_reason,
             **self._llm_call_counts,
             "total_llm_calls": sum(self._llm_call_counts.values()),
+            "workflow_metrics": {**self._workflow_metrics, "stop_reason": stop_reason},
         }
 
     def _trace(self, event: str, **fields: Any) -> None:
@@ -3885,6 +3917,44 @@ class Agent:
             reasoning_content_present=bool(response.message.reasoning_content),
         )
 
+    def _workflow_progress(self, emit, stage: str, **updates: Any) -> None:
+        """Export only controller-generated counters/enums; never affect decisions.
+
+        No planner/state reconciliation here: telemetry must not create progress.
+        Event sinks remain optional and the normal safe emitter isolates failures.
+        """
+        try:
+            self._workflow_metrics.update(updates)
+            objective = self.workflow.objective
+            sources = self.workflow.objective_sources()
+            budgets = [budget for aid, budget in self.workflow.evidence_recovery.items()
+                       if self.workflow.attempts.get(aid, {}).get("objective_id") == (objective.id if objective else None)]
+            phases = self.workflow.completed_phases(objective)
+            self._workflow_metrics.update(
+                objective_mode=objective.mode if objective else None,
+                completed_phases=sorted(phases),
+                frontier_pending=sum(row.disposition == "pending" for row in sources),
+                frontier_selected=sum(row.selected for row in sources),
+                frontier_selected_unresolved=sum(row.unresolved for row in sources),
+                frontier_unselected_pending=sum(not row.selected and row.disposition == "pending" for row in sources),
+                frontier_processed=sum(row.disposition == "processed" for row in sources),
+                frontier_partial=sum(row.disposition == "partial" for row in sources),
+                frontier_blocked=sum(row.disposition == "blocked" for row in sources),
+                frontier_not_applicable=sum(row.disposition == "not_applicable" for row in sources),
+                phase_exploration_cap=MAX_PHASE_EXPLORATION_STEPS,
+                active_skill_phases=sorted({active_phase for name in self.active_skills
+                    if name in self._skill_contracts and self._skill_contracts[name].owner == self._skill_owner()
+                    and (skill := self.skills.get(name)) is not None
+                    and (active_phase := {"reconnaissance": "recon", "enumeration": "enumeration",
+                        "analysis": "input_analysis", "validation": "validation"}.get(skill.stage or "")) is not None}),
+                evidence_rejections=sum(budget["rejections"] for budget in budgets),
+                evidence_repair_turns=sum(budget["repair_turns"] for budget in budgets),
+            )
+            emit({"type": "workflow-progress", "stage": stage, "metrics": deepcopy(self._workflow_metrics)})
+        except Exception:
+            # Diagnostics never replace the runtime result, including cancellation.
+            pass
+
     def _trace_workflow_gate(
         self,
         *,
@@ -3897,7 +3967,18 @@ class Agent:
         consecutive_no_progress: int,
         progress_kind: str,
         phase_exploration_steps: int,
+        emit=None,
+        credit: dict[str, int] | None = None,
     ) -> None:
+        self._workflow_progress(emit, "iteration_evaluated",
+            no_progress=consecutive_no_progress, progress_kind=progress_kind,
+            observed_new_facts=len(after_facts - before_facts),
+            phase_exploration_steps=phase_exploration_steps,
+            stall_threshold=MAX_CONSECUTIVE_NO_PROGRESS,
+            stall_threshold_reached=consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS,
+            workflow_status=status, actionable_count=len(actionable), blocker_count=len(blockers),
+            no_progress_reset_reason=progress_kind if consecutive_no_progress == 0 else None,
+            **(credit or {}))
         self._trace(
             "whole_target_gate",
             step=step,
@@ -3944,6 +4025,9 @@ class Agent:
         self._trace("run_started")
         self.running = True
         self._reset_llm_call_counts()
+        self._workflow_metrics = {"outer_iterations": 0, "no_progress": 0,
+            "validation_rejections": 0, "validation_finalizations": 0,
+            "planner_recommended_phase": None}
         self._turn_client_error = False
         self._pending_context = _TurnContext(None, None, False, None, capture_selection=selection)
         self._workflow_request_blocks = ()
@@ -4034,6 +4118,7 @@ class Agent:
                     self.running = False
                     self._pending_context = None
 
+                    self._workflow_progress(safe_emit, "stopping", stop_reason=stop_reason)
                     self._trace("terminal", stop_reason=stop_reason)
                     safe_emit(self._done_event(stop_reason))
 
@@ -4280,6 +4365,8 @@ class Agent:
 
             if whole_target:
                 stall_tracker.set_phase(self._whole_target_exploration_phase())
+            self._workflow_progress(emit, "iteration_started", outer_iterations=step + 1,
+                max_outer_iterations=max_steps, no_progress_before=stall_tracker.consecutive_no_progress)
             before_goal_signature = (
                 self._requested_goal_progress_signature() if requested_goal_run else ()
             )
@@ -4477,6 +4564,7 @@ class Agent:
                         consecutive_no_progress=stall_tracker.consecutive_no_progress,
                         progress_kind=progress_kind,
                         phase_exploration_steps=stall_tracker.phase_exploration_steps,
+                        emit=emit, credit=stall_tracker.last_credit,
                     )
                     if status == "completed":
                         return await self._whole_target_synthesis(
@@ -4591,6 +4679,10 @@ class Agent:
                         else 0
                     )
                     stall_tracker.consecutive_no_progress = requested_goal_no_progress
+                    self._workflow_progress(emit, "iteration_evaluated", no_progress=requested_goal_no_progress,
+                        progress_kind="no_progress" if requested_goal_no_progress else "structured_progress",
+                        stall_threshold=MAX_CONSECUTIVE_NO_PROGRESS,
+                        stall_threshold_reached=requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS)
                     if requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
                         if self._begin_validation_finalization(stall_tracker, working, step, max_steps):
                             requested_goal_no_progress = 0
@@ -4703,11 +4795,15 @@ class Agent:
                     continue
                 text = str(execution.result.result)
                 if execution.args.get("action") == "start_validation":
+                    if execution.result.status == "error":
+                        self._workflow_metrics["validation_rejections"] = self._workflow_metrics.get("validation_rejections", 0) + 1
                     budget = current_budget(self.workflow, cid)
                     if budget is not None and not budget["closed"] and budget["rejections"]:
                         evidence_recovery[cid] = (None if budget["paused"] else step - budget["repair_turns"],
                                                  budget["rejections"], budget["closure_args"])
                     continue
+                if execution.args.get("action") in {"start_validation", "record_result"} and execution.result.status == "error":
+                    self._workflow_metrics["validation_rejections"] = self._workflow_metrics.get("validation_rejections", 0) + 1
                 repair_kind = evidence_repair_kind(text)
                 if repair_kind == "manifest":
                     registration = execution.args.get("action") == "record_evidence"
@@ -4790,6 +4886,7 @@ class Agent:
                     consecutive_no_progress=stall_tracker.consecutive_no_progress,
                     progress_kind=progress_kind,
                     phase_exploration_steps=stall_tracker.phase_exploration_steps,
+                    emit=emit, credit=stall_tracker.last_credit,
                 )
                 if status == "completed":
                     return await self._whole_target_synthesis(
@@ -4838,6 +4935,7 @@ class Agent:
                         and not stall_tracker.completion_recovery_used
                         and step < max_steps - 1
                     ):
+                        self._workflow_metrics["completion_recoveries"] = self._workflow_metrics.get("completion_recoveries", 0) + 1
                         stall_tracker.completion_recovery_used = True
                         continue
                     return await self._whole_target_synthesis(
@@ -4883,6 +4981,11 @@ class Agent:
                     observations=policy.observations if policy else None,
                 )
                 requested_goal_no_progress = stall_tracker.consecutive_no_progress
+                self._workflow_progress(emit, "iteration_evaluated", no_progress=requested_goal_no_progress,
+                    progress_kind=progress_kind, phase_exploration_steps=stall_tracker.phase_exploration_steps,
+                    stall_threshold=MAX_CONSECUTIVE_NO_PROGRESS,
+                    stall_threshold_reached=requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS,
+                    **stall_tracker.last_credit)
                 self._trace("direct_progress", step=step, progress_kind=progress_kind,
                             consecutive_no_progress=requested_goal_no_progress,
                             exploration_steps=stall_tracker.phase_exploration_steps)
@@ -5042,6 +5145,9 @@ class Agent:
             return False
         attempt["probing_stopped"] = True
         self.workflow.mark_committed()
+        self._workflow_metrics["validation_finalizations"] = self._workflow_metrics.get("validation_finalizations", 0) + 1
+        self._workflow_metrics["no_progress_reset_reason"] = "validation_finalization"
+        self._workflow_metrics["no_progress"] = 0
         tracker.consecutive_no_progress = 0
         working.append(Message("system",
             f"Bounded probing has stopped for attempt {aid}. No more target actions are available for this attempt. "

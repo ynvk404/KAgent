@@ -13,6 +13,7 @@ from src.agent.decision_planner import PlannerCandidate, PlannerContext, build_d
 from src.target.target import Target
 from src.workflow.validation_route import ValidationRoute
 from pathlib import Path
+from tests.helpers.workflow import prepare_validation_prerequisites
 from tests.security.test_execution_policy import runtime
 from tests.security.test_generic_validation import (
     agent_for, bind_context, certificate, evidence, expert, request,
@@ -42,6 +43,7 @@ async def test_expert_status_alone_cannot_release_generic_boundary(runtime, tmp_
         await env[0].execute("http", {"url": "/outside-proposal", "phase": "validation"}, None, env[1])
     assert not runtime[4] and not env[3].requests
     # A real structured expert start still selects independent expert work.
+    await prepare_validation_prerequisites(env[6], cid)
     assert json.loads(await env[0].execute("workflow", {
         "action": "start_validation", "candidate_id": cid}, None, env[1]))["ok"]
     assert (await env[0].execute("http", {"url": "/expert", "phase": "validation"}, None, env[1])).http_status == 200
@@ -74,6 +76,7 @@ async def selected_expert(runtime, tmp_path):
         "endpoint": "/expert", "method": "GET", "parameter": "X-Test",
         "location": "header"}, None, env[1]))
     cid = recorded["candidate"]["id"]
+    await prepare_validation_prerequisites(env[6], cid)
     assert json.loads(await env[0].execute("workflow", {
         "action": "start_validation", "candidate_id": cid}, None, env[1]))["ok"]
     return env, cid

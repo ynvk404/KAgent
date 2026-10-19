@@ -273,6 +273,12 @@ class ParsedFlags:
     list_skills: bool = False
     list_tools: bool = False
     max_steps: int = 0
+    prompt_file: str = ""
+    headless: bool = False
+    interactive: bool = False
+    non_interactive: bool = False
+    execute_prompt: bool = False
+    headless_output: str = ""
     theme: ThemeChoice = "dark"
 
 
@@ -319,6 +325,18 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
             out.backend = next_arg(a)
         elif a == "--model":
             out.model = next_arg(a)
+        elif a == "--prompt-file":
+            out.prompt_file = next_arg(a)
+        elif a == "--headless":
+            out.headless = True
+        elif a == "--interactive":
+            out.interactive = True
+        elif a == "--non-interactive":
+            out.non_interactive = True
+        elif a == "--execute-prompt":
+            out.execute_prompt = True
+        elif a == "--headless-output":
+            out.headless_output = next_arg(a)
         elif a == "--theme":
             theme = next_arg(a)
             if theme not in {"dark", "light"}:
@@ -410,6 +428,22 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
 
     if out.http_lab_grants and not out.accept_unknown_http_effects:
         raise FlagParseError("--http-lab-grant requires explicit --accept-unknown-http-effects. Lab data may be deleted.")
+    if not (out.show_help or out.show_version):
+        if out.interactive and out.non_interactive:
+            raise FlagParseError("--interactive and --non-interactive are mutually exclusive")
+        if (out.interactive or out.non_interactive) and not out.headless:
+            raise FlagParseError("terminal input modes require --headless")
+        if out.execute_prompt and (not out.headless or not out.prompt_file):
+            raise FlagParseError("--execute-prompt requires --headless and --prompt-file")
+        if out.headless_output and not out.headless:
+            raise FlagParseError("--headless-output requires --headless")
+        if out.headless:
+            if not out.prompt_file or not out.execute_prompt:
+                raise FlagParseError("--headless requires --prompt-file and explicit --execute-prompt")
+            if out.resume_id or out.browser or out.burp or out.list_skills or out.list_tools:
+                raise FlagParseError("headless is one new turn; resume, browser, Burp and listing modes are incompatible")
+            if out.yolo and not out.http_lab_grants:
+                raise FlagParseError("headless YOLO requires an explicit finite --http-lab-grant")
     return out
 
 
@@ -528,6 +562,22 @@ async def main() -> int:
     if flags.show_help:
         print_help()
         return 0
+    initial_prompt = ""
+    if flags.interactive:
+        if os.name != "posix":
+            sys.stderr.write("kagent: interactive headless requires a POSIX terminal (Linux/WSL)\n")
+            return 2
+        from src.cli.terminal_input import has_terminal
+        if not has_terminal():
+            sys.stderr.write("kagent: --headless --interactive requires stdin/stdout/stderr TTY\n")
+            return 2
+    if flags.prompt_file:
+        from src.cli.prompt_file import PromptFileError, read_prompt_file
+        try:
+            initial_prompt = read_prompt_file(flags.prompt_file)
+        except PromptFileError as error:
+            sys.stderr.write(f"kagent: {error}\n")
+            return 2
     resume_store: session_store.Store | None = None
     if flags.resume_id:
         try:
@@ -555,6 +605,10 @@ async def main() -> int:
     try:
         cfg = config.load()
     except Exception as err:
+        if flags.headless:
+            sys.stderr.write(f"headless configuration refused: {type(err).__name__}\n")
+            await logger.aclose()
+            return 1
         bad_path = config.config_path()
         backup_path = f"{bad_path}.bad-{int(time.time() * 1000)}"
         try:
@@ -624,6 +678,10 @@ async def main() -> int:
             api_key_override=flags.api_key or None,
         )
     except Exception as err:
+        if flags.headless:
+            sys.stderr.write(f"headless provider startup failed: {type(err).__name__}\n")
+            await logger.aclose()
+            return 1
         if not restore_custom_provider:
             sys.stderr.write(f"{err}\n")
             return 1
@@ -669,8 +727,16 @@ async def main() -> int:
     bridged_ask = BridgedAskPrompter(
         lambda req: ask_holder["publish"] and ask_holder["publish"](req)
     )
+    from src.cli.headless import UnavailableInput
+    headless_input = UnavailableInput() if flags.headless else None
+    if flags.interactive:
+        from src.cli.terminal_input import TerminalInput
+        headless_input = TerminalInput(lambda: prompter.execution_policy.internal_secret_values()
+                                       if prompter.execution_policy is not None else ())
+        perm_holder["publish"] = headless_input.publish_permission
+        ask_holder["publish"] = headless_input.publish_ask
     prompter = YoloPrompter(
-        bridged_perm,
+        (headless_input or bridged_perm) if not flags.interactive else bridged_perm,
         flags.yolo
     )
     from src.permission.runtime.execution import default_execution_policy
@@ -764,7 +830,7 @@ async def main() -> int:
     tools.register(ServiceDiscoveryTool(target, engagement_state, workflow=workflow))
     tools.register(WebFetchTool(engagement_state, target))
     tools.register(WebSearchTool())
-    tools.register(AskUserTool(bridged_ask))
+    tools.register(AskUserTool(cast(Any, headless_input or bridged_ask) if not flags.interactive else bridged_ask))
     from src.tools.common.permission_status import PermissionStatusTool
     tools.register(PermissionStatusTool())
     tools.register(
@@ -970,7 +1036,7 @@ async def main() -> int:
 
         for server, result in zip(session_servers, mcp_results):
             if isinstance(result, BaseException):
-                print(f"mcp {server.name}: {result}", file=sys.stderr)
+                print(f"mcp {server.name}: {type(result).__name__ if flags.headless else result}", file=sys.stderr)
                 if flags.browser and server.name == 'browser':
                     browser_local_failed = True
                 continue
@@ -1083,6 +1149,31 @@ async def main() -> int:
         return 2
     if session_debug.enabled and (flags.http_lab_grants or flags.yolo):
         print("HTTP operator grants:\n" + engagement_state.http_permissions.status(), file=sys.stderr)
+
+    if flags.headless:
+        from src.cli.headless import run_headless
+        assert headless_input is not None
+        # Controller-selected restrictions reuse the current policy; no tool can
+        # restore these permissions through an argument or prompt.
+        for name in ("shell", "bash", "web_search"):
+            prompter.execution_policy.revoke(name)
+        output = (Path(flags.headless_output).expanduser().absolute() if flags.headless_output else
+                  project_root() / ".kagent/headless" / session_id)
+        try:
+            return await run_headless(agent, initial_prompt, root_ctl, headless_input, output, session_debug)
+        except (OSError, ValueError) as error:
+            print(f"headless output refused: {type(error).__name__}", file=sys.stderr)
+            return 1
+        finally:
+            try:
+                if flags.interactive:
+                    await headless_input.close()
+                await close_runtime_resources(root_ctl=root_ctl, reload_timer=None, watchers=[],
+                    mcp_sessions=mcp_sessions, close_burp_bridge=close_burp_bridge,
+                    scanner_runtime=prompter.execution_policy.scanner_runtime)
+            finally:
+                await session_debug.aclose()
+                await logger.aclose()
 
     skill_dirs_to_watch = [d for d in all_skill_dirs if os.path.exists(d)]
     watchers: list[Any] = []
@@ -1303,6 +1394,7 @@ async def main() -> int:
     app = KAgent(
         AppProps(
             agent=agent,
+            initial_prompt=initial_prompt,
             theme=flags.theme,
             banner_data=banner_data,
             parent_signal=root_ctl,
@@ -1540,6 +1632,8 @@ def effective_prompt_profile(
 
 def emit(event: dict) -> None:
     event_type = event.get("type")
+    if event_type == "workflow-progress":
+        return  # Controller diagnostics are retained by structured sinks, not printed.
 
     if event_type == "assistant-text":
         text = sanitize_text(str(event.get("text") or ""))

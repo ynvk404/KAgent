@@ -175,6 +175,7 @@ class AppProps:
     ) = None
     resume_summary: str | None = None
     theme: ThemeChoice = "dark"
+    initial_prompt: str = ""
 
 @dataclass(slots=True)
 class RunAgentOptions:
@@ -568,7 +569,8 @@ class KAgent(App):
                 yolo=True,
             )
 
-        self.input = TextField("")
+        self.input = TextField(props.initial_prompt)
+        self._prompt_file_draft = bool(props.initial_prompt)
         self.slash_idx = 0
         self.text_input = None
         self.slash_matches: list[SlashItem] = []
@@ -803,6 +805,12 @@ class KAgent(App):
 
 
     def _recompute_menus(self) -> None:
+        if not self.input.value:
+            self._prompt_file_draft = False
+        if self._prompt_file_draft:
+            self.slash_matches = []
+            self._slash_tab_completion = None
+            return
 
         value = self.input.value
 
@@ -831,6 +839,9 @@ class KAgent(App):
 
     def _insert_pasted_text(self, raw_input: str) -> None:
         pasted = normalize_pasted_text(strip_paste_markers(raw_input))
+        if self._prompt_file_draft:
+            self.input.insert_text(pasted)
+            return
         if should_collapse_paste(pasted):
             self.pasted_text_seq += 1
             id = self.pasted_text_seq
@@ -1087,6 +1098,7 @@ class KAgent(App):
         if key == "escape":
             if len(self.input.value) > 0:
                 self.input.clear()
+                self._prompt_file_draft = False
             if self.history_idx is not None:
                 self.history_idx = None
                 self.history_draft = ""
@@ -1101,8 +1113,8 @@ class KAgent(App):
             return
 
         if key == "enter":
-            v = self.input.value.strip()
-            if len(v) == 0:
+            v = self.input.value if self._prompt_file_draft else self.input.value.strip()
+            if not v.strip():
                 return
             self.input.clear()
             self.submit(v)
@@ -2023,7 +2035,9 @@ class KAgent(App):
 
 
     def submit(self, value: str) -> None:
-        agent_value = expand_pasted_text_markers(
+        file_draft = self._prompt_file_draft
+        self._prompt_file_draft = False
+        agent_value = value if file_draft else expand_pasted_text_markers(
             value,
             self.pasted_text,
         )
@@ -2040,7 +2054,7 @@ class KAgent(App):
         self.history_idx = None
         self.history_draft = ""
 
-        if agent_value.startswith("#"):
+        if not file_draft and agent_value.startswith("#"):
             personal = agent_value.startswith("#!")
 
             text = (
@@ -2111,7 +2125,7 @@ class KAgent(App):
             asyncio.create_task(save_memory())
             return
 
-        if agent_value.lstrip().startswith("/"):
+        if not file_draft and agent_value.lstrip().startswith("/"):
             handled = handle_slash(self, agent_value)
             if handled:
                 return

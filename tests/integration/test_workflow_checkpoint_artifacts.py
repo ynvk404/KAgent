@@ -115,6 +115,9 @@ async def completed_discovery(runtime, tmp_path, outcome):
         await persist(runtime, tmp_path, state, candidate)
     paths = {}
     for phase, name in PHASES:
+        if phase in state.completed_phases():
+            paths[phase] = tmp_path / tool.phase_completion_readiness(name)["artifact_ref"]
+            continue
         await record_phase_coverage_for_test(tool, phase)
         assert tool.skills is not None
         skill = tool.skills.get(name)
@@ -125,7 +128,7 @@ async def completed_discovery(runtime, tmp_path, outcome):
         path.write_text("Explicit offline discovery fixture record.")
         output = await runtime[0].execute("workflow", {
             "action": "complete_skill", "skill_name": name,
-            "no_inputs_discovered": phase == "input_analysis",
+            "no_inputs_discovered": phase == "input_analysis" and not state.objective_inputs(),
         }, None, runtime[1])
         assert json.loads(output)["ok"], output
         paths[phase] = path

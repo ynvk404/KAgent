@@ -54,7 +54,10 @@ def agent_runtime(tmp_path, origin, model, *, mode: WorkflowMode = 'whole_target
     from src.permission.network.grants import HTTPLimits
     rt.state.http_permissions.activate(origin, HTTPLimits.session())
     if enumeration:
-        artifact = 'artifacts/recon/fixture/summary.md'
+        from src.skills.artifacts import completion_artifact_path
+        recon = skills.get('recon')
+        assert recon is not None and recon.completion_artifact
+        artifact = completion_artifact_path(recon.completion_artifact, origin)
         path = rt.root / artifact
         path.parent.mkdir(parents=True)
         path.write_text('Explicit synthetic recon prerequisite for scanner enumeration fixture.')

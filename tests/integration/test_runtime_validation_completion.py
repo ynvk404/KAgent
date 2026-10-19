@@ -21,7 +21,7 @@ from tests.security.test_execution_policy import ORIGIN, runtime  # noqa: F401
 
 
 async def validated(runtime, tmp_path, *, candidate_class="sqli", outcome="confirmed", mode: WorkflowMode="direct"):
-    state, candidate, tool, args, _ = await setup(runtime, tmp_path, candidate_class=candidate_class)
+    state, candidate, tool, args, _ = await setup(runtime, tmp_path, candidate_class=candidate_class, mode=mode)
     assert state.objective is not None
     state.objective.mode = mode
     state.objective.add_requested_goal(candidate.candidate_class)
@@ -127,7 +127,7 @@ async def test_satisfied_goal_does_not_complete_unrelated_pending_expert_work(ru
 
 @pytest.mark.parametrize("outcome", ["blocked", "deferred", "insufficient-evidence", "browser-required", "authorization-required"])
 async def test_unresolved_outcomes_remain_explicit(runtime, tmp_path, outcome):
-    state, candidate, tool, args, _ = await setup(runtime, tmp_path)
+    state, candidate, tool, args, _ = await setup(runtime, tmp_path, mode="direct")
     assert state.objective is not None
     state.objective.mode = "direct"
     state.objective.add_requested_goal("xss")
@@ -149,7 +149,9 @@ async def test_unresolved_outcomes_remain_explicit(runtime, tmp_path, outcome):
 
 @pytest.mark.parametrize("outcome", ["confirmed", "not-confirmed"])
 async def test_whole_target_discovery_artifacts_and_phase_gates_remain_mandatory(runtime, tmp_path, outcome):
-    state, candidate, tool, _ = await validated(runtime, tmp_path, outcome=outcome, mode="whole_target")
+    state, candidate, tool, _ = await validated(runtime, tmp_path, outcome=outcome, mode="direct")
+    assert state.objective is not None
+    state.objective.mode = "whole_target"  # Legacy completed validation cannot certify discovery.
     if outcome == "confirmed":
         await persist(runtime, tmp_path, state, candidate)
     agent = agent_for(runtime, state, tool)

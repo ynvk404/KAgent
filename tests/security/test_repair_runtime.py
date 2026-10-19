@@ -215,6 +215,10 @@ async def test_boolean_sqli_runtime_admits_sources_without_four_observation_sema
     skills = SkillRegistry()
     skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
     registry.register(WorkflowTool(state, target=Target(origin), skills=skills, evidence_root=tmp_path))
+    from tests.helpers.workflow import prepare_validation_prerequisites
+    tool = registry.get('workflow')
+    assert isinstance(tool, WorkflowTool)
+    await prepare_validation_prerequisites(tool, candidate.id)
     (tmp_path / 'proof.txt').write_text('Bounded SQL boolean proof; no sensitive data.')
     ref = json.loads(await registry.execute('workflow', {
         'action': 'record_evidence', 'candidate_id': candidate.id,

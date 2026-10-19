@@ -15,7 +15,7 @@ from src.skills.registry import Registry as Skills
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.workflow.assessment import accepted_result, digest, source_row, seal, candidate_binding
-from src.workflow.state import Candidate, WorkflowState, WorkflowObjective
+from src.workflow.state import Candidate, WorkflowState, WorkflowObjective, WorkflowMode
 from tests.security.test_execution_policy import runtime, ORIGIN
 
 ASSESSMENT = {"hypothesis": "A bounded fixture response supports this candidate",
@@ -25,19 +25,24 @@ ASSESSMENT = {"hypothesis": "A bounded fixture response supports this candidate"
               "severity": "low"}
 
 
-async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, method="GET", payload="fixture"):
+async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, method="GET", payload="fixture", mode: WorkflowMode="whole_target"):
     from urllib.parse import urlencode
     registry, prompter, policy, _, _, _, target = runtime
     skills = Skills()
     skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
-    state = WorkflowState(objective=WorkflowObjective("assessment-objective", "whole_target", ORIGIN))
+    state = WorkflowState(objective=WorkflowObjective("assessment-objective", "direct" if mode == "candidate_validation" else mode, ORIGIN))
     assert state.objective is not None
     candidate, _ = state.add_candidate(Candidate(candidate_class=candidate_class,
         target=ORIGIN, endpoint="/fixture", method=method, parameter="q", location="body" if method == 'POST' else "query",
         objective_id=state.objective.id))
+    if mode == "candidate_validation":
+        state.objective.mode = mode
+        state.objective.candidate_id = candidate.id
     coverage = CoverageStore(str(tmp_path / "coverage.json"))
     tool = WorkflowTool(state, target, coverage, skills, tmp_path, "assessment-session")
     registry.register(tool)
+    from tests.helpers.workflow import prepare_validation_prerequisites
+    await prepare_validation_prerequisites(tool, candidate.id)
     started = json.loads(await registry.execute("workflow", {"action": "start_validation",
         "candidate_id": candidate.id, "related_requests": related or []}, None, prompter))
     assert started["ok"]
@@ -499,8 +504,10 @@ async def test_active_attempt_conflict_requires_honest_unresolved_closure(runtim
     state, candidate, tool, args, old_id = await setup(runtime, tmp_path, candidate_class="sqli")
     registry, p, policy, *_ = runtime
     other = json.loads(await registry.execute("workflow", {"action": "record_candidate",
-        "candidate_class": "sqli", "endpoint": "/filter", "method": "GET", "parameter": "category"}, None, p))
+        "candidate_class": "sqli", "endpoint": "/filter", "method": "GET", "parameter": "category", "location": "query"}, None, p))
     cid = other["candidate"]["id"]
+    from tests.helpers.workflow import prepare_validation_prerequisites
+    await prepare_validation_prerequisites(tool, cid)
     before = json.loads(json.dumps(state.to_dict()))
     rejected = await registry.execute("workflow", {"action": "start_validation", "candidate_id": cid}, None, p)
     assert "another validation attempt is active" in rejected
