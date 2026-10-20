@@ -236,22 +236,6 @@ Use the already retained landing-page body: collect `href`, `src` and `action` v
 resolve them against that page URL, and deduplicate the same-origin references.
 Parsing the retained response does not require another request.
 
-In Whole-target mode, optional bounded inspection is available through
-`read_http_observation(observation_id, start_char, max_chars, mode="discovery",
-discovery_source_id=...)` for an exact current selected native HTTP source.
-Use `workflow(action="select_source", discovery_source_id=...)` when choosing
-that source for inspection. This works with retained UTF-8 HTML, JavaScript,
-JSON, XML and plain text; it sends no request and creates no inventory records.
-An optional `needle` (1–80 characters) finds the first case-sensitive literal
-at or after `start_char`, returning one bounded contiguous excerpt. A literal
-hit is a text clue, not proof of a request, parameter, sink or vulnerability.
-Use actual `next_start_char` for another range. Retained EOF is separate from
-`complete`/`adapter_truncated`; a missing match covers only the retained suffix
-searched. Unavailable, revoked or invalid UTF-8 sources cannot be refreshed by
-the reader. Keep inspection purposeful within existing step/stall budgets,
-then explicitly disposition the selected source with truthful bounds and
-limitations; reading does not mark extraction or coverage as performed.
-
 Follow same-origin links one level deep when necessary to collect additional
 application routes. Do not recursively crawl the entire application here.
 Only retain URLs within the authorized target scope. Skip clearly external

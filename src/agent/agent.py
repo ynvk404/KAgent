@@ -2173,7 +2173,6 @@ class Agent:
                     await self.save()
                 except Exception as err:
                     emit({"type": "error", "err": Exception(f"save session: {err}")})
-        self._protect_http_context(req.messages, discovery_only=True)
         estimate = estimate_request(req, self.client.name())
         budget = self.input_budget()
         if budget.input_limit is not None and estimate.estimated_total > budget.input_limit:
@@ -6708,15 +6707,8 @@ class Agent:
             elif type(tool) is ReadHTTPObservation:
                 if tool.agent is not self or len(items) != 1 or "http" in policy.revoked:
                     return None
-                reader_args = parsed_args(tc.function)
-                tool.validate_rights(reader_args, self.prompter, receipt=False)
+                tool.validate_rights(parsed_args(tc.function), self.prompter, receipt=False)
                 row = json.loads(str(output).split("\n", 1)[0])
-                if reader_args.get("mode") == "discovery" or "mode" in row:
-                    row = tool.validate_discovery_output(str(output), self.prompter, reader_args)
-                    if (output.http_sources != ((row["observation_id"], row["retained_hash"]),)
-                            or output.http_body_ranges != ((len(str(output).split("\n", 1)[0]) + 1, len(output)),)):
-                        return None
-                    return str(output)
                 start, end = output.http_body_ranges[0]
                 if (len(output.http_body_ranges) != 1
                         or output[start:end] != items[0].body.decode(errors="replace")[row["start_char"]:row["end_char"]]):
@@ -6765,14 +6757,12 @@ class Agent:
         except Exception:
             return None
 
-    def _protect_http_context(self, messages: list[Message], *, discovery_only: bool = False) -> None:
+    def _protect_http_context(self, messages: list[Message]) -> None:
         """Recheck source access before outbound, including archived lab history."""
         from src.permission.runtime.execution import policy_for
         from src.workflow.assessment import digest, source_row
         policy = policy_for(self.prompter)
         for index, message in enumerate(messages):
-            if discovery_only and not _discovery_reader_message(message):
-                continue
             if message.role != "tool" or (not message.http_response_sources and (
                     message.name != "read_http_observation" or message.tool_status == "error")):
                 continue
@@ -6795,11 +6785,6 @@ class Agent:
                         raise ValueError
                     raw_header, content = message.content.split("\n", 1)
                     header = json.loads(raw_header)
-                    if "mode" in header:
-                        row = reader.validate_discovery_output(message.content, self.prompter)
-                        if message.http_response_sources != [row["observation_id"]]:
-                            raise ValueError
-                        continue
                     reader.validate_rights({"observation_id": header["observation_id"],
                         "start_char": header["start_char"], "max_chars": 2000}, self.prompter, receipt=False)
                     item = policy.observations._items[header["observation_id"]]
@@ -6830,9 +6815,7 @@ class Agent:
         analysis = self._http_analysis_content(tc, res, parsed.invocation)
         if analysis is not None:
             content = analysis
-            if (not (tc.function.name == "read_http_observation" and parsed.args.get("mode") == "discovery")
-                    and parsed.invocation is not None
-                    and parsed.invocation.scope == runtime_scope(self)):
+            if parsed.invocation is not None and parsed.invocation.scope == runtime_scope(self):
                 from src.workflow.discovery import observation_handoff
                 from src.permission.runtime.execution import policy_for
                 policy = policy_for(self.prompter)
@@ -6940,6 +6923,10 @@ class Agent:
             self.streaming_enabled
             and is_streaming(self.client)
         ):
+            c: StreamingClient = cast(
+                StreamingClient,
+                self.client,
+            )
             filter = ThinkingStreamFilter()
             turn_owner = ownership.capture(self)
 
@@ -6952,8 +6939,7 @@ class Agent:
                         stream_buffer.append(visible)
                     else:
                         emit({"type": "assistant-delta", "text": visible})
-            resp = await ownership.await_owned(self, self._client_handoff(
-                self.client,
+            resp = await ownership.await_owned(self, c.chat_stream(
                 ChatRequest(
                     model=req.model,
                     messages=req.messages,
@@ -6963,8 +6949,8 @@ class Agent:
                     reasoning_level=req.reasoning_level,
                     requested_reasoning_level=req.requested_reasoning_level,
                 ),
+                on_delta,
                 signal,
-                on_delta=on_delta,
             ))
 
             tail = filter.flush()
@@ -6976,23 +6962,12 @@ class Agent:
 
             return resp, True
 
-        resp = await ownership.await_owned(self, self._client_handoff(
-            self.client,
+        resp = await ownership.await_owned(self, self.client.chat(
             req,
             signal,
         ))
 
         return resp, False
-
-    async def _client_handoff(self, client: Client, req: ChatRequest, signal, *, on_delta=None) -> ChatResponse:
-        # This coroutine, rather than a pre-scheduling caller, owns the final
-        # B-only check. No suspension separates it from the client entrypoint.
-        # Provider-internal retries retain their existing transport contract.
-        ownership.check(self)
-        self._protect_http_context(req.messages, discovery_only=True)
-        if on_delta is not None:
-            return await cast(StreamingClient, client).chat_stream(req, on_delta, signal)
-        return await client.chat(req, signal)
 
     @ownership.owned_turn
     async def compact(
@@ -7256,7 +7231,7 @@ class Agent:
         status: Literal["success", "error", "cancelled"] = "success"
         try:
             self._count_llm_call("compaction_llm_calls")
-            response = await ownership.await_owned(self, self._client_handoff(self.client, req, signal))
+            response = await ownership.await_owned(self, self.client.chat(req, signal))
             if skill_context != skill_stamp():
                 raise AgentRuntimeError("Skill context changed during compaction; stale summary discarded.")
             return response
@@ -7688,20 +7663,6 @@ class AgentRuntimeError(RuntimeError):
         return str(self)
 
 
-def _discovery_reader_message(message: Message) -> bool:
-    """Use reader message provenance, never search unrelated text for excerpts."""
-    if message.role != "tool" or message.name != "read_http_observation":
-        return False
-    try:
-        from src.tools.common.tool_result import ReadHTTPObservation
-        row = ReadHTTPObservation.discovery_header(message.content)
-        return bool({"mode", "discovery_source_id", "search", "scope", "body_sha256", "retained_eof"} & row.keys())
-    except (ValueError, TypeError):
-        # Malformed reader history is safe to omit; successful legacy headers
-        # remain on their original path, including during compaction.
-        return bool(message.http_response_sources)
-
-
 def bounded_history_for_compaction(
     messages: list[Message],
 ) -> str:
@@ -7709,23 +7670,6 @@ def bounded_history_for_compaction(
     from .tool_results import reference_header
     prepared = []
     for message in messages:
-        if _discovery_reader_message(message):
-            # Metadata-only before flattening destroys per-message provenance.
-            # Saved fields are retrieval hints; they never restore permission.
-            try:
-                from src.tools.common.tool_result import ReadHTTPObservation
-                row = ReadHTTPObservation.discovery_header(message.content)
-                metadata = {key: row[key] for key in ("discovery_source_id", "observation_id", "retained_hash")}
-                if (not re.fullmatch(r"ds_[0-9a-f]{64}", metadata["discovery_source_id"])
-                        or not re.fullmatch(r"obs_[0-9a-f]{32}", metadata["observation_id"])
-                        or not re.fullmatch(r"[0-9a-f]{64}", metadata["retained_hash"])):
-                    raise ValueError
-                hint = json.dumps(metadata)
-            except (ValueError, TypeError, KeyError):
-                hint = "Source metadata unavailable."
-            prepared.append(replace(message, content=hint +
-                " [Discovery inspection text omitted for compaction; current gated read required.]"))
-            continue
         refs = load_references(message.tool_result_refs)
         if message.role == "tool" and refs:
             # The summary may carry a retrieval pointer, never a second preview
