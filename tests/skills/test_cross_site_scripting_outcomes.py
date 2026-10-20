@@ -20,7 +20,10 @@ Run with:
 
 from dataclasses import dataclass
 from enum import Enum
+from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -102,6 +105,11 @@ class Probe:
     # text appears somewhere in the response")?
     js_breakout_deterministic: bool = False
 
+    # For URL contexts, retain the attribute representation separately from
+    # actual execution evidence; HTML encoding does not establish a safe URL.
+    url_attribute_source: str | None = None
+    url_execution_observed: bool = False
+
     # for dom_based: was execution actually observed (vs. only a plausible
     # source -> sink path read from client-side source)?
     dom_execution_observed: bool = False
@@ -148,9 +156,20 @@ def classify_xss_outcome(probe: Probe) -> Outcome:
         return Outcome.BROWSER_REQUIRED
 
     if probe.context == ReflectionContext.URL_HREF:
-        # href/src contexts are inherently non-deterministic from HTTP
-        # evidence alone (depends on user interaction, scheme handling,
-        # CSP, etc.) — never `confirmed` from curl-level evidence.
+        # An observed execution marker is stronger than URL reflection;
+        # an executable scheme alone never proves that execution occurred.
+        if probe.url_execution_observed:
+            return Outcome.CONFIRMED
+        if probe.url_attribute_source is not None:
+            # HTML character references are decoded before URL interpretation.
+            try:
+                scheme = urlsplit(unescape(probe.url_attribute_source)).scheme.lower()
+            except ValueError:
+                return Outcome.BROWSER_REQUIRED  # Unknown handling is unresolved.
+            if scheme in {"http", "https"}:
+                return Outcome.NOT_CONFIRMED  # This bounded scheme vector is neutralized.
+            return Outcome.BROWSER_REQUIRED
+        # Preserve existing cases that supply only a reflection observation.
         if probe.payload_reflected_unescaped:
             return Outcome.BROWSER_REQUIRED
         return Outcome.NOT_CONFIRMED
@@ -299,6 +318,80 @@ class TestNonDeterministicContextsNeverConfirmFromHttpAlone:
             dom_execution_observed=False,
         )
         assert classify_xss_outcome(probe) == Outcome.NOT_CONFIRMED
+
+
+class TestUrlAttributeDecoding:
+    @pytest.mark.parametrize("raw_unescaped", [False, True])
+    @pytest.mark.parametrize(
+        ("attribute_source", "decoded_value", "expected"),
+        [
+            pytest.param(
+                "javascript:document.title=&#x27;synthetic-marker&#x27;",
+                "javascript:document.title='synthetic-marker'",
+                Outcome.BROWSER_REQUIRED,
+                id="encoded-script-quotes",
+            ),
+            pytest.param(
+                "java&#x73;cript&#58;document.title=&#39;synthetic-marker&#39;",
+                "javascript:document.title='synthetic-marker'",
+                Outcome.BROWSER_REQUIRED,
+                id="encoded-script-scheme",
+            ),
+            pytest.param(
+                "https&#58;//fixture.invalid/view?marker=synthetic&amp;mode=preview",
+                "https://fixture.invalid/view?marker=synthetic&mode=preview",
+                Outcome.NOT_CONFIRMED,
+                id="encoded-https-control",
+            ),
+            pytest.param(
+                "http&#58;//fixture.invalid/view?marker=synthetic&amp;mode=preview",
+                "http://fixture.invalid/view?marker=synthetic&mode=preview",
+                Outcome.NOT_CONFIRMED,
+                id="encoded-http-control",
+            ),
+        ],
+    )
+    def test_decoded_url_controls_outcome(
+        self, attribute_source, decoded_value, expected, raw_unescaped
+    ):
+        # Parse synthetic HTML locally; no browser, navigation or JS runs.
+        class AnchorParser(HTMLParser):
+            href: str | None = None
+
+            def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+                if tag == "a":
+                    self.href = dict(attrs).get("href")
+
+        parser = AnchorParser()
+        parser.feed(f'<a href="{attribute_source}">synthetic link</a>')
+        assert attribute_source != decoded_value
+        assert parser.href == decoded_value
+        probe = Probe(
+            context=ReflectionContext.URL_HREF,
+            payload_reflected_unescaped=raw_unescaped,
+            url_attribute_source=attribute_source,
+        )
+        assert classify_xss_outcome(probe) == expected
+
+    @pytest.mark.parametrize(
+        ("execution_observed", "upstream_blocked", "expected"),
+        [
+            (False, False, Outcome.BROWSER_REQUIRED),
+            (True, False, Outcome.CONFIRMED),
+            (True, True, Outcome.BLOCKED),
+        ],
+    )
+    def test_url_confirmation_needs_execution_proof(
+        self, execution_observed, upstream_blocked, expected
+    ):
+        # These are evidence states, not a claim that this fixture executes JS.
+        probe = Probe(
+            context=ReflectionContext.URL_HREF,
+            url_attribute_source="javascript:document.title=&#39;synthetic-marker&#39;",
+            url_execution_observed=execution_observed,
+            upstream_blocked=upstream_blocked,
+        )
+        assert classify_xss_outcome(probe) == expected
 
 
 class TestEncodedContextIsAlwaysNotConfirmed:

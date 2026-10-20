@@ -101,7 +101,7 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
 '><script>document.title='xsspoc-{MARKER}'</script>
     # purpose: single-quote variant of the attribute breakout above
     # applies: same as above, for single-quoted attribute values
-    # limit: this is the "one close variant" allowed by SKILL.md step 3 — do not chain further bypass attempts beyond this
+    # limit: use first for a known single-quoted attribute; if tried after a failed probe, it consumes SKILL.md step 3's one close-variant allowance
 
 # --- JavaScript string context -------------------------------------------
 ';document.title='xsspoc-{MARKER}';//
