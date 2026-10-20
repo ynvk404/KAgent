@@ -163,6 +163,16 @@ def initial_state(banner: str, banner_data: BannerData) -> AppState:
     return AppState(banner=banner, banner_data=banner_data)
 
 
+def _phase_with_pending_request(state: AppState, fallback: UiPhase) -> UiPhase:
+    """Keep the status phase aligned with the request currently shown by the app."""
+    # _get_active_modal presents user questions before permission requests.
+    if state.pending_ask is not None:
+        return "waiting-user"
+    if state.pending_perm is not None:
+        return "waiting-approval"
+    return fallback
+
+
 @dataclass(frozen=True, slots=True)
 class SetBanner:
     banner: str
@@ -272,7 +282,7 @@ def reducer(state: AppState, action: Action) -> AppState:
             return replace(state, transcript=(*state.transcript, entry))
 
         case AppendDelta(text=text):
-            phase: UiPhase = "answering" if state.busy else state.phase
+            phase = _phase_with_pending_request(state, "answering" if state.busy else state.phase)
             last = state.transcript[-1] if state.transcript else None
             if last is not None and last.kind == "assistant" and last.streaming:
                 return replace(state, phase=phase, stream_chunks=(*state.stream_chunks, text))
@@ -293,7 +303,8 @@ def reducer(state: AppState, action: Action) -> AppState:
                                 progress_rows=(), observed=(), activated_skills=(), skill_receipts=(),
                                 active_skill=None, running_tool=None, running_skill=None, planner_recommendation=None,
                                 presentation_scope=facts.scope if facts else state.presentation_scope)
-            return replace(state, busy=busy, phase="planning" if busy else "idle",
+            return replace(state, busy=busy,
+                           phase=_phase_with_pending_request(state, "planning" if busy else "idle"),
                            running_tool=state.running_tool if busy else None,
                            running_skill=state.running_skill if busy else None,
                            active_skill=state.active_skill if busy else None,
@@ -309,22 +320,19 @@ def reducer(state: AppState, action: Action) -> AppState:
             return replace(state, yolo=on)
 
         case SetPerm(req=req):
-            return replace(
-                state,
-                pending_perm=req,
-                phase="waiting-approval" if req else ("running-tool" if state.busy else "idle"),
-            )
+            state = replace(state, pending_perm=req)
+            fallback: UiPhase = "waiting-approval" if req else ("running-tool" if state.busy else "idle")
+            return replace(state, phase=_phase_with_pending_request(state, fallback))
 
         case SetAsk(req=req):
-            return replace(
-                state,
-                pending_ask=req,
-                phase="waiting-user" if req else ("running-tool" if state.pending_calls
-                                                  else "answering" if state.busy else "idle"),
-            )
+            state = replace(state, pending_ask=req)
+            fallback = ("waiting-user" if req else "running-tool" if state.pending_calls
+                        else "answering" if state.busy else "idle")
+            return replace(state, phase=_phase_with_pending_request(state, fallback))
 
         case SetSkillsPicker(open=open_):
-            return replace(state, pending_skills=open_, phase="skills" if open_ else "idle")
+            state = replace(state, pending_skills=open_)
+            return replace(state, phase=_phase_with_pending_request(state, "skills" if open_ else "idle"))
 
         case Clear(message=message):
             return replace(
@@ -340,6 +348,7 @@ def reducer(state: AppState, action: Action) -> AppState:
                 activated_skills=(), skill_receipts=(), running_skill=None, running_tool=None, planner_recommendation=None,
                 clear_message=sanitize_text(message) if message is not None else None,
                 latest_turn_details=None,
+                phase=_phase_with_pending_request(state, state.phase),
                 active_skill=(
                     None
                     if message == "conversation reset"
@@ -387,8 +396,7 @@ def reducer(state: AppState, action: Action) -> AppState:
                                deferred_outcome=None, deferred_facts=None, baseline=None, latest_facts=facts,
                                progress_rows=(), observed=(), activated_skills=(), skill_receipts=(), planner_recommendation=None,
                                running_tool=None, running_skill=None, active_skill=None,
-                               phase="waiting-approval" if state.pending_perm else "waiting-user" if state.pending_ask
-                               else "answering" if state.busy else "idle")
+                               phase=_phase_with_pending_request(state, "answering" if state.busy else "idle"))
             if facts and facts.scope != state.presentation_scope:
                 state = replace(state, presentation_scope=facts.scope, issues=(), milestones=(),
                                 delivered_results=(), outcome_written=False, deferred_outcome=None, deferred_facts=None,
@@ -547,11 +555,12 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
         case AssistantTextEvent(text=text):
             last = state.transcript[-1] if state.transcript else None
             if last is not None and last.kind == "assistant" and last.streaming:
-                return replace(_flush_progress(_finish_stream(state, text)), phase="answering")
+                state = _flush_progress(_finish_stream(state, text))
+                return replace(state, phase=_phase_with_pending_request(state, "answering"))
             state = _flush_progress(state)
             return replace(
                 state,
-                phase="answering",
+                phase=_phase_with_pending_request(state, "answering"),
                 transcript=(*state.transcript, TranscriptEntry(kind="assistant", text=sanitize_text(text))),
             )
 
@@ -573,7 +582,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                 state = _flush_selection(state)
             history = _remember_call(state, call) if ev.id else state.call_history
             return replace(state, call_history=history,
-                           phase="waiting-approval" if state.pending_perm else "waiting-user" if state.pending_ask else "running-tool",
+                           phase=_phase_with_pending_request(state, "running-tool"),
                            running_skill=call.skill if call.skill in state.activated_skills else None,
                            running_tool=sanitize_text(_activity_label(ev.name) +
                            (": " + (facts.activity if facts and facts.activity else call.activity)
@@ -586,8 +595,8 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                     replace(item, resolved=True) if item is call else item for item in state.call_history))
             pending = state.pending_calls
             state = replace(state,
-                            phase=("idle" if state.outcome_written else "waiting-approval" if state.pending_perm
-                                   else "waiting-user" if state.pending_ask else "running-tool" if pending else "answering"),
+                            phase=_phase_with_pending_request(
+                                state, "idle" if state.outcome_written else "running-tool" if pending else "answering"),
                             running_skill=pending[-1].skill if pending and pending[-1].skill in state.activated_skills else None,
                             running_tool=(_activity_label(pending[-1].name) +
                                           (": " + pending[-1].activity if pending[-1].activity else "")) if pending else None)
@@ -661,11 +670,12 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                 return state
             return replace(state, call_history=tuple(replace(row, scanner_job=ev.job_id,
                 started_monotonic=ev.started_monotonic) if row is call else row for row in state.call_history),
-                phase='running-tool', running_tool=f'{ev.scanner} running · scanner job')
+                phase=_phase_with_pending_request(state, 'running-tool'),
+                running_tool=f'{ev.scanner} running · scanner job')
 
         case ErrorEvent(err=agent_err):
-            state = replace(state, phase="waiting-approval" if state.pending_perm else "waiting-user" if state.pending_ask
-                            else "running-tool" if state.pending_calls else "answering" if state.busy else state.phase)
+            state = replace(state, phase=_phase_with_pending_request(
+                state, "running-tool" if state.pending_calls else "answering" if state.busy else state.phase))
             from src.llm.runtime.context_budget import ContextCapacityError
             from src.agent.agent import IneffectiveCompactionError
             if (isinstance(agent_err, IneffectiveCompactionError) or
@@ -731,7 +741,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
             return state
 
         case DoneEvent():
-            state = replace(state, busy=False, phase="waiting-user" if state.pending_ask else "idle",
+            state = replace(state, busy=False, phase=_phase_with_pending_request(state, "idle"),
                             running_tool=None, running_skill=None, active_skill=None, call_history=_retire_calls(state))
             if ev.stop_reason == "max_steps" and state.pending_ask is not None:
                 return replace(state, deferred_outcome=ev.stop_reason, deferred_facts=facts)
