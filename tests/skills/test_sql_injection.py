@@ -921,3 +921,52 @@ class TestContextAndEvidenceGuidance:
             "cleanup still requires separate authority", "does not authorize automatic cleanup",
         ):
             assert requirement in section
+
+
+def test_boolean_checkpoint_preserves_context_uncertainty_and_bounded_outcomes(skill_text):
+    section = _norm(skill_text.split('### 2a.', 1)[1].split('### 2b.', 1)[0]).lower()
+    for rule in (
+        'full query reconstruction is not required', 'known match',
+        'or tests may use a nonmatching seed', 'surrounding prefix/suffix',
+        'trailing `%`', 'cease to be true', 'new discriminating test',
+        'existing three-adjustment limit', 'specific stability/repetition',
+        'unfinished or unsupported context/proof stays unresolved',
+        'completed bounded negative', 'do not force another technique',
+    ):
+        assert rule in section
+
+
+def test_like_suffix_can_destroy_a_corpus_true_predicate(payloads_text):
+    import sqlite3
+
+    # Synthetic local oracle: this illustrates compatibility, not model behavior.
+    # No application, network request, historical payload or persisted DB is used.
+    probes = [line.split('#', 1)[0].strip() for line in payloads_text.splitlines()]
+    pair = [probe for probe in probes if probe in {"1' AND '1'='1", "1' AND '1'='2"}]
+    assert len(pair) == 2
+    with sqlite3.connect(':memory:') as db:
+        db.execute('CREATE TABLE items (label TEXT)')
+        db.execute('INSERT INTO items VALUES (?)', ('moss',))
+
+        def rows(value):
+            return db.execute(f"SELECT label FROM items WHERE label LIKE '%{value}%'").fetchall()
+
+        assert rows('moss') == [('moss',)]
+        # Even a known match cannot fix a predicate changed by the query suffix.
+        assert [rows('moss' + probe[1:]) for probe in pair] == [[], []]
+        assert rows("moss' AND '1' LIKE '1") == [('moss',)]
+        assert rows("moss' AND '1' LIKE '2") == []
+
+
+def test_dbms_and_timing_reference_uses_specific_diagnostics(skill_text, payloads_text):
+    prose = _norm(skill_text)
+    corpus = _norm(payloads_text)
+    assert '`SQLSTATE` is shared across DBMSs, not a Postgres fingerprint' in prose
+    assert 'Sequelize alone identifies an ORM, not its dialect' in prose
+    assert '`SQLITE_ERROR`' in prose and 'dialects/sqlite/' in corpus
+    assert 'MySQL -- comments require a following whitespace/control character' in corpus
+    assert 'preserve it on the wire' in corpus
+    assert 'Comments only start outside literals' in corpus
+    assert 'adapter `elapsed_ms` for step 2b timing' in prose
+    assert 'timing alone does not require it' in prose
+    assert 'Do not resend HTTP just to count' in prose

@@ -22,7 +22,7 @@ async def test_loaded_validation_guidance_binds_claims_to_captures_and_new_repai
                      'execution status' if name == 'sql-injection' else 'completed execution',
                      'Metadata-only capture', 'record_evidence', 'correct `observation_ids`',
                      'new immutable snapshot', '`evidence_refs` before resubmitting',
-                     'registered snapshots in place', 'at most two repair submissions',
+                     'registered snapshots in place', 'retry at most once',
                      '`insufficient-evidence` and stop'):
         assert contract.lower() in loaded.lower()
     metadata = skills.get(name)
@@ -56,3 +56,19 @@ async def test_xss_context_and_transformation_remain_bounded_without_execution_i
                      'Neither raw reflection nor HTML fragment parsing alone establishes execution',
                      'not observed browser execution', 'retain `browser-required`'):
         assert contract in loaded
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', ['sql-injection', 'cross-site-scripting'])
+async def test_repair_guidance_matches_loaded_preface_without_changing_runtime_ceiling(skills, monkeypatch, name):
+    from src.permission.runtime import execution
+    from src.workflow.evidence_recovery import MAX_EVIDENCE_RECOVERY_RETRIES
+
+    # Exercise the production loader preface, without creating runtime rights.
+    monkeypatch.setattr(execution, 'policy_for', lambda _: object())
+    loaded = ' '.join((await LoadSkillTool(skills).run({'name': name})).split()).lower()
+    assert 'retry at most once' in loaded
+    assert 'at most two repair submissions' not in loaded
+    assert 'remaining recovery budget' in loaded
+    assert 'runtime retry ceiling' in loaded
+    assert MAX_EVIDENCE_RECOVERY_RETRIES == 2

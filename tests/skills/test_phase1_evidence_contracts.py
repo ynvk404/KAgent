@@ -73,3 +73,33 @@ async def test_sql_ledger_retains_controls_errors_and_incomplete_captures(runtim
         assert rule in text
     # This is provenance coverage, not a SQL semantic verifier or request classifier.
     assert len(sent) == 4 and not state.validation_results
+
+
+async def test_sql_terminal_example_uses_production_assessment_contract(runtime, tmp_path):
+    state, candidate, _, args, oid = await setup(runtime, tmp_path, candidate_class='sqli')
+    registry, p, *_ = runtime
+    registered = json.loads(await registry.execute('workflow', {
+        'action': 'record_evidence', 'candidate_id': candidate.id,
+        'evidence_path': 'proof.md', 'observation_ids': [oid]}, None, p))
+    text = await loaded('sql-injection')
+    match = re.search(r'```python\n(.*?)\n```', text, re.S)
+    assert match is not None
+    expressions = ast.parse(match[1]).body
+    assert len(expressions) == 1 and isinstance(expressions[0], ast.Expr)
+    values = {'candidate_id': candidate.id, 'attempt_id': args['attempt_id'],
+              'sources': [oid], 'evidence_id': registered['evidence']['id'],
+              'hypothesis': 'A bounded fixture input could affect a SQL query',
+              'criteria': 'Compare complete fixture control and probe responses',
+              'limitations': 'Synthetic contract check; no SQLi semantics established',
+              'observed_impact': 'The bounded fixture test did not establish SQL injection'}
+    submission = eval(compile(ast.Expression(expressions[0].value), '<skill-example>', 'eval'),
+                      {'__builtins__': {}}, values)
+    # Required assessment fields and completed_attempt are enforced by production.
+    for key in ('hypothesis', 'criteria', 'limitations', 'observed_impact', 'severity', 'completed_attempt'):
+        incomplete = {**submission, 'assessment': {
+            k: v for k, v in submission['assessment'].items() if k != key}}
+        assert (await registry.execute('workflow', incomplete, None, p)).startswith('error:')
+        assert not state.validation_results and not state.eligible_for_finding(candidate.id)
+    result = json.loads(await registry.execute('workflow', submission, None, p))
+    assert result['ok'] and result['result']['outcome'] == 'not-confirmed'
+    assert not state.eligible_for_finding(candidate.id)

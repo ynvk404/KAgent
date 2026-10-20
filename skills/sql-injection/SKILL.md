@@ -138,6 +138,25 @@ user explicitly requests a retest or the request/input materially changed.
 Only an outcome of `confirmed` is eligible for `confirm_finding`; pass the
 Candidate ID to that tool. All other outcomes stop without confirming.
 
+Both terminal outcomes require `assessment` with `hypothesis`, `criteria`,
+`limitations`, `observed_impact`, and `severity`; a bounded `not-confirmed` also
+requires `completed_attempt: true`. For example, after completing an applicable
+bounded negative test, use actual returned references and evidence-derived text:
+
+```python
+{"action": "record_result", "candidate_id": candidate_id,
+ "attempt_id": attempt_id, "skill_name": "sql-injection",
+ "outcome": "not-confirmed", "observation_ids": sources,
+ "evidence_refs": [evidence_id], "assessment": {
+     "hypothesis": hypothesis, "criteria": criteria, "limitations": limitations,
+     "observed_impact": observed_impact, "severity": "info", "completed_attempt": True}}
+```
+
+`sources` contains usable current owned observations; `evidence_id` is the `ev_`
+returned by `record_evidence`, not a file path. A confirmed result additionally
+needs the applicable technique's proof and confirmation fields described below.
+Keep engine/context notes in existing accepted fields, not new top-level arguments.
+
 If another validation attempt is active, use `workflow(action="list",
 status="validating")` to identify its Candidate and continue that attempt or
 submit its honest `record_result` with the matching validator `skill_name`.
@@ -262,10 +281,10 @@ in which lines of `payloads.txt` you've read. This is stated in both files
 on purpose: gating should hold even if an agent reads `payloads.txt` first
 or in isolation.
 
-Use the built-in `http` tool for requests. Use `shell` only when
-reproducing the request needs something the `http` tool can't do (e.g.
-precise wall-clock timing for step 2b, or a raw request shape the tool
-doesn't support). **`shell` must never be used to simulate, fake, or
+Use the built-in `http` tool for requests and its adapter `elapsed_ms` for
+step 2b timing. Use `shell` only when reproducing a necessary request detail
+needs something the `http` tool cannot express; timing alone does not require it.
+**`shell` must never be used to simulate, fake, or
 locally stand in for an OOB callback/listener** — if no real OOB tool is
 available, Phase 2d does not run at all (see below); it is not
 approximated with shell scripting. Do not reach for `sqlmap`, `ghauri`, or
@@ -323,10 +342,14 @@ Before selecting time-based or engine-specific payloads:
 2. If not fingerprinted, use the error-based signal from Phase 1 (1b)
    first — DB error strings are usually engine-distinctive:
    - `SQL syntax.*MySQL`, `Warning: mysqli` → MySQL
-   - `pg_query`, `PostgreSQL.*ERROR`, `SQLSTATE` → Postgres
+   - `pg_query`, `PostgreSQL.*ERROR` → Postgres
    - `Microsoft OLE DB`, `Unclosed quotation mark`, `System.Data.SqlClient` → MSSQL
    - `ORA-\d{5}` → Oracle
-   - `SQLite3::`, `sqlite3.OperationalError` → SQLite
+   - `SQLITE_ERROR`, `SQLite3::`, `sqlite3.OperationalError`, or a
+     Sequelize `dialects/sqlite/` diagnostic → SQLite
+
+   `SQLSTATE` is shared across DBMSs, not a Postgres fingerprint. Sequelize
+   alone identifies an ORM, not its dialect or the full query shape.
 3. If Phase 1 produced no error string (silent failure or generic 500),
    don't cycle every engine's time-based payload as a fishing expedition.
    Instead, try one conservative, low-signal probe per candidate engine
@@ -513,7 +536,8 @@ that distinguishes the remaining possibilities. Do not walk a punctuation
 list (`--`, `-- `, `/*`, `')`, `'))`, and so on) one request at a time without
 using the returned parser position/message. Cap syntax-shape adjustments at
 three after the initial signal; if they do not converge, move to a different
-bounded confirmation technique or record the result as inconclusive.
+applicable bounded confirmation technique or record the appropriate unresolved
+outcome when context/proof remains insufficient; `inconclusive` is not an outcome.
 
 If neither the single-quote probe nor any variant in the Phase 1 section
 produces any observable change from baseline, that's a valid outcome. Don't
@@ -601,10 +625,23 @@ confirmation step, including after a clear error-based SQLI-1 signal: Phase 1
 syntax sensitivity alone does not establish SQLI-2. It also applies when 1b
 was absent or ambiguous but the surrounding context suggests an observable
 boolean evaluation. A TRUE/FALSE pair is required for boolean confirmation,
-not for every SQLi technique. Use the `PHASE 2 — VALIDATION` section of
-`payloads.txt` for the paired TRUE/FALSE probes — send a logically TRUE and
-a logically FALSE request, otherwise identical to each other and to the
-baseline.
+not for every SQLi technique.
+
+**Pair decision checkpoint:**
+
+- Use the evidence-supported quoted-string, numeric or parenthesized context,
+  or a justified hypothesis; full query reconstruction is not required.
+- Choose a stable benign seed for the oracle: AND-filter tests normally need
+  a known match; OR tests may use a nonmatching seed. Reuse suitable owned
+  observations rather than repeating a baseline without a stability question.
+- Check that both predicates retain their intended truth values after the
+  surrounding prefix/suffix is applied. In `LIKE '%input%'`, a generic quoted
+  equality can acquire a trailing `%` and cease to be TRUE. Account for wildcard,
+  quote and parenthesis boundaries before treating a corpus example as a pair.
+
+Use the `PHASE 2 — VALIDATION` section of `payloads.txt` as context-adapted
+examples. Send otherwise identical TRUE/FALSE requests with the baseline's
+request structure and authentication; change only the predicate within the pair.
 
 A consistent, repeatable difference between the TRUE and FALSE response
 (size, status, or presence/absence of the same content marker used in
@@ -619,6 +656,14 @@ query is not, by itself, a boolean differential. Record both members of both
 repetitions in the structured `confirmation` object passed to
 `workflow(action="record_result", ...)`. If the paired observations are equal,
 record that 2a was inconclusive; never preserve a signal claiming they differed.
+Identify whether the seed/oracle, predicate compatibility or another prerequisite
+is unresolved. Continue only with remaining budget and a new discriminating test;
+all syntax adjustments share the existing three-adjustment limit. Do not repeat
+an effective request without a specific stability/repetition or missing-proof
+reason. Identical bodies/ETags alone do not establish caching or quote rewriting.
+If no useful bounded test remains, apply the outcome rules below: unfinished or
+unsupported context/proof stays unresolved; a completed bounded negative needs
+usable observations and registered proof. Do not force another technique.
 Likewise, a successful `UNION SELECT` response compared with a syntax error or
 missing-table error is not a boolean TRUE/FALSE pair. Describe that observation
 as a bounded union/error differential; do not label it boolean-based or invent
@@ -912,8 +957,9 @@ candidate entry and every dependent claim/excerpt, then call `record_evidence`
 with the correct `observation_ids` to register a new immutable snapshot. Replace
 `evidence_refs` before resubmitting; removing an ID from `record_result` alone
 does not repair its derived proof. Never edit registered snapshots in place or
-reuse a source from another attempt. Allow at most two repair submissions after
-the initial submission within the existing recovery budget; do not reset it or
+reuse a source from another attempt. Following the loader preface, retry at most
+once with usable existing evidence, within the remaining recovery budget; this
+instruction does not change the runtime retry ceiling. Do not reset the budget or
 send new HTTP probes solely to repair a manifest. If a valid repair is unavailable, record
 `insufficient-evidence` and stop.
 
@@ -975,6 +1021,8 @@ output actually shown by the evidence; `potential_impact` describes further
 database access only as conditional unless the validation demonstrated it.
 Do not present possible impact as observed fact:
 
+- Verify counts from complete retained data before proof/result/finding submission;
+  repeated captures do not add distinct records. Do not resend HTTP just to count.
 - Report an observed count as `returned 56 rows, consistent with bypassing the
   filter`; do not call it `every row` or `the full table` unless an independently
   verified total proves that claim.

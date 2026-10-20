@@ -433,3 +433,40 @@ def test_returned_syntax_checkpoint_uses_captured_bytes_before_confirmation(skil
         'Deterministic HTTP-based confirmation remains sufficient',
     ):
         assert requirement in section
+
+
+def test_encoding_is_assessed_in_the_actual_parser_context(skill_text):
+    prose = ' '.join(skill_text.split()).lower()
+    corpus = ' '.join((Path(__file__).resolve().parents[2] / 'skills' /
+                       'cross-site-scripting' / 'payloads.txt').read_text().split()).lower()
+    for rule in (
+        'html-decoded value', 'encoding alone does not establish a safe scheme',
+        'event handlers or urls', 'enclosing parser and any later decoding',
+        'encoding presence/absence alone proves neither safety nor exploitability',
+    ):
+        assert rule in prose
+    assert '(a) not' not in corpus
+    assert 'encoded attribute is not automatically safe' in corpus
+    assert 'unknown handling remains unresolved' in corpus
+    assert 'establishes propagation only, not encoding or execution' in corpus
+
+
+def test_stored_and_dom_guidance_keeps_capability_effects_and_proof_distinct(skill_text):
+    prose = ' '.join(skill_text.split()).lower()
+    corpus = ' '.join((Path(__file__).resolve().parents[2] / 'skills' /
+                       'cross-site-scripting' / 'payloads.txt').read_text().split()).lower()
+    for rule in (
+        'interpolation escapes text', '`[innerhtml]` bindings sanitize html',
+        'direct dom writes', '`bypasssecuritytrust*`', 'fragment insertion',
+        'before a stateful execution probe', 'if the proof path needs browser execution',
+        'record reported effects promptly', 'do not wait for execution proof',
+        'rendering response may also serve as readback',
+        'acceptance, stored markup and json readback are not execution evidence',
+        'cleanup only with separate authority', 'honest limitations',
+        'browser capability is not required for deterministic http proof',
+        'an unobserved effect is not a tested negative',
+    ):
+        assert rule in prose
+    assert 'without observed execution supports browser-required, not confirmed' in corpus
+    assert 'unambiguous enough, confirmed' not in corpus
+    assert 'missing browser execution stays browser-required' in corpus

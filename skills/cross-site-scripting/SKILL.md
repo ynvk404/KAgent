@@ -357,16 +357,12 @@ comments, attributes, inert elements and CSP before choosing the proof.
   value.
 - **JS string context** — the marker sits inside a JavaScript string
   literal.
-- **URL/href context** — the marker lands in an `href`, `src`, or similar
-  URL-bearing attribute. Before selecting a Phase 2 payload for this
-  context, observe — don't assume — three things: whether the value is
-  HTML-encoded, whether the scheme is validated or allow-listed (e.g. the
-  app only accepts `http(s)://`), and whether the URL is canonicalized
-  before being written into the attribute. Only pick a probe from
-  `payloads.txt`'s URL-context entry once you know which of these apply;
-  do not default to a `javascript:`-scheme payload without that
-  observation, since many apps validate or strip the scheme before an
-  executable URL payload would ever matter.
+- **URL/href context** — the marker lands in a URL-bearing attribute. Inspect
+  the actual attribute, HTML-decoded value, scheme validation/allow-list and
+  canonicalization before selecting a URL probe. HTML attribute encoding alone
+  does not establish a safe scheme; different `href`/`src` elements also have
+  different execution/interaction behavior. Unknown handling is a limitation,
+  not permission to spray scheme variants or a reason to declare a negative.
 - **HTML comment context** — the marker lands inside an HTML comment
   (`<!-- ... -->`).
 - **CSS context** — the marker lands inside CSS. This has two mechanically
@@ -384,10 +380,18 @@ comments, attributes, inert elements and CSP before choosing the proof.
   it to often end in `not-confirmed` rather than force a result. Do not
   spend more than one probe per sub-case confirming this context is
   genuinely inert before moving on.
-- **Fully encoded/neutralized** — special characters are encoded or
-  otherwise neutralized. This candidate is very likely not exploitable as
-  reflected XSS; note this and mark it `not-confirmed` rather than forcing
-  a payload.
+- **Fully encoded/neutralized in the observed context** — a completed bounded
+  test shows the input remains data there, permitting `not-confirmed` for that
+  sink. HTML text encoding does not establish safety in JavaScript strings,
+  event handlers or URLs: account for the enclosing parser and any later decoding.
+  Encoding presence/absence alone proves neither safety nor exploitability.
+
+For Angular clients, interpolation escapes text and `[innerHTML]` bindings
+sanitize HTML by default; direct DOM writes and `bypassSecurityTrust*` calls have different
+trust boundaries. Verify the actual binding/source-to-sink path rather than
+assuming the framework is safe or vulnerable. Scripts inserted through ordinary
+`innerHTML` fragment insertion do not execute merely because they appear in DOM;
+HTML document parsing and fragment insertion are different proof contexts.
 
 For reflected XSS, the HTTP response establishes the reflection context.
 Whether that evidence is sufficient for `confirmed` depends on the context:
@@ -432,16 +436,23 @@ Keep the proof non-destructive and scoped to your own session:
   indicator) is sufficient proof of script execution.
 - Do not chain the payload into session hijacking, credential capture, or
   redirection to an external site.
-- For a candidate that appears to require stored XSS (the value is
-  persisted and rendered back on a later request, e.g. a comment or profile
-  field), only submit the payload to a resource you own or a designated
-  test account, and remove or clean up the stored payload afterward when
-  the application supports it. Stored XSS reuses the same Phase 2 payload
-  matched to the observed context — it is a difference in *where and when*
-  the payload executes (store now, render later, possibly to a different
-  user), not a different payload corpus. Record the trigger path — which
-  endpoint stores the value and which endpoint/action renders it back —
-  in the result's `order` field (see step 5).
+- **Stored/SPA checkpoint:** before a stateful execution probe, establish authority and
+  the evidenced rendering context, and only submit the payload to a resource
+  you own or a designated test account. Check isolation, readback and cleanup
+  feasibility; missing cleanup authority never permits automatic deletion.
+  If the proof path needs browser execution, check the actually permitted,
+  integrated capability first. When it is unavailable, record `browser-required`
+  if applicable rather than add executable mutations that cannot close the gap.
+  Browser capability is not required for deterministic HTTP proof under step 3.
+  After a write acknowledgement, record reported effects promptly under the
+  structured contract; do not wait for execution proof or claim verified storage.
+  Independent readback establishes persistence at that time; a rendering response
+  may also serve as readback, without an extra request solely to satisfy a list.
+  Acceptance, stored markup and JSON readback are not execution evidence. Follow
+  the evidenced rendering sink to its executable context and applicable proof,
+  then perform cleanup only with separate authority and record verification or
+  honest limitations. Record store-to-render endpoints/audience in `order` and
+  declare differing related request identities before starting the attempt.
 - For a candidate that appears to be DOM-based (the sink is client-side,
   e.g. `innerHTML`, `document.write`, `eval` on a URL fragment or a
   `postMessage` handler observed in JS during `web-enumeration`), confirm
@@ -485,8 +496,10 @@ from filter-bypass: a close variant tests whether the *same context* is
 exploitable through an equivalent vector, which is squarely part of
 assessing sanitization coverage; it does not use encoding tricks, case
 obfuscation, or payload fragmentation aimed at evading a filter or WAF —
-those remain out of scope per step 3a. If no close variant works, mark the
-candidate as `not-confirmed` rather than escalating further.
+those remain out of scope per step 3a. If no close variant works, stop and use
+step 5: `not-confirmed` needs a completed bounded test and usable proof; missing
+browser execution remains `browser-required`, and missing sources/proof remains
+`insufficient-evidence`. An unobserved effect is not a tested negative.
 
 ## 4. Bound the proof — do not escalate into impact demonstration
 
@@ -501,9 +514,9 @@ particular, do not:
   page, etc.);
 - run automated XSS scanners or fuzzers to "see how bad it is."
 
-If step 3 never produces a clear signal, that's a valid outcome — record it
-as `not-confirmed` rather than continuing to escalate technique or payload
-variety to force a result.
+If step 3 never produces a clear signal, stop payload escalation and use step 5's
+outcome rules. Distinguish a completed bounded negative from missing browser
+execution, incomplete testing or unavailable proof.
 
 ## 5. Record the validation evidence
 
@@ -547,9 +560,10 @@ dependent claims/excerpts, then `record_evidence` with the correct
 `observation_ids` for a new immutable snapshot and replacing `evidence_refs`
 before resubmitting. Removing an observation ID alone leaves derived proof
 stale. Never edit registered snapshots in place or borrow another attempt's
-sources. Use at most two repair submissions after the initial submission within
-the existing recovery budget, without new HTTP probes solely for manifest repair
-or resetting the budget.
+sources. Following the loader preface, retry at most once with usable existing
+evidence within the remaining recovery budget; this does not change the runtime
+retry ceiling. Do not send new HTTP probes solely for manifest repair or reset
+the budget.
 If valid repair is unavailable, record `insufficient-evidence` and stop;
 retain `browser-required` when the missing proof is browser execution.
 

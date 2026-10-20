@@ -81,12 +81,15 @@
 #
 # Engine     | Function-based tell               | String concatenation      | Comment syntax
 # -----------|-------------------------------------|----------------------------|----------------
-# MySQL      | version(), database(), user()       | CONCAT(a,b) or a||b*       | -- , #, /* */
+# MySQL      | version(), database(), user()       | CONCAT(a,b) or a||b*       | --<space>, #, /* */
 # Postgres   | version(), current_database()        | a || b                     | -- , /* */
 # MSSQL      | @@version, DB_NAME()                 | a + b                      | -- , /* */
 # Oracle     | banner from v$version, USER          | a || b                     | -- , /* */
 # SQLite     | sqlite_version()                     | a || b                     | -- , /* */
 # * MySQL only treats || as concatenation in PIPES_AS_CONCAT sql_mode; CONCAT() is the reliable default.
+# MySQL -- comments require a following whitespace/control character; preserve it
+# on the wire. SQLite/Postgres/MSSQL -- comments do not have that requirement.
+# Comments only start outside literals; check remaining parentheses/query structure.
 #
 # These indicators are for identification only — do not use a
 # function-based tell as a live extraction probe outside of the Phase 3
@@ -94,10 +97,11 @@
 
 # Error-string reference (for engine identification — see SKILL.md):
 #   MySQL:    "SQL syntax.*MySQL", "Warning: mysqli"
-#   Postgres: "pg_query", "PostgreSQL.*ERROR", "SQLSTATE"
+#   Postgres: "pg_query", "PostgreSQL.*ERROR"
 #   MSSQL:    "Microsoft OLE DB", "Unclosed quotation mark", "System.Data.SqlClient"
 #   Oracle:   "ORA-\d{5}"
-#   SQLite:   "SQLite3::", "sqlite3.OperationalError"
+#   SQLite:   "SQLITE_ERROR", "SQLite3::", "sqlite3.OperationalError", Sequelize "dialects/sqlite/"
+# SQLSTATE is shared across DBMSs; Sequelize alone does not identify its dialect.
 
 # --- Quoted-string vs. numeric context — try both if unclear ---
 # Per SKILL.md 1b: if the parameter's data type/context isn't already
@@ -119,6 +123,9 @@
 # a one-off difference is not evidence — repeat before concluding.
 
 # --- Boolean-based (engine-agnostic, try first) -----------------------------
+# Adapt the seed and quote/parenthesis/prefix/suffix to observed context per
+# SKILL.md 2a. These are not drop-in LIKE-pattern probes: a trailing wildcard can
+# change an equality's truth value. Equal responses are inconclusive for this pair.
 1 AND 1=1                  # purpose: boolean TRUE, numeric context | applies: should behave like baseline if injectable and the app is filtering rows | limit: confirmation only, no data read
 1 AND 1=2                  # purpose: boolean FALSE, numeric context | applies: should differ from baseline/TRUE if injectable | limit: confirmation only, no data read
 1' AND '1'='1              # purpose: boolean TRUE, quoted-string context | applies: use when parameter is rendered inside quotes | limit: confirmation only, no data read
