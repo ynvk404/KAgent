@@ -173,3 +173,17 @@ async def test_previous_attempt_cannot_be_read_during_retest(runtime, tmp_path):
     with pytest.raises(UserControlledRefusal):
         await agent.tools.execute("read_http_observation", args, None, prompter)
     assert len(sent) == before
+
+
+async def test_legacy_owned_reader_keeps_replace_decoding(runtime, tmp_path):
+    agent, _, _, _, oid = await reader_runtime(runtime, tmp_path)
+    _, prompter, policy, _, sent, *_ = runtime
+    body = b"legacy\xfftext\xc3"
+    item = replace(policy.observations._items[oid], body=body,
+                   response_hash=hashlib.sha256(body).hexdigest())
+    policy.observations._items[oid] = replace(item, retained_hash=digest(source_row(item)))
+    before = len(sent)
+    result = await agent.tools.execute("read_http_observation", {
+        "observation_id": oid, "start_char": 0, "max_chars": 2000}, None, prompter)
+    assert result.split("\n", 1)[1] == body.decode(errors="replace")
+    assert len(sent) == before

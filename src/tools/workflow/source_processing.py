@@ -16,7 +16,7 @@ from src.workflow.extraction import extract_html, apply_extraction
 controller: ContextVar[tuple[Any, str] | None] = ContextVar('discovery_source_controller', default=None)
 
 
-def read_admitted_source(agent, tool, source, prompter):
+def read_admitted_source(agent, tool, source, prompter, *, require_receipt=True):
     """Reuse current policy, admitted ObservationStore and scoped capture path."""
     from src.tools.http.http_tool import HTTPTool
     from src.tools.common.browser_capture import BrowserCaptureGetTool
@@ -24,7 +24,8 @@ def read_admitted_source(agent, tool, source, prompter):
     from src.tools.common.tool_result import ReadHTTPObservation
     policy = policy_for(prompter)
     if (agent is None or agent.workflow is not tool.state or agent.tools.get('workflow') is not tool
-            or policy is None or policy is not policy_for(agent.prompter) or not policy.nested_allowed()):
+            or policy is None or policy is not policy_for(agent.prompter)
+            or (require_receipt and not policy.nested_allowed())):
         raise ExecutionBlocked('blocked: source extraction requires its current controller and Registry receipt')
     if source.kind not in {'http', 'capture'}:
         raise ValueError('source has no admitted HTML/JSON response bytes; inspect its original discovery dataset')
@@ -46,7 +47,7 @@ def read_admitted_source(agent, tool, source, prompter):
     if item.candidate_id is not None:
         # Retain existing attempt ownership, supersession and context checks.
         ReadHTTPObservation(agent).validate_rights({'observation_id': item.id, 'start_char': 0, 'max_chars': 1},
-                                                   prompter, receipt=True)
+                                                   prompter, receipt=require_receipt)
     elif policy.generic_validation is not None and policy.generic_validation.restricted():
         raise ExecutionBlocked('blocked: unowned discovery source cannot be borrowed by a validation attempt')
     source_tool = agent.tools.get(capability)
