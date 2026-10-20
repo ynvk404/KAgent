@@ -190,9 +190,9 @@ async def test_malformed_agent_retry_prepares_fresh_context(tmp_path, monkeypatc
     original = agent.save
     changed = False
 
-    async def save():
+    async def save(**kwargs):
         nonlocal changed
-        await original()
+        await original(**kwargs)
         if agent.history[-1].role == "user" and "previous assistant message contained" in agent.history[-1].content:
             changed = True
             assert agent.workflow.objective is not None

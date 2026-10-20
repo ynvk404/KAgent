@@ -2183,6 +2183,17 @@ class Agent:
                                        estimate.estimated_total - reducible)
 
     async def _finish_tool_results(self, emit=None) -> None:
+        await self._checkpoint_workflow(emit)
+
+    async def _checkpoint_terminal_workflow(self) -> None:
+        """Reconcile the owned terminal state before its authoritative save.
+
+        This does not close attempts or grant execution rights. It also serves
+        interrupted/failed closures whose Result committed before the receipt.
+        """
+        await self._checkpoint_workflow(reconcile_goals=True)
+
+    async def _checkpoint_workflow(self, emit=None, *, reconcile_goals: bool = False) -> None:
         """Dispose controller-owned originals before saving or ending a turn.
 
         No pending originals or execution rights are serialized. On interruption
@@ -2191,22 +2202,33 @@ class Agent:
         Normal dispatch replaces this snapshot with its fully assembled request.
         """
         ownership.check(self)
+        workflow = self.workflow
+        generation = workflow.generation
         req = self._tool_checkpoint_request
-        workflow_dirty = self.workflow.committed_revision != self._workflow_saved_revision
-        if not workflow_dirty and (req is None or not self._tool_results_unsaved):
+        workflow_dirty = workflow.committed_revision != self._workflow_saved_revision
+        if not reconcile_goals and not workflow_dirty and (req is None or not self._tool_results_unsaved):
             return
 
         async def finish() -> None:
             async with asyncio.timeout(TOOL_CHECKPOINT_TIMEOUT_SECONDS):
-                if req is not None and self._tool_results_unsaved:
-                    if emit is None:
-                        self.result_retention.admit(req.messages, schema_tokens(req.tools), request=req, strict=True)
-                    else:
-                        self.guard_working_context(req.messages, emit, request=req, strict_retention=True)
-                # Tool cancellation has unwound its mutation lock. Persist the
-                # accepted state even when no receipt reached record_tool_result;
-                # pending coverage stays retryable instead of delaying this save.
-                await self.save()
+                async with workflow.mutation_lock:
+                    ownership.check(self)
+                    if self.workflow is not workflow or workflow.generation != generation:
+                        raise asyncio.CancelledError("workflow changed during checkpoint")
+                    if reconcile_goals:
+                        self._reconcile_requested_goals()
+                    workflow_dirty = workflow.committed_revision != self._workflow_saved_revision
+                    if not workflow_dirty and (req is None or not self._tool_results_unsaved):
+                        return
+                    if req is not None and self._tool_results_unsaved:
+                        if emit is None:
+                            self.result_retention.admit(req.messages, schema_tokens(req.tools), request=req, strict=True)
+                        else:
+                            self.guard_working_context(req.messages, emit, request=req, strict_retention=True)
+                    # Tool cancellation has unwound its mutation lock. Derive
+                    # and snapshot under the same lock, even without a receipt;
+                    # pending coverage remains retryable. Do not reacquire it.
+                    await self.save(_workflow_locked=True)
 
         task = asyncio.create_task(finish())
         cancelled = False
@@ -2907,6 +2929,10 @@ class Agent:
             for candidate in candidates:
                 if candidate.status not in {"new", "queued", "validating", "validated", "dismissed"}:
                     continue
+                if objective.mode == "direct":
+                    from src.permission.runtime.execution import policy_for
+                    if self._validation_completion_error(candidate, policy_for(self.prompter)) is None:
+                        continue
                 result = self.workflow.latest_result(candidate.id)
                 if result is not None and result.cleanup_state in {"requires-user-action", "failed", "unknown", "not-attempted"}:
                     from src.permission.runtime.execution import policy_for
@@ -2923,7 +2949,51 @@ class Agent:
                     return True
             if goal.status == "pending" and not candidates:
                 return True
+        if objective.mode == "direct":
+            # Assigned work outside the named classes also remains an
+            # obligation. Never reopen a class whose goal was cancelled.
+            requested_classes = {goal.candidate_class for goal in objective.requested_goals}
+            from src.permission.runtime.execution import policy_for
+            for candidate in self._direct_objective_candidates():
+                if candidate.candidate_class in requested_classes:
+                    continue
+                reason = self._validation_completion_error(candidate, policy_for(self.prompter))
+                if reason is None:
+                    continue
+                if self._direct_completion_action(candidate, reason) in {"coverage", "finding", "cleanup"}:
+                    return True
+                if candidate.status in {"new", "queued", "validating"} and (
+                    self._goal_validation_route(candidate.candidate_class).kind == "expert"
+                    or self._generic_startable(candidate)
+                ):
+                    return True
         return False
+
+    def _direct_objective_candidates(self) -> tuple[Candidate, ...]:
+        """Current direct records only; this grants no execution ownership."""
+        objective = self.workflow.objective
+        origin = self.target.origin()
+        if (objective is None or objective.mode != "direct" or origin is None
+                or objective.target_origin != origin.as_url()):
+            return ()
+        return tuple(candidate for candidate in sorted(self.workflow.candidates.values(), key=lambda c: c.id)
+                     if self.workflow.candidate_belongs_to_objective(candidate, objective))
+
+    def _direct_completion_action(self, candidate: Candidate, reason: str | None) -> str | None:
+        # These errors occur only after assessment ownership, proof integrity,
+        # attempt completion and artifact checks. Other failures need normal
+        # validation/repair admission, never persistence of an untrusted result.
+        if reason not in {"coverage sync pending", "confirmed finding persistence pending"} and not (
+            reason and reason.startswith("mutation cleanup unresolved:")
+        ):
+            return None
+        result = self.workflow.latest_result(candidate.id)
+        assert result is not None
+        if result.coverage_synced is False:
+            return "coverage"
+        if result.outcome == "confirmed" and not self.workflow.finding_is_persisted(candidate.id):
+            return "finding"
+        return "cleanup" if result.cleanup_state == "pending" else "operator"
 
     def _has_bounded_goal_context(self, objective: WorkflowObjective, user_msg: str) -> bool:
         if self._turn_capture_selection() is not None:
@@ -3471,6 +3541,7 @@ class Agent:
         workflow_tool = self.tools.get("workflow")
         objective = self.workflow.objective
         whole_target = objective is not None and objective.mode == "whole_target"
+        direct_goals = bool(objective is not None and objective.mode == "direct" and objective.requested_goals)
         status, actionable_work, blockers = (
             self._whole_target_state()
             if whole_target
@@ -3483,12 +3554,16 @@ class Agent:
             if whole_target
             else tuple(sorted(self.workflow.candidates.values(), key=lambda item: item.id))
         )
+        if direct_goals:
+            candidates = self._direct_objective_candidates()
         selection = self._turn_capture_selection()
         if selection is not None:
             refs = {row.baseline_request_ref for row in selection.requests if row.baseline_request_ref}
             candidates = tuple(candidate for candidate in candidates if candidate.baseline_request_ref in refs
                                and objective is not None
                                and self.workflow.candidate_belongs_to_objective(candidate, objective))
+        direct_errors = {candidate.id: self._validation_completion_error(candidate, policy_for(self.prompter))
+                         for candidate in candidates} if direct_goals else {}
         pending_inputs = sum(
             item.disposition == "pending" for item in self.workflow.objective_inputs()
         ) if whole_target else 0
@@ -3578,6 +3653,9 @@ class Agent:
                     generic_startable=self._generic_startable(candidate),
                     validation_ready=(workflow_tool.validation_admission_error(candidate.id, policy_for(self.prompter)) is None
                                       if whole_target and isinstance(workflow_tool, WorkflowTool) else None),
+                    validation_complete=(direct_errors[candidate.id] is None if direct_goals else None),
+                    completion_action=(self._direct_completion_action(candidate, direct_errors[candidate.id])
+                                       if direct_goals else None),
                 )
                 for candidate in candidates
                 for result in [self.workflow.latest_result(candidate.id)]
@@ -4101,7 +4179,7 @@ class Agent:
                 self._pending_context = None
             else:
                 try:
-                    await self._finish_tool_results()
+                    await self._checkpoint_terminal_workflow()
                 except Exception as err:
                     if stop_reason != "cancelled":
                         raise
@@ -4330,9 +4408,7 @@ class Agent:
                 reasoning_level=turn_reasoning_level,
                 requested_reasoning_level=turn_requested_level,
                 stop_reason="workflow_blocked",
-                instruction=self._requested_goal_incomplete_instruction(
-                    "The operator explicitly cancelled unresolved requested-goal work."
-                ),
+                instruction="The operator explicitly cancelled unresolved requested-goal work.",
                 max_steps=max_steps,
             )
 
@@ -4702,9 +4778,7 @@ class Agent:
                             reasoning_level=turn_reasoning_level,
                             requested_reasoning_level=turn_requested_level,
                             stop_reason="workflow_stalled",
-                            instruction=self._requested_goal_incomplete_instruction(
-                                "The direct objective stalled without structured requested-goal progress."
-                            ),
+                            instruction="The direct objective stalled without structured requested-goal progress.",
                             max_steps=max_steps,
                         )
                     if self._has_actionable_requested_goal():
@@ -4724,9 +4798,7 @@ class Agent:
                         reasoning_level=turn_reasoning_level,
                         requested_reasoning_level=turn_requested_level,
                         stop_reason="max_steps" if step == max_steps - 1 else "workflow_blocked",
-                        instruction=self._requested_goal_incomplete_instruction(
-                            "No safe actionable requested-goal work remains in this direct objective."
-                        ),
+                        instruction="No safe actionable requested-goal work remains in this direct objective.",
                         max_steps=max_steps,
                     )
 
@@ -4991,6 +5063,8 @@ class Agent:
                             exploration_steps=stall_tracker.phase_exploration_steps)
                 incomplete = any(status not in {"tested_confirmed", "tested_not_confirmed"}
                                  for status in statuses.values())
+                if self.workflow.objective is not None and self.workflow.objective.mode == "direct":
+                    incomplete = incomplete or bool(self._validation_completion_blockers())
                 # A newly recorded unresolved assessment may legitimately be
                 # revised using existing evidence. Do not preempt that bounded
                 # recovery merely because its candidate is no longer validating.
@@ -4999,7 +5073,7 @@ class Agent:
                     and result.cleanup_state in {"requires-user-action", "failed", "unknown", "not-attempted"}
                     and self._validation_completion_error(candidate, policy)
                         == f"mutation cleanup unresolved:{result.cleanup_state}"
-                    for candidate in self.workflow.objective_candidates()
+                    for candidate in self._direct_objective_candidates()
                 )
                 blocked = incomplete and operator_cleanup and not self._has_actionable_requested_goal()
                 stalled = incomplete and requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS
@@ -5012,11 +5086,9 @@ class Agent:
                         reasoning_level=turn_reasoning_level,
                         requested_reasoning_level=turn_requested_level,
                         stop_reason="workflow_blocked" if blocked else "workflow_stalled",
-                        instruction=self._requested_goal_incomplete_instruction(
-                            "Direct validation remains unresolved: " + (
-                                "operator action or an external repair is required."
-                                if blocked else "bounded exploration made no further progress; stop probing."
-                            )
+                        instruction="Direct validation remains unresolved: " + (
+                            "operator action or an external repair is required."
+                            if blocked else "bounded exploration made no further progress; stop probing."
                         ), max_steps=max_steps,
                     )
 
@@ -5032,9 +5104,7 @@ class Agent:
                         reasoning_level=turn_reasoning_level,
                         requested_reasoning_level=turn_requested_level,
                         stop_reason="max_steps",
-                        instruction=self._requested_goal_incomplete_instruction(
-                            f"The hard limit of {max_steps} outer agent iterations was reached."
-                        ),
+                        instruction=f"The hard limit of {max_steps} outer agent iterations was reached.",
                         max_steps=max_steps,
                     )
 
@@ -5200,7 +5270,7 @@ class Agent:
                 or self.workflow.attempts.get(aid) is not attempt or attempt.get("status") != "unresolved"
                 or self.workflow.candidates[cid].status != "deferred"):
             raise RuntimeError("unresolved closure did not commit")
-        await self.save()
+        await self._checkpoint_terminal_workflow()
         check_cancelled(signal)
         if self.store is not None and self._workflow_saved_revision != self.workflow.committed_revision:
             raise RuntimeError("unresolved closure persistence unavailable")
@@ -5313,7 +5383,7 @@ class Agent:
                 "candidates under current scope and budgets: " + ", ".join(independent)
                 + ". Continue only safe independent work through normal tool admission. "
                 "This is not assessment completion; preserve every unresolved obligation."))
-        await self.save()
+        await self._checkpoint_terminal_workflow()
         return None if independent else "workflow_blocked"
 
     @staticmethod
@@ -5332,8 +5402,16 @@ class Agent:
     ) -> None:
         ownership.check(self)
         blockers = self._validation_completion_blockers() if not resp.message.tool_calls else ()
-        if blockers:
-            resp.message.content = "Validation remains incomplete: " + "; ".join(blockers)
+        objective = self.workflow.objective
+        direct_partial = False
+        if not resp.message.tool_calls and objective is not None and objective.mode == "direct" and objective.requested_goals:
+            statuses = self._reconcile_requested_goals()
+            direct_partial = bool(blockers) or any(
+                status not in {"tested_confirmed", "tested_not_confirmed"} for status in statuses.values()
+            )
+        if blockers or direct_partial:
+            resp.message.content = (self._direct_partial_summary(blockers) if direct_partial
+                                    else "Validation remains incomplete: " + "; ".join(blockers))
             streamed = False
             if stream_buffer is not None:
                 stream_buffer.clear()
@@ -5345,6 +5423,57 @@ class Agent:
             emit({"type": "error", "err": Exception(f"save session: {err}")})
         if emit_text and resp.message.content and not streamed:
             emit({"type": "assistant-text", "text": resp.message.content})
+
+    def _direct_partial_summary(self, blockers: tuple[str, ...]) -> str:
+        """Report runtime facts instead of trusting incomplete model prose."""
+        from src.permission.runtime.execution import policy_for
+        from src.workflow.assessment import candidate_binding, seal
+        objective = self.workflow.objective
+        assert objective is not None and objective.mode == "direct"
+        workflow_tool = self.tools.get("workflow")
+        evidence_root = workflow_tool.evidence_root if isinstance(workflow_tool, WorkflowTool) else None
+        rows = ["Validation remains incomplete/partial. Requested goals:"]
+        for goal in objective.requested_goals:
+            rows.append(f"- {goal.candidate_class}: status={goal.status}"
+                        + (f"; {goal.reason}" if goal.reason else ""))
+        policy = policy_for(self.prompter)
+        for candidate in self._direct_objective_candidates():
+            result = self.workflow.latest_result(candidate.id)
+            reason = self._validation_completion_error(candidate, policy)
+            row = f"- {candidate.candidate_class} candidate={candidate.id}"
+            if result is not None:
+                attempt = self.workflow.attempts.get(result.attempt_id or "", {})
+                bound = accepted_result(self.workflow, candidate, result, policy) or (
+                    result.outcome not in {"confirmed", "not-confirmed"}
+                    and result.assessment_contract_version >= 2
+                    and result.assessment_binding == seal(result)
+                    and result.candidate_binding == candidate_binding(candidate)
+                    and attempt.get("candidate_id") == candidate.id
+                    and attempt.get("candidate_binding") == result.candidate_binding
+                    and attempt.get("objective_id") == objective.id
+                    and attempt.get("session_id") == result.session_id
+                    and (policy is None or policy.session_id is None or policy.session_id == result.session_id)
+                )
+                if result.objective_id == objective.id and bound:
+                    row += (f"; recorded outcome={result.outcome}; result={result.result_id}"
+                            f"; attempt={result.attempt_id}; mutation_performed={result.mutation_performed}"
+                            f"; cleanup={result.cleanup_state}; coverage_synced={result.coverage_synced}")
+                    if evidence_root is not None and result.evidence_refs and all(
+                        ref in self.workflow.evidence
+                        and self.workflow.evidence[ref].is_available_for_resume(evidence_root)
+                        for ref in result.evidence_refs
+                    ):
+                        row += "; evidence=" + ",".join(result.evidence_refs)
+                        if self.workflow.finding_is_persisted(candidate.id) and self.workflow.eligible_for_finding(candidate.id):
+                            row += "; persisted Finding binding=" + self.workflow.persisted_findings[candidate.id]
+                else:
+                    row += "; current assessment binding unavailable"
+            if reason:
+                row += "; unresolved: " + reason
+            rows.append(row)
+        if blockers:
+            rows.append("Assigned-work blockers:\n- " + "\n- ".join(blockers))
+        return redact("\n".join(rows))
 
     @staticmethod
     def _emit_buffered_response_text(
@@ -5381,6 +5510,7 @@ class Agent:
                              if current_budget(self.workflow, b["candidate_id"]) is b)
         if stop_reason == "workflow_stalled" or stop_reason == "max_steps" and not repair_pending:
             await self._close_terminal_attempt(stop_reason, signal, emit, working)
+        await self._checkpoint_terminal_workflow()
         if stop_reason == "final_response":
             instruction += "\n\n" + _PLAIN_SUMMARY_INSTRUCTION
         objective = self.workflow.objective
@@ -5393,7 +5523,13 @@ class Agent:
                             + ", ".join(pending_findings)
                             + ". No finding has been persisted for these assessment revisions.")
         if self.workflow.objective is not None and self.workflow.objective.requested_goals:
-            if stop_reason == "workflow_completed":
+            direct_complete = bool(
+                objective is not None and objective.mode == "direct"
+                and all(goal.status in {"tested_confirmed", "tested_not_confirmed"}
+                        for goal in objective.requested_goals)
+                and not self._validation_completion_blockers()
+            )
+            if stop_reason == "workflow_completed" or direct_complete:
                 instruction += (
                     "\n\nUse this runtime goal summary when describing completion; "
                     "do not overstate any result:\n" + self._requested_goal_summary_text()

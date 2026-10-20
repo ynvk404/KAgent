@@ -35,6 +35,8 @@ class PlannerCandidate:
     coverage_synced: bool | None = None
     generic_startable: bool | None = None
     validation_ready: bool | None = None
+    validation_complete: bool | None = None
+    completion_action: str | None = None
 
 
 @dataclass(frozen=True)
@@ -684,6 +686,31 @@ def _requested_goal_plan(
             item for item in context.candidates
             if item.id in goal.candidate_ids
         ]
+        if not whole_target and context.objective_mode == "direct":
+            # Only the controller's current evaluator can distinguish a
+            # completed sibling from one awaiting local persistence/cleanup.
+            candidates = [item for item in candidates if item.validation_complete is not True]
+            for item in candidates:
+                action = item.completion_action
+                if action not in {"coverage", "finding", "cleanup"}:
+                    continue
+                guidance = {
+                    "coverage": f"Call workflow(action=sync_coverage, candidate_id={item.id}) using the recorded result.",
+                    "finding": f"Call confirm_finding for candidate {item.id} using its existing accepted result and evidence.",
+                    "cleanup": (f"Cleanup is pending for {item.id}. Obtain the operator's intent for the exact cleanup "
+                                "action and normal per-action permission before attempting it. Record success only "
+                                "with owned cleanup/readback evidence; otherwise leave requires-user-action."),
+                }[action]
+                return DecisionPlan(
+                    None, f"candidate {item.id} has pending {action}", "normal",
+                    ["Finish only this recorded obligation; do not retest completed candidates."],
+                    "Decision planner guidance for this turn:\n" + guidance
+                    + " Do not repeat validation probes. Scope, ownership and tool admission still apply.",
+                    candidate_id=item.id,
+                )
+            candidates = [item for item in candidates if item.completion_action != "operator"]
+            if goal.candidate_ids and not candidates:
+                continue
         if candidates:
             candidate = next(
                 (item for item in candidates if item.status in {"new", "queued", "validating"}

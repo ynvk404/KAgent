@@ -107,8 +107,8 @@ async def test_saved_batch_interruption_resume_keeps_readable_refs(tmp_path, mon
     release = asyncio.Event()
     original_save = agent.save
     snapshots = []
-    async def save():
-        await original_save()
+    async def save(**kwargs):
+        await original_save(**kwargs)
         if agent.history[-1].role == "tool":
             snapshots.append(cast(Store, agent.store).load())
             saved.set()
@@ -166,8 +166,8 @@ async def test_interruption_does_not_force_retention(tmp_path, monkeypatch, pres
     agent, registry, _ = setup_run(tmp_path, monkeypatch, preserve=preserve, threshold=threshold)
     signal = FakeSignal()
     original_save = agent.save
-    async def save():
-        await original_save()
+    async def save(**kwargs):
+        await original_save(**kwargs)
         if agent.history[-1].role == "tool": signal.aborted = True
     monkeypatch.setattr(agent, "save", save)
     await agent.run("Read local file", signal, lambda _: None)
@@ -204,8 +204,8 @@ async def test_final_step_interrupted_save_uses_tools_free_request(tmp_path, mon
     monkeypatch.setattr(registry.get("file_read"), "schema", lambda: {**original_schema(), "description": "schema" * 80000})
     signal = FakeSignal()
     original_save = agent.save
-    async def save():
-        await original_save()
+    async def save(**kwargs):
+        await original_save(**kwargs)
         if agent.history[-1].role == "tool": signal.aborted = True
     monkeypatch.setattr(agent, "save", save)
     await agent.run("Read local file", signal, lambda _: None, AgentRunOptions(max_steps=1))
