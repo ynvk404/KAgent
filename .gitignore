@@ -78,3 +78,7 @@ vulture-100.txt
 .venv/
 .mypy_cache/
 .ruff_cache/
+components/browser_mcp/BOUNDED_YOLO.md
+components/browser_mcp/LIVE_TEST.md
+components/browser_mcp/patch-local-v2.diff
+components/browser_mcp/patch-local-v3.diff

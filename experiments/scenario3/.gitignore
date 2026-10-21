@@ -1,0 +1,3 @@
+# Local experiment state, credentials-adjacent backups, logs and evidence.
+/profiles/
+/runs/
