@@ -21,7 +21,7 @@ from src.tools.http.http_tool import HTTPTool
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import AttackSurfaceInput, Candidate, WorkflowMode, WorkflowObjective, WorkflowState
 from tests.helpers.workflow import prepare_validation_prerequisites
-from src.workflow.validation_context import resolve_validation_context
+from src.workflow.validation.context import resolve_validation_context
 
 ORIGIN = "https://target.test"
 

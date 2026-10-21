@@ -14,10 +14,10 @@ from src.findings.store import Store as FindingStore
 from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.workflow.assessment import accepted_result
-from src.workflow.evidence_recovery import current_budget, MAX_EVIDENCE_REJECTIONS
-from src.workflow.discovery import SourceRecord
+from src.workflow.evidence.recovery import current_budget, MAX_EVIDENCE_REJECTIONS
+from src.workflow.discovery.inventory import SourceRecord
 from src.workflow.state import WorkflowObjective, WorkflowState
-from src.workflow.validation_route import ValidationRoute
+from src.workflow.validation.route import ValidationRoute
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, ScriptedModel, collect, seed_compactable_history
 from tests.helpers.burp_selection import make_runtime, ORIGIN
 from tests.helpers.workflow import prepare_validation_prerequisites

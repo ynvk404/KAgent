@@ -7,10 +7,10 @@ import json
 import pytest
 
 from src.agent.decision_planner import build_whole_target_plan
-from src.workflow.discovery import SourceRecord
-from src.workflow.evidence_recovery import MAX_TERMINAL_REPAIR_TURNS
+from src.workflow.discovery.inventory import SourceRecord
+from src.workflow.evidence.recovery import MAX_TERMINAL_REPAIR_TURNS
 from src.workflow.state import ValidationResult
-from src.workflow.validation_route import GENERIC_VALIDATOR
+from src.workflow.validation.route import GENERIC_VALIDATOR
 from tests.agent.test_review_p2_guidance import budget_for, deferred_pair
 from tests.agent.test_validation_continuation import PREFIX, candidate_for, offline
 from tests.helpers.burp_selection import ORIGIN

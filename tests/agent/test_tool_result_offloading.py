@@ -648,7 +648,7 @@ async def test_missing_token_artifact_keeps_independent_authoritative_evidence(m
     evidence = tmp_path/'artifacts/proof.md'
     evidence.parent.mkdir()
     evidence.write_text('independent authoritative proof')
-    from src.workflow.evidence import EvidenceArtifact
+    from src.workflow.evidence.artifacts import EvidenceArtifact
     proof = EvidenceArtifact.capture('fixture',str(evidence.relative_to(tmp_path)),tmp_path)
     before = agent.workflow.to_dict()
     artifact(agent.result_retention.store,ref).unlink()
@@ -667,7 +667,7 @@ def test_authoritative_and_managed_file_sources_excluded(make, relative):
     path = root / relative
     if relative == 'ordinary-known-proof.md':
         path.write_text('proof')
-        from src.workflow.evidence import EvidenceArtifact
+        from src.workflow.evidence.artifacts import EvidenceArtifact
         proof = EvidenceArtifact.capture('candidate', relative, root)
         agent.workflow.evidence[proof.id] = proof
     msg, _, _, _ = record(agent, args={'path':str(path)})

@@ -13,7 +13,7 @@ from urllib.parse import unquote_plus, urljoin, urlsplit
 
 from src.target.input_admission import canonical_endpoint, identity_text
 from src.target.origin import HTTPOrigin
-from .discovery import fingerprint, MAX_SOURCE_RECORDS
+from .inventory import fingerprint, MAX_SOURCE_RECORDS
 
 MAX_DOCUMENT_BYTES = 65536
 MAX_HTML_NODES = 4096
@@ -255,8 +255,8 @@ def apply_extraction(state, source_id: str, extraction: Extraction, *, generatio
     failure rejects the entire proposal. No auth/baseline/source_ref is copied.
     """
     from copy import deepcopy
-    from .discovery import EndpointRecord, ProvenanceRecord
-    from .state import AttackSurfaceInput
+    from .inventory import EndpointRecord, ProvenanceRecord
+    from ..state import AttackSurfaceInput
     source = state.discovery_source(source_id, generation=generation, retained_ref=retained_ref)
     if (not source.selected or source.retained_ref != retained_ref or source.retained_hash != retained_hash
             or source.document_url != document_url or source.kind not in {'http', 'capture'}):

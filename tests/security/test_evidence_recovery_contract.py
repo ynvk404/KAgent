@@ -7,8 +7,8 @@ import pytest
 from src.agent.agent import Agent, AgentOptions
 from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.workflow.assessment import digest, source_row
-from src.workflow.evidence_errors import evidence_repair_kind
-from src.workflow.evidence_recovery import current_budget
+from src.workflow.evidence.errors import evidence_repair_kind
+from src.workflow.evidence.recovery import current_budget
 from src.workflow.state import WorkflowObjective, WorkflowState
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, ScriptedModel, collect
 from tests.security.test_agent_assessment import setup
@@ -379,7 +379,7 @@ async def test_restarting_same_objective_cannot_reset_exhausted_budget(runtime, 
 
 
 async def test_operator_stop_keeps_existing_goal_cancellation_priority(runtime, tmp_path):
-    from src.workflow.goals import RequestedGoal
+    from src.workflow.planning.goals import RequestedGoal
     state, candidate, workflow, args, _ = await setup(runtime, tmp_path)
     _, _, _, _, sent, *_ = runtime
     agent = agent_for(runtime, workflow, state, {**args, 'observation_ids': []})

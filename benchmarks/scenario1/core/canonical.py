@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from benchmarks.common.contracts import CanonicalResultExport, OperationalCaseInput, PROTOCOL, decode
 from src.workflow.assessment import accepted_result, candidate_binding, seal
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from src.workflow.state import Candidate, ValidationResult, WorkflowObjective, WorkflowState
 
 

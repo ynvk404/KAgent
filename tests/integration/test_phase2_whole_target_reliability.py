@@ -12,8 +12,8 @@ from src.permission.permission import AlwaysAllow
 from src.skills.registry import Registry as Skills
 from src.target.target import Target
 from src.tools.workflow.workflow_tool import WorkflowTool
-from src.workflow.evidence_recovery import current_budget
-from src.workflow.goals import RequestedGoal
+from src.workflow.evidence.recovery import current_budget
+from src.workflow.planning.goals import RequestedGoal
 from src.workflow.state import Candidate, PHASE_COVERAGE_DIMENSIONS, WorkflowObjective, WorkflowState
 from src.tools.common.outcome import ToolOutput
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, ScriptedModel, collect

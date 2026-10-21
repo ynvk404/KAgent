@@ -197,7 +197,7 @@ def restore_discovery(state, value: dict) -> None:
     Never use admission to reconstruct historical processing or guess IDs.
     Legacy inputs/attempts/results are deliberately left alone.
     """
-    from .state import normalize_media_type
+    from ..state import normalize_media_type
     invalid = value.get('discovery_restore_invalid', False)
     state.discovery_restore_invalid = invalid if type(invalid) is bool else True
     try:

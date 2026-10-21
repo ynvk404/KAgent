@@ -1,7 +1,7 @@
 """Short, transient continuation hints from the current runtime projection."""
 from typing import Any
 
-from src.workflow.validation_route import ValidationRoute
+from src.workflow.validation.route import ValidationRoute
 
 
 def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute | None,

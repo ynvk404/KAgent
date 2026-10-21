@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.skills.registry import Registry, Skill, SkillTriggers
-from src.workflow.goals import RequestedGoal, extract_requested_classes
+from src.workflow.planning.goals import RequestedGoal, extract_requested_classes
 from src.workflow.state import Candidate, WorkflowObjective, WorkflowState
 
 

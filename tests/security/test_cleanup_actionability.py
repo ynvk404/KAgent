@@ -4,7 +4,7 @@ import json
 import pytest
 
 from src.workflow.assessment import accepted_result
-from src.workflow.goals import RequestedGoal
+from src.workflow.planning.goals import RequestedGoal
 from src.workflow.state import WorkflowState
 from tests.security.test_execution_policy import runtime  # noqa: F401
 from tests.security.test_http_observation_reader import reader_runtime

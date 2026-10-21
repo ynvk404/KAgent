@@ -9,11 +9,11 @@ import re
 
 import httpx
 
-from src.workflow.review import digest
-from src.workflow.validation_route import (
+from src.workflow.evidence.review import digest
+from src.workflow.validation.route import (
     GENERIC_VALIDATOR, GENERIC_TOOLS, generic_admission, resolve_validation_route,
 )
-from src.workflow.probe import ProbeProposal
+from src.workflow.validation.probe import ProbeProposal
 
 
 def request_signature(request):

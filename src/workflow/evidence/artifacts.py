@@ -17,8 +17,8 @@ from typing import Any
 from src.redaction.redact import apply_evidence as redact
 from src.tools.execution.sensitive import is_sensitive_path
 from src.permission.permission import Prompter, UserControlledRefusal
-from src.workflow.evidence_errors import EvidenceSubmissionError
-from src.workflow.evidence_source import EvidenceSource
+from src.workflow.evidence.errors import EvidenceSubmissionError
+from src.workflow.evidence.source import EvidenceSource
 
 MAX_EVIDENCE_BYTES = 2_000_000
 
@@ -292,7 +292,7 @@ class EvidenceArtifact:
         if destination.is_symlink():
             raise ValueError("evidence snapshot file cannot be a symbolic link")
         try:
-            from .evidence_publication import publish
+            from .publication import publish
             publish(destination, snapshot, check=publication_check)
         except FileExistsError:
             try:

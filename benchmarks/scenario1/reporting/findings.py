@@ -13,7 +13,7 @@ from src.findings.presentation import EvidenceLink, SummaryContext, render_summa
 from src.redaction.redact import apply_evidence
 from src.target.origin import HTTPOrigin
 from src.workflow.assessment import accepted_result
-from src.workflow.review import confirmation_binding
+from src.workflow.evidence.review import confirmation_binding
 from src.workflow.state import validation_result_fingerprint
 
 

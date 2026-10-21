@@ -1,11 +1,13 @@
 """Reproduced layout failures, checked against complete cells and compositor output."""
 from __future__ import annotations
 
+from dataclasses import replace
+from typing import cast
 import pytest
 from rich.cells import cell_len
 from rich.text import Text
 from textual.geometry import Offset
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 from src.ui.core.app import KAgent
 from src.ui.commands.slash_items import SLASH_ITEMS
@@ -127,14 +129,22 @@ async def test_status_badge_stays_visible_with_long_runtime_metadata(
 ) -> None:
     async with app.run_test(size=size) as pilot:
         status = app.status_bar
-        status.apply(props(
-            busy=busy, yolo=True, phase="running-tool" if busy else "idle",
-            model="organization/research-model-with-a-long-name-and-version-2026",
+        # The app owns StatusBar; recomputes must retain the stressed metadata.
+        agent = cast(MagicMock, app.agent)
+        agent.approx_tokens.return_value = 2300
+        agent.idle_request_estimate.return_value.estimated_total = 5300
+        agent.get_auto_compact_threshold.return_value = 6000
+        app.state = replace(
+            app.state, busy=busy, phase="running-tool" if busy else "idle",
             running_tool="ffuf preparing/reviewing · scanner job",
-            tool_support="yes", ctx_tokens=2300, request_tokens=5300,
-            compact_threshold=6000, elapsed_seconds=18,
-        ))
+            banner_data=replace(app.state.banner_data,
+                model="organization/research-model-with-a-long-name-and-version-2026", tool_support="yes"),
+        )
+        status.elapsed_seconds = 18
+        app.apply_yolo(True)
         await pilot.pause()
+        assert app.state.yolo and app.state.busy is busy
+        assert status.model == app.state.banner_data.model
         line = status.render()
         assert line.cell_len <= status.content_size.width
         assert line.plain.endswith("AutoApprove")

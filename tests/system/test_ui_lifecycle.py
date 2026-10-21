@@ -13,7 +13,7 @@ from src.llm.core.client import StreamingClient
 from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.llm.transport.errors import ProviderControlError
 from src.ui.core import app as app_module
-from src.workflow import evidence as evidence_module
+from src.workflow.evidence import artifacts as evidence_module
 from tests.helpers.agent_fakes import FakeClient
 from tests.helpers.system_runtime import assert_idle, drain, heartbeat, make_system_app, wait_until
 from tests.system.test_local_boundaries import runtime_for

@@ -150,7 +150,7 @@ def extract_requested_classes(
     *,
     registered_classes: tuple[str, ...] | list[str] = (),
 ) -> list[str]:
-    #Hàm extract_requested_classes() nằm trong workflow/goals.py
+    #Hàm extract_requested_classes() nằm trong workflow/planning/goals.py
     #và có nhiệm vụ trích xuất các loại lỗ hổng mà người dùng thực sự yêu cầu kiểm thử từ promp
     """Extract canonical classes mentioned in operational clauses.
 

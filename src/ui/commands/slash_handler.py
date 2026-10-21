@@ -99,8 +99,14 @@ def build_help_document(agent: "Agent", read_config) -> HelpDocument:
         f"{compact_threshold // 1000}k" if compact_threshold >= 1000
         else f"{compact_threshold} tok"
     )
+    max_steps_override = agent.get_max_steps_override()
+    whole_target_steps = (
+        max_steps_override
+        if max_steps_override is not None
+        else DEFAULT_WHOLE_TARGET_MAX_STEPS
+    )
     out.append(
-        f"  limits     {agent.get_max_steps()} steps"
+        f"  limits     Direct Mode {agent.get_max_steps()} / Whole-target {whole_target_steps} steps"
         f"  ·  {compact_label} compact"
         f"  ·  thinking {'on' if agent.thinking_is_enabled() else 'off'}"
     )

@@ -84,7 +84,7 @@ def normalize(data: bytes, plan: ScannerPlan, secrets: tuple[str, ...]) -> tuple
         retained.append(row)
         retained_bytes += size
     parsed.records = retained
-    from src.workflow.scanner import observation_fingerprints
+    from src.workflow.discovery.scanner import observation_fingerprints
     dataset = parsed.dataset()
     return parsed, dataset, observation_fingerprints(dataset, plan.semantic_key)
 

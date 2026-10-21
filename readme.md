@@ -186,13 +186,18 @@ and keeps only canonical Findings in each execution workspace.
 
 ## Testing
 
-`pytest.ini` collects the complete test suite under `tests/`.
+`pytest.ini` collects tests under `tests/` and excludes
+`tests/integration/test_kagent_burp.py` by default. Live checks retain their
+existing opt-in requirements and skips.
 
 ```bash
 pytest -q
 ```
 
 Skill contracts and runtime behavior are still being refined through testing.
+See [test contract synchronization](tests/CONTRACT_SYNC_REPORT.md) for the
+21 October 2026 audit follow-up, intentional retirement of obsolete script tests
+and offline verification.
 
 ## Cleaning project outputs
 
@@ -230,22 +235,15 @@ this deletes only project `scenarios.jsonl` and its lock. Every scope supports `
 After cleanup, recreate a benchmark selection before using its manifest;
 historical audit provenance is optional through `--reset-audit <path>`.
 
-The four operator scripts are:
+`scripts/cleanup.py` implements the cleanup scopes above. Run Scenario 1 directly
+with `venv-linux/bin/python -m benchmarks.scenario1 --help`.
 
-| Script | Purpose |
-|---|---|
-| `scripts/setup.sh` | Create the virtualenv and install dependencies; `--check-only` validates without installing |
-| `scripts/doctor.sh` | Reuse setup validation and inspect storage, config presence and optional tools |
-| `scripts/cleanup.py` | Clean outputs with the scopes above |
-| `scripts/check_cwe_mcp.py` | Check an explicitly configured CWE MCP deployment |
-
-Run Scenario 1 directly with `venv-linux/bin/python -m benchmarks.scenario1 --help`.
-For CWE acceptance or repeated startup checks under tooling load:
-
-```bash
-venv-linux/bin/python -m scripts.check_cwe_mcp --deployment /absolute/path/to/cwe-deployment
-venv-linux/bin/python -m scripts.check_cwe_mcp --deployment /absolute/path/to/cwe-deployment --startup --rounds 5
-```
+`scripts/setup.sh`, `scripts/doctor.sh` and `scripts/check_cwe_mcp.py` were removed
+in commit `ce05271`. Use the package installation instructions under Setup.
+The checkout currently has no equivalent read-only environment-health or CWE
+deployment-check command. The five tests dedicated to the retired setup/doctor
+scripts were intentionally removed; those scripts are no longer required by
+the test suite.
 
 ## Authorized use and scope
 

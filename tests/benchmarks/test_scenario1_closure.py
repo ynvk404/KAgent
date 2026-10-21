@@ -15,7 +15,7 @@ from benchmarks.scenario1.core.canonical import freeze, inspect_export
 from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import Decision, PermissionRequest, UserControlledRefusal
 from src.workflow.assessment import digest, source_row
-from src.workflow.evidence_recovery import current_budget
+from src.workflow.evidence.recovery import current_budget
 from src.workflow.state import WorkflowState
 from src.tools.http.http_tool import HTTPTool
 from src.tools.common.tool_result import ReadHTTPObservation
@@ -527,22 +527,28 @@ async def test_terminal_closure_preserves_accepted_result_and_source_seals(tmp_p
 async def test_cancellation_during_closure_save_joins_without_claiming_persistence(tmp_path, op, settings, mock_http, monkeypatch):
     agent, _, cid, aid = await active_case(op, settings, tmp_path)
     entered, release = asyncio.Event(), asyncio.Event()
-    original = agent.save
+    failure = OSError('controlled closure checkpoint failure')
 
     async def held_save(*args, **kwargs):
         entered.set()
         await release.wait()
-        await original(*args, **kwargs)
+        raise failure
 
     monkeypatch.setattr(agent, 'save', held_save)
     events = collect()
     task = asyncio.create_task(agent._close_terminal_attempt('workflow_stalled', FakeSignal(),
         events['sink'], agent.history.copy()))
-    await asyncio.wait_for(entered.wait(), 5)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), 'cancellation must join the held writer'
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+    with pytest.raises(asyncio.CancelledError) as caught:
         await task
-    release.set()
+    assert caught.value.__cause__ is failure
     assert task.done() and not agent._background_tasks
     assert agent.workflow.attempts[aid]['status'] == 'unresolved'  # actual pre-save commit
     assert agent.workflow.latest_result(cid) is not None

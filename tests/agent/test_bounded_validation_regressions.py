@@ -14,8 +14,8 @@ from src.permission.permission import AlwaysAllow
 from src.tools.common.registry import Registry
 from src.tools.skills.payloads import ReadPayloadsTool
 from src.tools.skills.skill_file import ReadSkillFileTool
-from src.workflow.evidence import check_proof_references
-from src.workflow.evidence_errors import EvidenceSubmissionError
+from src.workflow.evidence.artifacts import check_proof_references
+from src.workflow.evidence.errors import EvidenceSubmissionError
 from src.workflow.state import ValidationResult, _text
 from tests.agent.test_token_accounting_independent_verify import make_agent
 from tests.helpers.agent_fakes import EchoTool, FakeSignal, collect

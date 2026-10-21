@@ -11,7 +11,7 @@ from src.target.target import Target
 from src.tools.execution.file import FileReadTool
 from src.tools.execution.search import GrepTool
 from src.tools.workflow.workflow_tool import WorkflowTool
-from src.workflow.evidence import EvidenceArtifact, verify_evidence_reads
+from src.workflow.evidence.artifacts import EvidenceArtifact, verify_evidence_reads
 from src.workflow.state import Candidate, WorkflowState
 
 
@@ -157,7 +157,7 @@ def test_low_level_sensitive_reads_fail_without_internal_approval(tmp_path):
 
 @pytest.mark.asyncio
 async def test_sensitive_snapshot_requires_reverification_in_fresh_runtime(tmp_path):
-    from src.workflow.evidence import _verified_sensitive
+    from src.workflow.evidence.artifacts import _verified_sensitive
     tool, cid = workflow(tmp_path)
     (tmp_path / ".env").write_text("FAKE_CANARY")
     ev = await snapshot(tool, cid, ".env", AlwaysAllow())

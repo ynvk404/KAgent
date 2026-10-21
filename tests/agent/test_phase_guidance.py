@@ -76,7 +76,7 @@ def test_source_counts_stay_bounded_without_copying_source_bodies(status):
 @pytest.mark.parametrize('completed', [frozenset(), frozenset({'recon', 'enumeration', 'input_analysis'})])
 @pytest.mark.parametrize('startable', [False, True])
 def test_unavailable_artifact_repair_does_not_suppress_owned_generic_work(completed, startable):
-    from src.workflow.validation_route import ValidationRoute
+    from src.workflow.validation.route import ValidationRoute
     context = PlannerContext(objective_mode='whole_target', completed_phases=completed,
         phase_completion_readiness={'phase': 'recon', 'skill_name': 'recon', 'ready': False},
         candidates=(PlannerCandidate('can_owned', 'unsupported-class', 'deferred', generic_startable=startable),),

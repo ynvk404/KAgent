@@ -355,7 +355,7 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
             elif call.operation:
                 activity = call.operation.replace("_", " ") + " · " + activity
             # A class route identifies its expert; activation is checked by the reducer.
-            from src.workflow.validation_route import resolve_validation_route
+            from src.workflow.validation.route import resolve_validation_route
             route = resolve_validation_route(getattr(tool, "skills", None), candidate.candidate_class)
             if route.kind == "expert":
                 activity_skill = route.skill_name or ""

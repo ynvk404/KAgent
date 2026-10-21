@@ -31,12 +31,13 @@ async def test_slash_yolo_activates_http_without_manual_grant_and_honors_revoke(
     app = make_app()
     engagement = EngagementState()
     engagement.initialize_target(ORIGIN)
-    tool = HTTPTool(Target(ORIGIN), engagement)
+    target = Target(ORIGIN)
+    tool = HTTPTool(target, engagement)
     inner = SimpleNamespace(ask=AsyncMock(return_value=Decision.DENY))
     prompter = YoloPrompter(cast(Prompter, inner))
     prompter.bind_http_permissions(tool.permissions)
     app.set_yolo = prompter.set_yolo
-    app.agent = cast(Agent, SimpleNamespace(engagement_state=engagement, prompter=prompter))
+    app.agent = cast(Agent, SimpleNamespace(target=target, engagement_state=engagement, prompter=prompter))
     sent = []
 
     def transport(request):
@@ -47,7 +48,9 @@ async def test_slash_yolo_activates_http_without_manual_grant_and_honors_revoke(
     monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient", lambda **kw: original(transport=httpx.MockTransport(transport), **kw))
     monkeypatch.setattr("src.tools.http.http_tool.gate_private_request", AsyncMock(return_value=""))
     assert handle_slash(app, "/yolo on")
-    assert "unknown server effects" in app.state.transcript[-1].text
+    status = app.state.transcript[-1].text
+    assert "Target: " + ORIGIN in status and "within declared scope" in status
+    assert "change/delete data" in status and "deny/revoke and limits remain enforced" in status
     await tool.run({"url": "/new", "method": "DELETE", "phase": "recon"}, None, prompter)
     grant = next(iter(tool.permissions.grants.values()))
     assert handle_slash(app, "/permissions revoke " + grant.id)

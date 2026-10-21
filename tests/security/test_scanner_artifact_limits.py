@@ -120,6 +120,6 @@ async def test_saturation_is_visible_in_agent_result_without_unreadable_refs(tmp
     assert limited['manifest'] is None and limited['normalized'] is None
     row = rt.agent.workflow.scanner_jobs[results[1]['job_id']]
     assert row.projection()['publication_error'] == limited['publication_error']
-    from src.workflow.scanner import ScannerJob
+    from src.workflow.discovery.scanner import ScannerJob
     restored = ScannerJob.from_dict(row.to_dict())
     assert restored is not None and restored.projection()['publication_error'] == limited['publication_error']

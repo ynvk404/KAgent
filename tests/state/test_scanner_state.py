@@ -9,7 +9,7 @@ import pytest
 from src.tools.discovery.scanner_results import ParsedScan, encode, clean
 from src.tools.execution.scanner_files import PrivateJob
 from src.permission.runtime.execution import ExecutionBlocked
-from src.workflow.scanner import ScannerJob, project_jobs
+from src.workflow.discovery.scanner import ScannerJob, project_jobs
 from src.workflow.state import WorkflowState, WorkflowObjective
 
 

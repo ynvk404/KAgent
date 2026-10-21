@@ -9,7 +9,7 @@ from src.skills.registry import (
     normalize_candidate_class,
 )
 from src.target.target import Target
-from src.workflow.validation_route import ValidationRoute
+from src.workflow.validation.route import ValidationRoute
 
 
 @dataclass
@@ -726,9 +726,12 @@ def _requested_goal_plan(
     if not context.requested_goals:
         return None
     for goal in context.requested_goals:
+        # Whole-target goals can stay open for cleanup after terminal validation.
+        # Their runtime handoff must not fall back to another validation run.
         candidates = [
             item for item in context.candidates
             if item.id in goal.candidate_ids
+            and (not whole_target or item.validation_action != "preserve_result")
         ]
         if goal.status not in {"pending", "in_progress"}:
             if not whole_target or goal.status not in {"blocked", "deferred"}:

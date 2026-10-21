@@ -15,7 +15,7 @@ from src.tools.workflow.finding import (
 )
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from tests.helpers.workflow import adopt_fixture_assessment, run_workflow_fixture
 
 

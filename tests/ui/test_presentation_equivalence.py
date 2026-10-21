@@ -22,7 +22,7 @@ from src.tools.workflow.finding import ConfirmFindingTool
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.ui.core.app import RunAgentOptions
 from src.ui.core.state import AgentEventAction
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from src.workflow.state import Candidate, ValidationResult, WorkflowObjective, WorkflowState
 from tests.helpers.agent_fakes import FakeClient, FakeSignal
 from tests.helpers.workflow import adopt_fixture_assessment

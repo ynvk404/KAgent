@@ -9,7 +9,7 @@ from pathlib import Path
 from scripts import experiment_profile as profile
 from src.findings.store import Finding
 from src.paths import project_root, project_artifact_root
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from tests.runtime.test_cli_exit_diagnostics import offline_cli
 from tests.runtime.test_experiment_profile import layout, make_plan, original_bytes
 

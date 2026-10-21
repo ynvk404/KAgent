@@ -25,9 +25,9 @@ from src.workflow.state import (
     WorkflowObjective,
     WorkflowState,
 )
-from src.workflow.goals import RequestedGoal
+from src.workflow.planning.goals import RequestedGoal
 from tests.helpers.workflow import record_completed_phase
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from src.engagement.state import EngagementState
 
 

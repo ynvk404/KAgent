@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from src.workflow.openapi import extract_openapi
+from src.workflow.discovery.openapi import extract_openapi
 from tests.state.test_html_extraction import prepared, apply, DOCUMENT
 
 

@@ -11,7 +11,7 @@ from src.permission.runtime.execution import ExecutionBlocked, policy_for
 from src.permission.network.grants import check_cancelled
 from src.target.input_admission import canonical_endpoint
 from src.workflow.assessment import digest, source_row
-from src.workflow.extraction import extract_html, apply_extraction
+from src.workflow.discovery.extraction import extract_html, apply_extraction
 
 controller: ContextVar[tuple[Any, str] | None] = ContextVar('discovery_source_controller', default=None)
 
@@ -85,8 +85,8 @@ def process_source(tool, args, signal, prompter):
     item = read_admitted_source(agent, tool, source, prompter)
     if args['extractor'] not in {'html', 'openapi'}:
         raise ValueError('unsupported source extractor')
-    from src.workflow.openapi import extract_openapi
-    from src.workflow.extraction import Extraction
+    from src.workflow.discovery.openapi import extract_openapi
+    from src.workflow.discovery.extraction import Extraction
     from src.workflow.state import normalize_media_type
     extractor = extract_html if args['extractor'] == 'html' else extract_openapi
     media = {normalize_media_type(value) for key, value in item.response_headers if key.lower() == 'content-type'}

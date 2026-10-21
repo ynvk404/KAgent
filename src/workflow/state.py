@@ -21,9 +21,9 @@ from src.redaction.redact import (
 )
 from src.target.origin import HTTPOrigin
 from src.target.input_admission import admit_input_fields, canonical_endpoint
-from .discovery import EndpointRecord, SourceRecord, ProvenanceRecord
-from .evidence import EvidenceArtifact
-from .goals import GoalStatus, RequestedGoal
+from .discovery.inventory import EndpointRecord, SourceRecord, ProvenanceRecord
+from .evidence.artifacts import EvidenceArtifact
+from .planning.goals import GoalStatus, RequestedGoal
 
 
 CandidateStatus = Literal[
@@ -434,7 +434,7 @@ class WorkflowObjective:
     def from_dict(cls, value: Any) -> WorkflowObjective | None:
         if not isinstance(value, dict):
             return None
-        from src.workflow.goals import RequestedGoalsLoadError
+        from src.workflow.planning.goals import RequestedGoalsLoadError
 
         # Absence is a legacy snapshot; presence must never lose corrupt work.
         goals: list[RequestedGoal] = []
@@ -1168,7 +1168,7 @@ class WorkflowState:
         if row.selected and changes.get('selected') is False:
             raise ValueError('selected source must be explicitly dispositioned, never silently removed')
         if 'limitations' in changes:
-            from .discovery import notes
+            from .discovery.inventory import notes
             changes['limitations'] = notes(tuple(dict.fromkeys((*row.limitations, *notes(changes['limitations'])))))
         updated = replace(row, **changes)
         if updated == row:
@@ -1191,7 +1191,7 @@ class WorkflowState:
         Producers must first validate their raw store/owner. This boundary
         checks object linkage only; a restored source never authorizes a read.
         """
-        from .discovery import MAX_ENDPOINTS, MAX_SOURCES, MAX_PROVENANCE, MAX_SOURCE_RECORDS
+        from .discovery.inventory import MAX_ENDPOINTS, MAX_SOURCES, MAX_PROVENANCE, MAX_SOURCE_RECORDS
         objective = self.objective
         if (objective is None or objective.mode != 'whole_target'
                 or source.objective_id != objective.id or source.target_origin != objective.target_origin):
@@ -1256,7 +1256,7 @@ class WorkflowState:
         return stored
 
     def add_scanner_job(self, job, *, observation_fingerprints: tuple[str, ...] = ()) -> bool:
-        from .scanner import MAX_JOBS, MAX_OBSERVATION_FACTS, observation_scope
+        from .discovery.scanner import MAX_JOBS, MAX_OBSERVATION_FACTS, observation_scope
         if job.job_id not in self.scanner_jobs and len(self.scanner_jobs) >= MAX_JOBS:
             replaceable = next((key for key, row in self.scanner_jobs.items()
                                 if not row.unresolved_selected and row.execution.get('status') != 'running'), None)
@@ -1859,7 +1859,7 @@ class WorkflowState:
             return frozenset()
         facts: set[str] = set()
         facts.update('endpoint:' + row.id for row in self.objective_endpoints())
-        from .discovery import source_progress_identity
+        from .discovery.inventory import source_progress_identity
         for source in self.objective_sources():
             # Locator IDs, raw byte hashes (which may cover secret values),
             # reasons and repeated reads must not manufacture novelty.
@@ -1868,7 +1868,7 @@ class WorkflowState:
             facts.add(f'discovery-state:{semantic}:{source.disposition}:{source.bounded_stop}')
             if source.selected:
                 facts.add('discovery-selected:' + semantic)
-        from .scanner import observation_scope
+        from .discovery.scanner import observation_scope
         owner = observation_scope(objective.id, objective.target_origin or '')
         facts.update('scanner-observations:' + key for key, scope in self.scanner_observations.items() if scope == owner)
         for job in self.scanner_jobs.values():
@@ -2400,7 +2400,7 @@ class WorkflowState:
         state = cls()
         if not isinstance(value, dict):
             return state
-        from .scanner import ScannerJob, MAX_JOBS, MAX_OBSERVATION_FACTS
+        from .discovery.scanner import ScannerJob, MAX_JOBS, MAX_OBSERVATION_FACTS
         raw_observations = value.get('scanner_observations', {})
         if isinstance(raw_observations, dict) and len(raw_observations) <= MAX_OBSERVATION_FACTS:
             state.scanner_observations = {key: scope for key, scope in raw_observations.items()
@@ -2430,7 +2430,7 @@ class WorkflowState:
                 if row.get("status") == "active":
                     row["status"] = "interrupted"
         state.objective = WorkflowObjective.from_dict(value.get("objective"))
-        from src.workflow.evidence_recovery import restored_budgets
+        from src.workflow.evidence.recovery import restored_budgets
         state.evidence_recovery = restored_budgets(value.get("evidence_recovery"), state.attempts)
 
         raw_candidates = value.get("candidates", [])
@@ -2578,7 +2578,7 @@ class WorkflowState:
                     state.set_requested_goal_status(
                         goal, "pending", reason="Persisted terminal goal lacks valid candidate/result linkage.",
                     )
-        from .discovery import restore_discovery
+        from .discovery.inventory import restore_discovery
         restore_discovery(state, value)
         return state
 

@@ -6,7 +6,7 @@ import pytest
 
 from scripts import experiment_profile as profile
 from src.cli.prompt_file import read_prompt_file
-from src.workflow.goals import extract_requested_classes
+from src.workflow.planning.goals import extract_requested_classes
 from tests.runtime.test_experiment_profile import layout, original_bytes
 
 

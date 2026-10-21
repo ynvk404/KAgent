@@ -380,7 +380,8 @@ async def test_whole_target_completed_multiple_results_and_findings_keep_phase_s
 
 
 @pytest.mark.parametrize("cleanup,expected", [("pending", "actionable"), ("unknown", "blocked"),
-                                             ("requires-user-action", "blocked")])
+                                             ("requires-user-action", "blocked"), ("failed", "blocked"),
+                                             ("not-attempted", "blocked")])
 async def test_whole_target_cleanup_planner_and_summary_keep_existing_obligations(runtime, tmp_path, cleanup, expected):
     state, first, tool, _ = await validated(runtime, tmp_path, mode="whole_target")
     await persist(runtime, tmp_path, state, first)
@@ -390,13 +391,16 @@ async def test_whole_target_cleanup_planner_and_summary_keep_existing_obligation
     agent = agent_for(runtime, state, tool)
     context = agent._planner_context()
     assert context.workflow_status == expected
+    assert all(c.validation_action == "preserve_result" for c in context.candidates)
+    assert context.requested_goals[0].status == "in_progress"
+    before = deepcopy(state.to_dict())
     plan = build_decision_plan("continue", agent.skills.list_enabled(), agent.target, context)
     if cleanup == "pending":
         assert plan is not None and plan.candidate_id == second.id and "cleanup" in plan.guidance.lower()
     else:
         assert plan is None
+    assert state.to_dict() == before and len(runtime[4]) == 2
     assert all(c.validation_complete is None and c.completion_action is None for c in context.candidates)
-    before = deepcopy(state.to_dict())
     client = SummaryClient(("workflow", {"action": "list"}))
     client.summary_text = f"SQLi Findings persist; second candidate cleanup remains {cleanup}; objective is incomplete."
     agent.client = client

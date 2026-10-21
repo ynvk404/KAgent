@@ -21,7 +21,7 @@ from src.tools.mcp.cwe_deployment import (
     CWE_MCP_SERVER_NAME,
     require_matching_cwe_deployment,
 )
-from src.workflow.review import digest
+from src.workflow.evidence.review import digest
 
 SEARCH_TOOL = 'mcp_cwe_catalog_search_cwe'
 GET_TOOL = 'mcp_cwe_catalog_get_cwe'

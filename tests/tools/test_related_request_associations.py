@@ -14,7 +14,7 @@ from src.tools.common.registry import Registry
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.assessment import DuplicateRequestAssociation, request_associations
 from src.workflow.state import WorkflowObjective, WorkflowState
-from src.workflow.validation_route import resolve_validation_route
+from src.workflow.validation.route import resolve_validation_route
 
 ORIGIN = "https://fixture.test"
 CLASSES = ("sqli", "xss", "idor", "csrf", "ssrf", "ssti")

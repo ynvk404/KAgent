@@ -118,5 +118,5 @@ and submit a structured assessment. Runtime checks provenance, identity and
 execution completeness; skill controls, repeatability, impact and stop conditions
 remain the Agent's responsibility. A bounded completed negative does not prove
 universal absence. Optional operator review creates its own revision. The runtime
-contract is implemented in `src/workflow/assessment.py`, `src/workflow/evidence.py`
+contract is implemented in `src/workflow/assessment.py`, `src/workflow/evidence/artifacts.py`
 and `src/tools/workflow/workflow_tool.py`.

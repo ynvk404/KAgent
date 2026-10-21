@@ -7,7 +7,7 @@ from typing import Any, Callable, Optional
 from src.llm.core.types import Message
 from src.session.store import SessionMemory
 from src.workflow.state import WorkflowState
-from src.workflow.validation_context import without_transient_validation_context
+from src.workflow.validation.context import without_transient_validation_context
 from .output_bounds import bound_distributed_content, _proportional_reductions
 
 

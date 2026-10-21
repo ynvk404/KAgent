@@ -15,9 +15,9 @@ from src.findings.store import Finding, render
 from src.report.builder import Sanitizer, SEMANTIC_WARNING, build_report, bounded_read
 from src.report.model import MAX_TEXT_INTAKE, Record, ReportError, Resources, SourceSnapshot, freeze
 from src.ui.commands.report_handler import capture_workflow
-from src.workflow.evidence import EvidenceArtifact
-from src.workflow.goals import RequestedGoal
-from src.workflow.review import review_snapshot
+from src.workflow.evidence.artifacts import EvidenceArtifact
+from src.workflow.planning.goals import RequestedGoal
+from src.workflow.evidence.review import review_snapshot
 from src.workflow.state import AttackSurfaceInput, Candidate, ValidationResult, WorkflowObjective, WorkflowState, ValidationOutcome, validation_result_fingerprint
 from tests.helpers.workflow import record_completed_phase
 

@@ -12,7 +12,7 @@ import pytest
 from src.browser.store import CaptureStore, CapturedRequest, MAX_RAW_REQUEST_B64
 from src.permission.runtime.generic_validation import GenericValidationBoundary
 from src.session.store import Store
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from src.workflow.state import AttackSurfaceInput, Candidate, ValidationResult, WorkflowState
 from tests.integration.test_structured_handoff_hardening import (
     ORIGIN, capture_payload, http_tool, record, replay_args, runtime,

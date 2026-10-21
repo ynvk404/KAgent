@@ -352,7 +352,7 @@ class HTTPTool(Tool):
         boundary = policy.generic_validation if policy is not None else None
         # A restored generic status cannot obtain compatibility-mode HTTP.
         if policy is None and self.workflow is not None:
-            from src.workflow.validation_route import GENERIC_VALIDATOR, resolve_validation_route
+            from src.workflow.validation.route import GENERIC_VALIDATOR, resolve_validation_route
             objective = self.workflow.objective
             for candidate in self.workflow.candidates.values():
                 latest = self.workflow.latest_result(candidate.id)

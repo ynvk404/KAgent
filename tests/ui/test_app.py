@@ -543,7 +543,8 @@ async def test_main_shell_regions_have_distinct_native_panels(
     async with app.run_test(size=(64, 22)) as pilot:
         assert app.transcript_panel.border_title == "Transcript"
         assert app.input_panel.border_title == "Input"
-        assert app.overview_static.parent is app.transcript_panel
+        assert app.overview_static.parent is app.overview_scroll
+        assert app.overview_scroll.parent is app.transcript_panel
         assert app.transcript_log.parent is app.transcript_panel
         assert app.live_entry_static.parent is app.transcript_panel
         assert app.transcript_panel.styles.border.top[0] == "round"
@@ -554,6 +555,9 @@ async def test_main_shell_regions_have_distinct_native_panels(
 
         assert app.transcript_panel.region.width == 32
         assert app.input_panel.region.width == 32
+        assert app.overview_scroll.region.height <= 14 * 0.4
+        assert app.transcript_log.region.height >= 3
+        assert app.input_panel.region.bottom <= 14
 
 
 async def test_resize_rerenders_composer(monkeypatch) -> None:

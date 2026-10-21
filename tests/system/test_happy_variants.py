@@ -21,7 +21,7 @@ from src.tools.common.capabilities import CapabilityInventory
 from src.tools.execution.scanners import ScannerBinding
 from src.tools.execution.shell import ShellTool
 from src.ui.core import app as app_module
-from src.workflow import evidence as evidence_module
+from src.workflow.evidence import artifacts as evidence_module
 from tests.helpers.agent_fakes import ScriptedModel
 from tests.helpers.agent_fakes import FakeSignal
 from tests.helpers.scenarios import dedicated_validation, receipt, record_candidate

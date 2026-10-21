@@ -6,7 +6,7 @@ import pytest
 from src.agent.system_prompt import render_workflow
 from src.target.target import Target
 from src.tools.workflow.workflow_tool import WorkflowTool
-from src.workflow.input_view import INPUT_PAGE_BYTES
+from src.workflow.discovery.input_view import INPUT_PAGE_BYTES
 from src.workflow.state import AttackSurfaceInput, WorkflowObjective, WorkflowState, Candidate
 
 ORIGIN = "https://target.test"

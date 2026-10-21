@@ -19,9 +19,9 @@ from src.permission.runtime.execution import ExecutionBlocked
 from src.skills.registry import Registry as Skills
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.tools.workflow.finding import ConfirmFindingTool
-from src.workflow.probe import ProbeProposal
+from src.workflow.validation.probe import ProbeProposal
 from src.workflow.state import AttackSurfaceInput, WorkflowState, WorkflowObjective, WorkflowMode, WorkflowPhase
-from src.workflow.validation_route import GENERIC_VALIDATOR
+from src.workflow.validation.route import GENERIC_VALIDATOR
 from tests.helpers.agent_fakes import FakeSignal, FakeClient
 from tests.helpers.workflow import record_completed_phase
 from tests.security.test_execution_policy import runtime, ORIGIN

@@ -8,7 +8,7 @@ from src.permission.permission import AlwaysAllow
 from src.permission.runtime.execution import ExecutionBlocked
 from src.target.target import Target
 from src.tools.workflow.workflow_tool import WorkflowTool
-from src.workflow.scanner import ScannerJob
+from src.workflow.discovery.scanner import ScannerJob
 from tests.state.test_scanner_state import job, state
 
 

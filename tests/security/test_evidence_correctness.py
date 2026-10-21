@@ -4,12 +4,12 @@ import json
 import os
 from pathlib import Path
 from contextlib import contextmanager
-from src.workflow.evidence_source import EvidenceSource
+from src.workflow.evidence.source import EvidenceSource
 
 import pytest
 
 from src.permission.permission import AlwaysDeny, UserControlledRefusal
-from src.workflow.evidence import EvidenceArtifact, MAX_EVIDENCE_BYTES
+from src.workflow.evidence.artifacts import EvidenceArtifact, MAX_EVIDENCE_BYTES
 from tests.security.test_evidence_reads import workflow
 from tests.security.test_persistence_handoff_audit import offline  # noqa: F401
 
@@ -116,7 +116,7 @@ def test_short_reads_preserve_complete_value_within_total_budget(tmp_path, monke
 
 
 def test_configured_read_budget_and_redaction_expansion_bound(tmp_path, monkeypatch):
-    from src.workflow import evidence as module
+    from src.workflow.evidence import artifacts as module
     source = tmp_path / "proof.txt"
     source.write_bytes(b"password=x")
     monkeypatch.setattr(module, "MAX_EVIDENCE_BYTES", 10)
@@ -263,7 +263,7 @@ def test_postwrite_read_preserves_existing_scope_and_sensitive_guards(tmp_path, 
     source.write_bytes(b"synthetic proof")
     sensitive = lab / ".env"
     sensitive.write_bytes(b"synthetic proof")
-    import src.workflow.evidence_publication as publication
+    import src.workflow.evidence.publication as publication
     original = publication._rename_noreplace
     changed = False
     def publish(directory, temporary, destination):

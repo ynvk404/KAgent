@@ -18,7 +18,9 @@ from src.paths import (
 
 
 @pytest.fixture
-def marked_project(tmp_path: Path) -> tuple[Path, Path]:
+def marked_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    # These cases exercise marker discovery, independently of an embedding host.
+    monkeypatch.delenv("KAGENT_PROJECT_ROOT", raising=False)
     root = tmp_path / "project"
     nested = root / "src" / "package"
     nested.mkdir(parents=True)
@@ -68,6 +70,8 @@ def test_project_root_environment_override(
 
     assert project_root() == root
     assert project_data_root() == root / ".kagent"
+    assert project_root(nested) == nested
+    assert project_data_root(nested) == nested / ".kagent"
 
 
 def test_user_data_root_is_independent_of_cwd(

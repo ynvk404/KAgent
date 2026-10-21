@@ -6,14 +6,14 @@ import threading
 
 import pytest
 
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from tests.security.test_evidence_reads import workflow
 from src.permission.permission import AlwaysAllow
 
 
 @pytest.mark.parametrize('failure', ['short', 'write', 'flush', 'fsync', 'close', 'fdopen', 'publish', 'cancel'])
 async def test_failed_publication_leaves_no_final_or_metadata_and_retry_recovers(tmp_path, monkeypatch, failure):
-    import src.workflow.evidence_publication as publication
+    import src.workflow.evidence.publication as publication
     tool, cid = workflow(tmp_path)
     raw = b'complete synthetic proof'
     (tmp_path / 'proof.txt').write_bytes(raw)
@@ -112,7 +112,7 @@ async def test_directory_fsync_failure_keeps_complete_proof_without_committing_m
 
 
 def test_concurrent_same_digest_publishers_reuse_only_complete_incumbent(tmp_path, monkeypatch):
-    import src.workflow.evidence_publication as publication
+    import src.workflow.evidence.publication as publication
     (tmp_path / 'proof.txt').write_bytes(b'complete synthetic proof')
     barrier = threading.Barrier(2)
     original = publication._rename_noreplace

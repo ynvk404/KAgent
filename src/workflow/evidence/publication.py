@@ -13,7 +13,7 @@ import uuid
 from typing import Callable
 from src.async_io import publication
 
-from .evidence_source import identity
+from .source import identity
 
 
 def _rename_noreplace(directory: int, temporary: str, destination: str) -> None:

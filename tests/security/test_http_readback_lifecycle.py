@@ -15,7 +15,7 @@ from src.tools.skills.payloads import ReadPayloadsTool
 from src.tools.common.outcome import ToolOutput
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.assessment import digest, source_row
-from src.workflow.goals import RequestedGoal
+from src.workflow.planning.goals import RequestedGoal
 from src.workflow.state import WorkflowObjective
 from tests.agent.test_bounded_validation_regressions import batch_call
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, ScriptedModel, collect

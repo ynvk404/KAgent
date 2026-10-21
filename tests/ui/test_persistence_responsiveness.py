@@ -25,8 +25,8 @@ from src.permission.permission import AlwaysAllow
 from src.session.store import Store as SessionStore
 from src.tools.execution.file import FileWriteTool
 from src.ui.core.app import KAgent
-from src.workflow.evidence import EvidenceArtifact
-from src.workflow import evidence as evidence_module
+from src.workflow.evidence.artifacts import EvidenceArtifact
+from src.workflow.evidence import artifacts as evidence_module
 from tests.data.test_findings_store import make_finding
 from tests.tools.test_finding import _tool, _valid_args
 from tests.ui.test_overview import _make_app

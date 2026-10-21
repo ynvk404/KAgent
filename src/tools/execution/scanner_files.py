@@ -7,7 +7,7 @@ import stat
 import time
 from typing import Callable
 from src.async_io import check_worker, publication
-from src.workflow.evidence_publication import _rename_noreplace
+from src.workflow.evidence.publication import _rename_noreplace
 
 from src.permission.runtime.execution import ExecutionBlocked
 

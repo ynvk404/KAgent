@@ -1,6 +1,6 @@
 from src.workflow.assessment import accepted_result
-from src.workflow.evidence_errors import evidence_repair_kind
-from src.workflow.evidence_recovery import (
+from src.workflow.evidence.errors import evidence_repair_kind
+from src.workflow.evidence.recovery import (
     MAX_EVIDENCE_REJECTIONS, MAX_TERMINAL_REPAIR_TURNS, current_budget,
 )
 from src.agent.events import Invocation
@@ -103,7 +103,7 @@ from src.target.target import Target
 from src.browser.selection import CaptureSelection, SelectedCapture, readable_burp_requests, MAX_SELECTED_REQUESTS
 from src.workflow.state import Candidate, WorkflowObjective, WorkflowState, candidate_origin
 from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
-from src.workflow.goals import RequestedGoal, extract_requested_classes
+from src.workflow.planning.goals import RequestedGoal, extract_requested_classes
 
 from src.tools.common.aliases import canonical_tool_name
 from src.tools.common.registry import InvalidToolArguments, Registry as ToolRegistry
@@ -1837,7 +1837,7 @@ class Agent:
         from src.permission.runtime.execution import policy_for
         execution = policy_for(self.prompter)
         if execution is None:
-            from src.workflow.validation_route import GENERIC_VALIDATOR, resolve_validation_route
+            from src.workflow.validation.route import GENERIC_VALIDATOR, resolve_validation_route
             objective = self.workflow.objective
             generic_work = any(
                 objective is not None and (
@@ -2037,7 +2037,7 @@ class Agent:
         from .system_prompt import render_workflow
         from src.tools.http.http_tool import HTTPTool
         from src.tools.workflow.action_view import ActionView
-        from src.workflow.validation_context import resolve_validation_context
+        from src.workflow.validation.context import resolve_validation_context
         from src.permission.runtime.execution import policy_for
 
         self._reconcile_skill_contracts()
@@ -2273,6 +2273,10 @@ class Agent:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
                 cancelled = True
+            except Exception:
+                # Inspect the completed writer below so its failure cannot
+                # bypass cancellation handling.
+                break
         try:
             task.result()
         except Exception as err:
@@ -2673,7 +2677,7 @@ class Agent:
         return frozenset(phases)
 
     def _workflow_validator_classes(self) -> frozenset[str]:
-        from src.workflow.validation_route import resolve_validation_route
+        from src.workflow.validation.route import resolve_validation_route
         return frozenset(
             candidate_class for skill in self.skills.list() for candidate_class in skill.candidate_classes
             if resolve_validation_route(self.skills, candidate_class).kind == "expert"
@@ -2681,7 +2685,7 @@ class Agent:
 
     def _validation_routes(self):
         from src.permission.runtime.execution import policy_for
-        from src.workflow.validation_route import ValidationRoute, generic_admission, resolve_validation_route
+        from src.workflow.validation.route import ValidationRoute, generic_admission, resolve_validation_route
         execution = policy_for(self.prompter)
         routes = {}
         for candidate in self.workflow.candidates.values():
@@ -2793,7 +2797,7 @@ class Agent:
 
     def _reconcile_requested_goals(self) -> dict[str, str]:
         """Recompute persisted goal summaries from objective-owned records."""
-        from src.workflow.validation_route import GENERIC_VALIDATOR, generic_admission, resolve_validation_route
+        from src.workflow.validation.route import GENERIC_VALIDATOR, generic_admission, resolve_validation_route
 
         objective = self.workflow.objective
         if objective is None:
@@ -2949,7 +2953,7 @@ class Agent:
         return (None, reason) if reason else (self.workflow.latest_result(candidate.id), None)
 
     def _goal_validation_route(self, candidate_class: str):
-        from src.workflow.validation_route import resolve_validation_route
+        from src.workflow.validation.route import resolve_validation_route
         return resolve_validation_route(self.skills, candidate_class)
 
     def _has_actionable_requested_goal(self) -> bool:
@@ -3631,7 +3635,7 @@ class Agent:
             if objective is not None and whole_target
             else None
         )
-        from src.workflow.validation_route import resolve_validation_route
+        from src.workflow.validation.route import resolve_validation_route
         planner_goals = tuple(
             PlannerGoal(
                 id=goal.id,
@@ -5195,8 +5199,8 @@ class Agent:
         """
         from src.permission.runtime.execution import policy_for
         from src.tools.http.http_tool import HTTPTool
-        from src.workflow.validation_context import resolve_validation_context
-        from src.workflow.validation_route import resolve_validation_route
+        from src.workflow.validation.context import resolve_validation_context
+        from src.workflow.validation.route import resolve_validation_route
 
         objective = self.workflow.objective
         if objective is None or objective.mode != "whole_target":
@@ -5339,7 +5343,7 @@ class Agent:
         from src.permission.runtime.execution import policy_for
         from src.tools.workflow.workflow_tool import WorkflowTool
         from src.workflow.assessment import attempt_owner, attempt_effects, require_idle_attempt
-        from src.workflow.validation_route import resolve_validation_route
+        from src.workflow.validation.route import resolve_validation_route
 
         check_cancelled(signal)
         objective = self.workflow.objective
@@ -6524,7 +6528,7 @@ class Agent:
         """Per-invocation hooks; no model payload installs callbacks or job facts."""
         from src.tools.execution.shell import ShellTool
         from src.tools.execution.scanner_runner import ScannerHooks
-        from src.workflow.scanner import ScannerJob, MAX_JOBS
+        from src.workflow.discovery.scanner import ScannerJob, MAX_JOBS
         from src.permission.runtime.execution import ExecutionBlocked
         from copy import deepcopy
         tool = self.tools.get(tc.function.name)
@@ -6600,7 +6604,7 @@ class Agent:
             self.result_retention.retain_scanner(produced, tc.id)
             job.artifacts = deepcopy(envelope['artifacts'])
             if produced.dataset:
-                from src.workflow.discovery import scanner_handoff
+                from src.workflow.discovery.inventory import scanner_handoff
                 try:
                     scanner_handoff(state, job, produced.dataset)
                 except ValueError:
@@ -6869,7 +6873,7 @@ class Agent:
         if analysis is not None:
             content = analysis
             if parsed.invocation is not None and parsed.invocation.scope == runtime_scope(self):
-                from src.workflow.discovery import observation_handoff
+                from src.workflow.discovery.inventory import observation_handoff
                 from src.permission.runtime.execution import policy_for
                 policy = policy_for(self.prompter)
                 if policy is not None and isinstance(res.result, ToolOutput):
@@ -7507,7 +7511,7 @@ def remove_workflow_duplicates(
 
 def elide_persisted_workflow_results(messages: list[Message]) -> None:
     """Drop successful prior-turn workflow payloads once state is injected."""
-    from src.workflow.validation_context import without_transient_validation_context
+    from src.workflow.validation.context import without_transient_validation_context
     for message in messages:
         if message.role != "tool" or message.name != "workflow":
             continue

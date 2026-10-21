@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.async_io import run_sync
-from src.workflow.evidence_source import bind_source
+from src.workflow.evidence.source import bind_source
 
 import json
 import hashlib
@@ -21,7 +21,7 @@ from src.coverage.store import CoverageStore, CoverageStatus
 from src.coverage.context import project_candidate_coverage
 from src.target.target import Target
 from src.target.input_admission import admit_input_fields, identity_text
-from src.workflow.input_view import input_page, input_summary
+from src.workflow.discovery.input_view import input_page, input_summary
 from src.workflow.state import (
     CANDIDATE_STATUSES,
     CLEANUP_STATES,
@@ -40,12 +40,12 @@ from src.workflow.state import (
     normalize_target_origin,
     validation_result_fingerprint,
 )
-from src.workflow.evidence import EvidenceArtifact, verify_evidence_reads, check_proof_references
-from src.workflow.evidence_source import EvidenceSource
+from src.workflow.evidence.artifacts import EvidenceArtifact, verify_evidence_reads, check_proof_references
+from src.workflow.evidence.source import EvidenceSource
 from src.workflow.assessment import (start_attempt, references, resolve_sources, candidate_binding,
                                      seal, accepted_result, check_excerpts, DuplicateRequestAssociation)
 import uuid
-from src.workflow.evidence_errors import EvidenceSubmissionError
+from src.workflow.evidence.errors import EvidenceSubmissionError
 from src.skills.registry import (
     Registry as SkillRegistry,
     Skill,
@@ -56,11 +56,11 @@ from src.skills.artifacts import completion_artifact_path, resolve_canonical_art
 
 from src.tools.common.outcome import ToolOutput
 from src.tools.common.types import Tool, arg_bool, arg_number, arg_string
-from src.workflow.validation_route import (
+from src.workflow.validation.route import (
     GENERIC_VALIDATOR, generic_admission, resolve_validation_route,
 )
-from src.workflow.probe import ProbeProposal
-from src.workflow.validation_context import resolve_validation_context
+from src.workflow.validation.probe import ProbeProposal
+from src.workflow.validation.context import resolve_validation_context
 from src.tools.http.http_tool import HTTPTool
 
 
@@ -1015,7 +1015,7 @@ class WorkflowTool(Tool):
     def validation_handoff(self, candidate_id: str, policy=None) -> dict[str, Any] | None:
         """Bounded lifecycle metadata, never observations, admission or authority."""
         from src.workflow.assessment import attempt_owner
-        from src.workflow.evidence_recovery import (
+        from src.workflow.evidence.recovery import (
             current_budget, MAX_EVIDENCE_REJECTIONS, MAX_TERMINAL_REPAIR_TURNS,
         )
         try:
@@ -1077,7 +1077,7 @@ class WorkflowTool(Tool):
             objective = self.state.objective
             candidate = self.state.candidates.get(candidate_id)
             if objective is not None and objective.mode == "whole_target":
-                from src.workflow.evidence_recovery import current_budget, MAX_EVIDENCE_REJECTIONS, MAX_TERMINAL_REPAIR_TURNS
+                from src.workflow.evidence.recovery import current_budget, MAX_EVIDENCE_REJECTIONS, MAX_TERMINAL_REPAIR_TURNS
                 budget = current_budget(self.state, candidate_id)
                 latest = self.state.latest_result(candidate_id)
                 if (budget is not None and budget["closed"] and latest is not None
@@ -2204,14 +2204,14 @@ class WorkflowTool(Tool):
             return "error: input listing requires the active objective target origin"
         try:
             if args.get('view') in {'sources', 'endpoints', 'provenance'}:
-                from src.workflow.discovery import discovery_page
+                from src.workflow.discovery.inventory import discovery_page
                 return json.dumps(discovery_page(self.state, args), ensure_ascii=True, separators=(',', ':'))
             inputs = input_page(self.state, args)
         except (ValueError, TypeError) as err:
             return f"error: {err}"
         if args.get("view") == "inputs":
             return json.dumps(inputs, ensure_ascii=True, separators=(",", ":"))
-        from src.workflow.scanner import relevant_jobs
+        from src.workflow.discovery.scanner import relevant_jobs
         objective = self.state.objective
         scanner_jobs = relevant_jobs(self.state.scanner_jobs, candidate_origin(self._active_target()),
                                      objective.id if objective else None)

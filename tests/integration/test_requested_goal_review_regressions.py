@@ -4,7 +4,7 @@ import json
 import pytest
 
 from src.session.store import SessionLoadError, Store
-from src.workflow.goals import RequestedGoal
+from src.workflow.planning.goals import RequestedGoal
 from src.workflow.state import Candidate, WorkflowObjective, WorkflowState
 from tests.integration.test_requested_goal_lifecycle import _direct_goal_agent
 
@@ -244,7 +244,7 @@ async def test_f10_no_candidate_review_binds_artifact_content_and_inventory(tmp_
     ("candidate_class=xss; test SQLi", ["cross-site-scripting", "sql-injection"]),
 ])
 def test_f08_extractor_operational_context_negation_and_source_order(tmp_path, text, expected):
-    from src.workflow.goals import extract_requested_classes
+    from src.workflow.planning.goals import extract_requested_classes
     assert extract_requested_classes(text) == expected
     agent, _ = _direct_goal_agent(tmp_path)
     agent._initialize_request_objective(text, True)

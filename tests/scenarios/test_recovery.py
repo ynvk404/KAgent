@@ -13,13 +13,13 @@ import pytest
 
 from src.coverage.store import CoverageStore
 from src.permission.network.grants import HTTPLimits
-from src.workflow.probe import ProbeProposal
+from src.workflow.validation.probe import ProbeProposal
 from tests.helpers.agent_fakes import FakeSignal, ScriptedModel
 from tests.helpers.scenario_oracle import InvariantOracle, TraceRecorder
 from tests.helpers.scenarios import (
     SQLI_VALUES, SSTI_FINGERPRINTS, ScenarioRun, dedicated_validation, direct_script, finding_arguments, generic_script, receipt,
 )
-from src.workflow.validation_route import GENERIC_VALIDATOR
+from src.workflow.validation.route import GENERIC_VALIDATOR
 from tests.scenarios.test_safety import protected, rejected, safety_definition, safety_outcomes, unresolved_closures
 
 

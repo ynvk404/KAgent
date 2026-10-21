@@ -3,7 +3,7 @@ from dataclasses import replace
 import json
 
 from src.workflow.assessment import digest, source_row
-from src.workflow.evidence_recovery import current_budget
+from src.workflow.evidence.recovery import current_budget
 from tests.security.test_agent_assessment import setup
 from tests.security.test_execution_policy import runtime  # noqa: F401
 

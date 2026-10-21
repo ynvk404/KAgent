@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from src.permission.permission import AlwaysAllow
-from src.workflow.evidence import EvidenceArtifact
-from src.workflow.evidence_source import EvidenceSource
+from src.workflow.evidence.artifacts import EvidenceArtifact
+from src.workflow.evidence.source import EvidenceSource
 from tests.security.test_evidence_reads import workflow
 
 

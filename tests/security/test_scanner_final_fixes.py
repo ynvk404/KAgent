@@ -15,7 +15,7 @@ from src.agent.system_prompt import render_workflow
 from src.llm.core.types import FunctionCall, ToolCall
 from src.tools.discovery.scanner_results import encode, parse_nmap
 from src.tools.execution.scanner_runner import normalize
-from src.workflow.scanner import observation_fingerprints, project_jobs
+from src.workflow.discovery.scanner import observation_fingerprints, project_jobs
 from src.workflow.state import WorkflowState
 from tests.helpers.agent_fakes import FakeClient, FakeSignal
 from tests.integration.test_scanner_agent_handoff import agent_runtime
@@ -53,7 +53,7 @@ def test_KSC01_observation_novelty_subset_reorder_new_content_and_restore(tmp_pa
 
 
 def test_KSC01_progress_memory_saturates_without_recrediting(monkeypatch, tmp_path):
-    monkeypatch.setattr('src.workflow.scanner.MAX_OBSERVATION_FACTS', 2)
+    monkeypatch.setattr('src.workflow.discovery.scanner.MAX_OBSERVATION_FACTS', 2)
     workflow, row = state(), job(tmp_path)
     first = add_observations(workflow, row, [{'id': value, 'status': 200} for value in row.sample_ids])
     assert len(workflow.scanner_observations) == 2

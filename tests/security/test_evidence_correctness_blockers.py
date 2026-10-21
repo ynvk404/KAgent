@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 from contextlib import contextmanager
-from src.workflow.evidence_source import EvidenceSource
+from src.workflow.evidence.source import EvidenceSource
 
 import pytest
 

@@ -15,7 +15,7 @@ from src.target.target import Target
 from src.tools.workflow.workflow_tool import DEFAULT_LIST_LIMIT, WorkflowTool
 from src.tools.common.outcome import ToolOutput
 from src.tools.workflow.coverage import CoverageTool
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from src.workflow.state import (
     AttackSurfaceInput,
     Candidate,
@@ -26,7 +26,7 @@ from src.workflow.state import (
     WorkflowState,
     validation_result_fingerprint,
 )
-from src.workflow.goals import RequestedGoal
+from src.workflow.planning.goals import RequestedGoal
 from tests.helpers.workflow import record_completed_phase, record_phase_coverage_for_test
 
 

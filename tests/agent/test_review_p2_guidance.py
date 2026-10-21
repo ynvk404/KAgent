@@ -6,11 +6,11 @@ import json
 import pytest
 
 from src.agent.decision_planner import PlannerCandidate, build_whole_target_plan
-from src.workflow.discovery import SourceRecord
-from src.workflow.evidence_recovery import current_budget, MAX_TERMINAL_REPAIR_TURNS
-from src.workflow.scanner import ScannerJob
+from src.workflow.discovery.inventory import SourceRecord
+from src.workflow.evidence.recovery import current_budget, MAX_TERMINAL_REPAIR_TURNS
+from src.workflow.discovery.scanner import ScannerJob
 from src.workflow.state import WorkflowState
-from src.workflow.validation_route import ValidationRoute
+from src.workflow.validation.route import ValidationRoute
 from tests.agent.test_validation_continuation import (
     PREFIX, candidate_for, compact_with_misleading_summary, execute, hint,
     InspectModel, offline, workflow,

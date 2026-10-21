@@ -17,7 +17,7 @@ from src.paths import project_artifact_root, project_root
 
 if TYPE_CHECKING:
     from src.findings.presentation import SummaryContext
-    from src.workflow.evidence import EvidenceArtifact
+    from src.workflow.evidence.artifacts import EvidenceArtifact
 
 Severity = Literal[
     "critical",

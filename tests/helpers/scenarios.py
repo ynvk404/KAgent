@@ -21,8 +21,8 @@ from src.skills.artifacts import completion_artifact_path
 from src.tools.skills.payloads import ReadPayloadsTool
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.findings.store import Store as FindingStore
-from src.workflow.probe import ProbeProposal
-from src.workflow.validation_route import GENERIC_VALIDATOR
+from src.workflow.validation.probe import ProbeProposal
+from src.workflow.validation.route import GENERIC_VALIDATOR
 from tests.helpers.agent_fakes import FakeSignal, ScriptedModel
 from tests.helpers.burp_selection import make_runtime
 

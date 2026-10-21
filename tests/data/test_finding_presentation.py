@@ -6,7 +6,7 @@ import pytest
 
 from src.findings.presentation import EvidenceLink, SummaryContext, artifact_links, render_summary
 from src.findings.store import Finding
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from src.workflow.state import Candidate, ValidationResult
 
 

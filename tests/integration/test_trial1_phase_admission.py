@@ -124,7 +124,7 @@ async def test_selected_late_source_does_not_force_exhaustive_discovery_before_v
 
 
 async def test_exact_english_review_prompt_uses_unchanged_stage3_parser():
-    from src.workflow.goals import extract_requested_classes
+    from src.workflow.planning.goals import extract_requested_classes
     prompt = ('Perform a whole-target assessment of the authorized target. '
               'Discover endpoints and inputs, analyze them, then validate SQL Injection and XSS. '
               'Stay within the declared origin and existing permissions and budgets. '

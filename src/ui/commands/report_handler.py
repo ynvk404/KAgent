@@ -17,7 +17,7 @@ from src.report.model import (
 from src.report.output import StagedReport, default_filename, stage_report, validate_filename
 from src.ui.core.state import Append, TranscriptEntry
 from src.version import VERSION
-from src.workflow.review import review_snapshot, confirmation_binding
+from src.workflow.evidence.review import review_snapshot, confirmation_binding
 from src.workflow.state import WorkflowState, validation_result_fingerprint
 from src.workflow.assessment import accepted_result, assessment_provenance
 

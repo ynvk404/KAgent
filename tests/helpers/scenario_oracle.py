@@ -16,7 +16,7 @@ from src.coverage.store import CoverageStore
 from src.findings.store import read_report
 from src.redaction.redact import apply_evidence, redact_payload
 from src.target.origin import HTTPOrigin
-from src.workflow.validation_route import resolve_validation_route
+from src.workflow.validation.route import resolve_validation_route
 
 
 def canonical_hash(value: Any) -> str:

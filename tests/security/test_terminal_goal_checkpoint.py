@@ -19,7 +19,7 @@ from src.permission.network.grants import HTTPLimits
 from src.session.store import Store
 from src.tools.common.ask import AskUserTool
 from src.workflow.assessment import accepted_result, seal
-from src.workflow.goals import RequestedGoal
+from src.workflow.planning.goals import RequestedGoal
 from src.workflow.state import Candidate, WorkflowMode
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, collect
 from tests.helpers.workflow import prepare_validation_prerequisites

@@ -62,7 +62,7 @@ async def test_xss_context_and_transformation_remain_bounded_without_execution_i
 @pytest.mark.parametrize('name', ['sql-injection', 'cross-site-scripting'])
 async def test_repair_guidance_matches_loaded_preface_without_changing_runtime_ceiling(skills, monkeypatch, name):
     from src.permission.runtime import execution
-    from src.workflow.evidence_recovery import MAX_EVIDENCE_RECOVERY_RETRIES
+    from src.workflow.evidence.recovery import MAX_EVIDENCE_RECOVERY_RETRIES
 
     # Exercise the production loader preface, without creating runtime rights.
     monkeypatch.setattr(execution, 'policy_for', lambda _: object())

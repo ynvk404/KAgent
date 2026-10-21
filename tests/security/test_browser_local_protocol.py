@@ -46,8 +46,12 @@ async def test_real_persistent_owner_permission_and_cleanup_in_private_namespace
         pytest.skip('explicitly prepared patched closure and Linux namespace required')
     verify_browser_local_deployment()
     script = Path(__file__).with_name('browser_local_owner.py')
+    # A checkout/snapshot may itself live under /tmp. Re-expose only its code
+    # read-only after hiding host temporary files; keep network isolation.
+    source_root = script.resolve().parents[2]
     child = await asyncio.create_subprocess_exec('/usr/bin/bwrap', '--unshare-net', '--ro-bind', '/', '/',
-        '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--', sys.executable, str(script),
+        '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
+        '--ro-bind', str(source_root), str(source_root), '--', sys.executable, str(script),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         stdout, stderr = await asyncio.wait_for(child.communicate(), 30)

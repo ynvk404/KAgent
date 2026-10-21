@@ -15,7 +15,7 @@ from src.session.store import Store as SessionStore
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.ui.commands.report_handler import capture_workflow
 from src.workflow.assessment import accepted_result, seal
-from src.workflow.review import confirmation_binding
+from src.workflow.evidence.review import confirmation_binding
 from tests.security.test_agent_assessment import setup
 from tests.security.test_execution_policy import runtime, ORIGIN
 

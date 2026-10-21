@@ -47,7 +47,7 @@ async def test_native_handoff_is_bounded_and_raw_remains_full(native):
 
 @pytest.mark.asyncio
 async def test_native_old_owner_cannot_publish_to_replacement_state(native):
-    from src.workflow.discovery import native_handoff
+    from src.workflow.discovery.inventory import native_handoff
     from src.workflow.state import WorkflowState
     agent, _ = native()
     _, _, result = await execute(agent, ['hit1'])

@@ -263,7 +263,7 @@ def _message_from_dict(data: Any) -> Message | None:
     if name is not None and not isinstance(name, str):
         name = None
     if role == "tool" and name == "workflow":
-        from src.workflow.validation_context import without_transient_validation_context
+        from src.workflow.validation.context import without_transient_validation_context
         content = without_transient_validation_context(content, truncated=data.get("tool_truncated") is True)
 
     tool_status = data.get("tool_status")
@@ -414,7 +414,7 @@ class Store:
         workflow_data = raw.get("workflow")
         if workflow_data is not None and not isinstance(workflow_data, dict):
             log.warning("session: ignoring malformed workflow state")
-        from src.workflow.goals import RequestedGoalsLoadError
+        from src.workflow.planning.goals import RequestedGoalsLoadError
         try:
             workflow = WorkflowState.from_dict(workflow_data)
         except RequestedGoalsLoadError as err:
@@ -530,7 +530,7 @@ def _serialize_session(session_id: str, snapshot: tuple, stage: Callable[[str], 
     serialized_messages = []
     http_content: dict[int, str] = {}
     from src.llm.providers.gemini import safe_replay_part
-    from src.workflow.validation_context import without_transient_validation_context
+    from src.workflow.validation.context import without_transient_validation_context
     for msg in messages:
         serialized: dict[str, Any] = {
             "role": msg.role,

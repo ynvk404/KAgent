@@ -17,7 +17,7 @@ from src.findings.cwe_enrichment import TrustedSource, parse_response
 from src.findings.store import read_report
 from src.permission.permission import UserControlledRefusal
 from src.tools.mcp.integration import MCPSession, MCPTool
-from src.workflow.review import confirmation_binding
+from src.workflow.evidence.review import confirmation_binding
 from tests.security.test_execution_policy import runtime
 
 

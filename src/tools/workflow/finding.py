@@ -17,12 +17,12 @@ from src.permission.permission import Prompter
 from src.redaction.redact import apply as redact, apply_evidence
 from src.logger.logger import get_logger
 from src.workflow.state import WorkflowState
-from src.workflow.evidence import verify_evidence_reads
-from src.workflow.review import review_snapshot, confirmation_binding
+from src.workflow.evidence.artifacts import verify_evidence_reads
+from src.workflow.evidence.review import review_snapshot, confirmation_binding
 from src.workflow.assessment import accepted_result
 from src.skills.registry import normalize_candidate_class
 from src.target.origin import HTTPOrigin
-from src.workflow.validation_route import GENERIC_VALIDATOR
+from src.workflow.validation.route import GENERIC_VALIDATOR
 from src.tools.common.types import Tool, arg_string
 
 SEVERITIES: tuple[Severity, ...] = (

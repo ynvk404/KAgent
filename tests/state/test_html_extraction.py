@@ -2,8 +2,8 @@ from dataclasses import replace
 
 import pytest
 
-from src.workflow.discovery import EndpointRecord, ProvenanceRecord
-from src.workflow.extraction import extract_html, apply_extraction, Extraction, ExtractedRecord
+from src.workflow.discovery.inventory import EndpointRecord, ProvenanceRecord
+from src.workflow.discovery.extraction import extract_html, apply_extraction, Extraction, ExtractedRecord
 from tests.state.test_discovery_inventory import state, source
 
 DOCUMENT = 'http://target.test/app/pages/document.html'
@@ -142,7 +142,7 @@ def test_invalid_item_is_excluded_without_orphan_input_or_processed_claim():
 
 def test_global_bound_failure_is_atomic(monkeypatch):
     s, src = prepared()
-    monkeypatch.setattr('src.workflow.discovery.MAX_ENDPOINTS', 1)
+    monkeypatch.setattr('src.workflow.discovery.inventory.MAX_ENDPOINTS', 1)
     before = s.to_dict()
     with pytest.raises(ValueError): apply(s, src, parse('<a href="/new"><form><input name="q"></form>'))
     assert s.to_dict() == before

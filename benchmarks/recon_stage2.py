@@ -2,7 +2,7 @@
 from time import perf_counter
 import json
 
-from src.workflow.discovery import EndpointRecord, SourceRecord, ProvenanceRecord, discovery_page
+from src.workflow.discovery.inventory import EndpointRecord, SourceRecord, ProvenanceRecord, discovery_page
 from src.workflow.state import WorkflowObjective, WorkflowState
 
 
@@ -33,7 +33,7 @@ def measure():
     start = perf_counter()
     for _ in range(100): discovery_page(state, {'view': 'sources', 'limit': 25})
     timings['100_frontier_listings'] = perf_counter() - start
-    from src.workflow.extraction import extract_html, apply_extraction
+    from src.workflow.discovery.extraction import extract_html, apply_extraction
     document_url = origin + '/large.html'
     html = ('<form method="post">' + ''.join(f'<input name="field{index}">' for index in range(260))
             + '</form>' + ' ' * 50000).encode()
@@ -47,7 +47,7 @@ def measure():
     apply_extraction(state, source.id, extraction, generation=state.generation,
                       retained_ref='obs-html', retained_hash='f' * 64, document_url=document_url)
     timings['bounded_large_html_admission'] = perf_counter() - start
-    from src.workflow.openapi import extract_openapi
+    from src.workflow.discovery.openapi import extract_openapi
     doc = {'openapi': '3.1.0', 'paths': {f'/api/{index}': {'post': {'requestBody': {'content': {
         'application/json': {'schema': {'properties': {f'q{i}': {'type': 'string'} for i in range(12)}}}}}}}
         for index in range(60)}}

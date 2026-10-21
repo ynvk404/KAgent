@@ -12,7 +12,7 @@ from benchmarks.scenario1.core.storage import resolve_run
 from benchmarks.scenario1.reporting.projection import json_bytes
 from benchmarks.scenario1.reporting.writer import write_report
 from src.findings.store import Finding, render
-from src.workflow.review import confirmation_binding
+from src.workflow.evidence.review import confirmation_binding
 from src.workflow.state import validation_result_fingerprint
 from tests.benchmarks.test_scenario1 import (
     ScriptedClient, execute_case, isolated_project_environment, mock_http, op, settings, single_manifest,

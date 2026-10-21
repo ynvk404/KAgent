@@ -639,7 +639,7 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
             "  - no_candidate means candidate discovery was reviewed but "
             "class-specific validation was not performed; it is not a negative result."
         )
-    from src.workflow.scanner import project_jobs
+    from src.workflow.discovery.scanner import project_jobs
     objective = workflow.objective
     scanner_projection = project_jobs(workflow.scanner_jobs,
         objective.target_origin if objective else None, objective.id if objective else None)
@@ -673,7 +673,7 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                 + ", ".join(dict.fromkeys(pending_findings))
             )
     if workflow.objective is not None and workflow.objective.mode == "whole_target":
-        from src.workflow.input_view import ordered_inputs
+        from src.workflow.discovery.input_view import ordered_inputs
         for item in ordered_inputs(workflow)[:12]:
             lines.append(
                 f"- Input {item.id}: {item.method or '*'} {_workflow_brief(item.endpoint or '*')} "

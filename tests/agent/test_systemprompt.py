@@ -11,9 +11,9 @@ from src.workflow.state import (
     WorkflowState,
     PHASE_COVERAGE_DIMENSIONS,
 )
-from src.workflow.goals import RequestedGoal
+from src.workflow.planning.goals import RequestedGoal
 from tests.helpers.workflow import record_completed_phase
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 import pytest
 from src.agent.system_prompt import (
     BuildOptions,

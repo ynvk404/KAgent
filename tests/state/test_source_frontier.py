@@ -5,7 +5,7 @@ import pytest
 
 from src.agent.agent import WholeTargetStallTracker
 from src.agent.system_prompt import render_workflow
-from src.workflow.discovery import discovery_page
+from src.workflow.discovery.inventory import discovery_page
 from tests.state.test_discovery_inventory import state, source, endpoint
 from tests.helpers.workflow import record_completed_phase
 
@@ -78,7 +78,7 @@ def test_invalid_update_is_atomic(attack):
 
 
 def test_late_source_invalidates_review_and_historical_completion_remains():
-    from src.workflow.goals import RequestedGoal
+    from src.workflow.planning.goals import RequestedGoal
     s = state()
     goal = RequestedGoal('xss')
     assert s.objective is not None

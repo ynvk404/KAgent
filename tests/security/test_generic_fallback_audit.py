@@ -11,7 +11,7 @@ from src.skills.registry import Registry as Skills
 from src.workflow.state import WorkflowState
 from src.agent.decision_planner import PlannerCandidate, PlannerContext, build_decision_plan
 from src.target.target import Target
-from src.workflow.validation_route import ValidationRoute
+from src.workflow.validation.route import ValidationRoute
 from pathlib import Path
 from tests.helpers.workflow import prepare_validation_prerequisites
 from tests.security.test_execution_policy import runtime

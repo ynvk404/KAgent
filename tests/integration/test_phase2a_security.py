@@ -13,7 +13,7 @@ from src.browser.store import CaptureStore
 from src.permission.permission import UserControlledRefusal
 from src.permission.runtime.execution import ExecutionBlocked
 from src.workflow.state import AttackSurfaceInput, Candidate
-from src.workflow.validation_context import resolve_validation_context
+from src.workflow.validation.context import resolve_validation_context
 from tests.security.test_execution_policy import runtime, ORIGIN
 from tests.security.test_generic_validation import setup, proposal, request
 

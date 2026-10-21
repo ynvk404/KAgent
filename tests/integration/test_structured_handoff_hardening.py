@@ -18,8 +18,8 @@ from src.tools.common.browser_capture import BrowserCaptureGetTool, BrowserCaptu
 from src.tools.common.registry import Registry
 from src.tools.http.http_tool import HTTPTool
 from src.tools.workflow.workflow_tool import WorkflowTool
-from src.workflow.evidence import EvidenceArtifact
-from src.workflow.goals import RequestedGoal
+from src.workflow.evidence.artifacts import EvidenceArtifact
+from src.workflow.planning.goals import RequestedGoal
 from src.workflow.state import AttackSurfaceInput, Candidate, ValidationResult, WorkflowObjective, WorkflowState
 from tests.helpers.workflow import record_completed_phase
 

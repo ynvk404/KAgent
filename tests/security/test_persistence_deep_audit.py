@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 from contextlib import contextmanager
-from src.workflow.evidence_source import EvidenceSource
+from src.workflow.evidence.source import EvidenceSource
 
 import pytest
 
@@ -18,7 +18,7 @@ from src.permission.permission import AlwaysAllow, Decision, YoloPrompter
 from src.permission.runtime.execution import ExecutionPolicy, ExecutionBlocked
 from src.tools.common.registry import Registry
 from src.tools.execution.file import FileWriteTool
-from src.workflow.evidence import EvidenceArtifact, MAX_EVIDENCE_BYTES
+from src.workflow.evidence.artifacts import EvidenceArtifact, MAX_EVIDENCE_BYTES
 from tests.security.test_evidence_reads import workflow
 from tests.security.test_persistence_handoff_audit import offline, scratch, observed
 

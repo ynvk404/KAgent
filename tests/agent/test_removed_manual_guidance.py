@@ -11,7 +11,7 @@ from src.permission.runtime.execution import default_execution_policy
 from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry
 from src.target.target import Target
-from src.workflow.validation_route import GENERIC_VALIDATOR, ValidationRoute
+from src.workflow.validation.route import GENERIC_VALIDATOR, ValidationRoute
 
 
 RETIRED_COMMANDS = ("/review-result", "/enrich-cwe")

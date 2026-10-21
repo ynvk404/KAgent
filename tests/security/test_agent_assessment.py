@@ -325,9 +325,9 @@ def test_v1_binding_vectors_and_honest_certificate_view(tmp_path):
     from src.permission.runtime.execution import ExecutionPolicy
     from src.engagement.state import EngagementState
     from src.permission.runtime.observations import VerifiedResult
-    from src.workflow.evidence import EvidenceArtifact
+    from src.workflow.evidence.artifacts import EvidenceArtifact
     from src.workflow.state import ValidationResult, validation_result_fingerprint
-    from src.workflow.review import review_snapshot, confirmation_binding
+    from src.workflow.evidence.review import review_snapshot, confirmation_binding
     from src.workflow.assessment import assessment_provenance
     state = WorkflowState(objective=WorkflowObjective("legacy-objective", "whole_target", "https://target.test"))
     candidate, _ = state.add_candidate(Candidate("xss", target="https://target.test", endpoint="/search",

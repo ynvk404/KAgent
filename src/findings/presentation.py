@@ -12,7 +12,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 from src.findings.store import Finding, _fenced
 from src.redaction.redact import _is_secret_field, apply_evidence
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 
 if TYPE_CHECKING:
     from src.workflow.state import Candidate, ValidationResult

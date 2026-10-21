@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ import pytest
 from src.agent.decision_planner import (
     PlannerCandidate,
     PlannerContext,
+    PlannerGoal,
     build_decision_plan,
     contains_keyword,
     detect_intent,
@@ -18,6 +20,7 @@ from src.agent.decision_planner import (
 from src.skills.registry import Registry, Skill, SkillTriggers
 from src.target.target import Target
 from src.workflow.state import Candidate, WorkflowState
+from src.workflow.validation.route import ValidationRoute
 
 
 SKILLS_ROOT = Path(__file__).resolve().parents[2] / "skills"
@@ -765,11 +768,63 @@ def test_whole_target_candidate_validator_resolution_fails_closed(skills, expect
     assert "do not validate it with an arbitrary skill" in plan.guidance.lower()
 
 
-@pytest.mark.parametrize("status", ["completed", "blocked"])
+@pytest.mark.parametrize("status", ["completed", "not_applicable"])
 def test_terminal_whole_target_planner_does_not_recommend_extra_work(status):
     assert build_decision_plan(
-        "anything", shipped_skills(), Target(), whole_context(workflow_status=status)
+        "anything", shipped_skills(), Target(), whole_context(
+            workflow_status=status,
+            completed_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        ),
     ) is None
+
+
+@pytest.mark.parametrize("goal_status", ["in_progress", "blocked", "deferred"])
+@pytest.mark.parametrize("recovery", [False, True])
+def test_blocked_whole_target_preserves_results_but_allows_independent_recovery(goal_status, recovery):
+    preserved = PlannerCandidate(
+        "cand_preserved", "sql-injection", "validated", latest_outcome="confirmed",
+        validation_action="preserve_result",
+    )
+    retry = PlannerCandidate(
+        "cand_retry", "cross-site-scripting", "deferred",
+        latest_outcome="insufficient-evidence", validation_action="start_validation",
+    )
+    context = whole_context(
+        workflow_status="blocked",
+        workflow_blockers=("mutation cleanup unresolved:requires-user-action",),
+        completed_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+        candidates=(preserved, retry) if recovery else (preserved,),
+        requested_goals=(
+            PlannerGoal("goal_preserved", "sql-injection", goal_status, (preserved.id,)),
+            *((PlannerGoal("goal_retry", "cross-site-scripting", goal_status, (retry.id,)),) if recovery else ()),
+        ),
+        validation_routes={
+            preserved.id: ValidationRoute("expert", "sql-injection"),
+            **({retry.id: ValidationRoute("expert", "cross-site-scripting")} if recovery else {}),
+        },
+    )
+    before = deepcopy(context)
+    plan = build_decision_plan("continue", shipped_skills(), Target(), context)
+    assert context == before
+    if recovery:
+        assert plan is not None
+        assert plan.candidate_id == retry.id
+        assert plan.recommended_skill == "cross-site-scripting"
+    else:
+        assert plan is None
+
+
+def test_blocked_whole_target_can_repair_an_incomplete_discovery_phase():
+    plan = build_decision_plan(
+        "continue", shipped_skills(), Target(), whole_context(
+            workflow_status="blocked",
+            workflow_blockers=("canonical recon artifact missing",),
+            completed_phases=frozenset({"recon", "enumeration", "input_analysis"}),
+            phase_completion_readiness={"phase": "recon", "historically_completed": True, "ready": False},
+        ),
+    )
+    assert plan is not None and plan.recommended_skill == "recon"
+    assert plan.candidate_id is None
 
 
 def test_direct_candidate_validation_keeps_existing_planner_route():

@@ -13,7 +13,7 @@ from urllib.parse import urlsplit, urljoin
 import uuid
 
 from src.target.origin import HTTPOrigin
-from src.workflow.evidence_errors import EvidenceSubmissionError
+from src.workflow.evidence.errors import EvidenceSubmissionError
 
 MAX_SOURCES = 32
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -230,7 +230,7 @@ def start_attempt(state, candidate, session_id, epoch, *, requests=None, criteri
         # Explicit start after a changed identity seals the old attempt. No
         # old sources or execution context are adopted by the new identity.
         previous["status"] = "interrupted"
-    from src.workflow.evidence_recovery import carry_continuation_budget
+    from src.workflow.evidence.recovery import carry_continuation_budget
     carry_continuation_budget(state, row)
     state.attempts[row["id"]] = row
     return row

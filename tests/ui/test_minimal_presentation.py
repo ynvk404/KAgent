@@ -28,7 +28,7 @@ def test_assistant_markdown_indentation_is_never_dimmed_by_role_renderer():
     assert all(line.color == PRIMARY for line in lines)
 
 
-def test_workflow_overview_and_inventory_use_authoritative_milestone_style():
+def test_workflow_overview_stays_separate_from_inventory_and_blocked_outcome():
     from src.agent.events import DoneEvent
     from src.ui.core.outcomes import OutcomeFacts, ProgressRecord
     from src.ui.core.state import AgentEventAction, SetBusy, initial_state, reducer
@@ -38,8 +38,15 @@ def test_workflow_overview_and_inventory_use_authoritative_milestone_style():
     facts = OutcomeFacts(scope="fixture", overview="Workflow · enumeration pending · 0/1 inputs reviewed",
                          records=(ProgressRecord("input", "one", "GET /search · q", "pending"),))
     state = reducer(state, AgentEventAction(DoneEvent(stop_reason="workflow_blocked"), facts=facts))
-    for entry in state.transcript[:2]:
-        assert entry.kind == "info" and entry_view(entry)[0].color == BOLD_ACCENT
+    inventory = [entry for entry in state.transcript if entry.text.startswith("Attack surface recorded:")]
+    assert len(inventory) == 1
+    assert "1 input (1 pending)" in inventory[0].text and "GET /search · q" in inventory[0].text
+    assert inventory[0].kind == "info" and entry_view(inventory[0])[0].color == BOLD_ACCENT
+    blocked = [entry for entry in state.transcript if entry.text.startswith("Blocked")]
+    assert len(blocked) == 1
+    assert blocked[0].kind == "warning" and entry_view(blocked[0])[0].color == WARNING
+    assert state.latest_facts == facts
+    assert all(facts.overview not in entry.text for entry in state.transcript)
 
 
 def http_request(*, body=b"PAYLOAD_TAIL", redirect_limit=0, url="https://fixture.test:8443/action", **overrides):

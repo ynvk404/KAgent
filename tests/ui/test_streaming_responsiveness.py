@@ -15,8 +15,8 @@ from src.tools.workflow.workflow_tool import WorkflowTool
 from src.ui.core import app as app_module
 from src.ui.core.app import KAgent
 from src.ui.core.state import AgentEventAction, SetBusy
-from src.workflow import evidence as evidence_module
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence import artifacts as evidence_module
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from src.workflow.state import Candidate, ValidationResult, WorkflowState
 from tests.helpers.workflow import adopt_fixture_assessment
 from tests.agent.test_token_accounting_independent_verify import make_agent

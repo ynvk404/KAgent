@@ -168,12 +168,17 @@ class HelpAgent:
     skills: HelpSkills = field(default_factory=HelpSkills)
     target: DummyTarget = field(default_factory=lambda: DummyTarget("https://lab.test"))
     client: HelpClient = field(default_factory=HelpClient)
+    max_steps: int = 20
+    max_steps_override: int | None = None
 
     def get_memory_stats(self) -> HelpMemory:
         return HelpMemory()
 
     def get_max_steps(self) -> int:
-        return 20
+        return self.max_steps
+
+    def get_max_steps_override(self) -> int | None:
+        return self.max_steps_override
 
     def get_auto_compact_threshold(self) -> int:
         return 8_000
@@ -250,7 +255,7 @@ def test_help_groups_commands_and_keeps_runtime_summary_compact():
     assert "provider   openrouter" in text
     assert "model      configured-model" in text
     assert "target     https://lab.test" in text
-    assert "limits     20 steps  ·  8k compact  ·  thinking on" in text
+    assert "limits     Direct Mode 20 / Whole-target 60 steps  ·  8k compact  ·  thinking on" in text
     assert "skills     2/3 enabled" in text
     assert "memory     4 items" in text
     assert "compactions" not in text
@@ -269,6 +274,17 @@ def test_help_groups_commands_and_keeps_runtime_summary_compact():
     assert "coverage(action=" not in text
     for item in SLASH_ITEMS:
         assert item.name in text
+
+
+def test_help_shows_maxsteps_override_for_both_modes():
+    agent = HelpAgent(max_steps=10, max_steps_override=10)
+
+    text = build_help_text(
+        cast(Agent, agent),
+        lambda: {"backend": "offline", "model": "fixture"},
+    )
+
+    assert "limits     Direct Mode 10 / Whole-target 10 steps" in text
 
 
 def _custom_model_app(*, fail_model: str | None = None):

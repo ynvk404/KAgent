@@ -22,9 +22,9 @@ from src.permission.runtime.execution import ExecutionPolicy
 from src.redaction.redact import redact_payload
 from src.session.store import Store
 from src.tools.workflow.workflow_tool import WorkflowTool
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from src.workflow.state import ValidationResult, WorkflowObjective
-from src.workflow.validation_context import resolve_validation_context, without_transient_validation_context
+from src.workflow.validation.context import resolve_validation_context, without_transient_validation_context
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, seed_compactable_history
 from tests.integration.test_phase2a_handoff import (
     ORIGIN, call, capture_payload, linked, runtime,

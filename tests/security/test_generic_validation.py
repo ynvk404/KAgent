@@ -31,14 +31,14 @@ from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.assessment import accepted_result
 from tests.security.test_agent_assessment import ASSESSMENT
 from src.workflow.state import AttackSurfaceInput, Candidate, ValidationResult, WorkflowMode, WorkflowObjective, WorkflowPhase, WorkflowState
-from src.workflow.validation_route import GENERIC_VALIDATOR, resolve_validation_route
-from src.workflow.probe import ProbeProposal
+from src.workflow.validation.route import GENERIC_VALIDATOR, resolve_validation_route
+from src.workflow.validation.probe import ProbeProposal
 from tests.helpers.workflow import record_completed_phase
 from tests.helpers.agent_fakes import FakeClient
 from tests.helpers.agent_fakes import FakeSignal, collect
 from src.llm.core.client import StreamingClient
 from src.llm.core.types import ChatResponse, Message
-from src.workflow.goals import RequestedGoal
+from src.workflow.planning.goals import RequestedGoal
 from tests.security.test_execution_policy import runtime, ORIGIN, REAL_CLIENT
 
 

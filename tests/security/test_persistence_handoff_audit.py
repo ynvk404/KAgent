@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 from contextlib import contextmanager
-from src.workflow.evidence_source import EvidenceSource
+from src.workflow.evidence.source import EvidenceSource
 import socket
 import tempfile
 import threading
@@ -24,7 +24,7 @@ from src.permission.permission import AlwaysAllow, YoloPrompter
 from src.permission.runtime.execution import ExecutionBlocked, ExecutionPolicy
 from src.session.store import _joined_thread
 from src.tools.execution.file import FileWriteTool
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from tests.data.test_findings_store import make_finding
 from tests.security.test_evidence_reads import workflow
 from tests.tools.test_finding import _tool, _valid_args

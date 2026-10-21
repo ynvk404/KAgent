@@ -337,7 +337,7 @@ class ResultRetention:
             preview = ToolOutput(text, status=output.status, error_kind=output.error_kind,
                                  truncated=payload["truncated"])
         preview.native_discovery = produced
-        from src.workflow.discovery import native_handoff
+        from src.workflow.discovery.inventory import native_handoff
         try:
             check()
             native_handoff(self.agent.workflow, produced, call_id)

@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from src.workflow.discovery import EndpointRecord, SourceRecord, ProvenanceRecord, observation_handoff, scanner_handoff
+from src.workflow.discovery.inventory import EndpointRecord, SourceRecord, ProvenanceRecord, observation_handoff, scanner_handoff
 from src.workflow.state import WorkflowObjective, WorkflowState, AttackSurfaceInput
 
 ORIGIN = 'http://target.test'

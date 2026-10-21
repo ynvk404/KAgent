@@ -21,8 +21,8 @@ from tests.helpers.workflow import FixtureWorkflowToolMixin
 
 class WorkflowTool(FixtureWorkflowToolMixin, ProductionWorkflowTool):
     pass
-from src.workflow.goals import RequestedGoal
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.planning.goals import RequestedGoal
+from src.workflow.evidence.artifacts import EvidenceArtifact
 from src.workflow.state import (
     AttackSurfaceInput, Candidate, ValidationResult,
     WorkflowObjective, WorkflowState,

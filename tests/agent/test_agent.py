@@ -71,7 +71,7 @@ from src.workflow.state import (
     WorkflowPhase,
     WorkflowState,
 )
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 
 from src.session.store import SessionMemory, Store, new_id
 from tests.helpers.agent_fakes import (

@@ -15,7 +15,7 @@ from src.workflow.state import (
     attack_surface_input_fingerprint,
 )
 from tests.helpers.workflow import record_completed_phase
-from src.workflow.evidence import EvidenceArtifact
+from src.workflow.evidence.artifacts import EvidenceArtifact
 
 
 def make_candidate(**changes) -> Candidate:
