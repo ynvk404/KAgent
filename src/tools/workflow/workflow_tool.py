@@ -185,6 +185,9 @@ class WorkflowTool(Tool):
             "Use returned IDs, real evidence; omit secrets. "
             "Only start_validation enters validating. Usable owned sources -> file_write redacted proof outside artifacts/findings -> record_evidence -> copy evidence.id (ev_...) -> "
             "record_result -> confirm_finding (accepted confirmed only). "
+            "start_validation establishes/resumes an attempt before validation probes; it does not send probe.values "
+            "or adopt captures made before start. Reload the resolved validator with load_skill each turn as needed. "
+            "force is supported only by record_result for explicit retests, never by start_validation. "
             "Active-attempt conflict: list validating work; record its honest result "
             "or insufficient-evidence/deferred with reason before starting another candidate. "
             "mutation_performed: verified writes; cleanup needs separate authority. Samples aren't replay baselines.\n"
@@ -378,7 +381,7 @@ class WorkflowTool(Tool):
                 '{"action":"start_validation","candidate_id":"<returned candidate.id>",'
                 '"related_requests":[{"role":"readback","method":"GET","url":"/comments/123"}]}'),
             'coverage_reason': 'Non-performed: reason; observed: source/limitations.',
-            'force': 'Explicit retest only.',
+            'force': 'record_result only, explicit retest only; never pass to start_validation.',
         }
         for key, description in descriptions.items():
             properties[key]['description'] = description
@@ -429,7 +432,10 @@ class WorkflowTool(Tool):
         unsupported = sorted(set(args) - {'action', *ACTION_INPUTS[action]})
         if unsupported:
             return ToolOutput('error: ' + action + ' does not accept ' + ', '.join(unsupported)
-                              + '; omit these arguments (runtime identities cannot be assigned)',
+                              + '; omit these arguments (runtime identities cannot be assigned)'
+                              + ('; force is record_result-only for explicit retests, not a start/recovery override. '
+                                 'Inspect list for current attempt, prerequisites and recovery; Continue cannot reset its budget.'
+                                 if action == 'start_validation' and 'force' in unsupported else ''),
                               status='error', error_kind='invalid_args')
         missing = [key for key in ACTION_REQUIRED.get(action, ()) if not arg_string(args, key)]
         if missing:
@@ -1005,6 +1011,64 @@ class WorkflowTool(Tool):
         return self._workflow_error(reason, code="WHOLE_TARGET_VALIDATION_PREREQUISITE",
             category="missing_prerequisite",
             next_action="Inspect current phase readiness and load its playbook. Complete Recon/Enumeration through their canonical artifacts and coverage contract; analyze and link this exact input. Early Candidate recording is allowed. Do not invent completion, source_skill or current_phase receipts. Other inputs/sources and the entire Input Analysis phase need not finish. An owned active Attempt keeps its existing recovery path; Direct admission is unchanged.")
+
+    def validation_handoff(self, candidate_id: str, policy=None) -> dict[str, Any] | None:
+        """Bounded lifecycle metadata, never observations, admission or authority."""
+        from src.workflow.assessment import attempt_owner
+        from src.workflow.evidence_recovery import (
+            current_budget, MAX_EVIDENCE_REJECTIONS, MAX_TERMINAL_REPAIR_TURNS,
+        )
+        try:
+            self._validate_current_objective_candidate(candidate_id)
+        except ValueError:
+            return None
+        candidate = self.state.candidates[candidate_id]
+        objective = self.state.objective
+        attempt = next((row for row in reversed(list(self.state.attempts.values()))
+                        if row.get('candidate_id') == candidate_id
+                        and row.get('objective_id') == (objective.id if objective else None)), None)
+        epoch = policy.engagement.http_permissions.epoch if policy else self.evidence_epoch
+        selector = policy.generic_validation.durable_attempt if policy else self.active_attempt
+        owned = bool(attempt and selector == attempt['id'] and attempt_owner(
+            self.state, selector, epoch, self.target.revision if self.target else None,
+            policy.session_id or self.session_id if policy else self.session_id))
+        budget = current_budget(self.state, candidate_id)
+        exhausted = bool(budget and (budget['rejections'] >= MAX_EVIDENCE_REJECTIONS
+                                     or budget['repair_turns'] >= MAX_TERMINAL_REPAIR_TURNS))
+        latest = self.state.latest_result(candidate_id)
+        terminal = bool(latest and latest.outcome in {'confirmed', 'not-confirmed'}
+                        and not (objective and objective.mode == 'candidate_validation'
+                                 and latest.objective_id != objective.id)
+                        and candidate.status not in {'queued', 'validating'})
+        stopped = bool(attempt and attempt.get('probing_stopped'))
+        prerequisite = self.validation_admission_error(candidate_id, policy)
+        if terminal:
+            action = 'preserve_result'
+        elif exhausted:
+            action = 'stop_recovery'
+        elif owned:
+            action = 'finalize_owned' if stopped else 'resume_owned'
+        elif latest and latest.outcome in {'blocked', 'browser-required', 'authorization-required', 'deferred'}:
+            action = 'resolve_dependency'
+        else:
+            action = 'repair_prerequisites' if prerequisite else 'start_validation'
+        return {
+            'candidate_id': candidate_id,
+            'attempt_id': attempt['id'] if attempt else None,
+            'attempt_status': attempt.get('status') if attempt else None,
+            'owned_active': owned, 'probing_stopped': stopped,
+            'latest_outcome': latest.outcome if latest else None,
+            'next_action': action, 'prerequisite_error': prerequisite,
+            'recovery': {
+                'status': 'exhausted' if exhausted else 'available',
+                'rejections': budget['rejections'] if budget else 0,
+                'repair_turns': budget['repair_turns'] if budget else 0,
+                'rejection_limit': MAX_EVIDENCE_REJECTIONS,
+                'repair_turn_limit': MAX_TERMINAL_REPAIR_TURNS,
+                'paused': budget['paused'] if budget else False,
+                'closed': budget['closed'] if budget else False,
+            },
+        }
 
     async def _start_validation(self, args: dict[str, Any], prompter: Prompter, signal: Any) -> str:
         candidate_id = arg_string(args, "candidate_id")
@@ -2224,6 +2288,9 @@ class WorkflowTool(Tool):
                 "truncated": total > len(selected),
                 "observations": observations[offset:offset + limit],
                 "observations_total": len(observations),
+                "observations_scope": "Current owned inventory only; zero does not mean session HTTP traffic was lost. Unowned/foreign sources are excluded.",
+                "validation_handoffs": [row for item in selected
+                    if (row := self.validation_handoff(item.id, policy)) is not None],
                 "next_observation_offset": offset + limit if offset + limit < len(observations) else None,
                 "current_phase": self.state.current_phase,
                 "scanner_jobs": [row.projection() for row in scanner_jobs[scanner_offset:scanner_offset + 5]],

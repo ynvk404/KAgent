@@ -24,6 +24,9 @@ from textual.strip import Strip
 from textual.widgets import RichLog, Static
 
 from src.agent.agent import Agent, AgentRunOptions
+from src.agent.scope import runtime_scope
+from src.target.origin import HTTPOrigin
+from src.workflow.state import WorkflowState
 from src.agent.events import AgentEvent, AssistantDeltaEvent, DoneEvent, MaxStepsError
 from src.agent.agent import AddMemoryInput
 from src.tools.common.ask import Option, Question
@@ -396,6 +399,15 @@ class KAgent(App):
         padding: 0 1;
     }}
 
+    #overview-scroll {{
+        width: 100%;
+        height: auto;
+        max-height: 40vh;
+        overflow-y: auto;
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 0;
+    }}
+
     #overview {{
         width: 100%;
         height: auto;
@@ -468,7 +480,7 @@ class KAgent(App):
         max-height: 55vh;
     }}
 
-    Screen.short-terminal #overview {{
+    Screen.short-terminal #overview-scroll {{
         max-height: 20vh;
         overflow-y: auto;
     }}
@@ -623,14 +635,19 @@ class KAgent(App):
         self._monotonic: Callable[[], float] = time.monotonic
         self._modal_view_intent: tuple | None = None
         self._completion_view_intent: tuple | None = None
+        self._assessment_reset_pending = False
+        self._facts_context: tuple | None = None
+        self._overview_key: tuple | None = None
 
 
     def compose(self) -> ComposeResult:
         self.transcript_panel = Vertical(id="transcript-panel")
         self.transcript_panel.border_title = "Transcript"
         with self.transcript_panel:
-            self.overview_static = Static(id="overview")
-            yield self.overview_static
+            self.overview_scroll = Vertical(id="overview-scroll")
+            with self.overview_scroll:
+                self.overview_static = Static(id="overview")
+                yield self.overview_static
 
             self.transcript_log = TranscriptView(auto_scroll=True)
             yield self.transcript_log
@@ -643,7 +660,7 @@ class KAgent(App):
             out=cast(IO[str], rich_log_writer),
             width=rich_log_writer.content_width,
             clear=self.transcript_log.clear,
-            write_banner=rich_log_writer.write_banner,
+            write_banner=self._render_overview,
             preserve_viewport=self.transcript_log.preserve_viewport,
             write_line=rich_log_writer.write_line,
             line_count=lambda: len(self.transcript_log.lines),
@@ -697,10 +714,21 @@ class KAgent(App):
             action = replace(action, facts=runtime_facts(self.agent, action.event, self.state.call_history))
         elif isinstance(action, SetBusy) and action.busy and not self.state.busy and action.facts is None:
             action = replace(action, facts=runtime_facts(self.agent, None, self.state.call_history))
+        previous_facts = self.state.latest_facts
         self.state = reducer(
             self.state,
             cast(Any, action),
         )
+        if isinstance(action, Clear):
+            if action.message == "conversation reset":
+                self._assessment_reset_pending = True
+            elif not self._assessment_reset_pending:
+                self._refresh_assessment_facts()
+        if self._assessment_reset_pending:
+            self.state = replace(self.state, latest_facts=None)
+            self._facts_context = None
+        elif self.state.latest_facts is not previous_facts:
+            self._facts_context = self._assessment_context()
 
         if (
             isinstance(action, AgentEventAction)
@@ -1332,6 +1360,7 @@ class KAgent(App):
             generation,
             clear_message=self.state.clear_message,
         )
+        self._render_overview(self.state.banner_data)
 
         self.live_entry_static.display = live is not None
         if live:
@@ -1341,6 +1370,49 @@ class KAgent(App):
 
         self._sync_overlay()
         self._sync_status_bar()
+
+    def _assessment_context(self) -> tuple | None:
+        if not isinstance(getattr(self.agent, "workflow", None), WorkflowState):
+            return None
+        return (runtime_scope(self.agent), getattr(getattr(self.agent, "store", None), "id", None),
+                id(self.agent.workflow))
+
+    def _refresh_assessment_facts(self) -> None:
+        self.state = replace(self.state, latest_facts=runtime_facts(self.agent, None, self.state.call_history))
+        self._facts_context = self._assessment_context()
+
+    def refresh_assessment_progress(self) -> None:
+        """Refresh after restoration/reset completes, without fabricating events."""
+        self._assessment_reset_pending = False
+        self._refresh_assessment_facts()
+        self._recompute_view()
+
+    def _render_overview(self, data: BannerData) -> None:
+        if not hasattr(self, "overview_static"):
+            return
+        target = getattr(self.agent, "target", None)
+        raw_target = target.base_url() if target is not None else None
+        target_label = "(not set)"
+        if isinstance(raw_target, str) and raw_target:
+            try:
+                target_label = HTTPOrigin.from_url(raw_target).as_url()
+            except ValueError:
+                target_label = "(invalid target)"
+        session = getattr(getattr(self.agent, "store", None), "id", None)
+        session_label = session if isinstance(session, str) and session else "(not set)"
+        facts = self.state.latest_facts
+        context = self._assessment_context()
+        progress = (facts.overview if facts and not facts.stale_event and context is not None
+                    and context == self._facts_context and facts.scope == context[0]
+                    and not self._assessment_reset_pending else "")
+        width = max(1, self.cols - 5)
+        compact = self.size.height < 24
+        key = (data, target_label, session_label, progress, width, compact)
+        if key != self._overview_key:
+            self._overview_key = key
+            self.overview_static.update(Banner(data, width=width, ui=self.ui_palette).render_panel(
+                compact=compact, target=target_label, session=session_label, show_status=False,
+                assessment_progress=progress))
 
     def _render_live_entry(self, live: TranscriptEntry) -> None:
         text = Text()
@@ -1872,9 +1944,7 @@ class KAgent(App):
         self.screen.set_class(event.size.height < 24, "short-terminal")
         self._render_input()
         if hasattr(self, "overview_static") and self.overview_static is not None and hasattr(self, "state") and self.state.banner_data:
-            width = max(1, self.cols - 5)
-            self.overview_static.update(Banner(self.state.banner_data, width=width, ui=self.ui_palette).render_panel(
-                compact=event.size.height < 24))
+            self._render_overview(self.state.banner_data)
         self.refresh()
         self._sync_overlay()
         modal = self._get_active_modal()
@@ -1895,6 +1965,8 @@ class KAgent(App):
             self._reveal_completion_selection(self._completion_view_intent)
 
     def on_mount(self) -> None:
+
+        self.refresh_assessment_progress()
 
         if self.hang_diagnostics is not None:
             self.hang_diagnostics.start()

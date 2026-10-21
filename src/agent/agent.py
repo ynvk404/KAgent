@@ -27,6 +27,7 @@ from typing import (
     Any,
     Awaitable,
     Callable,
+    Coroutine,
     List,
     Literal,
     Optional,
@@ -71,6 +72,7 @@ from src.logger.logger import debug as log_debug, error as log_error
 
 from src.intelligence.store import (
     IntelligenceStore,
+    LearningInput,
     format_intelligence_context,
 )
 
@@ -1635,40 +1637,42 @@ class Agent:
             ]
             if x is not None
         )
+        try:
+            origin = HTTPOrigin.from_url(self.target.base_url() or "")
+        except ValueError:
+            origin = None
         results = [
             r
-            for r in self.intelligence.search(query, 5)
+            for r in self.intelligence.search(query, 5, target_origin=origin, include_history=False)
             if r["score"] >= 6
         ]
 
         return format_intelligence_context(results)
 
-    async def learn_intelligence(
+    def learn_intelligence(
         self,
-        summary: str,
-    ) -> None:
-        if self.intelligence is None:
-            return
-
-        source_session_id = (
-            self.store.id
-            if self.store is not None
-            else None
-        )
-
+        summary: str | tuple[LearningInput, ...],
+    ) -> Coroutine[Any, Any, None]:
+        # Capture before create_task: the coroutine may start after a reset/resume.
+        intelligence = self.intelligence
+        source_session_id = self.store.id if self.store is not None else None
         try:
-            await self.intelligence.learn_from_text(
-                summary,
-                source_session_id,
-            )
+            origin = HTTPOrigin.from_url(self.target.base_url() or "")
+        except ValueError:
+            origin = None
+        inputs = (LearningInput(summary, "summary"),) if isinstance(summary, str) else tuple(summary)
+        snapshot = (intelligence.snapshot_learning(inputs, source_session_id, target_origin=origin)
+                   if intelligence is not None else None)
 
-        except Exception as err:
-            log_error(
-                "agent: intelligence learning failed",
-                {
-                    "err": err_message(err),
-                },
-            )
+        async def learn() -> None:
+            if intelligence is None or snapshot is None:
+                return
+            try:
+                await intelligence.learn_snapshot(snapshot)
+            except Exception as err:
+                log_error("agent: intelligence learning failed", {"err": err_message(err)})
+
+        return learn()
 
     async def set_skill_enabled(self, name: str, enabled: bool) -> bool:
         if not self.skills.has(name):
@@ -2079,6 +2083,32 @@ class Agent:
         if any((spec["function"]["name"] if isinstance(spec, dict) else spec.function.name) == "workflow"
                for spec in projected or ()):
             blocks.append(Message("system", render_action_guidance(view, planner)))
+            workflow_tool = self.tools.get("workflow")
+            # One relevant candidate, refreshed with every request including after
+            # Continue/compaction. Model summaries never supply lifecycle facts.
+            selected_id = next(
+                (c.id for c in planner.candidates if c.status == "validating"), None
+            ) or next(iter(planner.repair_candidate_ids), None) or (decision.candidate_id if decision else None)
+            if isinstance(workflow_tool, WorkflowTool):
+                from .validation_guidance import render_validation_guidance
+                handoff = workflow_tool.validation_handoff(selected_id, policy_for(self.prompter)) if selected_id else None
+                if selected_id is None and not planner.discovery_obligation_pending:
+                    fallbacks = [
+                        (candidate, row) for candidate in planner.candidates
+                        if (candidate.latest_outcome in {"insufficient-evidence", "blocked", "browser-required", "authorization-required", "deferred"}
+                            or candidate.status in {"new", "queued"} and candidate.validation_ready is False)
+                        if (row := workflow_tool.validation_handoff(candidate.id, policy_for(self.prompter))) is not None
+                    ]
+                    # Use the runtime lifecycle/admission projection, not budget
+                    # arithmetic or store order, to prefer a usable next step.
+                    handoff = next((row for candidate, row in fallbacks
+                        if row["next_action"] == "start_validation"
+                        and (route := planner.validation_routes.get(candidate.id)) is not None
+                        and (route.kind == "expert" or route.kind == "generic" and candidate.generic_startable)),
+                        fallbacks[0][1] if fallbacks else None)
+                if handoff is not None:
+                    blocks.append(Message("system", render_validation_guidance(
+                        handoff, planner.validation_routes.get(handoff["candidate_id"]), planner.active_skills)))
         policy = policy_for(self.prompter)
         signature = json.dumps({"workflow": workflow.to_dict(), "planner": asdict(planner),
                                 "target": (self.target.base_url(), self.target.revision),
@@ -2121,6 +2151,10 @@ class Agent:
         """
         ownership.check(self)
         if req.tools is None:
+            # Synthesis may follow runtime closure; an earlier action hint is
+            # stale and is not part of the tools-free reporting handoff.
+            req.messages[:] = [m for m in req.messages if not (m.role == "system"
+                and m.content.startswith("Runtime validation continuation (current state, not authorization):"))]
             await self._admit_request(req, emit)
             self._project_skill_bodies(req.messages)
             return
@@ -3623,6 +3657,20 @@ class Agent:
             (row for row in self.workflow.objective_sources() if row.disposition == "pending"),
             key=lambda row: (not row.selected, row.id),
         ) if whole_target else []
+        selected_source = next(iter(sorted(
+            (row for row in self.workflow.objective_sources() if row.unresolved),
+            key=lambda row: row.id,
+        )), None) if whole_target else None
+        next_source = selected_source or next(iter(pending_sources), None)
+        selected_scanner_job_id = next(iter(sorted(
+            job.job_id for job in self.workflow.scanner_jobs.values()
+            if whole_target and objective is not None and job.objective_id == objective.id
+            and job.target_origin == objective.target_origin and job.unresolved_selected
+        )), None)
+        validation_actions = {
+            candidate.id: handoff["next_action"] for candidate in candidates
+            if (handoff := workflow_tool.validation_handoff(candidate.id, policy_for(self.prompter))) is not None
+        } if whole_target and isinstance(workflow_tool, WorkflowTool) else {}
         return PlannerContext(
             selected_capture_ids=tuple(row.retrieval_id for row in selection.requests) if selection else (),
             validation_routes=self._validation_routes(),
@@ -3656,6 +3704,7 @@ class Agent:
                     validation_complete=(direct_errors[candidate.id] is None if direct_goals else None),
                     completion_action=(self._direct_completion_action(candidate, direct_errors[candidate.id])
                                        if direct_goals else None),
+                    validation_action=validation_actions.get(candidate.id),
                 )
                 for candidate in candidates
                 for result in [self.workflow.latest_result(candidate.id)]
@@ -3671,8 +3720,12 @@ class Agent:
                 and not budget["closed"] and budget["rejections"] > 0),
             pending_source_count=len(pending_sources),
             selected_pending_source_count=sum(row.selected for row in pending_sources),
-            next_source_id=pending_sources[0].id if pending_sources else None,
-            next_source_selected=bool(pending_sources and pending_sources[0].selected),
+            discovery_obligation_pending=bool(whole_target and (
+                self.workflow.source_completion_error() or selected_scanner_job_id)),
+            next_source_id=next_source.id if next_source else None,
+            next_source_selected=bool(next_source and next_source.selected),
+            next_source_disposition=next_source.disposition if next_source else None,
+            selected_scanner_job_id=selected_scanner_job_id,
             pending_input_count=pending_inputs,
             blocked_input_count=blocked_inputs,
             coverage_sync_candidate_ids=sync_candidates,
@@ -4744,7 +4797,7 @@ class Agent:
                         )
                         if self.turn_executed_tool:
                             self._spawn_background(
-                                self.learn_intelligence(build_turn_learning_text(user_msg, resp.message.content)),
+                                self.learn_intelligence(build_turn_learning_inputs(user_msg, resp.message.content)),
                                 "learn_intelligence",
                         )
                         return "workflow_blocked" if self._validation_completion_blockers() else "final_response"
@@ -4805,7 +4858,7 @@ class Agent:
                 if self.turn_executed_tool:
                     self._spawn_background(
                         self.learn_intelligence(
-                            build_turn_learning_text(
+                            build_turn_learning_inputs(
                                 user_msg,
                                 resp.message.content,
                             )
@@ -7813,6 +7866,10 @@ def split_markdown_sections(text: str) -> dict[str, list[str]]:
         text,
         heading_normalizer=normalize_heading,
     )
+
+
+def build_turn_learning_inputs(user_msg: str, assistant_msg: str) -> tuple[LearningInput, ...]:
+    return (LearningInput(user_msg, "user"), LearningInput(assistant_msg, "assistant"))
 
 
 def build_turn_learning_text(

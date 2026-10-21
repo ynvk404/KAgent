@@ -54,3 +54,80 @@ def test_presentation_keeps_export_marker_diagnostic_category_and_raw_result(nam
     assert len(issues) == 1
     assert issue_category(issues[0], event) == ("export" if name == "confirm_finding" else "diagnostic")
     assert event.result == result and event.truncated is truncated
+
+
+@pytest.mark.parametrize("status", [200, 403, 503, None])
+@pytest.mark.parametrize("redirects", [0, 2])
+def test_http_status_and_native_body_warning_keep_request_and_metadata_source(status, redirects):
+    from src.ui.core.state import AgentEventAction, initial_state, reducer
+    from src.ui.widgets.banner import BannerData
+    state = initial_state("", BannerData("offline", "fixture", "."))
+    state = reducer(state, AgentEventAction(ToolCallEvent(id="http", name="http", args={
+        "method":"POST", "url":"https://user:short-secret@fixture.test/start?token=short-secret",
+        "parameter":"email", "max_redirects":redirects})))
+    event = ToolResultEvent(id="http", name="http", status="observation", http_status=status,
+                            truncated=True, result="HTTP/1.1 999 fabricated\nHIDDEN_BODY")
+    state = reducer(state, AgentEventAction(event))
+    assert len(state.transcript) == 1 and state.transcript[0].kind == "system"
+    text = state.transcript[0].text
+    assert "POST /start · input email" in text
+    assert "validation may be limited" in text
+    assert ("Last response body truncated" if redirects else "Response body truncated") in text
+    assert ("initial request" in text) == bool(redirects)
+    if status is not None:
+        assert (f"Last response {status}" if redirects else f"· {status}") in text
+    else:
+        assert "Last response 999" not in text
+    assert not any(hidden in text for hidden in ("short-secret", "HIDDEN_BODY", "999", "final URL", "chain completed"))
+    assert issue_category(result_issues(event, call_metadata(ToolCallEvent(name="http", args={
+        "max_redirects":redirects})))[0], event) == "diagnostic"
+    assert event.result.endswith("HIDDEN_BODY")
+
+
+def test_sparse_http_activity_adds_status_without_new_success_rows_and_keeps_correlation():
+    from src.ui.core.state import AgentEventAction, initial_state, reducer
+    from src.ui.widgets.banner import BannerData
+    from src.agent.events import AssistantTextEvent
+    state = initial_state("", BannerData("offline", "fixture", "."))
+    for identifier, path, redirects in [("a", "/first", 0), ("b", "/second", 2)]:
+        state = reducer(state, AgentEventAction(ToolCallEvent(id=identifier, name="http", args={
+            "method":"GET", "url":path, "max_redirects":redirects})))
+    for identifier, code in [("b", 503), ("a", 403)]:
+        event = ToolResultEvent(id=identifier, name="http", http_status=code, status="observation")
+        state = reducer(state, AgentEventAction(event))
+        before = state
+        state = reducer(state, AgentEventAction(event))
+        assert state is before
+    assert not state.transcript and not state.issues
+    state = reducer(state, AgentEventAction(AssistantTextEvent(text="Observed responses.")))
+    assert len(state.transcript) == 2
+    activity = state.transcript[0].text
+    assert "initial request · GET /second · Last response 503" in activity
+    assert "GET /first · 403" in activity
+    assert not state.issues
+
+
+def test_missing_status_and_context_elision_never_infer_http_metadata_or_completeness():
+    from src.ui.core.admission import http_activity
+    call = call_metadata(ToolCallEvent(name="http", args={"url":"/path"}))
+    event = ToolResultEvent(name="http", result="HTTP/1.1 200 OK\n[response body truncated at 65536 decoded bytes]")
+    assert not result_issues(event, call)
+    assert http_activity(event, call, call.activity) == "http · GET /path"
+    event.http_status = 200
+    assert http_activity(event, None, "") == "http · Last response 200"
+    event.name = "shell"
+    event.truncated = True
+    assert result_issues(event, None) == ["Tool output truncated. Omitted output may limit validation."]
+
+
+def test_http_recovery_status_updates_only_the_already_visible_activity():
+    from src.ui.core.state import AgentEventAction, initial_state, reducer
+    from src.ui.widgets.banner import BannerData
+    state = initial_state("", BannerData("offline", "fixture", "."))
+    for identifier, result in [("fail", ToolResultEvent(id="fail", name="http", status="error", err="connection failed")),
+                               ("ok", ToolResultEvent(id="ok", name="http", status="observation", http_status=500))]:
+        state = reducer(state, AgentEventAction(ToolCallEvent(id=identifier, name="http", args={"url":"/path"})))
+        state = reducer(state, AgentEventAction(result))
+    assert len(state.transcript) == 1 and state.transcript[0].kind == "info"
+    assert state.transcript[0].text == "http · GET /path · 500"
+    assert state.transcript[0].details == ("Recovered after 1 failed attempt",)

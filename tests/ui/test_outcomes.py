@@ -223,8 +223,8 @@ def test_scoped_phase_completion_deduplicates_and_boundary_resets(tmp_path):
     for i in range(2):
         dispatch(app, ToolCallEvent(id=str(i), name="workflow", args={"action":"complete_skill"}))
         dispatch(app, ToolResultEvent(id=str(i), name="workflow", result=json.dumps({"ok": True, "phase":"recon"})))
-    assert sum(entry.text.startswith('Workflow ·') for entry in app.state.transcript) == 1
-    assert 'recon completed' in app.state.transcript[0].text
+    assert not any(entry.text.startswith('Workflow ·') for entry in app.state.transcript)
+    assert app.state.latest_facts and 'recon completed' in app.state.latest_facts.overview
     snapshot = workflow.to_dict()
     app.agent.target.set_base_url("http://other.lab:3000")
     dispatch(app, DoneEvent(stop_reason="workflow_blocked"))
@@ -277,8 +277,8 @@ def test_whole_target_inventory_is_aggregated_and_exact_origin_scoped(tmp_path):
         dispatch(app, ToolResultEvent(id=str(i), name='workflow', result=result))
         inventory = [entry.text for entry in app.state.transcript if entry.text.startswith('Attack surface recorded:')]
         assert len(inventory) == 1 and f'{i+1} input' in inventory[0]
-    assert len(app.state.transcript) == 2 and app.state.transcript[0].text.startswith('Workflow ·')
-    assert '0/30 inputs reviewed' in app.state.transcript[0].text
+    assert len(app.state.transcript) == 1 and app.state.transcript[0].text.startswith('Attack surface recorded:')
+    assert app.state.latest_facts and '0/30 inputs reviewed' in app.state.latest_facts.overview
     from src.workflow.state import AttackSurfaceInput
     foreign = AttackSurfaceInput('foreign', 'http://other.lab:3000', method='GET', endpoint='/outside', parameter='secret', location='query')
     workflow.attack_surface_inputs[foreign.id] = foreign

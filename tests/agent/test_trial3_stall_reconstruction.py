@@ -2,6 +2,8 @@
 
 Synthetic response bodies and a scripted client reproduce the retained facts,
 not a live experiment. No historical session, provider, or target is resumed.
+Repeated discovery metadata reads use the supported Workflow API. Raw HTTP
+readback remains attempt-owned; it has no discovery/search mode.
 """
 from copy import deepcopy
 import json
@@ -69,12 +71,9 @@ class Trial3Replay(FakeClient):
                     "source_limitations": ["Only the retained prefix was inspected"],
                     "source_reason": "No script reference in the retained prefix"})]
             else:
-                changes = {10: {"start_char": 0},
-                           11: {"start_char": 5000, "needle": "&lt;script src="},
-                           12: {"start_char": 1369, "needle": "script src"},
-                           13: {"start_char": 4000, "needle": "main"}}[step]
-                calls[step] = [("read_http_observation", {"observation_id": source.retained_ref,
-                    "discovery_source_id": source.id, "mode": "discovery", "max_chars": 2000, **changes})]
+                # get_source is read-only metadata. Repeating it cannot invent
+                # extraction progress or turn this source into validation proof.
+                calls[step] = [("workflow", {"action": "get_source", "discovery_source_id": source.id})]
         return ChatResponse(Message("assistant", "", tool_calls=[
             ToolCall(f"trial3-{step}-{i}", FunctionCall(name, json.dumps(args)))
             for i, (name, args) in enumerate(calls[step])
@@ -154,17 +153,22 @@ async def test_trial3_shape_stalls_only_without_workflow_progress(tmp_path, monk
     root = next(s for s in runtime.workflow.discovery_sources.values() if s.document_url.endswith("/"))
     assert root.selected and root.disposition == ("partial" if disposition else "pending")
 
-    # Check the actual client handoff, not the debug log's body-free summary.
-    readers = [m for m in client.requests[-1].messages if m.name == "read_http_observation"]
+    # Inspect actual successful get_source receipts, not error strings parsed
+    # as a nonexistent discovery readback envelope.
+    read_ids = {f"trial3-{step}-0" for step in range(10, 13 if disposition else 14)}
+    readers = [m for m in client.requests[-1].messages if m.tool_call_id in read_ids]
     assert len(readers) == (3 if disposition else 4)
-    for index, message in enumerate(readers):
-        header, body = message.content.split("\n", 1)
-        row = json.loads(header)
-        assert row["mode"] == "discovery" and row["adapter_truncated"] and not row["complete"]
-        assert row["source_chars"] == row["retained_bytes"] == 8192
-        if index == 0:
-            assert body == ROOT.decode()[row["start_char"]:row["end_char"]] and body
-        else:
-            assert not body and row["retained_eof"] and row["next_start_char"] is None
-            assert row["search"]["match_char"] is None and row["search"]["searched_end_char"] == 8192
+    for message in readers:
+        assert message.name == "workflow" and message.tool_status == "success"
+        row = json.loads(message.content)
+        assert row["ok"] and row["unresolved"]
+        assert row["discovery_source"]["id"] == root.id
+        assert row["discovery_source"]["retained_ref"] == root.retained_ref
+        assert row["discovery_source"]["retained_hash"] == root.retained_hash
+        assert row["discovery_source"]["selected"] and row["discovery_source"]["disposition"] == "pending"
+        assert message.http_response_sources is None
+    assert not [event for event in events if event.type == "tool-result" and event.status == "error"]
+    retained = runtime.policy.observations._items[root.retained_ref]
+    assert retained.body == ROOT[:8192] and retained.truncated and not retained.complete
+    assert retained.candidate_id is None and retained.attempt_id is None
     assert runtime.store.load().workflow.progress_facts() == runtime.workflow.progress_facts()

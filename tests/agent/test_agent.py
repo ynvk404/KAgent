@@ -1259,7 +1259,9 @@ async def test_learns_continuous_memory_from_substantive_tool_using_turns():
 
             await asyncio.sleep(0.01)
 
-        assert category == "observed-summary"
+        assert category == "user-preference"
+        assert result[0]["scenario"].source_role == "user"
+        assert result[0]["scenario"].provenance == "direct-user"
         assert intelligence.get_stats()["personal"] == 0
 
     finally:

@@ -45,6 +45,20 @@ async def test_reader_returns_bounded_existing_body_without_http(runtime, tmp_pa
     assert policy.observations._items[oid].candidate_id == candidate.id
 
 
+@pytest.mark.parametrize('extra', [
+    {'mode': 'discovery'}, {'discovery_source_id': 'ds_' + 'f' * 64}, {'needle': 'script src'},
+])
+async def test_reader_rejects_discovery_extensions_before_review_or_read(runtime, tmp_path, extra):
+    from src.tools.common.registry import InvalidToolArguments
+    agent, state, _, _, oid = await reader_runtime(runtime, tmp_path)
+    _, prompter, policy, operator, sent, *_ = runtime
+    args = {'observation_id': oid, 'start_char': 0, 'max_chars': 2000, **extra}
+    before = state.to_dict(), dict(policy.observations._items), len(sent), len(operator.requests)
+    with pytest.raises(InvalidToolArguments, match='bounded integer character offsets'):
+        await agent.tools.execute('read_http_observation', args, None, prompter)
+    assert (state.to_dict(), policy.observations._items, len(sent), len(operator.requests)) == before
+
+
 @pytest.mark.parametrize("fault", ["integrity", "owner", "epoch", "scope", "http-revoked", "unowned", "wrong-id"])
 async def test_reader_refuses_invalid_source_without_network(runtime, tmp_path, fault):
     agent, state, candidate, _, oid = await reader_runtime(runtime, tmp_path)

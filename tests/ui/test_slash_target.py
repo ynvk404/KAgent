@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -107,11 +108,11 @@ class FakeDispatchedEntry:
 
 
 class FakeApp:
-    """Stands in for `KAgent`. Only `agent` and `dispatch` are used by
-    handle_slash."""
+    """Stands in for the command's agent, mode state and transcript dispatch."""
 
     def __init__(self) -> None:
         self.agent = FakeAgent()
+        self.state = SimpleNamespace(yolo=False)
         self.dispatched: list[FakeDispatchedEntry] = []
 
     def dispatch(self, action) -> None:
@@ -119,8 +120,7 @@ class FakeApp:
         if entry is not None:
             self.dispatched.append(FakeDispatchedEntry(kind=entry.kind, text=entry.text))
 
-    # handle_slash also references app.dispatch and app.agent only for
-    # the /target branch; other commands (not exercised here) touch more
+    # Other commands (not exercised here) touch more
     # attributes, so this fake intentionally stays minimal.
 
 
@@ -295,6 +295,23 @@ async def test_target_confirmation_message_matches_normalized_url():
 
     text = last_system_text(app)
     assert text == "target set to http://juice.lab:3000"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_target_set_show_and_clear_keep_legacy_messages_independent_of_yolo(enabled):
+    app = FakeApp()
+    app.state.yolo = enabled
+    for command, expected in (
+        ("/target juice.lab:3000", "target set to http://juice.lab:3000"),
+        ("/target", "target currently: http://juice.lab:3000"),
+        ("/target clear", "target cleared (no target configured)"),
+        ("/target", "no target configured"),
+    ):
+        assert handle_slash(as_kagent(app), command)
+        text = last_system_text(app)
+        assert text == expected
+        assert app.state.yolo is enabled
+        await asyncio.sleep(0)  # Drain the mocked save without starting an Agent/TUI.
 
 
 # ---------------------------------------------------------------------------

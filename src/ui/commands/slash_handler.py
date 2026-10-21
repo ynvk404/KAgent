@@ -18,10 +18,11 @@ from src.config.config import Backend
 from src.llm.core.models import list_models
 from src.ui.core.state import Append, Clear, TranscriptEntry
 from src.ui.render.help import HelpDocument, HelpSection
-from src.ui.render.permissions import permissions_summary
+from src.ui.render.permissions import permissions_details, permissions_summary, yolo_target_summary
 from src.ui.render.sanitize import sanitize_text
 from src.ui.widgets.text_input_modal import TextInputRequest
 from src.permission.network.control import parse_lab_spec, GRANT_SYNTAX
+from src.permission.runtime.execution import policy_for
 
 if TYPE_CHECKING:
     from src.agent.agent import Agent
@@ -221,6 +222,16 @@ def suggest_closest(target: str, known: list[str]) -> str | None:
     return best_name if best_name is not None and best_score >= 4 else None
 
 
+def _target_yolo_status(app: "KAgent") -> str:
+    agent = app.agent
+    engagement = getattr(agent, "engagement_state", None)
+    policy = policy_for(getattr(agent, "prompter", None))
+    return yolo_target_summary(
+        agent.target.base_url(), policy.yolo if policy is not None else app.state.yolo,
+        engagement.http_permissions if engagement is not None else None, policy,
+    )
+
+
 def handle_slash(app: "KAgent", raw: str) -> bool:
     parts = raw.strip().split()
     if not parts:
@@ -242,13 +253,12 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
     if cmd == "/permissions":
         rights = agent.engagement_state.http_permissions
-        from src.permission.runtime.execution import policy_for
         policy = policy_for(getattr(agent, "prompter", None))
         rights.sync_target()
         try:
             sub = rest[0] if rest else "show"
             if sub == "show" and len(rest) <= 1:
-                text = permissions_summary(rights, policy)
+                text = permissions_details(rights, policy) if rest else permissions_summary(rights, policy)
             elif sub == 'browser' and policy is not None:
                 binding = policy.browser_local
                 if binding is None:
@@ -321,26 +331,11 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
 
     if cmd == "/yolo":
         if not rest:
-            current = "on" if app.state.yolo else "off"
-            scope_origins = getattr(
-                getattr(agent, "engagement_state", None),
-                "allowed_origins",
-                (),
-            )
-            scope_text = (
-                ", ".join(origin.as_url() for origin in sorted(scope_origins))
-                if scope_origins else "no target scope declared. Set /target first"
-            )
             dispatch(
                 Append(
                     entry=TranscriptEntry(
                         kind="system",
-                        text=(
-                            f"YOLO: {current}\nWhen on, native HTTP runs within "
-                            "operator scope and resource limits. Covered permission gates auto-approve. "
-                            "Resource checks and revocation remain independent. Unsupported adapters are blocked.\n"
-                            f"Scope: {scope_text}."
-                        ),
+                        text=_target_yolo_status(app),
                     )
                 )
             )
@@ -364,37 +359,11 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         if engagement is not None:
             engagement.http_permissions.set_yolo(next_state)
 
-        if arg == "default":
-            text = "YOLO reset to default (off)"
-        elif next_state:
-            scope_origins = getattr(
-                getattr(agent, "engagement_state", None),
-                "allowed_origins",
-                (),
-            )
-            scope_text = (
-                ", ".join(origin.as_url() for origin in sorted(scope_origins))
-                if scope_origins else "no target scope declared. Set /target first"
-            )
-            text = (
-                "YOLO enabled. Native HTTP receives session permissions within operator scope.\n"
-                "Per origin: no request quota or fixed grant TTL · 3/s (burst 3) · concurrency 2 · "
-                "request 128 KiB · retained response 64 KiB.\n"
-                "You accept unknown server effects. Bulk delete or changes to real data are NOT prevented.\n"
-                "Existing limits and revocation remain enforced. Confirm-each resumes when OFF.\n"
-                "Use /permissions to view or adjust.\n"
-                "Shell/plugin and compatible local stdio MCP use the isolated worker/scoped HTTP broker. "
-                "ffuf has a constrained HTTP adapter. Raw TCP/nmap, CONNECT and remote MCP remain unavailable.\n"
-                f"Scope: {scope_text}."
-            )
-        else:
-            text = "YOLO disabled. YOLO HTTP permissions removed. Explicit autonomous HTTP grants remain active. Confirm-each still prompts."
-
         dispatch(
             Append(
                 entry=TranscriptEntry(
                     kind="system",
-                    text=text,
+                    text=_target_yolo_status(app),
                 )
             )
         )
@@ -410,6 +379,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             cancel_selection()
         async def _reset():
             await agent.reset()
+            app.refresh_assessment_progress()
 
         asyncio.create_task(_reset())
         dispatch(Clear(message="conversation reset"))

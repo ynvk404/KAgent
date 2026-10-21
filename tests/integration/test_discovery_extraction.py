@@ -133,6 +133,44 @@ async def test_native_http_source_bytes_use_actual_document_url_without_another_
     assert len(sent) == 1
 
 
+async def test_truncated_native_discovery_uses_extraction_without_unowned_readback(tmp_path, monkeypatch):
+    import httpx
+    real_client = httpx.AsyncClient
+    sent = []
+    body = (b'<html><head><style>' + b'/* retained CSS */' * 600
+            + b'</style></head><body><script src="/unseen.js"></script></body></html>')
+
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(200, content=body, headers={'Content-Type': 'text/html'}, request=request)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs))
+    runtime = make_runtime(tmp_path)
+    runtime.workflow.objective = WorkflowObjective('discovery', 'whole_target', ORIGIN)
+    await execute(runtime, 'http', {'url': '/', 'phase': 'recon', 'max_response_bytes': 8192})
+    source = next(iter(runtime.workflow.discovery_sources.values()))
+    item = runtime.policy.observations._items[source.retained_ref]
+    assert item.body == body[:8192] and item.truncated and not item.complete
+    assert item.candidate_id is None and item.attempt_id is None
+    await execute(runtime, 'workflow', {'action': 'select_source', 'discovery_source_id': source.id})
+    await process(runtime, source)
+    metadata = await execute(runtime, 'workflow', {'action': 'get_source', 'discovery_source_id': source.id})
+    row = json.loads(metadata.result)['discovery_source']
+    assert row['disposition'] == 'partial' and row['limitations'] and not row['bounded_stop']
+    assert not runtime.workflow.attack_surface_inputs
+    assert not any(endpoint.url.endswith('/unseen.js') for endpoint in runtime.workflow.endpoints.values())
+    before = runtime.workflow.to_dict()
+    await process(runtime, source)
+    assert runtime.workflow.to_dict() == before
+    # Even schema-correct raw readback cannot borrow discovery observations.
+    refused = await execute(runtime, 'read_http_observation', {'observation_id': item.id,
+        'start_char': 0, 'max_chars': 2000}, success=False)
+    assert refused.status == 'error' and 'ownership or scope is unavailable' in str(refused.result)
+    assert runtime.workflow.to_dict() == before and len(sent) == 1
+    assert runtime.policy.observations._items[item.id] == item
+    assert not runtime.workflow.candidates and not runtime.workflow.attempts and not runtime.workflow.evidence
+
+
 @pytest.mark.parametrize('format', ['html', 'openapi'])
 async def test_processing_cancelled_signal_does_not_publish(tmp_path, format):
     runtime, source = await captured(tmp_path)

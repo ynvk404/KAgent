@@ -233,9 +233,10 @@ def test_accepted_evidence_is_scoped_subordinate_and_read_only(tmp_path, mode, o
     if mode == 'burp-assisted':
         assert any('captured request' in entry.text for entry in app.state.transcript)
     if mode == 'whole_target':
-        assert any(entry.text.startswith('Workflow ·') for entry in app.state.transcript)
+        assert app.state.latest_facts and app.state.latest_facts.overview
     else:
-        assert not any(entry.text.startswith('Workflow ·') for entry in app.state.transcript)
+        assert app.state.latest_facts and not app.state.latest_facts.overview
+    assert not any(entry.text.startswith('Workflow ·') for entry in app.state.transcript)
 
 
 def test_changed_evidence_never_produces_an_accepted_evidence_or_confirmation_row(tmp_path):
@@ -357,7 +358,8 @@ def test_whole_target_overview_uses_only_recorded_state_and_completion_needs_run
             artifact_ref=artifact_ref,no_inputs_discovered=phase=='input_analysis')
         dispatch(app, ToolCallEvent(id=phase,name='workflow',args={'action':'complete_skill'}))
         dispatch(app, ToolResultEvent(id=phase,name='workflow',result='{"ok":true}'))
-        assert sum(entry.text.startswith('Workflow ·') for entry in app.state.transcript) == 1
+        assert not any(entry.text.startswith('Workflow ·') for entry in app.state.transcript)
+        assert app.state.latest_facts and phase.replace('_', ' ') + ' completed' in app.state.latest_facts.overview
         assert not any(entry.text.startswith('Workflow completed') for entry in app.state.transcript)
     snapshot = copy.deepcopy(workflow.to_dict())
     dispatch(app, DoneEvent(stop_reason='workflow_completed'))

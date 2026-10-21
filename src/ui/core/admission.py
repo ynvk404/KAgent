@@ -31,6 +31,7 @@ class PendingCall:
     scanner: str = ''
     scanner_job: str = ''
     started_monotonic: float | None = None
+    http_redirects: bool = False
 
 
 def invocation_call(calls: tuple[PendingCall, ...],
@@ -83,12 +84,19 @@ def call_metadata(ev: ToolCallEvent) -> PendingCall:
         recovery_identity = identity
     activity = ""
     if (ev.name == "http" and args.get("url")) or args.get("endpoint"):
+        endpoint = str(args.get("url") or args.get("endpoint") or "")
+        method = str(args.get('method') or '').upper()
+        # Presentation only: coverage endpoints may already use METHOD /path.
+        prefixed = re.match(r"^\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S.*)$", endpoint, re.I)
+        if prefixed:
+            method = method or prefixed.group(1).upper()
+            endpoint = prefixed.group(2)
         try:
-            path = urlsplit(str(args.get("url") or args.get("endpoint") or "")).path or "/"
+            path = urlsplit(endpoint).path or "/"
         except ValueError:
             path = "[invalid endpoint]"
         parameter = args.get("parameter")
-        activity = sanitize_text(f"{str(args.get('method', 'GET')).upper()} {path}" +
+        activity = sanitize_text(f"{method or 'GET'} {path}" +
                                  (f" · input {parameter}" if parameter else ""))
     elif operation:
         activity = sanitize_text(operation.replace("_", " "))
@@ -104,7 +112,19 @@ def call_metadata(ev: ToolCallEvent) -> PendingCall:
                        candidate_id[:80] if isinstance(candidate_id, str) else "", activity, recovery_identity,
                        skill=skill if isinstance(skill, str) else "",
                        attempt_id=attempt_id if isinstance(attempt_id, str) else "",
-                       invocation=ev.invocation, scanner=scanner if scanner in {'nmap', 'ffuf'} else '')
+                       invocation=ev.invocation, scanner=scanner if scanner in {'nmap', 'ffuf'} else '',
+                       http_redirects=(ev.name == 'http' and type(args.get('max_redirects')) is int
+                                       and 0 < args['max_redirects'] <= 5))
+
+
+def http_activity(ev: ToolResultEvent, call: PendingCall | None, context: str) -> str:
+    """Last-response metadata cannot identify the destination of a redirect."""
+    label = "http" + (" · initial request" if call and call.http_redirects else "")
+    if context:
+        label += " · " + context
+    if ev.http_status is not None:
+        label += " · " + ("Last response " if call is None or call.http_redirects else "") + str(ev.http_status)
+    return sanitize_text(label)
 
 
 def issue_category(text: str, ev: ToolResultEvent) -> str:
@@ -112,7 +132,8 @@ def issue_category(text: str, ev: ToolResultEvent) -> str:
         return "export"
     if text.startswith(("Validation ", "Cleanup ", "Coverage synchronization")):
         return "incomplete"
-    if text.startswith(("WARNING:", "Warning:", "Shell stderr:", "Tool output truncated", "MCP output truncated")):
+    if text.startswith(("WARNING:", "Warning:", "Shell stderr:", "Tool output truncated", "MCP output truncated",
+                        "Response body truncated", "Last response body truncated")):
         return "diagnostic"
     if ev.status == "cancelled":
         return "cancelled"
@@ -186,7 +207,11 @@ def result_issues(ev: ToolResultEvent, call: PendingCall | None) -> list[str]:
         issues.extend(line for line in notice_text.splitlines()
                       if line.startswith(("WARNING:", "Warning:")) and line not in issues)
     if ev.truncated:
-        issues.append("Tool output truncated. Omitted output may limit validation.")
+        if ev.name == "http":
+            subject = "Last response body" if call is None or call.http_redirects else "Response body"
+            issues.append(subject + " truncated; validation may be limited.")
+        else:
+            issues.append("Tool output truncated. Omitted output may limit validation.")
     if ev.status not in {"success", "observation", "error", "cancelled", "pending"}:
         issues.append("Unrecognized tool outcome. Review the operation.")
     return list(dict.fromkeys(re.sub(r"\b(?:cand(?:idate)?|result|attempt|ev|goal)_[0-9a-f]{12,}\b",

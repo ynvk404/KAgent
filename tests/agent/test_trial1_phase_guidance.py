@@ -65,3 +65,32 @@ def test_validation_result_does_not_suppress_remaining_discovery():
     plan = build_whole_target_plan(skills(), context)
     assert plan is not None and plan.recommended_skill == 'web-enumeration'
     assert 'ds_fixture' in plan.guidance
+
+
+@pytest.mark.parametrize('ready', [True, False, None])
+@pytest.mark.parametrize('selected', [False, True])
+def test_completed_discovery_prioritizes_only_ready_validation_over_unselected_frontier(ready, selected):
+    context = frontier(completed_phases=frozenset({'recon', 'enumeration', 'input_analysis'}),
+        selected_pending_source_count=int(selected), next_source_selected=selected,
+        candidates=(PlannerCandidate('cand_ready', 'sql-injection', 'queued', validation_ready=ready),))
+    before = replace(context)
+    plan = build_whole_target_plan(skills(), context)
+    assert context == before  # Planning cannot disposition any source or certify completion.
+    assert plan is not None
+    if ready is True and not selected:
+        assert plan.candidate_id == 'cand_ready' and plan.recommended_skill == 'sql-injection'
+        assert 'start_validation' in plan.guidance and 'remain open' in plan.guidance
+    else:
+        assert plan.candidate_id is None and 'ds_fixture' in plan.guidance
+
+
+@pytest.mark.parametrize('phase', ['recon', 'enumeration', 'input_analysis'])
+def test_ready_candidate_cannot_hide_required_artifact_repair(phase):
+    context = frontier(completed_phases=frozenset({'recon', 'enumeration', 'input_analysis'}),
+        candidates=(PlannerCandidate('cand_ready', 'sql-injection', 'queued', validation_ready=True),),
+        phase_completion_readiness={'phase': phase, 'historically_completed': True,
+                                    'artifact_valid': False, 'reason': 'canonical artifact missing'})
+    plan = build_whole_target_plan(skills(), context)
+    assert plan is not None and plan.candidate_id is None
+    assert plan.recommended_skill == {'recon': 'recon', 'enumeration': 'web-enumeration',
+                                      'input_analysis': 'web-input-analysis'}[phase]

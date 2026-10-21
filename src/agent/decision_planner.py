@@ -37,6 +37,7 @@ class PlannerCandidate:
     validation_ready: bool | None = None
     validation_complete: bool | None = None
     completion_action: str | None = None
+    validation_action: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,8 +77,11 @@ class PlannerContext:
     repair_candidate_ids: tuple[str, ...] = ()
     pending_source_count: int = 0
     selected_pending_source_count: int = 0
+    discovery_obligation_pending: bool = False
     next_source_id: str | None = None
     next_source_selected: bool = False
+    next_source_disposition: str | None = None
+    selected_scanner_job_id: str | None = None
 
     @property
     def structured_phase(self) -> str | None:
@@ -353,6 +357,16 @@ def source_frontier_guidance(context: PlannerContext) -> str:
     """One exact metadata reference; never select, fetch, or certify a source."""
     if context.objective_mode != "whole_target" or not context.next_source_id:
         return ""
+    if context.next_source_selected and context.next_source_disposition in {"partial", "blocked"}:
+        return (
+            f'\nSelected source {context.next_source_id} remains {context.next_source_disposition}. '
+            f'Inspect workflow(action="get_source", discovery_source_id="{context.next_source_id}") '
+            "for its recorded stop_reason, limitations and retained reference. Resolve the actual "
+            "browser/operator/authorization or retrieval dependency before further source work; "
+            "otherwise preserve it as unresolved. Do not retry scanners/probes or refetch the source "
+            "while its blocker is unchanged. Partial processing needs a truthful supported disposition "
+            "or explicit bounded stop under the existing policy; never invent completion."
+        )
     action = "get_source" if context.next_source_selected else "select_source"
     timing = "After recon completion, " if context.structured_phase == "recon" else "Next, "
     return (
@@ -380,12 +394,6 @@ def build_whole_target_plan(
             "then record_result with the honest outcome. Respect probing_stopped and the existing recovery budget. "
             "Do not start new discovery or borrow sources during this recovery.", candidate_id=repair_id,
         )
-    if context.workflow_status == "blocked":
-        for candidate in context.candidates:
-            route = context.validation_routes.get(candidate.id)
-            if route is not None and route.kind == "generic":
-                return _route_plan(candidate, route, revalidation=True)
-        return None
     if context.workflow_status in {"completed", "not_applicable"}:
         return None
 
@@ -482,12 +490,16 @@ def build_whole_target_plan(
             candidate_id=candidate_id,
         )
 
-    # A bounded analyzed input can validate while other inputs/sources remain pending.
+    # A bounded analyzed input can validate while an unselected frontier remains.
+    # Required phase/artifact repair and selected source obligations stay first.
     ready = next(iter(sorted(
         (c for c in context.candidates if c.validation_ready is True and c.status in {"new", "queued"}),
         key=lambda c: ({"queued": 1, "new": 2}.get(c.status, 3),
                        {"high": 0, "medium": 1, "low": 2}.get(c.priority or "", 3), c.id),
-    )), None) if context.structured_phase == "input_analysis" else None
+    )), None) if (context.structured_phase in {"input_analysis", "validation"}
+                  and not context.selected_pending_source_count
+                  and not context.discovery_obligation_pending
+                  and not (context.phase_completion_readiness or {}).get("historically_completed")) else None
     if ready:
         route = context.validation_routes.get(ready.id)
         if route and route.kind != "expert":
@@ -497,7 +509,8 @@ def build_whole_target_plan(
             name = validators[0].name
             return DecisionPlan(name, "analyzed linked input is ready for bounded validation", "normal", [],
                 "Decision planner guidance for this turn:\n"
-                f'Load load_skill(name="{name}") if needed, then workflow(action="start_validation", candidate_id="{ready.id}"). '
+                f'Call workflow(action="start_validation", candidate_id="{ready.id}"), then reload load_skill(name="{name}") '
+                "if needed before validation probes. "
                 "Only this analyzed input is ready; other pending discovery/input obligations remain open. "
                 "Follow the validator, evidence and permission gates.", candidate_id=ready.id)
 
@@ -570,6 +583,29 @@ def build_whole_target_plan(
             ),
         )
 
+    # Partial/blocked selected sources and selected scanner rows may remain
+    # after the pending frontier is empty. Gate every later candidate route.
+    if context.discovery_obligation_pending or context.selected_pending_source_count:
+        if context.next_source_selected and source_guidance:
+            guidance = source_guidance
+        elif context.selected_scanner_job_id:
+            guidance = (
+                f'\nSelected scanner observations remain unresolved for {context.selected_scanner_job_id}. '
+                f'Inspect workflow(action="list", job_id="{context.selected_scanner_job_id}") '
+                "and its retained selected records/limitations. Resolve the recorded dependency or "
+                "triage only supported observations through the existing policy. If retained data or "
+                "browser/operator/authorization prerequisites are unavailable, leave it unresolved. "
+                "Do not retry scanners/probes while the blocker is unchanged."
+            )
+        else:
+            guidance = (
+                "\nSelected discovery obligations remain unresolved. Inspect workflow list for the "
+                "recorded source/scanner or restore limitation and resolve that dependency first. "
+                "Do not retry scanners/probes or infer completion while the blocker is unchanged."
+            )
+        return DecisionPlan(None, "selected discovery obligations require resolution", "normal", [],
+                            "Decision planner guidance for this turn:" + guidance)
+
     if context.pending_input_count > 0:
         skill = next(
             (
@@ -609,7 +645,8 @@ def build_whole_target_plan(
     actionable = [
         candidate for candidate in context.candidates
         if candidate.status in {"new", "queued", "validating"}
-        or candidate.status == "deferred" and candidate.generic_startable is True
+        or candidate.status == "deferred" and (
+            candidate.generic_startable is True or _startable_validation(candidate, context))
         or candidate.id in context.revalidation_candidate_ids
     ]
     actionable.sort(
@@ -654,6 +691,15 @@ def build_whole_target_plan(
             candidate_id=candidate.id,
         )
 
+    # A generic unresolved record must not hide independent admitted work.
+    # Keep it as the blocker only after higher priorities and usable Candidates.
+    if context.workflow_status == "blocked":
+        for candidate in sorted(context.candidates, key=lambda item: item.id):
+            route = context.validation_routes.get(candidate.id)
+            if route is not None and route.kind == "generic":
+                return _route_plan(candidate, route, revalidation=True)
+        return None
+
     if context.workflow_status == "actionable":
         return DecisionPlan(
             recommended_skill=None,
@@ -680,12 +726,16 @@ def _requested_goal_plan(
     if not context.requested_goals:
         return None
     for goal in context.requested_goals:
-        if goal.status not in {"pending", "in_progress"}:
-            continue
         candidates = [
             item for item in context.candidates
             if item.id in goal.candidate_ids
         ]
+        if goal.status not in {"pending", "in_progress"}:
+            if not whole_target or goal.status not in {"blocked", "deferred"}:
+                continue
+            candidates = [item for item in candidates if _startable_validation(item, context)]
+            if not candidates:
+                continue
         if not whole_target and context.objective_mode == "direct":
             # Only the controller's current evaluator can distinguish a
             # completed sibling from one awaiting local persistence/cleanup.
@@ -714,6 +764,7 @@ def _requested_goal_plan(
         if candidates:
             candidate = next(
                 (item for item in candidates if item.status in {"new", "queued", "validating"}
+                 or whole_target and _startable_validation(item, context)
                  or item.id in context.revalidation_candidate_ids),
                 None,
             )
@@ -788,6 +839,13 @@ def _requested_goal_plan(
             ),
         )
     return None
+
+
+def _startable_validation(candidate: PlannerCandidate, context: PlannerContext) -> bool:
+    """Use the runtime handoff; budget or status alone cannot allow recovery."""
+    route = context.validation_routes.get(candidate.id)
+    return bool(candidate.validation_action == "start_validation" and route is not None
+                and (route.kind == "expert" or route.kind == "generic" and candidate.generic_startable is True))
 
 
 def _route_plan(candidate: PlannerCandidate, route: ValidationRoute, *, revalidation=False) -> DecisionPlan:

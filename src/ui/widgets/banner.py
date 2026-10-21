@@ -12,6 +12,7 @@ from rich.text import Text
 
 from src.ui.theme import ACCENT, ERROR, MUTED, SUCCESS, WARNING, PRIMARY
 from src.ui.theme import DARK_UI, UIPalette
+from src.ui.render.sanitize import sanitize_text
 
 
 LOGO = [
@@ -106,7 +107,10 @@ class Banner:
             width,
         )
 
-    def _detail_lines(self) -> list[Text]:
+    def _detail_lines(
+        self, *, target: str | None = None, session: str | None = None,
+        status: str | None = None, assessment_progress: str = "", show_status: bool = True,
+    ) -> list[Text]:
         """Build the welcome metadata used by the framed TUI header."""
         data = self.data
         context = f" · ctx {data.context_window}" if data.context_window else ""
@@ -120,19 +124,31 @@ class Banner:
         if data.endpoint:
             fields.append(("Endpoint", data.endpoint))
         fields.append(("Path", data.cwd))
-        if data.status:
-            fields.append(("Status", data.status))
+        if target is not None:
+            fields.append(("Target", target))
+        if session is not None:
+            fields.append(("Session", session))
+        status_value = status or data.status
+        if show_status and status_value:
+            fields.append(("Status", status_value))
+        if assessment_progress:
+            fields.append(("Assessment Progress", assessment_progress.removeprefix("Workflow · ")))
 
         lines = [Text("Welcome to KAgent", style=f"bold {self.ui.accent}")]
         for label, value in fields:
             line = Text(f"{label}: ", style=self.ui.muted)
-            line.append(value, style=self.ui.text)
+            line.append(sanitize_text(value), style=self.ui.text)
             lines.append(line)
         return lines
 
-    def render_panel(self, *, compact: bool = False) -> RenderableType:
+    def render_panel(
+        self, *, compact: bool = False, target: str | None = None,
+        session: str | None = None, status: str | None = None,
+        assessment_progress: str = "", show_status: bool = True,
+    ) -> RenderableType:
         """Render the welcome block as one compact, responsive Rich panel."""
-        details = Group(*self._detail_lines())
+        details = Group(*self._detail_lines(target=target, session=session, status=status,
+                                          assessment_progress=assessment_progress, show_status=show_status))
         if compact:
             return details
         logo = Text("\n".join(LOGO), style=self.ui.accent, no_wrap=True)
@@ -143,7 +159,7 @@ class Banner:
             content.add_column(ratio=1)
             content.add_row(logo, details)
         else:
-            content = Group(logo, Text(""), details)
+            content = details
 
         return Panel(
             content,

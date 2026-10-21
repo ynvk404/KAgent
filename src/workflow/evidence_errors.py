@@ -20,6 +20,10 @@ class EvidenceSubmissionError(ValueError):
             return ("Identify the predeclared required request still missing usable evidence. "
                     "Continue only that bounded validation step through existing gates, or submit an unresolved outcome.")
         specific = {
+            "SOURCE_OWNERSHIP_MISMATCH": (
+                "A source may be unowned (captured before start_validation), not necessarily from a prior attempt. "
+                "It cannot be adopted or rebound. observations_total counts only the current owned inventory, "
+                "not all session traffic. Repair a manifest only with sources already owned by this attempt. "),
             "EVIDENCE_REFERENCE_MISMATCH": (
                 "evidence_refs requires canonical ev_... IDs from record_evidence.evidence.id for this Candidate, "
                 "never evidence_path, snapshot path or obs_ IDs. Write proof first, register it, then copy the returned ID. "),

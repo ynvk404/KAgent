@@ -188,6 +188,11 @@ class DummyApp:
     state: DummyState = field(default_factory=DummyState)
     actions: list[object] = field(default_factory=list)
     turns: list[tuple[str, RunAgentOptions | None]] = field(default_factory=list)
+    progress_refreshes: int = 0
+
+    def refresh_assessment_progress(self) -> None:
+        self.progress_refreshes += 1
+
     def dispatch(self, action: object) -> None:
         self.actions.append(action)
 
@@ -231,6 +236,7 @@ async def test_reset_keeps_reset_invocation_and_replaces_the_transcript_with_a_s
     await asyncio.sleep(0)
 
     assert app.agent.reset_calls == 1
+    assert app.progress_refreshes == 1
     assert app.actions == [Clear(message="conversation reset")]
 
 
@@ -552,8 +558,9 @@ def test_yolo_without_argument_shows_current_state():
 
     assert handle_slash(cast(KAgent, app), "/yolo")
 
-    assert "YOLO: off" in last_text(app)
-    assert "no target scope declared" in last_text(app)
+    assert "YOLO OFF" in last_text(app)
+    assert "Target: (not set)" in last_text(app)
+    assert "/target <url>" in last_text(app)
     assert not app.state.yolo
     assert len(app.actions) == 1
 
@@ -564,30 +571,23 @@ def test_yolo_on_enables_auto_approve():
     assert handle_slash(cast(KAgent, app), "/yolo on")
 
     assert app.state.yolo
-    assert (
-        last_text(app)
-        == (
-            "YOLO enabled. Native HTTP receives session permissions within operator scope.\n"
-            "Per origin: no request quota or fixed grant TTL · 3/s (burst 3) · concurrency 2 · "
-            "request 128 KiB · retained response 64 KiB.\n"
-            "You accept unknown server effects. Bulk delete or changes to real data are NOT prevented.\n"
-            "Existing limits and revocation remain enforced. Confirm-each resumes when OFF.\n"
-            "Use /permissions to view or adjust.\n"
-            "Shell/plugin and compatible local stdio MCP use the isolated worker/scoped HTTP broker. "
-            "ffuf has a constrained HTTP adapter. Raw TCP/nmap, CONNECT and remote MCP remain unavailable.\n"
-            "Scope: no target scope declared. Set /target first."
-        )
-    )
+    text = last_text(app)
+    assert "YOLO ON" in text
+    assert "Auto-approve supported actions within declared scope" in text
+    assert "change/delete data" in text and "deny/revoke" in text
+    assert "/permissions show" in text and "/help" not in text
+    assert not any(detail in text for detail in ("nmap", "broker", "KiB", "3/s"))
     assert len(app.actions) == 1
 
 
-def test_yolo_status_shows_canonical_declared_scope():
+def test_yolo_status_shows_active_target_without_changing_canonical_scope():
     app = DummyApp()
     app.agent.apply_target_base_url("HTTP://Juice.Lab.:3000/app")
 
     assert handle_slash(cast(KAgent, app), "/yolo on")
 
-    assert "Scope: http://juice.lab:3000." in last_text(app)
+    assert "Target: HTTP://Juice.Lab.:3000/app" in last_text(app)
+    assert app.agent.engagement_state.allowed_origins == {HTTPOrigin.from_url("http://juice.lab:3000")}
 
 
 def test_yolo_off_disables_auto_approve():
@@ -597,7 +597,9 @@ def test_yolo_off_disables_auto_approve():
     assert handle_slash(cast(KAgent, app), "/yolo off")
 
     assert not app.state.yolo
-    assert last_text(app) == "YOLO disabled. YOLO HTTP permissions removed. Explicit autonomous HTTP grants remain active. Confirm-each still prompts."
+    assert "YOLO OFF" in last_text(app)
+    assert "Normal permission review" in last_text(app)
+    assert "existing explicit HTTP grants are retained" in last_text(app)
     assert len(app.actions) == 1
 
 
@@ -608,7 +610,8 @@ def test_yolo_default_resets_to_off():
     assert handle_slash(cast(KAgent, app), "/yolo default")
 
     assert not app.state.yolo
-    assert last_text(app) == "YOLO reset to default (off)"
+    assert "YOLO OFF" in last_text(app)
+    assert "Normal permission review" in last_text(app)
     assert len(app.actions) == 1
 
 

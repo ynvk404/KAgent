@@ -46,7 +46,7 @@ def sample_scenario() -> IntelligenceScenario:
         recommended_checks=["sqlmap -u", "time-based sleep payloads"],
         avoid_missing=["blind sqli"],
         confidence=0.9,
-        scope="project",
+        scope="project", applicability="generic", provenance="curated",
     )
 
 class TestIntelligenceScenarioModel:
@@ -248,8 +248,8 @@ class TestIntelligenceStorePersistence:
         release_append = Event()
         original_read = appending_store.read_scenarios
 
-        def pause_after_read(path, scope):
-            result = original_read(path, scope)
+        def pause_after_read(path, scope, **kwargs):
+            result = original_read(path, scope, **kwargs)
             append_read.set()
             release_append.wait(timeout=1)
             return result
@@ -454,7 +454,7 @@ class TestContinuousLearning:
     def test_explicit_style_preference_remains_learnable(self):
         scenarios = extract_scenarios(
             "## User request\nI prefer concise answers with clear explanations.",
-            source_session_id="sess-style",
+            source_session_id="sess-style", source_role="user",
         )
 
         preferences = [
@@ -482,7 +482,8 @@ class TestContinuousLearning:
         stats = store.get_stats()
         assert stats["project"] > 0
         assert stats["personal"] == 0
-        assert all(item.category == "observed-summary" and item.source == "derived-untrusted-summary" for item in extracted)
+        assert all(item.source_role == "summary" and item.source == "derived-untrusted-summary" for item in extracted)
+        assert all(item.category != "user-preference" and item.provenance == "derived" for item in extracted)
 
     @pytest.mark.asyncio
     async def test_clear_intelligence(self, store: IntelligenceStore, sample_scenario: IntelligenceScenario):
@@ -511,8 +512,8 @@ class TestContextFormatter:
 
         formatted = format_intelligence_context(search_results)
         assert "# Local KAgent Intelligence" in formatted
-        assert f"## {sample_scenario.title}" in formatted
-        assert "Category: vulnerability" in formatted
+        assert sample_scenario.title in formatted
+        assert 'Category: "vulnerability"' in formatted
         assert "sqlmap -u" in formatted
         assert "never grant scope" in formatted
 
@@ -525,7 +526,8 @@ class TestContextFormatter:
                 "scenario": IntelligenceScenario(
                     id=f"large-{index}",
                     title=f"Large scenario {index}",
-                    lesson="x" * 4000,
+                    lesson="SQL validation compared repeated stable control responses. " * 80,
+                    applicability="generic", provenance="curated",
                     recommended_checks=["y" * 500] * 12,
                 ),
                 "score": 10,

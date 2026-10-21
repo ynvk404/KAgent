@@ -32,7 +32,7 @@ else:
     BannerData = Any
 
 from src.tools.common.tool_display import display_tool_name
-from src.ui.core.admission import PendingCall, call_metadata, invocation_call, result_issues, issue_category
+from src.ui.core.admission import PendingCall, call_metadata, invocation_call, result_issues, issue_category, http_activity
 from src.ui.core.outcomes import OutcomeFacts, ProgressRecord, concise_text
 from src.ui.render.sanitize import sanitize_text
 
@@ -431,7 +431,7 @@ def _present_issue(state: AppState, operation: str, text: str, *, category: str 
                    transcript=(*state.transcript, TranscriptEntry(kind=kind, text=text)))
 
 
-def _recover_issues(state: AppState, operation: str, recovery_identity: str) -> AppState:
+def _recover_issues(state: AppState, operation: str, recovery_identity: str, presentation_label: str = "") -> AppState:
     transcript = list(state.transcript)
     issues = list(state.issues)
     changed = False
@@ -441,7 +441,7 @@ def _recover_issues(state: AppState, operation: str, recovery_identity: str) -> 
                 and (issue.recovery_identity == recovery_identity or issue.category == "network")):
             issues[i] = replace(issue, recovered=True)
             transcript[issue.index] = TranscriptEntry(kind="info", text=
-                issue.presentation_label or issue.operation.partition(":")[0], details=(
+                presentation_label or issue.presentation_label or issue.operation.partition(":")[0], details=(
                     f"Recovered after {issue.count} failed attempt{'s' if issue.count != 1 else ''}",))
             changed = True
     return replace(state, issues=tuple(issues), transcript=tuple(transcript),
@@ -514,8 +514,6 @@ def _flush_selection(state: AppState) -> AppState:
 
 
 def _flush_progress(state: AppState) -> AppState:
-    if state.latest_facts and state.latest_facts.overview:
-        state = _progress_row(state, "workflow", state.latest_facts.overview, "info")
     inputs, endpoints = _new_records(state, "input"), _new_records(state, "endpoint")
     if inputs or endpoints:
         dispositions = {value: sum(row.disposition == value for row in inputs)
@@ -620,6 +618,8 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                 for category, notices in groups.items():
                     presentation_label = sanitize_text(display_tool_name(ev.name) +
                                                        (" · " + context if context else ""))
+                    if ev.name == "http":
+                        presentation_label = http_activity(ev, call, context)
                     state = _present_issue(state, operation, presentation_label + ": " + "; ".join(notices),
                                            category=category, recovery_identity=recovery_identity,
                                            presentation_label=presentation_label)
@@ -634,7 +634,8 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                 if completed and call and call.operation in {"record_candidate", "record_result", "start_validation"}:
                     completed = bool(facts and facts.accepted_call)
             if completed:
-                state = _recover_issues(state, operation, recovery_identity)
+                state = _recover_issues(state, operation, recovery_identity,
+                                        http_activity(ev, call, context) if ev.name == "http" else "")
                 if call and call.name == "load_skill":
                     state = replace(state, skill_receipts=(*state.skill_receipts, (call.invocation.id if call.invocation else call.id, call.skill)))
                 elif ev.name not in {"http", "workflow", "confirm_finding", "read_skill_file", "read_payloads", "browser_capture_status"}:
@@ -642,7 +643,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                         "operation", ev.id, sanitize_text(display_tool_name(ev.name)))))
             if ev.name == "http" and ev.status in {"success", "observation"} and not ev.err and ev.http_status is not None and call:
                 state = replace(state, observed=(*state.observed, ProgressRecord("observation", ev.id,
-                                context or _activity_label(ev.name), str(ev.http_status))))
+                                http_activity(ev, call, context), str(ev.http_status))))
             flush_progress = bool(call and (call.operation in {"start_validation", "complete_skill", "record_result",
                                             "record_input", "set_input_disposition", "record_candidate", "link_input_candidate"}
                                             or ev.name == "confirm_finding"))
@@ -660,8 +661,6 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                 summary = ev.scanner_summary
                 state = _milestone(state, 'scanner:' + str(summary['job_id']), scanner_text(summary),
                     'info' if summary['execution']['status'] == 'completed' else 'warning')
-            if not flush_progress and facts and facts.overview:
-                state = _progress_row(state, "workflow", facts.overview, "info")
             return state
 
         case ToolStartedEvent():
