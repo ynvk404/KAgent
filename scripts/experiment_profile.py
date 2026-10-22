@@ -76,9 +76,11 @@ def reviewed_prompt(path: Path) -> bytes:
 
 def request_bytes(value: dict) -> bytes:
     """Resolve a pinned request, or preserve the legacy v2 generated request."""
+    if value.get("version") == 4 and "reviewed_request" not in value:
+        return b""
     if value.get("version") == 2 and "reviewed_request" not in value:
         return whole_target_request(value).encode()
-    if value.get("version") != 3:
+    if value.get("version") not in (3, 4):
         raise ValueError("invalid request profile version")
     request = value.get("reviewed_request")
     if not isinstance(request, dict) or set(request) != {"source", "sha256", "bytes"}:
@@ -92,9 +94,10 @@ def request_bytes(value: dict) -> bytes:
     return raw
 
 
-def plan(repo: Path, home: Path, config: Path, run: Path, origin: str, max_steps: int = 60,
-         *, prompt_file: Path | None = None, enable_headless_shell: bool = False) -> dict:
-    from src.config.config import config_from_dict
+def plan(repo: Path, home: Path, config: Path, run: Path, origin: str, max_steps: int | None = None,
+         *, prompt_file: Path | None = None, enable_headless_shell: bool = False,
+         legacy_bounded: bool = False) -> dict:
+    from src.config.config import config_from_dict, resolve_custom_provider
     repo, home, config, run = (p.absolute() for p in (repo, home, config, run))
     if any(".." in p.parts for p in (repo, home, config, run)):
         raise ValueError("parent traversal is not supported")
@@ -113,20 +116,25 @@ def plan(repo: Path, home: Path, config: Path, run: Path, origin: str, max_steps
         raise ValueError("run directory overlaps protected or existing user data")
     raw = regular(config)
     cfg = config_from_dict(json.loads(raw))
-    if cfg.active_custom_provider_id:
+    if legacy_bounded and cfg.active_custom_provider_id:
         raise ValueError("Scenario 3 requires the reviewed official provider, not an active Custom profile")
-    if cfg.base_url:
+    effective = cfg
+    if not legacy_bounded and cfg.active_custom_provider_id:
+        effective, _ = resolve_custom_provider(cfg, cfg.active_custom_provider_id)
+    if effective.base_url:
         from src.llm.providers import validate_base_url
-        validate_base_url(cfg.base_url)
-    if max_steps <= 0:
+        validate_base_url(effective.base_url)
+    if max_steps is not None and (type(max_steps) is not int or max_steps <= 0):
         raise ValueError("max steps must be positive")
-    if cfg.skills_dirs or cfg.plugins:
+    if legacy_bounded and (cfg.skills_dirs or cfg.plugins):
         raise ValueError("extra skill/plugin paths require a separate reviewed profile")
-    # Current profile has only the pinned, generic CWE catalog. Refuse unknown
-    # integrations rather than silently importing another historical data source.
+    # Legacy experiments admitted only the pinned, generic CWE catalog. Normal
+    # isolation profiles retain the operator's configured integrations.
     from src.tools.mcp.cwe_deployment import is_designated_cwe_server
-    if any(not is_designated_cwe_server(s) for s in cfg.mcp_servers):
+    if legacy_bounded and any(not is_designated_cwe_server(s) for s in cfg.mcp_servers):
         raise ValueError("unreviewed MCP data source in configuration")
+    if enable_headless_shell and not legacy_bounded:
+        raise ValueError("shell preset requires --legacy-bounded; normal headless policy is unchanged")
     backups = []
     for label, path in (
         ("project-intelligence", repo / ".kagent/intelligence/scenarios.jsonl"),
@@ -136,7 +144,7 @@ def plan(repo: Path, home: Path, config: Path, run: Path, origin: str, max_steps
             data = regular(path)
             backups.append({"label": label, "path": str(path), "sha256": digest(data),
                             "bytes": len(data)})
-    value = {"version": 2, "operation": "fresh-profile-no-deletion", "repo": str(repo),
+    value = {"version": 2 if legacy_bounded else 4, "operation": "fresh-profile-no-deletion", "repo": str(repo),
             "original_home": str(home), "config": str(config), "config_sha256": digest(raw),
             "run": str(run), "profile": str(profile), "origin": normalized_origin(origin), "backup_sources": backups,
             "runtime_files": tree(repo / "src"), "skill_files": tree(repo / "skills"),
@@ -158,12 +166,22 @@ def plan(repo: Path, home: Path, config: Path, run: Path, origin: str, max_steps
             "startup_adapter": ["IntelligenceStore(cwd, home)", "MemoryStore(cwd, home)",
                                 "EngagementStore(cwd, home)", "skill_search_dirs(cwd, home)",
                                 "session.store.dir_from_path", "KAGENT_PROJECT_ROOT + cwd"]}
+    if legacy_bounded:
+        value["limits"]["max_steps"] = max_steps if max_steps is not None else 60
+    else:
+        del value["limits"]
+        value["runtime_options"] = {"max_steps": max_steps}
+        value["provider"] = {"backend": str(effective.backend), "model": effective.model,
+                             "base_url": effective.base_url,
+                             "active_custom_provider_id": cfg.active_custom_provider_id,
+                             "thinking_enabled": effective.thinking_enabled,
+                             "streaming_enabled": effective.streaming_enabled}
     if prompt_file is not None:
         source = prompt_file.expanduser().absolute()
         if ".." in source.parts or source.is_relative_to(run) or source.is_relative_to(profile):
             raise ValueError("reviewed request source must be outside the new run and profile")
         raw_request = reviewed_prompt(source)
-        value["version"] = 3
+        value["version"] = 3 if legacy_bounded else 4
         value["reviewed_request"] = {"source": str(source), "sha256": digest(raw_request),
                                      "bytes": len(raw_request)}
     if enable_headless_shell:
@@ -194,9 +212,11 @@ def private_write(path: Path, data: bytes) -> None:
 def validate_plan(value: dict) -> None:
     request_bytes(value)  # Reject malformed metadata or a stale prompt before any writes.
     expected = plan(Path(value["repo"]), Path(value["original_home"]), Path(value["config"]),
-                    Path(value["run"]), value["origin"], value["limits"]["max_steps"],
-                    prompt_file=Path(value["reviewed_request"]["source"]) if value["version"] == 3 else None,
-                    enable_headless_shell=value.get("execution_preset") == "headless-shell")
+                    Path(value["run"]), value["origin"],
+                    value["runtime_options"]["max_steps"] if value["version"] == 4 else value["limits"]["max_steps"],
+                    prompt_file=Path(value["reviewed_request"]["source"]) if "reviewed_request" in value else None,
+                    enable_headless_shell=value.get("execution_preset") == "headless-shell",
+                    legacy_bounded=value["version"] in (2, 3))
     if expected != value:
         raise ValueError("plan is stale or modified; review a new dry-run")
 
@@ -232,7 +252,9 @@ def apply(value: dict) -> Path:
     profile.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     profile.mkdir(mode=0o700)
     receipt = profile / "profile.json"
-    private_write(profile / "whole-target-request.txt", request_bytes(value))
+    request = request_bytes(value)
+    if request:
+        private_write(profile / "whole-target-request.txt", request)
     private_write(receipt, encode(value))
     return receipt
 
@@ -245,7 +267,7 @@ def verify(receipt: Path) -> dict:
         raise ValueError("run contains a linked path")
     if tree(run / "logs", exclude_caches=False):
         raise ValueError("run contains pre-existing logs")
-    if receipt.absolute() != Path(value["profile"]) / "profile.json" or value.get("version") not in (2, 3):
+    if receipt.absolute() != Path(value["profile"]) / "profile.json" or value.get("version") not in (2, 3, 4):
         raise ValueError("invalid profile receipt")
     if "execution_preset" in value and (
         value["execution_preset"] != "headless-shell" or value["version"] != 3
@@ -265,8 +287,17 @@ def verify(receipt: Path) -> dict:
         raise ValueError("profile contains unexpected files")
     if digest(regular(Path(value["config"]))) != value["config_sha256"]:
         raise ValueError("provider configuration changed")
-    if regular(Path(value["profile"]) / "whole-target-request.txt") != request_bytes(value):
+    request = request_bytes(value)
+    request_path = Path(value["profile"]) / "whole-target-request.txt"
+    if (request and regular(request_path) != request) or (not request and request_path.exists()):
         raise ValueError("reviewed request changed")
+    if value["version"] == 4:
+        options = value.get("runtime_options")
+        if not isinstance(options, dict) or set(options) != {"max_steps"} or "limits" in value:
+            raise ValueError("invalid isolation runtime options")
+        steps = options["max_steps"]
+        if steps is not None and (type(steps) is not int or steps <= 0):
+            raise ValueError("max steps must be positive")
     for row in value["backup_sources"]:
         if digest(regular(run / "backup" / (row["label"] + ".jsonl"))) != row["sha256"]:
             raise ValueError("backup changed")
@@ -301,7 +332,15 @@ def bound_runtime(value: dict):
         stack.enter_context(patch.object(runtime, "IntelligenceStore", partial(IntelligenceStore, cwd=project, home=home)))
         stack.enter_context(patch.object(runtime, "MemoryStore", partial(MemoryStore, cwd=str(project), home=str(home))))
         stack.enter_context(patch.object(runtime, "EngagementStore", partial(EngagementStore, cwd=project, home=home)))
-        stack.enter_context(patch.object(runtime, "skill_search_dirs", partial(skill_search_dirs, cwd=str(project), home=str(home))))
+        if value.get("version") == 4:
+            def isolated_skill_dirs(configured):
+                # Keep normal playbooks/configured paths; replace only the builtin
+                # project snapshot. Learned memory and engagement use fresh stores.
+                original = skill_search_dirs(configured, cwd=value["repo"], home=value["original_home"])
+                return [str(project / "skills"), *original[1:]]
+            stack.enter_context(patch.object(runtime, "skill_search_dirs", isolated_skill_dirs))
+        else:
+            stack.enter_context(patch.object(runtime, "skill_search_dirs", partial(skill_search_dirs, cwd=str(project), home=str(home))))
         stack.enter_context(patch.object(sessions, "dir_from_path", lambda path=None: (
             Path(path).parent if path else home / ".kagent/sessions")))
         try:
@@ -358,23 +397,79 @@ def headless_shell_runtime(value: dict):
         yield
 
 
+def launch_isolated(value: dict, receipt: Path, max_steps: int | None, *, headless: bool,
+                    interactive: bool, non_interactive: bool, execute_prompt: bool,
+                    yolo: bool, accept_unknown_http_effects: bool, cli_args: list[str]) -> int:
+    """Change storage paths and delegate behavior/validation to the normal CLI."""
+    managed = {"--target", "--resume", "--prompt-file", "--log", "--debug-session-path",
+               "--headless-output", "--headless", "--interactive", "--non-interactive",
+               "--execute-prompt", "--max-steps", "--yolo", "--accept-unknown-http-effects"}
+    if any(arg.split("=", 1)[0] in managed for arg in cli_args):
+        raise ValueError("use launcher options for target, input modes and isolated output paths")
+    run = Path(value["run"])
+    steps = max_steps if max_steps is not None else value["runtime_options"]["max_steps"]
+    argv = ["kagent", "--target", value["origin"],
+            "--log", str(run / "logs/kagent.log"),
+            "--debug-session-path", str(run / "logs/session.jsonl")]
+    if steps is not None:
+        argv.extend(["--max-steps", str(steps)])
+    if "reviewed_request" in value:
+        argv.extend(["--prompt-file", str(Path(value["profile"]) / "whole-target-request.txt")])
+    if yolo:
+        argv.append("--yolo")
+    if accept_unknown_http_effects:
+        argv.append("--accept-unknown-http-effects")
+    if headless:
+        argv.extend(["--headless", "--headless-output", str(run / "logs/headless")])
+    if execute_prompt:
+        argv.append("--execute-prompt")
+    if interactive:
+        argv.append("--interactive")
+    if non_interactive:
+        argv.append("--non-interactive")
+    argv.extend(cli_args)
+    with bound_runtime(value) as runtime, patch.object(sys, "argv", argv):
+        # Reuse all normal CLI checks, including headless YOLO's explicit finite
+        # grant requirement. Invalid flags must not consume a fresh profile.
+        flags = runtime.parse_flags(argv[1:])
+        private_write(run / "launch-started.json", encode({
+            "profile_sha256": digest(regular(receipt)), "max_steps": steps,
+            "headless": flags.headless, "interactive": flags.interactive, "yolo": flags.yolo,
+            "execute_prompt": flags.execute_prompt, "mode": "isolation",
+        }))
+        if not headless:
+            print("Opening the official KAgent TUI with isolated experiment data.")
+        return runtime.cli_main()
+
+
 def launch(receipt: Path, max_steps: int | None = None, *, headless: bool = False,
            interactive: bool = False, non_interactive: bool = False,
            execute_prompt: bool = False, yolo: bool = False,
-           accept_unknown_http_effects: bool = False, enable_headless_shell: bool = False) -> int:
+           accept_unknown_http_effects: bool = False, enable_headless_shell: bool = False,
+           cli_args: list[str] | None = None) -> int:
     if interactive and non_interactive:
         raise ValueError("input modes are mutually exclusive")
     if (interactive or non_interactive or execute_prompt) and not headless:
         raise ValueError("headless input/execution flags require --headless")
     if headless and not execute_prompt:
         raise ValueError("headless requires explicit --execute-prompt")
-    if yolo and not accept_unknown_http_effects:
-        raise ValueError("YOLO requires explicit acceptance of bounded HTTP effects")
     if (not headless or interactive) and (not sys.stdin.isatty() or not sys.stdout.isatty()):
         raise ValueError("run requires the current interactive WSL terminal")
     if headless and interactive and not sys.stderr.isatty():
         raise ValueError("interactive headless requires stderr TTY")
     value = verify(receipt)
+    if value["version"] == 4:
+        if enable_headless_shell:
+            raise ValueError("shell preset requires a legacy bounded profile")
+        return launch_isolated(value, receipt, max_steps, headless=headless,
+                               interactive=interactive, non_interactive=non_interactive,
+                               execute_prompt=execute_prompt, yolo=yolo,
+                               accept_unknown_http_effects=accept_unknown_http_effects,
+                               cli_args=cli_args or [])
+    if cli_args:
+        raise ValueError("native CLI arguments require an isolation profile")
+    if yolo and not accept_unknown_http_effects:
+        raise ValueError("YOLO requires explicit acceptance of bounded HTTP effects")
     shell_preset = value.get("execution_preset") == "headless-shell"
     if enable_headless_shell != shell_preset or (shell_preset and not headless):
         raise ValueError("shell preset requires matching explicit --headless and --enable-headless-shell")
@@ -426,16 +521,24 @@ def main(argv=None) -> int:
     parser.add_argument("--approve-plan-sha256")
     parser.add_argument("--prompt-file", type=Path, help="Dry-run only: pin this reviewed request's exact bytes and SHA-256")
     parser.add_argument("--enable-headless-shell", action="store_true",
-                        help="Explicit experiment preset: permit BashTool/shell commands and typed scanners through existing policy")
-    parser.add_argument("--max-steps", type=int)
+                        help="Legacy bounded profiles only: opt into the existing headless shell preset")
+    parser.add_argument("--legacy-bounded", action="store_true",
+                        help="Dry-run only: select the old Scenario 3 limits and generated request")
+    parser.add_argument("--max-steps", type=int, help="Optional native CLI override; otherwise use normal KAgent defaults/config")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--interactive", action="store_true")
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--execute-prompt", action="store_true")
     parser.add_argument("--yolo", action="store_true")
     parser.add_argument("--accept-unknown-http-effects", action="store_true")
+    parser.add_argument("cli_args", nargs=argparse.REMAINDER, help="Native CLI options after --, on isolation-profile launch only")
     args = parser.parse_args(argv)
     try:
+        native_args = args.cli_args[1:] if args.cli_args[:1] == ["--"] else args.cli_args
+        if native_args and (not args.launch or args.cli_args[:1] != ["--"]):
+            raise ValueError("native CLI options require --launch PROFILE -- ...")
+        if args.legacy_bounded and (args.apply or args.verify or args.launch):
+            raise ValueError("select legacy bounded behavior at dry-run")
         if args.prompt_file is not None and (args.apply or args.verify or args.launch):
             raise ValueError("select the request at dry-run; prepare/verify/run use only the reviewed plan")
         if args.enable_headless_shell and (args.apply or args.verify):
@@ -448,7 +551,7 @@ def main(argv=None) -> int:
                           interactive=args.interactive, non_interactive=args.non_interactive,
                           execute_prompt=args.execute_prompt, yolo=args.yolo,
                           accept_unknown_http_effects=args.accept_unknown_http_effects,
-                          enable_headless_shell=args.enable_headless_shell)
+                          enable_headless_shell=args.enable_headless_shell, cli_args=native_args)
         elif args.apply:
             if not args.plan or not args.approve_plan_sha256:
                 raise ValueError("apply requires the reviewed --plan and --approve-plan-sha256")
@@ -460,8 +563,9 @@ def main(argv=None) -> int:
             from src.config.config import config_path
             if args.run_dir is None:
                 raise ValueError("dry-run requires an explicit --run-dir for review")
-            value = plan(args.repo, Path.home(), config_path(), args.run_dir, args.origin, args.max_steps or 60,
-                         prompt_file=args.prompt_file, enable_headless_shell=args.enable_headless_shell)
+            value = plan(args.repo, Path.home(), config_path(), args.run_dir, args.origin, args.max_steps,
+                         prompt_file=args.prompt_file, enable_headless_shell=args.enable_headless_shell,
+                         legacy_bounded=args.legacy_bounded)
             sys.stdout.write(encode(value).decode())
         return 0
     except (ValueError, OSError, KeyError, TypeError) as error:

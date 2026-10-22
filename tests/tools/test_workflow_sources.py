@@ -30,6 +30,32 @@ async def test_source_frontier_api_exact_refs_and_zero_input():
     assert not closed['unresolved'] and not s.attack_surface_inputs and not s.candidates
 
 
+@pytest.mark.parametrize('length', [240, 241, 345])
+async def test_source_reason_schema_runtime_length_and_atomic_rejection(length):
+    from src.workflow.discovery.inventory import MAX_SOURCE_REASON_LENGTH
+    s, source = setup()
+    tool = WorkflowTool(s, Target('http://target.test'))
+    assert tool.schema()['properties']['source_reason']['maxLength'] == MAX_SOURCE_REASON_LENGTH == 240
+    before = s.to_dict()
+    result = await call(tool, 'set_source_disposition', discovery_source_id=source.id,
+        source_disposition='processed', source_reason='x' * length)
+    if length == 240:
+        assert json.loads(result)['discovery_source']['stop_reason'] == 'x' * length
+    else:
+        assert 'source_reason' in result and str(length) in result and '240' in result
+        assert 'x' * length not in result and s.to_dict() == before
+
+
+@pytest.mark.parametrize('reason', ['password=fixture-secret', 'line\nbreak', 'tab\tvalue', 'delete\x7f'])
+async def test_source_reason_preserves_non_secret_exact_text_guard(reason):
+    s, source = setup()
+    before = s.to_dict()
+    result = await call(WorkflowTool(s, Target('http://target.test')), 'set_source_disposition',
+        discovery_source_id=source.id, source_disposition='processed', source_reason=reason)
+    assert result.startswith('error:') and reason not in result
+    assert s.to_dict() == before
+
+
 async def test_source_update_queued_across_reset_never_guesses_replacement():
     s, source = setup()
     tool = WorkflowTool(s, Target('http://target.test'))

@@ -8,6 +8,12 @@ from src.ui.core.state import (initial_state, reducer, AgentEventAction, SetBusy
 from src.agent.events import (ToolCallEvent, ToolResultEvent, ErrorEvent, AssistantDeltaEvent,
     AssistantTextEvent, DoneEvent, DecisionEvent, CompactEvent, MemoryRecallEvent)
 from src.ui.widgets.transcript import entry_view
+from src.tools.common.runtime_metadata import RuntimeMetadata, StreamCapture
+
+
+def shell_metadata(code=0, *, stderr=0):
+    return RuntimeMetadata(process="exit", exit_code=code,
+        stdout=StreamCapture(0, 0, True), stderr=StreamCapture(stderr, stderr, True))
 
 
 def seed():
@@ -196,11 +202,14 @@ def test_planning_compaction_recall_and_proposed_findings_are_hidden():
 def test_interleaved_search_results_correlate_by_id():
     state = emit(seed(), ToolCallEvent(id="search", name="shell", args={"command":"rg missing ."}))
     state = emit(state, ToolCallEvent(id="other", name="shell", args={"command":"false"}))
-    state = emit(state, ToolResultEvent(id="search", name="shell", result="exit: 1\nstdout:\n"))
+    state = emit(state, ToolResultEvent(id="search", name="shell", result="exit: 1\nstdout:\n",
+        runtime_metadata=shell_metadata(1)))
     assert not state.transcript and state.running_tool == "shell"
-    state = emit(state, ToolResultEvent(id="other", name="shell", result="exit: 1\nstdout:\n"))
+    state = emit(state, ToolResultEvent(id="other", name="shell", result="exit: 1\nstdout:\n",
+        runtime_metadata=shell_metadata(1)))
     assert len(state.transcript) == 1 and "exit 1" in state.transcript[0].text
-    missing = emit(seed(), ToolResultEvent(id="missing", name="shell", result="exit: 1\nstdout:\n"))
+    missing = emit(seed(), ToolResultEvent(id="missing", name="shell", result="exit: 1\nstdout:\n",
+        runtime_metadata=shell_metadata(1)))
     assert "exit 1" in missing.transcript[0].text
 
 
@@ -213,7 +222,8 @@ def test_interleaved_search_results_correlate_by_id():
     (ToolResultEvent(name="confirm_finding", result="Finding persisted; compact report export failed."), "export failed"),
     (ToolResultEvent(name="unknown", err="connection failed\npassword=short-secret"), "connection failed"),
     (ToolResultEvent(name="unknown", truncated=True), "truncated"),
-    (ToolResultEvent(name="shell", result="exit: 0\nstdout:\nok\nstderr:\ncleanup required"), "cleanup required"),
+    (ToolResultEvent(name="shell", result="exit: 0\nstdout:\nok\nstderr:\ncleanup required",
+        runtime_metadata=shell_metadata(stderr=16)), "Shell stderr: 16 bytes observed"),
 ])
 def test_actionable_outcomes_survive_success_metadata(event, reason):
     state = emit(seed(), event)

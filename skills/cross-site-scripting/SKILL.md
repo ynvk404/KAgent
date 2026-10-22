@@ -43,6 +43,21 @@ allowed-tools:
 
 # Cross-site scripting playbook
 
+A requested XSS goal does not itself establish a Candidate. Controllable input
+or markup in JSON without rendering context/source-to-sink evidence remains an
+observation. An API negative applies only to the tested sink and cannot exclude
+DOM or stored XSS. Base `browser-required` on actual exposed and allowed browser
+capabilities; do not invent execution or infer capability from application type.
+
+Before proof/result submission, inspect the current candidate/attempt inventory.
+Prefer completed, complete, non-truncated sources with the correct request
+association; reuse an existing complete control instead of recapturing after
+choosing a truncated duplicate. Metadata usability does not prove XSS impact.
+Keep adverse evidence. If parents change, correct the source proof and dependent
+claims and register a new immutable snapshot; never edit or rebind an old one.
+Registration alone does not make a terminal result eligible. Reserve remaining
+budget for finalization after probing stops; Continue resets no allowance.
+
 ## Runtime completion contract
 
 The runtime derives validation completion from the current objective and target,
@@ -97,8 +112,30 @@ permission or proof. Workflow list/prompt rows are summaries; use
 `workflow(action="get_input", input_id="...")` for a selected full canonical
 sanitized input, including after resume or compaction.
 
-Follow candidate → attempt → observation → evidence → result in that order.
-Record the concrete Candidate, then call `start_validation` before active probes.
+For a new expert attempt: complete current prerequisites → read the current
+skill → prepare primary/supplementary requests and roles → successfully call
+`start_validation` → probe → evidence → result. Whole-target work requires
+Workflow completion of Recon, Enumeration and Input Analysis; Direct and
+candidate-validation retain their own admission contracts.
+
+Prepare associations from the existing Candidate, inventory and context before
+opening the attempt. Prefer candidate ID alone when it covers the primary
+request and no supplementary request is needed. For example, a Candidate for
+`POST /comments` may need known `GET /comments` as a supplementary request with
+role `readback`. The same path with a different method is a different request
+identity. Declare each supplementary method/URL once with a consistent role;
+payload variations are observations. Declare only known endpoints actually
+needed for this bounded hypothesis; do not guess rendering or cleanup routes
+or send validation probes before admission. Association grants no permission
+to execute a request and does not establish XSS.
+
+An owned active attempt keeps its immutable declaration and recovery budget.
+If its declaration lacks an association, do not amend it retrospectively or
+repeat HTTP just to repair association. Continue if the current declaration
+can still complete the work; otherwise record an honest unresolved outcome
+and follow the explicit retest contract for a changed declaration.
+
+Record the concrete Candidate before opening its attempt.
 Keep its returned `attempt_id`; it is a controller identity, not one to invent.
 The HTTP evidence envelope supplies real `observation_ids` for captured requests.
 Both `confirmed` and `not-confirmed` require usable primary observations with
@@ -119,8 +156,9 @@ Keep the artifact available through finding creation and session resume.
 If coverage sync is `pending`, retry `workflow(action="sync_coverage",
 candidate_id="...")` before `confirm_finding`.
 
-Consume a matching Candidate with `workflow(action="start_validation",
-candidate_id="...")`. For a concrete direct user request, record its supplied
+After the preparation above, consume a matching Candidate with
+`workflow(action="start_validation", candidate_id="...")`, including necessary
+known supplementary associations. For a concrete direct user request, record its supplied
 details as a Candidate and start its attempt before active probes,
 without requiring prior recon/analysis. Finish every meaningful attempt
 with `workflow(action="record_result", ...)`, mapping browser-only proof to

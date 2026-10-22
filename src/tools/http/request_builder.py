@@ -302,9 +302,9 @@ def _replace_multipart(body: bytes, content_type: str, parameter: str, value: st
     return separator.join(parts)
 
 
-def _captured_parts(row: Any, candidate: Any) -> tuple[str, str, list[tuple[str, str]], bytes]:
-    """Validate the capture binding without consulting shared runtime identity."""
-    method, url, raw_headers, body = _raw_capture(row)
+def validate_capture_binding(row: Any, candidate: Any) -> None:
+    """Metadata identity only; incomplete captures still confer no replay rights."""
+    method, url = str(row.method).upper(), str(row.url)
     if urlsplit(url).username or urlsplit(url).password:
         raise ValueError("captured URL credentials require a credential-free recapture")
     if method != candidate.method or HTTPOrigin.from_url(url) != HTTPOrigin.from_url(candidate.target):
@@ -313,6 +313,12 @@ def _captured_parts(row: Any, candidate: Any) -> tuple[str, str, list[tuple[str,
     pattern = '^' + re.sub(r'\\\{[^{}]+\\\}', r'[^/]+', re.escape(endpoint)) + '$'
     if endpoint and not re.fullmatch(pattern, urlsplit(url).path):
         raise ValueError("baseline path differs from candidate")
+
+
+def _captured_parts(row: Any, candidate: Any) -> tuple[str, str, list[tuple[str, str]], bytes]:
+    """Validate the capture binding without consulting shared runtime identity."""
+    method, url, raw_headers, body = _raw_capture(row)
+    validate_capture_binding(row, candidate)
     content_type = httpx.Headers(raw_headers).get('content-type', '')
     if candidate.content_type and content_type.split(';', 1)[0].strip().lower() != candidate.content_type.split(';', 1)[0].strip().lower():
         raise ValueError('baseline content type differs from candidate')

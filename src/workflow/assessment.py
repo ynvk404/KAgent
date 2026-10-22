@@ -103,7 +103,18 @@ def source_association(candidate, attempt, row, associations):
     direct = (not path or urlsplit(row["url"]).path == path) and (not candidate.method or candidate.method == row["method"])
     request = associations.get((row["method"], row["url"]))
     if request is None and not direct:
-        raise EvidenceSubmissionError("SOURCE_REQUEST_MISMATCH", "undeclared primary request identity/role mismatch")
+        from src.redaction.redact import apply as redact
+        # Geometry only, taken from actual source metadata. Query/fragment,
+        # authority credentials, headers and bodies never enter diagnostics.
+        def label(method, url):
+            verb = method if method in {"GET", "POST", "HEAD", "OPTIONS", "PUT", "PATCH", "DELETE"} else "unknown"
+            safe_path = redact(urlsplit(url).path or '/')
+            safe_path = ''.join(c for c in safe_path if ord(c) >= 32 and ord(c) != 127)[:240]
+            return f'{verb} {safe_path}'
+        producer = row.get('producer') if row.get('producer') in {'http', 'scoped-capture-bridge'} else 'unknown'
+        raise EvidenceSubmissionError("SOURCE_REQUEST_MISMATCH", "undeclared primary request identity/role mismatch; "
+            f"expected primary: {label(candidate.method, candidate.endpoint or '/')}; "
+            f"actual: {label(row['method'], row['url'])}; producer={producer}; no related request association")
     if request is not None:
         return request["role"], request.get("required", True)
     return ("imported" if row["source_kind"] == "imported-capture" else "probe"), True

@@ -65,6 +65,14 @@ identifier exactly — do not re-derive it differently here.
 
 ## Preconditions
 
+In whole-target mode, complete Recon → Enumeration → Input Analysis through
+Workflow before opening any new validation attempt. During these phases, keep
+the detection markers and bounded signal probes allowed by this playbook and
+record grounded Candidates for later validation; do not begin confirmation or
+bounded impact validation. Skill loading, artifact writing and approval are not
+phase completion. On prerequisite rejection, return to the missing work before
+retrying. Owned active attempts retain their existing recovery contract.
+
 Before starting, you should have:
 
 - `artifacts/web-enumeration/<target>/inventory.md` (same target identifier as `recon`
@@ -82,6 +90,29 @@ full sanitized sample is needed. This lookup reads stored context only; it
 does not retrieve raw captures or live credentials. Marker-free samples remain
 samples: do not automatically insert `{INJECTION_POINT}` or treat a sanitized
 sample as an executable mutation template or captured replay baseline.
+
+Prefer `record_candidate(input_id=...)` for a stored input and inherit its
+verified request identity. Do not guess an endpoint spelling, change `product`
+to `products`, or reuse an unrelated HTTP source_ref. Method, normalized origin
+and path must come from the checked request-context source. Unexpected paths
+do not prove endpoint behavior; HTTP 500 alone does not establish absence.
+Correct an erroneous input through existing disposition/replacement actions
+with honest attribution; do not rewrite historical records or fabricate refs.
+Reconcile every evidenced field with structured input records, including secret
+field names with redacted values. Use `blocked` with the actual unmet prerequisite
+when analysis could not be performed; `analyzed` does not mean an untested path
+was exercised. `Unexpected path` proves neither handler nor method/body schema.
+401 alone does not prove missing session: invalid credentials and format errors
+need their own interpretation. Missing documentation observations are not proof
+of absence. Phase completion checks structured obligations, not all Markdown.
+
+`content_type` describes the request body, never response Content-Type; omit it
+for query-only skeletons. `request_template` is explicitly supplied context with
+`{INJECTION_POINT}`; a sanitized sample, even with a marker, is not automatically
+promoted into a mutation template or replay authority. HTTP `obs_...` references
+belong in `source_ref` only when their checked method/origin/path match this
+request. `baseline_request_ref` must come from the capture-store replay resolver;
+never invent it, borrow another request, or convert an observation into a baseline.
 
 Read every entry. Drop entries that are clearly not worth analyzing:
 
@@ -152,6 +183,17 @@ attribute, script, URL, JSON, or a non-rendered response. A marker in raw JSON
 or a response the browser does not render is not an XSS candidate by itself.
 If client-side rendering is unknown, record that ambiguity and stop short of
 an XSS Candidate.
+The user's requested vulnerability class is a goal to investigate, not a signal
+that establishes a Candidate. A SQL parser error without query text leaves the
+SQL shape hypothetical; do not claim a visible SELECT or constructed query.
+
+HTML markup or an inert marker in JSON remains an observation when neither a
+rendering context nor a compatible source-to-sink path is established. Do not
+send a mutation to rescue an unsupported XSS hypothesis. Distinguish JSON
+readback, persistence, executable rendering and execution proof: none implies
+the next. A grounded rendering/source-to-sink hypothesis may become a Candidate
+without browser execution or a confirmed exploit at this stage. A valid request
+association likewise does not establish confirmed XSS.
 
 When existing evidence identifies a distinct client-side source-to-sink path,
 or persistence plus a separate rendering/readback sink, retain that DOM/stored

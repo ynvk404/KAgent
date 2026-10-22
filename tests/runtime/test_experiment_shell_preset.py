@@ -24,11 +24,11 @@ def shell_plan(layout, tmp_path):
     source = tmp_path / "request.txt"
     source.write_bytes(ENGLISH)
     return profile.plan(layout[0], layout[1], layout[2], layout[3], "http://127.0.0.1:8081",
-                        prompt_file=source, enable_headless_shell=True)
+                        prompt_file=source, enable_headless_shell=True, legacy_bounded=True)
 
 
 def test_shell_preset_is_explicit_pinned_and_preserves_native_limits(layout, shell_plan):
-    legacy = profile.plan(layout[0], layout[1], layout[2], layout[3], shell_plan["origin"])
+    legacy = profile.plan(layout[0], layout[1], layout[2], layout[3], shell_plan["origin"], legacy_bounded=True)
     assert "execution_preset" not in legacy
     assert legacy["limits"]["scanner_jobs_authorized"] == 0
     assert shell_plan["execution_preset"] == "headless-shell"
@@ -44,7 +44,7 @@ def test_shell_preset_is_explicit_pinned_and_preserves_native_limits(layout, she
 def test_shell_preset_requires_reviewed_request(layout):
     with pytest.raises(ValueError, match="reviewed request"):
         profile.plan(layout[0], layout[1], layout[2], layout[3], "http://127.0.0.1:8081",
-                     enable_headless_shell=True)
+                     enable_headless_shell=True, legacy_bounded=True)
     assert not layout[3].exists()
 
 
@@ -61,7 +61,7 @@ def test_verify_rejects_invalid_execution_preset(shell_plan, preset):
 @pytest.mark.parametrize("prepared,requested,headless", [(True, False, True), (False, True, True), (True, True, False)])
 def test_shell_launch_requires_matching_plan_and_explicit_headless(layout, shell_plan, monkeypatch,
                                                                  prepared, requested, headless):
-    value = shell_plan if prepared else profile.plan(layout[0], layout[1], layout[2], layout[3], shell_plan["origin"])
+    value = shell_plan if prepared else profile.plan(layout[0], layout[1], layout[2], layout[3], shell_plan["origin"], legacy_bounded=True)
     receipt = profile.apply(value)
     monkeypatch.setattr(profile.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(profile.sys.stdout, "isatty", lambda: True)

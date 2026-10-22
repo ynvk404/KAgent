@@ -670,3 +670,45 @@ async def test_cleanup_consistency_applies_to_initial_submission_and_same_attemp
     assert state.to_dict() == before
     assert len(state.validation_results) == 1 and len(state.attempts) == 1
     assert latest.cleanup_state == 'pending' and accepted_result(state, candidate, latest, policy)
+
+
+@pytest.mark.parametrize('declared', [False, True])
+async def test_xss_post_candidate_get_on_same_path_needs_supplementary_association(runtime, tmp_path, declared):
+    related = [{'role': 'readback', 'method': 'GET', 'url': ORIGIN + '/fixture'}] if declared else []
+    state, candidate, _, args, _ = await setup(runtime, tmp_path, method='POST', related=related)
+    registry, p, policy, *_ = runtime
+    await registry.execute('http', {'url': '/fixture', 'method': 'GET', 'phase': 'validation'}, None, p)
+    oid = next(reversed(policy.observations._items))
+    item = policy.observations._items[oid]
+    assert item.candidate_id == candidate.id and item.attempt_id == args['attempt_id'] and item.complete
+    args['observation_ids'].append(oid)
+    output = await registry.execute('workflow', args, None, p)
+    if declared:
+        assert json.loads(output)['ok']
+        result = state.latest_result(candidate.id)
+        assert result is not None and result.evidence_manifest[-1]['source']['role'] == 'readback'
+    else:
+        assert output.startswith('error:') and 'undeclared primary request identity/role mismatch' in output
+        assert not state.validation_results
+
+
+async def test_whole_target_rechecks_input_analysis_artifact_after_evidence_read_await(runtime, tmp_path, monkeypatch):
+    from copy import deepcopy
+    import asyncio
+    from src.tools.workflow import workflow_tool as module
+    state, candidate, tool, args, _ = await setup(runtime, tmp_path)
+    registry, p, policy, *_ = runtime
+    assert json.loads(await registry.execute('workflow', args, None, p))['ok']
+    assert state.objective is not None
+    artifact = tmp_path / state.phase_completions[f'{state.objective.id}:input_analysis'].artifact_ref
+    async def missing_after_review(*_args, **_kwargs):
+        await asyncio.sleep(0)
+        artifact.unlink()
+        return False  # Existing evidence-revalidation path admits a new attempt only through current gates.
+    monkeypatch.setattr(module, 'verify_evidence_reads', missing_after_review)
+    before = deepcopy(state.to_dict())
+    active_id, selector = tool.active_attempt, policy.generic_validation.durable_attempt
+    rejected = await registry.execute('workflow', {'action': 'start_validation', 'candidate_id': candidate.id}, None, p)
+    assert 'WHOLE_TARGET_VALIDATION_PREREQUISITE' in rejected and 'input_analysis' in rejected
+    assert state.to_dict() == before
+    assert tool.active_attempt == active_id and policy.generic_validation.durable_attempt == selector

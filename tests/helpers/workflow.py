@@ -7,6 +7,26 @@ from src.workflow.state import (PHASE_COVERAGE_DIMENSIONS, WorkflowPhase, Workfl
                                 AttackSurfaceInput, attack_surface_input_fingerprint)
 
 
+def bind_capture_baseline(tool, endpoint, method='POST', content_type='application/json', body='{}'):
+    """Use a real offline capture resolver rather than invent replay IDs."""
+    from src.browser.store import CaptureStore
+    from src.engagement.state import EngagementState
+    from src.tools.http.http_tool import HTTPTool
+    from urllib.parse import urlsplit
+    capture = CaptureStore()
+    origin = tool.target.base_url()
+    engagement = EngagementState()
+    engagement.initialize_target(origin)
+    http = HTTPTool(tool.target, engagement, tool.state, capture)
+    tool.http_tool = http
+    row = capture.ingest({'kind': 'browser', 'id': 'fixture', 'url': origin + endpoint,
+        'method': method, 'reqHeaders': [{'name': 'Host', 'value': urlsplit(origin).netloc},
+                                       {'name': 'Content-Type', 'value': content_type}],
+        'reqBody': body})
+    assert row['ok']
+    return row['baseline_request_ref']
+
+
 def historical_input(objective_id: str, target_origin: str, **fields: Any) -> AttackSurfaceInput:
     """Explicit old-session fixture; never routes malformed data through new admission."""
     fingerprint_fields = {name: fields.get(name) for name in (
@@ -200,3 +220,12 @@ async def prepare_validation_prerequisites(tool, candidate_id: str) -> None:
     result = await tool.run({"action": "set_input_disposition", "input_id": input_id,
                              "disposition": "analyzed"}, None, AlwaysAllow())
     assert json.loads(result)["ok"], result
+    if "input_analysis" not in tool.state.completed_phases():
+        skill = tool.skills.get("web-input-analysis")
+        assert skill is not None and skill.completion_artifact
+        relative = completion_artifact_path(skill.completion_artifact, tool._active_target())
+        path = tool.evidence_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Offline consumer fixture; compatible input analyzed and linked.")
+        result = await tool.run({"action": "complete_skill", "skill_name": "web-input-analysis"}, None, AlwaysAllow())
+        assert json.loads(result)["ok"], result

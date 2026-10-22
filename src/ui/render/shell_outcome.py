@@ -1,13 +1,46 @@
-"""Parse exit and stderr metadata for actionable Shell presentation."""
+"""Structured Shell diagnostics; legacy text parsing is only a best-effort view."""
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 from typing import Optional
 
+from src.tools.common.runtime_metadata import RuntimeMetadata, process_diagnostic
+
 EXIT_RE = re.compile(r"^exit:\s*(-?\d+|timeout[^\n]*)")
 STDOUT_LABEL = "stdout:"
 STDERR_LABEL = "stderr:"
+
+
+def shell_issues(metadata: RuntimeMetadata | None, *, status: str, error_kind: str | None,
+                 reported_error: bool, search: bool = False) -> list[str]:
+    """No output/err text enters diagnostics, including for ambiguous history."""
+    if type(metadata) is not RuntimeMetadata:
+        if status in {"error", "cancelled", "pending"} or error_kind or reported_error:
+            reason = ("cancelled" if status == "cancelled" else "operation pending" if status == "pending"
+                      else {"permission_denied": "permission denied", "scope_denied": "scope denied",
+                            "policy_block": "blocked by execution policy", "invalid_args": "invalid arguments",
+                            "timeout": "timeout", "network": "network error"}.get(error_kind or "", "execution error"))
+            return [f"Shell {reason}; process/stream metadata unavailable. See sanitized output."]
+        return []
+
+    no_matches = (search and metadata.process == "exit" and metadata.exit_code == 1
+                  and metadata.stdout is not None and metadata.stdout.complete and metadata.stdout.observed_bytes == 0
+                  and metadata.stderr is not None and metadata.stderr.complete and metadata.stderr.observed_bytes == 0
+                  and status in {"success", "error"} and error_kind in {None, "tool_exception"})
+    issues = []
+    process = process_diagnostic(metadata)
+    if process and not no_matches:
+        issues.append(process)
+    elif not no_matches and (status in {"error", "cancelled", "pending"} or error_kind
+                            or (reported_error and metadata.process == "unknown")):
+        issues.append("Shell operation pending" if status == "pending" else
+                      "Shell cancelled" if status == "cancelled" else "Shell tool execution error")
+    if metadata.stderr is not None and metadata.stderr.observed_bytes:
+        stream = metadata.stderr
+        issues.append(f"Shell stderr: {stream.observed_bytes} bytes observed ({stream.retained_bytes} retained); "
+                      "see sanitized output.")
+    return issues
 
 
 @dataclass
@@ -19,6 +52,7 @@ class ShellResultParts:
 
 
 def _parse_shell_result(body: str) -> Optional[ShellResultParts]:
+    """Archival display helper. Delimiters cannot establish exit/stream facts."""
     lines = [line.rstrip("\r") for line in body.split("\n")]
     first = lines[0] if lines else ""
     exit_match = EXIT_RE.match(first)

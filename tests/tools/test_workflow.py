@@ -5,7 +5,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from tests.helpers.workflow import run_workflow_fixture
+from tests.helpers.workflow import run_workflow_fixture, bind_capture_baseline
 
 from src.coverage.store import CoverageStore
 from src.coverage.context import CoverageContext
@@ -119,8 +119,9 @@ async def test_active_candidate_context_enrichment_cannot_invalidate_attempt_own
     state = WorkflowState()
     target = Target("https://target.test")
     tool = WorkflowTool(state, target, session_id="fixture")
+    baseline_ref = bind_capture_baseline(tool, '/product', method='GET')
     args = {"action": "record_candidate", "candidate_class": "sqli", "endpoint": "/product",
-            "method": "GET", "parameter": "productId", "baseline_request_ref": "capture:baseline"}
+            "method": "GET", "parameter": "productId", "baseline_request_ref": baseline_ref}
     cid = json.loads(await tool.run(args, None, AlwaysAllow()))["candidate"]["id"]
     started = json.loads(await tool.run({"action": "start_validation", "candidate_id": cid}, None, AlwaysAllow()))
     aid = started["validation_context"]["attempt_id"]
@@ -1569,6 +1570,7 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
     state = whole_target_tool_state()
     target = Target("https://target.test")
     tool = WorkflowTool(state, target, evidence_root=tmp_path)
+    baseline_ref = bind_capture_baseline(tool, "/api/v1/auth/login")
     input_args = {
         "action": "record_input", "method": "GET", "endpoint": "/search",
         "parameter": "q", "location": "query", "input_type": "text",
@@ -1591,7 +1593,7 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
         "action": "record_candidate", "candidate_class": "xss",
         "target": "https://TARGET.test:443/any-path", "input_id": input_id,
         "request_template": '{"email":"{INJECTION_POINT}","password":"example-secret"}',
-        "baseline_request_ref": "captures/login-baseline.json",
+        "baseline_request_ref": baseline_ref,
         "auth_context_ref": "captures/auth-context.md",
     }, None, AlwaysAllow()))
     candidate_id = candidate["candidate"]["id"]
@@ -1601,7 +1603,7 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
     assert candidate["candidate"]["parameter"] == "email"
     assert candidate["candidate"]["content_type"] == "application/json"
     assert "example-secret" not in candidate["candidate"]["request_template"]
-    assert candidate["candidate"]["baseline_request_ref"] == "captures/login-baseline.json"
+    assert candidate["candidate"]["baseline_request_ref"] == baseline_ref
     assert candidate["candidate"]["auth_context_ref"] == "captures/auth-context.md"
     assert state.attack_surface_inputs[input_id].candidate_ids == [candidate_id]
 
@@ -1609,7 +1611,7 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
     assert restored.attack_surface_inputs[input_id].content_type == "application/json"
     restored_candidate = restored.candidates[candidate_id]
     assert restored_candidate.request_template == candidate["candidate"]["request_template"]
-    assert restored_candidate.baseline_request_ref == "captures/login-baseline.json"
+    assert restored_candidate.baseline_request_ref == baseline_ref
     assert restored_candidate.auth_context_ref == "captures/auth-context.md"
     listed = json.loads(await run_workflow_fixture(tool, {"action": "list"}, None, AlwaysAllow()))
     listed_input = listed["attack_surface_inputs"][0]
@@ -1620,7 +1622,7 @@ async def test_whole_target_tool_assigns_candidate_scope_and_tracks_input(tmp_pa
     assert detail["sample_payload"].startswith('{"email":')
     assert listed_candidate["content_type"] == "application/json"
     assert listed_candidate["request_template"] == candidate["candidate"]["request_template"]
-    assert listed_candidate["baseline_request_ref"] == "captures/login-baseline.json"
+    assert listed_candidate["baseline_request_ref"] == baseline_ref
     assert listed_candidate["auth_context_ref"] == "captures/auth-context.md"
     assert "objective_id is assigned" in await run_workflow_fixture(tool, {
         "action": "record_candidate", "candidate_class": "xss",
@@ -1961,23 +1963,24 @@ async def test_candidate_validation_objective_rejects_missing_candidate(tmp_path
 async def test_capture_context_handoff_survives_workflow_resume(tmp_path):
     state = whole_target_tool_state()
     tool = WorkflowTool(state, Target("https://target.test"), evidence_root=tmp_path)
+    baseline_ref = bind_capture_baseline(tool, "/api/search")
     recorded = json.loads(await run_workflow_fixture(tool, {
         "action": "record_input", "method": "POST", "endpoint": "/api/search",
         "parameter": "q", "location": "body", "input_type": "string",
         "content_type": "application/json",
         "sample_payload": '{"q":"{INJECTION_POINT}","csrf":"secret-value"}',
-        "baseline_request_ref": "wr:captured-1", "auth_context_ref": "user-identity",
+        "baseline_request_ref": baseline_ref, "auth_context_ref": "user-identity",
         "source_ref": "browser:tab-1",
     }, None, AlwaysAllow()))["input"]
     candidate = json.loads(await run_workflow_fixture(tool, {
         "action": "record_candidate", "candidate_class": "sql-injection",
         "input_id": recorded["id"],
     }, None, AlwaysAllow()))["candidate"]
-    assert candidate["baseline_request_ref"] == "wr:captured-1"
+    assert candidate["baseline_request_ref"] == baseline_ref
     assert candidate["auth_context_ref"] == "user-identity"
     assert candidate["source_ref"] == "browser:tab-1"
-    assert candidate["request_template"] == recorded["sample_payload"]
-    assert "secret-value" not in candidate["request_template"]
+    assert candidate["request_template"] is None
+    assert "secret-value" not in recorded["sample_payload"]
     restored = WorkflowState.from_dict(state.to_dict())
-    assert restored.candidates[candidate["id"]].baseline_request_ref == "wr:captured-1"
+    assert restored.candidates[candidate["id"]].baseline_request_ref == baseline_ref
     assert restored.attack_surface_inputs[recorded["id"]].source_ref == "browser:tab-1"

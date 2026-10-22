@@ -14,7 +14,9 @@ def retrieval_corpus():
         row.target_origin = ({"scheme": "http", "hostname": "juice.lab", "port": port}
                              if applicability == "target" else None)
         row.provenance = "curated" if applicability == "generic" else "derived"
-        row.source_role = "assistant"
+        # Target observations in this ranking fixture represent primary tool
+        # sources; model summaries have a separate ineligibility regression.
+        row.source_role = "tool"
         row.conditions = conditions
         return row
 

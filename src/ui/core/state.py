@@ -699,9 +699,14 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                     state = replace(state, milestones=(*state.milestones, event_key))
                 recommendation = (ev.recommended_skill, ev.candidate_id or "")
                 if recommendation != state.planner_recommendation:
+                    context = next((row for row in facts.records
+                                    if row.kind == "candidate" and row.key == ev.candidate_id), None) if facts else None
+                    label = "Planner recommended · " + concise_text(ev.recommended_skill, 100)
+                    if context:
+                        label += " · " + concise_text(context.label, 180) + " · " + context.key[-8:]
                     state = replace(state, planner_recommendation=recommendation,
                                     transcript=(*state.transcript, TranscriptEntry(kind="info",
-                                        text="Planner recommended · " + concise_text(ev.recommended_skill, 100))))
+                                        text=label)))
             return state
 
         case CompactEvent():

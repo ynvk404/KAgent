@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from copy import deepcopy
 import json
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from rich.console import Console
 
-from src.permission.permission import AlwaysDeny, Decision, UserControlledRefusal
+from src.engagement.state import EngagementState
+from src.permission.permission import AlwaysDeny, Decision, UserControlledRefusal, YoloPrompter
+from src.permission.runtime.execution import ExecutionPolicy, ExecutionReview, current_policy, invocation_digest
 from src.tools.mcp.integration import MCPTool
 from src.tools.common.registry import Registry
-from src.tools.execution.shell import ShellTool, rewrite_portable_command
+from src.tools.execution.shell import BashTool, ShellTool
+from src.tools.common.outcome import ToolOutput
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest
 from src.ui.widgets.permission_modal import PermissionModal
 
@@ -59,7 +65,7 @@ async def test_mcp_deny_prevents_remote_dispatch():
 
 
 @pytest.mark.asyncio
-async def test_shell_preview_matches_rewritten_dispatch_and_preserves_secrets(monkeypatch):
+async def test_shell_preview_matches_original_dispatch_and_preserves_secrets(monkeypatch):
     command = "printf abc | grep -P 'a'; echo token=FAKE_SECRET_1234567890"
     args = {"command": command}
     calls = []
@@ -72,12 +78,81 @@ async def test_shell_preview_matches_rewritten_dispatch_and_preserves_secrets(mo
             req = request
             assert "FAKE_SECRET_1234567890" not in req.detail
             assert "[REDACTED" in req.detail
+            assert "printf abc | grep -P 'a'" in req.detail
+            assert req.cache_key == command
+            assert req.no_session_cache and not req.supports_session
             args["command"] = "echo changed"
             return Decision.ALLOW_ONCE
     registry = Registry()
     registry.register(ShellTool())
     await registry.execute("shell", args, None, Approve())
-    assert rewrite_portable_command(command) in calls[0][1]
+    assert calls == [("/bin/sh", ["-c", command])]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("factory", [ShellTool, BashTool])
+async def test_shell_review_receipt_worker_and_dispatch_keep_original_arguments(factory, tmp_path, monkeypatch):
+    command = "pat=abc; printf '%s\\n' abc | grep -P \"$pat\""
+    args = {"command": command, "timeout_seconds": 7}
+    reviewed_args = deepcopy(args)
+    tool = factory()
+    policy = ExecutionPolicy(EngagementState(), tmp_path)
+    expected_digest = invocation_digest(tool, reviewed_args)
+    review_ids = []
+    prepared = []
+    dispatched = []
+
+    class Approve:
+        async def ask(self, request, signal=None):
+            assert request.detail == f"{command}\n\nTimeout: 7s"
+            assert request.cache_key == command
+            assert request.no_session_cache and not request.supports_session
+            review, = policy._receipts.values()
+            assert isinstance(review, ExecutionReview)
+            assert review.digest == expected_digest
+            review_ids.append(review.id)
+            args["command"] = "echo caller changed during review"
+            args["timeout_seconds"] = 1
+            return Decision.ALLOW_ONCE
+
+    def assert_active_receipt():
+        assert current_policy() is policy
+        receipt, = policy._active_receipts.values()
+        assert not isinstance(receipt, ExecutionReview)
+        assert receipt.digest == expected_digest
+        assert receipt.id == review_ids[0]
+
+    @asynccontextmanager
+    async def broker(signal=None, *, collector=None):
+        assert_active_receipt()
+        yield tmp_path / "fake-broker"
+
+    async def prepare(cmd, argv, *, broker, signal):
+        assert_active_receipt()
+        assert broker == tmp_path / "fake-broker"
+        prepared.append((cmd, list(argv)))
+        return cmd, argv
+
+    async def capture(cmd, argv, timeout, signal):
+        assert_active_receipt()
+        dispatched.append((cmd, list(argv), timeout))
+        return ToolOutput("fixture output")
+
+    # Keep the real Registry and receipt lifecycle; only the worker/broker and
+    # subprocess boundary are fakes. No host command or network is dispatched.
+    policy.worker = SimpleNamespace(summary=lambda: "fixture-worker", prepare=prepare)
+    prompter = YoloPrompter(Approve())
+    prompter.bind_execution_policy(policy)
+    monkeypatch.setattr("src.permission.worker.broker.broker_directory", broker)
+    monkeypatch.setattr("src.tools.execution.shell.run_with_capture", capture)
+    registry = Registry()
+    registry.register(tool)
+    assert await registry.execute(tool.name(), args, None, prompter) == "fixture output"
+    assert prepared == [(tool.shell_path, ["-c", command])]
+    assert dispatched == [(tool.shell_path, ["-c", command], 7)]
+    assert len(review_ids) == 1
+    assert not policy._receipts and not policy._active_receipts and not policy._pending
+    assert policy.active == 0
+
 
 
 def test_full_detail_is_reviewable_without_a_mode_toggle_or_secret_leak():

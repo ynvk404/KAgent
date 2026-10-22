@@ -132,7 +132,7 @@ class Banner:
         if show_status and status_value:
             fields.append(("Status", status_value))
         if assessment_progress:
-            fields.append(("Assessment Progress", assessment_progress.removeprefix("Workflow · ")))
+            fields.append(("Progress", assessment_progress.removeprefix("Workflow · ")))
 
         lines = [Text("Welcome to KAgent", style=f"bold {self.ui.accent}")]
         for label, value in fields:

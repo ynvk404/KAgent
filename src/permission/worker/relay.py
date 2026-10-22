@@ -30,7 +30,10 @@ async def main():
     server = await asyncio.start_server(relay, '127.0.0.1', 18080)
     async with server:
         child = await asyncio.create_subprocess_exec(*sys.argv[1:])
-        return await child.wait()
+        code = await child.wait()
+        # SystemExit(-signal) wraps modulo 256 (SIGTERM became 241). Preserve
+        # positive exits and use the shell convention at this process boundary.
+        return code if code >= 0 else 128 - code
 
 
 if __name__ == '__main__':

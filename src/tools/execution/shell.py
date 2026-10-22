@@ -5,8 +5,10 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
+from dataclasses import replace
+
+from src.tools.common.runtime_metadata import RuntimeMetadata, StreamCapture
 
 from src.logger.logger import get_logger
 from src.permission.permission import Prompter
@@ -57,57 +59,6 @@ DENY_PATTERNS: list[re.Pattern[str]] = [
     )
 ]
 
-@dataclass
-class PortabilityPattern:
-    re: re.Pattern[str]
-    message: str
-
-PORTABILITY_PATTERNS: list[PortabilityPattern] = [
-    PortabilityPattern(
-        re.compile(r"\bgrep\s+(?:-[A-Za-z]*P[A-Za-z]*|--perl-regexp)\b"),
-        "grep -P/--perl-regexp is GNU-only. Use grep -E, awk, sed, perl -ne, or jq instead.",
-    ),
-    PortabilityPattern(
-        re.compile(r"\bsed\s+-[A-Za-z]*r[A-Za-z]*\b"),
-        "sed -r is GNU-only. Use sed -E for portable extended regular expressions.",
-    ),
-    PortabilityPattern(
-        re.compile(r"\bbase64\s+[^|;&\n]*-[A-Za-z]*w\d*[A-Za-z]*\b"),
-        'base64 -w is GNU-only. Omit wrapping flags or use tr -d "\\n".',
-    ),
-    PortabilityPattern(
-        re.compile(r"\breadlink\s+-[A-Za-z]*f[A-Za-z]*\b"),
-        "readlink -f is GNU-only. Use python3 os.path.realpath snippet instead.",
-    ),
-    PortabilityPattern(
-        re.compile(r"\bdate\s+[^|;&\n]*-[A-Za-z]*d[A-Za-z]*\b"),
-        "date -d is GNU-only. Use portable shell date handling or python3.",
-    ),
-    PortabilityPattern(
-        re.compile(r"\bxargs\s+-[A-Za-z]*r[A-Za-z]*\b"),
-        "xargs -r is GNU-only. Guard input explicitly before xargs.",
-    ),
-    PortabilityPattern(
-        re.compile(r"\bstat\s+-c\b"),
-        "stat -c is GNU-only. Use stat -f on macOS/BSD or python3 os.stat.",
-    ),
-    PortabilityPattern(
-        re.compile(r"\bsort\s+-[A-Za-z]*V[A-Za-z]*\b"),
-        "sort -V is GNU-only. Use plain sort or python3 version-sort.",
-    ),
-    PortabilityPattern(
-        re.compile(r"(^|[|;&\s])timeout\s+\d"),
-        "timeout is not available on macOS. Use tool timeout_seconds argument or python3.",
-    ),
-]
-
-GREP_P_RE = re.compile(
-    r"(^|[\n|;&(])([ \t]*)grep\s+"
-    r"((?:(?:-[A-Za-z]+|--perl-regexp)\s+)*)"
-    r"""((?:'[^']*')|(?:"[^"]*")|(?:\\.|[^\s|;&])+)"""
-    r"([^|;&\n]*)"
-)
-
 class ShellTool(Tool):
     def freeze_for_execution(self):
         from copy import copy
@@ -155,8 +106,11 @@ class ShellTool(Tool):
                 "Worker cwd /work: read-only project, no host paths. Write shell output only to "
                 "/work/artifacts/worker. For other permitted project artifacts use file_write/file_edit "
                 "with normal permission checks.",
-                "Use portable macOS/BSD + Linux commands: avoid GNU-only grep -P; "
-                "prefer grep -E, awk, sed, perl -ne or jq.",
+                "Use installed worker utilities; host executable availability does not imply worker compatibility. "
+                "For macOS/BSD portability prefer grep -E when available; avoid GNU-only grep -P. "
+                "Check the parser and its dependencies before extraction. "
+                "Reuse downloaded artifacts after parser failure. Inspect download status, parser exit, stderr "
+                "and useful stdout separately; a pipeline can hide a missing dependency. grep no-match is distinct from failure.",
                 "Use semantic tools for bounded path/service discovery; "
                 "generic-shell scanners require an explicit user request.",
                 "On Linux/WSL, shell(scanner=nmap|ffuf, typed fields) uses an exact reviewed "
@@ -251,7 +205,7 @@ class ShellTool(Tool):
         return {
             "noSessionCache": True,
             "riskTier": "high-impact",
-            "cacheKey": rewrite_portable_command(arg_string(args, "command") or ""),
+            "cacheKey": arg_string(args, "command") or "",
             "sessionScopeDisplay": f"this exact {self.tool_name} command only",
         }
 
@@ -259,7 +213,7 @@ class ShellTool(Tool):
         if "scanner" in args:
             return {"summary": f"shell: trusted {args['scanner']} scanner job (exact plan)",
                     "detail": self.scanner_plan.display() if self.scanner_plan else "Scanner plan unavailable"}
-        cmd = rewrite_portable_command(arg_string(args, "command") or "")
+        cmd = arg_string(args, "command") or ""
         first_line = cmd.split("\n", 1)[0]
         truncated = f"{first_line[:117]}..." if len(first_line) > 120 else first_line
         timeout = args.get("timeout_seconds")
@@ -286,20 +240,14 @@ class ShellTool(Tool):
             assert self.scanner_binding is not None
             return await self.scanner_binding.runtime.run(self.scanner_binding, self, args, signal)
         worker = guard_process(prompter, self, args)
-        original_cmd = arg_string(args, "command") or ""
-        cmd_str = rewrite_portable_command(original_cmd)
+        cmd_str = arg_string(args, "command") or ""
 
         if not cmd_str:
             raise ValueError("command is required")
 
         for pattern in (DENY_PATTERNS if worker is None else []):
-            if pattern.search(original_cmd) or pattern.search(cmd_str):
+            if pattern.search(cmd_str):
                 raise ValueError(f"command blocked by denylist (matched {pattern.pattern})")
-
-        if not is_windows():
-            for guard in PORTABILITY_PATTERNS:
-                if guard.re.search(cmd_str):
-                    raise ValueError(f"command blocked for portability: {guard.message}")
 
         timeout_arg = args.get("timeout_seconds")
         timeout_seconds = DEFAULT_TIMEOUT_SECONDS
@@ -312,14 +260,21 @@ class ShellTool(Tool):
 
         cmd, argv = shell_invocation(self.shell_path, cmd_str)
         if worker is not None:
-            from src.permission.worker.broker import broker_directory
-            async with broker_directory(signal) as broker:
+            from src.permission.worker.broker import BrokerCollector, broker_directory
+            collector = BrokerCollector()
+            async with broker_directory(signal, collector=collector) as broker:
                 cmd, argv = await worker.prepare(cmd, argv, broker=broker, signal=signal)
                 from src.permission.runtime.execution import policy_for
                 policy = policy_for(prompter)
                 if policy is not None:
                     policy.revalidate_active(self, args, signal)
-                return await run_with_capture(cmd, argv, timeout_seconds, signal)
+                output = await run_with_capture(cmd, argv, timeout_seconds, signal)
+            # Handler cancellation, response capture and reservation release are
+            # finished before publishing the final shell diagnostics. The shell
+            # observation/hash continues to describe only its original output.
+            if output.runtime_metadata is not None:
+                output.runtime_metadata = replace(output.runtime_metadata, http=collector.snapshot())
+            return output
         return await run_with_capture(cmd, argv, timeout_seconds, signal)
 
 class BashTool(ShellTool):
@@ -340,63 +295,9 @@ class BashTool(ShellTool):
         )
 
 def rewrite_portable_command(command: str) -> str:
-    if is_windows():
-        return command
+    """Compatibility helper: execute the reviewed command without translation."""
+    return command
 
-    def replace(m: re.Match[str]) -> str:
-        sep, lead, raw_flags, raw_pattern, rest = m.groups()
-
-        flags = [f for f in raw_flags.strip().split() if f]
-        short_flags = "".join(
-            f[1:] for f in flags if re.fullmatch(r"-[A-Za-z]+", f)
-        )
-        has_perl_regexp = "--perl-regexp" in flags or "P" in short_flags
-        if not has_perl_regexp:
-            return m.group(0)
-
-        unsupported_flags = re.sub(r"[Piovh]", "", short_flags)
-        has_unsupported_long = any(
-            f.startswith("--") and f != "--perl-regexp" for f in flags
-        )
-        if unsupported_flags or has_unsupported_long:
-            return m.group(0)
-
-        pattern = unquote_shell_token(raw_pattern)
-        if pattern is None:
-            return m.group(0)
-
-        file_args = rest.strip()
-        if re.search(r"(?:^|\s)-", file_args):
-            return m.group(0)
-
-        regex_flags = "i" if "i" in short_flags else ""
-        negate = "v" in short_flags
-        extract_only = "o" in short_flags
-
-        prelude = "BEGIN { $p = $ENV{PF_GREP_PAT} } "
-        if extract_only:
-            code = f'{prelude}while (/$p/{regex_flags}g) {{ print "$&\\n" }}'
-        elif negate:
-            code = f"{prelude}print unless /$p/{regex_flags}"
-        else:
-            code = f"{prelude}print if /$p/{regex_flags}"
-
-        perl = f"PF_GREP_PAT={shell_quote(pattern)} perl -ne {shell_quote(code)}"
-        return f"{sep}{lead}{perl}{' ' + file_args if file_args else ''}"
-
-    return GREP_P_RE.sub(replace, command)
-
-def unquote_shell_token(token: str) -> str | None:
-    if not token:
-        return None
-    if token.startswith("'") and token.endswith("'"):
-        return token[1:-1]
-    if token.startswith('"') and token.endswith('"'):
-        return re.sub(r'\\(["\\$`])', r"\1", token[1:-1])
-    return re.sub(r"\\(.)", r"\1", token)
-
-def shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\\''") + "'"
 
 async def run_with_capture(
     cmd: str,
@@ -407,14 +308,40 @@ async def run_with_capture(
     from src.permission.runtime.execution import current_policy
     policy = current_policy()
     source_owner = policy.observations.owner_provider() if policy else None
-    def recorded(output):
+    def recorded(output: ToolOutput) -> ToolOutput:
+        from src.permission.runtime.observations import ObservationPersistenceError
         output.truncated = stdout_buf.total > MAX_OUTPUT_BYTES or stderr_buf.total > MAX_OUTPUT_BYTES
+        state = ("cancelled" if output.status == "cancelled" else
+                 "timeout" if output.error_kind == "timeout" else "exit")
+        code = proc.returncode
+        metadata = RuntimeMetadata(
+            process=state,
+            exit_code=(code if code >= 0 else 128 - code) if state == "exit" and code is not None else None,
+            termination_signal=-code if state == "exit" and code is not None and code < 0 else None,
+            stdout=StreamCapture(stdout_buf.total, min(stdout_buf.total, MAX_OUTPUT_BYTES), stdout_buf.eof),
+            stderr=StreamCapture(stderr_buf.total, min(stderr_buf.total, MAX_OUTPUT_BYTES), stderr_buf.eof),
+            capture_envelope_bytes=len(output.encode("utf-8")),
+            delivery="complete", retention="unavailable",
+        )
+        text = str(output)
         if policy is not None:
-            key = policy.observations.capture_output("shell", output, owner=source_owner,
-                completed=output.status == "success", truncated=output.truncated)
-            return ToolOutput(str(output) + f"\n[runtime observation: {key}]", status=output.status,
-                              error_kind=output.error_kind, truncated=output.truncated)
-        return output
+            try:
+                key = policy.observations.capture_output("shell", output, owner=source_owner,
+                    completed=output.status == "success", truncated=output.truncated)
+            except ObservationPersistenceError as exc:
+                metadata = replace(metadata, persistence=exc.persistence)
+            else:
+                item = policy.observations._items[key]
+                input_bytes = (item.source_details or {})["retention_input_bytes"]
+                metadata = replace(metadata,
+                    retention="complete" if len(item.body) == input_bytes else "partial",
+                    retention_input_bytes=input_bytes, retained_bytes=len(item.body), observation_id=key,
+                    persistence="persisted" if policy.observations.storage is not None else "memory-only",
+                    response_hash_basis="bounded-rendered-envelope-utf8")
+                text += f"\n[runtime observation: {key}]"
+        return ToolOutput(text, status=output.status, error_kind=output.error_kind,
+                          truncated=output.truncated,
+                          runtime_metadata=replace(metadata, delivered_bytes=len(text.encode("utf-8"))))
     if _is_aborted(abort_signal):
         raise RuntimeError("aborted")
 
@@ -428,13 +355,20 @@ async def run_with_capture(
     else:
         kwargs["start_new_session"] = True
 
-    proc = await asyncio.create_subprocess_exec(
-        cmd,
-        *argv,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        **kwargs,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            cmd,
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            **kwargs,
+        )
+
+    except OSError as exc:
+        # Preserve the original exception type (including FileNotFoundError).
+        # This fact comes from the spawn boundary, never an error-text parser.
+        setattr(exc, "runtime_metadata", RuntimeMetadata(process="not_started", delivery="unavailable"))
+        raise
 
     stdout_buf = HeadTailBuffer(MAX_OUTPUT_BYTES)
     stderr_buf = HeadTailBuffer(MAX_OUTPUT_BYTES)
@@ -443,6 +377,7 @@ async def run_with_capture(
         while True:
             chunk = await stream.read(65536)
             if not chunk:
+                buf.eof = True
                 break
             buf.push(chunk)
 
@@ -581,6 +516,7 @@ class HeadTailBuffer:
         self.tail: list[bytes] = []
         self.tail_len = 0
         self.total = 0
+        self.eof = False
 
     def push(self, chunk: bytes) -> None:
         self.total += len(chunk)

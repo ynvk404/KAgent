@@ -16,6 +16,7 @@ from src.workflow.state import Candidate, ValidationResult, WorkflowObjective
 from tests.helpers.workflow import adopt_fixture_assessment, record_completed_phase
 from tests.tools.test_finding import _tool, _valid_args
 from tests.ui.test_app import make_app, timer_app
+from src.tools.common.runtime_metadata import RuntimeMetadata, StreamCapture
 
 
 def dispatch(app, event):
@@ -89,7 +90,9 @@ def test_late_or_missing_results_and_unknown_reasons_remain_safe():
     dispatch(app, ToolResultEvent(id="late", name="unknown", status="error", error_kind="network"))
     assert app.state.phase == "idle" and app.state.transcript[-1].kind == "error"
     dispatch(app, ToolCallEvent(name="shell", args={"command":"rg missing ."}))
-    dispatch(app, ToolResultEvent(name="shell", result="exit: 1\nstdout:\n"))
+    dispatch(app, ToolResultEvent(name="shell", result="exit: 1\nstdout:\n",
+        runtime_metadata=RuntimeMetadata(process="exit", exit_code=1,
+            stdout=StreamCapture(0, 0, True), stderr=StreamCapture(0, 0, True))))
     assert "exit 1" in app.state.transcript[-1].text
 
 
@@ -224,7 +227,8 @@ def test_scoped_phase_completion_deduplicates_and_boundary_resets(tmp_path):
         dispatch(app, ToolCallEvent(id=str(i), name="workflow", args={"action":"complete_skill"}))
         dispatch(app, ToolResultEvent(id=str(i), name="workflow", result=json.dumps({"ok": True, "phase":"recon"})))
     assert not any(entry.text.startswith('Workflow ·') for entry in app.state.transcript)
-    assert app.state.latest_facts and 'recon completed' in app.state.latest_facts.overview
+    assert app.state.latest_facts and 'Recon repair' in app.state.latest_facts.overview
+    assert 'recon' in workflow.completed_phases()
     snapshot = workflow.to_dict()
     app.agent.target.set_base_url("http://other.lab:3000")
     dispatch(app, DoneEvent(stop_reason="workflow_blocked"))

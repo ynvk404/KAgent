@@ -275,11 +275,27 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
     completion_supported = False
     if objective and objective.mode == "whole_target" and objective.target_origin == origin:
         from src.workflow.state import REQUIRED_WHOLE_TARGET_PHASES
+        from src.agent.decision_planner import PlannerContext
         completed = workflow.completed_phases(objective)
-        parts = [marker.phase.replace("_", " ") + " completed"
-                 + (" (artifact repair required)" if marker.phase in artifact_errors else "")
-                 for marker in workflow.phase_completions.values()
-                 if marker.objective_id == objective.id and marker.target_origin == origin and marker.phase in completed]
+        readiness = tool.next_phase_completion_readiness() if isinstance(tool, WorkflowTool) else None
+        phase = PlannerContext(objective_mode=objective.mode, completed_phases=completed,
+            phase_completion_readiness=readiness,
+            pending_input_count=sum(item.disposition == "pending" for item in workflow.objective_inputs()),
+            blocked_input_count=sum(item.disposition == "blocked" for item in workflow.objective_inputs())).structured_phase
+        work = {"recon": "Recon", "enumeration": "Enumeration", "input_analysis": "Input Analysis",
+                "validation": "Validation"}.get(phase or "", "Assessment")
+        if readiness and readiness.get("historically_completed"):
+            work += " repair"
+        if isinstance(tool, WorkflowTool):
+            owned = next((handoff for candidate in candidates
+                          if (handoff := tool.validation_handoff(candidate.id, policy)) and handoff["owned_active"]), None)
+            if owned:
+                work = "Validation"
+                if owned["probing_stopped"]:
+                    work += " finalization"
+                elif owned["recovery"]["rejections"] or owned["recovery"]["repair_turns"]:
+                    work += " recovery"
+        parts = (["Blocked", work] if blockers else [work])
         inventory = [row for row in records if row.kind == "input"]
         if inventory:
             reviewed = sum(row.disposition in {"analyzed", "dropped"} for row in inventory)

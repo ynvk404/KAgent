@@ -49,7 +49,7 @@ def test_dry_run_cli_pins_bytes_without_copying_prompt_into_plan(layout, reviewe
                          "--prompt-file", str(source)]) == 0
     output = capsys.readouterr().out
     value = json.loads(output)
-    assert value["version"] == 3
+    assert value["version"] == 4
     assert value["reviewed_request"]["sha256"] == profile.digest(ENGLISH)
     assert ENGLISH.decode().strip() not in output
     assert not layout[3].exists()
@@ -179,16 +179,18 @@ def test_future_reviewed_requests_preserve_raw_bytes_without_hardcoded_hash(layo
 
 
 def test_legacy_v2_profiles_keep_generated_request(layout):
-    value = profile.plan(layout[0], layout[1], layout[2], layout[3], "http://127.0.0.1:8081")
+    value = profile.plan(layout[0], layout[1], layout[2], layout[3], "http://127.0.0.1:8081", legacy_bounded=True)
     assert value["version"] == 2 and "reviewed_request" not in value
     receipt = profile.apply(value)
     assert (receipt.parent / "whole-target-request.txt").read_bytes() == profile.whole_target_request(value).encode()
     assert profile.verify(receipt) == value
 
 
-def test_reviewed_launch_uses_verified_copy_and_unchanged_flags(layout, reviewed, monkeypatch):
+def test_legacy_reviewed_launch_uses_verified_copy_and_unchanged_flags(layout, reviewed, monkeypatch):
     from src.cli import runtime
-    source, value = reviewed
+    source, _ = reviewed
+    value = profile.plan(layout[0], layout[1], layout[2], layout[3], "http://127.0.0.1:8081",
+                         prompt_file=source, legacy_bounded=True)
     receipt = profile.apply(value)
     called = []
     def inspect():

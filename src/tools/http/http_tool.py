@@ -8,6 +8,7 @@ import ipaddress
 import hashlib
 import json
 import re
+import sys
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, parse_qsl
 import httpx
@@ -500,10 +501,11 @@ class HTTPTool(Tool):
         check_cancelled(signal)
         receipt = self.permissions.dispatch_receipt(receipt, action, signal, self.target.revision)
         evidence_store = policy.observations if policy else getattr(self, "evidence_store", None)
-        def check_response_current() -> None:
+        def check_response_current(*, partial: bool = False) -> None:
             # Admission authorizes this dispatch, not publication after an
             # awaited send/body read has crossed a scope or ownership change.
-            check_cancelled(signal)
+            if not partial:
+                check_cancelled(signal)
             self.permissions.sync_target()
             if evidence_store is None:
                 # Legacy standalone callers can receive redacted historical
@@ -517,7 +519,9 @@ class HTTPTool(Tool):
                     or self.workflow is not None and not workflow_current(self)):
                 raise PermissionPolicyBlocked('blocked: HTTP response owner/scope/permission changed')
             if policy is not None:
-                policy.revalidate_active(self, generic_args, signal)
+                policy.revalidate_active(self, generic_args, None if partial else signal)
+            if partial and source_owner != evidence_store.owner_provider():
+                raise PermissionPolicyBlocked('blocked: partial HTTP observation attempt owner changed')
 
         transport_options: dict[str, Any] = {'trust_env': False} if policy is not None or action.capture_source is not None else {}
         async with httpx.AsyncClient(verify=False, follow_redirects=False, timeout=REQUEST_TIMEOUT, **transport_options) as client:
@@ -526,6 +530,7 @@ class HTTPTool(Tool):
             dispatch_fact = None
             captured_observation = None
             dispatch_cancelled = False
+            dispatch_completed = False
             dispatch_state = policy.generic_validation.state if policy and policy.generic_validation else None
             try:
                 if policy is not None and not policy.nested_allowed():
@@ -563,21 +568,6 @@ class HTTPTool(Tool):
                         request, response, identity, action.url,
                         generation=(action.target_revision, action.scope_revision, action.epoch),
                     )
-                chunks: list[bytes] = []
-                total = 0
-                truncated = False
-                async for chunk in response.aiter_bytes():
-                    check_cancelled(signal)
-                    remaining = action.response_cap + 1 - total
-                    if len(chunk) >= remaining:
-                        chunks.append(chunk[:remaining])
-                        total += remaining
-                        truncated = total > action.response_cap
-                        break
-                    chunks.append(chunk)
-                    total += len(chunk)
-                check_response_current()
-                content = b''.join(chunks)[:action.response_cap]
                 from src.permission.runtime.execution import _active, invocation_digest
                 execution = _active.get()
                 trusted_http = bool(type(self) is HTTPTool and policy is not None
@@ -590,24 +580,8 @@ class HTTPTool(Tool):
                     and action.scope_revision == self.engagement.revision)
                 redact = (http_credential_redactor(request.headers.multi_items(), response.headers.multi_items())
                         if action.capture_source else redact_evidence)
-                version = getattr(response, 'http_version', None)
-                output = f'{version or "HTTP"} {response.status_code} {redact(response.reason_phrase)}\n'
-                for k, v in response.headers.items():
-                    # Header names supply the credential context; the body does
-                    # not pass through this header/request export guard.
-                    output += redact(f'{k}: {v}') + '\n'
-                output += (f'final URL: {redact(action.url)}\n'
-                        f'decoded body bytes retained before redaction: {len(content)}\n'
-                        f'wire Content-Length: {response.headers.get("content-length", "unknown")}\n'
-                        f'Content-Encoding: {response.headers.get("content-encoding", "identity")}\n')
-                header_length = len(output)
-                output += '\n'
-                body_start = len(output)
-                output += content.decode(errors='replace') if trusted_http else redact(content.decode(errors='replace'))
-                body_end = len(output)
-                if truncated:
-                    output += f'\n[response body truncated at {action.response_cap} decoded bytes]'
-                if evidence_store is not None:
+                def capture_response(content, *, complete, execution_status, truncated):
+                    assert response is not None and evidence_store is not None
                     # The effective, authorized request includes replay/context
                     # changes. Model arguments alone are not a capture of it.
                     request_text = redact(
@@ -635,12 +609,65 @@ class HTTPTool(Tool):
                         assert policy is not None
                         request_details['body_representation'] = 'bounded-native-decoded-bytes'
                         request_details['analysis_session'] = policy.session_id or self.permissions.session_id
-                    observation = evidence_store.capture(action, response.status_code, content, complete=not truncated,
+                    observation = evidence_store.capture(action, response.status_code, content, complete=complete, execution_status=execution_status, truncated=truncated,
                         validation_binding=(generic_probe[0], generic_probe[2]) if generic_probe else None,
                         owner=source_owner or {}, response_headers=response.headers.items(),
                         elapsed_ms=(time.monotonic() - sent_at) * 1000,
                         source_details=request_details, redact_text=redact if action.capture_source else None,
                         retain_body=trusted_http)
+                    return observation, request_details
+
+                chunks: list[bytes] = []
+                total = 0
+                truncated = False
+                try:
+                    async for chunk in response.aiter_bytes():
+                        remaining = action.response_cap + 1 - total
+                        if len(chunk) >= remaining:
+                            chunks.append(chunk[:remaining])
+                            total += remaining
+                            truncated = total > action.response_cap
+                            check_cancelled(signal)
+                            break
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        check_cancelled(signal)
+                    check_response_current()
+                except (Exception, asyncio.CancelledError) as original:
+                    # Synchronous publication: no task can outlive rollback or
+                    # cancellation. Revoked/stale invocations publish nothing.
+                    if total and evidence_store is not None:
+                        try:
+                            check_response_current(partial=True)
+                            captured_observation, _ = capture_response(
+                                b''.join(chunks)[:action.response_cap], complete=False,
+                                execution_status="cancelled" if isinstance(original, asyncio.CancelledError) else "failed",
+                                truncated=truncated)
+                        except (Exception, asyncio.CancelledError) as publication_error:
+                            original.add_note("Partial HTTP observation unavailable: " + type(publication_error).__name__)
+                    raise
+                content = b''.join(chunks)[:action.response_cap]
+                version = getattr(response, 'http_version', None)
+                output = f'{version or "HTTP"} {response.status_code} {redact(response.reason_phrase)}\n'
+                for k, v in response.headers.items():
+                    # Header names supply the credential context; the body does
+                    # not pass through this header/request export guard.
+                    output += redact(f'{k}: {v}') + '\n'
+                output += (f'final URL: {redact(action.url)}\n'
+                        f'decoded body bytes retained before redaction: {len(content)}\n'
+                        f'wire Content-Length: {response.headers.get("content-length", "unknown")}\n'
+                        f'Content-Encoding: {response.headers.get("content-encoding", "identity")}\n')
+                header_length = len(output)
+                output += '\n'
+                body_start = len(output)
+                output += content.decode(errors='replace') if trusted_http else redact(content.decode(errors='replace'))
+                body_end = len(output)
+                if truncated:
+                    output += f'\n[response body truncated at {action.response_cap} decoded bytes]'
+                if evidence_store is not None:
+                    observation, request_details = capture_response(content, complete=not truncated,
+                        execution_status="completed", truncated=truncated)
+                    request_preview = bytes.fromhex(request_details['request_preview_hex']).decode()
                     captured_observation = observation
                     self._attest_phase_coverage(action, response, content, observation)
                     captured = evidence_store._items[observation]
@@ -683,6 +710,7 @@ class HTTPTool(Tool):
                     assert captured.retained_hash is not None
                     result.http_sources = ((observation, captured.retained_hash),)
                     result.http_body_ranges = ((body_start, body_end),)
+                dispatch_completed = True
                 return (result,
                         response.headers.get('location') if response.status_code in {301, 302, 303, 307, 308} else None,
                         'set-cookie' in response.headers)
@@ -690,17 +718,22 @@ class HTTPTool(Tool):
                 dispatch_cancelled = True
                 raise
             finally:
+                original_error = sys.exception()
                 if dispatch_state is not None and dispatch_fact is not None:
                     from src.workflow.assessment import finish_dispatch
                     task = asyncio.current_task()
                     finish_dispatch(dispatch_state, dispatch_fact,
-                        status="completed" if captured_observation else "cancelled" if (
+                        status="completed" if dispatch_completed else "cancelled" if (
                             dispatch_cancelled or getattr(signal, "aborted", False)
                             or task is not None and task.cancelling()) else "failed",
                         observation_id=captured_observation)
                 try:
                     if response is not None:
                         await response.aclose()
+                except (Exception, asyncio.CancelledError) as close_error:
+                    if original_error is None:
+                        raise
+                    original_error.add_note("HTTP response cleanup failed: " + type(close_error).__name__)
                 finally:
                     reservation.release()
 

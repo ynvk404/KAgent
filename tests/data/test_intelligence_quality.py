@@ -86,7 +86,7 @@ def test_historical_instructions_are_not_automatic_context(store):
 def test_finding_heading_never_verifies_learning():
     rows = extract_scenarios("## Confirmed findings\n- SQLi returned a differential database error.")
     assert rows and all(r.confidence <= .4 and r.provenance == "derived" for r in rows)
-    assert all(r.applicability == "unknown" for r in rows)
+    assert all(r.applicability == "session" for r in rows)
 
 
 @pytest.mark.parametrize("url,eligible", [

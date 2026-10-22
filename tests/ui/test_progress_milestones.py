@@ -359,7 +359,9 @@ def test_whole_target_overview_uses_only_recorded_state_and_completion_needs_run
         dispatch(app, ToolCallEvent(id=phase,name='workflow',args={'action':'complete_skill'}))
         dispatch(app, ToolResultEvent(id=phase,name='workflow',result='{"ok":true}'))
         assert not any(entry.text.startswith('Workflow ·') for entry in app.state.transcript)
-        assert app.state.latest_facts and phase.replace('_', ' ') + ' completed' in app.state.latest_facts.overview
+        expected = {'recon': 'Enumeration', 'enumeration': 'Input Analysis', 'input_analysis': 'Validation'}[phase]
+        assert app.state.latest_facts and app.state.latest_facts.overview == 'Workflow · ' + expected
+        assert phase in workflow.completed_phases()  # Detail remains in Workflow.
         assert not any(entry.text.startswith('Workflow completed') for entry in app.state.transcript)
     snapshot = copy.deepcopy(workflow.to_dict())
     dispatch(app, DoneEvent(stop_reason='workflow_completed'))
@@ -534,3 +536,112 @@ async def test_cancelled_retest_keeps_new_attempt_pending_without_recounting_old
     dispatch(app,DoneEvent(stop_reason='cancelled'))
     assert '1 incomplete validation' in app.state.transcript[-1].text
     assert not any(entry.text.startswith('Validation confirmed') for entry in app.state.transcript)
+
+
+def complete_phase_fixtures(workflow, tool, tmp_path):
+    from src.skills.registry import Registry as Skills
+    from src.skills.artifacts import completion_artifact_path
+    tool.skills = Skills()
+    tool.skills.load_dir('skills')
+    for phase, name in [('recon', 'recon'), ('enumeration', 'web-enumeration'), ('input_analysis', 'web-input-analysis')]:
+        skill = tool.skills.get(name)
+        assert skill and skill.completion_artifact
+        ref = completion_artifact_path(skill.completion_artifact, ORIGIN)
+        path = tmp_path / ref
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('Explicit bounded offline phase fixture.')
+        record_completed_phase(workflow, cast(WorkflowPhase, phase), objective_id='fixture-objective',
+            target_origin=ORIGIN, artifact_ref=ref, no_inputs_discovered=phase == 'input_analysis' and not workflow.objective_inputs())
+
+
+def test_planner_same_validator_resolves_scoped_candidate_context_and_keeps_deduplication(tmp_path):
+    app, workflow, _ = runtime(tmp_path)
+    candidates = [workflow.add_candidate(Candidate(candidate_class='sqli', target=ORIGIN,
+        endpoint=endpoint, method=method, parameter=parameter, objective_id='fixture-objective'))[0]
+        for method, endpoint, parameter in [('GET', '/search?q=private-query', 'q'),
+                                             ('POST', '/login', 'email')]]
+    from src.ui.core.outcomes import endpoint_label
+    assert endpoint_label('POST', 'https://user:private-credential@fixture.test/login', 'email') == 'POST /login · input email'
+    before = copy.deepcopy(workflow.to_dict())
+    for candidate in candidates:
+        event = DecisionEvent(recommended_skill='sql-injection', candidate_id=candidate.id, decision_id=candidate.id)
+        dispatch(app, event)
+        dispatch(app, event)
+        dispatch(app, replace(event, decision_id=candidate.id + '-new-request'))
+    lines = [entry.text for entry in app.state.transcript if entry.text.startswith('Planner recommended')]
+    assert len(lines) == 2
+    assert 'GET /search' in lines[0] and 'input q' in lines[0]
+    assert 'POST /login' in lines[1] and 'input email' in lines[1]
+    for line, candidate in zip(lines, candidates):
+        assert candidate.id[-8:] in line
+    assert 'private-query' not in repr(lines) and 'private-credential' not in repr(lines)
+    assert workflow.to_dict() == before
+
+
+def test_compact_progress_keeps_counts_negative_acceptance_and_pending_goals(tmp_path):
+    from src.ui.core.outcomes import runtime_facts
+    from src.ui.widgets.banner import Banner
+    from src.workflow.state import AttackSurfaceInput, RequestedGoal
+    app, workflow, tool = runtime(tmp_path, whole=True)
+    for endpoint in ['/one', '/two']:
+        item, _ = workflow.add_attack_surface_input(AttackSurfaceInput('fixture-objective', ORIGIN,
+            method='GET', endpoint=endpoint, parameter='q', location='query'))
+        workflow.set_input_disposition(item.id, 'analyzed')
+        candidate, _ = workflow.add_candidate(Candidate(candidate_class='sqli', target=ORIGIN,
+            method='GET', endpoint=endpoint, parameter='q', objective_id='fixture-objective'), input_id=item.id)
+        workflow.add_validation_result(accepted_fixture(tmp_path, workflow, candidate, outcome='not-confirmed'))
+    complete_phase_fixtures(workflow, tool, tmp_path)
+    assert workflow.objective is not None
+    workflow.objective.requested_goals.append(RequestedGoal('ssrf'))
+    before = copy.deepcopy(workflow.to_dict())
+    facts = runtime_facts(app.agent, None, ())
+    assert facts.overview == 'Workflow · Validation · 2/2 inputs reviewed · 2 validations accepted · 1 goal pending'
+    assert facts.validations == 2 and facts.goals == 1 and not facts.completion_supported
+    assert 'confirmed' not in facts.overview and 'completed' not in facts.overview
+    lines = Banner(BannerData('fixture', 'fixture', '.'))._detail_lines(assessment_progress=facts.overview)
+    assert any(line.plain.startswith('Progress: Validation') for line in lines)
+    assert all('Assessment Progress' not in line.plain for line in lines)
+    assert workflow.to_dict() == before
+
+
+@pytest.mark.parametrize('work', ['late-pending', 'blocked', 'artifact-repair', 'owned-recovery'])
+def test_progress_uses_actual_work_with_historical_completions_without_mutation(tmp_path, work):
+    from src.ui.core.outcomes import runtime_facts
+    from src.workflow.state import AttackSurfaceInput, RequestedGoal
+    app, workflow, tool = runtime(tmp_path, whole=True)
+    candidate, _ = workflow.add_candidate(Candidate(candidate_class='xss', target=ORIGIN,
+        method='GET', endpoint='/search', parameter='q', location='query', objective_id='fixture-objective'))
+    item, _ = workflow.add_attack_surface_input(AttackSurfaceInput('fixture-objective', ORIGIN,
+        method='GET', endpoint='/search', parameter='q', location='query'))
+    workflow.link_input_candidate(item.id, candidate.id)
+    workflow.set_input_disposition(item.id, 'analyzed')
+    complete_phase_fixtures(workflow, tool, tmp_path)
+    if work == 'late-pending':
+        workflow.add_attack_surface_input(AttackSurfaceInput('fixture-objective', ORIGIN,
+            method='GET', endpoint='/late', parameter='q', location='query'))
+        expected = 'Input Analysis'
+    elif work == 'blocked':
+        assert workflow.objective is not None
+        workflow.objective.requested_goals.append(RequestedGoal('ssrf', status='blocked'))
+        expected = 'Blocked · Validation'
+    elif work == 'artifact-repair':
+        (tmp_path / workflow.phase_completions['fixture-objective:recon'].artifact_ref).unlink()
+        expected = 'Recon repair'
+    else:
+        from src.workflow.assessment import start_attempt
+        from src.workflow.evidence.recovery import current_budget
+        assert tool.target is not None
+        attempt = start_attempt(workflow, candidate, tool.session_id, tool.evidence_epoch,
+            target_origin=ORIGIN, target_revision=tool.target.revision)
+        tool.active_attempt = attempt['id']
+        workflow.set_candidate_status(candidate.id, 'validating')
+        budget = current_budget(workflow, candidate.id, create=True)
+        assert budget is not None
+        budget.update(rejections=1, repair_turns=2)
+        (tmp_path / workflow.phase_completions['fixture-objective:recon'].artifact_ref).unlink()
+        expected = 'Validation recovery'
+    before = copy.deepcopy(workflow.to_dict())
+    facts = runtime_facts(app.agent, None, ())
+    assert expected in facts.overview and not facts.completion_supported
+    assert ' completed' not in facts.overview
+    assert workflow.to_dict() == before

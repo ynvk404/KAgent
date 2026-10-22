@@ -6,7 +6,7 @@ The vetted address set is retained until an explicit controller refresh.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from contextlib import asynccontextmanager
 import ipaddress
 import socket
@@ -16,6 +16,20 @@ import httpx
 
 from src.permission.runtime.execution import ExecutionPolicy, ExecutionBlocked, policy_for, current_policy
 from src.permission.network.grants import EffectiveHTTP, check_cancelled
+from src.permission.runtime.observations import ObservationPersistenceError
+from src.tools.common.runtime_metadata import PersistenceState
+
+
+@dataclass(slots=True)
+class ResponseDiagnostics:
+    """Native per-request state, optionally supplied by the controller broker."""
+    eof: bool = False
+    truncated: bool = False
+    transport_failed: bool = False
+    cancelled: bool = False
+    persistence: PersistenceState = "unknown"
+    capture_attempted: bool = False
+    observation_partial: bool = False
 
 
 async def pin_request(policy: ExecutionPolicy, request: httpx.Request, *, research: bool = False) -> tuple[httpx.Request, str]:
@@ -44,7 +58,8 @@ async def pin_request(policy: ExecutionPolicy, request: httpx.Request, *, resear
 
 
 async def governed_send(client: httpx.AsyncClient, request: httpx.Request, prompter: Any,
-                        signal: Any, *, response_cap: int, research: bool = False) -> httpx.Response:
+                        signal: Any, *, response_cap: int, research: bool = False,
+                        diagnostics: ResponseDiagnostics | None = None) -> httpx.Response:
     policy = policy_for(prompter) or current_policy()
     if policy is None:
         return await client.send(request, stream=True)
@@ -69,7 +84,10 @@ async def governed_send(client: httpx.AsyncClient, request: httpx.Request, promp
         source_owner = policy.observations.owner_provider() or {}
         sent_at = time.monotonic()
         response = await client.send(pinned, stream=True)
-    except BaseException:
+    except BaseException as exc:
+        if diagnostics is not None:
+            diagnostics.cancelled = isinstance(exc, asyncio.CancelledError)
+            diagnostics.transport_failed = isinstance(exc, httpx.TransportError)
         reservation.release()
         raise
     close = response.aclose
@@ -87,6 +105,8 @@ async def governed_send(client: httpx.AsyncClient, request: httpx.Request, promp
         if released:
             return
         released = True
+        if diagnostics is not None:
+            diagnostics.capture_attempted = True
         try:
             response.extensions["runtime_observation_id"] = policy.observations.capture(
                 action, response.status_code, b"".join(chunks), complete=complete,
@@ -94,12 +114,27 @@ async def governed_send(client: httpx.AsyncClient, request: httpx.Request, promp
                 elapsed_ms=(time.monotonic() - sent_at) * 1000,
                 execution_status=execution_status, truncated=observed > cap,
             )
+            if diagnostics is not None:
+                item = policy.observations._items[response.extensions["runtime_observation_id"]]
+                if policy.observations.storage is not None:
+                    diagnostics.persistence = "persisted"
+                else:
+                    diagnostics.persistence = "memory-only"
+                diagnostics.observation_partial = not item.complete
+        except ObservationPersistenceError as exc:
+            if diagnostics is not None:
+                if exc.persistence == "failed":
+                    diagnostics.persistence = "failed"
+                else:
+                    diagnostics.persistence = "unknown"
+            raise
         finally:
             reservation.release()
 
     async def capture_bytes(chunk_size=None):
         nonlocal observed, complete, advancing, execution_status
         iterator = original_iterator(chunk_size)
+        failure: BaseException | None = None
         try:
             while True:
                 advancing = True
@@ -107,18 +142,28 @@ async def governed_send(client: httpx.AsyncClient, request: httpx.Request, promp
                     chunk = await anext(iterator)
                 except StopAsyncIteration:
                     complete = observed <= cap
+                    if diagnostics is not None:
+                        diagnostics.eof = True
                     break
                 finally:
                     advancing = False
                 room = max(0, cap - observed)
                 chunks.append(chunk[:room])
                 observed += len(chunk)
+                if diagnostics is not None:
+                    diagnostics.truncated = observed > cap
                 yield chunk
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
+            failure = exc
             execution_status = "cancelled"
+            if diagnostics is not None:
+                diagnostics.cancelled = True
             raise
-        except Exception:
+        except Exception as exc:
+            failure = exc
             execution_status = "failed"
+            if diagnostics is not None and not isinstance(exc, ObservationPersistenceError):
+                diagnostics.transport_failed = True
             raise
         finally:
             # HTTPX auto-closes aiter_raw before decoder/chunker flush and
@@ -126,16 +171,33 @@ async def governed_send(client: httpx.AsyncClient, request: httpx.Request, promp
             # that final advance; an external early close still captures
             # immediately with complete=False.
             if response.is_closed:
-                capture_and_release()
+                try:
+                    capture_and_release()
+                except ObservationPersistenceError as exc:
+                    if failure is not None:
+                        raise failure from exc
+                    raise
 
     response.aiter_bytes = capture_bytes
 
     async def release_response():
+        failure: BaseException | None = None
         try:
             await close()
+        except BaseException as exc:
+            failure = exc
+            if diagnostics is not None:
+                diagnostics.cancelled |= isinstance(exc, asyncio.CancelledError)
+                diagnostics.transport_failed |= isinstance(exc, httpx.HTTPError)
+            raise
         finally:
             if not advancing:
-                capture_and_release()
+                try:
+                    capture_and_release()
+                except ObservationPersistenceError as exc:
+                    if failure is not None:
+                        raise failure from exc
+                    raise
 
     response.aclose = release_response
     return response

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.helpers.workflow import bind_capture_baseline
 from tests.helpers.workflow import run_workflow_fixture
 
 import json
@@ -151,13 +152,14 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
     assert analysis_plan is not None
     assert analysis_plan.recommended_skill == "web-input-analysis"
 
+    baseline_ref = bind_capture_baseline(workflow_tool, "/api/v1/search")
     candidate_result = json.loads(await run_workflow_fixture(workflow_tool, {
         "action": "record_candidate", "candidate_class": "sql-injection",
         "source_skill": "web-input-analysis", "method": "POST",
         "endpoint": "/api/v1/search", "parameter": "filter", "location": "body",
         "input_id": input_result["input"]["id"],
         "request_template": '{"filter":"{INJECTION_POINT}","limit":10}',
-        "baseline_request_ref": "captures/search-baseline.json",
+        "baseline_request_ref": baseline_ref,
         "auth_context_ref": "captures/auth-context.md",
     }, None, AlwaysAllow()))
     candidate_id = candidate_result["candidate"]["id"]
@@ -169,7 +171,7 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
         '{"filter":"{INJECTION_POINT}","limit":10}'
     )
     assert state.candidates[candidate_id].baseline_request_ref == (
-        "captures/search-baseline.json"
+        baseline_ref
     )
     assert state.candidates[candidate_id].auth_context_ref == "captures/auth-context.md"
     await run_workflow_fixture(workflow_tool, {
@@ -243,6 +245,7 @@ async def test_request_shape_context_survives_input_to_candidate_handoff(
         id="assessment-handoff", mode="whole_target", target_origin="https://target.test",
     ))
     tool = WorkflowTool(state, target)
+    baseline_ref = bind_capture_baseline(tool, endpoint, method, content_type)
     input_result = json.loads(await tool.run({
         "action": "record_input", "endpoint": endpoint, "method": method,
         "parameter": parameter, "location": location, "input_type": "string",
@@ -252,7 +255,7 @@ async def test_request_shape_context_survives_input_to_candidate_handoff(
         "action": "record_candidate", "candidate_class": "authentication",
         "input_id": input_result["input"]["id"],
         "request_template": template,
-        "baseline_request_ref": "captures/request-baseline.json",
+        "baseline_request_ref": baseline_ref,
         "auth_context_ref": "captures/auth-context.md",
     }, None, AlwaysAllow()))
 
@@ -264,7 +267,7 @@ async def test_request_shape_context_survives_input_to_candidate_handoff(
     assert candidate.location == location
     assert candidate.content_type == content_type
     assert candidate.request_template == template
-    assert candidate.baseline_request_ref == "captures/request-baseline.json"
+    assert candidate.baseline_request_ref == baseline_ref
     assert candidate.auth_context_ref == "captures/auth-context.md"
     assert restored.attack_surface_inputs[input_result["input"]["id"]].sample_payload == sample
 
@@ -279,26 +282,13 @@ async def test_whole_target_revalidates_when_immutable_proof_disappears(tmp_path
     state = WorkflowState(objective=objective)
     candidate, _ = state.add_candidate(Candidate(
         candidate_class="cross-site-scripting", target="https://target.test",
-        endpoint="/feedback", parameter="comment", objective_id=objective.id,
+        endpoint="/feedback", method="POST", parameter="comment", location="body", objective_id=objective.id,
     ))
     skills = SkillRegistry()
     skills.load_dir(SKILLS_ROOT)
     workflow_tool = WorkflowTool(state, target, skills=skills, evidence_root=tmp_path)
-    for phase, skill_name in (
-        ("recon", "recon"),
-        ("enumeration", "web-enumeration"),
-        ("input_analysis", "web-input-analysis"),
-    ):
-        skill = skills.get(skill_name)
-        assert skill is not None and skill.completion_artifact
-        artifact = completion_artifact_path(skill.completion_artifact, target.base_url())
-        _artifact(tmp_path, artifact)
-        await record_phase_coverage_for_test(workflow_tool, phase)
-        completed = json.loads(await workflow_tool.run({
-            "action": "complete_skill", "skill_name": skill_name, "artifact_ref": artifact,
-            "no_inputs_discovered": phase == "input_analysis",
-        }, None, AlwaysAllow()))
-        assert completed["ok"]
+    from tests.helpers.workflow import prepare_validation_prerequisites
+    await prepare_validation_prerequisites(workflow_tool, candidate.id)
     tools = ToolRegistry()
     tools.register(workflow_tool)
     agent = Agent(AgentOptions(

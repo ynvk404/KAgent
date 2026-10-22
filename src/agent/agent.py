@@ -109,6 +109,10 @@ from src.tools.common.aliases import canonical_tool_name
 from src.tools.common.registry import InvalidToolArguments, Registry as ToolRegistry
 from src.tools.common.types import ActionPermissionTool
 from src.tools.common.outcome import ErrorKind, ToolOutput, ToolStatus
+from src.tools.common.runtime_metadata import (
+    RuntimeMetadata, collect_runtime_limitations, load_runtime_limitations, process_diagnostic, runtime_view,
+)
+from src.tools.execution.shell import ShellTool, BashTool
 from src.tools.workflow.workflow_tool import WorkflowTool
 
 from .decision_planner import (
@@ -389,7 +393,11 @@ COMPACTION_SYSTEM_PROMPT = (
     "placeholders. Omit chatter and failed dead ends unless "
     "they prevent repeat work. Do not restate Candidate or "
     "ValidationResult records: authoritative WorkflowState is preserved "
-    "separately. Keep only evidence references needed to continue."
+    "separately. Keep only evidence references needed to continue. "
+    "Preserve the whole-target objective and every requested goal, including pending, completed, deferred and blocked goals. "
+    "Separate observed facts, hypotheses and verified blockers. A SQLite parser error without query text does not reveal constructed SQL. "
+    "A reader offset failure is not redaction; credential rejection is not evidence of a missing-session prerequisite. "
+    "Do not invent requests, timeouts or authority to restart an unresolved attempt."
 )
 
 
@@ -439,7 +447,10 @@ class ToolCallResult:
         truncated: bool = False,
         retention_generation: str | None = None,
         retention_provenance: dict[str, Any] | None = None,
+        runtime_metadata: RuntimeMetadata | None = None,
     ):
+        self.runtime_metadata = (runtime_metadata if runtime_metadata is not None else
+                                 result.runtime_metadata if isinstance(result, ToolOutput) else None)
         self.result = result
         self.err_str = err_str
         self.duration_ms = duration_ms
@@ -464,16 +475,19 @@ class _BoundedToolResult:
     elided: bool = False
 
 
-def safe_tool_text(text: str, unavailable: str) -> str:
-    """Fail closed only at the representation boundary, never change execution."""
+def safe_tool_view(text: str, unavailable: str) -> tuple[str, bool]:
+    """Sanitized representation plus availability, independent of execution."""
     try:
         sanitized = redact_payload(text)
         if isinstance(sanitized, str) and (sanitized or not text):
-            return str(sanitized)
+            return str(sanitized), True
     except Exception:
-        # Neither the original text nor the sanitizer exception is safe to emit.
         pass
-    return unavailable
+    return unavailable, False
+
+
+def safe_tool_text(text: str, unavailable: str) -> str:
+    return safe_tool_view(text, unavailable)[0]
 
 
 def tool_error_kind(err: Exception, *, invalid_args: bool = False) -> ErrorKind:
@@ -1832,6 +1846,7 @@ class Agent:
         self,
         tool_name: str,
         args: dict[str, Any] | None = None,
+        *, capability_only: bool = False,
     ) -> ToolAllowedResult:
         self._reconcile_skill_contracts()
         from src.permission.runtime.execution import policy_for
@@ -1853,16 +1868,23 @@ class Agent:
         if execution is not None and execution.generic_validation is not None:
             tool = self.tools.get(tool_name)
             if tool is not None:
-                try:
-                    execution.generic_validation.validate_tool(tool, args or {})
-                except (TypeError, ValueError) as exc:
-                    return ToolAllowedResult(ok=False, reason=str(exc))
+                if capability_only:
+                    if not execution.generic_validation.allows_tool_name(tool_name):
+                        return ToolAllowedResult(ok=False, reason="generic capability unavailable")
+                else:
+                    try:
+                        execution.generic_validation.validate_tool(tool, args or {})
+                    except (TypeError, ValueError) as exc:
+                        return ToolAllowedResult(ok=False, reason=str(exc))
         if not self.active_skills and not self._skill_admission_restricted:
             return ToolAllowedResult(
                 ok=True,
             )
 
         if tool_name == "read_tool_result":
+            if capability_only:
+                return ToolAllowedResult(ok=any(self.is_tool_allowed(name, capability_only=True).ok
+                    for name in self.tools.names() if name not in {"read_tool_result", "read_http_observation"}))
             try:
                 ref = self.result_retention.lookup((args or {}).get("result_ref", ""))
             except ValueError:
@@ -1875,7 +1897,7 @@ class Agent:
             from src.tools.common.tool_result import ReadHTTPObservation
             reader = self.tools.get(tool_name)
             if type(reader) is ReadHTTPObservation and reader.agent is self:
-                return self.is_tool_allowed("http")
+                return self.is_tool_allowed("http", capability_only=capability_only)
 
         tool = self.tools.get(tool_name)
 
@@ -1883,6 +1905,11 @@ class Agent:
             return ToolAllowedResult(
                 ok=True,
             )
+
+        if capability_only and isinstance(tool, ActionPermissionTool):
+            # Some actions are readers and others require permission. Keep the
+            # schema until actual arguments can be checked by the same gate.
+            return ToolAllowedResult(ok=True)
 
         requires_permission = (
             tool.requires_permission_for(args or {})
@@ -2041,6 +2068,9 @@ class Agent:
         from src.permission.runtime.execution import policy_for
 
         self._reconcile_skill_contracts()
+        tools = [spec for spec in tools or () if self.is_tool_allowed(
+            spec["function"]["name"] if isinstance(spec, dict) else spec.function.name,
+            capability_only=True).ok]
         planner = deepcopy(self._planner_context())
         # Request facts copy canonical records, not the live lock's queued
         # Futures. The snapshot never executes mutations or owns that lock.
@@ -3763,24 +3793,8 @@ class Agent:
             return False
 
     def _phase_completion_readiness(self) -> dict[str, Any] | None:
-        objective = self.workflow.objective
-        if objective is None or objective.mode != "whole_target":
-            return None
-        artifact_errors = self._discovery_artifact_errors()
-        phase = next(
-            (item for item in REQUIRED_WHOLE_TARGET_PHASES
-             if item not in self.workflow.completed_phases(objective)
-             or item in artifact_errors),
-            None,
-        )
-        skill_name = {
-            "recon": "recon", "enumeration": "web-enumeration",
-            "input_analysis": "web-input-analysis",
-        }.get(phase or "")
         tool = self.tools.get("workflow")
-        if skill_name is None or not isinstance(tool, WorkflowTool):
-            return None
-        return tool.phase_completion_readiness(skill_name)
+        return tool.next_phase_completion_readiness() if isinstance(tool, WorkflowTool) else None
 
     def _discovery_artifact_errors(self) -> dict[str, str]:
         tool = self.tools.get("workflow")
@@ -5837,7 +5851,15 @@ class Agent:
             message = working[index]
             source = original(message)
             self._bounded_results.pop(id(message), None)
-            replacement = replace(message, content=content)
+            runtime = message.tool_runtime
+            if runtime is not None:
+                budget = max(len(content), len(runtime_view("", runtime, delivery="elided")[0]))
+                content, runtime = runtime_view(content, runtime,
+                    delivery="unavailable" if runtime.delivery == "unavailable" else "elided",
+                    budget=budget, render=lambda size: _output_bounds.bound_distributed_content(
+                        content, size, minimum_retained_length=min(size, MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR),
+                        elision_prefix=MIDTURN_ELISION_PREFIX, weights=MIDTURN_WINDOW_WEIGHTS))
+            replacement = replace(message, content=content, tool_runtime=runtime)
             working[index] = replacement
             pending = self.result_retention.pending.pop(id(message), None)
             if pending is not None:
@@ -6478,31 +6500,35 @@ class Agent:
             if error_kind in {'permission_pending', 'permission_timeout'}:
                 status = 'pending'
 
-            log_error(
-                "agent: tool failed",
-                {
-                    "tool": tc.function.name,
-                    "duration_ms": duration_ms,
-                    "err": safe_tool_text(
-                        err_str, "Tool execution error; sanitized details unavailable.",
-                    ),
-                },
-            )
-
         elif isinstance(result, ToolOutput):
             status = result.status
             error_kind = result.error_kind
             http_status = result.http_status
             truncated = result.truncated
             if status in {"error", "pending"}:
-                err_str = (str(result.scanner_result.envelope.get('error', {}).get('message', 'scanner job incomplete'))
-                    if result.scanner_result is not None else (
-                    "fetch failed"
-                    if tc.function.name in ("web_fetch", "web_search")
-                    else str(result).strip() or (error_kind or "tool failed")
-                ))
+                if tc.function.name in {"shell", "bash", "BashTool"} and result.scanner_result is None:
+                    # The shell envelope is output, not an error description.
+                    # Keep it once as the sanitized result, including stdout.
+                    err_str = (process_diagnostic(result.runtime_metadata)
+                               or ("Shell operation pending" if status == "pending" else "Shell tool execution error"))
+                else:
+                    err_str = (str(result.scanner_result.envelope.get('error', {}).get('message', 'scanner job incomplete'))
+                        if result.scanner_result is not None else (
+                        "fetch failed"
+                        if tc.function.name in ("web_fetch", "web_search")
+                        else str(result).strip() or (error_kind or "tool failed")
+                    ))
             elif status == "cancelled":
                 err_str = "cancelled"
+
+        if status == "error":
+            # Diagnostic codes only: result/exception prose may contain traffic
+            # or unlabeled secrets. One event covers raised and typed errors.
+            log_error("agent: tool failed", {
+                "tool": redact_payload(tc.function.name), "duration_ms": duration_ms,
+                "status": status, "error_kind": error_kind,
+                "exception_type": type(run_err).__name__ if run_err is not None else None,
+            })
 
         return ToolCallResult(
             result=result,
@@ -6516,6 +6542,9 @@ class Agent:
             truncated=truncated,
             retention_generation=retention_generation,
             retention_provenance=retention_provenance,
+            runtime_metadata=(getattr(run_err, "runtime_metadata", None)
+                if run_err is not None and isinstance(run_err, OSError)
+                and type(self.tools.get(tc.function.name)) in (ShellTool, BashTool) else None),
         )
 
     async def drain_scanners(self, *, close: bool = False) -> None:
@@ -6654,9 +6683,17 @@ class Agent:
                            invocation: Invocation | None = None) -> dict[str, Any]:
         # Raw ToolCallResult remains available to transient controller processing
         # and observation bindings. Only event/history/context receive this view.
+        runtime = res.runtime_metadata
+        represented = True
+        error_text = res.err_str
+        if (error_text and tc.function.name in {"shell", "bash", "BashTool"}
+                and isinstance(res.result, ToolOutput) and res.result.scanner_result is None):
+            error_text = (process_diagnostic(runtime)
+                          or ("Shell operation pending" if res.status == "pending" else
+                              "Shell cancelled" if res.status == "cancelled" else "Shell tool execution error"))
         error = safe_tool_text(
-            res.err_str, 'Tool execution error. Sanitized details are unavailable.',
-        ) if res.err_str else ""
+            error_text, 'Tool execution error. Sanitized details are unavailable.',
+        ) if error_text else ""
         if isinstance(res.result, ToolOutput) and res.result.http_sources:
             # Presentation/debug receive source/status metadata, not a duplicate
             # body archive. The existing tool outcome and original stay intact.
@@ -6669,7 +6706,7 @@ class Agent:
             # sanitizer's line-anchored patterns (e.g. short Basic credentials).
             content = f"ERROR: {error}"
         else:
-            content = safe_tool_text(
+            content, represented = safe_tool_view(
                 res.result,
                 f"Tool execution completed.\n"
                 f"status={res.status} · error_kind={res.error_kind}\n"
@@ -6677,6 +6714,12 @@ class Agent:
                 "Sanitized output is unavailable due to a representation failure. "
                 "Do not repeat the action solely to recover its output.",
             )
+        if runtime is not None:
+            delivery = runtime.delivery if runtime.delivery != "unknown" else "complete"
+            # Keep the established UI result envelope intact. Structured event
+            # metadata describes that view; model/history add their own summary.
+            runtime = replace(runtime, delivery=delivery if represented else "unavailable",
+                              delivered_bytes=len(content.encode("utf-8")))
         accepted_candidate_id = None
         scanner_summary = None
         if (tc.function.name == 'shell' and isinstance(res.result, ToolOutput)
@@ -6714,6 +6757,7 @@ class Agent:
                 "invocation": invocation,
                 "accepted_candidate_id": accepted_candidate_id,
                 "scanner_summary": scanner_summary,
+                "runtime_metadata": runtime,
             }
 
     def _managed_http_secrets(self) -> tuple[str, ...]:
@@ -6869,6 +6913,7 @@ class Agent:
         ownership.check(self)
         event = self._tool_result_event(tc, res, parsed.invocation)
         content = event['result']
+        runtime = event.get('runtime_metadata')
         analysis = self._http_analysis_content(tc, res, parsed.invocation)
         if analysis is not None:
             content = analysis
@@ -6883,6 +6928,8 @@ class Agent:
                         except (ValueError, KeyError):
                             # Raw observations remain readable through their original gates.
                             content += '\nDiscovery metadata limited/unavailable; original source retained.'
+        if runtime is not None:
+            content, runtime = runtime_view(content, runtime, delivery=runtime.delivery)
         if publish_result:
             emit(event)
 
@@ -6939,6 +6986,7 @@ class Agent:
             tool_error_kind=res.error_kind,
             tool_http_status=res.http_status,
             tool_truncated=res.truncated,
+            tool_runtime=runtime,
             skill_activation=skill_provenance,
             http_response_sources=([ref for ref, _ in res.result.http_sources]
                                    if analysis is not None and isinstance(res.result, ToolOutput) else None),
@@ -7070,7 +7118,7 @@ class Agent:
                 messages=[
                     Message(
                         role="system",
-                        content=COMPACTION_SYSTEM_PROMPT,
+                        content=self._compaction_system_prompt(),
                     ),
                     Message(
                         role="user",
@@ -7305,6 +7353,17 @@ class Agent:
                 },
             )
 
+    def _compaction_system_prompt(self) -> str:
+        objective = self.workflow.objective
+        if objective is None:
+            return COMPACTION_SYSTEM_PROMPT
+        # Only typed controller fields, never free-form reason/summary prose.
+        canonical = {"mode": objective.mode, "target_origin": objective.target_origin,
+                     "requested_goals": [{"class": g.candidate_class, "status": g.status}
+                                         for g in objective.requested_goals]}
+        return (COMPACTION_SYSTEM_PROMPT + "\nCanonical objective from runtime (summary cannot replace it):\n"
+                + json.dumps(canonical, ensure_ascii=False))
+
     async def compact_in_place(
         self,
         signal,
@@ -7323,7 +7382,7 @@ class Agent:
             messages=[
                 Message(
                     role="system",
-                    content=COMPACTION_SYSTEM_PROMPT,
+                    content=self._compaction_system_prompt(),
                 ),
                 Message(
                     role="user",
@@ -7366,6 +7425,10 @@ class Agent:
         next_memory = remove_workflow_duplicates(
             merge_memory(self.memory, summary),
             self.workflow,
+        )
+        next_memory.runtime_limitations = collect_runtime_limitations(
+            next_memory.runtime_limitations,
+            (message.tool_runtime for message in history_snap if message.role == "tool"),
         )
         parsed = parse_compaction_summary(summary)
         structured = any(
@@ -7733,8 +7796,12 @@ def bounded_history_for_compaction(
             # of a preview or a hydrated payload. Pairing and outcome fields stay
             # on the structured message; the continuation index survives even
             # if the model omits every pointer from its summary.
-            message = replace(message, content=reference_header(refs[0])
-                              + "[Distributed preview is retained in the session; omitted output requires a gated range read.]")
+            content = (reference_header(refs[0])
+                       + "[Distributed preview is retained in the session; omitted output requires a gated range read.]")
+            runtime = message.tool_runtime
+            if runtime is not None:
+                content, runtime = runtime_view(content, runtime, delivery="elided")
+            message = replace(message, content=content, tool_runtime=runtime)
         prepared.append(message)
     return _compaction.bounded_history_for_compaction(
         prepared,
@@ -7761,6 +7828,7 @@ def merge_memory(
         last_compacted_at=now,
         last_summary=summary,
         compactions=(prev.compactions if prev else 0) + 1,
+        runtime_limitations=load_runtime_limitations(base.runtime_limitations),
 
         objectives=merge_list(
             base.objectives,

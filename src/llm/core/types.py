@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from src.llm.core.reasoning import ReasoningLevel
 from src.llm.runtime.metrics import TokenUsage
+from src.tools.common.runtime_metadata import RuntimeMetadata
 
 Role = Literal[
     "system",
@@ -61,6 +62,7 @@ class Message:
     tool_error_kind: str | None = None
     tool_http_status: int | None = None
     tool_truncated: bool = False
+    tool_runtime: RuntimeMetadata | None = None
     # Controller-only token-saving descriptors; never evidence or approval.
     tool_result_refs: list[dict[str, Any]] | None = None
     tool_result_scope: dict[str, str] | None = None

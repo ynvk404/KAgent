@@ -130,7 +130,17 @@ async def test_direct_handoff_requires_no_input_or_recon_and_keeps_unknowns(tmp_
     state, registry, _, _ = runtime(tmp_path, mode="direct")
     args = dict(method="POST", endpoint="/api", parameter="q", location="body", content_type="application/json",
                 request_template='{"q":"{INJECTION_POINT}"}', baseline_request_ref="legacy-ref", auth_context_ref="user") if known else {}
-    candidate = await record(registry, "record_candidate", candidate_class=cls, **args)
+    if known:
+        # An old session may retain a stale baseline, but new tool admission
+        # must no longer manufacture one. Hydrate this historical fixture.
+        assert state.objective is not None
+        legacy = Candidate.from_dict({**args, 'candidate_class': cls, 'target': ORIGIN,
+                                      'objective_id': state.objective.id})
+        assert legacy is not None
+        state.add_candidate(legacy)
+        candidate = legacy.to_dict()
+    else:
+        candidate = await record(registry, "record_candidate", candidate_class=cls, **args)
     context = (await start(registry, candidate))["validation_context"]
     assert context["resolution"] == "candidate_only"
     assert context["input_ids"] == []
@@ -320,8 +330,22 @@ async def test_baseline_state_uses_live_binding_and_existing_completeness_guards
     elif fault == "method":
         payload["method"] = "PUT"
     row = captures.ingest(payload)
-    item, candidate = await linked(registry, content_type="application/json", sample_payload='{"q":"sanitized"}',
-                                    baseline_request_ref=row["baseline_request_ref"], source_ref="capture/shared")
+    if fault in {"origin", "url_credentials", "method"}:
+        # Persisted mismatches remain inspectable, without routing invalid new
+        # references through public admission or silently repairing them.
+        legacy_input = AttackSurfaceInput('handoff2', ORIGIN, method='POST', endpoint='/api',
+            parameter='q', location='body', content_type='application/json', sample_payload='{"q":"sanitized"}',
+            baseline_request_ref=row['baseline_request_ref'], source_ref='capture/shared')
+        state.add_attack_surface_input(legacy_input)
+        legacy_candidate = Candidate('xss', target=ORIGIN, objective_id='handoff2', method='POST', endpoint='/api',
+            parameter='q', location='body', content_type='application/json',
+            baseline_request_ref=row['baseline_request_ref'], source_ref='capture/shared')
+        state.add_candidate(legacy_candidate, input_id=legacy_input.id)
+        state.link_input_candidate(legacy_input.id, legacy_candidate.id)
+        item, candidate = legacy_input.to_dict(), legacy_candidate.to_dict()
+    else:
+        item, candidate = await linked(registry, content_type="application/json", sample_payload='{"q":"sanitized"}',
+                                        baseline_request_ref=row["baseline_request_ref"], source_ref="capture/shared")
     if fault == "clear":
         captures.clear()
         captures.ingest(payload)

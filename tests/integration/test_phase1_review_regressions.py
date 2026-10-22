@@ -1,7 +1,7 @@
 """Offline response binding and persisted identity regressions through consumers."""
 from __future__ import annotations
 
-from tests.helpers.workflow import historical_input
+from tests.helpers.workflow import historical_input, bind_capture_baseline
 
 import base64
 import json
@@ -64,9 +64,10 @@ def test_variant_response_update_preserves_both_resolvers(kind, update):
 @pytest.mark.parametrize("input_order", [False, True])
 async def test_actual_session_hydrates_distinct_media_ids_and_links(tmp_path, candidate_order, input_order):
     state, registry = runtime(tmp_path)
+    baseline_ref = bind_capture_baseline(registry.get("workflow"), "/api0")
     # Shared geometry and provenance still have distinct persisted media identities.
     args = dict(method="POST", endpoint="/api0", parameter="q", location="body", source_ref="inventory/shared",
-                baseline_request_ref="baseline:opaque", auth_context_ref="identity:user")
+                baseline_request_ref=baseline_ref, auth_context_ref="identity:user")
     known_input = await record(registry, "record_input", **args, content_type="application/json")
     known = await record(registry, "record_candidate", candidate_class="xss", input_id=known_input["id"], signals=["known signal"])
     unknown_input = await record(registry, "record_input", **args)
@@ -130,8 +131,8 @@ def test_request_identity_changes_get_distinct_bindings(change):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lifecycle", ["live", "clear", "restart", "mutate", "mutate_then_reingest"])
 async def test_hydrated_media_ids_never_repair_stale_baselines(tmp_path, lifecycle):
-    state, registry = runtime(tmp_path)
     capture = CaptureStore()
+    state, registry = runtime(tmp_path, captures=capture)
     capture.ingest(capture_payload('{"q":"old","other":"original"}'))
     variant = capture_payload('{"q":"old","other":"variant"}')
     captured = capture.ingest(variant)

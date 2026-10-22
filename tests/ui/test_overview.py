@@ -129,7 +129,7 @@ async def test_initial_overview_compact_layout() -> None:
         assert "Target: (not set)" in text
         assert "Session: offline-session" in text
         assert "Status:" not in text
-        assert "Assessment Progress:" not in text
+        assert "Progress:" not in text
 
 
 @pytest.mark.asyncio
@@ -264,19 +264,19 @@ async def test_progress_restored_once_and_clear_rebuilds_without_telemetry(tmp_p
         app.resume_summary = "Restored offline conversation."
     async with app.run_test(size=(120, 32)):
         text = _render_obj(_get_panel(app), 116)
-        assert text.count("Assessment Progress:") == 1
-        assert "recon completed (artifact repair required)" in text
+        assert text.count("Progress:") == 1
+        assert "Recon repair" in text and "Blocked" in text
         assert not any(entry.text.startswith("Workflow ·") for entry in app.state.transcript)
         before = app.state
         app.dispatch(AgentEventAction(WorkflowProgressEvent(metrics={"made_up_progress": 100})))
         assert app.state is before
         app.dispatch(Clear())
-        assert "Assessment Progress:" in _render_obj(_get_panel(app), 116)
+        assert "Progress:" in _render_obj(_get_panel(app), 116)
         assert not app.state.transcript
         assert workflow.objective is not None
         workflow.objective.mode = "direct"
         app.refresh_assessment_progress()
-        assert "Assessment Progress:" not in _render_obj(_get_panel(app), 116)
+        assert "Progress:" not in _render_obj(_get_panel(app), 116)
 
 
 async def test_progress_preserves_all_snapshot_fields_without_assessment_conclusion(tmp_path):
@@ -298,7 +298,7 @@ async def test_progress_preserves_all_snapshot_fields_without_assessment_conclus
     workflow.set_candidate_status(active.id, "validating")
     async with app.run_test(size=(120, 32)):
         text = " ".join(_render_obj(_get_panel(app), 116).replace("│", "").split())
-        for part in ("Assessment Progress:", "recon completed", "artifact repair required", "1/2 inputs reviewed",
+        for part in ("Progress:", "Recon repair", "Blocked", "1/2 inputs reviewed",
                      "1 input blocked", "1 validation active", "1 validation accepted", "1 goal pending"):
             assert part in text
         assert not app.state.transcript
@@ -327,7 +327,7 @@ async def test_context_change_hides_old_progress_and_late_duplicate_cannot_resto
         app.dispatch(AgentEventAction(call))
         result = ToolResultEvent(id="old", name="http", http_status=200, invocation=call.invocation)
         app.dispatch(AgentEventAction(result))
-        assert "Assessment Progress:" in _render_obj(_get_panel(app), 116)
+        assert "Progress:" in _render_obj(_get_panel(app), 116)
         if change == "target":
             app.agent.target.set_base_url("https://other.test")
         elif change == "revision":
@@ -342,11 +342,11 @@ async def test_context_change_hides_old_progress_and_late_duplicate_cannot_resto
         else:
             workflow.retire_generation()
         app._recompute_view()
-        assert "Assessment Progress:" not in _render_obj(_get_panel(app), 116)
+        assert "Progress:" not in _render_obj(_get_panel(app), 116)
         app.dispatch(AgentEventAction(result))
-        assert "Assessment Progress:" not in _render_obj(_get_panel(app), 116)
+        assert "Progress:" not in _render_obj(_get_panel(app), 116)
         app.dispatch(AgentEventAction(DecisionEvent(target_origin="https://stale.test")))
-        assert "Assessment Progress:" not in _render_obj(_get_panel(app), 116)
+        assert "Progress:" not in _render_obj(_get_panel(app), 116)
 
 
 async def test_reset_hides_progress_through_await_and_keeps_actual_store_id(tmp_path):
@@ -358,19 +358,19 @@ async def test_reset_hides_progress_through_await_and_keeps_actual_store_id(tmp_
         workflow.clear()
     app.agent.reset = reset
     async with app.run_test(size=(120, 32)) as pilot:
-        assert "Assessment Progress:" in _render_obj(_get_panel(app), 116)
+        assert "Progress:" in _render_obj(_get_panel(app), 116)
         handle_slash(app, "/reset")
         await entered.wait()
         assert app.state.latest_facts is None
         for action in (AgentEventAction(DecisionEvent()), Clear()):
             app.dispatch(action)
             assert app.state.latest_facts is None
-            assert "Assessment Progress:" not in _render_obj(_get_panel(app), 116)
+            assert "Progress:" not in _render_obj(_get_panel(app), 116)
         assert "Session: offline-session" in _render_obj(_get_panel(app), 116)
         release.set()
         await pilot.pause()
         assert app.state.latest_facts is not None and not app.state.latest_facts.overview
-        assert "Assessment Progress:" not in _render_obj(_get_panel(app), 116)
+        assert "Progress:" not in _render_obj(_get_panel(app), 116)
         assert "Session: offline-session" in _render_obj(_get_panel(app), 116)
 
 

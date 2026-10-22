@@ -1,0 +1,20 @@
+[
+  {
+    "method": "GET",
+    "status": 200,
+    "complete": true,
+    "truncated": false,
+    "execution_status": "completed",
+    "producer": "http",
+    "retained_body_bytes": 921
+  },
+  {
+    "method": "GET",
+    "status": 200,
+    "complete": false,
+    "truncated": true,
+    "execution_status": "completed",
+    "producer": "http",
+    "retained_body_bytes": 512
+  }
+]

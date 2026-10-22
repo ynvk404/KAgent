@@ -264,11 +264,15 @@ class GenericValidationBoundary:
         segment = slugify(normalize_target_origin(candidate.target) or "")
         return self.policy.root / "artifacts/generic-validation" / segment / candidate.id / "proof.md"
 
+    def allows_tool_name(self, name):
+        """Capability projection only; argument admission remains validate_tool."""
+        return not self.restricted() or name in GENERIC_TOOLS
+
     def validate_tool(self, tool, args):
         if not self.restricted():
             return
         name = tool.name()
-        if name not in GENERIC_TOOLS:
+        if not self.allows_tool_name(name):
             raise ValueError(f"generic capability unavailable: {name}")
         if name == "http":
             action, request = tool.prepare(args)

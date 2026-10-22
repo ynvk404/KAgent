@@ -1,5 +1,6 @@
 """Offline Phase 2 contracts through production Workflow, HTTP and Agent."""
 import asyncio
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -67,7 +68,7 @@ async def complete_discovery(tool: WorkflowTool, root: Path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['whole_target', 'direct', 'candidate_validation'])
-async def test_early_validation_does_not_complete_discovery(runtime, tmp_path, mode):
+async def test_validation_preserves_preexisting_discovery_completions(runtime, tmp_path, mode):
     state, candidate, tool, args, _ = await setup(runtime, tmp_path, candidate_class='sqli', mode=mode)
     assert state.objective is not None
     # Whole-target now satisfies bounded prerequisites; Direct modes still need no discovery.
@@ -75,17 +76,19 @@ async def test_early_validation_does_not_complete_discovery(runtime, tmp_path, m
         state.objective.mode = mode
         state.objective.candidate_id = candidate.id if mode == 'candidate_validation' else None
     registry, p, policy, *_ = runtime
+    completions = deepcopy(state.phase_completions)
     started = json.loads(await registry.execute('workflow', {'action': 'start_validation', 'candidate_id': candidate.id}, None, p))
     assert started['ok'] and started['validation_context']['attempt_id'] == args['attempt_id']
     result = json.loads(await registry.execute('workflow', {**args, 'outcome': 'not-confirmed'}, None, p))
     assert result['ok']
-    assert state.completed_phases() == (frozenset({'recon', 'enumeration'}) if mode == 'whole_target' else frozenset())
+    assert state.phase_completions == completions
+    assert state.completed_phases() == (frozenset({'recon', 'enumeration', 'input_analysis'}) if mode == 'whole_target' else frozenset())
     assert tool.validation_completion_error(candidate.id, policy) is None
     agent = agent_for(runtime, tool, state)
     assert not agent._validation_completion_blockers()
     if mode == 'whole_target':
         status, actions, _ = agent._whole_target_state()
-        assert status == 'actionable' and actions == ('phase:input_analysis',)
+        assert status == 'completed' and not actions
     else:
         assert agent._whole_target_state() == ('not_applicable', (), ())
 

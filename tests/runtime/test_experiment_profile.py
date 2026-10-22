@@ -102,7 +102,7 @@ def test_scenario3_profiles_and_run_outputs_are_separate(layout):
     value = make_plan((*layout[:3], run))
     receipt = profile.apply(value)
     assert receipt == run.parent.parent / "profiles/fixture-run/profile.json"
-    assert (receipt.parent / "whole-target-request.txt").is_file()
+    assert not (receipt.parent / "whole-target-request.txt").exists()
     assert not (run / "profile.json").exists()
     assert (run / "backup").is_dir()
     assert (run / "project").is_dir()
@@ -184,8 +184,8 @@ def test_fresh_startup_paths_legacy_fallback_history_and_policy_boundaries(layou
         history = sessions.Store.new_with_id(sessions.dir_from_path(), "new-session").load()
         assert history.messages == [] and history.memory is None and history.workflow.objective is None
         dirs = cli.skill_search_dirs([])
-        assert dirs == skill_search_dirs([], cwd=str(project), home=str(layout[3] / "profile-home"))
-        assert not any(str(layout[1]) in path for path in dirs)
+        original_dirs = skill_search_dirs([], cwd=str(layout[0]), home=str(layout[1]))
+        assert dirs == [str(project / "skills"), *original_dirs[1:]]
         policy = default_execution_policy(EngagementState(), project_root())
         with pytest.raises(ExecutionBlocked):
             policy.require_path(layout[0] / "artifacts/prior-report.md")
@@ -255,7 +255,8 @@ def test_exception_restores_process_local_bindings(layout):
 
 def test_headless_launcher_requires_execution_and_yolo_opt_in_and_uses_finite_grant(layout, monkeypatch):
     from src.cli import runtime
-    receipt = profile.apply(make_plan(layout))
+    receipt = profile.apply(profile.plan(layout[0], layout[1], layout[2], layout[3],
+                                         "http://127.0.0.1:8081", legacy_bounded=True))
     monkeypatch.setattr(profile.sys.stdin, "isatty", lambda: False)
     with pytest.raises(ValueError, match="execute-prompt"):
         profile.launch(receipt, headless=True)
@@ -302,7 +303,7 @@ def test_active_custom_provider_cannot_shadow_official_model_identity(layout):
         "base_url": "https://fixture.invalid/v1", "default_model": "different-model"}}
     layout[2].write_text(json.dumps(value))
     with pytest.raises(ValueError, match="official provider"):
-        make_plan(layout)
+        profile.plan(layout[0], layout[1], layout[2], layout[3], "http://127.0.0.1:8081", legacy_bounded=True)
 
 
 @pytest.mark.parametrize("shutdown", ["ctrl+c", "parent-signal"])

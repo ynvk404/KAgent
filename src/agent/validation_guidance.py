@@ -4,6 +4,22 @@ from typing import Any
 from src.workflow.validation.route import ValidationRoute
 
 
+def expert_attempt_preparation(skill: str, candidate_id: str) -> str:
+    """Shared ordering for a new expert attempt; no requests or authority."""
+    return (
+        f'After current prerequisites are complete, read the current playbook with load_skill(name="{skill}"). '
+        'Before start_validation, prepare the primary request and any necessary supplementary method/URL '
+        'associations and roles from the existing Candidate, inventory and context. Do not guess endpoints '
+        'or send validation probes to prepare them. Prefer candidate_id alone when the Candidate covers '
+        'the primary request and no supplementary associations are needed; otherwise declare each unique '
+        'supplementary method/URL once in related_requests with a consistent role. Different methods on '
+        'the same path are different request identities; payload variations are observations. '
+        f'Then call workflow(action="start_validation", candidate_id="{candidate_id}", ...) successfully '
+        'before probes → evidence → result. Association grants no execution permission. '
+        'An owned active attempt follows resume/recovery with its immutable declaration and budget instead.'
+    )
+
+
 def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute | None,
                                active_skills: frozenset[str]) -> str:
     action = handoff['next_action']
@@ -33,8 +49,8 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
                      'Resolve browser/authorization/blocking conditions and follow the validator stop conditions '
                      'before considering a new attempt through existing gates. Do not retry blocked probes or infer authority from Continue.')
     elif action == 'start_validation':
-        start = ('call workflow(action="start_validation", candidate_id="' + handoff['candidate_id'] + '")'
-                 if route and route.kind == 'expert' else
+        start = (expert_attempt_preparation(route.skill_name, handoff['candidate_id'])
+                 if route and route.kind == 'expert' and route.skill_name else
                  'resolve the current validator route and its admitted proposal, then call start_validation')
         lines.append('No owned active attempt: ' + start + ' before any validation probes. '
                      'A closed/interrupted attempt is not resumed by HTTP phase="validation"; a new attempt '
@@ -48,15 +64,16 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
                      'continue only an identified missing bounded validation step, or save proof, record_evidence and record_result.')
     skill = route.skill_name if route and route.kind == 'expert' else None
     if skill and action not in {'preserve_result', 'stop_recovery'}:
-        if skill not in active_skills:
-            order = 'After start_validation, reload' if action == 'start_validation' else 'Reload'
-            lines.append(f'{order} load_skill(name="{skill}") before validation probes/proof work; '
+        if skill not in active_skills and action != 'start_validation':
+            lines.append(f'Reload load_skill(name="{skill}") before validation probes/proof work; '
                          'skill activation expires per turn and grants no authority.')
         if skill == 'sql-injection':
             lines.append('Boolean SQLi confirmation needs two complete TRUE/FALSE repetitions, at least four distinct owned '
                          'observations and structured confirmation under the SQLi skill. Syntax-shape adjustments: '
                          'at most three after the initial signal, guided by observed query shape; no punctuation walk.')
         elif skill == 'cross-site-scripting':
-            lines.append('Raw HTML in JSON is not executable XSS proof; establish the actual compatible input/rendering sink. '
+            lines.append('Raw HTML in JSON is an observation, not an XSS Candidate when rendering context or a compatible '
+                         'source-to-sink path is unknown. Do not mutate to rescue an unsupported hypothesis. '
+                         'Distinguish JSON readback, persistence, executable rendering and execution proof. '
                          'CAPTCHA issuance alone does not show CAPTCHA rejection or interception.')
     return '\n'.join(lines)

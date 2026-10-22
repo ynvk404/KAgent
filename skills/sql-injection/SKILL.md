@@ -45,6 +45,26 @@ allowed-tools:
 
 # SQL injection playbook
 
+Parser sensitivity, controlled SQL evaluation and a confirmed finding are
+different evidence levels. A SQLite error without query text leaves SQL shape
+a hypothesis; do not claim that SELECT or constructed SQL was observed. TRUE
+and FALSE producing the same error or the same empty result do not establish
+a differential. Changing technique names does not reset the syntax-adjustment
+allowance. Record only requests, timeouts and responses actually observed.
+
+Distinguish raw wire encoding from decoded application input: `%27` and a literal
+quote may denote the same input after one justified decode. Do not repeatedly
+decode or rewrite request hashes/identity/evidence bindings to merge probes.
+
+Before proof/result submission, inspect the current candidate/attempt observation
+inventory. Prefer completed, complete, non-truncated sources with the correct
+request association; reuse an existing complete control instead of recapturing
+it after choosing a truncated duplicate. Usable metadata is not impact proof.
+Keep adverse evidence. Changed parents require corrected source proof and claims
+plus a new immutable snapshot; registration alone does not establish terminal
+eligibility. When probing stops, use the remaining budget for honest finalization;
+Continue does not authorize a retest or reset declaration/recovery allowances.
+
 ## Runtime completion contract
 
 The runtime derives validation completion from the current objective and target,

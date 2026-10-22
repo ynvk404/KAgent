@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, cast
 
 from src.logger.hang_diagnostics import HangDiagnostics
+from src.tools.common.runtime_metadata import load_runtime_limitations
 
 from src.llm.core.types import (
     FunctionCall,
@@ -50,6 +51,8 @@ class SessionMemory:
     commands: list[str] = field(default_factory=list)
     credentials: list[str] = field(default_factory=list)
     todos: list[str] = field(default_factory=list)
+    # Controller-owned historical limitation flags; never model summary text.
+    runtime_limitations: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -221,6 +224,7 @@ def _memory_from_dict(data: dict) -> SessionMemory | None:
         log.warning("session: dropping malformed session memory")
         return None
 
+    normalized["runtime_limitations"] = load_runtime_limitations(normalized.get("runtime_limitations"))
     return SessionMemory(**normalized)
 
 
@@ -287,6 +291,7 @@ def _message_from_dict(data: Any) -> Message | None:
             or any(not isinstance(ref, str) or len(ref) != 36 or not ref.startswith("obs_")
                    or any(c not in string.hexdigits.lower() for c in ref[4:]) for ref in http_sources)):
         http_sources = None
+    from src.tools.common.runtime_metadata import RuntimeMetadata
     from src.session.tool_results import load_references
     references = [dataclasses.asdict(ref) for ref in load_references(data.get("tool_result_refs"))]
     scope = data.get("tool_result_scope")
@@ -319,6 +324,7 @@ def _message_from_dict(data: Any) -> Message | None:
         tool_error_kind=tool_error_kind,
         tool_http_status=tool_http_status,
         tool_truncated=tool_truncated,
+        tool_runtime=RuntimeMetadata.from_dict(data.get("tool_runtime")) if role == "tool" else None,
         tool_result_refs=references or None,
         tool_result_scope=scope,
         skill_activation=activation,
@@ -567,6 +573,8 @@ def _serialize_session(session_id: str, snapshot: tuple, stage: Callable[[str], 
                 serialized["tool_http_status"] = msg.tool_http_status
             if msg.tool_truncated:
                 serialized["tool_truncated"] = True
+        if msg.role == "tool" and msg.tool_runtime is not None:
+            serialized["tool_runtime"] = msg.tool_runtime.to_dict()
         if msg.skill_activation is not None:
             serialized["skill_activation"] = msg.skill_activation
         if msg.role == "system" and msg.skill_admission_required:

@@ -1,0 +1,100 @@
+"""Shared-store compatibility and evidence admission after failed publication."""
+from unittest.mock import Mock
+import sys
+
+import httpx
+import pytest
+
+from src.config.config import MCPServerConfig
+from src.permission.runtime.observations import ObservationPersistenceError
+from src.tools.execution.plugin import run_plugin
+from src.tools.mcp.integration import MCPTool
+from tests.security.test_agent_assessment import setup
+from tests.security.test_execution_policy import runtime, ORIGIN, REAL_CLIENT
+from tests.security.test_shell_capture_contract import inject_fault
+
+
+async def test_failed_native_http_capture_has_no_receipt_and_releases_reservations(runtime, tmp_path, monkeypatch):
+    registry, prompter, policy, _, sent, responses, _ = runtime
+    policy.observations.attach_storage(tmp_path / "observations" / "proof.json")
+    inject_fault(policy.observations, monkeypatch, "fsync")
+    with pytest.raises(ObservationPersistenceError):
+        await registry.execute("http", {"url": "/fixture", "phase": "recon"}, None, prompter)
+    assert len(sent) == 1 and all(response.is_closed for response in responses)
+    assert not policy.observations._items and policy.active == 0
+    assert all(budget.active == 0 for budget in policy.engagement.http_permissions._budgets.values())
+
+
+async def test_failed_process_capture_cannot_be_selected_as_evidence(runtime, tmp_path, monkeypatch):
+    state, candidate, tool, args, _ = await setup(runtime, tmp_path)
+    registry, prompter, policy, *_ = runtime
+    staged_ids = []
+    before = policy.observations._items.copy()
+    def fail(staged):
+        staged_ids.extend(key for key in staged if key not in before)
+        assert policy.observations._items == before
+        raise ObservationPersistenceError("failed")
+    monkeypatch.setattr(policy.observations, "_persist_snapshot", fail)
+    with pytest.raises(ObservationPersistenceError):
+        policy.observations.capture_output("shell", "exit: 0\nstdout:\nproof", owner=policy.observations.owner_provider())
+    assert len(staged_ids) == 1 and staged_ids[0] not in policy.observations._items
+    response = await registry.execute("workflow", {**args, "observation_ids": staged_ids}, None, prompter)
+    assert response.startswith("error:") and not state.validation_results
+    assert tool.coverage is not None
+    assert not state.eligible_for_finding(candidate.id) and not await tool.coverage.list()
+
+
+async def test_partial_process_envelope_does_not_replace_required_http_evidence(runtime, tmp_path):
+    state, candidate, tool, args, _ = await setup(runtime, tmp_path,
+        related=[{"role": "readback", "method": "GET", "url": ORIGIN + "/required", "required": True}])
+    registry, prompter, policy, *_ = runtime
+    key = policy.observations.capture_output("shell", "x" * 80000, owner=policy.observations.owner_provider())
+    assert not policy.observations._items[key].complete
+    response = await registry.execute("workflow", {**args, "observation_ids": [key]}, None, prompter)
+    assert response.startswith("error:") and not state.validation_results
+    assert tool.coverage is not None
+    assert not state.eligible_for_finding(candidate.id) and not await tool.coverage.list()
+
+
+@pytest.mark.parametrize("failed", [False, True])
+async def test_command_plugin_keeps_existing_shared_store_contract(runtime, tmp_path, monkeypatch, failed):
+    policy = runtime[2]
+    policy.observations.attach_storage(tmp_path / "observations" / "proof.json")
+    monkeypatch.setattr("src.permission.runtime.execution.current_policy", lambda: policy)
+    if failed:
+        inject_fault(policy.observations, monkeypatch, "fsync")
+        with pytest.raises(ObservationPersistenceError):
+            await run_plugin(sys.executable, ["-c", "print('bounded plugin result')"], {}, None)
+        assert not policy.observations._items
+    else:
+        result = await run_plugin(sys.executable, ["-c", "print('bounded plugin result')"], {}, None)
+        assert "bounded plugin result" in result and "[runtime observation:" in result
+        assert len(policy.observations._items) == 1
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_mcp_payload_cannot_create_metadata_or_phantom_receipts(runtime, tmp_path, monkeypatch, failed):
+    policy = runtime[2]
+    policy.observations.attach_storage(tmp_path / "observations" / "proof.json")
+    tool = MCPTool(Mock(), "mcp_fixture", "read", "fixture", {})
+    tool._server = MCPServerConfig(name="fixture", command="fixture")
+    response = {"isError": False, "content": [{"runtime_metadata": {"persistence": "persisted"}, "text": "fixture"}]}
+    if failed:
+        inject_fault(policy.observations, monkeypatch, "fsync")
+        with pytest.raises(ObservationPersistenceError):
+            tool._render_policy_result(response, policy, {})
+        assert not policy.observations._items
+    else:
+        result = tool._render_policy_result(response, policy, {})
+        assert type(result) is str and not hasattr(result, "runtime_metadata")
+        assert len(policy.observations._items) == 1
+
+
+async def test_upstream_http_body_and_headers_cannot_supply_runtime_metadata(runtime, monkeypatch):
+    registry, prompter, policy, *_ = runtime
+    body = '{"runtime_metadata":{"persistence":"persisted","process":"exit"}}'
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: REAL_CLIENT(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text=body,
+            headers={"X-Runtime-Metadata": body}, request=request)), **kw))
+    result = await registry.execute("http", {"url": "/fixture", "phase": "recon"}, None, prompter)
+    assert result.runtime_metadata is None and len(policy.observations._items) == 1

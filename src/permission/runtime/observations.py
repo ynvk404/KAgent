@@ -9,13 +9,34 @@ from dataclasses import dataclass, asdict, replace
 import hashlib
 import json
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from urllib.parse import urlsplit
 import uuid
 from pathlib import Path
 import os
+import errno
+import stat
 
 _OWNER_UNSET = object()
+
+
+class ObservationPersistenceError(OSError):
+    """Expected storage failure; never contains output, paths or credentials."""
+
+    def __init__(self, persistence: Literal["failed", "unknown"]):
+        super().__init__("observation persistence " + persistence)
+        self.persistence = persistence
+
+
+def _owned_stream(fd: int, mode: str):
+    try:
+        return os.fdopen(fd, mode)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
 
 
 
@@ -87,12 +108,19 @@ class ObservationStore:
                 self._historical.add(key)
 
     def persist(self) -> None:
+        self._persist_snapshot(self._items)
+
+    def _persist_snapshot(self, items: dict[str, Observation]) -> None:
+        """Persist a staged snapshot without publishing records or evictions.
+
+        This transaction is synchronous: cancellation cannot leave an offloaded
+        writer replacing the file after a caller has rolled back its state.
+        """
         if self.storage is None:
             return
         from src.redaction.redact import apply_evidence
-        self.storage.parent.mkdir(parents=True, exist_ok=True)
         rows = []
-        for item in self._items.values():
+        for item in items.values():
             row = asdict(item)
             # Persist minimum redacted proof, never credentials/headers. Hash of
             # original response remains separate from this redacted derivative.
@@ -109,22 +137,69 @@ class ObservationStore:
         for row in results.values():
             for field in ('observed_impact', 'response_excerpt'):
                 row[2][field] = apply_evidence(row[2][field])
+        # Serialization/redaction failures are programming/representation
+        # failures, not expected filesystem failures to hide at the executor.
+        data = json.dumps({"observations": rows, "results": results})
         temp = self.storage.with_suffix(".tmp")
         # Raw lab proof needs the same private mode during the temporary write,
         # not only after publication. Do not follow an incumbent temp symlink.
-        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(fd, "w") as stream:
-            if hasattr(os, "fchmod"):
-                os.fchmod(stream.fileno(), 0o600)
+        created = False
+        replacing = False
+        try:
+            self.storage.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            created = True
+            stream = _owned_stream(fd, "w")
+            try:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(stream.fileno(), 0o600)
+                else:
+                    temp.chmod(0o600)
+                # Opaque epochs/IDs/hashes must retain their resume identity.
+                if stream.write(data) != len(data):
+                    raise OSError("incomplete observation snapshot write")
+                stream.flush()
+                os.fsync(stream.fileno())
+            except BaseException:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+                raise
             else:
-                temp.chmod(0o600)
-            # Opaque epochs/IDs/hashes are controller metadata, not secrets.
-            # Blanket redaction here corrupts the binding needed on resume.
-            stream.write(json.dumps({"observations": rows, "results": results}))
-            stream.flush()
-            os.fsync(stream.fileno())
-        temp.chmod(0o600)
-        temp.replace(self.storage)
+                stream.close()
+            temp.chmod(0o600)
+            replacing = True
+            temp.replace(self.storage)
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                # O_NOFOLLOW is an integrity gate, not a storage outage.
+                raise
+            if replacing and self._snapshot_committed(data.encode()):
+                return
+            raise ObservationPersistenceError("unknown" if replacing else "failed") from exc
+        finally:
+            if created:
+                try:
+                    temp.unlink(missing_ok=True)
+                except OSError:
+                    # A leftover temp is never a published observation/receipt.
+                    pass
+
+    def _snapshot_committed(self, expected: bytes) -> bool:
+        """Bounded verification of this exact snapshot after replace uncertainty."""
+        assert self.storage is not None
+        try:
+            fd = os.open(self.storage, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with _owned_stream(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                        or (hasattr(os, "getuid") and info.st_uid != os.getuid())
+                        or info.st_size != len(expected)):
+                    return False
+                return stream.read(len(expected) + 1) == expected
+        except OSError:
+            return False
 
     @staticmethod
     def candidate_identity(candidate) -> str:
@@ -151,11 +226,18 @@ class ObservationStore:
                         for k, v in response_headers if str(k).lower() in allowed_headers)[:24]
         retained_body = body if retain_body else redact(body.decode(errors="replace")).encode()
         retained_truncated = len(retained_body) > 65536
+        if source_kind == "tool-output":
+            source_details = {**(source_details or {}), "retention_input_bytes": len(retained_body)}
+        retained = retained_body[:65536]
+        if not retain_body:
+            # Redact the whole bounded envelope before byte capping. Avoid a
+            # dangling UTF-8 sequence in this textual retained representation.
+            retained = retained.decode("utf-8", errors="ignore").encode("utf-8")
         complete = complete and not retained_truncated
         item = Observation("obs_" + uuid.uuid4().hex, action.epoch, action.method,
             redact(action.url), action.transport_address, action.digest,
             hashlib.sha256(body).hexdigest(), status,
-            retained_body[:65536], complete, time.time(),
+            retained, complete, time.time(),
             owner.get("candidate_id") or (validation_binding or (None, None))[0],
             (validation_binding or (None, None))[1], source_kind, producer,
             owner.get("session_id"), owner.get("objective_id"), owner.get("id"),
@@ -163,10 +245,11 @@ class ObservationStore:
             (not complete if truncated is None else truncated) or retained_truncated, getattr(action, "response_cap", None),
             getattr(action, "invocation_id", None), source_details)
         item = replace(item, retained_hash=digest(source_row(item)))
-        self._items[item.id] = item
-        while len(self._items) > 256:
-            del self._items[next(iter(self._items))]
-        self.persist()
+        staged = {**self._items, item.id: item}
+        while len(staged) > 256:
+            del staged[next(iter(staged))]
+        self._persist_snapshot(staged)
+        self._items = staged
         return item.id
 
     def capture_output(self, producer, output, *, owner, completed=True, truncated=False) -> str:
@@ -175,14 +258,15 @@ class ObservationStore:
         active = _active.get()
         receipt = active[1] if active else None
         owner = owner or {}
-        truncated = truncated or len(str(output).encode()) > 65536
+        body = str(output).encode()
+        truncated = truncated or len(body) > 65536
         action = SimpleNamespace(epoch=owner.get("epoch", ""), method="OUTPUT", url="",
                                  transport_address="process", digest=receipt.digest if receipt else "",
                                  response_cap=65536, invocation_id=receipt.id if receipt else None)
-        key = self.capture(action, 0, str(output).encode()[:65536], complete=completed and not truncated
-                           and len(str(output).encode()) <= 65536,
+        key = self.capture(action, 0, body, complete=completed and not truncated,
                            owner=owner, source_kind="tool-output", producer=producer,
-                           execution_status="completed" if completed else "failed", truncated=truncated)
+                           execution_status="completed" if completed else "failed", truncated=truncated,
+                           source_details={"hash_basis": "bounded-rendered-envelope-utf8"})
         return key
 
     def import_capture(self, capture, *, owner, runtime_store=None) -> str:

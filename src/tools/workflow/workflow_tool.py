@@ -10,7 +10,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from src.paths import project_root
 from src.permission.permission import Prompter, UserControlledRefusal
@@ -20,8 +20,9 @@ from src.redaction.redact import apply as redact, redact_payload
 from src.coverage.store import CoverageStore, CoverageStatus
 from src.coverage.context import project_candidate_coverage
 from src.target.target import Target
-from src.target.input_admission import admit_input_fields, identity_text
+from src.target.input_admission import admit_input_fields, identity_text, canonical_endpoint
 from src.workflow.discovery.input_view import input_page, input_summary
+from src.workflow.discovery.inventory import MAX_SOURCE_REASON_LENGTH
 from src.workflow.state import (
     CANDIDATE_STATUSES,
     CLEANUP_STATES,
@@ -186,13 +187,14 @@ class WorkflowTool(Tool):
             "Only start_validation enters validating. Usable owned sources -> file_write redacted proof outside artifacts/findings -> record_evidence -> copy evidence.id (ev_...) -> "
             "record_result -> confirm_finding (accepted confirmed only). "
             "start_validation establishes/resumes an attempt before validation probes; it does not send probe.values "
-            "or adopt captures made before start. Reload the resolved validator with load_skill each turn as needed. "
+            "or adopt captures made before start. For a new expert attempt, complete prerequisites, read the current "
+            "validator with load_skill and prepare known primary/supplementary request roles before start_validation. "
             "force is supported only by record_result for explicit retests, never by start_validation. "
             "Active-attempt conflict: list validating work; record its honest result "
             "or insufficient-evidence/deferred with reason before starting another candidate. "
             "mutation_performed: verified writes; cleanup needs separate authority. Samples aren't replay baselines.\n"
             "For primary-only validation, prefer start_validation with candidate_id alone when the Candidate covers "
-            "the primary request and current prerequisites are met. Whole-target new Attempts require completed Recon/Enumeration and a linked analyzed input; Direct and owned active Attempt recovery keep their existing admission. Generic still needs an admitted probe/proposal. "
+            "the primary request and current prerequisites are met. Whole-target new Attempts require completed Recon, Enumeration and Input Analysis and a linked analyzed input; Direct, candidate-validation and owned active Attempt recovery keep their existing admission. Generic still needs an admitted probe/proposal. "
             "related_requests is optional supplementary method/URL associations, not individual payload observations.\n"
             '{"action":"record_candidate","candidate_class":"sqli","endpoint":"/login","method":"POST","parameter":"email"}\n'
             '{"action":"start_validation","candidate_id":"<returned candidate.id>"}'
@@ -232,7 +234,7 @@ class WorkflowTool(Tool):
                 "retained_ref": optional_string,
                 "discovery_cursor": optional_string,
                 "source_disposition": {"type": "string", "enum": ['pending', 'processed', 'partial', 'blocked', 'not_applicable']},
-                "source_reason": optional_string,
+                "source_reason": {"type": "string", "maxLength": MAX_SOURCE_REASON_LENGTH},
                 "source_limitations": {"type": "array", "maxItems": 16, "items": {"type": "string", "maxLength": 240}},
                 "source_bounds": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}},
                 "acknowledge_bounded_stop": {"type": "boolean"},
@@ -246,6 +248,7 @@ class WorkflowTool(Tool):
                 "content_type": {
                     "type": "string",
                     "maxLength": 200,
+                    "description": "Request body media type, never the response Content-Type. Omit for query-only requests.",
                 },
                 "sample_payload": {
                     "type": "string",
@@ -505,7 +508,7 @@ class WorkflowTool(Tool):
         elif action == "get_input":
             result = self._get_input(args)
         elif action == "record_input":
-            result = self._record_input(args)
+            result = self._record_input(args, prompter)
         elif action == "set_input_disposition":
             result = self._set_input_disposition(args)
         elif action == "link_input_candidate":
@@ -715,11 +718,9 @@ class WorkflowTool(Tool):
                 if args.get("content_type") is not None
                 else input_item.content_type if input_item is not None else None
             ),
-            request_template=(args.get("request_template")
-                              if args.get("request_template") is not None
-                              else input_item.sample_payload if input_item is not None
-                              and input_item.sample_payload and "{INJECTION_POINT}" in input_item.sample_payload
-                              else None),
+            # A sanitized sample is descriptive context, not an explicit
+            # mutation template. Only the caller supplies that representation.
+            request_template=args.get("request_template"),
             source_ref=(args.get("source_ref") if args.get("source_ref") is not None
                         else input_item.source_ref if input_item is not None else None),
             source_skill=args.get("source_skill"),
@@ -740,6 +741,11 @@ class WorkflowTool(Tool):
     def _record_candidate(self, args: dict[str, Any], policy=None) -> str:
         try:
             candidate = self.candidate_proposal(args)
+            existing = self.state.candidates.get(candidate.id)
+            if existing is None or candidate_binding(existing) != candidate_binding(candidate):
+                self._validate_input_http_source({**candidate.to_dict(),
+                    "target_origin": candidate_origin(candidate.target)}, policy)
+                self._validate_replay_baseline(candidate, policy)
         except (TypeError, ValueError) as err:
             return f"error: {err}"
         candidate_class = candidate.candidate_class
@@ -860,7 +866,7 @@ class WorkflowTool(Tool):
         # sample bound. This opt-in read never hydrates runtime captures.
         return json.dumps({"ok": True, "input": item.to_dict()}, indent=2)
 
-    def _record_input(self, args: dict[str, Any]) -> str:
+    def _record_input(self, args: dict[str, Any], prompter=None) -> str:
         objective = self.state.objective
         if objective is None or objective.mode != "whole_target":
             return "error: record_input requires an active whole-target objective"
@@ -900,6 +906,7 @@ class WorkflowTool(Tool):
                 **args, "objective_id": objective.id, "target_origin": target_origin,
                 "method": method, "endpoint": endpoint,
             }, base_url=self.target.base_url())
+            self._validate_input_http_source(admitted, policy_for(prompter))
             item = AttackSurfaceInput(
                 objective_id=objective.id,
                 target_origin=target_origin or "",
@@ -914,10 +921,129 @@ class WorkflowTool(Tool):
                 auth_context_ref=args.get("auth_context_ref"),
                 source_ref=args.get("source_ref"),
             )
+            existing = self.state.attack_surface_inputs.get(item.id)
+            if existing is None and item.baseline_request_ref:
+                # Reuse the state's canonical identity for legacy IDs. This
+                # only recognizes unchanged historical context, never rekeys
+                # a row or resolves its stale reference to another capture.
+                matches = []
+                for row in self.state.objective_inputs():
+                    if row.baseline_request_ref != item.baseline_request_ref:
+                        continue
+                    try:
+                        if self.state._canonical_input(row).id == item.id:
+                            matches.append(row)
+                    except ValueError:
+                        continue
+                existing = matches[0] if len(matches) == 1 else None
+            if existing is None or any(getattr(existing, name) != getattr(item, name) for name in (
+                    'method', 'endpoint', 'parameter', 'location', 'content_type',
+                    'baseline_request_ref', 'auth_context_ref', 'source_ref')):
+                self._validate_replay_baseline(item, policy_for(prompter))
             stored, created = self.state.add_attack_surface_input(item)
         except (TypeError, ValueError) as err:
             return f"error: {err}"
         return json.dumps({"ok": True, "created": created, "input": stored.to_dict()}, indent=2)
+
+    def _validate_replay_baseline(self, proposal, policy) -> None:
+        """New replay references resolve through the existing capture namespace.
+
+        Hydration deliberately does not call this boundary: stale history stays
+        intact and still cannot obtain replay rights from its persisted text.
+        """
+        if not proposal.baseline_request_ref:
+            return
+        from types import SimpleNamespace
+        from src.browser.scoped_store import ScopedCaptureStore
+        from src.tools.http.request_builder import validate_capture_binding
+        tool = self.http_tool
+        if (tool is None or tool.workflow is not self.state or tool.target is not self.target
+                or tool.capture_store is None or policy is not None and tool.engagement is not policy.engagement):
+            raise ValueError("baseline_request_ref replay capture unavailable; observation/source provenance is not a replay baseline")
+        try:
+            store = ScopedCaptureStore(tool.capture_store, policy) if policy else tool.capture_store
+            row = store.resolve_baseline(proposal.baseline_request_ref)
+            if row is None:
+                raise ValueError("unavailable")
+            tool._require_scope(row.url or '')
+            if getattr(row, 'auth_context_ref', None) not in (None, proposal.auth_context_ref):
+                raise ValueError("identity mismatch")
+            context = proposal if isinstance(proposal, Candidate) else SimpleNamespace(
+                method=proposal.method, target=proposal.target_origin, endpoint=proposal.endpoint,
+                content_type=proposal.content_type)
+            # A current metadata reference can be handed off even when its raw
+            # bytes are incomplete. Existing validation-context/replay gates
+            # still require complete supported bytes before any replay.
+            validate_capture_binding(row, context)
+        except (ValueError, PermissionError, UserControlledRefusal):
+            # No capture URL, credentials or exception prose crosses this gate.
+            raise ValueError("baseline_request_ref replay capture unavailable or request/identity binding mismatch; use source_ref for observation provenance") from None
+
+    def _validate_input_http_source(self, admitted: dict[str, Any], policy) -> None:
+        """Check admitted discovery metadata, never read/adopt terminal evidence.
+
+        Unowned Recon/capture sources are legitimate request context. They need
+        live provenance and scope, not a validation attempt or body-read right.
+        Other kinds of request-context reference retain their existing contract.
+        """
+        ref = admitted.get("source_ref")
+        if not ref:
+            return
+        if ref.startswith('baseline:'):
+            raise ValueError("source_ref requires source provenance, not a baseline_request_ref replay capture")
+        store = policy.observations if policy else self.observations
+        item = store._items.get(ref)
+        sources = [source for source in self.state.discovery_sources.values()
+                   if source.retained_ref == ref and source.kind in {"http", "capture"}]
+        if item is None:
+            # Resolve producer metadata first; the reserved namespace only
+            # detects unavailable observations, never establishes their kind.
+            if sources or ref.startswith("obs_"):
+                raise ValueError("HTTP source_ref unavailable; cannot verify request identity")
+            return
+        if item.source_kind not in {"native-http", "imported-capture"}:
+            if item.source_kind == "tool-output" and not sources:
+                return
+            raise ValueError("source_ref lacks trustworthy HTTP metadata; cannot verify request identity")
+        capability = "http" if item.source_kind == "native-http" else "browser_capture_get"
+        producer = "http" if capability == "http" else "scoped-capture-bridge"
+        if (policy is None or not policy.nested_allowed()
+                or {"*", capability, "read_http_observation"} & policy.revoked):
+            raise ValueError("HTTP source_ref access unavailable; cannot verify request identity")
+        objective = self.state.objective
+        from src.workflow.assessment import digest, source_row
+        source = next((source for source in sources
+                       if objective and source.objective_id == objective.id and source.target_origin == objective.target_origin), None)
+        if (item.producer != producer or not item.method or not item.url
+                or item.epoch != policy.engagement.http_permissions.epoch
+                or (item.source_details or {}).get("analysis_session") != (
+                    policy.session_id or policy.engagement.http_permissions.session_id)
+                or item.objective_id not in {None, objective.id if objective else None}
+                or (sources and source is None)
+                or (source is not None and (item.retained_hash != source.retained_hash
+                    or source.kind != ("http" if capability == "http" else "capture")))
+                or digest(source_row(item)) != item.retained_hash):
+            raise ValueError("HTTP source_ref lacks current trustworthy discovery metadata/provenance; cannot verify request identity")
+        if source is not None:
+            self.state.discovery_source(source.id, generation=self.state.generation, retained_ref=ref)
+        try:
+            # Only method/origin/path are request-context identity here. Query
+            # values may already be redacted and must neither be compared nor
+            # prevent verification of the retained non-secret geometry.
+            parts = urlsplit(item.url)
+            if parts.fragment:
+                raise ValueError("HTTP source URL contains a fragment")
+            source_url = canonical_endpoint(parts._replace(query="").geturl(), admitted["target_origin"])
+        except ValueError:
+            raise ValueError("HTTP source_ref origin or URL cannot be verified against input") from None
+        policy.require_network(source_url)
+        if (source is not None and (not source.document_url
+                or urlsplit(source.document_url)._replace(query="").geturl() != source_url)):
+            raise ValueError("HTTP source_ref discovery URL metadata mismatch; cannot verify request identity")
+        if item.method != admitted["method"]:
+            raise ValueError("HTTP source_ref method does not match input")
+        if urlsplit(source_url).path != urlsplit(admitted["endpoint"]).path:
+            raise ValueError("HTTP source_ref path does not match input")
 
     @staticmethod
     def _normalize_method_endpoint(
@@ -990,11 +1116,15 @@ class WorkflowTool(Tool):
             for row in self.state.attempts.values()
         ):
             return None  # Resume only the same owned active attempt; not a status-only bypass.
-        for phase, name in (("recon", "recon"), ("enumeration", "web-enumeration")):
+        for phase, name in (("recon", "recon"), ("enumeration", "web-enumeration"),
+                            ("input_analysis", "web-input-analysis")):
             marker = self.state.phase_completions.get(f"{objective.id}:{phase}")
             if marker is None or phase not in self.state.completed_phases(objective):
                 return f"{phase} must complete before a new Whole-target validation attempt"
             readiness = self.phase_completion_readiness(name, artifact_ref=marker.artifact_ref)
+            # All prerequisite markers are checked in order above. Historical
+            # readiness may be false (already completed, or late sources); only
+            # its canonical artifact check applies to this completed pass.
             if not readiness["artifact_valid"]:
                 return f"{phase} canonical artifact requires repair before new validation"
         for item in self.state.objective_inputs():
@@ -1010,7 +1140,7 @@ class WorkflowTool(Tool):
     def _validation_prerequisite_error(self, reason: str) -> ToolOutput:
         return self._workflow_error(reason, code="WHOLE_TARGET_VALIDATION_PREREQUISITE",
             category="missing_prerequisite",
-            next_action="Inspect current phase readiness and load its playbook. Complete Recon/Enumeration through their canonical artifacts and coverage contract; analyze and link this exact input. Early Candidate recording is allowed. Do not invent completion, source_skill or current_phase receipts. Other inputs/sources and the entire Input Analysis phase need not finish. An owned active Attempt keeps its existing recovery path; Direct admission is unchanged.")
+            next_action="Inspect current phase readiness and load its playbook. Complete Recon, then Enumeration, then Input Analysis through Workflow with their canonical artifacts and coverage contract; analyze and link this exact input. Early detection and grounded Candidate recording are allowed, not confirmation or impact validation. Loading a skill, writing an artifact or permission approval is not completion. Return to the missing work before retrying. Do not invent completion, source_skill or current_phase receipts. Historical completions do not reopen for late inputs/sources. An owned active Attempt keeps its existing recovery path; Direct and candidate-validation admission are unchanged.")
 
     def validation_handoff(self, candidate_id: str, policy=None) -> dict[str, Any] | None:
         """Bounded lifecycle metadata, never observations, admission or authority."""
@@ -2068,10 +2198,25 @@ class WorkflowTool(Tool):
                             ("input_analysis", "web-input-analysis")):
             if phase not in self.state.completed_phases(objective):
                 continue
-            readiness = self.phase_completion_readiness(name)
+            marker = self.state.phase_completions[f"{objective.id}:{phase}"]
+            readiness = self.phase_completion_readiness(name, artifact_ref=marker.artifact_ref)
             if not readiness["artifact_valid"]:
                 errors[phase] = readiness["reason"]
         return errors
+
+    def next_phase_completion_readiness(self) -> dict[str, Any] | None:
+        """Current required phase/repair, shared by controller and presentation."""
+        objective = self.state.objective
+        if objective is None or objective.mode != "whole_target":
+            return None
+        errors = self.discovery_artifact_errors()
+        completed = self.state.completed_phases(objective)
+        for phase, name in (("recon", "recon"), ("enumeration", "web-enumeration"),
+                            ("input_analysis", "web-input-analysis")):
+            if phase not in completed or phase in errors:
+                marker = self.state.phase_completions.get(f"{objective.id}:{phase}")
+                return self.phase_completion_readiness(name, artifact_ref=marker.artifact_ref if marker else None)
+        return None
 
     def _record_phase_coverage(self, args: dict[str, Any]) -> str:
         objective = self.state.objective
@@ -2361,6 +2506,8 @@ class WorkflowTool(Tool):
             rows.append({"observation_id": item.id, "attempt_id": item.attempt_id,
                 "method": item.method, "url": item.url, "request_hash": item.request_hash,
                 "status": item.status, "elapsed_ms": item.elapsed_ms, "complete": item.complete,
+                "execution_status": item.execution_status, "producer": item.producer,
+                "source_kind": item.source_kind,
                 "truncated": item.truncated, "retained_body_bytes": len(item.body),
                 "read_available": attempt.get("status") in {"active", "completed"}
                                   and "read_http_observation" not in policy.revoked})

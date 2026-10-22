@@ -10,6 +10,7 @@ from src.skills.registry import (
 )
 from src.target.target import Target
 from src.workflow.validation.route import ValidationRoute
+from src.agent.validation_guidance import expert_attempt_preparation
 
 
 @dataclass
@@ -412,42 +413,6 @@ def build_whole_target_plan(
             candidate_id=candidate_id,
         )
 
-    if context.revalidation_candidate_ids:
-        candidate_id = context.revalidation_candidate_ids[0]
-        candidate = next(
-            (item for item in context.candidates if item.id == candidate_id), None
-        )
-        if candidate is None:
-            return _unresolved_validator_plan(
-                candidate_id, "unknown", 0, revalidation=True,
-            )
-        if candidate.id in context.validation_routes and context.validation_routes[candidate.id].kind != "expert":
-            return _route_plan(candidate, context.validation_routes[candidate.id], revalidation=True)
-        matching = _validation_skills_for_class(skills, candidate.candidate_class)
-        if len(matching) != 1:
-            return _unresolved_validator_plan(
-                candidate_id, candidate.candidate_class, len(matching),
-                revalidation=True,
-            )
-        validator = matching[0]
-        return DecisionPlan(
-            recommended_skill=validator.name,
-            reason=f"registered evidence for {candidate_id} is missing or no longer resolvable",
-            risk="normal",
-            checklist=[
-                "Revalidate only this existing candidate because its registered proof is unavailable.",
-                "Save fresh redacted proof and record the updated result before reporting it.",
-            ],
-            guidance=(
-                "Decision planner guidance for this turn:\n"
-                f"Active objective: whole-target assessment {context.objective_id}.\n"
-                f"Revalidate candidate {candidate_id} only to replace missing or invalid proof. "
-                "This is evidence repair, not a general retest; keep the original scope and "
-                "the skill's authorization and stop conditions."
-            ),
-            candidate_id=candidate_id,
-        )
-
     if context.pending_finding_candidate_ids:
         candidate_id = context.pending_finding_candidate_ids[0]
         return DecisionPlan(
@@ -490,30 +455,6 @@ def build_whole_target_plan(
             candidate_id=candidate_id,
         )
 
-    # A bounded analyzed input can validate while an unselected frontier remains.
-    # Required phase/artifact repair and selected source obligations stay first.
-    ready = next(iter(sorted(
-        (c for c in context.candidates if c.validation_ready is True and c.status in {"new", "queued"}),
-        key=lambda c: ({"queued": 1, "new": 2}.get(c.status, 3),
-                       {"high": 0, "medium": 1, "low": 2}.get(c.priority or "", 3), c.id),
-    )), None) if (context.structured_phase in {"input_analysis", "validation"}
-                  and not context.selected_pending_source_count
-                  and not context.discovery_obligation_pending
-                  and not (context.phase_completion_readiness or {}).get("historically_completed")) else None
-    if ready:
-        route = context.validation_routes.get(ready.id)
-        if route and route.kind != "expert":
-            return _route_plan(ready, route)
-        validators = _validation_skills_for_class(skills, ready.candidate_class)
-        if len(validators) == 1:
-            name = validators[0].name
-            return DecisionPlan(name, "analyzed linked input is ready for bounded validation", "normal", [],
-                "Decision planner guidance for this turn:\n"
-                f'Call workflow(action="start_validation", candidate_id="{ready.id}"), then reload load_skill(name="{name}") '
-                "if needed before validation probes. "
-                "Only this analyzed input is ready; other pending discovery/input obligations remain open. "
-                "Follow the validator, evidence and permission gates.", candidate_id=ready.id)
-
     source_guidance = source_frontier_guidance(context)
     phase_skills = (
         ("recon", "recon"),
@@ -523,6 +464,8 @@ def build_whole_target_plan(
     for phase, skill_name in phase_skills:
         if phase != context.structured_phase:
             continue
+        if phase in context.completed_phases and not context.phase_completion_readiness:
+            continue  # Late inputs do not reopen a historically completed phase.
         skill = next(
             (
                 item for item in skills
@@ -571,7 +514,11 @@ def build_whole_target_plan(
                 + (f'Load the current playbook with load_skill(name="{skill.name}") before phase work. '
                  if skill.name not in context.active_skills else "")
                 + "Follow the skill playbook. Runtime structured state controls "
-                "completion; this recommendation is guidance."
+                "completion; this recommendation is guidance. Complete Recon → Enumeration → Input Analysis "
+                "through Workflow before opening a new validation attempt. Detection/markers permitted by the "
+                "current playbook and grounded Candidate recording remain allowed; defer confirmation and "
+                "bounded impact validation. Loading a skill, writing an artifact or approval is not completion. "
+                "If blocked by a prerequisite, do the missing work before retrying."
                 + completion_guidance
                 + ("\nPhase requirements: " + str({
                     "artifact_ref": readiness.get("artifact_ref"),
@@ -582,6 +529,66 @@ def build_whole_target_plan(
                 + (source_guidance if not readiness or not readiness.get("ready") else "")
             ),
         )
+
+    if context.revalidation_candidate_ids and any(
+        c.id == context.revalidation_candidate_ids[0] and c.validation_ready is not False
+        for c in context.candidates
+    ):
+        candidate_id = context.revalidation_candidate_ids[0]
+        candidate = next(
+            (item for item in context.candidates if item.id == candidate_id), None
+        )
+        if candidate is None:
+            return _unresolved_validator_plan(
+                candidate_id, "unknown", 0, revalidation=True,
+            )
+        if candidate.id in context.validation_routes and context.validation_routes[candidate.id].kind != "expert":
+            return _route_plan(candidate, context.validation_routes[candidate.id], revalidation=True)
+        matching = _validation_skills_for_class(skills, candidate.candidate_class)
+        if len(matching) != 1:
+            return _unresolved_validator_plan(
+                candidate_id, candidate.candidate_class, len(matching),
+                revalidation=True,
+            )
+        validator = matching[0]
+        return DecisionPlan(
+            recommended_skill=validator.name,
+            reason=f"registered evidence for {candidate_id} is missing or no longer resolvable",
+            risk="normal",
+            checklist=[
+                "Revalidate only this existing candidate because its registered proof is unavailable.",
+                "Save fresh redacted proof and record the updated result before reporting it.",
+            ],
+            guidance=(
+                "Decision planner guidance for this turn:\n"
+                f"Active objective: whole-target assessment {context.objective_id}.\n"
+                f"Revalidate candidate {candidate_id} only to replace missing or invalid proof. "
+                "This is evidence repair, not a general retest; keep the original scope and "
+                "the skill's authorization and stop conditions."
+                + " " + expert_attempt_preparation(validator.name, candidate_id)
+            ),
+            candidate_id=candidate_id,
+        )
+
+    # The runtime admission projection includes all three completed phases and
+    # compatible analyzed linkage. Late unselected frontier/inputs stay open.
+    ready = next(iter(sorted(
+        (c for c in context.candidates if c.validation_ready is True and c.status in {"new", "queued"}),
+        key=lambda c: ({"queued": 1, "new": 2}.get(c.status, 3),
+                       {"high": 0, "medium": 1, "low": 2}.get(c.priority or "", 3), c.id),
+    )), None) if not context.discovery_obligation_pending and not context.selected_pending_source_count else None
+    if ready:
+        route = context.validation_routes.get(ready.id)
+        if route and route.kind != "expert":
+            return _route_plan(ready, route)
+        validators = _validation_skills_for_class(skills, ready.candidate_class)
+        if len(validators) == 1:
+            name = validators[0].name
+            return DecisionPlan(name, "completed phases and analyzed linked input admit validation", "normal", [],
+                "Decision planner guidance for this turn:\n"
+                + expert_attempt_preparation(name, ready.id)
+                + " Other pending discovery/input obligations remain open; follow their existing contract.",
+                candidate_id=ready.id)
 
     # Partial/blocked selected sources and selected scanner rows may remain
     # after the pending frontier is empty. Gate every later candidate route.
@@ -644,10 +651,10 @@ def build_whole_target_plan(
 
     actionable = [
         candidate for candidate in context.candidates
-        if candidate.status in {"new", "queued", "validating"}
+        if candidate.validation_ready is not False and (candidate.status in {"new", "queued", "validating"}
         or candidate.status == "deferred" and (
             candidate.generic_startable is True or _startable_validation(candidate, context))
-        or candidate.id in context.revalidation_candidate_ids
+        or candidate.id in context.revalidation_candidate_ids)
     ]
     actionable.sort(
         key=lambda item: (
@@ -687,6 +694,7 @@ def build_whole_target_plan(
                 f"Next candidate: {candidate.id} ({candidate.candidate_class}) via "
                 f"{validator.name}.\n"
                 "Respect the validator's authorization and evidence gates."
+                + " " + expert_attempt_preparation(validator.name, candidate.id)
             ),
             candidate_id=candidate.id,
         )
@@ -731,7 +739,8 @@ def _requested_goal_plan(
         candidates = [
             item for item in context.candidates
             if item.id in goal.candidate_ids
-            and (not whole_target or item.validation_action != "preserve_result")
+            and (not whole_target or (item.validation_action != "preserve_result"
+                                      and item.validation_ready is not False))
         ]
         if goal.status not in {"pending", "in_progress"}:
             if not whole_target or goal.status not in {"blocked", "deferred"}:
@@ -799,6 +808,7 @@ def _requested_goal_plan(
                     "Decision planner guidance for this turn:\n"
                     f"Next requested goal: {goal.candidate_class}; candidate {candidate.id}.\n"
                     f"Use {validator.name} and follow its authorization and evidence gates."
+                    + " " + expert_attempt_preparation(validator.name, candidate.id)
                 ),
                 candidate_id=candidate.id,
             )
@@ -1392,6 +1402,11 @@ def render_guidance(
         ))
         if skill_name is None:
             lines.insert(2, "- No enabled validator matches this candidate; keep it deferred or choose a justified manual path.")
+        elif skill_name not in {"recon", "web-enumeration", "web-input-analysis"}:
+            if candidate.status == "validating":
+                lines.insert(2, "- Resume the owned active attempt with its immutable declaration and recovery budget; do not open a replacement.")
+            else:
+                lines.insert(2, "- " + expert_attempt_preparation(skill_name, candidate.id))
     elif candidates:
         blocked = [item for item in candidates if item.status == "deferred"]
         if blocked:

@@ -301,6 +301,11 @@ async def test_direct_planner_excludes_foreign_candidates_and_keeps_cancelled_go
 
 
 async def complete_input_analysis(tool):
+    if 'input_analysis' in tool.state.completed_phases():
+        readiness = tool.phase_completion_readiness('web-input-analysis')
+        assert readiness['historically_completed'] and readiness['artifact_valid']
+        assert readiness['prerequisites_valid'] and readiness['reason'] == 'input_analysis phase is already completed'
+        return
     assert tool.skills is not None
     skill = tool.skills.get("web-input-analysis")
     assert skill is not None and skill.completion_artifact

@@ -147,10 +147,16 @@ def _redact_multipart(value: str, content_type: str | None) -> str:
     return "".join(output)
 
 
-def redact_request_context(value: str, content_type: str | None = None) -> str:
+def redact_request_context(value: str, content_type: str | None = None, *,
+                           location: str | None = None) -> str:
     """Redact bounded JSON, form, and multipart request skeletons."""
     media_type = (content_type or "").split(";", 1)[0].strip().lower()
     text = value.strip()
+    # A query/request-line skeleton is not a body. Legacy producers sometimes
+    # supplied the response media type here. Remove that inappropriate body
+    # hint, while still applying JSON detection and secret-field redaction.
+    if location == "query" or (location is None and re.fullmatch(r"[A-Z]+ [^\r\n]+", text)):
+        media_type = ""
     is_multipart = media_type == "multipart/form-data" or bool(
         re.search(r"(?im)^content-disposition:\s*form-data\b", text)
     )
@@ -208,7 +214,8 @@ def redact_payload(value: Any) -> Any:
                 _redacted_secret_value(item)
                 if _is_secret_field(key) and item is not None
                 else redact_request_context(
-                    item, content_type if isinstance(content_type, str) else None
+                    item, content_type if isinstance(content_type, str) else None,
+                    location=value.get("location")
                 )
                 if key in _REQUEST_CONTEXT_FIELDS and isinstance(item, str)
                 else redact_payload(item)

@@ -5,6 +5,9 @@ from __future__ import annotations
 import sys
 import asyncio
 import os
+import shutil
+import subprocess
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -98,97 +101,164 @@ async def test_executes_benign_command_and_returns_stdout():
 
 
 @pytest.mark.asyncio
-async def test_rejects_blocked_command_before_spawn():
+async def test_rejects_blocked_command_before_spawn(monkeypatch):
+    spawn = AsyncMock(side_effect=AssertionError("denylist must prevent spawn"))
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
     t = ShellTool()
     with pytest.raises(Exception, match="blocked by denylist"):
         await t.run({"command": "rm -rf /"}, None, AlwaysAllow())
+    spawn.assert_not_called()
 
 
-def test_rewrites_common_grep_p_forms_to_portable_perl():
-    # The pattern travels through the PF_GREP_PAT env var, never inlined into
-    # the Perl source, so a malicious pattern can't become a code-exec primitive.
-    assert rewrite_portable_command("printf 'abc' | grep -P 'a'") == (
-        "printf 'abc' | PF_GREP_PAT='a' perl -ne "
-        "'BEGIN { $p = $ENV{PF_GREP_PAT} } print if /$p/'"
+# Compare with the same native shell, without another command transformer or
+# output parser. Each subprocess runs offline in pytest's temporary directory.
+PCRE_COMMANDS = [
+    pytest.param(
+        "printf '%s\\n' '---TITLE---'\npat=abc\n"
+        'printf \'%s\\n\' abc | grep -P "$pat" | grep -q abc',
+        0, id="audit-reproduction",
+    ),
+    pytest.param("printf 'abc\\nxyz\\n' | grep -P 'a'", 0, id="match"),
+    pytest.param("printf 'abc\\n' | grep -P 'missing'", 1, id="no-match"),
+    pytest.param("grep -Pr 'a' /dev/null", 1, id="recursive-flag"),
+    pytest.param("printf 'abc\\n' | grep -oP 'a.'", 0, id="extract"),
+    pytest.param("printf 'ABC\\n' | grep -iP 'a'", 0, id="ignore-case"),
+    pytest.param("printf 'abc\\n' | grep --perl-regexp 'a'", 0, id="long-flag"),
+    pytest.param("printf 'abc\\nxyz\\n' | grep -voP 'a'", 0, id="inverse-extract"),
+    pytest.param("printf 'abc\\nxyz\\n' | grep -P 'a' -A1", 0, id="trailing-flags"),
+    pytest.param("printf 'abc\\n' | grep -P '['", 2, id="malformed-regex"),
+    pytest.param(
+        'pat=$(printf abc)\nprintf \'%s\\n\' abc | grep -P $pat',
+        0, id="unquoted-expansion",
+    ),
+    pytest.param(
+        "pat=abc; printf 'abc\\n' > input.txt\n"
+        'grep -P "$pat" < input.txt > output.txt; code=$?; cat output.txt; exit "$code"',
+        0, id="redirections",
+    ),
+    pytest.param(
+        "printf 'abc\\n' | grep -P '[' 2> error.txt; code=$?; cat error.txt >&2; exit \"$code\"",
+        2, id="stderr-redirection",
+    ),
+    pytest.param(
+        "printf 'abc\\n' | grep -P 'missing' | cat",
+        0, id="pipeline-masks-no-match",
+    ),
+    pytest.param(
+        "printf 'x\\n' | grep -P '@{[ `echo PWNED` ]}'",
+        1, id="quoted-pattern-stays-inert",
+    ),
+]
+
+SHELL_TEXT_COMMANDS = [
+    pytest.param('printf \'%s\\n\' "| grep -P \'a\'"', id="quoted-pipeline"),
+    pytest.param(
+        "printf '%s\\n' before # | grep -P '$pat'\nprintf '%s\\n' after",
+        id="comment",
+    ),
+    pytest.param(
+        "cat <<'DATA'\n| grep -P '$pat'\nsed -r 's/a/A/'\nDATA",
+        id="quoted-heredoc",
+    ),
+    pytest.param(
+        'pat=abc\ncat <<DATA\n| grep -P "$pat"\n$pat\n$(printf expanded)\nDATA',
+        id="expanded-heredoc",
+    ),
+    pytest.param(
+        'cat <<DATA > output.txt\n| grep -P \'abc\'\nDATA\ncat < output.txt',
+        id="heredoc-redirection",
+    ),
+    pytest.param(
+        "printf '%s\\n' 'grep -P sed -r base64 -w0 readlink -f date -d xargs -r stat -c sort -V timeout 2'",
+        id="gnu-flags-as-data",
+    ),
+    pytest.param(
+        "# sed -r; base64 -w0; readlink -f .; date -d tomorrow; xargs -r; stat -c; sort -V; timeout 2\ntrue",
+        id="gnu-flags-in-comment",
+    ),
+    pytest.param("printf 'abc\\n' | sed -r 's/a/A/'", id="native-sed"),
+    pytest.param("printf 'abc' | base64 -w0", id="native-base64"),
+    pytest.param("readlink -f .", id="native-readlink"),
+    pytest.param("date -d '2000-01-02 UTC' +%F", id="native-date"),
+    pytest.param("printf '' | xargs -r echo", id="native-xargs"),
+    pytest.param("stat -c %s /dev/null", id="native-stat"),
+    pytest.param("printf '1.2\\n1.10\\n' | sort -V", id="native-sort"),
+    pytest.param("timeout 2 printf bounded", id="native-timeout"),
+    pytest.param("kagent_f1_nonexistent_command", id="missing-utility"),
+]
+
+
+@pytest.fixture(params=[ShellTool, BashTool], ids=["sh", "bash"])
+def native_shell_tool(request, monkeypatch, tmp_path):
+    if os.name != "posix":
+        pytest.skip("Native POSIX shell comparison")
+    tool = request.param()
+    if not os.path.isfile(tool.shell_path):
+        pytest.skip(f"Native shell unavailable: {tool.shell_path}")
+    monkeypatch.chdir(tmp_path)
+    return tool
+
+
+@pytest.fixture
+def native_grep_p():
+    if shutil.which("grep") is None:
+        pytest.skip("Native grep unavailable")
+    probe = subprocess.run(
+        ["grep", "-P", "a"], input=b"abc\n", capture_output=True, timeout=5,
     )
-    assert rewrite_portable_command("printf 'abc' | grep -oP 'a.'") == (
-        "printf 'abc' | PF_GREP_PAT='a.' perl -ne "
-        "'BEGIN { $p = $ENV{PF_GREP_PAT} } while (/$p/g) { print \"$&\\n\" }'"
+    if probe.returncode != 0:
+        pytest.skip("Native grep lacks PCRE support")
+
+
+async def assert_native_shell_result(tool, command, expected_exit=None):
+    direct = subprocess.run(
+        [tool.shell_path, "-c", command], capture_output=True, timeout=5,
     )
-    assert rewrite_portable_command("printf 'ABC' | grep -iP 'a'") == (
-        "printf 'ABC' | PF_GREP_PAT='a' perl -ne "
-        "'BEGIN { $p = $ENV{PF_GREP_PAT} } print if /$p/i'"
-    )
-    assert rewrite_portable_command("printf 'abc' | grep --perl-regexp 'a'") == (
-        "printf 'abc' | PF_GREP_PAT='a' perl -ne "
-        "'BEGIN { $p = $ENV{PF_GREP_PAT} } print if /$p/'"
-    )
+    if expected_exit is not None:
+        assert direct.returncode == expected_exit
+    out = await tool.run({"command": command, "timeout_seconds": 5}, None, AlwaysAllow())
+    expected = f"exit: {direct.returncode}\nstdout:\n{direct.stdout.decode('utf-8', errors='replace')}"
+    if direct.stderr:
+        expected += f"\nstderr:\n{direct.stderr.decode('utf-8', errors='replace')}"
+    assert str(out) == expected
+    assert out.status == ("success" if direct.returncode == 0 else "error")
+    assert out.error_kind == (None if direct.returncode == 0 else "tool_exception")
+    assert not out.truncated
 
 
 @pytest.mark.asyncio
-async def test_treats_grep_p_pattern_as_inert_data_not_perl_exec_primitive():
-    # The classic payload runs `id` when inlined into a /.../ literal; as data
-    # it must match nothing and never execute.
-    rewritten = rewrite_portable_command("grep -P '@{[ `id` ]}' /dev/null")
-    assert "`id`/" not in rewritten
-    assert "PF_GREP_PAT=" in rewritten
-
-    out = await ShellTool().run(
-        {
-            "command": "printf 'x\\n' | grep -P '@{[ `echo PWNED` ]}'",
-            "timeout_seconds": 5,
-        },
-        None,
-        AlwaysAllow(),
-    )
-    assert "PWNED" not in out
-
-
-def test_does_not_rewrite_grep_p_inside_string_or_with_trailing_flags():
-    # L2: literal `grep -P` inside a quoted string is not at a command position.
-    assert (
-        rewrite_portable_command('echo "look at grep -P xyz"')
-        == 'echo "look at grep -P xyz"'
-    )
-    # L1: trailing context/format flags have no faithful perl translation, so
-    # we leave the original in place (the portability guard then surfaces a
-    # message).
-    assert (
-        rewrite_portable_command("grep -P 'a' -A3 file")
-        == "grep -P 'a' -A3 file"
-    )
+@pytest.mark.parametrize("command,expected_exit", PCRE_COMMANDS)
+async def test_native_grep_semantics(native_shell_tool, native_grep_p, command, expected_exit):
+    await assert_native_shell_result(native_shell_tool, command, expected_exit)
 
 
 @pytest.mark.asyncio
-async def test_executes_rewritten_grep_p_commands_instead_of_blocking():
-    t = ShellTool()
-    out = await t.run(
-        {"command": "printf 'abc\\nxyz\\n' | grep -oP 'a.'", "timeout_seconds": 5},
-        None,
-        AlwaysAllow(),
-    )
-    assert "ab" in out
-    assert "exit: 0" in out
+@pytest.mark.parametrize("command", SHELL_TEXT_COMMANDS)
+async def test_shell_text_and_native_utilities_are_not_portability_blocked(native_shell_tool, command):
+    await assert_native_shell_result(native_shell_tool, command)
+
+
+@pytest.mark.parametrize("command", [
+    "printf 'abc' | grep -P 'a'",
+    "printf 'abc' | grep -voP 'a' -A1",
+    'pat=abc; printf abc | grep -P "$pat"',
+    "grep -P '@{[ `id` ]}' /dev/null",
+    "cat <<'DATA'\n| grep -P 'abc'\nDATA",
+    "printf abc | sed -r 's/a/A/'",
+])
+def test_legacy_rewrite_helper_preserves_original_command(command):
+    assert rewrite_portable_command(command) == command
 
 
 @pytest.mark.asyncio
-async def test_blocks_known_gnu_only_commands_with_guidance():
-    t = ShellTool()
-    cases = [
-        ("printf 'abc' | grep -Pr 'a'", "grep -P"),
-        ("printf 'abc' | sed -r 's/a/A/'", "sed -r"),
-        ("printf 'abc' | base64 -w0", "base64 -w"),
-        ("readlink -f ./package.json", "readlink -f"),
-        ("date -d tomorrow", "date -d"),
-        ("printf '' | xargs -r echo", "xargs -r"),
-        ("stat -c %s package.json", "stat -c"),
-        ("printf '1.2\\n1.10\\n' | sort -V", "sort -V"),
-        ("timeout 2 curl -s https://example.com", "timeout"),
-    ]
-
-    for command, message in cases:
-        with pytest.raises(Exception, match=message):
-            await t.run({"command": command}, None, AlwaysAllow())
+async def test_unavailable_executor_raises_before_command_execution(monkeypatch):
+    spawn = AsyncMock(side_effect=FileNotFoundError("fixture executor unavailable"))
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    with pytest.raises(FileNotFoundError, match="executor unavailable"):
+        await ShellTool(shell="/unavailable-shell").run(
+            {"command": "exit 1"}, None, AlwaysAllow(),
+        )
+    spawn.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -466,13 +536,10 @@ def test_honors_pflow_windows_shell_override_on_windows(
     assert cmd == "pwsh.exe"
 
 
-def test_skips_unix_grep_p_to_perl_rewrite_on_windows(monkeypatch):
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
+def test_legacy_rewrite_is_identity_on_every_platform(monkeypatch, platform):
     cmd = "type x | grep -P 'a'"
-    assert with_platform(monkeypatch, "win32", lambda: rewrite_portable_command(cmd)) == cmd
-    # Sanity: on POSIX the same input *is* rewritten, proving the guard matters.
-    assert "perl -ne" in with_platform(
-        monkeypatch, "linux", lambda: rewrite_portable_command(cmd)
-    )
+    assert with_platform(monkeypatch, platform, lambda: rewrite_portable_command(cmd)) == cmd
 
 
 def test_surfaces_powershell_appropriate_guidance_on_windows(monkeypatch):

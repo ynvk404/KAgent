@@ -72,3 +72,48 @@ async def test_repair_guidance_matches_loaded_preface_without_changing_runtime_c
     assert 'remaining recovery budget' in loaded
     assert 'runtime retry ceiling' in loaded
     assert MAX_EVIDENCE_RECOVERY_RETRIES == 2
+
+
+async def test_xss_opening_contract_prepares_only_known_associations_and_preserves_active_declaration(skills):
+    loaded = ' '.join((await LoadSkillTool(skills).run({'name': 'cross-site-scripting'})).split())
+    for contract in ('complete current prerequisites', 'read the current skill',
+                     'prepare primary/supplementary requests and roles', 'successfully call `start_validation`',
+                     'candidate ID alone', '`POST /comments`', '`GET /comments`', 'role `readback`',
+                     'different method is a different request identity', 'payload variations are observations',
+                     'only known endpoints', 'Association grants no permission',
+                     'do not amend it retrospectively', 'repeat HTTP just to repair association',
+                     'Continue if the current declaration', 'honest unresolved outcome', 'explicit retest contract'):
+        assert contract in loaded
+    assert '/api/Feedbacks' not in loaded and 'Juice Shop' not in loaded
+
+
+async def test_input_analysis_does_not_promote_json_markup_to_unsupported_xss_or_require_exploit(skills):
+    loaded = ' '.join((await LoadSkillTool(skills).run({'name': 'web-input-analysis'})).split())
+    for contract in ('HTML markup or an inert marker in JSON remains an observation',
+                     'rendering context nor a compatible source-to-sink path',
+                     'Do not send a mutation to rescue an unsupported XSS hypothesis',
+                     'JSON readback, persistence, executable rendering and execution proof',
+                     'without browser execution or a confirmed exploit',
+                     'valid request association likewise does not establish confirmed XSS'):
+        assert contract in loaded
+    assert 'unique, inert marker' in loaded and 'minimal syntax perturbation' in loaded
+
+
+@pytest.mark.parametrize('name,obligations', [
+    ('sql-injection', ['without query text leaves SQL shape a hypothesis',
+        'same error or the same empty result do not establish a differential',
+        'Changing technique names does not reset', 'raw wire encoding from decoded application input',
+        'new immutable snapshot', 'Usable metadata is not impact proof']),
+    ('cross-site-scripting', ['API negative applies only to the tested sink',
+        'cannot exclude DOM or stored XSS', 'actual exposed and allowed browser capabilities',
+        'Registration alone does not make a terminal result eligible']),
+    ('web-input-analysis', ['sanitized sample, even with a marker', 'not automatically promoted',
+        'invalid credentials and format errors', 'request body, never response Content-Type']),
+    ('web-enumeration', ['including password fields', 'not automatically synchronized',
+        'not semantic completeness of Markdown', 'within 240 characters']),
+])
+async def test_loaded_lan02_evidence_handoff_guidance(skills, name, obligations):
+    # These verify the supplied playbook contract, not model compliance.
+    loaded = ' '.join((await LoadSkillTool(skills).run({'name': name})).split()).lower()
+    for obligation in obligations:
+        assert obligation.lower() in loaded

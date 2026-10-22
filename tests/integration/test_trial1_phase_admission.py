@@ -43,29 +43,70 @@ async def linked(tool, *, analyze=True, endpoint='/fixture'):
     return item, candidate
 
 
-async def test_production_prerequisites_are_reachable_without_finishing_all_inputs(tmp_path):
+async def analysis(tool):
+    readiness = tool.phase_completion_readiness('web-input-analysis')
+    path = tool.evidence_root / readiness['artifact_ref']
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('Bounded offline input analysis fixture; every initial input reviewed.')
+    assert json.loads(await action(tool, 'complete_skill', skill_name='web-input-analysis'))['ok']
+
+
+async def test_production_prerequisites_allow_late_inputs_without_reopening_completed_phases(tmp_path):
     tool = runtime(tmp_path)
     await phases(tool)
     item, candidate = await linked(tool)
+    await analysis(tool)
     pending, _ = await linked(tool, analyze=False, endpoint='/later')
     assert tool.state.validate_input_candidate(item['id'], tool.state.candidates[candidate['id']]).disposition == 'analyzed'
     started = json.loads(await action(tool, 'start_validation', candidate_id=candidate['id']))
     assert started['ok'] and tool.state.attack_surface_inputs[pending['id']].disposition == 'pending'
-    assert tool.state.completed_phases() == frozenset({'recon', 'enumeration'})
+    assert tool.state.completed_phases() == frozenset({'recon', 'enumeration', 'input_analysis'})
 
 
 import pytest
 
 
-@pytest.mark.parametrize('mode', ['whole_target', 'direct'])
+@pytest.mark.parametrize('phase', ['recon', 'enumeration', 'input_analysis'])
+@pytest.mark.parametrize('fault', ['missing', 'objective', 'target', 'noncanonical', 'empty'])
+async def test_each_phase_is_required_by_runtime_and_planner_without_mutation(tmp_path, phase, fault):
+    from tests.agent.test_workflow_request_preparation import setup
+    tool = runtime(tmp_path)
+    await phases(tool)
+    _, candidate = await linked(tool)
+    await analysis(tool)
+    assert tool.state.objective is not None
+    key = f'{tool.state.objective.id}:{phase}'
+    marker = tool.state.phase_completions[key]
+    if fault == 'missing': del tool.state.phase_completions[key]
+    elif fault == 'objective': marker.objective_id = 'other'
+    elif fault == 'target': marker.target_origin = 'https://other.test'
+    elif fault == 'noncanonical': marker.artifact_ref = 'artifacts/not-canonical.md'
+    else: (tmp_path / marker.artifact_ref).write_text('')
+    before = tool.state.to_dict()
+    assert 'WHOLE_TARGET_VALIDATION_PREREQUISITE' in await action(tool, 'start_validation', candidate_id=candidate['id'])
+    assert tool.state.to_dict() == before and tool.active_attempt is None
+    assert not tool.state.attempts and not tool.state.evidence_recovery
+    agent = setup(tmp_path, state=tool.state)
+    assert tool.target is not None
+    agent.target = tool.target
+    agent.tools.tools['workflow'] = tool
+    view = agent._workflow_request_view('continue', agent.tools.as_llm_tools())
+    assert view.decision is not None and view.decision.candidate_id is None
+    assert view.decision.recommended_skill in {'recon', 'web-enumeration', 'web-input-analysis'}
+    assert tool.state.to_dict() == before
+
+
+@pytest.mark.parametrize('mode', ['whole_target', 'direct', 'candidate_validation'])
 async def test_early_candidate_is_retained_but_only_whole_target_new_attempt_is_gated(tmp_path, mode):
-    tool = runtime(tmp_path, mode)
+    tool = runtime(tmp_path, 'direct' if mode == 'candidate_validation' else mode)
     candidate = json.loads(await action(tool, 'record_candidate', candidate_class='xss',
         method='GET', endpoint='/fixture', parameter='q', location='query',
         source_skill='web-input-analysis', current_phase='validation'))['candidate']
+    if mode == 'candidate_validation':
+        tool.state.objective = WorkflowObjective('candidate-retest', mode, ORIGIN, candidate['id'])
     before = tool.state.to_dict()
     response = await action(tool, 'start_validation', candidate_id=candidate['id'])
-    if mode == 'direct':
+    if mode != 'whole_target':
         assert json.loads(response)['ok'] and not tool.state.completed_phases()
     else:
         assert 'WHOLE_TARGET_VALIDATION_PREREQUISITE' in response
@@ -77,22 +118,27 @@ async def test_early_candidate_is_retained_but_only_whole_target_new_attempt_is_
 async def test_input_gate_uses_canonical_analyzed_linkage(tmp_path, fault):
     tool = runtime(tmp_path)
     await phases(tool)
-    item, candidate = await linked(tool, analyze=fault != 'pending')
+    item, candidate = await linked(tool)
+    await analysis(tool)
     record = tool.state.attack_surface_inputs[item['id']]
+    if fault == 'pending': record.disposition = 'pending'
     if fault == 'no-link': record.candidate_ids.clear()
     if fault == 'dropped': record.disposition = 'dropped'
     if fault == 'foreign-objective': record.objective_id = 'other'
     if fault == 'foreign-target': record.target_origin = 'https://other.test'
     if fault == 'mismatch': record.parameter = 'different'
+    before = tool.state.to_dict()
     result = await action(tool, 'start_validation', candidate_id=candidate['id'])
     assert 'WHOLE_TARGET_VALIDATION_PREREQUISITE' in result and not tool.state.attempts
+    assert tool.state.to_dict() == before and tool.active_attempt is None
 
 
-@pytest.mark.parametrize('name', ['recon', 'web-enumeration'])
+@pytest.mark.parametrize('name', ['recon', 'web-enumeration', 'web-input-analysis'])
 async def test_missing_artifact_blocks_new_but_does_not_block_owned_active_recovery(tmp_path, name):
     tool = runtime(tmp_path)
     await phases(tool)
     _, candidate = await linked(tool)
+    await analysis(tool)
     relative = tool.phase_completion_readiness(name)['artifact_ref']
     path = tmp_path / relative
     original = path.read_text()
@@ -100,13 +146,20 @@ async def test_missing_artifact_blocks_new_but_does_not_block_owned_active_recov
     assert 'WHOLE_TARGET_VALIDATION_PREREQUISITE' in await action(tool, 'start_validation', candidate_id=candidate['id'])
     path.write_text(original)
     first = json.loads(await action(tool, 'start_validation', candidate_id=candidate['id']))
+    from src.workflow.evidence.recovery import current_budget
+    budget = current_budget(tool.state, candidate['id'], create=True)
+    assert budget is not None
+    budget.update(rejections=1, repair_turns=2)
     path.unlink()
+    before = tool.state.to_dict()
     second = json.loads(await action(tool, 'start_validation', candidate_id=candidate['id']))
     assert second['validation_context']['attempt_id'] == first['validation_context']['attempt_id']
     assert len(tool.state.attempts) == 1
+    assert tool.state.to_dict() == before
     # A forged validating status alone cannot resume an attempt under a new session.
     tool.session_id = 'different-session'
     assert 'WHOLE_TARGET_VALIDATION_PREREQUISITE' in await action(tool, 'start_validation', candidate_id=candidate['id'])
+    assert tool.state.to_dict() == before
 
 
 async def test_selected_late_source_does_not_force_exhaustive_discovery_before_validation(tmp_path):
@@ -114,6 +167,7 @@ async def test_selected_late_source_does_not_force_exhaustive_discovery_before_v
     tool = runtime(tmp_path)
     await phases(tool)
     _, candidate = await linked(tool)
+    await analysis(tool)
     assert tool.state.objective is not None
     src = source(objective_id=tool.state.objective.id, target_origin=ORIGIN,
         document_url=ORIGIN + '/late', selected=True)

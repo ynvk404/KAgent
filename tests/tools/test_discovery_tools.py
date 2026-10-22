@@ -491,6 +491,31 @@ async def test_content_discovery_omits_attestation_without_qualifying_phase():
     assert workflow.phase_coverage_record("enumeration", "active_content_discovery") is None
 
 
+async def test_first_enumeration_discovery_after_workflow_recon_completion_records_coverage(tmp_path):
+    from src.skills.registry import Registry as Skills
+    from src.tools.workflow.workflow_tool import WorkflowTool
+    from tests.helpers.workflow import record_phase_coverage_for_test
+    workflow = make_workflow()
+    discovery = make_content_tool(workflow=workflow)
+    skills = Skills()
+    skills.load_dir('skills')
+    tool = WorkflowTool(workflow, discovery.target, skills=skills, evidence_root=tmp_path)
+    await record_phase_coverage_for_test(tool, 'recon')
+    readiness = tool.phase_completion_readiness('recon')
+    artifact = tmp_path / readiness['artifact_ref']
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text('Offline Recon pass with explicit dimension dispositions.')
+    assert json.loads(await tool.run({'action': 'complete_skill', 'skill_name': 'recon'}, None, AlwaysAllow()))['ok']
+    assert workflow.is_next_phase('enumeration')
+    assert workflow.needs_phase_coverage('enumeration', 'active_content_discovery')
+    # A real path gap in this fixture; no earlier discovery or receipt-only rerun.
+    output = await discovery.run({'paths': ['admin'], 'max_requests': 3}, None, AlwaysAllow())
+    assert len(FakeHTTPClient.seen) == 3
+    assert json.loads(str(output))['phase_coverage']['changed'] is True
+    coverage = workflow.phase_coverage_record('enumeration', 'active_content_discovery')
+    assert coverage is not None and coverage.status == 'performed'
+
+
 @pytest.mark.asyncio
 async def test_content_discovery_omits_attestation_when_recording_fails(monkeypatch):
     workflow = make_workflow(phase="enumeration")

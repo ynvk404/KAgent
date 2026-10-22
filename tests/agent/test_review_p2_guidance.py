@@ -61,7 +61,8 @@ async def test_recoverable_fallback_precedes_exhausted_in_either_store_order(off
     before = deepcopy(rt.workflow.to_dict())
     text = continuation(rt)
     assert f'Candidate {recoverable};' in text and 'Recovery=available rejections=1/3' in text
-    assert 'No owned active attempt: call' in text and f'Candidate {exhausted};' not in text
+    assert 'No owned active attempt:' in text and f'Candidate {exhausted};' not in text
+    assert text.index('load_skill') < text.index('Then call workflow(action="start_validation"')
     assert rt.workflow.to_dict() == before and not sent
     # Guidance selection does not change start_validation's admission semantics.
     rejected = await rt.registry.execute('workflow', {
@@ -211,7 +212,8 @@ async def test_resolved_selected_obligations_allow_ready_validation(offline, res
     assert not context.discovery_obligation_pending
     plan = build_whole_target_plan(rt.skills.list_enabled(), context)
     assert plan is not None and plan.candidate_id == cid
-    assert plan.guidance.index('start_validation') < plan.guidance.index('load_skill')
+    assert plan.guidance.index('load_skill') < plan.guidance.index('Then call workflow(action="start_validation"')
+    assert 'prepare the primary request' in plan.guidance and 'related_requests' in plan.guidance
     assert rt.workflow.to_dict() == before and not sent
 
 

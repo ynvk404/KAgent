@@ -416,6 +416,11 @@ proceed with `enumeration`. If reachability failed, set
 Completion records that this bounded reconnaissance pass ended; it does not
 force the next skill or prevent targeted recon later.
 
+For whole-target work, wait for successful Workflow Recon completion before
+Enumeration or `content_discovery`. Writing this summary, loading a skill, or
+obtaining permission does not complete Recon. If completion is rejected, resolve
+the stated missing coverage/artifact work before retrying or moving on.
+
 For whole-target work, inspect workflow coverage before completion and account
 for `target_resolution`, `reachability`, `http_fingerprint`, and
 `service_discovery`. `performed` is reserved for machine-observed execution:

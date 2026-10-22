@@ -55,6 +55,7 @@ async def custom_env(runtime, tmp_path, shape="json", mode: WorkflowMode="direct
                         coverage=CoverageStore(str(tmp_path / "coverage.json")))
     registry.register(tool)
     http = registry.get("http")
+    tool.http_tool = http
     http.workflow, http.validation_registry = state, skills
     policy.bind_validation_context(state, skills, target)
     shapes = {

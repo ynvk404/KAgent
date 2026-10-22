@@ -140,7 +140,7 @@ async def test_max_steps_compaction_continue_owned_proof_result_coverage_finding
         if len(model.calls) == 0:
             assert f'attempt={old_aid} status=unresolved' in current
             assert 'No owned active attempt' in current and 'before any validation probes' in current
-            assert 'reload load_skill(name="sql-injection")' in current.lower()
+            assert 'load_skill(name="sql-injection")' in current.lower()
             assert 'two complete TRUE/FALSE repetitions' in current
             assert 'four distinct owned' in current and 'structured confirmation' in current
         if aids and len(model.calls) < 9:
@@ -383,7 +383,7 @@ async def test_compacted_repair_handoff_distinguishes_owned_resume_from_interrup
     def check(request):
         current = hint(request)
         if not model.calls:
-            assert 'reload load_skill(name="sql-injection")' in current.lower()
+            assert 'load_skill(name="sql-injection")' in current.lower()
             assert ('No owned active attempt' if restore else 'Resume this owned active attempt') in current
             assert f'status={"interrupted" if restore else "active"}' in current
 

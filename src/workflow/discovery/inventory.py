@@ -19,6 +19,7 @@ MAX_ENDPOINTS = 4096
 MAX_SOURCES = 128
 MAX_PROVENANCE = 8192
 MAX_SOURCE_RECORDS = 256
+MAX_SOURCE_REASON_LENGTH = 240
 SOURCE_KINDS = frozenset({'native', 'ffuf', 'nmap', 'capture', 'http'})
 SOURCE_STATES = frozenset({'pending', 'processed', 'partial', 'blocked', 'not_applicable'})
 BOUND_NAMES = frozenset({'max_bytes', 'max_nodes', 'max_records', 'max_paths', 'max_operations',
@@ -129,7 +130,9 @@ class SourceRecord:
         bounds = tuple(sorted(tuple(pair) for pair in self.processing_bounds))
         if len({key for key, _ in bounds}) != len(bounds):
             raise ValueError('duplicate processing bound')
-        reason = exact(self.stop_reason, maximum=240) if self.stop_reason is not None else None
+        if isinstance(self.stop_reason, str) and len(self.stop_reason) > MAX_SOURCE_REASON_LENGTH:
+            raise ValueError(f'source_reason length {len(self.stop_reason)} exceeds maximum {MAX_SOURCE_REASON_LENGTH}')
+        reason = exact(self.stop_reason, maximum=MAX_SOURCE_REASON_LENGTH) if self.stop_reason is not None else None
         if self.disposition in {'partial', 'blocked', 'not_applicable'} and not reason:
             raise ValueError('source disposition requires a bounded stop reason')
         if self.bounded_stop and (self.disposition != 'partial' or not reason or not limits or not bounds):

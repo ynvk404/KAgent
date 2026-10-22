@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 from src.agent.events import Invocation, SkillActiveEvent, ToolCallEvent, ToolResultEvent, ToolStartedEvent
 from src.ui.render.sanitize import sanitize_text
-from src.ui.render.shell_outcome import _parse_shell_result
+from src.ui.render.shell_outcome import shell_issues
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +137,8 @@ def issue_category(text: str, ev: ToolResultEvent) -> str:
         return "diagnostic"
     if ev.status == "cancelled":
         return "cancelled"
+    if ev.name in {"shell", "bash", "BashTool"} and text.startswith("Shell cancelled"):
+        return "cancelled"
     if ev.status == 'pending' or ev.error_kind in {'permission_pending', 'permission_timeout', 'permission_stale'}:
         return 'pending'
     if ev.error_kind == "network":
@@ -149,7 +151,11 @@ def issue_category(text: str, ev: ToolResultEvent) -> str:
 def result_issues(ev: ToolResultEvent, call: PendingCall | None) -> list[str]:
     """Use explicit failures and known receipt warnings, never success guesses."""
     issues: list[str] = []
-    if ev.err:
+    shell = ev.name in {"shell", "bash", "BashTool"}
+    if shell and ev.scanner_summary is None:
+        issues.extend(shell_issues(ev.runtime_metadata, status=ev.status, error_kind=ev.error_kind,
+                                   reported_error=bool(ev.err), search=bool(call and call.search)))
+    elif ev.err:
         issues.append(ev.err.split("(raw:", 1)[0].rstrip() if ev.error_kind == "invalid_args" else ev.err)
     elif ev.status in {"error", "cancelled", "pending"} or ev.error_kind:
         issues.append(ev.error_kind or ev.status)
@@ -178,18 +184,9 @@ def result_issues(ev: ToolResultEvent, call: PendingCall | None) -> list[str]:
                     cleanup = result.get("cleanup_state")
                     if isinstance(cleanup, str) and cleanup in {"pending", "failed", "requires-user-action"}:
                         issues.append("Cleanup " + cleanup)
-    if ev.name in {"shell", "bash", "BashTool"}:
-        parsed = _parse_shell_result(ev.result)
-        if parsed:
-            no_matches = (parsed.exit == "1" and not parsed.stdout and not parsed.stderr
-                          and not parsed.rest and call is not None and call.search)
-            if parsed.exit != "0" and not no_matches and not issues:
-                issues.append("Shell " + (parsed.exit if parsed.exit.startswith("timeout") else "exit " + parsed.exit))
-            if parsed.stderr:
-                issues.append("Shell stderr: " + parsed.stderr)
     if ev.name == "confirm_finding" and "Finding persisted; compact report export failed." in ev.result:
         issues.append("Finding persisted; compact report export failed. Retry confirm_finding with the same candidate_id to regenerate the report.")
-    if not issues and ev.result.lower().startswith("error:"):
+    if not shell and not issues and ev.result.lower().startswith("error:"):
         issues.append(ev.result.splitlines()[0].partition(":")[2].strip())
     if ev.name not in {"http", "shell", "bash", "BashTool"}:
         notice_text = ev.result

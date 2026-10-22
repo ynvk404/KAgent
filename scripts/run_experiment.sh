@@ -16,14 +16,14 @@ if (($#)); then
     --dry-run) shift ;;
     --help|-h)
       printf '%s\n' \
-        'Dry-run (default): --dry-run --run-dir ABSOLUTE_NEW_PATH [--origin URL] [--prompt-file REVIEWED_UTF8_FILE]' \
+        'Dry-run (default, data isolation only): --dry-run --run-dir ABSOLUTE_NEW_PATH [--origin URL] [--prompt-file REVIEWED_UTF8_FILE]' \
         'Prepare only: --prepare --plan REVIEWED_JSON --approve-plan-sha256 HASH' \
         'Verify only: --verify PROFILE_JSON' \
-        'Interactive official TUI: --run PROFILE_JSON [--max-steps 60]' \
+        'Interactive official TUI: --run PROFILE_JSON [--max-steps N] [-- NATIVE_CLI_OPTIONS]' \
         'Headless: --run PROFILE_JSON --headless --execute-prompt [--interactive|--non-interactive]' \
-        'Bounded YOLO: add --yolo --accept-unknown-http-effects (never implicit)' \
-        'Shell preset: dry-run with --prompt-file FILE --enable-headless-shell; repeat --enable-headless-shell on Headless run' \
-        'Shell preset permits arbitrary commands in the existing worker; scanner traffic has no aggregate HTTP quota.' \
+        'YOLO and native HTTP grants follow the normal KAgent CLI rules; no grant or quota is injected.' \
+        'Legacy limits: select --legacy-bounded at dry-run; old v2/v3 profiles keep their reviewed behavior.' \
+        'Legacy shell preset: also select --prompt-file FILE --enable-headless-shell; repeat --enable-headless-shell on Headless run.' \
         'No existing data is deleted or reset. Preparation never starts KAgent.'
       exit 0 ;;
   esac
@@ -38,9 +38,11 @@ if [[ "$task_mode" == --launch && ( "$task_headless" == false || "$task_interact
   printf '%s\n' '--run requires the current interactive WSL terminal (TTY); no headless fallback.' >&2
   exit 2
 fi
-# Profiles use a 20-minute foreground lifetime starting at TUI open.
-# INT uses KAgent's existing shutdown path; no forced KILL can drop evidence.
-if [[ "$task_mode" == --launch ]]; then
+# The default profile only redirects data. Retain the reviewed 20-minute
+# foreground lifetime exclusively for old bounded v2/v3 profiles.
+if [[ "$task_mode" == --launch ]] && "$task_python" -B -c \
+  'import json, sys; sys.exit(0 if json.load(open(sys.argv[1])).get("version") in (2, 3) else 1)' \
+  "${1:-}" 2>/dev/null; then
   if ! command -v timeout >/dev/null 2>&1; then
     printf '%s\n' 'GNU timeout is unavailable; the approved wall limit cannot be applied.' >&2
     exit 2

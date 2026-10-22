@@ -134,13 +134,18 @@ async def test_duplicates_are_structured_atomic_and_do_not_rewrite_arguments(dis
         assert sensitive not in json.dumps(error)
 
 
-async def test_bad_retry_preserves_active_attempt_and_omission_preserves_obligations(dispatch):
+@pytest.mark.parametrize('candidate_class', ['sqli', 'xss'])
+async def test_bad_retry_preserves_active_attempt_and_omission_preserves_obligations(dispatch, candidate_class):
     state, tool, registry, p = dispatch
-    candidate = await candidate_for(dispatch)
+    candidate = await candidate_for(dispatch, candidate_class)
     start = {"action": "start_validation", "candidate_id": candidate.id}
     rows = [declaration("readback", "GET", "/comments/123")]
     first = json.loads(await registry.execute("workflow", {**start, "related_requests": rows}, None, p))
     aid = first["validation_context"]["attempt_id"]
+    from src.workflow.evidence.recovery import current_budget
+    budget = current_budget(state, candidate.id, create=True)
+    assert budget is not None
+    budget.update(rejections=1, repair_turns=2)
     before, revision = deepcopy(state.to_dict()), state.committed_revision
     for _ in range(2):  # No implicit association-specific retry enforcement.
         error_envelope(await registry.execute("workflow", {**start, "related_requests": rows * 2}, None, p))
@@ -166,6 +171,8 @@ async def test_bad_retry_preserves_active_attempt_and_omission_preserves_obligat
     omitted = json.loads(await registry.execute("workflow", start, None, p))
     assert omitted["validation_context"]["attempt_id"] == new_aid
     assert resumed.attempts[new_aid]["related_requests"] == resumed.attempts[aid]["related_requests"]
+    budget = current_budget(resumed, candidate.id)
+    assert budget is not None and budget['rejections'] == 1 and budget['repair_turns'] == 2
 
 
 @pytest.mark.parametrize("role", ["baseline", "control", "trigger", "readback", "cleanup", "auxiliary"])

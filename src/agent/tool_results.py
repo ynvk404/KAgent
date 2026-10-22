@@ -9,6 +9,7 @@ from typing import Any, TYPE_CHECKING, cast
 import uuid
 
 from src.llm.core.types import ChatRequest, Message
+from src.tools.common.runtime_metadata import runtime_view
 from src.paths import project_root
 from src.permission.runtime.execution import policy_for, ExecutionBlocked
 from src.session.tool_results import (
@@ -102,11 +103,11 @@ def reference_header(ref: ResultReference) -> str:
               "report that limitation; do not infer unseen content or repeat the action.\n")
 
 
-def retained_preview(ref: ResultReference, original: str, budget: int) -> str:
+def retained_preview(ref: ResultReference, original: str, budget: int, *, floor: int | None = None) -> str:
     from .agent import MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR, MIDTURN_ELISION_PREFIX, MIDTURN_WINDOW_WEIGHTS
     from .output_bounds import bound_distributed_content
     header = reference_header(ref)
-    minimum = max(1, MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR - len(header))
+    minimum = max(1, (MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR if floor is None else floor) - len(header))
     return header + bound_distributed_content(original, max(minimum, budget - len(header)),
         minimum_retained_length=minimum, elision_prefix=MIDTURN_ELISION_PREFIX,
         weights=MIDTURN_WINDOW_WEIGHTS)
@@ -387,8 +388,12 @@ class ResultRetention:
                 msg.tool_call_id or "", msg.tool_status or "success", msg.tool_error_kind,
                 msg.tool_http_status, msg.tool_truncated, pending.provenance["kind"], "0" * 64)
             header = reference_header(prototype)
+            original_text = pending.original
             budget = max(floor, len(msg.content) - reduction)
             represented = retained_preview(prototype, pending.original, budget)
+            if msg.tool_runtime is not None:
+                represented, _ = runtime_view(represented, msg.tool_runtime, delivery="elided", budget=budget,
+                    render=lambda size: retained_preview(prototype, original_text, size, floor=size))
             reader = agent.tools.get("read_tool_result")
             schema_cost = len(json.dumps(reader.schema())) if reader is not None else 0
             if len(pending.original) - len(represented) <= max(len(header), schema_cost):
@@ -411,7 +416,13 @@ class ResultRetention:
                 continue
             if ref is None:
                 continue
-            replacement = replace(msg, content=retained_preview(ref, pending.original, budget),
+            retained_ref = ref
+            represented = retained_preview(retained_ref, original_text, budget)
+            runtime = msg.tool_runtime
+            if runtime is not None:
+                represented, runtime = runtime_view(represented, runtime, delivery="elided", budget=budget,
+                    render=lambda size: retained_preview(retained_ref, original_text, size, floor=size))
+            replacement = replace(msg, content=represented, tool_runtime=runtime,
                                   tool_result_refs=[asdict(ref)], tool_result_scope=dict(self.scope))
             working[i] = replacement
             agent.history[:] = [replacement if entry is msg else entry for entry in agent.history]

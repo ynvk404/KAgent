@@ -86,6 +86,13 @@ a different naming scheme for this skill's output paths.
 
 ## Preconditions
 
+For whole-target work, complete Recon through Workflow before Enumeration,
+including the first `content_discovery` call. A summary file or loaded skill
+alone is not completion. Run discovery only for a real remaining path-coverage
+gap, never just to obtain a receipt. If earlier work lacks machine attestation,
+record its source and limitation as `observed` under the coverage contract;
+never backfill `performed`, invent a skip, or repeat discovery solely for it.
+
 Before starting, you should have from `recon` or the user:
 
 - a confirmed, reachable target (URL, host, or set of hosts);
@@ -338,6 +345,122 @@ pass while the specification covers the route gap.
 Read operation keys from the retained `.paths` object and record supported
 request shapes incrementally. Reuse the same retained response for parsing;
 do not fetch a specification again merely to list its paths.
+
+### Inline OpenAPI in Swagger UI
+
+Inspect already visible Swagger UI HTML and its retained initializer before
+guessing another spec URL. A definition can be a literal object supplied to
+`SwaggerUIBundle({spec: ...})`, or passed through `options.swaggerDoc`, an
+intermediate variable, and `swaggerOptions.spec`. Follow only the visible
+literal bindings to the object containing `openapi` and `paths`. A separate
+JSON download is not required for an inline definition. Swagger UI `url` and
+`urls[].url` identify definition-download locations; `servers[].url` identifies
+an API base, not a spec URL. A configured inline `spec` can supersede `url`;
+do not fetch that URL merely because it appears beside an inline definition.
+
+URL-only extraction from HTML/JS does not enumerate an embedded `paths`
+object. No extracted URLs, or a `401`/`403` from an API base, does not establish
+that documented operations are absent. Retain the distinction between a
+documented operation, an observed response at a particular URL/method,
+reachability of that operation, and authenticated access. A successful UI
+page response does not establish API-operation reachability either.
+
+Review the visible request syntax without executing JavaScript, `eval`,
+deobfuscation, or resolving computed/dynamic values. Enumerate every visible
+`paths` method, including operations with no parameters. Read path-item and
+operation parameters (name/location, type and required state), operation
+overrides, and `requestBody.content` media types and schema fields. Preserve
+unresolved `$ref`, truncated definitions and unseen fields as limitations;
+never invent missing operations or request fields. Read applicable document
+`security` and operation overrides, including `security: []`, alongside
+`components.securitySchemes`. Bearer/JWT declarations describe documented
+security, not available credentials or successful authentication; a scheme
+definition alone does not apply it to every operation. Never copy token values.
+
+Apply `servers` precedence from operation to path-item to document. Append
+the operation path to the selected API-base path; do not drop the base prefix
+by resolving a leading `/` as a new root. Resolve relative server URLs using
+the actual document location and known UI base context; when an inline
+definition's relative base is ambiguous, record that uncertainty rather than
+inventing a spec URL. Check scheme, host and effective port against exact
+authorized scope. An off-origin server is an external documentation clue,
+not authority to request it or rebase its operations onto the active target.
+Unresolved server variables remain limitations.
+
+Reuse retained source under existing rights. `process_source` with
+`extractor="openapi"` accepts an admitted JSON document, not raw initializer
+JS. Do not feed it JavaScript, execute JS to obtain JSON, or register a copied
+object as a replacement authoritative source. `read_http_observation` is only
+usable when its existing ownership/scope/permission checks allow the read;
+an unowned discovery observation may be unavailable through that reader.
+Do not create a validation attempt to gain read rights. If retained discovery
+JS is unavailable, evicted or outside the visible representation, record the
+limitation; do not open a reader/gate, raise caps or refetch solely to list
+paths. Keep the fixed large-response strategy and its stop conditions.
+
+### Record inline documentation through existing actions
+
+In whole-target mode, inspect `workflow(action="list", view="sources")` and
+use only returned IDs with `get_source` and `select_source`. Inspect existing
+`endpoints`/`provenance` views to reuse actual runtime-admitted references.
+Write every documented method/endpoint to the canonical Markdown inventory
+in step 7, including operations without inputs, the actual initializer/page
+URL, visible binding/field location, and returned source/ref IDs when present.
+Record unknown reachability/authentication and any source limitations there.
+This manual review is not a machine extraction receipt. There is no public
+`record_endpoint` or manual provenance-publication action: do not fabricate
+`ds_`/`ep_`/`pv_`/`obs_` IDs or imply manual entries exist in those runtime views.
+
+For each known request field, use `record_input` incrementally under the
+active whole-target objective, reusing returned input IDs. For example, only
+if this method/base/path/field is actually documented on the active origin:
+
+```json
+{
+  "tool": "workflow",
+  "arguments": {
+    "action": "record_input",
+    "method": "POST",
+    "endpoint": "/service/v4/widgets",
+    "parameter": "label",
+    "location": "json",
+    "input_type": "string",
+    "content_type": "application/json",
+    "sample_payload": "{\"label\":\"{INJECTION_POINT}\"}"
+  }
+}
+```
+
+Do not manufacture a dummy input for an operation without request fields.
+`source_ref`, `baseline_request_ref` and `auth_context_ref` are request-context
+references, not places for a discovery ID, documentation URL or invented auth
+context. Omit them when no genuine context exists; put documentation attribution
+in the inventory. `record_input` does not publish endpoint/provenance graph
+rows. In direct mode, use the inventory without invoking whole-target-only
+actions or changing mode to obtain them.
+
+When `source_ref` is an HTTP observation used as request context, take method,
+normalized origin and path from that checked source; they must match the input.
+For example, a `/robots.txt` observation is not request context for an API path
+listed in its body. OpenAPI, JavaScript and documentation can establish inputs
+without `source_ref`; retain attribution in the inventory, not an unrelated
+HTTP reference. An unexpected path does not prove an endpoint works, and HTTP
+500 alone does not prove it absent. Do not silently change `product` to
+`products`. If an input is wrong, use the existing disposition/correction and
+replacement flow with the actual evidence; never rewrite history or fake a ref.
+
+For a selected source, use `set_source_disposition` with its real
+`discovery_source_id` and `retained_ref`. Mark `processed` only after the
+complete visible source has actually been reviewed; JSON-extractor rejection
+of JS is not `not_applicable` or proof of zero operations. Use `partial` or
+`blocked` with `source_reason` and `source_limitations` for missing/truncated,
+dynamic, inaccessible or unsupported portions. Only acknowledge an actual
+bounded stop with `acknowledge_bounded_stop=true`, `source_disposition="partial"`,
+a reason, limitations and `source_bounds` containing the real limits applied
+(for example `max_bytes` or `max_operations`); never invent bounds to close a
+source. Unresolved sources can still block completion. Source disposition is
+not `complete_skill`: satisfy the current frontier, coverage and artifact
+gates in step 7 without claiming unperformed work as `performed`.
 
 If a GraphQL endpoint is identified, record:
 
@@ -603,6 +726,20 @@ skip before completion; a missing observation never implies `performed`.
 
 Reconcile the inventory with the input records already committed incrementally.
 Do not re-record unchanged inputs or wait until this step to record them.
+Record every actually known request field separately, including password fields
+and secondary fields recovered at a visible JS call site; keep field names and
+redact secret values. Reuse existing input identities and provenance. A path
+name alone supplies no body schema. Compare structured inputs/endpoints/provenance
+with the retained source before closing; manual Markdown inventory entries are
+not automatically synchronized. Phase completion checks the workflow contract,
+not semantic completeness of Markdown. State any remaining reconciliation gap.
+
+`Unexpected path` does not establish a handler, method or body schema. A 401
+alone does not establish a missing-session prerequisite: invalid credentials,
+missing session and format validation are distinct observations. Record only
+the observed response and verified prerequisite. API documentation not observed
+is not proof that documentation does not exist. Keep `source_reason` within
+240 characters; do not truncate an explanation silently or invent a disposition.
 
 ### GET /search
 

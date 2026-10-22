@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Literal, TYPE_CHECKING
 
+from src.tools.common.runtime_metadata import RuntimeMetadata
+
 if TYPE_CHECKING:
     from src.tools.execution.scanner_runner import ScannerResult
     from src.tools.discovery.content import NativeDiscoveryResult
@@ -20,6 +22,7 @@ ErrorKind = Literal[
 class ToolOutput(str):
     """A string result with metadata; existing consumers still see text."""
 
+    runtime_metadata: RuntimeMetadata | None
     status: ToolStatus
     error_kind: ErrorKind | None
     http_status: int | None
@@ -40,8 +43,10 @@ class ToolOutput(str):
         error_kind: ErrorKind | None = None,
         http_status: int | None = None,
         truncated: bool = False,
+        runtime_metadata: RuntimeMetadata | None = None,
     ) -> "ToolOutput":
         value = super().__new__(cls, text)
+        value.runtime_metadata = runtime_metadata
         value.status = status
         value.error_kind = error_kind
         value.http_status = http_status

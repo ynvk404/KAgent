@@ -123,13 +123,13 @@ def _text(value: Any, *, limit: int = _MAX_ITEM_LENGTH) -> str | None:
     return bounded or None
 
 
-def _request_context(value: Any, content_type: str | None = None) -> str | None:
+def _request_context(value: Any, content_type: str | None = None, *, location: str | None = None) -> str | None:
     """Keep a compact request skeleton while preserving its structure."""
     if value is None:
         return None
     if not isinstance(value, str):
         raise ValueError("expected a string")
-    normalized = redact_request_context(value, content_type)
+    normalized = redact_request_context(value, content_type, location=location)
     if len(normalized) > _MAX_REQUEST_CONTEXT_LENGTH:
         raise ValueError(
             f"request context must be at most {_MAX_REQUEST_CONTEXT_LENGTH} characters"
@@ -288,7 +288,7 @@ class Candidate:
         if self.identity_media_type and self.identity_media_type != normalize_media_type(self.content_type):
             raise ValueError("media identity conflicts with content_type")
         self.request_template = _request_context(
-            self.request_template, self.content_type
+            self.request_template, self.content_type, location=self.location
         )
         self.source_ref = _text(self.source_ref)
         self.source_skill = (
@@ -562,7 +562,7 @@ class AttackSurfaceInput:
             self.identity_media_type = normalize_media_type(self.identity_media_type) or ""
         if self.identity_media_type and self.identity_media_type != normalize_media_type(self.content_type):
             raise ValueError("media identity conflicts with content_type")
-        self.sample_payload = _request_context(self.sample_payload, self.content_type)
+        self.sample_payload = _request_context(self.sample_payload, self.content_type, location=self.location)
         self.baseline_request_ref = _text(self.baseline_request_ref)
         self.auth_context_ref = _text(self.auth_context_ref)
         self.source_ref = _text(self.source_ref)

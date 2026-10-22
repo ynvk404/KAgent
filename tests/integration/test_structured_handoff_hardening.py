@@ -21,19 +21,22 @@ from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.evidence.artifacts import EvidenceArtifact
 from src.workflow.planning.goals import RequestedGoal
 from src.workflow.state import AttackSurfaceInput, Candidate, ValidationResult, WorkflowObjective, WorkflowState
-from tests.helpers.workflow import record_completed_phase
+from tests.helpers.workflow import record_completed_phase, bind_capture_baseline
 
 ORIGIN = "https://target.test"
 
 
-def runtime(tmp_path):
+def runtime(tmp_path, captures=None):
     state = WorkflowState(objective=WorkflowObjective(
         "handoff", "whole_target", ORIGIN, requested_goals=[RequestedGoal("xss")],
     ))
     skills = SkillRegistry()
     skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
     registry = Registry()
-    registry.register(WorkflowTool(state, Target(ORIGIN), skills=skills, evidence_root=tmp_path))
+    target, engagement = Target(ORIGIN), EngagementState()
+    engagement.initialize_target(ORIGIN)
+    http = HTTPTool(target, engagement, state, captures if captures is not None else CaptureStore())
+    registry.register(WorkflowTool(state, target, skills=skills, evidence_root=tmp_path, http_tool=http))
     return state, registry
 
 
@@ -211,7 +214,8 @@ async def test_f2_normalized_media_identity_preserves_original_context(tmp_path,
 @pytest.mark.asyncio
 async def test_f2_anchored_enrichment_keeps_ids_links_and_session_context(tmp_path):
     state, registry = runtime(tmp_path)
-    args = {"method": "POST", "endpoint": "/api", "parameter": "q", "location": "body", "baseline_request_ref": "baseline:opaque"}
+    baseline_ref = bind_capture_baseline(registry.get("workflow"), "/api")
+    args = {"method": "POST", "endpoint": "/api", "parameter": "q", "location": "body", "baseline_request_ref": baseline_ref}
     item = await record(registry, "record_input", **args)
     candidate = await record(registry, "record_candidate", candidate_class="xss", input_id=item["id"])
     rich_item = await record(registry, "record_input", **args, content_type="application/json", sample_payload='{"q":"old"}')
@@ -281,8 +285,9 @@ CONFLICTS = [
 @pytest.mark.parametrize("duplicate", [False, True])
 async def test_f3_failed_create_or_duplicate_is_atomic(tmp_path, override, duplicate):
     state, registry = runtime(tmp_path)
+    baseline_ref = bind_capture_baseline(registry.get("workflow"), "/api")
     item = await record(registry, "record_input", method="POST", endpoint="/api", parameter="q", location="body",
-                        content_type="application/json", baseline_request_ref="baseline:one", auth_context_ref="user")
+                        content_type="application/json", baseline_request_ref=baseline_ref, auth_context_ref="user")
     if duplicate:
         await record(registry, "record_candidate", candidate_class="xss", input_id=item["id"], signals=["original"])
     before = json.dumps(state.to_dict(), sort_keys=True)
@@ -314,15 +319,16 @@ def test_f3_canonical_add_and_link_cannot_bypass_compatibility(tmp_path, overrid
 @pytest.mark.asyncio
 async def test_f3_compatible_normalized_context_and_omitted_inheritance(tmp_path):
     state, registry = runtime(tmp_path)
+    baseline_ref = bind_capture_baseline(registry.get("workflow"), "/api?q=old")
     item = await record(registry, "record_input", method="post", endpoint="/api?q=old", parameter="q", location="body",
-                        content_type="Application/JSON; charset=UTF-8", baseline_request_ref="baseline:one", auth_context_ref="user")
+                        content_type="Application/JSON; charset=UTF-8", baseline_request_ref=baseline_ref, auth_context_ref="user")
     inherited = await record(registry, "record_candidate", candidate_class="xss", input_id=item["id"])
     explicit = await record(registry, "record_candidate", candidate_class="xss", input_id=item["id"],
                             target="https://TARGET.test:443", method="pOsT", endpoint="https://target.test/api?q=old",
-                            parameter="q", location="BODY", content_type="application/json", baseline_request_ref="baseline:one", auth_context_ref="user")
+                            parameter="q", location="BODY", content_type="application/json", baseline_request_ref=baseline_ref, auth_context_ref="user")
     for row in (inherited, explicit):
         assert row["method"] == "POST"
-        assert row["baseline_request_ref"] == "baseline:one" and row["auth_context_ref"] == "user"
+        assert row["baseline_request_ref"] == baseline_ref and row["auth_context_ref"] == "user"
         assert row["id"] in state.attack_surface_inputs[item["id"]].candidate_ids
     direct = await record(registry, "record_candidate", candidate_class="sqli", endpoint="/direct", parameter="id")
     assert direct["id"] in state.candidates

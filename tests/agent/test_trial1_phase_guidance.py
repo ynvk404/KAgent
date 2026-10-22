@@ -51,12 +51,13 @@ def test_ready_completion_precedes_unselected_frontier():
     assert 'ds_fixture' not in plan.guidance
 
 
-def test_one_ready_analyzed_candidate_can_validate_while_others_pending():
+def test_analyzed_candidate_cannot_precede_input_analysis_completion():
     context = frontier(completed_phases=frozenset({'recon', 'enumeration'}), pending_input_count=8,
-        candidates=(PlannerCandidate('cand_ready', 'cross-site-scripting', 'new', validation_ready=True),))
+        candidates=(PlannerCandidate('cand_ready', 'cross-site-scripting', 'new', validation_ready=False),))
     plan = build_whole_target_plan(skills(), context)
-    assert plan is not None and plan.candidate_id == 'cand_ready'
-    assert 'start_validation' in plan.guidance and 'pending' in plan.guidance
+    assert plan is not None and plan.candidate_id is None
+    assert plan.recommended_skill == 'web-input-analysis'
+    assert 'before opening a new validation attempt' in plan.guidance
 
 
 def test_validation_result_does_not_suppress_remaining_discovery():
@@ -94,3 +95,27 @@ def test_ready_candidate_cannot_hide_required_artifact_repair(phase):
     assert plan is not None and plan.candidate_id is None
     assert plan.recommended_skill == {'recon': 'recon', 'enumeration': 'web-enumeration',
                                       'input_analysis': 'web-input-analysis'}[phase]
+
+
+@pytest.mark.parametrize('branch', ['ready', 'actionable', 'goal', 'revalidation', 'direct'])
+def test_every_new_expert_route_prepares_skill_and_associations_before_start(branch):
+    from src.agent.decision_planner import PlannerGoal, build_decision_plan
+    from src.target.target import Target
+    from src.workflow.validation.route import ValidationRoute
+    candidate = PlannerCandidate('cand_xss', 'cross-site-scripting', 'queued',
+        validation_ready=True if branch == 'ready' else None, validation_action='start_validation')
+    context = PlannerContext(objective_mode='direct' if branch == 'direct' else 'whole_target',
+        workflow_status='actionable', completed_phases=frozenset({'recon', 'enumeration', 'input_analysis'}),
+        candidates=(candidate,), validation_routes={candidate.id: ValidationRoute('expert', 'cross-site-scripting')},
+        revalidation_candidate_ids=(candidate.id,) if branch == 'revalidation' else (),
+        requested_goals=(PlannerGoal('goal_xss', 'cross-site-scripting', 'in_progress', (candidate.id,)),)
+                        if branch in {'goal', 'direct'} else ())
+    plan = build_decision_plan('continue', skills(), Target('https://target.test'), context)
+    assert plan is not None and plan.candidate_id == candidate.id
+    text = ' '.join(plan.guidance.split())
+    assert text.index('load_skill') < text.index('Then call workflow(action="start_validation"')
+    for contract in ('prepare the primary request', 'existing Candidate, inventory and context',
+                     'candidate_id alone', 'no supplementary associations', 'consistent role',
+                     'Different methods', 'payload variations are observations', 'Do not guess endpoints',
+                     'no execution permission', 'immutable declaration and budget'):
+        assert contract in text

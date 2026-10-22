@@ -215,6 +215,12 @@ class OfflineWorker:
         for path in ["/usr", "/bin", "/lib", "/lib64"]:
             if Path(path).exists():
                 args += ["--ro-bind", path, path]
+        # Debian's awk alternative leaves the mounted binary directories. Add
+        # only this compatibility link in the empty worker /etc; expose no host
+        # configuration, and never point it at an unmounted executable.
+        awk_target = self._awk_alternative()
+        if awk_target is not None:
+            args += ['--dir', '/etc/alternatives', '--symlink', str(awk_target), '/etc/alternatives/awk']
         if scanner:
             args += ['--setenv', 'GOMAXPROCS', '2', '--setenv', 'GOMEMLIMIT', '134217728']
         args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--ro-bind", str(self.root), "/work",
@@ -242,6 +248,16 @@ class OfflineWorker:
             command, argv = '/usr/bin/python3', ['/relay.py', command, *argv]
         args += ["--chdir", "/work", "--", command, *argv]
         return self.limiter, args
+
+    @staticmethod
+    def _awk_alternative() -> Path | None:
+        try:
+            target = Path('/etc/alternatives/awk').resolve(strict=True)
+            if target.is_relative_to('/usr/bin') and target.is_file() and os.access(target, os.X_OK):
+                return target
+        except (OSError, RuntimeError):
+            pass
+        return None
 
     def _validate_cwe_deployment(self, requested: Path, checkpoint) -> Path:
         configured = self.cwe_mcp_deployment_path

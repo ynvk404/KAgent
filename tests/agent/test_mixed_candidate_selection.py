@@ -52,8 +52,8 @@ async def test_recoverable_expert_precedes_generic_blocker_in_every_insertion_or
     assert view.decision is not None and view.decision.candidate_id == recoverable
     hints = [m.content for m in view.blocks if m.content.startswith(PREFIX)]
     assert len(hints) == 1 and f'Candidate {recoverable};' in hints[0]
-    assert hints[0].index('start_validation') < hints[0].index('reload load_skill')
-    assert 'before validation probes' in hints[0]
+    assert hints[0].index('load_skill') < hints[0].index('Then call workflow(action="start_validation"')
+    assert 'prepare the primary request' in hints[0] and 'before any validation probes' in hints[0]
     assert rt.workflow.to_dict() == before and not sent
     assert rt.workflow.candidates[blocked].status == 'deferred'
     assert not rt.workflow.eligible_for_finding(blocked)

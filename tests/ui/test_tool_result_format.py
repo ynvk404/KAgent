@@ -3,6 +3,12 @@ import pytest
 from src.ui.render.shell_outcome import _parse_shell_result
 from src.ui.core.admission import call_metadata, result_issues, issue_category
 from src.agent.events import ToolCallEvent, ToolResultEvent
+from src.tools.common.runtime_metadata import RuntimeMetadata, StreamCapture
+
+
+def shell_metadata(code=0, *, stdout=0, stderr=0):
+    return RuntimeMetadata(process="exit", exit_code=code,
+        stdout=StreamCapture(stdout, stdout, True), stderr=StreamCapture(stderr, stderr, True))
 
 
 @pytest.mark.parametrize("code", ["0", "1", "3", "-1", "timeout after 300s"])
@@ -14,19 +20,24 @@ def test_shell_exit_stderr_and_crlf_parsing_is_preserved(code):
 @pytest.mark.parametrize("command", ["rg missing .", "grep missing file"])
 def test_simple_search_no_matches_is_hidden(command):
     call = call_metadata(ToolCallEvent(id="search", name="shell", args={"command":command}))
-    assert not result_issues(ToolResultEvent(id="search", name="shell", result="exit: 1\nstdout:\n"), call)
+    assert not result_issues(ToolResultEvent(id="search", name="shell", result="exit: 1\nstdout:\n",
+        status="error", error_kind="tool_exception", err="Shell exit 1", runtime_metadata=shell_metadata(1)), call)
 
 
 @pytest.mark.parametrize("command", ["rg missing . | false", "rg missing .; false", "rg missing . && false", "false"])
 def test_complex_search_exit_one_remains_actionable(command):
     call = call_metadata(ToolCallEvent(name="shell", args={"command":command}))
-    assert "Shell exit 1" in result_issues(ToolResultEvent(name="shell", result="exit: 1\nstdout:\n"), call)
+    assert "Shell exit 1" in result_issues(ToolResultEvent(name="shell", result="exit: 1\nstdout:\n",
+        status="error", error_kind="tool_exception", runtime_metadata=shell_metadata(1)), call)
 
 
-def test_shell_success_stderr_is_retained_without_stdout_traffic():
-    issues = result_issues(ToolResultEvent(name="shell", result="exit: 0\nstdout:\nHIDDEN_PAYLOAD\nstderr:\nWARNING: cleanup required\npassword=secret"), None)
-    assert "cleanup required" in " ".join(issues)
+def test_shell_success_stderr_is_diagnosed_without_copying_output():
+    event = ToolResultEvent(name="shell", result="exit: 0\nstdout:\nHIDDEN_PAYLOAD\nstderr:\nWARNING: cleanup required\npassword=secret",
+        runtime_metadata=shell_metadata(stderr=40))
+    issues = result_issues(event, None)
+    assert "Shell stderr: 40 bytes observed" in " ".join(issues)
     assert "secret" not in " ".join(issues) and "HIDDEN_PAYLOAD" not in " ".join(issues)
+    assert "cleanup required" not in " ".join(issues) and "cleanup required" in event.result
 
 
 def test_unknown_failure_metadata_never_dumps_arbitrary_json():

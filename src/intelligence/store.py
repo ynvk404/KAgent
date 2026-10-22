@@ -303,6 +303,11 @@ def guidance_eligibility(s: IntelligenceScenario, origin: HTTPOrigin | None) -> 
         return "provenance unknown"
     if s.provenance == "derived" and s.source_role == "unknown":
         return "source role unknown"
+    if s.provenance == "derived" and s.source_role in {"summary", "assistant"}:
+        # Model prose has no primary evidence binding. Neither matching origin
+        # nor confidence upgrades it to reusable technical guidance. Preserve
+        # the record for explicit historical lookup, without rewriting it.
+        return "unverified model-derived history"
     if s.category in {"decision", "next-step", "coverage-gap"}:
         return "historical session state"
     if s.category != "user-preference" and s.provenance != "curated" and session_directive(s.lesson):
@@ -810,7 +815,7 @@ def extract_scenarios(
     session_sections = {
         "decisions and assumptions", "important decisions", "open todos", "todos", "next steps",
         "next best actions", "tested surface", "target and scope", "permissions", "authorization",
-        "user request", "user preferences",
+        "user request", "user preferences", "current objective", "plan", "completed tasks",
     }
     observations = "\n".join("\n".join(lines) for heading, lines in sections.items()
                              if heading not in session_sections)
@@ -850,7 +855,8 @@ def extract_scenarios(
                 source="derived-untrusted-summary" if source_role == "summary" else "continuous learning",
                 source_session_id=source_session_id, source_role=source_role,
                 provenance="direct-user" if preference else "derived",
-                applicability="generic" if preference else "target" if target_origin else "unknown",
+                applicability=("generic" if preference else "session" if source_role in {"summary", "assistant"}
+                               else "target" if target_origin else "unknown"),
                 target_origin=target_origin.to_dict() if target_origin and not preference else None,
                 updated_at=now, confidence=0.7 if preference else 0.4,
             )

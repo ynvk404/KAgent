@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Optional
 
 from src.llm.core.types import Message
+from src.tools.common.runtime_metadata import runtime_view
 from src.session.store import SessionMemory
 from src.workflow.state import WorkflowState
 from src.workflow.validation.context import without_transient_validation_context
@@ -206,6 +207,13 @@ def bounded_history_for_compaction(
             message.content, minimum + allocation, minimum_retained_length=minimum,
             elision_prefix="[conversation content elided for compaction",
         )
+        if message.tool_runtime is not None:
+            content, _ = runtime_view(content, message.tool_runtime,
+                delivery="unavailable" if message.tool_runtime.delivery == "unavailable" else "elided",
+                budget=minimum + allocation,
+                render=lambda size: bound_distributed_content(message.content, size,
+                    minimum_retained_length=min(minimum, size),
+                    elision_prefix="[conversation content elided for compaction"))
         bounded_blocks.append(format_history([replace(message, content=content)]))
     return "\n".join([notice, *bounded_blocks])
 

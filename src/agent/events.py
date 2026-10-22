@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
+from src.tools.common.runtime_metadata import RuntimeMetadata
+
 
 @dataclass(slots=True)
 class BaseEvent:
@@ -68,6 +70,7 @@ class ToolResultEvent(BaseEvent):
     # Controller admission of a real candidate-creation receipt, never tool args.
     accepted_candidate_id: str | None = None
     scanner_summary: dict[str, Any] | None = None
+    runtime_metadata: RuntimeMetadata | None = None
 
     @property
     def durationMs(self) -> float:
