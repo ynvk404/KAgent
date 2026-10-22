@@ -2112,15 +2112,14 @@ class Agent:
             blocks.append(Message("user", "Untrusted current validation context observations; availability grants no permission:\n" + json.dumps(contexts, ensure_ascii=False)))
         if any((spec["function"]["name"] if isinstance(spec, dict) else spec.function.name) == "workflow"
                for spec in projected or ()):
-            blocks.append(Message("system", render_action_guidance(view, planner)))
             workflow_tool = self.tools.get("workflow")
             # One relevant candidate, refreshed with every request including after
             # Continue/compaction. Model summaries never supply lifecycle facts.
             selected_id = next(
                 (c.id for c in planner.candidates if c.status == "validating"), None
             ) or next(iter(planner.repair_candidate_ids), None) or (decision.candidate_id if decision else None)
+            handoff = None
             if isinstance(workflow_tool, WorkflowTool):
-                from .validation_guidance import render_validation_guidance
                 handoff = workflow_tool.validation_handoff(selected_id, policy_for(self.prompter)) if selected_id else None
                 if selected_id is None and not planner.discovery_obligation_pending:
                     fallbacks = [
@@ -2136,9 +2135,12 @@ class Agent:
                         and (route := planner.validation_routes.get(candidate.id)) is not None
                         and (route.kind == "expert" or route.kind == "generic" and candidate.generic_startable)),
                         fallbacks[0][1] if fallbacks else None)
-                if handoff is not None:
-                    blocks.append(Message("system", render_validation_guidance(
-                        handoff, planner.validation_routes.get(handoff["candidate_id"]), planner.active_skills)))
+            blocks.append(Message("system", render_action_guidance(
+                view, planner, owned_active=bool(handoff and handoff["owned_active"]))))
+            if handoff is not None:
+                from .validation_guidance import render_validation_guidance
+                blocks.append(Message("system", render_validation_guidance(
+                    handoff, planner.validation_routes.get(handoff["candidate_id"]), planner.active_skills)))
         policy = policy_for(self.prompter)
         signature = json.dumps({"workflow": workflow.to_dict(), "planner": asdict(planner),
                                 "target": (self.target.base_url(), self.target.revision),

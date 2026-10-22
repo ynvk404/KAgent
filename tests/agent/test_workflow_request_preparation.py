@@ -21,6 +21,9 @@ from src.tools.workflow.action_view import ActionView
 from src.tools.workflow.workflow_tool import ACTIONS, WorkflowTool
 from src.workflow.state import WorkflowObjective, WorkflowState
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, seed_compactable_history
+from tests.security.test_agent_assessment import setup as assessment_setup
+from tests.security.test_evidence_recovery_contract import agent_for
+from tests.security.test_execution_policy import runtime  # noqa: F401
 
 ORIGIN = "https://fixture.test"
 SKILLS = Path(__file__).resolve().parents[2] / "skills"
@@ -80,6 +83,41 @@ def test_guidance_budget_and_conditional_contract(mode, status):
     assert len(guidance) <= 1000 and text_tokens(guidance) <= 300
     assert "Available =" in guidance and "Recommended =" in guidance and "Excluded =" in guidance
     assert "not permission" in guidance and "sync_coverage" in guidance
+
+
+@pytest.mark.parametrize("mode", ["whole_target", "direct"])
+@pytest.mark.parametrize("stopped", [False, True])
+async def test_owned_handoff_guidance_reaches_model_without_changing_runtime(runtime, tmp_path, mode, stopped):
+    state, candidate, workflow, args, _ = await assessment_setup(runtime, tmp_path, candidate_class="sqli", mode=mode)
+    agent = agent_for(runtime, workflow, state, args)
+    state.attempts[args["attempt_id"]]["probing_stopped"] = stopped
+    client = SnapshotClient([ChatResponse(Message("assistant", "done"), "stop")])
+    agent.set_client(client)
+    before = deepcopy(state.to_dict())
+    policy = runtime[2]
+    rights = policy.engagement.http_permissions
+    grants, epoch, used = dict(rights.grants), rights.epoch, policy.used
+    req = ChatRequest(client.model(), [Message("user", "continue")], tools=agent.tools.as_llm_tools())
+    await agent._chat_for_turn(req, FakeSignal(), lambda event: None)
+    advice = block(client.requests[0], "Workflow action guidance:")
+    assert "record_attempt_state" in advice and "effects" in advice
+    assert "required request" in advice and "owned observations" in advice
+    assert "do not wait for proof" in advice.lower()
+    assert "GET" in advice and "write acknowledgement" in advice and "does not establish mutation=false" in advice
+    assert "record_evidence" in advice and "registration does not replace record_result" in advice
+    assert "incomplete" in advice and "insufficient-evidence" in advice
+    assert "Reuse valid proof" in advice and "evidence_refs" in advice
+    assert "tool response" in advice and "canonical" in advice and "commit" in advice
+    assert "probing_stopped" in advice and "runtime-permitted" in advice
+    if mode == "direct":
+        assert "complete_skill" not in advice and "before discovery" not in advice
+    if stopped:
+        assert not any((spec["function"]["name"] if isinstance(spec, dict) else spec.function.name) == "http"
+                       for spec in client.requests[0].tools or [])
+    assert len(advice) <= 2000 and text_tokens(advice) <= 600
+    assert state.to_dict() == before and len(runtime[4]) == 1
+    assert rights.grants == grants and rights.epoch == epoch and policy.used == used
+    assert not state.validation_results and candidate.status == "validating"
 
 
 async def test_normal_iterations_refresh_canonical_observations_without_accumulation(tmp_path):
@@ -354,6 +392,9 @@ async def test_resume_rebuilds_interrupted_attempt_guidance_from_canonical_state
     assert isinstance(restored.client, SnapshotClient)
     assert restored.workflow.to_dict() == before
     assert cid in block(restored.client.requests[0], "Untrusted recorded workflow data;")
-    assert "record_result for the active attempt" in block(restored.client.requests[0], "Workflow action guidance:")
+    advice = block(restored.client.requests[0], "Workflow action guidance:")
+    assert "no owned active attempt" in advice and "record_attempt_state" not in advice
+    assert "record_result for the active attempt" not in advice
+    assert "status=interrupted" in block(restored.client.requests[0], "Runtime validation continuation")
     assert "record_result" in actions(restored.client.requests[0])
     assert len(restored.workflow.attempts) == 1

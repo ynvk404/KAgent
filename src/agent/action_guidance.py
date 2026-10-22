@@ -3,7 +3,8 @@ from src.agent.decision_planner import PlannerContext
 from src.tools.workflow.action_view import ActionView
 
 
-def render_action_guidance(view: ActionView, context: PlannerContext) -> str:
+def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_active: bool = False) -> str:
+    """Use current validation_handoff ownership, never Candidate status alone."""
     lines = [
         "Workflow action guidance:",
         "Available = exposed for consideration, not permission or guaranteed execution. "
@@ -13,10 +14,29 @@ def render_action_guidance(view: ActionView, context: PlannerContext) -> str:
     if view.excluded:
         lines.append("Excluded: " + ", ".join(view.excluded) + ".")
     phase = context.structured_phase
-    if context.objective_mode == "whole_target" and (
+    if owned_active or (
         any(c.status == "validating" for c in context.candidates) or context.repair_candidate_ids
     ):
-        lines.append("Recommended: finish owned Attempt/recovery before discovery; list sources, save proof, record_evidence then record_result. Respect probing_stopped and existing budgets.")
+        if context.objective_mode == "whole_target":
+            lines.append("Recommended: finish current validation/recovery before discovery.")
+        if owned_active:
+            lines.append(
+                "Recommended: list and reconcile the required request ledger, owned observations and effects. "
+                "Use actual IDs/timing; obs_ is not a read_tool_result reference. "
+                "Use record_attempt_state promptly for supported effects while ownership/action remains valid; "
+                "do not wait for proof. GET or no write acknowledgement does not establish mutation=false; unknown stays unknown.")
+            lines.append(
+                "Reuse valid proof; otherwise save minimal proof and record_evidence with actual parents. "
+                "Choose evidence_refs explicitly; registration does not replace record_result for the active attempt's honest outcome. "
+                "With incomplete bounded testing/missing evidence, submit insufficient-evidence or the applicable unresolved outcome "
+                "rather than wait for ineligible proof.")
+            lines.append(
+                "After probing_stopped use only runtime-permitted local actions within existing budgets. "
+                "Check the record_result tool response and canonical state for commit; Markdown/summary is not a commit.")
+        else:
+            lines.append(
+                "Recommended: no owned active attempt; inspect list and the runtime handoff for permitted evidence repair, "
+                "exact retries or current admission. Preserve terminal results and recovery budgets; do not automatically reopen an attempt.")
     elif phase in {"recon", "enumeration", "input_analysis"}:
         if phase == "recon":
             lines.append("Recommended: gather sourced service/technology observations; inspect coverage gaps. Scanner hints are not vulnerabilities.")
@@ -28,9 +48,6 @@ def render_action_guidance(view: ActionView, context: PlannerContext) -> str:
         lines.append("Check permissions_status: ready scanner, native or no scanner depends on gaps. complete_skill requires ready state and canonical artifacts; repair blockers or state bounded stops.")
     elif context.objective_mode == "whole_target" and context.workflow_status in {"completed", "blocked"}:
         lines.append("Recommended: list current status and blockers; report the bounded outcome or repair the stated dependency. Readiness grants no finding eligibility.")
-    elif any(c.status == "validating" for c in context.candidates):
-        lines.append("Recommended: record_evidence for usable sources; record_result for the active attempt's honest outcome, including unresolved closure.")
-        lines.append("Use list for actual owned observation IDs/timing; obs_ is not a read_tool_result reference. Record effects via record_attempt_state before ending; absence is unknown, not false.")
     elif context.candidates:
         lines.append("Recommended: list to inspect current work; start_validation only with the resolved validator and current prerequisites. Generic restrictions still apply.")
         lines.append("Primary-only: prefer start_validation(candidate_id) when Candidate covers the request; related_requests is for unique method/URL associations, not payloads.")

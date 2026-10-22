@@ -14,14 +14,14 @@ from benchmarks.scenario1.core.canonical import freeze, inspect_export
 from benchmarks.scenario1.core.runtime import execute_case, request_fixture, candidate_arguments
 from tests.benchmarks.test_scenario1 import isolated_project_environment, op, settings, mock_http
 from tests.benchmarks.test_scenario1_closure import active_case, captured_case, StopClient
-from tests.helpers.agent_fakes import FakeSignal, collect
+from tests.helpers.agent_fakes import FakeClient, FakeSignal, collect
 from tests.security.test_execution_policy import REAL_CLIENT
 from tests.security.test_execution_policy import runtime
 from tests.security.test_agent_assessment import setup as assessment_setup
 from tests.security.test_evidence_recovery_contract import agent_for
 from src.workflow.assessment import seal
 from src.workflow.state import WorkflowState, ValidationResult
-from src.llm.core.types import ChatResponse, Message
+from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from tests.benchmarks.test_scenario1 import ASSESSMENT
 
 
@@ -75,6 +75,33 @@ async def test_attempt_declaration_is_independent_of_submission_failure(
     assert policy.session_id is not None
     saved = json.loads((tmp_path / ".kagent/sessions" / (policy.session_id + ".json")).read_text())
     assert saved["workflow"]["validation_results"][-1]["result_id"] == result.result_id
+
+
+async def test_registered_proof_without_explicit_result_is_not_attached_at_hard_stop(runtime, tmp_path):
+    state, candidate, tool, args, _ = await assessment_setup(runtime, tmp_path, candidate_class="sqli")
+    agent = agent_for(runtime, tool, state, args, max_steps=1)
+    client = FakeClient([ChatResponse(Message("assistant", "", tool_calls=[ToolCall("list", FunctionCall(
+        "workflow", json.dumps({"action": "list", "candidate_id": candidate.id})))]), "tool_calls"),
+        ChatResponse(Message("assistant", "Bounded fixture remains unresolved."), "stop")])
+    agent.set_client(client)
+    policy = runtime[2]
+    evidence = deepcopy(state.evidence)
+    attempts = list(state.attempts)
+    rights = policy.engagement.http_permissions
+    grants, epoch = dict(rights.grants), rights.epoch
+    events = collect()
+    await agent.run("Continue current validation.", FakeSignal(), events["sink"])
+    assert events["events"][-1]["stop_reason"] == "max_steps"
+    result = state.latest_result(candidate.id)
+    assert result is not None and result.outcome == "insufficient-evidence"
+    assert result.attempt_id is not None and result.attempt_id == args["attempt_id"]
+    assert state.attempts[result.attempt_id]["status"] == "unresolved"
+    assert candidate.status == "deferred" and not state.eligible_for_finding(candidate.id)
+    assert result.mutation_performed is None and result.cleanup_state == "unknown"
+    assert not result.evidence_refs and not result.evidence_manifest and state.evidence == evidence
+    assert args["evidence_refs"] and list(state.attempts) == attempts and len(runtime[4]) == 1
+    assert rights.grants == grants and rights.epoch == epoch
+    assert len(client.requests) == 2 and client.requests[-1].tools is None
 
 
 @pytest.mark.parametrize("cancelled", [False, True])

@@ -50,6 +50,17 @@ def test_direct_hypothesis_still_has_candidate_path():
     assert 'record_candidate' in guidance(PlannerContext(objective_mode='direct'))
 
 
+@pytest.mark.parametrize('mode', ['whole_target', 'direct'])
+@pytest.mark.parametrize('status', ['validating', 'deferred', 'validated'])
+def test_candidate_and_repair_labels_do_not_grant_active_ownership(mode, status):
+    advice = guidance(PlannerContext(objective_mode=mode,
+        candidates=(PlannerCandidate('can_repair', 'sql-injection', status),),
+        repair_candidate_ids=('can_repair',)))
+    assert 'no owned active attempt' in advice
+    assert 'record_attempt_state' not in advice and 'record_result for the active attempt' not in advice
+    assert 'permitted evidence repair' in advice and 'Preserve terminal results' in advice
+
+
 @pytest.mark.parametrize('status', ['completed', 'blocked'])
 def test_terminal_work_does_not_start_new_hypothesis(status):
     advice = guidance(PlannerContext(objective_mode='whole_target', workflow_status=status,

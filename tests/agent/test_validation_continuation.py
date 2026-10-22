@@ -249,6 +249,8 @@ async def test_stopped_probing_and_recovery_exhaustion_remain_distinct_across_co
         current = hint(request)
         assert f'Recovery={"exhausted" if exhausted else "available"}' in current
         assert 'do not reset these counters' in current
+        advice = next(m.content for m in request.messages if m.content.startswith('Workflow action guidance:'))
+        assert 'record_attempt_state' not in advice and 'record_result for the active attempt' not in advice
         if exhausted:
             assert 'explicit operator-selected retest' in current
 
@@ -386,6 +388,9 @@ async def test_compacted_repair_handoff_distinguishes_owned_resume_from_interrup
             assert 'load_skill(name="sql-injection")' in current.lower()
             assert ('No owned active attempt' if restore else 'Resume this owned active attempt') in current
             assert f'status={"interrupted" if restore else "active"}' in current
+            advice = next(m.content for m in request.messages if m.content.startswith('Workflow action guidance:'))
+            assert ('record_attempt_state' in advice) is not restore
+            assert ('record_result for the active attempt' in advice) is not restore
 
     def finish():
         if restore:
