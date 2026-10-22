@@ -663,6 +663,13 @@ def test_controllability_and_reflection_context_gate_candidates(flat_lower: str)
     assert "a numeric id, a reflected string, a status code, or an error message alone is not that evidence" in flat_lower
 
 
+def test_disposition_reasons_and_prerequisites_are_bound_to_actual_input(flat_lower: str) -> None:
+    for contract in ('reuse the returned `input_id`', 'for that exact input and its evidence',
+                     "do not copy a sibling's reason", 'do not infer persistence, rendering, authentication',
+                     'manual source attribution', '`analyzed` records triage, not tested'):
+        assert contract in flat_lower
+
+
 def test_target_placeholder_is_only_used_as_identifier_in_output_paths(
     flat_lower: str,
 ) -> None:

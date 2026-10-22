@@ -98,10 +98,18 @@ and path must come from the checked request-context source. Unexpected paths
 do not prove endpoint behavior; HTTP 500 alone does not establish absence.
 Correct an erroneous input through existing disposition/replacement actions
 with honest attribution; do not rewrite historical records or fabricate refs.
+Reuse the returned `input_id` for each disposition and Candidate. Write each
+disposition reason for that exact input and its evidence; do not copy a sibling's
+reason. A documented serialization field is not automatically an object ID.
+Do not infer persistence, rendering, authentication or captcha prerequisites
+from route names, GET collections or application knowledge. Keep unknowns
+explicit; a credential field alone does not prove credentials are required for
+every analysis. Manual source attribution records the caller's declaration,
+not verified document content, server acceptance or a tested input.
 Reconcile every evidenced field with structured input records, including secret
 field names with redacted values. Use `blocked` with the actual unmet prerequisite
-when analysis could not be performed; `analyzed` does not mean an untested path
-was exercised. `Unexpected path` proves neither handler nor method/body schema.
+when analysis could not be performed; `analyzed` records triage, not tested or
+exercised behavior. `Unexpected path` proves neither handler nor method/body schema.
 401 alone does not prove missing session: invalid credentials and format errors
 need their own interpretation. Missing documentation observations are not proof
 of absence. Phase completion checks structured obligations, not all Markdown.

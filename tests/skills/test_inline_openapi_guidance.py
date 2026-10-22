@@ -14,11 +14,9 @@ import httpx
 import pytest
 
 from src.skills.artifacts import completion_artifact_path
-from src.workflow.discovery.extraction import extract_html
-from src.workflow.discovery.openapi import extract_openapi
 from src.workflow.state import WorkflowObjective
 from tests.helpers.burp_selection import make_runtime
-from tests.integration.test_discovery_extraction import execute
+from tests.helpers.discovery_calls import execute, attribution
 from tests.skills.test_web_enumeration import read_skill
 
 ORIGIN = 'http://catalog.test'
@@ -75,7 +73,7 @@ def initializer(binding: str) -> str:
     ('url-only', '401', '403', 'documented', 'reachability', 'authenticated'),
     ('path-item', 'parameters', 'requestbody.content', 'security: []', 'securityschemes', 'credentials'),
     ('servers', 'operation', 'path-item', 'document', 'prefix', 'relative', 'off-origin', 'scope'),
-    ('process_source', 'json', 'javascript', 'authoritative', 'read_http_observation', 'ownership', 'validation attempt'),
+    ('source_attribution', 'json', 'javascript', 'authoritative', 'read_http_observation', 'ownership', 'validation attempt'),
     ('record_input', 'inventory', 'without inputs', 'record_endpoint', 'provenance', 'request-context'),
     ('set_source_disposition', 'partial', 'blocked', 'source_limitations', 'source_bounds', 'complete_skill'),
 ])
@@ -85,30 +83,9 @@ def test_guidance_covers_inline_contract_without_layout_dependency(concepts):
     text = ' '.join(body.replace('`', '').lower().split())
     assert all(concept in text for concept in concepts)
     if 'source_bounds' in concepts:
-        assert 'never invent bounds' in text and 'unresolved sources' in text
+        assert 'never invent bounds' in text and 'selected unresolved sources' in text
     if 'read_http_observation' in concepts:
-        assert 'without executing javascript' in text and 'do not create a validation attempt' in text
-
-
-@pytest.mark.parametrize('binding', ['literal', 'intermediate'])
-def test_inline_literals_are_not_json_sources_or_absent_operations(binding):
-    raw = initializer(binding).encode()
-    # A URL-only HTML pass cannot see these operations. It is not a JS parser.
-    assert not extract_html(raw, DOCUMENT).records
-    rejected = extract_openapi(raw, DOCUMENT)
-    assert not rejected.records and rejected.limitations and not rejected.not_applicable
-    # A separately supplied JSON fixture verifies the existing extractor contract;
-    # it is never registered as a replacement for the admitted JS source.
-    parsed = extract_openapi(json.dumps(SPEC).encode(), DOCUMENT)
-    assert not parsed.limitations
-    assert {(r.method, r.url.removeprefix(ORIGIN)) for r in parsed.records} == OPERATIONS
-    fields = [r for r in parsed.records if r.parameter is not None]
-    assert {(r.parameter, r.location) for r in fields} == {
-        ('label', 'json'), ('widgetId', 'path'), ('q', 'query'), ('X-Mode', 'header')}
-    assert next(r for r in fields if r.parameter == 'q').required
-    label = next(r for r in fields if r.parameter == 'label')
-    assert label.required and label.input_type == 'string' and label.content_type == 'application/json'
-    assert any(r.url.endswith('/status') and r.parameter is None for r in parsed.records)
+        assert 'without executing javascript' in text and 'gain read rights' in text
 
 
 async def retained_initializer(tmp_path, monkeypatch, body: str, *, cap=8192):
@@ -145,12 +122,16 @@ async def retained_initializer(tmp_path, monkeypatch, body: str, *, cap=8192):
 @pytest.mark.parametrize('binding', ['literal', 'intermediate'])
 async def test_visible_review_uses_existing_actions_and_inventory_not_fake_provenance(tmp_path, monkeypatch, binding):
     runtime, source, requests = await retained_initializer(tmp_path, monkeypatch, initializer(binding))
-    graph = (dict(runtime.workflow.endpoints), dict(runtime.workflow.discovery_provenance))
+    # No HTML/OpenAPI/JS parsing or execution occurs during source admission.
+    assert not runtime.workflow.attack_surface_inputs
+    assert {row.url for row in runtime.workflow.endpoints.values()} == {DOCUMENT}
+    assert runtime.workflow.discovery_sources[source.id].content_identity is None
     _, guidance, _ = read_skill()
     examples = [json.loads(block) for block in re.findall(r'```json\s*\n(.*?)\n```', guidance, re.S)]
     example = next(row for row in examples if row.get('arguments', {}).get('parameter') == 'label'
                    and row['arguments'].get('endpoint') == '/service/v4/widgets')
     # Exercise the guidance's actual tool example, then the other visible fields.
+    example['arguments']['source_attribution'] = attribution(source, 'options.swaggerDoc.paths./widgets.post.label')
     first = json.loads((await execute(runtime, example['tool'], example['arguments'])).result)
     again = json.loads((await execute(runtime, example['tool'], example['arguments'])).result)
     assert first['created'] and not again['created'] and first['input']['id'] == again['input']['id']
@@ -158,12 +139,17 @@ async def test_visible_review_uses_existing_actions_and_inventory_not_fake_prove
                                              ('X-Mode', 'header', 'string')]:
         await execute(runtime, 'workflow', {'action': 'record_input', 'method': 'GET',
             'endpoint': '/service/preview/widgets/{widgetId}', 'parameter': parameter,
-            'location': location, 'input_type': input_type})
+            'location': location, 'input_type': input_type,
+            'source_attribution': attribution(source, f'paths./widgets/{{widgetId}}.get.{parameter}')})
     inputs = tuple(runtime.workflow.attack_surface_inputs.values())
     assert len(inputs) == 4 and all(row.disposition == 'pending' for row in inputs)
     assert all(row.source_ref is row.baseline_request_ref is row.auth_context_ref is None for row in inputs)
     assert not any(row.endpoint.endswith('/status') for row in inputs)  # no dummy input
-    assert (runtime.workflow.endpoints, runtime.workflow.discovery_provenance) == graph
+    links = [row for row in runtime.workflow.discovery_provenance.values() if row.input_id]
+    assert len(links) == 4 and all(row.locator.startswith('manual:') for row in links)
+    assert {row.source_id for row in links} == {source.id}
+    assert not any(row.url.endswith('/status') for row in runtime.workflow.endpoints.values())
+    assert runtime.workflow.discovery_sources[source.id].content_identity is None
 
     # Test-authored review facts: root inheritance, operation override, empty security.
     assert SPEC['security'] == [{'BearerAuth': []}]
@@ -211,8 +197,8 @@ async def test_incomplete_review_preserves_reader_rights_and_frontier(tmp_path, 
             'start_char': 0, 'max_chars': 2000}, success=False)
         assert refused.status == 'error' and 'ownership or scope is unavailable' in str(refused.result)
         assert runtime.workflow.to_dict() == before
-    result = extract_openapi(item.body, DOCUMENT, complete=item.complete)
-    assert not result.records and result.limitations and not result.not_applicable
+    assert not runtime.workflow.attack_surface_inputs
+    assert runtime.workflow.discovery_sources[source.id].content_identity is None
     args = {'action': 'set_source_disposition', 'discovery_source_id': source.id,
         'retained_ref': source.retained_ref, 'source_disposition': 'partial' if case == 'truncated' else 'blocked',
         'source_reason': f'Inline review limited: {case}', 'source_limitations': [f'{case} source not fully reviewable']}
@@ -234,8 +220,7 @@ async def test_incomplete_review_preserves_reader_rights_and_frontier(tmp_path, 
 async def test_external_servers_are_not_rebased_or_admitted_as_target_inputs(tmp_path, monkeypatch):
     external = {'openapi': '3.0.3', 'servers': [{'url': 'http://external.test/service'}],
                 'paths': {'/widgets': {'get': {'parameters': [{'in': 'query', 'name': 'q'}]}}}}
-    parsed = extract_openapi(json.dumps(external).encode(), DOCUMENT)
-    assert not parsed.records and parsed.limitations
+    assert external['servers'][0]['url'].startswith('http://external.test')
     runtime, _, requests = await retained_initializer(tmp_path, monkeypatch, initializer('literal'))
     before = runtime.workflow.to_dict()
     refused = await execute(runtime, 'workflow', {'action': 'record_input', 'method': 'GET',

@@ -91,7 +91,7 @@ class SourceRecord:
     document_url: str | None = None
     retained_ref: str | None = None
     scanner_job_id: str | None = None
-    # Syntax-only identity may be populated by extraction; no form values.
+    # Preserve historical extractor identity; manual attribution does not set it.
     content_identity: str | None = None
     selected: bool = False
     disposition: str = 'pending'

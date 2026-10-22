@@ -6423,8 +6423,6 @@ class Agent:
 
                         native_token = result_hook.set(retain_native if type(self.tools.get(tc.function.name)) is
                             ContentDiscoveryTool else None)
-                        from src.tools.workflow.source_processing import controller as source_controller
-                        source_token = source_controller.set((self, native_scope))
                         try:
                             admission_owner = self._skill_owner()
                             admission_tool_name = tc.function.name
@@ -6463,7 +6461,6 @@ class Agent:
                                                         defer_admission=True)
                             raise
                         finally:
-                            source_controller.reset(source_token)
                             result_hook.reset(native_token)
                             hooks.reset(hook_token)
                     except Exception as err:

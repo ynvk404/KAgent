@@ -465,14 +465,31 @@ def test_input_recording_is_incremental_and_keeps_analysis_boundary():
     assert 'Keep these inputs pending for `web-input-analysis`' in early
 
 
-def test_large_response_strategy_has_fixed_bounds_and_no_escalation():
+def test_large_response_strategy_preserves_read_boundaries_without_refetch():
     _, body, _ = read_skill()
     strategy = collapse_ws(body.split('## Large responses:', 1)[1].split('## 1.', 1)[0])
     for requirement in (
         'Do not repeatedly fetch the same large resource',
-        'at most one targeted extraction attempt per resource',
-        'no redirect following, one GET', '--max-time 8 --max-filesize 65536',
-        '40 matches and 4,000 characters', 'Do not raise the bound or restart retrieval',
+        'Do not fetch again, increase caps or cache-bust',
+        'raw ObservationStore bytes are not a general discovery reader',
+        'unowned discovery observation', 'gain read rights',
+        'unavailable, evicted, outside limits or unreadable',
+        'Do not raise the bound or restart retrieval',
         'retaining unresolved source limitations',
     ):
         assert requirement in strategy
+
+
+def test_default_flow_uses_manual_fields_without_source_management_backlog():
+    _, body, _ = read_skill()
+    text = collapse_ws(body).lower()
+    for contract in ('unselected pending source is not a mandatory backlog',
+                     'there is no required select_source', 'get_source` only when',
+                     'recording an input never selects or dispositions',
+                     'caller declaration', 'not a machine extraction receipt',
+                     'selected unresolved sources still block completion',
+                     'do not drop a reference to bypass an admission error',
+                     'fields nested in a sample do not replace separate records',
+                     'not semantic completeness', 'in direct mode, discover only'):
+        assert contract in text
+    assert 'process_source' not in text

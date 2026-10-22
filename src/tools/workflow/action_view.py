@@ -9,7 +9,7 @@ from .workflow_tool import ACTIONS, ACTION_INPUTS, ACTION_REQUIRED
 
 
 WHOLE_TARGET_ACTIONS = frozenset({
-    "select_source", "get_source", "get_endpoint", "set_source_disposition", "process_source",
+    "select_source", "get_source", "get_endpoint", "set_source_disposition",
     "record_input", "set_input_disposition", "link_input_candidate",
     "record_phase_coverage", "review_no_candidate",
 })

@@ -30,15 +30,18 @@ def test_frontier_and_incomplete_phases_cannot_hide_current_obligations(obligati
     assert 'ds_fixture' not in plan.guidance and 'select_source' not in plan.guidance
 
 
-@pytest.mark.parametrize('selected,action', [(False, 'select_source'), (True, 'get_source')])
-def test_exact_frontier_step_and_missing_phase_requirements_are_visible(selected, action):
+@pytest.mark.parametrize('selected', [False, True])
+def test_only_selected_frontier_obligations_guide_review_with_phase_requirements(selected):
     context = frontier(completed_phases=frozenset({'recon'}), next_source_selected=selected,
         phase_completion_readiness={'phase': 'enumeration', 'ready': False,
             'artifact_ref': 'artifacts/web-enumeration/target/inventory.md', 'artifact_valid': False,
             'required_coverage': {'html_navigation': None}, 'reason': 'canonical artifact missing'})
     plan = build_whole_target_plan(skills(), context)
     assert plan is not None and plan.recommended_skill == 'web-enumeration'
-    assert action in plan.guidance and 'ds_fixture' in plan.guidance
+    assert ('ds_fixture' in plan.guidance) == selected
+    assert 'select_source' not in plan.guidance and 'process_source' not in plan.guidance
+    if selected:
+        assert 'record_input' in plan.guidance and 'get_source only for missing metadata' in plan.guidance
     assert 'load_skill' in plan.guidance and 'html_navigation' in plan.guidance
     assert 'canonical artifact missing' in plan.guidance
 
@@ -65,7 +68,7 @@ def test_validation_result_does_not_suppress_remaining_discovery():
         candidates=(PlannerCandidate('cand_done', 'cross-site-scripting', 'dismissed', latest_outcome='not-confirmed'),))
     plan = build_whole_target_plan(skills(), context)
     assert plan is not None and plan.recommended_skill == 'web-enumeration'
-    assert 'ds_fixture' in plan.guidance
+    assert 'ds_fixture' not in plan.guidance
 
 
 @pytest.mark.parametrize('ready', [True, False, None])
@@ -81,8 +84,10 @@ def test_completed_discovery_prioritizes_only_ready_validation_over_unselected_f
     if ready is True and not selected:
         assert plan.candidate_id == 'cand_ready' and plan.recommended_skill == 'sql-injection'
         assert 'start_validation' in plan.guidance and 'remain open' in plan.guidance
-    else:
+    elif selected:
         assert plan.candidate_id is None and 'ds_fixture' in plan.guidance
+    else:
+        assert 'ds_fixture' not in plan.guidance and 'select_source' not in plan.guidance
 
 
 @pytest.mark.parametrize('phase', ['recon', 'enumeration', 'input_analysis'])

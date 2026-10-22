@@ -3,7 +3,7 @@ import json
 import pytest
 
 from tests.integration.test_scanner_agent_handoff import agent_runtime, wire, require_binaries
-from tests.integration.test_discovery_extraction import execute
+from tests.helpers.discovery_calls import execute
 from tests.helpers.agent_fakes import FakeClient
 
 

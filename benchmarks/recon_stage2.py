@@ -33,36 +33,25 @@ def measure():
     start = perf_counter()
     for _ in range(100): discovery_page(state, {'view': 'sources', 'limit': 25})
     timings['100_frontier_listings'] = perf_counter() - start
-    from src.workflow.discovery.extraction import extract_html, apply_extraction
-    document_url = origin + '/large.html'
-    html = ('<form method="post">' + ''.join(f'<input name="field{index}">' for index in range(260))
-            + '</form>' + ' ' * 50000).encode()
-    start = perf_counter()
-    extraction = extract_html(html, document_url)
-    timings['bounded_large_html_parse'] = perf_counter() - start
-    source = SourceRecord('benchmark', origin, 'http', 'obs-html', 'f' * 64, document_url,
-                          retained_ref='obs-html', selected=True)
+    from src.workflow.discovery.attribution import record_attributed_input
+    from src.workflow.state import AttackSurfaceInput
+    source = SourceRecord('benchmark', origin, 'http', 'obs-document', 'f' * 64,
+                          origin + '/openapi.json', retained_ref='obs-document')
     state.admit_discovery(source)
-    start = perf_counter()
-    apply_extraction(state, source.id, extraction, generation=state.generation,
-                      retained_ref='obs-html', retained_hash='f' * 64, document_url=document_url)
-    timings['bounded_large_html_admission'] = perf_counter() - start
-    from src.workflow.discovery.openapi import extract_openapi
-    doc = {'openapi': '3.1.0', 'paths': {f'/api/{index}': {'post': {'requestBody': {'content': {
-        'application/json': {'schema': {'properties': {f'q{i}': {'type': 'string'} for i in range(12)}}}}}}}
-        for index in range(60)}}
-    body = json.dumps(doc).encode()
-    start = perf_counter()
-    extracted = extract_openapi(body, origin + '/openapi.json')
-    timings['bounded_large_openapi_parse'] = perf_counter() - start
-    src = SourceRecord('benchmark', origin, 'http', 'obs-api', 'e' * 64, origin + '/openapi.json',
-                        retained_ref='obs-api', selected=True)
-    state.admit_discovery(src)
-    assert src.document_url is not None
-    start = perf_counter()
-    apply_extraction(state, src.id, extracted, generation=state.generation,
-                      retained_ref='obs-api', retained_hash='e' * 64, document_url=src.document_url)
-    timings['bounded_large_openapi_admission'] = perf_counter() - start
+    # Synthetic caller-authored metadata, no parsing or LLM-quality measurement.
+    declarations = [AttackSurfaceInput('benchmark', origin, method='POST', endpoint='/orders',
+                    parameter=f'field{index}', location='json', content_type='application/json')
+                    for index in range(32)]
+    for operation in ('insert', 'dedup'):
+        start = perf_counter()
+        for item in declarations:
+            assert item.parameter is not None
+            record_attributed_input(state, item, {
+                'discovery_source_id': source.id, 'retained_ref': source.retained_ref,
+                'retained_hash': source.retained_hash,
+                'document_location': '/components/schemas/Order/properties/' + item.parameter,
+            }, generation=state.generation)
+        timings[operation + '_32_manual_attributions'] = perf_counter() - start
     return timings
 
 

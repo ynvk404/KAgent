@@ -10,8 +10,7 @@ import pytest
 
 MODULES = (
     "src.workflow.discovery.inventory",
-    "src.workflow.discovery.extraction",
-    "src.workflow.discovery.openapi",
+    "src.workflow.discovery.attribution",
     "src.workflow.discovery.scanner",
     "src.workflow.discovery.input_view",
     "src.workflow.evidence.artifacts",

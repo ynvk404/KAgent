@@ -50,7 +50,8 @@ async def test_structured_progress_resets_and_frontier_is_precise_without_text(t
     before = agent.workflow.to_dict()
     context = agent._planner_context()
     plan = build_whole_target_plan(agent.skills.list_enabled(), context)
-    assert plan and 'select_source' in plan.guidance and src.id in plan.guidance
+    assert plan and plan.recommended_skill == 'recon'
+    assert 'select_source' not in plan.guidance and src.id not in plan.guidance
     assert context.pending_source_count == 1 and context.selected_pending_source_count == 0
     assert agent.workflow.to_dict() == before  # Advice never selects or processes.
     events = []

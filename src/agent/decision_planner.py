@@ -356,7 +356,8 @@ def build_decision_plan(
 
 def source_frontier_guidance(context: PlannerContext) -> str:
     """One exact metadata reference; never select, fetch, or certify a source."""
-    if context.objective_mode != "whole_target" or not context.next_source_id:
+    if (context.objective_mode != "whole_target" or not context.next_source_id
+            or not context.next_source_selected):
         return ""
     if context.next_source_selected and context.next_source_disposition in {"partial", "blocked"}:
         return (
@@ -366,15 +367,19 @@ def source_frontier_guidance(context: PlannerContext) -> str:
             "browser/operator/authorization or retrieval dependency before further source work; "
             "otherwise preserve it as unresolved. Do not retry scanners/probes or refetch the source "
             "while its blocker is unchanged. Partial processing needs a truthful supported disposition "
-            "or explicit bounded stop under the existing policy; never invent completion."
+            "or explicit bounded stop under the existing policy; never invent completion. "
+            "Continue manual review only from visible content or an artifact readable under existing rights; "
+            "automatic extraction is unavailable and historical provenance grants no read authority."
         )
-    action = "get_source" if context.next_source_selected else "select_source"
-    timing = "After recon completion, " if context.structured_phase == "recon" else "Next, "
     return (
-        f"\nFrontier pending={context.pending_source_count}, selected_pending={context.selected_pending_source_count}. "
-        + timing + f'workflow(action="{action}", discovery_source_id="{context.next_source_id}"). '
-        "Then get_source for retained_ref/limitations; process_source with a supported extractor, or "
-        "set_source_disposition with truthful reason/bounds. Truncated bytes remain partial; never fabricate provenance."
+        f"\nSelected unresolved source {context.next_source_id} still requires review. "
+        "Reuse content already visible or an artifact readable under existing rights, record each established "
+        "field with record_input and optional source_attribution, then reconcile the inventory. "
+        "Use get_source only for missing metadata. Explicitly set_source_disposition with an honest outcome "
+        "or supported bounded stop; unavailable, truncated or dynamic portions remain limitations. "
+        "Historical extraction records stay intact; automatic source extraction is no longer available. "
+        "Do not create validation ownership, refetch or raise caps to recover unreadable bytes. "
+        "Unselected retained sources are traceability, not a mandatory backlog."
     )
 
 

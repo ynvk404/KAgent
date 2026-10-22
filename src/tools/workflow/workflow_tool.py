@@ -66,7 +66,6 @@ from src.tools.http.http_tool import HTTPTool
 
 
 ACTIONS = (
-    "process_source",
     "select_source",
     "get_source",
     "get_endpoint",
@@ -92,7 +91,6 @@ MAX_LIST_LIMIT = 25
 MAX_LIST_COMPLETED_SKILLS = 20
 LIST_TEXT_LIMIT = 200
 ACTION_REQUIRED = {
-    'process_source': ('discovery_source_id', 'retained_ref', 'extractor'),
     'select_source': ('discovery_source_id',),
     'get_source': ('discovery_source_id',),
     'get_endpoint': ('endpoint_id',),
@@ -112,7 +110,6 @@ ACTION_REQUIRED = {
     'review_no_candidate': ('goal_id',),
 }
 ACTION_INPUTS = {
-    'process_source': ('discovery_source_id', 'retained_ref', 'extractor'),
     'select_source': ('discovery_source_id', 'retained_ref'),
     'get_source': ('discovery_source_id',),
     'get_endpoint': ('endpoint_id',),
@@ -124,7 +121,7 @@ ACTION_INPUTS = {
     # informational label retained for existing validation-feedback callers.
     'record_input': ('objective_id', 'target_origin', 'target', 'endpoint', 'method', 'parameter',
                      'location', 'input_type', 'content_type', 'sample_payload',
-                     'baseline_request_ref', 'auth_context_ref', 'source_ref', 'source'),
+                     'baseline_request_ref', 'auth_context_ref', 'source_ref', 'source', 'source_attribution'),
     'set_input_disposition': ('input_id', 'disposition', 'disposition_reason'),
     'link_input_candidate': ('input_id', 'candidate_id'),
     'record_candidate': ('candidate_class', 'target', 'endpoint', 'method', 'parameter', 'location',
@@ -229,7 +226,19 @@ class WorkflowTool(Tool):
                 "assessment": {"type": "object"},
                 "input_id": optional_string,
                 "discovery_source_id": optional_string,
-                "extractor": {"type": "string", "enum": ['html', 'openapi']},
+                "source_attribution": {
+                    "type": "object",
+                    "description": "Optional manual declaration of a field read in an admitted HTTP/capture document. Metadata only; never request context, extraction proof, read permission or test evidence.",
+                    "properties": {
+                        "discovery_source_id": {"type": "string"},
+                        "retained_ref": {"type": "string"},
+                        "retained_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "document_location": {"type": "string", "minLength": 1, "maxLength": 233,
+                            "description": "Exact non-secret field location: JSON pointer, HTML selector or visible JS binding. No traffic, values or credentials."},
+                    },
+                    "required": ["discovery_source_id", "retained_ref", "retained_hash", "document_location"],
+                    "additionalProperties": False,
+                },
                 "endpoint_id": optional_string,
                 "retained_ref": optional_string,
                 "discovery_cursor": optional_string,
@@ -393,12 +402,6 @@ class WorkflowTool(Tool):
     def requires_permission(self) -> bool:
         return False
 
-    def requires_permission_for(self, args: dict[str, Any]) -> bool:
-        return args.get('action') == 'process_source'
-
-    def permission_hints(self, args: dict[str, Any]):
-        return {'noSessionCache': True, 'riskTier': 'high-impact'}
-
     def context_reduction_policy(self) -> str:
         """Keep same-turn workflow mutations intact for the next LLM call."""
         return "preserve"
@@ -494,15 +497,6 @@ class WorkflowTool(Tool):
                 return self._typed_result('error: scanner triage unavailable: ' + str(exc))
             self.state.mark_committed()
             result = json.dumps({'ok': True, 'scanner_job': job.projection()})
-        elif action == 'process_source':
-            try:
-                if candidate_origin(self._active_target()) != (self.state.objective.target_origin if self.state.objective else None):
-                    raise ValueError('source extraction requires the active objective target origin')
-                from src.tools.workflow.source_processing import process_source
-                source = process_source(self, args, signal, prompter)
-                result = json.dumps({'ok': True, 'discovery_source': source.to_dict(), 'unresolved': source.unresolved})
-            except (ValueError, TypeError, KeyError) as err:
-                result = f'error: {err}'
         elif action in {'select_source', 'get_source', 'get_endpoint', 'set_source_disposition'}:
             result = self._discovery_action(action, args)
         elif action == "get_input":
@@ -940,10 +934,18 @@ class WorkflowTool(Tool):
                     'method', 'endpoint', 'parameter', 'location', 'content_type',
                     'baseline_request_ref', 'auth_context_ref', 'source_ref')):
                 self._validate_replay_baseline(item, policy_for(prompter))
-            stored, created = self.state.add_attack_surface_input(item)
+            attribution = None
+            if 'source_attribution' in args:
+                from src.workflow.discovery.attribution import record_attributed_input
+                stored, created, attribution = record_attributed_input(
+                    self.state, item, args['source_attribution'], generation=self.state.generation)
+            else:
+                stored, created = self.state.add_attack_surface_input(item)
         except (TypeError, ValueError) as err:
             return f"error: {err}"
-        return json.dumps({"ok": True, "created": created, "input": stored.to_dict()}, indent=2)
+        return json.dumps({"ok": True, "created": created, "input": stored.to_dict(),
+                           **({'source_attribution': attribution.to_dict(),
+                               'attribution_kind': 'manual_declaration'} if attribution else {})}, indent=2)
 
     def _validate_replay_baseline(self, proposal, policy) -> None:
         """New replay references resolve through the existing capture namespace.

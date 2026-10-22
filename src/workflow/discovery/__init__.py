@@ -1,1 +1,1 @@
-"""Discovery inventory, bounded extraction and scanner handoff."""
+"""Discovery inventory, manual attribution and scanner handoff."""

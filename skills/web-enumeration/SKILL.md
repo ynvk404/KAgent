@@ -41,20 +41,23 @@ allowed-tools:
 
 # Web enumeration playbook
 
-You have been handed a target that `recon` has already classified and shown
-to be reachable. This phase answers "what does this application expose that
-could be tested?" It does not decide which exposed item is vulnerable and
-does not attempt vulnerability testing. Those tasks belong to
-`web-input-analysis` and the vulnerability-specific skills.
-
 **Objective:** map the web application's reachable attack surface — routes,
 endpoints, parameters, forms, API surfaces, and relevant static/JS resources
 — without attempting vulnerability exploitation or drawing vulnerability-
 class conclusions.
 
+Whole-target flow: reuse sources → read and establish structure → `record_input`
+→ reconcile canonical records → inventory and coverage → `complete_skill` →
+Input Analysis. Native HTTP obtains a new source only when needed; Content
+Discovery fills a concrete path gap. In Direct mode, discover only what the
+specific request needs; do not force all phases or whole-target source actions.
+
 Prefer the built-in `http` tool with `phase: recon` for known-source
 enumeration. Use `curl` only when the native tool cannot express a necessary
 request detail; shell requests do not enforce target-origin scope.
+For a necessary new source via shell, keep the exact active origin, one GET,
+no redirects, timeout ≤8 seconds and download cap ≤64 KiB. Shell approval
+does not authorize another origin or a replacement fetch for omitted content.
 Use `content_discovery` only when steps 2–5 leave a concrete path-coverage gap.
 `content_discovery` uses native HTTP through the runtime permission gate.
 Discovery stays on the active origin, is bounded, and requires
@@ -135,7 +138,7 @@ Keep these inputs pending for `web-input-analysis`. Do not call
 in enumeration. Input recording does not complete the phase: write the
 inventory and account for coverage before `complete_skill`.
 
-## Large responses: bounded extraction, then move on
+## Large responses: bounded reading, then move on
 
 A response truncation marker or context-guard omission is a strategy signal.
 Do not repeatedly fetch the same large resource, increase `max_response_bytes`,
@@ -143,24 +146,21 @@ or add empty queries/cache-busters to obtain the whole blob. Check status and
 Content-Type first: HTML at a guessed Swagger URL is not a JSON specification.
 Use already visible input/schema/link clues and record them immediately.
 
-Prefer searching/grepping a previously retained local artifact. If the needed
-information lies outside the retained prefix and the native tool cannot
-extract it, the allowed `shell` tool may perform at most one targeted
-extraction attempt per resource. Explain the exact purpose (e.g. form names,
-same-origin directory anchors, or one documented operation). Use the exact
-active scheme/host/effective port, no redirect following, one GET, a timeout
-of at most 8 seconds, and a fixed download bound of at most 64 KiB (for example
-curl `--max-time 8 --max-filesize 65536`). Bound parsing to that prefix and
-output to at most 40 matches and 4,000 characters. Extract only the needed
-structure; never print or persist raw credentials or complete traffic.
-Do not run a recursive loop, arbitrary URL batch, or generic shell scanner.
-Shell approval does not authorize an off-origin URL.
-
-If that bounded attempt fails, returns a wildcard shell, or yields no useful
-new structure, record the remaining source limitation in the inventory and
-move to other known inputs. Do not raise the bound or restart retrieval.
+Reuse content already seen or search a retained local artifact under existing
+read permissions, with at most 40 matches and 4,000 output characters.
+Native HTTP returns a bounded response
+inline; its raw ObservationStore bytes are not a general discovery reader or
+an automatic `read_tool_result` cache. Context omission and response truncation
+are different: `complete=true` does not mean omitted text is still visible.
+Do not fetch again, increase caps or cache-bust just because context lacks a
+part that was already retained. `read_http_observation` keeps its validation
+ownership contract: do not use it for an unowned discovery observation, create
+a Candidate/validation attempt to gain read rights, or infer authority from a
+source ID. If content is unavailable, evicted, outside limits or unreadable
+under current rights, record that limitation and work with known inputs.
+Do not raise the bound or restart retrieval.
 Use `content_discovery` only for an actual path gap, not to download a blob.
-Partial extraction is sufficient for a bounded inventory; do not make complete
+Partial review is sufficient for a bounded inventory; do not make complete
 large-resource ingestion a prerequisite for handoff. Once the known input
 surface and coverage are accounted for, write the inventory and transition to
 `web-input-analysis`, retaining unresolved source limitations.
@@ -338,10 +338,6 @@ parameters, each operation's `requestBody.content` media type/schema, and any
 operation-level security requirement. Record their provenance as `observed
 from the specification`; do not say they are reachable until requested.
 
-For an API-only target with a useful specification, inventory the documented
-surface before considering focused discovery. Do not run a default wordlist
-pass while the specification covers the route gap.
-
 Read operation keys from the retained `.paths` object and record supported
 request shapes incrementally. Reuse the same retained response for parsing;
 do not fetch a specification again merely to list its paths.
@@ -387,29 +383,17 @@ authorized scope. An off-origin server is an external documentation clue,
 not authority to request it or rebase its operations onto the active target.
 Unresolved server variables remain limitations.
 
-Reuse retained source under existing rights. `process_source` with
-`extractor="openapi"` accepts an admitted JSON document, not raw initializer
-JS. Do not feed it JavaScript, execute JS to obtain JSON, or register a copied
-object as a replacement authoritative source. `read_http_observation` is only
-usable when its existing ownership/scope/permission checks allow the read;
-an unowned discovery observation may be unavailable through that reader.
-Do not create a validation attempt to gain read rights. If retained discovery
-JS is unavailable, evicted or outside the visible representation, record the
-limitation; do not open a reader/gate, raise caps or refetch solely to list
-paths. Keep the fixed large-response strategy and its stop conditions.
+### Record documentation and retain attribution
 
-### Record inline documentation through existing actions
-
-In whole-target mode, inspect `workflow(action="list", view="sources")` and
-use only returned IDs with `get_source` and `select_source`. Inspect existing
-`endpoints`/`provenance` views to reuse actual runtime-admitted references.
-Write every documented method/endpoint to the canonical Markdown inventory
-in step 7, including operations without inputs, the actual initializer/page
-URL, visible binding/field location, and returned source/ref IDs when present.
-Record unknown reachability/authentication and any source limitations there.
-This manual review is not a machine extraction receipt. There is no public
-`record_endpoint` or manual provenance-publication action: do not fabricate
-`ds_`/`ep_`/`pv_`/`obs_` IDs or imply manual entries exist in those runtime views.
+Read visible HTML/JSON/JS yourself under the bounded-reading rules above.
+There is no automatic HTML/OpenAPI extraction action. Never execute JavaScript
+or register a copied object as a replacement authoritative source.
+Runtime retains Discovery Sources for traceability; an unselected pending
+source is not a mandatory backlog. Reuse known metadata; use `list` sources or
+`get_source` only when an exact reference/hash or limitation is missing.
+There is no required select_source → get_source → processing sequence for each
+response. Select a source only for deliberate further review, not to tidy the
+frontier. Recording an input never selects or dispositions its source.
 
 For each known request field, use `record_input` incrementally under the
 active whole-target objective, reusing returned input IDs. For example, only
@@ -432,35 +416,53 @@ if this method/base/path/field is actually documented on the active origin:
 ```
 
 Do not manufacture a dummy input for an operation without request fields.
-`source_ref`, `baseline_request_ref` and `auth_context_ref` are request-context
-references, not places for a discovery ID, documentation URL or invented auth
-context. Omit them when no genuine context exists; put documentation attribution
-in the inventory. `record_input` does not publish endpoint/provenance graph
-rows. In direct mode, use the inventory without invoking whole-target-only
-actions or changing mode to obtain them.
+Optionally supply `source_attribution` on the same `record_input` call with
+the admitted HTTP/capture source's exact `discovery_source_id`, `retained_ref`,
+`retained_hash` and a non-secret `document_location` (JSON pointer, HTML
+selector or visible JS binding). Copy actual returned metadata, never IDs from
+an example. For GET /openapi.json documenting POST /orders JSON `cid`, attribute
+the field to that document and its schema location. The runtime atomically
+admits the input's endpoint and a `manual:` provenance linkage. A bad attribution
+rejects the whole call; do not drop a reference to bypass an admission error.
+This is a caller declaration, not a machine extraction receipt or verification
+that the field exists. It proves neither reachability, accepted request shape,
+authentication nor testing. Metadata grants no bytes, replay or evidence rights.
+
+`source_ref`, `baseline_request_ref` and `auth_context_ref` keep their separate
+request-context contracts; the GET document capture is not POST request context.
+Documented inputs do not require request captures. Keep all documented endpoints
+in Markdown, including operations without inputs and unknown reachability/auth.
+There is no public `record_endpoint`: do not manufacture dummy inputs or claim
+structured endpoint/provenance rows that were not admitted. In Direct mode,
+retain attribution in the inventory without whole-target-only actions.
 
 When `source_ref` is an HTTP observation used as request context, take method,
 normalized origin and path from that checked source; they must match the input.
 For example, a `/robots.txt` observation is not request context for an API path
 listed in its body. OpenAPI, JavaScript and documentation can establish inputs
-without `source_ref`; retain attribution in the inventory, not an unrelated
-HTTP reference. An unexpected path does not prove an endpoint works, and HTTP
+without `source_ref`; use document attribution, not an unrelated HTTP reference.
+Keep a concrete path unless documentation or compatible observed paths establish
+a template. Never remove source_ref on retry to turn a concrete capture into
+wildcard/template authority. An unexpected path does not prove an endpoint works, and HTTP
 500 alone does not prove it absent. Do not silently change `product` to
 `products`. If an input is wrong, use the existing disposition/correction and
 replacement flow with the actual evidence; never rewrite history or fake a ref.
 
 For a selected source, use `set_source_disposition` with its real
 `discovery_source_id` and `retained_ref`. Mark `processed` only after the
-complete visible source has actually been reviewed; JSON-extractor rejection
-of JS is not `not_applicable` or proof of zero operations. Use `partial` or
+complete visible source has actually been reviewed; unsupported or dynamic JS
+is not `not_applicable` or proof of zero operations. Use `partial` or
 `blocked` with `source_reason` and `source_limitations` for missing/truncated,
 dynamic, inaccessible or unsupported portions. Only acknowledge an actual
 bounded stop with `acknowledge_bounded_stop=true`, `source_disposition="partial"`,
 a reason, limitations and `source_bounds` containing the real limits applied
 (for example `max_bytes` or `max_operations`); never invent bounds to close a
-source. Unresolved sources can still block completion. Source disposition is
+source. Selected unresolved sources still block completion. Source disposition is
 not `complete_skill`: satisfy the current frontier, coverage and artifact
-gates in step 7 without claiming unperformed work as `performed`.
+gates in step 7 without claiming unperformed work as `performed`. On Continue,
+preserve historical extraction IDs, provenance, content identity and bounds;
+continue selected unresolved reviews with readable material or an honest
+limitation. Persisted metadata never restores read or execution authority.
 
 If a GraphQL endpoint is identified, record:
 
@@ -522,8 +524,7 @@ alone is insufficient. Apply the large-response strategy if content is cut.
 
 Skip JavaScript or other resources that resolve to clearly unauthorized
 cross-origin domains.
-This step extracts route clues already known by the frontend. Keep the source
-bundle and call-site evidence with each clue, then classify it as a client
+Keep the source bundle and call-site evidence with each clue, then classify it as a client
 route, a backend endpoint reference, or unknown. Do not deobfuscate or
 reverse-engineer bundles, and do not treat every `/...` string as an API.
 This step extracts route and endpoint strings already known by the frontend.
@@ -729,8 +730,11 @@ Do not re-record unchanged inputs or wait until this step to record them.
 Record every actually known request field separately, including password fields
 and secondary fields recovered at a visible JS call site; keep field names and
 redact secret values. Reuse existing input identities and provenance. A path
-name alone supplies no body schema. Compare structured inputs/endpoints/provenance
-with the retained source before closing; manual Markdown inventory entries are
+name, GET collection or general application knowledge supplies no POST body
+schema. Check missing fields, speculative fields, concrete/template identities
+and attribution against sources actually read; fields nested in a sample do
+not replace separate records. Compare structured inputs/endpoints/provenance
+with readable retained sources before closing; manual Markdown inventory entries are
 not automatically synchronized. Phase completion checks the workflow contract,
 not semantic completeness of Markdown. State any remaining reconciliation gap.
 

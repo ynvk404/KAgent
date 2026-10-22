@@ -1680,7 +1680,7 @@ class WorkflowState:
         if len(matches) > 1:
             raise ValueError("ambiguous canonical input match; inspect exact historical IDs and retire invalid work, never guess a replacement")
         # Only an existing no-candidate review needs an inventory comparison.
-        # Bounded extraction can admit many rows in one detached transaction;
+        # Discovery admission can stage rows in a detached transaction;
         # serializing thousands of unrelated endpoints for every row is wasteful.
         previous = (self._inventory_signature()
                     if any(goal.status == 'no_candidate' for goal in objective.requested_goals) else None)

@@ -44,7 +44,7 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
             lines.append("Recommended: inventory endpoints/sources/inputs; inspect coverage gaps. Defer hypotheses to input analysis.")
         else:
             lines.append("Recommended: analyze inputs; record disposition or record_candidate only with evidenced controllability and compatible input bindings.")
-        lines.append("Use bounded list pages/cursors and get_input/get_source; inspect pending/partial/blocked sources and limitations. Native discovery, scanner endpoints, triage and coverage differ; scanner completion is not discovery completion.")
+        lines.append("Reuse visible sources/input IDs; record_input may include manual source_attribution. Use list pages/cursors or get_input/get_source only for missing context. Selected sources keep obligations/limitations; unselected sources are not a backlog. Scanner completion is not discovery completion.")
         lines.append("Check permissions_status: ready scanner, native or no scanner depends on gaps. complete_skill requires ready state and canonical artifacts; repair blockers or state bounded stops.")
     elif context.objective_mode == "whole_target" and context.workflow_status in {"completed", "blocked"}:
         lines.append("Recommended: list current status and blockers; report the bounded outcome or repair the stated dependency. Readiness grants no finding eligibility.")

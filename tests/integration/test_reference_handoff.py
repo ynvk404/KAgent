@@ -8,7 +8,7 @@ import pytest
 from src.workflow.state import Candidate, WorkflowState
 from src.workflow.validation.context import resolve_validation_context
 from tests.integration.test_input_http_source import offline, source_runtime, record
-from tests.integration.test_discovery_extraction import execute
+from tests.helpers.discovery_calls import execute
 from tests.helpers.burp_selection import ingest, ORIGIN
 
 

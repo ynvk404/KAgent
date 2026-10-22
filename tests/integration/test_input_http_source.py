@@ -10,7 +10,7 @@ import pytest
 from src.workflow.state import WorkflowObjective
 from src.workflow.assessment import digest, source_row
 from tests.helpers.burp_selection import make_runtime, ingest, ORIGIN
-from tests.integration.test_discovery_extraction import execute, process
+from tests.helpers.discovery_calls import execute, attribution
 
 
 @pytest.fixture(autouse=True)
@@ -143,15 +143,15 @@ async def test_documentation_and_non_http_context_preserve_contract(tmp_path, re
     assert json.loads(output.result)['input']['source_ref'] == ref
 
 
-async def test_capture_html_extraction_keeps_document_provenance_separate_from_request_context(tmp_path):
+async def test_capture_manual_attribution_keeps_document_provenance_separate_from_request_context(tmp_path):
     rt = make_runtime(tmp_path)
     rt.workflow.objective = WorkflowObjective('input-sources', 'whole_target', ORIGIN)
     row = ingest(rt, path='/document', respBody='<form action="/submit" method="post"><input name="q"></form>',
                  responseComplete=True, status=200)
     await execute(rt, 'browser_capture_get', {'id': row['id']})
     source = next(iter(rt.workflow.discovery_sources.values()))
-    await execute(rt, 'workflow', {'action': 'select_source', 'discovery_source_id': source.id})
-    await process(rt, source)
+    await execute(rt, 'workflow', {'action': 'record_input', 'method': 'POST', 'endpoint': ORIGIN + '/submit',
+        'parameter': 'q', 'location': 'form', 'source_attribution': attribution(source)})
     item = next(iter(rt.workflow.attack_surface_inputs.values()))
     assert item.method == 'POST' and item.endpoint == ORIGIN + '/submit' and item.source_ref is None
     assert not rt.workflow.attempts
