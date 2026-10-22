@@ -251,7 +251,7 @@ def misuse_script(runtime, scenario, evidence_fault):
 
 @pytest.mark.parametrize("cls,method,endpoint,parameter,value,outcome", [
     ("sql-injection", "GET", "/filter", "category", "Gifts", "confirmed"),
-    ("ssti", "POST", "/preview", "template", "plain-marker", "not-confirmed"),
+    ("cross-site-scripting", "POST", "/preview", "template", "plain-marker", "not-confirmed"),
 ])
 @pytest.mark.parametrize("evidence_fault", ["unavailable-source", "wrong-attempt", "wrong-proof"])
 async def test_s03_s15_wrong_ids_raw_json_reserved_fields_then_corrected_proof(
@@ -327,16 +327,16 @@ async def test_s05_session_denial_never_reopens_from_model_retries(scenario_runn
 def goals_script(runtime, scenario):
     yield from direct_script(runtime, replace(scenario, expected=replace(scenario.expected, outcome="confirmed")))
     assert not runtime.agent._whole_target_state()[0] == "completed"
-    other = receipt((yield "workflow", {**record_candidate(scenario), "candidate_class": "ssti"}))["candidate"]["id"]
-    receipt((yield "workflow", {"action": "record_result", "candidate_id": other, "skill_name": "ssti",
-        "outcome": "insufficient-evidence", "deferred_reason": "No authorized template rendering context supplied; do not infer a negative."}))
+    other = receipt((yield "workflow", {**record_candidate(scenario), "candidate_class": "cross-site-scripting"}))["candidate"]["id"]
+    receipt((yield "workflow", {"action": "record_result", "candidate_id": other, "skill_name": "cross-site-scripting",
+        "outcome": "insufficient-evidence", "deferred_reason": "No executable rendering context supplied; do not infer a negative."}))
     assert runtime.workflow.latest_result(other).outcome == "insufficient-evidence"
     assert not runtime.workflow.latest_result(other).evidence_manifest
 
 
 async def test_s13_one_native_terminal_result_does_not_complete_second_goal(scenario_runner):
     scenario = safety_definition("S13", goals_script)
-    scenario = replace(scenario, user_input=scenario.user_input + " Also test SSTI on this input.",
+    scenario = replace(scenario, user_input=scenario.user_input + " Also test XSS on this input.",
         expected=replace(scenario.expected, outcome="insufficient-evidence", complete=False))
     run = await scenario_runner.run(scenario)
     assert [g.status for g in run.runtime.workflow.objective.requested_goals] == ["tested_confirmed", "deferred"]

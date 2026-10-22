@@ -19,7 +19,7 @@ from tests.helpers.scenarios import (
 def definition(*, id="direct-sqli-confirmed", origin="http://127.0.0.1:3101", endpoint="/filter",
                method="GET", cls="sql-injection", parameter="category", value="Gifts", mode="direct",
                outcome="confirmed", controller_bound=False, ambiguous=False):
-    kind = "sqli" if cls == "sql-injection" else "ssti" if cls == "ssti" else "generic"
+    kind = "sqli" if cls == "sql-injection" else "xss" if cls == "cross-site-scripting" else "generic"
     app = FixtureApplication(kind, origin, endpoint, method, parameter)
     expected = ExpectedOutcomes(outcome, int(outcome == "confirmed"), outcome in {"confirmed", "not-confirmed"},
         "tested_confirmed" if outcome == "confirmed" else "tested_not_confirmed" if outcome == "not-confirmed"
@@ -37,10 +37,10 @@ def definition(*, id="direct-sqli-confirmed", origin="http://127.0.0.1:3101", en
 
 DIRECT = [
     definition(),
-    definition(id="direct-ssti-negative-form", origin="http://127.0.0.2:3202", endpoint="/preview",
-               method="POST", cls="ssti", parameter="template", value="plain-marker", outcome="not-confirmed"),
-    definition(id="direct-ssti-negative-ipv6", origin="http://[::1]:3303", endpoint="/render",
-               cls="ssti", parameter="content", value="inert-marker", outcome="not-confirmed"),
+    definition(id="direct-xss-negative-form", origin="http://127.0.0.2:3202", endpoint="/preview",
+               method="POST", cls="cross-site-scripting", parameter="template", value="plain-marker", outcome="not-confirmed"),
+    definition(id="direct-xss-negative-ipv6", origin="http://[::1]:3303", endpoint="/render",
+               cls="cross-site-scripting", parameter="content", value="inert-marker", outcome="not-confirmed"),
 ]
 
 

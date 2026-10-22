@@ -57,7 +57,7 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
 
     inventory = tmp_path / "artifacts/web-enumeration/target-test/inventory.md"
     inventory.parent.mkdir(parents=True)
-    inventory.write_text("GET /search?q; GET /product?id; POST /fetch?url", encoding="utf-8")
+    inventory.write_text("GET /search?q; GET /product?id; GET /restricted-query?q", encoding="utf-8")
     await run_workflow_fixture(tool, {
         "action": "complete_skill", "skill_name": "web-enumeration",
         "artifact_ref": inventory.relative_to(tmp_path).as_posix(),
@@ -67,7 +67,7 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
     for candidate_class, endpoint, parameter, priority in (
         ("cross-site-scripting", "/search", "q", "high"),
         ("sql-injection", "/product", "id", "medium"),
-        ("ssrf", "/fetch", "url", "low"),
+        ("sql-injection", "/restricted-query", "q", "low"),
     ):
         response = json.loads(await run_workflow_fixture(tool, {
             "action": "record_candidate", "candidate_class": candidate_class,
@@ -75,11 +75,11 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
             "priority": priority, "signals": ["inventory observation"],
         }, None, allow))
         assert response["supported"] is True
-        ids[candidate_class] = response["candidate"]["id"]
+        ids[endpoint] = response["candidate"]["id"]
 
     first = _plan(state, skills, "next validation")
     assert first is not None
-    assert first.candidate_id == ids["cross-site-scripting"]
+    assert first.candidate_id == ids["/search"]
     assert first.candidate_id is not None
     assert first.recommended_skill == "cross-site-scripting"
     loaded = await LoadSkillTool(skills).run({"name": first.recommended_skill}, None, allow)
@@ -114,7 +114,7 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
     assert len(list((tmp_path / "artifacts/findings").glob("*.md"))) == 1
 
     second = _plan(state, skills, "next validation")
-    assert second is not None and second.candidate_id == ids["sql-injection"]
+    assert second is not None and second.candidate_id == ids["/product"]
     negative_proof = json.loads(await tool.run({
         "action": "record_evidence", "candidate_id": second.candidate_id,
         "evidence_path": xss_proof.relative_to(tmp_path).as_posix(),
@@ -128,11 +128,11 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
     assert negative["coverage_sync"] == "synced"
 
     third = _plan(state, skills, "next validation")
-    assert third is not None and third.candidate_id == ids["ssrf"]
+    assert third is not None and third.candidate_id == ids["/restricted-query"]
     waiting = json.loads(await run_workflow_fixture(tool, {
         "action": "record_result", "candidate_id": third.candidate_id,
-        "skill_name": "ssrf", "outcome": "authorization-required",
-        "deferred_reason": "internal destination not approved",
+        "skill_name": "sql-injection", "outcome": "authorization-required",
+        "deferred_reason": "query action not approved",
     }, None, allow))
     assert waiting["coverage_sync"] == "not-applicable"
 
@@ -144,7 +144,7 @@ async def test_inventory_to_finding_and_next_candidate_across_resume(tmp_path):
     assert len(await CoverageStore(str(tmp_path / "coverage.json")).list()) == 2
     next_plan = _plan(restored, skills, "next validation")
     assert next_plan is not None and next_plan.candidate_id is None
-    assert "internal destination not approved" in next_plan.guidance
+    assert "query action not approved" in next_plan.guidance
     await ConfirmFindingTool(
         Store(project_directory=tmp_path), workflow=restored,
     ).run(finding_args, None, allow)

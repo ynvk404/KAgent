@@ -310,8 +310,9 @@ it), or candidates directly supplied by the user with equivalent endpoint,
 input, and context details.
 Do not:
 
-- test candidates suspected of a different class (`sql-injection`,
-  `access-control`) — those route to their own skill instead;
+- test candidates suspected of a different class — route SQL injection to
+  `sql-injection`; for other classes, inspect the enabled registry and defer
+  when no matching validator is available;
 - expand scope to parameters or endpoints outside the provided candidate;
 - invent endpoint, input, or context details from a generic "test XSS"
   request.

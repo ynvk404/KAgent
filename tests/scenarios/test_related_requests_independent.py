@@ -164,25 +164,25 @@ def mixed_whole_target_script(runtime, scenario):
         if name == "workflow" and args.get("action") == "record_candidate":
             # Another hypothesis on the observed canonical input, registered by
             # production dispatch before either validator runs. No injected state.
-            other = receipt((yield "workflow", {**args, "candidate_class": "ssti",
-                "signals": ["Same observed input; template evaluation remains an untested hypothesis."]}))["candidate"]["id"]
+            other = receipt((yield "workflow", {**args, "candidate_class": "cross-site-scripting",
+                "signals": ["Same observed input; executable rendering remains an untested hypothesis."]}))["candidate"]["id"]
         try:
             name, args = original.send(output)
         except StopIteration:
             break
     assert other is not None
-    yield "load_skill", {"name": "ssti"}
+    yield "load_skill", {"name": "cross-site-scripting"}
     aid = receipt((yield "workflow", {"action": "start_validation", "candidate_id": other}))["validation_context"]["attempt_id"]
     receipt((yield "workflow", {"action": "record_result", "candidate_id": other, "attempt_id": aid,
-        "skill_name": "ssti", "outcome": "insufficient-evidence",
-        "deferred_reason": "No template-specific probes or proof in this bounded run; outstanding hypothesis."}))
+        "skill_name": "cross-site-scripting", "outcome": "insufficient-evidence",
+        "deferred_reason": "No rendering-context probes or proof in this bounded run; outstanding hypothesis."}))
 
 
 async def test_d_discovery_handoff_confirmed_plus_unresolved_stays_incomplete(scenario_runner):
     scenario = safety_definition("qa-D-mixed-target", mixed_whole_target_script,
                                  mode="whole_target", outcome="insufficient-evidence")
     scenario = replace(scenario, expected=replace(scenario.expected, findings=1), max_steps=55,
-        user_input=f"Assess the whole target {scenario.origin} for SQL injection and SSTI, "
+        user_input=f"Assess the whole target {scenario.origin} for SQL injection and XSS, "
                    "from recon through enumeration and input analysis. This exact origin is an authorized local lab.")
     run = await scenario_runner.run(scenario)
     state = run.runtime.workflow
@@ -194,7 +194,7 @@ async def test_d_discovery_handoff_confirmed_plus_unresolved_stays_incomplete(sc
     assert skills[:4] == ["recon", "web-enumeration", "web-input-analysis", "sql-injection"]
     recommended = {e["recommended_skill"] for e in run.trace.events
                    if e["type"] == "decision" and e.get("recommended_skill")}
-    assert {"recon", "web-enumeration", "web-input-analysis", "sql-injection", "ssti"} <= recommended
+    assert {"recon", "web-enumeration", "web-input-analysis", "sql-injection", "cross-site-scripting"} <= recommended
     assert {g.status for g in state.objective.requested_goals} == {"tested_confirmed", "deferred"}
 
 

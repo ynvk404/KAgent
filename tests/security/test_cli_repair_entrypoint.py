@@ -80,11 +80,11 @@ async def test_cli_tui_real_factory_evidence_network_off_and_revoke(lab, tmp_pat
             app.dispatch = dispatch
             output = await agent.tools.execute('http', {'url':origin+'/new?q=1%3D1','phase':'impact'}, None, agent.prompter)
             assert output.http_status == 200
-            candidate, _ = agent.workflow.add_candidate(Candidate(candidate_class='xxe',target=origin,endpoint='/xml'))
+            candidate, _ = agent.workflow.add_candidate(Candidate(candidate_class='xss',target=origin,endpoint='/render'))
             for source in ['proof.txt','.env']:
                 await agent.tools.execute('file_write', {'path':str(tmp_path/source),'content':'FAKE_CLI_EVIDENCE'}, None, agent.prompter)
                 evidence = json.loads(await agent.tools.execute('workflow', {'action':'record_evidence','candidate_id':candidate.id,'evidence_path':source}, None, agent.prompter))['evidence']
-                result = await agent.tools.execute('workflow', {'action':'record_result','candidate_id':candidate.id,'skill_name':'xxe','outcome':'insufficient-evidence','evidence_refs':[evidence['id']], 'force':True}, None, agent.prompter)
+                result = await agent.tools.execute('workflow', {'action':'record_result','candidate_id':candidate.id,'skill_name':'cross-site-scripting','outcome':'insufficient-evidence','evidence_refs':[evidence['id']], 'force':True}, None, agent.prompter)
                 assert '"result"' in result, result
                 with pytest.raises(ExecutionBlocked):
                     await agent.tools.execute('file_read', {'path':str(tmp_path/evidence['path'])}, None, agent.prompter)

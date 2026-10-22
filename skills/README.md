@@ -4,6 +4,12 @@ Skills are pre-authored playbooks the agent loads on demand. The format
 follows the **Agent Skills** convention: a directory containing a `SKILL.md`
 file with YAML frontmatter and a Markdown body.
 
+This checkout ships five skills: `recon`, `web-enumeration`,
+`web-input-analysis`, `sql-injection`, and `cross-site-scripting`.
+Other vulnerability classes remain available to the shared workflow, finding,
+and classification APIs; they have no built-in validation playbook here.
+Project-local, personal, or configured skill directories can add validators.
+
 ```
 skills/
   sql-injection/

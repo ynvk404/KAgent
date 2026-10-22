@@ -61,23 +61,23 @@ action below. No registry-only case substitutes for an Agent path.
 | --- | --- | --- |
 | S01 `conflict_honest_closure` | Direct SQLi; B start conflicts with active A, protected ledger unchanged | A honestly insufficient, B owns distinct attempt/sources; one finding/coverage row, A remains saved outstanding |
 | S02 `same_binding_repeat` | Direct SQLi; repeated start preserves ID, annotations merge, request-template enrichment rejected while active | Honest close, legitimate enrichment/start; captured old binding remains historical, new proof/report persisted |
-| S03/S15 `wrong_ids_raw_json` | SQLi query and SSTI form; wrong Candidate/attempt/observation/evidence, malformed JSON, unknown tool, reserved fields | Corrected native calls complete class-specific proof; one SQLi finding, no SSTI finding; exact error kinds and IDs |
+| S03/S15 `wrong_ids_raw_json` | SQLi query and XSS form; wrong Candidate/attempt/observation/evidence, malformed JSON, unknown tool, reserved fields | Corrected native calls complete class-specific proof; one SQLi finding, no XSS finding; exact error kinds and IDs |
 | S04 `native_truncation` repair | Direct SQLi; actual 3-byte HTTP cap yields unusable primary terminal source | New derived artifact from six complete sources already captured; original immutable snapshot unchanged; seven HTTP sends total |
 | S05 `sticky_revoke`, `session_denial` | Direct; sticky revoke (YOLO OFF/ON) and session denial prevent two model retries | Traced trusted operator retry/activate; six authorized native requests, normal proof and persistence |
 | S06 `revoke_during_event` | Direct; revoke after authorization while real pre-send scheduler is held by Events | Delegate scheduler rejects invalidated receipt; explicit operator reopening and corrected call progress; zero stale sends |
 | S07 `cancel_http_join_restore` | Direct and Generic; cancel first HTTP pre-send after start, join owning operation | Last saved active attempt restores interrupted, Candidate may remain validating; fresh Agent/tools/budgets/rights/start, Generic trusted fixture rebind; six/two new sends |
-| S08 `terminal_history`, plus S07 Generic | Direct SSTI; accepted history/retained sources readable, fresh policy/controller authority absent; new attempt cannot borrow old source | Explicit continuation/retest; two intact result histories, disjoint source ownership, one logical disk coverage row/count |
+| S08 `terminal_history`, plus S07 Generic | Direct XSS; accepted history/retained sources readable, fresh policy/controller authority absent; new attempt cannot borrow old source | Explicit continuation/retest; two intact result histories, disjoint source ownership, one logical disk coverage row/count |
 | S09 `filesystem_commit` canonical | Direct SQLi; first exact canonical `os.open` fails | Accepted confirmed result remains; no persistence marker/report, completion pending; same revision retry writes exactly one canonical file with no probes |
 | S10 `filesystem_commit` export | Direct SQLi; first exact derivative `os.replace` fails after canonical commit | Finding/result/completion survive; same Candidate retry exports summary, canonical bytes unchanged, one canonical file |
 | S11 `coverage_failure_snapshot` | Direct SQLi; first exact coverage `Path.replace` fails | Observe live row/error and empty disk before recovery; bounded 13-step checkpoint remains incomplete; fresh runtime finding guard rejects before real sync, sync retry keeps row/count=1, then finding persists without HTTP |
 | S12 `actual_session_replace` | Direct SQLi; exact session replacement fails at admission and finalization | Live committed confirmed result differs from last saved result set; temp files/locks/tasks released; explicit `Agent.save`, fresh runtime finding continuation, no HTTP |
-| S13 `one_native_terminal` | Direct requested SQLi and SSTI goals; only SQLi has complete native proof | SSTI honestly insufficient, never negative; one finding does not complete work; saved goal statuses are confirmed/deferred |
+| S13 `one_native_terminal` | Direct requested SQLi and XSS goals; only SQLi has complete native proof | XSS honestly insufficient, never negative; one finding does not complete work; saved goal statuses are confirmed/deferred |
 | S14 `missing_actual_proof` | Direct; remove a real retained immutable proof, keeping accepted ledger/finding intact | Agent compatibility completion gate rejects; traced fixture controller restores exact backup bytes/hash, real completion gate and fresh resume succeed without probes |
 | S16 `native_truncation` budget closure | Direct SQLi; repeated actual inadmissible terminal submissions | Production repair budget closes once with insufficient-evidence/unresolved, no terminal manifest/finding/coverage, exactly seven sends, no third scripted submission |
 
 The shared M2 budget is 40 model steps, 60 execution calls and 30 seconds per
 turn. Request schedules are exact: six dedicated-class sends, two Generic
-sends, seven for the native-cap cases, and twelve across the two SSTI retest
+sends, seven for the native-cap cases, and twelve across the two XSS retest
 turns. S11 declares an exact 13-step first turn to preserve pending committed
 state for fresh recovery; its max-step diagnostic is asserted. Event waits are
 bounded (5 seconds for release, 10 seconds for entry/join). No runtime retry
@@ -224,7 +224,7 @@ returned IDs; retries cannot conceal script assertions or exhaustion.
 | Scenario | Observations and outcome |
 | --- | --- |
 | Direct SQLi | Benign baseline, syntax marker, two distinct executed TRUE/FALSE pairs; accepted confirmed result, then canonical finding |
-| Direct SSTI, form and IPv6 query variants | Baseline and five Phase 1 arithmetic fingerprints from the playbook; literal reflection, accepted not-confirmed result, no finding |
+| Direct XSS, form and IPv6 query variants | Baseline and five inert markers reflected as text/plain, accepted not-confirmed result, no finding |
 | Whole-target complete | Landing page recon, HTML/form and API inventory, metadata review, structured input analysis and candidate handoff, SQLi validation, finding, coverage and completion |
 | Whole-target deferred | Same bounded discovery and native observations; review is explicitly postponed, the attempt is unresolved, no finding or tested coverage, incomplete goal |
 | Generic controller-bound | Zero matching validators; pure fixture controller verifies exact read-only input values and binds the production probe API; native comparison, proof and accepted not-confirmed result |

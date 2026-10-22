@@ -302,7 +302,6 @@ def shipped_payload_tool():
     [
         "sql-injection",
         "cross-site-scripting",
-        "ssti",
     ],
 )
 async def test_reads_top_level_payloads_from_shipped_skills(

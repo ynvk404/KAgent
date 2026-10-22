@@ -209,7 +209,7 @@ class InvariantOracle:
                          for skill in expected_skills]
             assert positions == sorted(positions)
         elif expected.route == "expert":
-            skill = "sql-injection" if definition.application.kind == "sqli" else "ssti"
+            skill = "sql-injection" if definition.application.kind == "sqli" else "cross-site-scripting"
             assert plans and plans[0]["recommended_skill"] == skill
             assert skill in loaded
         results = [e for e in run.trace.events if e["type"] == "tool-result"]

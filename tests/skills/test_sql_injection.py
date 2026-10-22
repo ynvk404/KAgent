@@ -970,3 +970,56 @@ def test_dbms_and_timing_reference_uses_specific_diagnostics(skill_text, payload
     assert 'adapter `elapsed_ms` for step 2b timing' in prose
     assert 'timing alone does not require it' in prose
     assert 'Do not resend HTTP just to count' in prose
+
+
+def test_syntax_guidance_keeps_query_shape_hypothetical(skill_text):
+    section = _norm(skill_text.split('### 1b.', 1)[1]
+                    .split('**Detecting second-order', 1)[0]).lower()
+    for concept in (
+        'syntax-error fragment supports parser sensitivity', 'not the exact `like`',
+        'parenthesis balance', 'suffix', 'constructed query',
+        'without observed full query text', 'query-shape explanations as hypotheses',
+        'sqlite', 'outside a string literal', 'next newline or end of input',
+        'space after `--` does not terminate',
+        'not a new payload or a reason to send additional probes',
+    ):
+        assert concept in section
+
+
+def test_equal_http_success_is_not_intended_evaluation_or_completed_negative(skill_text):
+    section = _norm(skill_text.split('**Pair decision checkpoint:**', 1)[1]
+                    .split('### 2b.', 1)[0]).lower()
+    for concept in (
+        'http 200 with identical true/false bodies does not prove',
+        'predicate was evaluated as intended', 'seed/oracle is not established',
+        'remains unresolved', 'rather than automatically becoming a completed negative',
+    ):
+        assert concept in section
+
+
+def test_empty_pair_and_syntax_only_counterexample_is_grounded_before_submission(skill_text):
+    section = _norm(skill_text.split('### Evidence-to-decision checkpoint', 1)[1]
+                    .split('### Standard result entry template', 1)[0]).lower()
+    for concept in (
+        'true and false both return http 200', '{"status":"success","data":[]}',
+        'http 500', 'sqlite_error: incomplete input', '**observed facts:**',
+        '**working hypothesis:**', '**unresolved limitation:**',
+        'no boolean differential', 'none establishes the full query shape',
+        'controlled sql evaluation is unproved', '`insufficient-evidence`',
+        'do not turn this into sqli-2 or a completed negative',
+        'before writing proof and calling `record_evidence` / `record_result`',
+        'the outcome and every countable claim against that owned ledger',
+    ):
+        assert concept in section
+
+
+@pytest.mark.parametrize('after_marker', ['', ' '])
+def test_sqlite_space_after_line_comment_does_not_restore_suffix(after_marker):
+    import sqlite3
+
+    # Synthetic syntax only; this does not reconstruct any target's SQL query.
+    with sqlite3.connect(':memory:') as db:
+        assert db.execute(f'SELECT 1 --{after_marker}+ 1').fetchone() == (1,)
+        assert db.execute(f'SELECT 1 --{after_marker}\n+ 1').fetchone() == (2,)
+        with pytest.raises(sqlite3.OperationalError, match='incomplete input'):
+            db.execute(f'SELECT (1 --{after_marker})')

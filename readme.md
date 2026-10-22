@@ -32,18 +32,13 @@ agent, tool registry, workflow state, skills, and local stores. Skills guide a
 high-level flow from discovery through confirmation and reporting; permission
 and target-scope checks remain part of the runtime.
 
-Available skill categories are:
+The five built-in skills are:
 
 - recon
 - web-enumeration
 - web-input-analysis
 - sql-injection
 - cross-site-scripting
-- access-control
-- authentication
-- csrf
-- ssrf
-- ssti
 
 ## Setup
 

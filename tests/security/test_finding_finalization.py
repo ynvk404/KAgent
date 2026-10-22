@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.findings.store import Store, read_report
+from src.skills.registry import Skill
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.workflow.state import ValidationResult
 from src.workflow.assessment import accepted_result, seal
@@ -16,7 +17,16 @@ from tests.security.test_execution_policy import runtime, ORIGIN
 
 
 async def confirmed_fixture(runtime, tmp_path):
-    state, candidate, tool, args, _ = await setup(runtime, tmp_path, candidate_class="access-control")
+    # Keep broad-class/no-CWE persistence coverage with a test-only validator.
+    validator = Skill(
+        name="access-control", description="Synthetic finding finalization validator",
+        tools=["http", "workflow", "confirm_finding"],
+        disable_model_invocation=False, path="/fixture/access-control/SKILL.md",
+        body="", stage="validation", candidate_classes=["access-control"],
+    )
+    state, candidate, tool, args, _ = await setup(
+        runtime, tmp_path, candidate_class="access-control", extra_skills=(validator,),
+    )
     args["skill_name"] = "access-control"
     result = await runtime[0].execute("workflow", args, None, runtime[1])
     assert not result.startswith("error:"), result

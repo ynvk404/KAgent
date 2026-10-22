@@ -17,7 +17,7 @@ from src.workflow.validation.probe import ProbeProposal
 from tests.helpers.agent_fakes import FakeSignal, ScriptedModel
 from tests.helpers.scenario_oracle import InvariantOracle, TraceRecorder
 from tests.helpers.scenarios import (
-    SQLI_VALUES, SSTI_FINGERPRINTS, ScenarioRun, dedicated_validation, direct_script, finding_arguments, generic_script, receipt,
+    SQLI_VALUES, XSS_MARKERS, ScenarioRun, dedicated_validation, direct_script, finding_arguments, generic_script, receipt,
 )
 from src.workflow.validation.route import GENERIC_VALIDATOR
 from tests.scenarios.test_safety import protected, rejected, safety_definition, safety_outcomes, unresolved_closures
@@ -350,7 +350,7 @@ async def test_s14_missing_actual_proof_blocks_completion_and_restoration_repair
 
 
 async def test_s08_terminal_history_readable_but_old_sources_cannot_own_retest(scenario_runner):
-    scenario = safety_definition("S08-history", direct_script, cls="ssti", endpoint="/render",
+    scenario = safety_definition("S08-history", direct_script, cls="cross-site-scripting", endpoint="/render",
                                  parameter="content", value="plain-marker", outcome="not-confirmed")
     run = await scenario_runner.run(scenario)
     old_result = deepcopy(run.runtime.workflow.validation_results[0].to_dict())
@@ -362,7 +362,7 @@ async def test_s08_terminal_history_readable_but_old_sources_cannot_own_retest(s
     cid = old_result["candidate_id"]
     app = scenario.application
     run.transport.expected.extend((app.request(value), app.render(value))
-                                 for value in (scenario.input_value, *SSTI_FINGERPRINTS))
+                                 for value in (scenario.input_value, *XSS_MARKERS))
 
     def script(rt, sc):
         original = dedicated_validation(rt, sc, cid)

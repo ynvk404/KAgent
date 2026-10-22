@@ -29,23 +29,7 @@ from src.workflow.state import WorkflowState
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CANONICAL_VALIDATION_CLASSES = {
-    "access-control",
-    "authentication",
-    "command-injection",
-    "cors-misconfiguration",
-    "cross-site-scripting",
-    "csrf",
-    "file-upload",
-    "jwt-misconfiguration",
-    "nosql-injection",
-    "open-redirect",
-    "path-traversal",
-    "sql-injection",
-    "ssrf",
-    "ssti",
-    "xxe",
-}
+BUILTIN_VALIDATION_CLASSES = {"sql-injection", "cross-site-scripting"}
 
 
 def find_web_input_analysis_skill() -> Path:
@@ -308,14 +292,6 @@ def test_sensitive_data_is_not_recorded(
             "Query/filter param + syntax-sensitive response",
             "sql-injection",
         ),
-        (
-            "Object identifier on an authenticated object route",
-            "access-control",
-        ),
-        (
-            "State-changing action whose documented request lets the caller select an object",
-            "access-control",
-        ),
     ],
 )
 def test_active_class_mappings(
@@ -332,63 +308,15 @@ def test_handoff_uses_enabled_skill_metadata(
 ) -> None:
     assert "loaded skill registry is the source of truth" in flat_lower
     assert "recommended_skills" in flat_lower
-    assert "only `sql-injection`, `cross-site-scripting`, and `access-control`" not in flat_lower
+    assert "defer when no matching validator is available" in flat_lower
 
 
-def test_playbook_covers_every_canonical_validation_class(skill_text: str) -> None:
-    for candidate_class in CANONICAL_VALIDATION_CLASSES:
+def test_playbook_covers_builtin_validation_classes(skill_text: str) -> None:
+    for candidate_class in BUILTIN_VALIDATION_CLASSES:
         assert f"`{candidate_class}`" in skill_text
 
 
-def test_implemented_classes_are_not_described_as_unsupported(flat_lower: str) -> None:
-    for candidate_class in CANONICAL_VALIDATION_CLASSES:
-        assert f"unsupported {candidate_class}" not in flat_lower
-        assert f"unsupported `{candidate_class}`" not in flat_lower
-
-
-def test_section_four_does_not_defer_implemented_classes(skill_text: str) -> None:
-    section_four = skill_text.split("## 4.", 1)[1].split("## 5.", 1)[0].lower()
-    implemented_new_classes = (
-        "nosql-injection",
-        "command-injection",
-        "xxe",
-        "path-traversal",
-        "file-upload",
-        "jwt-misconfiguration",
-        "cors-misconfiguration",
-        "open-redirect",
-    )
-
-    for line in section_four.splitlines():
-        if any(candidate_class in line for candidate_class in implemented_new_classes):
-            assert "unsupported" not in line
-            assert "deferred" not in line
-
-
-def test_new_class_guidance_names_input_locations_and_evidence_gates(
-    flat_lower: str,
-) -> None:
-    guidance = {
-        "nosql-injection": ("json/form-body field", "operator signal"),
-        "command-injection": ("process/argument boundary", "generic server error"),
-        "xxe": ("xml request body", "doctype"),
-        "path-traversal": ("path-bearing route parameter", "filename parameter alone"),
-        "file-upload": ("multipart file field", "public access"),
-        "jwt-misconfiguration": ("authorization header", "never copy raw token"),
-        "cors-misconfiguration": (
-            "access-control-allow-origin",
-            "protected data from a permissive header alone",
-        ),
-        "open-redirect": ("return_url", "do not confuse it with `ssrf`"),
-    }
-
-    for candidate_class, expected_signals in guidance.items():
-        assert candidate_class in flat_lower
-        for signal in expected_signals:
-            assert signal in flat_lower
-
-
-def test_all_canonical_classes_are_runtime_accepted_with_one_validator() -> None:
+def test_builtin_classes_are_runtime_accepted_with_one_validator() -> None:
     registry = Registry()
     registry.load_dir(REPO_ROOT / "skills")
     actual_classes = {
@@ -398,8 +326,8 @@ def test_all_canonical_classes_are_runtime_accepted_with_one_validator() -> None
         for candidate_class in skill.candidate_classes
     }
 
-    assert actual_classes == CANONICAL_VALIDATION_CLASSES
-    for candidate_class in sorted(CANONICAL_VALIDATION_CLASSES):
+    assert actual_classes == BUILTIN_VALIDATION_CLASSES
+    for candidate_class in sorted(BUILTIN_VALIDATION_CLASSES):
         candidate = Candidate(candidate_class=candidate_class)
         validators = registry.validators_for_class(candidate.candidate_class)
         assert candidate.candidate_class == candidate_class
@@ -419,10 +347,10 @@ async def test_playbook_guidance_candidate_handoff_reaches_unique_planner_valida
     mapped_classes = {
         candidate_class
         for line in mapping_section.splitlines()
-        for candidate_class in CANONICAL_VALIDATION_CLASSES
+        for candidate_class in BUILTIN_VALIDATION_CLASSES
         if f"`{candidate_class}`" in line
     }
-    assert mapped_classes == CANONICAL_VALIDATION_CLASSES
+    assert mapped_classes == BUILTIN_VALIDATION_CLASSES
 
     for index, candidate_class in enumerate(sorted(mapped_classes)):
         response = json.loads(await workflow.run(
@@ -546,7 +474,6 @@ def test_handoff_is_explicit(
     assert "hand off only the candidates relevant to each skill" in lower
     assert "sql-injection" in lower
     assert "cross-site-scripting" in lower
-    assert "access-control" in lower
 
 
 # ---------------------------------------------------------------------------

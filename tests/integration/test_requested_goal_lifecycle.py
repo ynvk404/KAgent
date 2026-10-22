@@ -12,7 +12,7 @@ from src.agent.decision_planner import build_decision_plan
 from src.llm.core.client import Client
 from src.llm.core.types import ChatRequest, ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import AlwaysAllow
-from src.skills.registry import Registry as SkillRegistry
+from src.skills.registry import Registry as SkillRegistry, Skill
 from src.target.target import Target
 from src.tools.common.registry import Registry as ToolRegistry
 from src.tools.workflow.workflow_tool import WorkflowTool as ProductionWorkflowTool
@@ -369,7 +369,7 @@ def test_discovered_extra_whole_target_candidate_remains_an_obligation_not_a_req
             no_inputs_discovered=phase == "input_analysis",
         )
     extra, _ = state.add_candidate(Candidate(
-        candidate_class="ssrf", target="https://target.test", endpoint="/fetch",
+        candidate_class="cross-site-scripting", target="https://target.test", endpoint="/render",
         objective_id=objective.id,
     ))
     agent = Agent(AgentOptions(
@@ -387,6 +387,13 @@ def test_discovered_extra_whole_target_candidate_remains_an_obligation_not_a_req
 @pytest.mark.asyncio
 async def test_direct_three_goal_lifecycle_rejects_early_finals_and_advances_in_user_order(tmp_path):
     agent, client = _direct_goal_agent(tmp_path)
+    # This tests three-goal orchestration independently of shipped playbooks.
+    agent.skills.add(Skill(
+        name="access-control", description="Synthetic multi-goal validator",
+        tools=[], disable_model_invocation=False,
+        path="/fixture/access-control/SKILL.md", body="",
+        stage="validation", candidate_classes=["access-control"],
+    ))
     collector = collect()
     await agent.run(
         "Test SQL Injection, XSS and IDOR for GET /search?term=sample",

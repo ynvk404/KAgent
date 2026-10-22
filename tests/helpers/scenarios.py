@@ -28,7 +28,7 @@ from tests.helpers.burp_selection import make_runtime
 
 REAL_HTTP_CLIENT = httpx.AsyncClient
 Script = Generator[tuple[str, Any], str, None]
-SSTI_FINGERPRINTS = ("${7*7}", "{{7*7}}", "<%= 7*7 %>", "*{7*7}", "{{7*'7'}}")
+XSS_MARKERS = ("kagent-marker", "<kagent-marker>", 'kagent"marker', "kagent'marker", "kagent&marker")
 SQLI_VALUES = ("Gifts", "Gifts'", "Gifts' AND 1=1--", "Gifts' AND 1=2--",
                "Gifts' AND 1=1--", "Gifts' AND 1=2--")
 
@@ -72,7 +72,8 @@ class ScenarioDefinition:
 class FixtureApplication:
     """Pure fixture behavior, with no network, evaluation, writes or callbacks.
 
-    SSTI is literal reflection. SQLi models a controlled product filter,
+    XSS fixtures reflect inert markers as text/plain. SQLi models a controlled
+    product filter,
     including syntax sensitivity; it is not a real database implementation.
     Generic is a read-only comparison with a stable response.
     """
@@ -99,7 +100,7 @@ class FixtureApplication:
             if value.endswith("'"):
                 return 400, b"fixture syntax error", "text/plain"
             return 200, b"fixture products", "text/plain"
-        if self.kind == "ssti":
+        if self.kind == "xss":
             return 200, ("Literal value: " + value).encode(), "text/plain"
         return 200, b"stable comparison response", "text/plain"
 
@@ -144,8 +145,8 @@ class FakeTransport:
             values: tuple[str, ...] = ()
         elif app.kind == "sqli":
             values = (definition.input_value, *SQLI_VALUES[1:])
-        elif app.kind == "ssti":
-            values = (definition.input_value, *SSTI_FINGERPRINTS)
+        elif app.kind == "xss":
+            values = (definition.input_value, *XSS_MARKERS)
         else:
             values = ("baseline", "variant")
         for value in values:
@@ -198,16 +199,16 @@ def record_candidate(definition: ScenarioDefinition, *, input_id: str | None = N
 
 def dedicated_validation(runtime, definition, cid: str, *, skill_loaded=False) -> Script:
     app = definition.application
-    skill = "sql-injection" if app.kind == "sqli" else "ssti"
+    skill = "sql-injection" if app.kind == "sqli" else "cross-site-scripting"
     if not skill_loaded:
         loaded = yield "load_skill", {"name": skill}
         assert skill in loaded
     corpus = yield "read_payloads", {"skill": skill, "file": "payloads.txt"}
-    assert ("1=1" if skill == "sql-injection" else "{{7*7}}") in corpus
+    assert ("1=1" if skill == "sql-injection" else "xsspoc{TIMESTAMP}") in corpus
     started = receipt((yield "workflow", {"action": "start_validation", "candidate_id": cid}))
     aid = started["validation_context"]["attempt_id"]
     assert started["validator_resolution"] == "unique"
-    values = (definition.input_value, *(SQLI_VALUES[1:] if app.kind == "sqli" else SSTI_FINGERPRINTS))
+    values = (definition.input_value, *(SQLI_VALUES[1:] if app.kind == "sqli" else XSS_MARKERS))
     observations = []
     for value in values:
         output = yield "http", app.request(value)
@@ -224,10 +225,10 @@ def dedicated_validation(runtime, definition, cid: str, *, skill_loaded=False) -
         return
     ids = observations
     impact = ("Controlled predicates repeatedly change the fixture product response." if app.kind == "sqli"
-              else "Baseline and all five arithmetic fingerprints are reflected literally; SSTI could not be confirmed.")
-    assessment = {"hypothesis": "Input reaches a SQL filter" if app.kind == "sqli" else "Reflected input may be template evaluated",
+              else "Baseline and all five inert markers are reflected as text/plain; executable rendering was not observed.")
+    assessment = {"hypothesis": "Input reaches a SQL filter" if app.kind == "sqli" else "Reflected input may reach an executable rendering context",
         "criteria": "Baseline, syntax signal and two complete TRUE/FALSE pairs" if app.kind == "sqli"
-                    else "Baseline and five Phase 1 fingerprints; evaluation must differ from literal reflection",
+                    else "Baseline and five inert markers; plain-text reflection does not establish execution",
         "limitations": "Offline fixture only; no live target, extraction, introspection or impact validation. No general absence claim.",
         "completed_attempt": True, "observed_impact": impact, "severity": "medium" if app.kind == "sqli" else "info"}
     extra: dict[str, Any] = {}
@@ -243,7 +244,7 @@ def dedicated_validation(runtime, definition, cid: str, *, skill_loaded=False) -
                  "request_template": definition.origin + definition.endpoint + "?" + definition.parameter + "=Gifts' AND {predicate}--",
                  "true_predicate": "1=1", "false_predicate": "1=2", "pairs": pairs}}
     result = yield from publish_proof(runtime, cid, aid, ids, skill, definition.expected.outcome,
-                                      assessment, ["SQLI-2", "boolean-based"] if app.kind == "sqli" else ["arithmetic-fingerprint"], extra=extra)
+                                      assessment, ["SQLI-2", "boolean-based"] if app.kind == "sqli" else ["reflection-context"], extra=extra)
     if definition.expected.outcome == "confirmed":
         assert result["eligible_for_confirm_finding"] and not runtime.workflow.finding_is_persisted(cid)
         finding = yield "confirm_finding", finding_arguments(definition, cid, impact)
@@ -283,7 +284,7 @@ def publish_proof(runtime, cid, aid, ids, skill, outcome, assessment, techniques
 
 
 def direct_script(runtime, definition) -> Script:
-    skill = "sql-injection" if definition.application.kind == "sqli" else "ssti"
+    skill = "sql-injection" if definition.application.kind == "sqli" else "cross-site-scripting"
     loaded = yield "load_skill", {"name": skill}
     assert skill in loaded
     created = receipt((yield "workflow", record_candidate(definition)))

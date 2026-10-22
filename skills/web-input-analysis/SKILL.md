@@ -39,8 +39,9 @@ allowed-tools:
 You have been handed an inventory that `web-enumeration` built. This phase
 answers "of everything found, what's actually worth testing, and for which
 bug class?" It does not exploit anything and does not produce findings.
-That belongs to `sql-injection`, `cross-site-scripting`, `access-control`,
-or (for classes without an active skill yet) is deferred entirely.
+That belongs to `sql-injection` or `cross-site-scripting` in this checkout.
+For other classes, inspect the enabled registry and defer when no matching
+validator is available.
 
 **Objective:** turn an endpoint/parameter inventory into a small, prioritized
 list of candidate inputs, each with a reasoned suspected vulnerability class,
@@ -277,26 +278,13 @@ message alone is not that evidence.
 
 ## 4. Map signals to a suspected vulnerability class
 
-For each candidate, form a reasoned suspicion, not a conclusion:
+For each candidate, form a reasoned suspicion, not a conclusion. The built-in
+validators handle these classes:
 
 | Context / signal | Suspected class |
 |---|---|
 | Controllable value appears in an HTML rendering context with encoding or DOM handling that remains unclear | `cross-site-scripting`; raw JSON reflection alone is not a candidate |
 | Query/filter param + syntax-sensitive response (error/size/timing shift) | `sql-injection` |
-| Object identifier on an authenticated object route, with observed evidence that the input selects an in-scope object and the ownership boundary remains unobserved | `access-control`; an ID/name or absent client-side check alone is insufficient |
-| State-changing action whose documented request lets the caller select an object while its authorization boundary remains unclear | `access-control`; an HTTP method or identifier name alone is insufficient, and do not submit or swap cross-user IDs here |
-| URL-fetch, image-import, webhook, or callback parameter with server-side fetch evidence | `ssrf`; an ordinary browser redirect alone is not SSRF |
-| Reflected template expression evaluated by the server | `ssti` |
-| Login, reset, MFA, logout, or session-lifecycle property | `authentication` |
-| State-changing request using ambient browser credentials with a suspected missing defense | `csrf` |
-| JSON query/filter input accepts an object/operator shape where a scalar is expected, or shows a repeatable type-sensitive query difference | `nosql-injection`; **input:** a concrete query/filter parameter or JSON/form-body field. Create a Candidate only for that field plus an observed query/operator signal, not merely because the endpoint uses JSON or MongoDB |
-| Input plausibly reaches a server-side process/argument boundary and syntax or output behavior changes with a harmless marker | `command-injection`; **input:** the concrete query, body, header, or path field plausibly passed to a process/argument boundary. Create a Candidate only with that signal; do not infer command execution from a generic server error |
-| XML body/document field is parsed with DTD or entity-processing signals | `xxe`; **input:** a concrete XML request body or uploaded XML document field. Create a Candidate for that input, but do not infer external-entity resolution from XML parsing or a `DOCTYPE` alone |
-| File/path/filename input appears to select a server-side file and normalization or relative-path handling is relevant | `path-traversal`; **input:** a path-bearing route parameter, query parameter, or body field. Create a Candidate when a server-side file-selection/path-resolution signal exists; a filename parameter alone is not enough |
-| Multipart/file field reaches an upload handler with a concrete validation, storage, naming, or retrieval concern | `file-upload`; **input:** the multipart file field and, when relevant, its filename/metadata. Create a Candidate for an observed policy concern; do not infer execution or public access merely because upload exists |
-| JWT-bearing input shows a concrete signature, algorithm, expiry, issuer, audience, or claim-enforcement concern | `jwt-misconfiguration`; **input:** an Authorization header, cookie, or token parameter/body field known to carry a JWT. Do not create this class for opaque sessions or generic login failures, and never copy raw token material into signals |
-| Read-only endpoint returns a concrete unsafe CORS policy signal such as untrusted Origin reflection or a credentialed cross-origin header combination | `cors-misconfiguration`; **input:** compare the request `Origin` header with response `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials` headers. Do not infer browser-readable protected data from a permissive header alone |
-| Redirect parameter produces redirect-only behavior without evidence of a server-side fetch | `open-redirect`; **input:** a concrete URL/return-destination field such as `next`, `return_url`, or `redirect_uri`, with observed off-origin `Location` behavior. Do not confuse it with `ssrf` |
 
 These are signal examples, not a frozen list of available validators. The
 loaded skill registry is the source of truth: `workflow(record_candidate)`
@@ -396,7 +384,9 @@ identifier as `recon` and `web-enumeration`. One entry per candidate:
   confidence: low
   rationale: object ownership behavior remains unknown; no IDs or sessions were
     swapped during analysis
-  recommended_next_skill: access-control
+  status: deferred
+  recommended_next_skill: null
+  deferred_reason: no enabled validator handles this class in the built-in set
 
 - endpoint: GET /redirect
   parameter: next
@@ -407,7 +397,9 @@ identifier as `recon` and `web-enumeration`. One entry per candidate:
   suspected_class: open-redirect
   confidence: medium
   rationale: redirect-only sink with no server-side fetch evidence
-  recommended_next_skill: open-redirect
+  status: deferred
+  recommended_next_skill: null
+  deferred_reason: no enabled validator handles this class in the built-in set
 ```
 
 Include `content_type`, `request_template`, `baseline_request_ref`, and

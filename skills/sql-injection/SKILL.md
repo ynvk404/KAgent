@@ -559,6 +559,13 @@ three after the initial signal; if they do not converge, move to a different
 applicable bounded confirmation technique or record the appropriate unresolved
 outcome when context/proof remains insufficient; `inconclusive` is not an outcome.
 
+A SQL syntax-error fragment supports parser sensitivity, not the exact `LIKE`
+clause, parenthesis balance, suffix, or constructed query. Without observed full
+query text, keep those query-shape explanations as hypotheses. For SQLite, `--`
+outside a string literal comments through the next newline or end of input;
+a space after `--` does not terminate the line comment or restore its suffix.
+This syntax note is not a new payload or a reason to send additional probes.
+
 If neither the single-quote probe nor any variant in the Phase 1 section
 produces any observable change from baseline, that's a valid outcome. Don't
 conclude SQL injection is absent from one probe alone — continue into an
@@ -658,6 +665,9 @@ not for every SQLi technique.
   surrounding prefix/suffix is applied. In `LIKE '%input%'`, a generic quoted
   equality can acquire a trailing `%` and cease to be TRUE. Account for wildcard,
   quote and parenthesis boundaries before treating a corpus example as a pair.
+- HTTP 200 with identical TRUE/FALSE bodies does not prove that either predicate
+  was evaluated as intended. If the seed/oracle is not established, the equal
+  pair remains unresolved rather than automatically becoming a completed negative.
 
 Use the `PHASE 2 — VALIDATION` section of `payloads.txt` as context-adapted
 examples. Send otherwise identical TRUE/FALSE requests with the baseline's
@@ -933,6 +943,17 @@ non-Boolean expression errors. These observations establish parser sensitivity,
 not SQLI-2 confirmation by themselves; the type errors do not demonstrate
 controlled evaluation of the proposed technique.
 
+Counterexample: TRUE and FALSE both return HTTP 200 with
+`{"status":"success","data":[]}`, then syntax adjustments return HTTP 500 with
+`SQLITE_ERROR: incomplete input`. Separate these in the proof:
+
+- **Observed facts:** equal empty responses and syntax errors; no boolean differential.
+- **Working hypothesis:** a wildcard, quote, parenthesis or suffix may explain
+  the responses; none establishes the full query shape or predicate evaluation.
+- **Unresolved limitation:** the oracle is not established and controlled SQL
+  evaluation is unproved. Record `insufficient-evidence` when no useful bounded
+  test remains; do not turn this into SQLI-2 or a completed negative.
+
 Recheck mutation/cleanup bookkeeping for the entire attempt, including
 baseline successful-write acknowledgements, under the state-changing endpoint
 contract above. Record readback limitations and honest cleanup state.
@@ -951,7 +972,8 @@ Markdown proof or conversation memory. Check every claimed repetition against
 distinct executed observations: repeating a sentence, registering another
 snapshot or reusing an observation ID does not establish repeatability.
 
-Before writing proof, reconcile every countable claim against that ledger:
+Before writing proof and calling `record_evidence` / `record_result`, reconcile
+the outcome and every countable claim against that owned ledger:
 successful exploit executions, complete positive repetitions, controls and errors.
 Use the effective request and actual response to assign each proof label
 (`control`, `positive`, `error`, `incomplete`); do not copy a label from an earlier

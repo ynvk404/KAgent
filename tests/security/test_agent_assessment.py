@@ -25,11 +25,13 @@ ASSESSMENT = {"hypothesis": "A bounded fixture response supports this candidate"
               "severity": "low"}
 
 
-async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, method="GET", payload="fixture", mode: WorkflowMode="whole_target"):
+async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, method="GET", payload="fixture", mode: WorkflowMode="whole_target", extra_skills=()):
     from urllib.parse import urlencode
     registry, prompter, policy, _, _, _, target = runtime
     skills = Skills()
     skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
+    for skill in extra_skills:
+        skills.add(skill)
     state = WorkflowState(objective=WorkflowObjective("assessment-objective", "direct" if mode == "candidate_validation" else mode, ORIGIN))
     assert state.objective is not None
     candidate, _ = state.add_candidate(Candidate(candidate_class=candidate_class,
@@ -416,11 +418,11 @@ async def test_closed_other_candidate_selector_allows_unstarted_unresolved_only(
     await registry.execute("workflow", args, None, p)
     prior = state.latest_result(first.id)
     assert state.objective is not None
-    other, _ = state.add_candidate(Candidate("ssrf", target=ORIGIN, endpoint="/fetch",
+    other, _ = state.add_candidate(Candidate("sql-injection", target=ORIGIN, endpoint="/restricted-query",
         method="GET", objective_id=state.objective.id))
     submission = {"action": "record_result", "candidate_id": other.id,
-        "skill_name": "ssrf", "outcome": "authorization-required",
-        "deferred_reason": "Destination testing needs operator intent"}
+        "skill_name": "sql-injection", "outcome": "authorization-required",
+        "deferred_reason": "Query testing needs operator intent"}
     for invalid in ({"attempt_id": args["attempt_id"]}, {"observation_ids": args["observation_ids"]},
                     {"outcome": "not-confirmed"}):
         assert (await registry.execute("workflow", {**submission, **invalid}, None, p)).startswith("error:")

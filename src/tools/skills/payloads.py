@@ -34,7 +34,7 @@ class ReadPayloadsTool(Tool):
         return "read_payloads"
 
     def description(self) -> str:
-        return 'Read/list loaded skill payloads/ or payloads.txt. E.g. read_payloads(skill="ssti", file="payloads.txt"). Clipped: copy the Next page call exactly; never guess source_ref or offsets. Fresh read: omit source_ref and start_char. Source <=256KiB, body <=16KiB. sf_ IDs are not read_tool_result refs.'
+        return 'Read/list loaded skill payloads/ or payloads.txt. E.g. read_payloads(skill="cross-site-scripting", file="payloads.txt"). Clipped: copy the Next page call exactly; never guess source_ref or offsets. Fresh read: omit source_ref and start_char. Source <=256KiB, body <=16KiB. sf_ IDs are not read_tool_result refs.'
 
     def schema(self) -> dict[str, Any]:
         return {

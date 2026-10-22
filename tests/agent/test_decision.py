@@ -112,11 +112,6 @@ def test_informational_classifier_is_generic_not_vulnerability_specific():
     [
         ("test this id parameter for SQL injection", "sql-injection"),
         ("check whether q has reflected XSS", "cross-site-scripting"),
-        ("validate the webhook parameter for SSRF", "ssrf"),
-        ("check this template expression for SSTI", "ssti"),
-        ("investigate session fixation after login", "authentication"),
-        ("test the order id for horizontal privilege escalation", "access-control"),
-        ("check this state changing request for CSRF", "csrf"),
         ("enumerate subdomains and fingerprint live hosts", "recon"),
         ("enumerate endpoints and routes for the app", "web-enumeration"),
         ("triage input candidates by suspected vulnerability class", "web-input-analysis"),
@@ -145,7 +140,25 @@ def test_shipped_metadata_routes_current_workflows(text, expected):
     ],
 )
 def test_specific_phrases_do_not_route_to_embedded_candidate_classes(text, expected):
-    assert planned_skill(text) == expected
+    # Synthetic metadata isolates phrase matching from the shipped catalog.
+    skills = [
+        metadata_skill("sql-injection", strong=["sql injection"], candidate_classes=["sql-injection"]),
+        metadata_skill(
+            "nosql-injection", strong=["nosql injection", "no-sql injection"],
+            candidate_classes=["nosql-injection"],
+        ),
+        metadata_skill(
+            "cors-misconfiguration",
+            strong=["access-control-allow-origin", "access-control-allow-credentials"],
+            candidate_classes=["cors-misconfiguration"],
+        ),
+        metadata_skill("access-control", strong=["access control"], candidate_classes=["access-control"]),
+        metadata_skill("authentication", strong=["login issue"], candidate_classes=["authentication"]),
+        metadata_skill("open-redirect", strong=["url redirect issue", "open redirect"], candidate_classes=["open-redirect"]),
+        metadata_skill("ssrf", candidate_classes=["ssrf"]),
+        metadata_skill("command-injection", strong=["command injection"], candidate_classes=["command-injection"]),
+    ]
+    assert planned_skill(text, skills) == expected
 
 
 def test_standalone_candidate_mention_survives_a_more_specific_phrase_elsewhere():
@@ -153,7 +166,13 @@ def test_standalone_candidate_mention_survives_a_more_specific_phrase_elsewhere(
         score["skill_name"]: score
         for score in detect_intent(
             normalize("test access control and access-control-allow-origin"),
-            shipped_skills(),
+            [
+                metadata_skill("access-control", candidate_classes=["access-control"]),
+                metadata_skill(
+                    "cors-misconfiguration", strong=["access-control-allow-origin"],
+                    candidate_classes=["cors-misconfiguration"],
+                ),
+            ],
         )
     }
 
@@ -175,7 +194,17 @@ def test_standalone_candidate_mention_survives_a_more_specific_phrase_elsewhere(
     ],
 )
 def test_candidate_class_aliases_are_normalized(alias, expected):
-    assert planned_skill(f"validate candidate class {alias}") == expected
+    skills = [metadata_skill(expected, candidate_classes=[expected])]
+    assert planned_skill(f"validate candidate class {alias}", skills) == expected
+
+
+@pytest.mark.parametrize("candidate_class", [
+    "access-control", "authentication", "command-injection",
+    "cors-misconfiguration", "csrf", "file-upload", "jwt-misconfiguration",
+    "nosql-injection", "open-redirect", "path-traversal", "ssrf", "ssti", "xxe",
+])
+def test_unshipped_validators_are_not_recommended(candidate_class):
+    assert planned_skill(f"validate candidate class {candidate_class}") is None
 
 
 @pytest.mark.parametrize("text", ["check auth", "test auth", "validate candidate class auth"])
@@ -195,7 +224,13 @@ def test_ambiguous_auth_alias_fails_closed(text):
     ],
 )
 def test_safe_validation_aliases_and_specific_triggers_route(text, expected):
-    assert planned_skill(text) == expected
+    skills = [
+        metadata_skill("nosql-injection", strong=["mongodb injection"], candidate_classes=["nosql-injection"]),
+        metadata_skill("cors-misconfiguration", candidate_classes=["cors-misconfiguration"]),
+        metadata_skill("jwt-misconfiguration", strong=["jwt signature validation"], candidate_classes=["jwt-misconfiguration"]),
+        metadata_skill("command-injection", candidate_classes=["command-injection"]),
+    ]
+    assert planned_skill(text, skills) == expected
 
 
 def test_generic_origin_header_phrase_remains_fail_closed():
@@ -227,7 +262,7 @@ def test_aliases_are_explicit_candidate_references_not_skill_specific_routes():
 
 
 def test_known_candidate_context_outweighs_unrelated_vocabulary():
-    context = PlannerContext(candidate_classes=frozenset({"idor"}))
+    context = PlannerContext(candidate_classes=frozenset({"xss"}))
     plan = build_decision_plan(
         "continue validation",
         shipped_skills(),
@@ -236,7 +271,7 @@ def test_known_candidate_context_outweighs_unrelated_vocabulary():
     )
 
     assert plan is not None
-    assert plan.recommended_skill == "access-control"
+    assert plan.recommended_skill == "cross-site-scripting"
 
 
 @pytest.mark.parametrize(

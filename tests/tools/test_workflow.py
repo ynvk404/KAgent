@@ -418,19 +418,6 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
     cases = (
         ("sqli", "sql-injection"),
         ("xss", "cross-site-scripting"),
-        ("idor", "access-control"),
-        ("authentication", "authentication"),
-        ("csrf", "csrf"),
-        ("ssrf", "ssrf"),
-        ("ssti", "ssti"),
-        ("nosql-injection", "nosql-injection"),
-        ("path-traversal", "path-traversal"),
-        ("cors-misconfiguration", "cors-misconfiguration"),
-        ("open-redirect", "open-redirect"),
-        ("jwt-misconfiguration", "jwt-misconfiguration"),
-        ("file-upload", "file-upload"),
-        ("command-injection", "command-injection"),
-        ("xxe", "xxe"),
     )
     for index, (candidate_class, validator) in enumerate(cases):
         response = json.loads(await run_workflow_fixture(tool,
@@ -462,21 +449,52 @@ async def test_candidate_handoff_uses_enabled_validator_metadata():
     ))
     assert forced["candidate"]["status"] == "deferred"
 
-    skills.set_disabled("ssrf", True)
+    skills.set_disabled("cross-site-scripting", True)
     disabled = json.loads(await run_workflow_fixture(tool,
-        {"action": "record_candidate", "candidate_class": "ssrf", "endpoint": "/input/5"},
+        {"action": "record_candidate", "candidate_class": "xss", "endpoint": "/input/1"},
         None, AlwaysAllow(),
     ))
     assert disabled["supported"] is False
     assert disabled["created"] is False
     assert disabled["candidate"]["status"] == "deferred"
-    skills.set_disabled("ssrf", False)
+    skills.set_disabled("cross-site-scripting", False)
     restored = json.loads(await run_workflow_fixture(tool,
-        {"action": "record_candidate", "candidate_class": "ssrf", "endpoint": "/input/5"},
+        {"action": "record_candidate", "candidate_class": "xss", "endpoint": "/input/1"},
         None, AlwaysAllow(),
     ))
     assert restored["supported"] is True
     assert restored["candidate"]["status"] == "queued"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_class", [
+    "access-control", "authentication", "command-injection",
+    "cors-misconfiguration", "csrf", "file-upload", "jwt-misconfiguration",
+    "nosql-injection", "open-redirect", "path-traversal", "ssrf", "ssti", "xxe",
+])
+async def test_unshipped_validators_preserve_candidates_without_starting_validation(candidate_class):
+    skills = SkillRegistry()
+    skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
+    state = WorkflowState()
+    tool = WorkflowTool(state, Target("https://target.test"), skills=skills)
+    response = json.loads(await tool.run({
+        "action": "record_candidate", "candidate_class": candidate_class,
+        "method": "GET", "endpoint": "/input", "parameter": "value",
+        "signals": ["Retained observation for an unavailable validator"],
+    }, None, AlwaysAllow()))
+
+    candidate_id = response["candidate"]["id"]
+    assert response["supported"] is False
+    assert response["recommended_skills"] == []
+    assert response["candidate"]["candidate_class"] == candidate_class
+    assert response["candidate"]["status"] == "deferred"
+    assert skills.validators_for_class(candidate_class) == []
+    rejected = await tool.run({
+        "action": "start_validation", "candidate_id": candidate_id,
+    }, None, AlwaysAllow())
+    assert rejected.startswith("error:")
+    assert not state.attempts and not state.validation_results
+    assert state.candidates[candidate_id].status == "deferred"
 
 
 @pytest.mark.asyncio
@@ -530,7 +548,7 @@ async def test_direct_input_can_have_multiple_independent_candidate_classes():
     state = WorkflowState()
     tool = WorkflowTool(state, Target("https://target.test"), skills=skills)
     ids = []
-    for candidate_class in ("cross-site-scripting", "ssti"):
+    for candidate_class in ("cross-site-scripting", "sql-injection"):
         response = json.loads(await run_workflow_fixture(tool,
             {
                 "action": "record_candidate", "candidate_class": candidate_class,
