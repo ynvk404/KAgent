@@ -31,7 +31,7 @@ def test_complete_matrix_and_copy_projection(mode):
     schema = projected[0]["function"]["parameters"]
     action_field = schema["properties"]["action"]
     assert {'select_source', 'get_source', 'get_endpoint', 'set_source_disposition'} <= set(ACTIONS)
-    assert ACTION_REQUIRED['triage_scanner_results'] == ('job_id', 'scanner_disposition', 'scanner_reason')
+    assert 'triage_scanner_results' not in ACTION_REQUIRED
     assert "record_attempt_state" in view.available
     assert ACTION_REQUIRED["record_attempt_state"] == ("candidate_id", "mutation_state", "effect_basis")
     assert set(view.excluded) == excluded

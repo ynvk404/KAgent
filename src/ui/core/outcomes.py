@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
-from src.agent.events import AgentEvent, SkillActiveEvent, ToolCallEvent, ToolResultEvent, ToolStartedEvent
+from src.agent.events import AgentEvent, SkillActiveEvent, ToolCallEvent, ToolResultEvent
 from src.agent.scope import runtime_scope
 from src.permission.runtime.execution import policy_for
 from src.ui.core.admission import PendingCall, call_metadata, invocation_call
@@ -96,7 +96,7 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
     policy = policy_for(getattr(agent, "prompter", None))
     scope = runtime_scope(agent)
     call = (call_metadata(event) if isinstance(event, ToolCallEvent) else
-            invocation_call(calls, event) if isinstance(event, (ToolResultEvent, ToolStartedEvent, SkillActiveEvent)) else None)
+            invocation_call(calls, event) if isinstance(event, (ToolResultEvent, SkillActiveEvent)) else None)
     invocation = getattr(event, 'invocation', None)
     event_origin = getattr(event, "target_origin", None)
     event_revision = getattr(event, "target_revision", None)
@@ -117,10 +117,6 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
     accepted_call = False
     operation_owner = ''
     operation_candidate_id = ''
-    for job in workflow.scanner_jobs.values():
-        if job.target_origin == origin and job.objective_id == (objective.id if objective else None) and job.unresolved_selected:
-            pending.append('selected scanner observations unresolved')
-            blockers.append('selected scanner observations unresolved')
     tool = getattr(agent, "tools", {}).get("workflow")
     root = getattr(tool, "evidence_root", None)
     from src.tools.workflow.workflow_tool import WorkflowTool

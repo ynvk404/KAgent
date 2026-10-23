@@ -699,7 +699,8 @@ async def test_http_grants_do_not_authorize_other_tools(runtime, tmp_path, monke
     operator = Operator()
     with pytest.raises(PermissionError):
         await registry.execute(other.name(), request, None, YoloPrompter(operator, True))
-    assert operator.requests and not remote.calls
+    assert not remote.calls
+    assert bool(operator.requests) is (kind != "mcp")  # unavailable MCP fails before review
     subprocess.assert_not_called()
 
 

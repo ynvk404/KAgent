@@ -11,7 +11,6 @@ import pytest
 @pytest.mark.parametrize("module_name", [
     "src.tools.common.registry",
     "src.tools.common.types",
-    "src.tools.common.capabilities",
     "src.tools.common.outcome",
     "src.tools.common.aliases",
     "src.tools.common.approval_display",
@@ -39,7 +38,6 @@ import pytest
     "src.tools.skills.skill_file",
     "src.tools.skills.paths",
     "src.tools.mcp.integration",
-    "src.tools.mcp.session_servers",
 ])
 def test_canonical_tool_module_imports(module_name):
     assert importlib.import_module(module_name).__name__ == module_name
@@ -63,7 +61,6 @@ import importlib
 import sys
 
 for name in (
-    'src.tools', 'src.tools.common', 'src.tools.mcp', 'src.tools.mcp.session_servers',
     'src.cli.main', 'src.cli.runtime',
 ):
     importlib.import_module(name)

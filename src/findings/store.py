@@ -79,6 +79,15 @@ class Finding:
     binding_version: int = 1
     classification_provenance: dict[str, Any] | None = None
     classification_revision: int = 0
+    classification_review: dict[str, Any] | None = None
+
+    @property
+    def effective_cwe(self) -> list[str]:
+        """Presentation only; original classification and eligibility stay intact."""
+        review = self.classification_review
+        if review is not None:
+            return [review["selected_cwe"]] if review["status"] == "resolved" else []
+        return list(self.cwe or [])
 
     @property
     def classification_origin(self) -> str | None:
@@ -177,12 +186,7 @@ class Store:
         Cancelled preparation is drained under the shared lock before cleanup.
         Directory fsync uncertainty never rolls back an already visible report.
         """
-        async with self._save_lock:
-            guard()
-            raw = report_bytes(path)
-            if hashlib.sha256(raw).hexdigest() != expected_digest:
-                raise ValueError("finding report changed during CWE review")
-            snapshot = read_report(path)
+        def update(raw: bytes, snapshot: Finding) -> bytes:
             if snapshot.cwe or snapshot.classification_revision != expected_revision:
                 raise ValueError("finding already classified or classification revision changed")
             _read_revision(str(expected_revision + 1))
@@ -191,7 +195,41 @@ class Store:
                     or provenance.get("selected_cwe") != cwe
                     or provenance.get("revision") != expected_revision + 1):
                 raise ValueError("invalid classification update")
-            replacement = classification_replacement(raw, cwe, provenance, expected_revision + 1)
+            return classification_replacement(raw, cwe, provenance, expected_revision + 1)
+        return await self._update_classification(path, expected_digest, update, guard, publish)
+
+    async def annotate_classification(
+        self, path: Path, *, expected_digest: str, review: dict[str, Any],
+        guard: Callable[[], None], publish: Callable[[Finding, str], None],
+    ) -> tuple[Finding, bool]:
+        """A bounded review annotation; never replace an existing CWE mapping."""
+        def update(raw: bytes, snapshot: Finding) -> bytes:
+            annotation = _read_classification_review(json.dumps(review), snapshot)
+            assert annotation is not None
+            lines, boundary, positions = _report_header(raw)
+            newline = "\r\n" if lines[0].endswith("\r\n") else "\n"
+            line = '- **CWE review:** ' + json.dumps(annotation, sort_keys=True, separators=(',', ':')) + newline
+            if 'CWE review' in positions:
+                lines[positions['CWE review']] = line
+            else:
+                lines.insert(boundary, line)
+            replacement = ''.join(lines).encode('utf-8')
+            if len(replacement) > MAX_REPORT_BYTES:
+                raise ValueError('classification annotation exceeds report bound')
+            return replacement
+        return await self._update_classification(path, expected_digest, update, guard, publish)
+
+    async def _update_classification(
+        self, path: Path, expected_digest: str, update: Callable[[bytes, Finding], bytes],
+        guard: Callable[[], None], publish: Callable[[Finding, str], None],
+    ) -> tuple[Finding, bool]:
+        async with self._save_lock:
+            guard()
+            raw = report_bytes(path)
+            if hashlib.sha256(raw).hexdigest() != expected_digest:
+                raise ValueError("finding report changed during CWE review")
+            snapshot = read_report(path)
+            replacement = update(raw, snapshot)
             pending = asyncio.create_task(asyncio.to_thread(_prepare_classification, path, replacement))
             temporary = None
             try:
@@ -428,6 +466,8 @@ def render(
         lines.append(f"- **Binding version:** {f.binding_version}")
     if f.classification_provenance is not None:
         lines.append(f"- **Classification provenance:** {json.dumps(f.classification_provenance, sort_keys=True, separators=(',', ':'))}")
+    if f.classification_review is not None:
+        lines.append(f"- **CWE review:** {json.dumps(f.classification_review, sort_keys=True, separators=(',', ':'))}")
     if f.classification_revision:
         lines.append(f"- **Classification revision:** {f.classification_revision}")
 
@@ -553,7 +593,7 @@ def read_report_bytes(raw: bytes, *, slug: str) -> Finding:
     observed_impact = body("Observed impact")
     if observed_impact is None:
         observed_impact = body("Impact")
-    return Finding(
+    finding = Finding(
         title=lines[0][2:], severity=cast(Severity, severity), url=value("URL") or "",
         observed_impact=observed_impact or "", potential_impact=body("Potential impact") or "",
         parameter=value("Parameter"), payload=body("Payload", code=True), method=value("Method"),
@@ -569,6 +609,44 @@ def read_report_bytes(raw: bytes, *, slug: str) -> Finding:
         classification_provenance=_read_provenance(value("Classification provenance")),
         classification_revision=_read_revision(value("Classification revision")),
     )
+    if len(metadata.get('CWE review', [])) > 1:
+        raise ValueError('duplicate CWE review metadata')
+    finding.classification_review = _read_classification_review(value('CWE review'), finding)
+    return finding
+
+
+
+
+def _read_classification_review(value: str | None, finding: Finding) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        if len(value.encode('utf-8')) > 8192:
+            raise ValueError('review bound')
+        review = json.loads(value)
+        required = {'status', 'selected_cwe', 'reason', 'previous_cwe', 'evidence_refs',
+                    'confirmation_binding', 'reviewer', 'corpus', 'source_signature'}
+        if (not isinstance(review, dict) or set(review) != required
+                or review['status'] not in {'resolved', 'unresolved'} or review['reviewer'] not in {'operator', 'automatic'}
+                or not isinstance(review['reason'], str) or not 1 <= len(review['reason'].strip()) <= 1000
+                or any(not c.isprintable() for c in review['reason'])
+                or review['previous_cwe'] != list(finding.cwe or [])
+                or not finding.confirmation_binding or review['confirmation_binding'] != finding.confirmation_binding
+                or not finding.evidence_refs or review['evidence_refs'] != finding.evidence_refs
+                or not isinstance(review['corpus'], (dict, type(None)))
+                or (review['source_signature'] is not None and
+                    (not isinstance(review['source_signature'], str) or not re.fullmatch(r'[0-9a-f]{64}', review['source_signature'])))):
+            raise ValueError('review identity')
+        selected = review['selected_cwe']
+        if review['status'] == 'resolved':
+            if (review['reviewer'] != 'operator' or not isinstance(selected, str) or not re.fullmatch(r'CWE-[1-9][0-9]{0,5}', selected)
+                    or not review['corpus'] or not review['source_signature']):
+                raise ValueError('resolved review source')
+        elif selected is not None:
+            raise ValueError('unresolved review cannot assign CWE')
+        return review
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise ValueError('invalid persisted CWE review annotation') from exc
 
 
 def _read_revision(value: str | None) -> int:
@@ -598,7 +676,7 @@ def report_bytes(path: Path) -> bytes:
     return raw
 
 
-def classification_header(raw: bytes):
+def _report_header(raw: bytes):
     """Require unambiguous historical bindings before retrieval or mutation."""
     lines = raw.decode("utf-8").splitlines(keepends=True)
     if not lines or not lines[0].startswith("# "):
@@ -619,7 +697,12 @@ def classification_header(raw: bytes):
         raise ValueError("duplicate report metadata")
     if not all(metadata.get(key) for key in ("Severity", "URL", "Reported at", "Candidate ID", "Evidence", "Canonical class", "Confirmation binding")):
         raise ValueError("report lacks historical confirmation binding")
-    if any(value.strip() for value in metadata.get("CWE", [])):
+    return lines, boundary, positions
+
+
+def classification_header(raw: bytes):
+    lines, boundary, positions = _report_header(raw)
+    if 'CWE' in positions and lines[positions['CWE']].split('** ', 1)[1].strip():
         raise ValueError("classified report cannot be replaced")
     return lines, boundary, positions
 
@@ -637,6 +720,8 @@ def classification_replacement(raw: bytes, cwe: str, provenance: dict[str, Any],
             lines[positions[key]] = f"- **{key}:** {value}{newline}"
     additions = [f"- **{key}:** {value}{newline}" for key, value in updated.items() if key not in positions]
     lines[boundary:boundary] = additions
+    if "CWE review" in positions:
+        lines.pop(positions["CWE review"])
     replacement = "".join(lines).encode("utf-8")
     if len(replacement) > MAX_REPORT_BYTES:
         raise ValueError("classification replacement exceeds report bound")

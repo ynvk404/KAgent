@@ -133,10 +133,14 @@ def render_summary(finding: Finding, *, context: SummaryContext | None = None,
     if finding.parameter or ctx.location:
         inputs = [prose(v, inline=True) for v in (finding.parameter, ctx.location) if v]
         lines.append(f"- **Input:** {' · '.join(inputs)}")
-    classification = [v for v in (finding.vulnerabilityType, *(finding.cwe or []),
+    classification = [v for v in (finding.vulnerabilityType, *finding.effective_cwe,
                                    *(finding.owasp or [])) if v]
     if classification:
         lines.append("- **Classification:** " + "; ".join(prose(v, inline=True) for v in classification))
+    if finding.classification_review:
+        review = finding.classification_review
+        lines.append('- **Original CWE mapping:** ' + prose(', '.join(finding.cwe or []) or 'none', inline=True))
+        lines.append('- **CWE enrichment:** ' + prose(review['status'] + ': ' + review['reason'], inline=True))
     lines.extend(["", "## Observed impact", "", prose(finding.observed_impact), "",
                   "**Confirmation criteria:** " + prose(ctx.criteria), ""])
     if finding.responseExcerpt and len(finding.responseExcerpt) <= 800:

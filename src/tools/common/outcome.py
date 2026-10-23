@@ -7,7 +7,6 @@ from typing import Literal, TYPE_CHECKING
 from src.tools.common.runtime_metadata import RuntimeMetadata
 
 if TYPE_CHECKING:
-    from src.tools.execution.scanner_runner import ScannerResult
     from src.tools.discovery.content import NativeDiscoveryResult
 
 ToolStatus = Literal["success", "observation", "error", "cancelled", "pending"]
@@ -32,7 +31,6 @@ class ToolOutput(str):
     http_session: str | None
     http_stamp: tuple | None
     http_body_ranges: tuple[tuple[int, int], ...]
-    scanner_result: ScannerResult | None
     native_discovery: NativeDiscoveryResult | None
 
     def __new__(
@@ -55,6 +53,5 @@ class ToolOutput(str):
         value.http_session = None
         value.http_stamp = None
         value.http_body_ranges = ()
-        value.scanner_result = None
         value.native_discovery = None
         return value

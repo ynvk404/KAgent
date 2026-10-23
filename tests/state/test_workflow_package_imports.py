@@ -11,7 +11,6 @@ import pytest
 MODULES = (
     "src.workflow.discovery.inventory",
     "src.workflow.discovery.attribution",
-    "src.workflow.discovery.scanner",
     "src.workflow.discovery.input_view",
     "src.workflow.evidence.artifacts",
     "src.workflow.evidence.errors",

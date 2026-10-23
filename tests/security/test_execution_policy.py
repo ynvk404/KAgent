@@ -276,7 +276,7 @@ def test_receipt_replay_expiry_and_changed_args(runtime, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["shell", "plugin", "mcp"])
+@pytest.mark.parametrize("kind", ["plugin", "mcp"])
 async def test_missing_process_enforcement_blocks_before_dialog_and_direct_dispatch(runtime, monkeypatch, kind):
     registry, p, _, operator, _, _, _ = runtime
     dispatch = AsyncMock()
@@ -288,9 +288,9 @@ async def test_missing_process_enforcement_blocks_before_dialog_and_direct_dispa
     registry.register(tool)
     args = {"command": "printf fixture", "url": ORIGIN}
     for _ in range(2):
-        with pytest.raises(ExecutionBlocked, match="enforcement-unavailable"):
+        with pytest.raises(ExecutionBlocked, match="unavailable"):
             await registry.execute(tool.name(), args, None, p)
-    with pytest.raises(ExecutionBlocked, match="enforcement-unavailable"):
+    with pytest.raises(ExecutionBlocked, match="unavailable"):
         await tool.run(args, None, p)
     assert not operator.requests and not dispatch.called
 
@@ -309,9 +309,9 @@ async def test_plugin_effective_config_frozen_before_ordinary_review(monkeypatch
             cfg.command, cfg.args = "after", ["after"]
             return Decision.ALLOW_ONCE
 
-    await registry.execute("fixture", {"nested": {"data": "fixture"}}, None, Reviewer())
-    assert dispatch.await_args is not None
-    assert dispatch.await_args.args[:2] == ("before", ["before"])
+    with pytest.raises(ExecutionBlocked, match="unavailable"):
+        await registry.execute("fixture", {"nested": {"data": "fixture"}}, None, Reviewer())
+    dispatch.assert_not_called()
 
 
 @pytest.mark.asyncio

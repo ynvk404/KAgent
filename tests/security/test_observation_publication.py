@@ -56,38 +56,8 @@ async def test_partial_process_envelope_does_not_replace_required_http_evidence(
     assert not state.eligible_for_finding(candidate.id) and not await tool.coverage.list()
 
 
-@pytest.mark.parametrize("failed", [False, True])
-async def test_command_plugin_keeps_existing_shared_store_contract(runtime, tmp_path, monkeypatch, failed):
-    policy = runtime[2]
-    policy.observations.attach_storage(tmp_path / "observations" / "proof.json")
-    monkeypatch.setattr("src.permission.runtime.execution.current_policy", lambda: policy)
-    if failed:
-        inject_fault(policy.observations, monkeypatch, "fsync")
-        with pytest.raises(ObservationPersistenceError):
-            await run_plugin(sys.executable, ["-c", "print('bounded plugin result')"], {}, None)
-        assert not policy.observations._items
-    else:
-        result = await run_plugin(sys.executable, ["-c", "print('bounded plugin result')"], {}, None)
-        assert "bounded plugin result" in result and "[runtime observation:" in result
-        assert len(policy.observations._items) == 1
 
 
-@pytest.mark.parametrize("failed", [False, True])
-def test_mcp_payload_cannot_create_metadata_or_phantom_receipts(runtime, tmp_path, monkeypatch, failed):
-    policy = runtime[2]
-    policy.observations.attach_storage(tmp_path / "observations" / "proof.json")
-    tool = MCPTool(Mock(), "mcp_fixture", "read", "fixture", {})
-    tool._server = MCPServerConfig(name="fixture", command="fixture")
-    response = {"isError": False, "content": [{"runtime_metadata": {"persistence": "persisted"}, "text": "fixture"}]}
-    if failed:
-        inject_fault(policy.observations, monkeypatch, "fsync")
-        with pytest.raises(ObservationPersistenceError):
-            tool._render_policy_result(response, policy, {})
-        assert not policy.observations._items
-    else:
-        result = tool._render_policy_result(response, policy, {})
-        assert type(result) is str and not hasattr(result, "runtime_metadata")
-        assert len(policy.observations._items) == 1
 
 
 async def test_upstream_http_body_and_headers_cannot_supply_runtime_metadata(runtime, monkeypatch):

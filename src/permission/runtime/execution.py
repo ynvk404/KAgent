@@ -1,7 +1,6 @@
 """Controller-owned execution policy; tool output/args are never authority.
 
-An approval is separate from resource validation. Bound process tools need the
-isolated worker and supported broker transport; never ambient host fallback.
+An approval is separate from resource validation. Shell runs directly with a current receipt. Worker-dependent plugins/MCP are unavailable.
 """
 from __future__ import annotations
 
@@ -66,9 +65,6 @@ def invocation_digest(tool: Any, args: dict[str, Any]) -> str:
     material = [tool.name(), type(tool).__module__, args,
                 asdict(config) if is_dataclass(config) and not isinstance(config, type) else None,
                 getattr(tool, "shell_path", None), resource]
-    if type(tool).__module__ == "src.tools.execution.shell" and "scanner" in args:
-        plan = getattr(tool, 'scanner_plan', None)
-        material.append(plan.digest if plan is not None else None)
     return hashlib.sha256(json.dumps(material, sort_keys=True, default=str,
                                      separators=(",", ":")).encode()).hexdigest()
 
@@ -108,12 +104,6 @@ class ExecutionPolicy:
         self.input_questions: dict[str, str | None] = {}
         self.journal: Path | None = None
         self.session_id: str | None = None
-        self.worker: Any = None
-        # Lifecycle ownership only; this is not a scanner grant/quota store.
-        self.scanner_runtime: Any = None
-        self.scanner_binding: Any = None
-        # Only the CLI controller can install this session-only Browser binding.
-        self.browser_local: Any = None
         self.generic_validation: Any = None
         from src.permission.runtime.observations import ObservationStore
         self.observations = ObservationStore()
@@ -135,8 +125,7 @@ class ExecutionPolicy:
         profile = hashlib.sha256(json.dumps([str(self.root), [str(p) for p in self.protected],
                                               self.max_calls, self.concurrency,
                                               str(self.cwe_mcp_deployment_path or ""),
-                                              str(getattr(self.worker, "cwe_mcp_deployment_path", None) or ""),
-                                              id(self.worker), self.worker.summary() if self.worker else None],
+                                              "direct-shell-v1"],
                                              separators=(",", ":")).encode()).hexdigest()
         return profile, self.revision, self.engagement.revision, self.engagement.http_permissions.revision
 
@@ -298,26 +287,10 @@ class ExecutionPolicy:
         if "*" in self.revoked or name in self.revoked:
             raise ExecutionBlocked("blocked: tool/session-revoked")
         module = type(tool).__module__
-        if (module == "src.tools.mcp.integration" and getattr(tool, '_server', None) is not None
-                and tool._server.name == 'cwe_catalog'):
-            from src.tools.mcp.cwe_deployment import require_matching_cwe_deployment
-            require_matching_cwe_deployment(self, self.worker)
-        if module == 'src.tools.mcp.integration':
-            from src.tools.mcp.browser_deployment import is_designated_browser_local
-            if is_designated_browser_local(getattr(tool, '_server', None)):
-                if self.browser_local is None:
-                    raise ExecutionBlocked('blocked: designated Browser local opt-in unavailable')
-                if self.browser_local.policy is not self:
-                    raise ExecutionBlocked('blocked: Browser local controller binding mismatch')
-                self.browser_local.validate_tool(tool, args)
-            elif self.worker is None or getattr(tool, '_execution_policy', None) is not self:
-                raise ExecutionBlocked('blocked: enforcement-unavailable; MCP isolated executor identity unavailable')
-        scanner = module == "src.tools.execution.shell" and "scanner" in args
-        if scanner:
-            tool.validate_args(args)
-            tool.validate_scanner(self, args)
-        if not scanner and module in {"src.tools.execution.shell", "src.tools.execution.plugin"} and self.worker is None:
-            raise ExecutionBlocked("blocked: enforcement-unavailable; isolated filesystem/network/process adapter required")
+        if module in {'src.tools.mcp.integration', 'src.tools.execution.plugin'}:
+            raise ExecutionBlocked('unavailable: this adapter requires the removed isolated executor; host execution is not enabled')
+        if module == 'src.tools.execution.shell' and 'scanner' in args:
+            raise ExecutionBlocked('unavailable: external scanner jobs have been removed')
         if module not in {"src.tools.http.http_tool", "src.tools.http.web", "src.tools.execution.file", "src.tools.execution.search",
                           "src.tools.discovery.content", "src.tools.discovery.service", "src.tools.workflow.workflow_tool",
                           "src.tools.workflow.finding", "src.tools.workflow.coverage", "src.tools.skills.payloads", "src.tools.skills.skill_file",
@@ -340,16 +313,7 @@ class ExecutionPolicy:
             self.require_network(args.get("url", "https://html.duckduckgo.com"), research=name == "web_search")
         elif module in {"src.tools.discovery.content", "src.tools.discovery.service"}:
             self.require_network(tool.target.base_url())
-            if module == "src.tools.discovery.content":
-                _, _, mode, cap, _, _ = tool._parameters(args)
-                backend = tool._select_backend(mode, cap)
-            else:
-                _, _, _, mode, _ = tool._parameters(args)
-                backend = tool._select_backend(mode)
-            if backend == 'ffuf' and (self.worker is None or not tool.target.base_url().startswith('http://')):
-                raise ExecutionBlocked('blocked: ffuf requires isolated plaintext HTTP broker (native backend available)')
-            if backend == "nmap":
-                raise ExecutionBlocked("blocked: enforcement-unavailable; scanner process adapter required (native backend available)")
+            tool.validate_args(args)
 
     def prepare(self, tool: Any, args: dict[str, Any], *, reviewing: bool = False,
                 signal: Any = None) -> ExecutionReceipt:
@@ -507,9 +471,6 @@ class ExecutionPolicy:
                           args: dict[str, Any] | None = None) -> bool:
         """UI callback check; do not consult the callback task's review context."""
         try:
-            if (tool is not None and args is not None and 'scanner' in args
-                    and type(tool).__module__ == 'src.tools.execution.shell'):
-                tool.validate_scanner(self, args)
             return (self._receipts.get(receipt.id) is receipt and receipt.revision == self.stamp()
                     and self.clock() < receipt.expires
                     and (receipt.review_guard is None or receipt.review_guard.is_current())
@@ -521,7 +482,7 @@ class ExecutionPolicy:
         limit = str(self.max_calls) if self.max_calls is not None else 'no session quota'
         return (f"Execution profile: {self.root}; YOLO: {self.yolo}; calls: {self.used}/{limit}; "
                 f"active: {self.active}/{self.concurrency}; revoked: {', '.join(sorted(self.revoked)) or '(none)'}\n"
-                f"Worker: {self.worker.summary() if self.worker is not None else 'enforcement-unavailable'}; ordinary Shell/local stdio MCP need compatible configuration; remote MCP unavailable. Typed scanner readiness is in the controller catalog.\n"
+                "Shell: direct subprocess in project cwd; account filesystem/network rights, no OS isolation. Plugins/MCP requiring the removed executor are unavailable.\n"
                 "Read and export assumptions: lab root is operator-approved input; no general context egress guarantee.")
 
 
@@ -540,17 +501,18 @@ def default_execution_policy(engagement: EngagementState, root: Path, *,
 
 
 def guard_process(prompter: Any, tool: Any, args: dict[str, Any]):
+    if type(tool).__module__ != 'src.tools.execution.shell':
+        raise ExecutionBlocked('unavailable: direct execution is supported only for the native shell adapter')
     policy = policy_for(prompter)
     if policy is not None:
-        if policy.worker is None:
-            raise ExecutionBlocked("blocked: enforcement-unavailable; isolated process adapter required")
         if not policy.nested_allowed():
             raise ExecutionBlocked("blocked: process-without-execution-receipt")
         entry = _active.get()
         digest = invocation_digest(tool, args)
         if entry is None or entry[1].digest != digest:
             raise ExecutionBlocked("blocked: effective-process-action-changed")
-        return policy.worker
+        policy.revalidate_active(tool, args, None)
+        return policy
     return None
 
 

@@ -10,7 +10,6 @@ from src.agent.events import (
     DoneEvent,
     Invocation,
     ToolCallEvent,
-    ToolStartedEvent,
 )
 from src.permission.permission import (
     Decision,
@@ -40,24 +39,12 @@ def seed():
     return initial_state("", BannerData("fixture", "fixture", "."))
 
 
-def scanner_call() -> ToolCallEvent:
+def shell_call() -> ToolCallEvent:
     return ToolCallEvent(
-        id="scanner",
+        id="shell",
         name="shell",
         invocation=Invocation("invocation", ""),
-        args={"scanner": "ffuf", "url": "http://fixture.test/FUZZ", "wordlist_id": "fixture"},
-    )
-
-
-def scanner_started(call: ToolCallEvent | None = None) -> ToolStartedEvent:
-    call = call or scanner_call()
-    return ToolStartedEvent(
-        id=call.id,
-        name=call.name,
-        invocation=call.invocation,
-        scanner="ffuf",
-        job_id="fixture-job",
-        started_monotonic=1.0,
+        args={"command": "printf fixture"},
     )
 
 
@@ -90,17 +77,16 @@ def test_pending_permission_survives_streaming_delta():
     assert state.transcript[-1].streaming
 
 
-def test_pending_permission_survives_tool_started_event():
-    call = scanner_call()
+def test_pending_permission_survives_shell_call():
+    call = shell_call()
     state = reducer(seed(), SetBusy(True))
     state = reducer(state, SetPerm(pending_permission()))
     state = reducer(state, AgentEventAction(call))
 
-    state = reducer(state, AgentEventAction(scanner_started(call)))
 
     assert state.phase == "waiting-approval"
     assert state.pending_perm is not None
-    assert state.call_history[-1].started_monotonic == 1.0
+    assert state.call_history[-1].name == "shell"
 
 
 def test_pending_permission_survives_busy_false():
@@ -116,14 +102,13 @@ def test_pending_permission_survives_busy_false():
 
 
 def test_pending_user_request_survives_stream_and_tool_activity():
-    call = scanner_call()
+    call = shell_call()
     state = reducer(seed(), SetBusy(True))
     state = reducer(state, SetAsk(pending_ask()))
     state = reducer(state, AgentEventAction(AssistantDeltaEvent(text="partial")))
     assert state.phase == "waiting-user"
 
     state = reducer(state, AgentEventAction(call))
-    state = reducer(state, AgentEventAction(scanner_started(call)))
     state = reducer(state, SetBusy(False))
 
     assert state.phase == "waiting-user"
@@ -149,20 +134,6 @@ def test_overlapping_requests_follow_active_ask_then_permission_ownership():
     state = reducer(state, SetPerm(None))
     assert state.phase == "running-tool"
     assert state.pending_perm is None
-
-
-def test_stale_tool_started_event_does_not_replace_pending_permission_phase():
-    call = scanner_call()
-    state = reducer(seed(), SetBusy(True))
-    state = reducer(state, SetPerm(pending_permission()))
-    state = reducer(state, AgentEventAction(call))
-    stale = scanner_started(call)
-    stale.invocation = Invocation("stale-invocation", "")
-
-    state = reducer(state, AgentEventAction(stale))
-
-    assert state.phase == "waiting-approval"
-    assert state.call_history[-1].started_monotonic is None
 
 
 def test_request_resolution_returns_to_normal_busy_or_idle_phase():
@@ -351,9 +322,8 @@ def test_no_pending_request_keeps_existing_answering_running_and_idle_phases():
     state = reducer(state, AgentEventAction(AssistantDeltaEvent(text="answer")))
     assert state.phase == "answering"
 
-    call = scanner_call()
+    call = shell_call()
     state = reducer(state, AgentEventAction(call))
-    state = reducer(state, AgentEventAction(scanner_started(call)))
     assert state.phase == "running-tool"
 
     state = reducer(state, SetBusy(False))

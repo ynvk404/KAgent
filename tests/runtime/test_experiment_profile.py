@@ -230,7 +230,7 @@ def test_prepare_does_not_launch_and_launcher_uses_official_bounded_new_session(
         args = runtime.parse_flags(profile.sys.argv[1:])
         assert args.target_url == "http://127.0.0.1:8081"
         assert args.max_steps == 17 and not args.resume_id and not args.yolo
-        assert not args.browser and not args.burp
+        assert not hasattr(args, "browser") and not args.burp
         assert Path(args.log_path).is_relative_to(layout[3])
         assert Path(args.debug_session_path).is_relative_to(layout[3])
         return 0

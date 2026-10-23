@@ -209,11 +209,6 @@ class Registry:
                 raise
             except (TypeError, ValueError) as err:
                 raise InvalidToolArguments(str(err)) from err
-        if type(tool).__module__ == 'src.tools.execution.shell' and 'scanner' in args:
-            try:
-                await getattr(tool, 'prepare_scanner')(args, policy, signal)
-            except (TypeError, ValueError) as err:
-                raise InvalidToolArguments(str(err)) from err
         receipt = policy.prepare(tool, args, reviewing=True, signal=signal) if policy is not None else None
         try:
             return await self._execute(tool, args, signal, prompter, policy, receipt)

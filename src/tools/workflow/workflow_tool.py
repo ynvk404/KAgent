@@ -70,7 +70,6 @@ ACTIONS = (
     "get_source",
     "get_endpoint",
     "set_source_disposition",
-    "triage_scanner_results",
     "get_input",
     "record_input",
     "set_input_disposition",
@@ -95,7 +94,6 @@ ACTION_REQUIRED = {
     'get_source': ('discovery_source_id',),
     'get_endpoint': ('endpoint_id',),
     'set_source_disposition': ('discovery_source_id', 'source_disposition', 'source_reason'),
-    'triage_scanner_results': ('job_id', 'scanner_disposition', 'scanner_reason'),
     'get_input': ('input_id',),
     'set_input_disposition': ('input_id', 'disposition'),
     'link_input_candidate': ('input_id', 'candidate_id'),
@@ -115,7 +113,6 @@ ACTION_INPUTS = {
     'get_endpoint': ('endpoint_id',),
     'set_source_disposition': ('discovery_source_id', 'retained_ref', 'source_disposition', 'source_reason',
                                'source_limitations', 'source_bounds', 'acknowledge_bounded_stop'),
-    'triage_scanner_results': ('job_id', 'record_ids', 'scanner_disposition', 'scanner_reason', 'remaining'),
     'get_input': ('input_id',),
     # Legacy ownership fields are equality assertions; source is an ignored
     # informational label retained for existing validation-feedback callers.
@@ -139,7 +136,7 @@ ACTION_INPUTS = {
     'record_phase_coverage': ('phase', 'coverage_dimension', 'coverage_status', 'coverage_reason'),
     'complete_skill': ('skill_name', 'artifact_ref', 'no_inputs_discovered', 'current_phase'),
     'review_no_candidate': ('goal_id', 'artifact_ref'),
-    'list': ('candidate_id', 'status', 'candidate_class', 'limit', 'observation_offset', 'job_id', 'scanner_offset',
+    'list': ('candidate_id', 'status', 'candidate_class', 'limit', 'observation_offset',
              'view', 'input_limit', 'input_cursor', 'input_disposition', 'discovery_cursor', 'discovery_source_id'),
 }
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
@@ -203,11 +200,6 @@ class WorkflowTool(Tool):
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": list(ACTIONS)},
-                "job_id": optional_string,
-                "record_ids": {"type": "array", "maxItems": 128, "items": {"type": "string"}},
-                "scanner_disposition": {"type": "string", "enum": ['selected', 'handled', 'deferred', 'dropped']},
-                "scanner_reason": {"type": "string", "maxLength": 240},
-                "remaining": {"type": "boolean"},
                 "candidate_id": {
                     "type": "string",
                 },
@@ -312,8 +304,6 @@ class WorkflowTool(Tool):
                                       "verified-write", "no-mutation-established"]},
                 "effect_basis": optional_string,
                 "observation_offset": {"type": "integer", "minimum": 0},
-                "scanner_offset": {"type": "integer", "minimum": 0,
-                    "description": "list: page scanner jobs, or dispositions when job_id is supplied."},
                 "cleanup_status": optional_string,
                 "cleanup_state": {
                     "type": "string",
@@ -473,31 +463,7 @@ class WorkflowTool(Tool):
         if (policy is not None and policy.session_id is not None and self.session_id != policy.session_id
                 and action in {"start_validation", "record_attempt_state", "record_evidence", "record_result"}):
             return self._typed_result("error: workflow/runtime session identity mismatch")
-        if action == 'triage_scanner_results':
-            job = self.state.scanner_jobs.get(args['job_id'])
-            objective = self.state.objective
-            if (job is None or job.objective_id != (objective.id if objective else None)
-                    or job.target_origin != candidate_origin(self._active_target())):
-                return self._typed_result('error: scanner job does not belong to the current target/objective')
-            if policy is not None:
-                retiring_selected = job.can_retire_selected(args.get('record_ids', []),
-                    args['scanner_disposition'], remaining=args.get('remaining', False))
-                # Closing known historical work is a local state mutation. It
-                # grants no source rights; triage still checks artifact integrity.
-                if not retiring_selected:
-                    policy.require_network(job.target_origin)
-                if '*' in policy.revoked or ('shell' in policy.revoked and not retiring_selected):
-                    return self._typed_result('error: scanner source capability revoked')
-            try:
-                if type(args.get('remaining', False)) is not bool:
-                    raise ValueError('remaining must be boolean')
-                job.triage(self.evidence_root, args.get('record_ids', []), args['scanner_disposition'],
-                           args['scanner_reason'], remaining=args.get('remaining', False))
-            except (ValueError, OSError) as exc:
-                return self._typed_result('error: scanner triage unavailable: ' + str(exc))
-            self.state.mark_committed()
-            result = json.dumps({'ok': True, 'scanner_job': job.projection()})
-        elif action in {'select_source', 'get_source', 'get_endpoint', 'set_source_disposition'}:
+        if action in {'select_source', 'get_source', 'get_endpoint', 'set_source_disposition'}:
             result = self._discovery_action(action, args)
         elif action == "get_input":
             result = self._get_input(args)
@@ -2358,26 +2324,7 @@ class WorkflowTool(Tool):
             return f"error: {err}"
         if args.get("view") == "inputs":
             return json.dumps(inputs, ensure_ascii=True, separators=(",", ":"))
-        from src.workflow.discovery.scanner import relevant_jobs
         objective = self.state.objective
-        scanner_jobs = relevant_jobs(self.state.scanner_jobs, candidate_origin(self._active_target()),
-                                     objective.id if objective else None)
-        scanner_offset = args.get('scanner_offset', 0)
-        if type(scanner_offset) is not int or scanner_offset < 0:
-            return 'error: scanner_offset must be a nonnegative integer'
-        if args.get('job_id'):
-            job = next((row for row in scanner_jobs if row.job_id == args['job_id']), None)
-            if job is None:
-                return 'error: scanner job unavailable for the current target/objective'
-            # Read historical triage, never raw scanner output or authority.
-            from src.tools.discovery.scanner_results import clean
-            dispositions = [{'record_id': key, 'disposition': row['disposition'], 'reason': clean(row['reason'], 240)}
-                            for key, row in sorted(job.dispositions.items())]
-            selected = dispositions[scanner_offset:scanner_offset + 8]
-            detail = job.projection(detail=True)
-            return json.dumps({'ok': True, 'scanner_job': detail, 'scanner_dispositions': selected,
-                'dispositions_total': len(dispositions), 'next_scanner_offset': scanner_offset + len(selected)
-                if scanner_offset + len(selected) < len(dispositions) else None})
         candidate_id = arg_string(args, "candidate_id")
         status = arg_string(args, "status")
         candidate_class = arg_string(args, "candidate_class")
@@ -2440,9 +2387,6 @@ class WorkflowTool(Tool):
                     if (row := self.validation_handoff(item.id, policy)) is not None],
                 "next_observation_offset": offset + limit if offset + limit < len(observations) else None,
                 "current_phase": self.state.current_phase,
-                "scanner_jobs": [row.projection() for row in scanner_jobs[scanner_offset:scanner_offset + 5]],
-                "scanner_jobs_total": len(scanner_jobs),
-                "next_scanner_offset": scanner_offset + 5 if scanner_offset + 5 < len(scanner_jobs) else None,
                 "objective": objective.to_dict() if objective else None,
                 "requested_goals": [
                     goal.to_dict() for goal in objective.requested_goals

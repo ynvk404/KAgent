@@ -41,4 +41,3 @@ include = ["src*", "components", "components.cwe_mcp"]
 
 [tool.setuptools.package-data]
 "components.cwe_mcp" = ["manifest.json"]
-"src.tools.execution" = ["wordlists/*.txt"]

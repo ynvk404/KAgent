@@ -14,7 +14,7 @@ def test_menu_orders_help_first_then_related_commands():
         "/help",
         "/provider", "/model", "/thinking", "/maxsteps",
         "/target", "/scope", "/permissions", "/yolo",
-        "/plan", "/report", "/turn-details", "/skills", "/burp",
+        "/plan", "/cwe", "/report", "/turn-details", "/skills", "/burp",
         "/memory", "/compact",
         "/clear", "/reset", "/exit",
     ]

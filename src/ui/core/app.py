@@ -1657,9 +1657,7 @@ class KAgent(App):
 
     def _tick_elapsed(self) -> None:
         if self._elapsed_active:
-            scanners = [call for call in self.state.pending_calls if call.started_monotonic is not None]
-            since = scanners[-1].started_monotonic if len(scanners) == 1 else self._elapsed_start
-            self.status_bar.elapsed_seconds = max(0.0, self._monotonic() - (since if since is not None else self._elapsed_start))
+            self.status_bar.elapsed_seconds = max(0.0, self._monotonic() - self._elapsed_start)
 
 
     async def run_agent_turn(
@@ -2034,12 +2032,6 @@ class KAgent(App):
             from src.agent.ownership import join
             self._skill_task.cancel()
             await join(self._skill_task)
-        from src.permission.runtime.execution import policy_for
-        from src.tools.execution.scanner_runner import ScannerRuntime
-        policy = policy_for(getattr(self.agent, 'prompter', None))
-        scanner_runtime = policy.scanner_runtime if policy is not None else None
-        if isinstance(scanner_runtime, ScannerRuntime):
-            await scanner_runtime.drain(close=True)
         if self.hang_diagnostics is not None:
             await self.hang_diagnostics.stop()
 

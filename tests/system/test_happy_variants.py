@@ -17,8 +17,6 @@ from textual import events
 from src.llm.core.client import StreamingClient
 from src.llm.core.types import Message
 from src.permission.network.grants import HTTPLimits
-from src.tools.common.capabilities import CapabilityInventory
-from src.tools.execution.scanners import ScannerBinding
 from src.tools.execution.shell import ShellTool
 from src.ui.core import app as app_module
 from src.workflow.evidence import artifacts as evidence_module
@@ -74,21 +72,6 @@ def variant_script(variant, original):
                 original_id = receipt(feedback)["evidence"]["id"]
                 duplicate = receipt((yield name, args))
                 assert duplicate["evidence"]["id"] == original_id
-            if variant == "scanner" and name == "load_skill" and args["name"] == "web-enumeration":
-                scanned = json.loads((yield "shell", {"scanner": "ffuf", "url": scenario.origin + "/FUZZ",
-                    "wordlist_id": "lab-routes", "threads": 1, "rate": 20, "timeout_seconds": 10}))
-                assert scanned["execution"]["status"] == "completed", scanned
-                assert {row["url"] for row in scanned["records"]} == {scenario.origin + "/filter", scenario.origin + "/hidden"}
-                assert scanned["artifacts"]["manifest"] and scanned["artifacts"]["result_refs"]
-                page = json.loads((yield "read_tool_result", {"result_ref": scanned["artifacts"]["result_refs"][0],
-                    "start_char": 0, "max_chars": 2000}))
-                assert page["content"] and page["sha256"]
-                receipt((yield "workflow", {"action": "triage_scanner_results", "job_id": scanned["job_id"],
-                    "record_ids": [row["id"] for row in scanned["records"]], "scanner_disposition": "handled",
-                    "scanner_reason": "Two fixture routes reviewed; input inventory follows from the form and documentation."}))
-                receipt((yield "workflow", {"action": "triage_scanner_results", "job_id": scanned["job_id"],
-                    "record_ids": [], "remaining": True, "scanner_disposition": "deferred",
-                    "scanner_reason": "Only the two approved words were scanned; no claim about other paths."}))
     return script
 
 
@@ -107,9 +90,9 @@ class StreamingScript(ScriptedModel, StreamingClient):
         return await super().chat(request, signal)
 
 
-@pytest.mark.parametrize("variant", ["scanner", "approve", "redirect_auth", "retry", "capture", "alternate_proof", "streaming"])
+@pytest.mark.parametrize("variant", ["approve", "redirect_auth", "retry", "capture", "alternate_proof", "streaming"])
 async def test_successful_subsystem_variants(tmp_path, monkeypatch, local_lab, variant, record_property):
-    mode = "whole_target" if variant in {"scanner", "redirect_auth", "retry"} else "direct"
+    mode = "whole_target" if variant in {"redirect_auth", "retry"} else "direct"
     scenario = lab_definition(local_lab, mode=mode)
     scenario = replace(scenario, id="happy-" + variant, script=variant_script(variant, scenario.script))
     runner, rt, traffic = prepare_lab(tmp_path, monkeypatch, local_lab, scenario)
@@ -137,29 +120,6 @@ async def test_successful_subsystem_variants(tmp_path, monkeypatch, local_lab, v
             "responseStatus": row["status"], "responseBody": row["response"].decode()})
         rt.lab_capture_ref = imported["baseline_request_ref"]
         traffic.expected.insert(0, ({"url": "/filter?category=Gifts", "method": "GET"}, (200, b"fixture products", "text/plain")))
-    elif variant == "scanner":
-        ffuf = shutil.which("ffuf")
-        if not ffuf or not Path("/usr/bin/prlimit").is_file():
-            pytest.skip("trusted ffuf/prlimit are not installed; no package installation")
-        words = tmp_path / "approved-routes.txt"
-        words.write_text("filter\nhidden\n")
-        binding = ScannerBinding(rt.policy, rt.target, CapabilityInventory(), (("lab-routes", words),))
-        rt.registry.register(ShellTool(scanner_binding=binding))
-        def allowed_process(args, kwargs):
-            argv = args[0]
-            return (isinstance(argv, (list, tuple)) and argv[0] == str(Path("/usr/bin/prlimit").resolve())
-                and argv[argv.index("--") + 1] == str(Path(ffuf).resolve())
-                and argv[argv.index("-u") + 1] == local_lab.origin + "/FUZZ"
-                and Path(kwargs["cwd"]).is_relative_to(tmp_path / ".kagent/tmp/scanners"))
-        local_lab.process_check = allowed_process
-        original_spawn = asyncio.create_subprocess_exec
-        async def spawn(*args, **kwargs):
-            process = await original_spawn(*args, **kwargs)
-            pids.append(process.pid)
-            return process
-        monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-        traffic.expected[1:1] = [({"url": "/filter", "method": "GET"}, (200, b"fixture products", "text/plain")),
-                                 ({"url": "/hidden", "method": "GET"}, (200, b"synthetic hidden route", "text/plain"))]
     if variant == "streaming":
         rt.agent.streaming_enabled = True
         rt.agent.history.extend(Message("user" if i % 2 == 0 else "assistant", "synthetic history " * 2) for i in range(1000))
@@ -217,14 +177,6 @@ async def test_successful_subsystem_variants(tmp_path, monkeypatch, local_lab, v
         if variant == "streaming":
             assert isinstance(run.model, StreamingScript) and run.model.deltas >= 600
             assert metrics["semantic_delta_calls"] == 0 and delta_calls["reads"] > 0
-        if variant == "scanner":
-            assert len(rt.workflow.scanner_jobs) == 1 and pids
-            job = next(iter(rt.workflow.scanner_jobs.values()))
-            assert job.execution["status"] == "completed" and job.dataset(tmp_path)
-            manifest = tmp_path / job.artifacts["manifest"]
-            assert hashlib.sha256(manifest.read_bytes()).hexdigest() == job.manifest_sha256
-            assert rt.policy.scanner_runtime.task is None
-            assert not list((tmp_path / ".kagent/tmp/scanners").iterdir())
         if variant == "alternate_proof":
             assert len(rt.workflow.candidates) == len(rt.workflow.evidence) == 1
             assert "reviewed-proof" in next(iter(rt.workflow.evidence.values())).source_path

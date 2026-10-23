@@ -29,39 +29,8 @@ class Session:
         return {"isError": False, "content": []}
 
 
-@pytest.mark.asyncio
-async def test_mcp_full_preview_redacts_and_dispatches_same_nested_arguments():
-    session = Session()
-    tool = MCPTool(session, "mcp_browser_navigate", "navigate", "fixture", {})
-    registry = Registry()
-    registry.register(tool)
-    original = {"url": "https://target.test/new", "options": {"callback": "https://callback.test"},
-                "password": "FAKE_SECRET", "long": "X" * 9000 + "FINAL_ARGUMENT"}
-    class Approve:
-        async def ask(self, request, signal=None):
-            req = request
-            preview = json.loads(req.detail)
-            assert preview["server"] == session.server_name
-            assert preview["tool"] == "navigate"
-            assert preview["args"]["options"] == original["options"]
-            assert preview["args"]["password"] == "[REDACTED]"
-            assert "FINAL_ARGUMENT" in req.detail
-            original["options"]["callback"] = "https://changed.invalid"
-            return Decision.ALLOW_ONCE
-    await registry.execute(tool.name(), original, None, Approve())
-    assert session.calls[0][1]["options"]["callback"] == "https://callback.test"
-    assert session.calls[0][1]["password"] == "FAKE_SECRET"
 
 
-@pytest.mark.asyncio
-async def test_mcp_deny_prevents_remote_dispatch():
-    session = Session()
-    tool = MCPTool(session, "mcp_fixture", "operation", "fixture", {})
-    registry = Registry()
-    registry.register(tool)
-    with pytest.raises(UserControlledRefusal):
-        await registry.execute(tool.name(), {"url": "https://target.test"}, None, AlwaysDeny())
-    assert session.calls == []
 
 
 @pytest.mark.asyncio
@@ -69,7 +38,7 @@ async def test_shell_preview_matches_original_dispatch_and_preserves_secrets(mon
     command = "printf abc | grep -P 'a'; echo token=FAKE_SECRET_1234567890"
     args = {"command": command}
     calls = []
-    async def run_capture(cmd, argv, timeout, signal):
+    async def run_capture(cmd, argv, timeout, signal, **kwargs):
         calls.append((cmd, argv))
         return "fixture output"
     monkeypatch.setattr("src.tools.execution.shell.run_with_capture", run_capture)
@@ -121,33 +90,20 @@ async def test_shell_review_receipt_worker_and_dispatch_keep_original_arguments(
         assert receipt.digest == expected_digest
         assert receipt.id == review_ids[0]
 
-    @asynccontextmanager
-    async def broker(signal=None, *, collector=None):
+    async def capture(cmd, argv, timeout, signal, *, cwd):
         assert_active_receipt()
-        yield tmp_path / "fake-broker"
-
-    async def prepare(cmd, argv, *, broker, signal):
-        assert_active_receipt()
-        assert broker == tmp_path / "fake-broker"
-        prepared.append((cmd, list(argv)))
-        return cmd, argv
-
-    async def capture(cmd, argv, timeout, signal):
-        assert_active_receipt()
+        assert cwd == tmp_path
         dispatched.append((cmd, list(argv), timeout))
         return ToolOutput("fixture output")
 
     # Keep the real Registry and receipt lifecycle; only the worker/broker and
     # subprocess boundary are fakes. No host command or network is dispatched.
-    policy.worker = SimpleNamespace(summary=lambda: "fixture-worker", prepare=prepare)
     prompter = YoloPrompter(Approve())
     prompter.bind_execution_policy(policy)
-    monkeypatch.setattr("src.permission.worker.broker.broker_directory", broker)
     monkeypatch.setattr("src.tools.execution.shell.run_with_capture", capture)
     registry = Registry()
     registry.register(tool)
     assert await registry.execute(tool.name(), args, None, prompter) == "fixture output"
-    assert prepared == [(tool.shell_path, ["-c", command])]
     assert dispatched == [(tool.shell_path, ["-c", command], 7)]
     assert len(review_ids) == 1
     assert not policy._receipts and not policy._active_receipts and not policy._pending

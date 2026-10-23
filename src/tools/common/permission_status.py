@@ -25,7 +25,4 @@ class PermissionStatusTool:
         policy = policy_for(prompter)
         if policy is None:
             return 'Execution profile is unavailable. Legacy permission gates apply.'
-        return (policy.status() + "\n" + policy.engagement.http_permissions.status()
-                + ('\nTrusted scanner catalog: ' + json.dumps(policy.scanner_binding.catalog())
-                   if policy.scanner_binding is not None else '')
-                + ("\n" + policy.browser_local.grant_status() if policy.browser_local is not None else ""))
+        return policy.status() + "\n" + policy.engagement.http_permissions.status()

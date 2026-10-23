@@ -18,7 +18,6 @@ from src.permission.permission import (
 from src.permission.network.grants import HTTPBlocked, HTTPPending, HTTPReviewStale, HTTPReviewTimeout
 from src.permission.runtime.execution import ExecutionBlocked
 from src.target.target import Target
-from src.tools.common.capabilities import CapabilityInventory
 from src.tools.discovery.content import (
     ContentDiscoveryTool,
     MAX_REQUESTS,
@@ -165,37 +164,10 @@ def fake_content_network(monkeypatch):
     monkeypatch.setattr("src.tools.discovery.content.sleep_or_abort", no_wait)
 
 
-def test_capability_inventory_detects_once_and_missing_tools_are_supported():
-    calls: list[str] = []
-
-    def which(name: str) -> str | None:
-        calls.append(name)
-        return f"/tools/{name}" if name == "ffuf" else None
-
-    inventory = CapabilityInventory(which=which)
-    first = inventory.snapshot()
-    second = inventory.snapshot()
-
-    assert first is second
-    assert first.ffuf == "/tools/ffuf"
-    assert first.nmap is None
-    assert calls == ["ffuf", "nmap"]
-    assert first.prompt_summary() == "ffuf"
 
 
-def test_capability_inventory_empty_does_not_raise():
-    inventory = CapabilityInventory(which=lambda _name: None)
-    assert inventory.snapshot().prompt_summary() == "native tools only"
 
 
-def test_capability_inventory_invalidates_only_the_matching_stale_binary():
-    inventory = CapabilityInventory(which=lambda name: f"/tools/{name}")
-    inventory.snapshot()
-    inventory.mark_unavailable("ffuf", "/tools/other-ffuf")
-    assert inventory.snapshot().ffuf == "/tools/ffuf"
-    inventory.mark_unavailable("ffuf", "/tools/ffuf")
-    assert inventory.snapshot().ffuf is None
-    assert inventory.snapshot().nmap == "/tools/nmap"
 
 
 def test_content_discovery_requires_active_exact_origin_and_effective_port():
@@ -264,7 +236,7 @@ def test_content_discovery_always_selects_native(mode, coverage, monkeypatch):
             target_origin=workflow.objective.target_origin or "",
         )
     # Native discovery must not inspect installed scanner executables.
-    monkeypatch.setattr(CapabilityInventory, "snapshot", lambda self: pytest.fail("scanner lookup"))
+    monkeypatch.setattr("shutil.which", lambda name: pytest.fail("external executable lookup"))
     tool = make_content_tool(workflow=workflow)
     assert tool._select_backend(mode, max_requests=6) == "native"
     assert "backend: native" in tool.summarize({"mode": mode})["detail"]
@@ -340,7 +312,7 @@ async def test_content_discovery_filters_spa_wildcard_and_reports_bounded_struct
     assert payload["completed_request_count_exact"] is True
     assert payload["rejected"][0]["reason"] == "wildcard_or_spa_baseline"
     assert all("body" not in item for item in payload["discovered"])
-    assert payload["backend_reason"] == "native HTTP discovery; external ffuf uses typed Shell scanner jobs"
+    assert payload["backend_reason"] == "native HTTP discovery"
 
 
 @pytest.mark.asyncio
@@ -374,7 +346,7 @@ async def test_content_auto_explains_native_discovery():
     )
     payload = json.loads(str(output))
     assert payload["backend"] == "native"
-    assert payload["backend_reason"] == "native HTTP discovery; external ffuf uses typed Shell scanner jobs"
+    assert payload["backend_reason"] == "native HTTP discovery"
 
 
 @pytest.mark.asyncio
@@ -585,7 +557,7 @@ def test_service_always_selects_native(mode, coverage, monkeypatch):
             objective_id=workflow.objective.id,
             target_origin=workflow.objective.target_origin or "",
         )
-    monkeypatch.setattr(CapabilityInventory, "snapshot", lambda self: pytest.fail("scanner lookup"))
+    monkeypatch.setattr("shutil.which", lambda name: pytest.fail("external executable lookup"))
     tool = make_service_tool(workflow=workflow)
     assert tool._select_backend(mode) == "socket"
     assert "backend: socket" in tool.summarize({"mode": mode})["detail"]
@@ -630,7 +602,7 @@ async def test_service_auto_explains_native_tcp(monkeypatch):
     output = await tool.run({}, None, AlwaysAllow())
     payload = json.loads(str(output))
     assert payload["backend"] == "socket"
-    assert payload["backend_reason"] == "native TCP discovery; external Nmap uses typed Shell scanner jobs"
+    assert payload["backend_reason"] == "native TCP discovery"
 
 
 @pytest.mark.asyncio

@@ -1118,7 +1118,7 @@ class WorkflowState:
     completed_artifacts: dict[str, str] = field(default_factory=dict)
     persisted_findings: dict[str, str] = field(default_factory=dict)
     current_phase: str | None = None
-    scanner_jobs: dict[str, Any] = field(default_factory=dict)
+    scanner_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     scanner_observations: dict[str, str] = field(default_factory=dict)
     attempts: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Submission repair accounting, separate from immutable attempt declarations.
@@ -1185,7 +1185,7 @@ class WorkflowState:
         return f'selected source {row.id} remains {row.disposition}' if row is not None else None
 
     def admit_discovery(self, source: SourceRecord, endpoints: tuple[EndpointRecord, ...] = (),
-                        provenance: tuple[ProvenanceRecord, ...] = (), *, scanner_dataset: bytes | None = None) -> SourceRecord:
+                        provenance: tuple[ProvenanceRecord, ...] = ()) -> SourceRecord:
         """Synchronous atomic metadata admission under the caller's existing lock.
 
         Producers must first validate their raw store/owner. This boundary
@@ -1219,25 +1219,9 @@ class WorkflowState:
                         or (row.media_type is not None and item.content_type is not None
                             and normalize_media_type(row.media_type) != normalize_media_type(item.content_type))):
                     raise ValueError('provenance input operation mismatch; no context borrowing')
-            if source.kind in {'ffuf', 'nmap'} and not re.fullmatch(r'sr_[0-9a-f]{24}', row.locator):
-                raise ValueError('scanner provenance requires an exact verified record ID')
             proposed_provenance[row.id] = row
-        if source.scanner_job_id is not None:
-            job = self.scanner_jobs.get(source.scanner_job_id)
-            if (job is None or job.objective_id != source.objective_id or job.target_origin != source.target_origin
-                    or job.scanner != source.kind or job.artifacts.get('dataset_sha256') != source.retained_hash):
-                raise ValueError('discovery scanner source/job binding mismatch')
-            if provenance:
-                if (scanner_dataset is None
-                        or hashlib.sha256(scanner_dataset).hexdigest() != source.retained_hash):
-                    raise ValueError('scanner provenance requires its verified retained dataset')
-                records = {row['id']: row for row in map(json.loads, scanner_dataset.splitlines())}
-                for link in provenance:
-                    record = records.get(link.locator)
-                    endpoint = proposed_endpoints[link.endpoint_id]
-                    if (record is None or source.kind != 'ffuf' or endpoint.method != 'GET'
-                            or canonical_endpoint(record.get('url'), source.target_origin) != endpoint.url):
-                        raise ValueError('scanner record/operation mismatch; no cross-job provenance')
+        if source.kind in {'ffuf', 'nmap'} or source.scanner_job_id is not None:
+            raise ValueError('unavailable: external scanner source admission has been removed')
         if (len(proposed_endpoints) > MAX_ENDPOINTS or len(proposed_provenance) > MAX_PROVENANCE
                 or len(set(self.discovery_sources) | {source.id}) > MAX_SOURCES
                 or sum(row.source_id == source.id for row in proposed_provenance.values()) > MAX_SOURCE_RECORDS):
@@ -1254,27 +1238,6 @@ class WorkflowState:
         self._invalidate_inventory_reviews(None)
         self.mark_committed()
         return stored
-
-    def add_scanner_job(self, job, *, observation_fingerprints: tuple[str, ...] = ()) -> bool:
-        from .discovery.scanner import MAX_JOBS, MAX_OBSERVATION_FACTS, observation_scope
-        if job.job_id not in self.scanner_jobs and len(self.scanner_jobs) >= MAX_JOBS:
-            replaceable = next((key for key, row in self.scanner_jobs.items()
-                                if not row.unresolved_selected and row.execution.get('status') != 'running'), None)
-            if replaceable is None:
-                return False
-            self.scanner_jobs.pop(replaceable)
-        self.scanner_jobs[job.job_id] = job
-        owner = observation_scope(job.objective_id, job.target_origin)
-        # Only the trusted producer supplies minimized normalized JSONL here.
-        # Canonical content includes stable identity and meaningful row fields;
-        # dataset ordering, job IDs and paths never participate in novelty.
-        for content_digest in observation_fingerprints:
-            if len(self.scanner_observations) >= MAX_OBSERVATION_FACTS:
-                break
-            fingerprint = hashlib.sha256((owner + content_digest).encode()).hexdigest()
-            self.scanner_observations.setdefault(fingerprint, owner)
-        self.mark_committed()
-        return True
 
     @staticmethod
     def _media_enrichment_match(existing: Any, incoming: Any, *, candidate: bool) -> bool:
@@ -1868,13 +1831,6 @@ class WorkflowState:
             facts.add(f'discovery-state:{semantic}:{source.disposition}:{source.bounded_stop}')
             if source.selected:
                 facts.add('discovery-selected:' + semantic)
-        from .discovery.scanner import observation_scope
-        owner = observation_scope(objective.id, objective.target_origin or '')
-        facts.update('scanner-observations:' + key for key, scope in self.scanner_observations.items() if scope == owner)
-        for job in self.scanner_jobs.values():
-            if job.objective_id == objective.id and job.target_origin == objective.target_origin:
-                for record_id, row in job.dispositions.items():
-                    facts.add(f"scanner-triage:{job.semantic_key}:{record_id}:{row['disposition']}")
         for goal in objective.requested_goals:
             facts.add(
                 f"requested-goal:{goal.id}:{goal.status}:{','.join(sorted(goal.candidate_ids))}:"
@@ -2030,10 +1986,6 @@ class WorkflowState:
                     actionable.append('source:' + source.id)
                 else:
                     blockers.append(f'source:{source.id}:{source.disposition}:{source.stop_reason or "unresolved"}')
-        for job in self.scanner_jobs.values():
-            if (job.objective_id == objective.id and job.target_origin == current_origin
-                    and job.unresolved_selected):
-                blockers.append('selected scanner observations unresolved:' + job.job_id)
         normalized_validators = frozenset(
             normalize_candidate_class(item) for item in validator_classes
         )
@@ -2358,7 +2310,7 @@ class WorkflowState:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "scanner_jobs": [row.to_dict() for row in self.scanner_jobs.values()],
+            "scanner_jobs": deepcopy(list(self.scanner_jobs.values())),
             "endpoints": [row.to_dict() for row in self.endpoints.values()],
             "discovery_sources": [row.to_dict() for row in self.discovery_sources.values()],
             "discovery_provenance": [row.to_dict() for row in self.discovery_provenance.values()],
@@ -2400,18 +2352,20 @@ class WorkflowState:
         state = cls()
         if not isinstance(value, dict):
             return state
-        from .discovery.scanner import ScannerJob, MAX_JOBS, MAX_OBSERVATION_FACTS
+        # Retired producer metadata is opaque history only: never opened,
+        # projected into prompts, credited as coverage or used as authority.
         raw_observations = value.get('scanner_observations', {})
-        if isinstance(raw_observations, dict) and len(raw_observations) <= MAX_OBSERVATION_FACTS:
+        if isinstance(raw_observations, dict) and len(raw_observations) <= 8192:
             state.scanner_observations = {key: scope for key, scope in raw_observations.items()
                 if isinstance(key, str) and re.fullmatch(r'[0-9a-f]{64}', key)
                 and isinstance(scope, str) and re.fullmatch(r'[0-9a-f]{64}', scope)}
         raw_jobs = value.get('scanner_jobs', [])
         if isinstance(raw_jobs, list):
-            for raw_job in raw_jobs[-MAX_JOBS:]:
-                job = ScannerJob.from_dict(raw_job)
-                if job is not None:
-                    state.scanner_jobs[job.job_id] = job
+            for row in raw_jobs[-32:]:
+                if (isinstance(row, dict) and isinstance(row.get('job_id'), str)
+                        and re.fullmatch(r'scan_[0-9a-f]{32}', row['job_id'])
+                        and len(json.dumps(row)) <= 48 * 1024):
+                    state.scanner_jobs[row['job_id']] = deepcopy(row)
         version = value.get("version", 1)
         if isinstance(version, int) and not isinstance(version, bool) and version > 0:
             # Version 1 had no registered evidence or independent subcases.

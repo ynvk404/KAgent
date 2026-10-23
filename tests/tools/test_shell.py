@@ -83,8 +83,8 @@ def test_describes_portable_grep_usage_and_avoids_grep_p_guidance():
     assert "grep -E" in desc
     assert "macOS/BSD" in desc
     assert "built-in http tool" in desc
-    assert "isolated worker" in desc
-    assert "scoped HTTP broker" in desc
+    assert "Direct subprocess" in desc
+    assert "no OS sandbox or HTTP attestation" in desc
 
 
 @pytest.mark.asyncio

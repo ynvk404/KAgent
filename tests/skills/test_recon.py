@@ -160,10 +160,9 @@ def test_recon_describes_supported_service_backend():
     text = collapse_ws(body)
 
     assert "The semantic tool uses bounded native TCP checks" in text
-    assert 'typed `shell(scanner="nmap", target=numeric_ip, ports=explicit_ports)` path' in text
-    assert 'explicitly declared TCP scope' in text
-    assert 'do not establish an HTTP origin' in text
-    assert "full profile may select installed nmap" not in text
+    assert "limited to the active URL's effective port" in text
+    assert 'External scanner integration is unavailable' in text
+    assert '"scanner": "nmap"' not in text
 
 
 def test_recon_explicitly_excludes_endpoint_and_parameter_enumeration():

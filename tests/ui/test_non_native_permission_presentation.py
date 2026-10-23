@@ -33,70 +33,10 @@ from tests.ui.test_permission_review import _content_text
 from tests.ui.test_permission_modal import make_req, rendered
 from tests.security.test_captured_http_replay import replay
 from tests.security.test_execution_policy import runtime
-from tests.security.test_browser_local import rig, ORIGIN as BROWSER_ORIGIN
-from tests.security.test_browser_yolo import call, yolo
 
 
-@pytest.mark.parametrize("group,name,args", [
-    ("read", "snapshot", {}),
-    ("navigate", "navigate", {"url": BROWSER_ORIGIN + "/fixture"}),
-    ("interaction", "click", {"ref": "s1e1", "element": "fixture"}),
-])
-async def test_browser_real_proposal_has_one_complete_scope_and_warning(rig, group, name, args):
-    prompter = yolo(rig)
-    if group == "interaction":
-        await call(rig, prompter)
-    checked = []
-
-    async def review(request, signal=None):
-        original = deepcopy(request)
-        before = deepcopy(rig.binding.grant)
-        modal = PermissionModal(bridged(request))
-        frame = rendered(modal, width=300)
-        normalized = " ".join(frame.split())
-        scope = " ".join(request.session_scope_display.split())
-        assert normalized.count(scope) == 1
-        assert "Tool:" not in frame
-        assert f"a trust Browser {group}" in frame
-        assert '"executor"' in frame and '"args"' in frame
-        assert request.detail.partition("\n\n")[0] in frame
-        assert '"tool": "browser_' + name + '"' in frame
-        assert "Session lifetime · no call quota" in frame
-        assert "does not authenticate tab/profile" in frame and "all Chrome traffic" in frame
-        assert "browser_snapshot" in scope
-        if group != "read":
-            assert "browser_navigate" in scope
-        if group == "interaction":
-            assert "browser_click" in scope and "browser_type" in scope
-            assert frame.count("Click/type may submit forms") == 1
-        assert request == original and rig.binding.grant == before
-        rig.operator.asks.append(request)
-        checked.append(group)
-        return Decision.ALLOW_ONCE
-
-    rig.operator.ask = review
-    await call(rig, prompter, name, args)
-    assert checked == [group] and rig.binding.grant is None
 
 
-@pytest.mark.parametrize("enabled,name", [(False, "snapshot"), (True, "press_key")])
-async def test_browser_once_and_unsupported_actions_keep_full_json_without_trust(rig, enabled, name):
-    prompter = yolo(rig, enabled)
-    checked = []
-
-    async def review(request, signal=None):
-        modal = PermissionModal(bridged(request))
-        frame = rendered(modal, width=300)
-        assert " · a trust " not in frame
-        assert '"server": "browser"' in frame and '"tool": "browser_' + name + '"' in frame
-        assert "UNKNOWN_ARGUMENT_TAIL" in frame
-        checked.append(name)
-        rig.operator.asks.append(request)
-        return Decision.ALLOW_ONCE
-
-    rig.operator.ask = review
-    await call(rig, prompter, name, {"key": "Enter", "fixture": "UNKNOWN_ARGUMENT_TAIL"})
-    assert checked == [name] and rig.binding.grant is None
 
 
 def test_unknown_browser_trailer_is_not_removed_or_reclassified():
@@ -108,27 +48,6 @@ def test_unknown_browser_trailer_is_not_removed_or_reclassified():
     assert detail in frame and "CUSTOM_BROWSER_TRAILER" in frame
 
 
-async def test_browser_separate_grant_review_keeps_producer_scope_and_decision(rig):
-    checked = []
-
-    async def review(request, signal=None):
-        rig.operator.asks.append(request)
-        if request.tool != "browser_lab_grant":
-            return Decision.GRANT_LAB
-        original = deepcopy(request)
-        modal = PermissionModal(bridged(request))
-        frame = rendered(modal, width=300)
-        scope = request.summary.removeprefix("Activate ")
-        assert frame.count(scope) == 1 and "Tool:" not in frame
-        assert "Session lifetime · no call quota" in frame and "does not authenticate tab/profile" in frame
-        assert "y approve grant" in frame and " · a " not in frame
-        assert request == original and rig.binding.grant is None
-        checked.append(request)
-        return Decision.ALLOW_ONCE
-
-    rig.operator.ask = review
-    await call(rig, yolo(rig))
-    assert len(checked) == 1 and rig.binding.grant.group == "read"
 
 
 @pytest.mark.parametrize("verb", ["read", "search", "read retained result"])
@@ -191,56 +110,8 @@ async def test_file_registry_proposal_keeps_once_resolved_scope_and_complete_con
     assert len(checked) == 1 and args == original_args and path.read_text() == new
 
 
-async def test_general_mcp_producer_keeps_executor_and_frozen_arguments_without_duplicate_header():
-    session = Session()
-    tool = MCPTool(session, "mcp_fixture_operation", "operation", "fixture", {})
-    tool._server = MCPServerConfig(name="fixture-server", command="python", args=["-m", "fixture-server"])
-    registry = Registry()
-    registry.register(tool)
-    args = {"resource": "fixture.txt", "password": "fixture-secret", "nested": {"tail": "FULL_ARGUMENT_TAIL"}}
-    original_args = deepcopy(args)
-    checked = []
-
-    class Operator:
-        async def ask(self, request, signal=None):
-            original = deepcopy(request)
-            modal = PermissionModal(bridged(request))
-            frame = rendered(modal, width=300)
-            assert "Tool:" not in frame and "mcp: fixture-server/operation" in frame
-            assert '"command": "python"' in frame and '"fixture-server"' in frame
-            assert request.detail in frame and "FULL_ARGUMENT_TAIL" in frame
-            assert "fixture-secret" not in frame and " · a " not in frame
-            assert request == original and not session.calls
-            checked.append(request)
-            return Decision.ALLOW_ONCE
-
-    await registry.execute(tool.name(), args, None, Operator())
-    assert len(checked) == 1 and args == original_args and session.calls[0][1] == original_args
 
 
-async def test_plugin_producer_keeps_joined_executor_and_json_stdin(monkeypatch):
-    run = AsyncMock(return_value="fixture")
-    monkeypatch.setattr("src.tools.execution.plugin.run_plugin", run)
-    tool = CommandPluginTool(PluginConfig(name="fixture_plugin", command="python", args=["argument with spaces"]))
-    registry = Registry()
-    registry.register(tool)
-    args = {"stdin": "FULL_STDIN_TAIL", "password": "fixture-secret"}
-    original_args = deepcopy(args)
-
-    class Operator:
-        async def ask(self, request, signal=None):
-            original = deepcopy(request)
-            frame = rendered(PermissionModal(bridged(request)), width=300)
-            assert "Tool:" not in frame and "plugin: fixture_plugin" in frame
-            assert "python argument with spaces" in frame and "FULL_STDIN_TAIL" in frame
-            assert "fixture-secret" not in frame and " · a " not in frame
-            assert request == original
-            run.assert_not_called()
-            return Decision.ALLOW_ONCE
-
-    await registry.execute(tool.name(), args, None, Operator())
-    assert run.call_args.args[:3] == ("python", ["argument with spaces"], original_args)
-    assert args == original_args
 
 
 @pytest.mark.parametrize("kind", ["content", "service"])
@@ -474,52 +345,6 @@ async def test_mounted_real_capture_review_keyboard_never_sends_before_approval(
             await asyncio.gather(task, return_exceptions=True)
 
 
-@pytest.mark.parametrize("size", [(40, 18), (80, 24)])
-@pytest.mark.parametrize("group,name", [("read", "snapshot"), ("navigate", "navigate"), ("interaction", "type")])
-async def test_mounted_real_browser_grant_keeps_scope_arguments_and_trust_mapping(rig, monkeypatch, size, group, name):
-    if group == "interaction":
-        await call(rig, yolo(rig))
-    app, bridge, shown, visible = mounted_permission_app(monkeypatch)
-    prompter = YoloPrompter(bridge, True)
-    prompter.bind_execution_policy(rig.policy)
-    tail = "x\n" * 200 + "MOUNTED_ARGUMENT_TAIL"
-    args = {"url": BROWSER_ORIGIN + "/fixture", "fixture": tail} if group == "navigate" else {
-        "ref": "s1e1", "element": "fixture", "text": tail} if group == "interaction" else {"fixture": tail}
-    original_args = deepcopy(args)
-    count = len(rig.calls)
-    async with app.run_test(size=size) as pilot:
-        task = asyncio.create_task(call(rig, prompter, name, args))
-        try:
-            await asyncio.wait_for(visible.wait(), 3)
-            await pilot.pause()
-            full = _content_text(app)
-            assert "MOUNTED_ARGUMENT_TAIL" in full and "no call quota" in full
-            assert "browser_snapshot" in full
-            if group != "read":
-                assert "browser_navigate" in full
-            assert app.overlay_static.region.bottom <= size[1]
-            assert app.overlay_content_static.max_scroll_x == 0
-            await pilot.press("end")
-            await pilot.pause()
-            for _ in range(20):
-                if "MOUNTED_ARGUMENT_TAIL" in _content_text(app, visible_only=True):
-                    break
-                await pilot.press("up")
-                await pilot.pause()
-            assert "MOUNTED_ARGUMENT_TAIL" in _content_text(app, visible_only=True)
-            assert len(rig.calls) == count and rig.binding.grant is None
-            await pilot.press("a")
-            await asyncio.wait_for(task, 3)
-            grant = getattr(rig.binding, "grant")
-            assert grant is not None and grant.group == group and grant.remaining is None
-            assert not bridge._session_allowed  # Browser grant is not bridge cache authority.
-            assert args == original_args and len(rig.calls) == count + 1
-            shown[0].resolve(Decision.ALLOW_SESSION)
-            assert len(rig.calls) == count + 1
-        finally:
-            if not task.done():
-                task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
 
 
 def bridged(request: PermissionRequest) -> BridgedPermissionRequest:

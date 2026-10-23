@@ -8,7 +8,7 @@ import pytest
 from src.llm.core.types import ChatResponse, Message, ToolCall, FunctionCall
 from src.workflow.state import WorkflowState
 from tests.helpers.agent_fakes import FakeClient, FakeSignal
-from tests.integration.test_scanner_agent_handoff import agent_runtime
+from tests.helpers.direct_runtime import agent_runtime
 
 
 @pytest.mark.parametrize('boundary', ['reset', 'resume', 'repeated_reset', 'same_id_state'])

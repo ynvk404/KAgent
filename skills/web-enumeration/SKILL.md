@@ -64,17 +64,9 @@ Discovery stays on the active origin, is bounded, and requires
 permission. Do not run generic-shell `ffuf`, `gobuster`, or `dirsearch`
 automatically.
 
-For a path gap, `shell(scanner="ffuf", url=active_origin_plus_FUZZ_path,
-wordlist_id=approved_id)` is also available when `permissions_status` reports a
-tested build ready. Select an existing file by its catalog ID, path, size and
-applicability. Installed DIRB files appear as `dirb-small` and `dirb-common`;
-additional existing files can be registered with `--scanner-wordlist ID=FILE`.
-`web-common` is a small bundled text file for a smoke pass. Do not generate
-wordlists or pass arbitrary file paths to the scanner. See step 6 for examples.
-A typed job can be the
-first call of an enumeration turn with valid recon prerequisites; native HTTP
-first and no scanner are equally valid when known/documented/captured inventory
-is sufficient. There is no mandatory Nmap/ffuf/HTTP sequence.
+Use native `content_discovery` only for an actual path gap; no additional
+probe is required when known/documented/captured inventory is sufficient.
+External scanner integration is unavailable; do not substitute shell scan loops.
 
 Execution rule: substitute the real target into commands before running them.
 Never write literal placeholders such as `<TARGET>`, `<HOST>`, or `<endpoint>`
@@ -560,129 +552,12 @@ follow redirects, and records observations directly from native HTTP. The tool's
 limits are 1,000 total requests, 10 requests/second, and 120 seconds; use a
 smaller budget when sufficient. It does not recurse or accept raw scanner flags.
 
-Those limits and wildcard calibration describe the native `content_discovery`
-tool. Typed ffuf is one exact reviewed scanner job, with default 40 threads,
-optional native rate/calibration/status/size filters and a finite deadline.
-HTTP quotas/confirm-each do not govern its traffic. It pins a numeric destination
-while preserving the reviewed Host/SNI, sends no Native HTTP credentials, and
-does not recurse or follow redirects. Do not fall back to generic-shell ffuf.
-
-### Choose a file and a URL template from the observed gap
-
-Read the catalog and existing workflow jobs first. The model chooses the file
-ID, URL template and supported ffuf options; the selected file supplies the
-words. Prefer the smallest applicable file: `dirb-small` for a narrow path gap,
-or `dirb-common` for a justified wider pass. Choose a registered API-specific
-file when available for an observed API surface. Do not assume these IDs exist
-on every machine: use only catalog entries with `available: true`. Availability
-is a file check; contents are validated and frozen before job review.
-
-Use `/FUZZ` for a root path gap. Use `/api/FUZZ` only when recon, documentation,
-or captures actually establish `/api/`; the file should contain relative child
-names, not another `api/` prefix. One FUZZ may also occur in a filename template
-when the observed application gives a concrete reason. Changing the prefix,
-file or filters is a new job and requires its own review. Never create a file
-to bypass the catalog or choose a large list merely because it is installed.
-
-### ffuf examples through the Shell tool
-
-These are tool-call examples, not shell command strings. They assume the
-operator's active authorized origin is `http://127.0.0.1:3000`. Substitute the
-actual active origin and a suitable available file ID before calling. Do not
-execute all examples as a sequence.
-
-**Small root discovery:** when known sources leave a concrete root path gap,
-choose the installed small DIRB file and a finite request rate/deadline:
-
-```json
-{
-  "tool": "shell",
-  "arguments": {
-    "scanner": "ffuf",
-    "url": "http://127.0.0.1:3000/FUZZ",
-    "wordlist_id": "dirb-small",
-    "threads": 10,
-    "rate": 10,
-    "timeout_seconds": 180,
-    "request_timeout_seconds": 5,
-    "match_status": "all"
-  }
-}
-```
-
-Budget for the selected file: roughly entry count divided by rate, plus time
-for slow responses and calibration. The small DIRB file has about 1,000 entries;
-at 10 requests/second a 180-second deadline allows a complete pass under normal
-responses. A shorter deliberate pass must retain its partial coverage.
-
-**Children of an observed API prefix:** assume the operator has registered an
-existing file as `api-words` and that ID appears available in the catalog:
-
-```json
-{
-  "tool": "shell",
-  "arguments": {
-    "scanner": "ffuf",
-    "url": "http://127.0.0.1:3000/api/FUZZ",
-    "wordlist_id": "api-words",
-    "threads": 10,
-    "rate": 5,
-    "timeout_seconds": 60,
-    "request_timeout_seconds": 5,
-    "match_status": "all"
-  }
-}
-```
-
-**Filter an established wildcard response:** if nonexistent controls really
-returned a stable 1234-byte wildcard body, a separately reviewed pass may use
-calibration and that observed size. Replace 1234 with the actual measurement:
-
-```json
-{
-  "tool": "shell",
-  "arguments": {
-    "scanner": "ffuf",
-    "url": "http://127.0.0.1:3000/FUZZ",
-    "wordlist_id": "dirb-small",
-    "threads": 10,
-    "rate": 10,
-    "timeout_seconds": 180,
-    "calibration": true,
-    "match_status": "all",
-    "filter_size": [
-      1234
-    ]
-  }
-}
-```
-
-`url` maps to ffuf `-u`; the reviewed file snapshot supplies `-w`.
-`threads`, `rate`, `request_timeout_seconds` and `timeout_seconds` map to `-t`,
-`-rate`, `-timeout` and `-maxtime`. `calibration`, `match_status`, `filter_status`
-and `filter_size` map to `-ac`, `-mc`, `-fc` and `-fs`. Use only these typed
-fields; the adapter owns executable, Host/SNI, pinning, output and redirects.
-Size/status filters can hide real routes: retain the selection rationale and
-coverage limitation. A 401/403/500 may be useful; do not blindly filter it away.
-Valid ffuf JSON or exit 0 does not prove the intended pass completed.
-
-Inspect workflow scanner jobs and reuse suitable results before requesting a
-new pass; changed wordlist/options/scope, partial results, or explicit retest
-justify a new job and approval. Each retained row is `scanner_reported`.
-Do not Native-verify every hit. Select useful record IDs, read bounded
-`read_tool_result` ranges, and record `triage_scanner_results` dispositions with
-reasons. Remaining rows may be deferred/dropped with an aggregate reason; this
-does not claim they were analyzed or verified. A path, 401/403/500, or size is
-not a parameter, request schema, candidate or finding. Use documentation,
-captures or selected native requests to establish actual input context. Preserve
-job failure/partial/coverage uncertainty in the canonical inventory; unavailable
-refs are retrieval limitations, never permission to rerun the scanner.
-
 `content_discovery` uses native HTTP.
-External ffuf uses only the typed Shell scanner path.
-If coverage is already sufficient, record a `skipped`
-or `not_applicable` reason instead of repeating the pass. Stop when additional
-requests stop producing useful new routes.
+Reuse suitable native discovery observations before another pass. A failed or
+partial pass retains its coverage limitations. Source paths/statuses alone do
+not establish input schemas, reachability of documented operations or findings.
+If coverage is already sufficient, record a `skipped` or `not_applicable` reason
+instead of repeating discovery. Stop when requests stop producing useful routes.
 
 If enumeration begins to resemble testing for a particular vulnerability
 class rather than discovering paths or resources, stop and hand off to the

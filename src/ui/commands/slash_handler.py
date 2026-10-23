@@ -46,7 +46,7 @@ _KEYBINDINGS: list[tuple[str, str]] = [
 
 _COMMAND_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     ("Everyday", ("/help", "/target", "/scope", "/plan", "/provider", "/model", "/clear", "/reset", "/exit")),
-    ("Workflow", ("/report", "/turn-details", "/compact", "/memory", "/skills")),
+    ("Workflow", ("/report", "/cwe", "/turn-details", "/compact", "/memory", "/skills")),
     ("Advanced", ("/permissions", "/burp", "/maxsteps", "/thinking", "/yolo")),
 ]
 
@@ -61,6 +61,7 @@ _QUICK_HELP: dict[str, tuple[str, str]] = {
     "/reset": ("", "reset conversation/session"),
     "/exit": ("", "quit"),
     "/report": ("[file.pdf]", "export assessment"),
+    "/cwe": ("<candidate_id>", "review Finding CWE with local catalog"),
     "/turn-details": ("", "latest turn diagnostics"),
     "/compact": ("", "compact conversation"),
     "/memory": ("[...]", "manage memory"),
@@ -252,6 +253,11 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
         app.show_turn_details()
         return True
 
+    if cmd == "/cwe":
+        from src.ui.commands.cwe_handler import start_cwe_review
+        start_cwe_review(app, rest)
+        return True
+
     if cmd == "/report":
         from src.ui.commands.report_handler import start_report
         start_report(app, rest)
@@ -265,17 +271,6 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
             sub = rest[0] if rest else "show"
             if sub == "show" and len(rest) <= 1:
                 text = permissions_details(rights, policy) if rest else permissions_summary(rights, policy)
-            elif sub == 'browser' and policy is not None:
-                binding = policy.browser_local
-                if binding is None:
-                    raise ValueError('Browser MCP is not enabled. Start with --browser and --target.')
-                if rest == ['browser', 'revoke']:
-                    binding.revoke_grant()
-                    text = 'Browser grant revoked. Queued auto-approvals cannot dispatch. Already-sent effects are not rolled back.'
-                elif rest == ['browser']:
-                    text = binding.grant_status()
-                else:
-                    raise ValueError('usage: /permissions browser [revoke]')
             elif sub == "revoke-tool" and len(rest) == 2 and policy is not None:
                 policy.revoke(rest[1])
                 text = f"Tool revoked: {rest[1]}. YOLO and ordinary approval cannot override this rule."
@@ -322,7 +317,7 @@ def handle_slash(app: "KAgent", raw: str) -> bool:
                 asyncio.create_task(_review_http_grant())
                 return True
             else:
-                raise ValueError("usage: /permissions [show|browser [revoke]|grant <spec>|revoke <id>|deny|retry <origin>|revoke-tool <name>|restore-tool <name>|retry-tools|network-refresh|limits <calls> <concurrency>]\n" + GRANT_SYNTAX)
+                raise ValueError("usage: /permissions [show|grant <spec>|revoke <id>|deny|retry <origin>|revoke-tool <name>|restore-tool <name>|retry-tools|network-refresh|limits <calls> <concurrency>]\n" + GRANT_SYNTAX)
         except (ValueError, PermissionError) as err:
             dispatch(Append(entry=TranscriptEntry(kind="error", text=str(err))))
             return True

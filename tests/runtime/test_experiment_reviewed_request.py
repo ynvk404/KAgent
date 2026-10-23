@@ -197,7 +197,7 @@ def test_legacy_reviewed_launch_uses_verified_copy_and_unchanged_flags(layout, r
         flags = runtime.parse_flags(profile.sys.argv[1:])
         assert Path(flags.prompt_file).read_bytes() == source.read_bytes() == ENGLISH
         assert flags.headless and flags.non_interactive and flags.execute_prompt and flags.yolo
-        assert not flags.browser and not flags.burp and not flags.resume_id
+        assert not getattr(flags, "browser", False) and not flags.burp and not flags.resume_id
         assert flags.max_steps == 60
         assert flags.http_lab_grants == ["http://127.0.0.1:8081,autonomous,1200,500,3,3,2,131072,65536"]
         called.append(True)

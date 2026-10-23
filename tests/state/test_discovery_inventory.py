@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from src.workflow.discovery.inventory import EndpointRecord, SourceRecord, ProvenanceRecord, observation_handoff, scanner_handoff
+from src.workflow.discovery.inventory import EndpointRecord, SourceRecord, ProvenanceRecord, observation_handoff
 from src.workflow.state import WorkflowObjective, WorkflowState, AttackSurfaceInput
 
 ORIGIN = 'http://target.test'
@@ -121,41 +121,14 @@ def test_capture_admission_preserves_locator_without_raw_or_request_context():
     assert s.to_dict() == before
 
 
-def test_ffuf_exact_job_and_record_ids_and_nmap_no_http_inference(tmp_path):
-    from tests.state.test_scanner_state import job, state as scanner_state
-    s = scanner_state()
-    scan = job(tmp_path)
-    s.add_scanner_job(scan)
-    rows = scan.dataset(tmp_path)
-    src = scanner_handoff(s, scan, rows)
-    assert src is not None and src.scanner_job_id == scan.job_id
-    assert {p.locator for p in s.discovery_provenance.values()} == set(scan.sample_ids)
-    assert not scan.dispositions and not s.attack_surface_inputs and not s.candidates
-    before = s.to_dict()
-    with pytest.raises(ValueError): scanner_handoff(s, replace(scan, objective_id='other'), rows)
-    assert s.to_dict() == before
-    with pytest.raises(ValueError): scanner_handoff(s, scan, b'corrupted')
-    scan.scanner = 'nmap'
-    scanner_handoff(s, scan, rows)
-    assert len(s.endpoints) == 3
-
-
-@pytest.mark.parametrize('attack', ['row', 'operation', 'dataset'])
-def test_scanner_provenance_rejects_cross_record_binding(tmp_path, attack):
-    from tests.state.test_scanner_state import job, state as scanner_state
-    s = scanner_state()
-    scan = job(tmp_path)
-    s.add_scanner_job(scan)
-    data = scan.dataset(tmp_path)
-    src = SourceRecord('objective', scan.target_origin, 'ffuf', scan.job_id,
-                       scan.artifacts['dataset_sha256'], scanner_job_id=scan.job_id)
-    ep = EndpointRecord('objective', scan.target_origin, '/path0', 'GET')
-    record_id = scan.sample_ids[1 if attack == 'operation' else 0]
-    if attack == 'row': record_id = 'sr_' + 'f' * 24
-    before = s.to_dict()
-    with pytest.raises(ValueError):
-        s.admit_discovery(src, (ep,), (ProvenanceRecord(src.id, ep.id, locator=record_id),),
-                          scanner_dataset=b'wrong' if attack == 'dataset' else data)
+@pytest.mark.parametrize('kind', ['ffuf', 'nmap'])
+def test_retired_scanner_sources_cannot_be_admitted(kind):
+    s = state()
+    src = SourceRecord('objective', ORIGIN, kind, 'scan_' + 'a' * 32, 'b' * 64,
+                       scanner_job_id='scan_' + 'a' * 32)
+    before = deepcopy(s.to_dict())
+    with pytest.raises(ValueError, match='unavailable: external scanner source admission'):
+        s.admit_discovery(src)
     assert s.to_dict() == before
 
 

@@ -11,7 +11,7 @@ import pytest
 
 from src.permission.permission import AlwaysAllow
 from src.tools.execution.shell import BashTool, ShellTool, run_with_capture
-from tests.security.test_offline_worker import worker_runtime
+from tests.helpers.direct_runtime import direct_runtime
 
 pytestmark = pytest.mark.skipif(os.name != 'posix', reason='POSIX process signal contract')
 
@@ -38,26 +38,26 @@ async def test_direct_signal_and_positive_exits(tool_type, command, code, observ
     ('exit 0', 0), ('exit 1', 1), ('exit 7', 7),
     ('exit 143', 143), ('exit 241', 241), ('exit 255', 255),
 ])
-async def test_bound_signal_and_positive_exits_preserve_relay_uncertainty(worker_runtime, tool_type, command, code):
-    registry, prompter, policy, operator, *_ = worker_runtime
+async def test_bound_signal_and_positive_exits_preserve_direct_signal(direct_runtime, tool_type, command, code):
+    registry, prompter, policy, operator, *_ = direct_runtime
     tool = tool_type()
     if registry.get(tool.name()) is None:
         registry.register(tool)
     output = await registry.execute(tool.name(), {'command': command}, None, prompter)
     meta = output.runtime_metadata
     assert meta is not None and meta.process == 'exit' and meta.exit_code == code
-    # The controller sees the relay's positive exit, not its child's -signal.
-    assert meta.termination_signal is None
+    assert meta.termination_signal == (signal.SIGTERM if command == 'kill -TERM $$' else
+                                       signal.SIGKILL if command == 'kill -KILL $$' else None)
     assert output.startswith(f'exit: {code}\nstdout:\n')
     assert output.status == ('success' if code == 0 else 'error')
-    assert meta.http is not None and meta.http.requests == 0
+    assert meta.http is None
     assert policy.active == 0 and not policy._active_receipts and operator.calls == 0
 
 
 @pytest.mark.parametrize('bound', [False, True])
 @pytest.mark.parametrize('ending', ['timeout', 'abort', 'cancel'])
-async def test_controller_timeout_and_cancellation_are_not_signal_exit(worker_runtime, bound, ending, monkeypatch):
-    registry, prompter, policy, _, root, _ = worker_runtime
+async def test_controller_timeout_and_cancellation_are_not_signal_exit(direct_runtime, bound, ending, monkeypatch):
+    registry, prompter, policy, _, root, _ = direct_runtime
     real_spawn = asyncio.create_subprocess_exec
     processes = []
     def observe_process(proc):

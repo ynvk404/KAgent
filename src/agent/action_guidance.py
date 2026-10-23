@@ -55,7 +55,7 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
         else:
             lines.append("Recommended: analyze inputs; record disposition or record_candidate only with evidenced controllability and compatible input bindings.")
         lines.append("Reuse visible sources/input IDs; record_input may include manual source_attribution. Use list pages/cursors or get_input/get_source only for missing context. Selected sources keep obligations/limitations; unselected sources are not a backlog. Scanner completion is not discovery completion.")
-        lines.append("Check permissions_status: ready scanner, native or no scanner depends on gaps. complete_skill requires ready state and canonical artifacts; repair blockers or state bounded stops.")
+        lines.append("Check permissions_status; use native discovery only for actual gaps. complete_skill requires ready state and canonical artifacts; repair blockers or state bounded stops.")
     elif context.objective_mode == "whole_target" and context.workflow_status in {"completed", "blocked"}:
         lines.append("Recommended: list current status and blockers; report the bounded outcome or repair the stated dependency. Readiness grants no finding eligibility.")
     elif context.candidates:

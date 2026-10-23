@@ -121,7 +121,7 @@ class ContentDiscoveryTool(Tool):
                 "mode": {
                     "type": "string",
                     "enum": ["auto", "native"],
-                    "description": "auto and native both use built-in HTTP; external ffuf requires a typed Shell scanner job.",
+                    "description": "auto and native both use built-in HTTP.",
                 },
                 "max_requests": {
                     "type": "integer",
@@ -455,14 +455,14 @@ class ContentDiscoveryTool(Tool):
 
     @staticmethod
     def _select_backend(mode: str, max_requests: int | None = None) -> str:
-        # Adapter hook used by the shared execution policy. Scanners use typed Shell.
+        # Adapter hook used by the shared execution policy. Native discovery has no external executor.
         return "native"
 
     @staticmethod
     def _backend_reason(mode: str) -> str:
         if mode == "native":
             return "native backend explicitly selected"
-        return "native HTTP discovery; external ffuf uses typed Shell scanner jobs"
+        return "native HTTP discovery"
 
     @staticmethod
     def _bounded_int(

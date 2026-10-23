@@ -68,26 +68,3 @@ async def test_shell_direct_cancellation_terminates_process(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 3)
     assert processes[0].returncode is not None
-
-
-@pytest.mark.asyncio
-async def test_plugin_direct_cancellation_terminates_process(monkeypatch):
-    created = asyncio.Event()
-    processes = []
-    original = asyncio.create_subprocess_exec
-
-    async def create(*args, **kwargs):
-        proc = await original(*args, **kwargs)
-        processes.append(proc)
-        created.set()
-        return proc
-
-    monkeypatch.setattr("src.tools.execution.plugin.asyncio.create_subprocess_exec", create)
-    task = asyncio.create_task(run_plugin(
-        sys.executable, ["-c", "import time; time.sleep(30)"], {}, FakeSignal(),
-    ))
-    await asyncio.wait_for(created.wait(), 2)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(task, 3)
-    assert processes[0].returncode is not None

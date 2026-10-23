@@ -61,11 +61,8 @@ class ConfirmFindingTool:
         self.workflow = workflow
         self._export_summary = export_summary
 
-    async def write_summary(self, candidate_id: str) -> str | None:
-        """Export only a persisted current Finding; retries regenerate the derivative."""
-        if not self._export_summary:
-            return None
-        from src.findings.presentation import SummaryContext
+    def persisted_context(self, candidate_id: str):
+        """Bind one existing report to its unchanged confirmed assessment."""
         state = self.workflow
         if state is None or not state.finding_is_persisted(candidate_id):
             raise ValueError("persisted finding required for summary export")
@@ -107,6 +104,14 @@ class ConfirmFindingTool:
                 if not re.fullmatch(template, urlparse(finding.url).path):
                     raise ValueError("finding summary endpoint identity changed")
 
+        return candidate, latest, artifacts, guard
+
+    async def write_summary(self, candidate_id: str) -> str | None:
+        """Export only a persisted current Finding; retries regenerate the derivative."""
+        if not self._export_summary:
+            return None
+        from src.findings.presentation import SummaryContext
+        candidate, latest, artifacts, guard = self.persisted_context(candidate_id)
         return await self.store.export_summary(
             candidate_id, SummaryContext.from_validation(candidate, latest), artifacts, guard=guard,
         )
@@ -452,6 +457,26 @@ class ConfirmFindingTool:
         # malformed/missed tool call cannot make whole-target completion lie.
         self.workflow.mark_finding_persisted(candidate_id)
 
+        enrichment_notice = ''
+        if not finding.cwe:
+            from src.findings.cwe_review import enrich_missing
+            try:
+                finding, enrichment_notice = await enrich_missing(self, candidate_id, policy)
+            except Exception:
+                # Finding persistence is already committed. Enrichment failure
+                # never revokes evidence, creates another report or retests it.
+                log.warning('automatic CWE enrichment unavailable after Finding persistence')
+                enrichment_notice = 'CWE enrichment review/persistence unavailable; inspect the saved report or use /cwe.'
+            if not await verify_evidence_reads(
+                evidence_artifacts, root, prompter, signal, approved_paths=evidence_read_approvals,
+            ):
+                raise ValueError('candidate evidence artifact changed during CWE enrichment')
+        if review_snapshot(self.workflow, candidate_id) != result_snapshot:
+            raise ValueError('candidate validation result changed during CWE enrichment')
+        check_generic_snapshot()
+        if not accepted_result(self.workflow, candidate, latest, policy):
+            raise ValueError('assessment evidence changed during CWE enrichment')
+
         summary_notice = ""
         try:
             summary_path = await self.write_summary(candidate_id)
@@ -478,8 +503,9 @@ class ConfirmFindingTool:
 
         return (f'Finding "{finding.title}" written to {path}\n'
                 f'Classification: {finding.vulnerabilityType or "unknown"} · '
-                f'CWE: {", ".join(finding.cwe or []) or "none"} · '
-                f'OWASP: {", ".join(finding.owasp or []) or "none"}' + summary_notice)
+                f'CWE: {", ".join(finding.effective_cwe) or "none"} · '
+                f'OWASP: {", ".join(finding.owasp or []) or "none"}' + summary_notice
+                + ('\n' + enrichment_notice if enrichment_notice else ''))
 
 def is_severity(value: str) -> TypeGuard[Severity]:
     return value in SEVERITIES

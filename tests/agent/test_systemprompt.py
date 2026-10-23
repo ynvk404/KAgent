@@ -462,11 +462,11 @@ class TestBuildSystemPrompt:
         assert "grep -P" in p
         assert "grep -E" in p
 
-    def test_single_tooling_policy_keeps_native_discovery_and_separate_typed_scanners(self):
+    def test_single_tooling_policy_keeps_native_discovery_without_external_scanners(self):
         p = build_system_prompt(BuildOptions(skills=Registry(), thinking_enabled=False, target=None))
         assert "`content_discovery` uses native HTTP" in p
         assert "`service_discovery` uses native TCP" in p
-        assert "Typed Shell Nmap/ffuf use the separate reviewed trusted-host adapter when ready" in p
+        assert "External scanner adapters and integrated Browser MCP are unavailable" in p
         assert "explicit scope and current phase prerequisites" in p
         assert "Tooling profile:" not in p
 

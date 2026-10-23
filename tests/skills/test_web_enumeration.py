@@ -327,7 +327,7 @@ def test_web_enumeration_focused_discovery_is_optional_and_bounded():
         "Call `content_discovery` with `mode=\"auto\"` when a bounded discovery pass is justified.",
         "checks two independent random nonexistent paths and compares modest normalized response fingerprints",
         "`content_discovery` uses native HTTP.",
-        "External ffuf uses only the typed Shell scanner path.",
+        "External scanner integration is unavailable; do not substitute shell scan loops.",
         "If coverage is already sufficient, record a `skipped` or `not_applicable` reason",
         "If enumeration begins to resemble testing for a particular "
         "vulnerability class rather than discovering paths or "

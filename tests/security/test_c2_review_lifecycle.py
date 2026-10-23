@@ -25,8 +25,6 @@ from src.tools.mcp.integration import MCPTool, MCPSession
 from src.tools.http.http_tool import HTTPTool
 from src.tools.http.private_host import gate_private_request
 from src.ui.bridges.perm_bridge import BridgedPrompter
-from tests.security.test_browser_local import rig
-from tests.security.test_browser_yolo import call
 
 ORIGIN = 'http://127.0.0.1:3000'
 ARGS = {'url': '/fixture', 'phase': 'recon'}
@@ -277,24 +275,6 @@ async def test_closed_parent_orphan_cannot_create_http_grant(native, decision):
     assert len(native.sent) == 1 and not rights.grants
 
 
-@pytest.mark.parametrize('decision', [Decision.ALLOW_SESSION, Decision.GRANT_LAB])
-async def test_closed_parent_orphan_cannot_create_browser_grant(rig, decision):
-    shown = []
-    bridge = BridgedPrompter(shown.append)
-    prompter = YoloPrompter(bridge, True)
-    prompter.bind_execution_policy(rig.policy)
-    with review_turn() as owner:
-        child = asyncio.create_task(call(rig, prompter))
-        stale = await modal(shown)
-        if decision == Decision.GRANT_LAB:
-            stale.resolve(decision)
-            stale = await modal(shown, 'browser_lab_grant')
-    assert owner.closed and child.cancelling() == 0
-    stale.resolve(Decision.ALLOW_ONCE if decision == Decision.GRANT_LAB else decision)
-    with pytest.raises(UserControlledRefusal):
-        await child
-    assert rig.binding.grant is None and not rig.calls and not bridge._session_allowed
-    assert not rig.policy._receipts and not rig.policy._pending and rig.policy.active == 0
 
 
 @pytest.mark.parametrize('delay', [59, 60, 61, 158])
@@ -387,57 +367,6 @@ async def test_closed_owner_cannot_dispatch_shell_without_policy(tmp_path, monke
     run_capture.assert_not_called()
 
 
-@pytest.mark.parametrize('kind', ['shell', 'plugin', 'mcp'])
-@pytest.mark.parametrize('invalidate', [False, True])
-async def test_process_and_mcp_recheck_after_initialization_await(tmp_path, monkeypatch, kind, invalidate):
-    now = [0.0]
-    policy = ExecutionPolicy(EngagementState(), tmp_path, clock=lambda: now[0])
-    dispatched = AsyncMock(return_value='offline output')
-    rpc = AsyncMock(return_value={'isError': False, 'content': [{'type': 'text', 'text': 'offline'}]})
-    session = SimpleNamespace(server_name='fixture', call_tool=rpc, close=AsyncMock())
-    tool = (ShellTool() if kind == 'shell' else CommandPluginTool(PluginConfig('fixture_plugin', 'fixture'))
-            if kind == 'plugin' else MCPTool(cast(Any, session), 'fixture_mcp', 'operation', 'fixture', {}))
-    args = {'command': 'printf fixture'} if kind == 'shell' else {'fixture': 'unchanged'}
-
-    def change():
-        now[0] += 61
-        if invalidate:
-            policy.revoke(tool.name())
-
-    class Worker:
-        def summary(self): return 'offline fake worker'
-        async def prepare(self, command, argv, **kwargs):
-            change()
-            return command, argv
-    policy.worker = Worker()
-    if kind == 'mcp':
-        tool = cast(MCPTool, tool)
-        tool._server = MCPServerConfig('fixture', 'fixture')
-        tool._execution_policy = policy
-        async def open_session(*args, **kwargs):
-            change()
-            return session
-        monkeypatch.setattr(MCPSession, 'open', open_session)
-    monkeypatch.setattr('src.tools.execution.shell.run_with_capture', dispatched)
-    monkeypatch.setattr('src.tools.execution.plugin.run_plugin', dispatched)
-    class Operator:
-        async def ask(self, request, signal=None):
-            now[0] += 61
-            assert request.is_current()
-            return Decision.ALLOW_ONCE
-    prompter = YoloPrompter(Operator())
-    prompter.bind_execution_policy(policy)
-    registry = Registry()
-    registry.register(tool)
-    if invalidate:
-        with pytest.raises(ExecutionBlocked):
-            await registry.execute(tool.name(), args, None, prompter)
-        dispatched.assert_not_called()
-        rpc.assert_not_called()
-    else:
-        await registry.execute(tool.name(), args, None, prompter)
-        assert rpc.await_count == 1 if kind == 'mcp' else dispatched.await_count == 1
-    assert policy.active == 0 and not policy._receipts and not policy._active_receipts
 
 
 def test_review_cleanup_failure_still_drains_other_owners_and_resets_context():

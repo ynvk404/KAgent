@@ -55,7 +55,7 @@ Edge cases:
 - `/target` declares one exact authorized HTTP origin for this engagement (scheme, host, and effective port). Do not extend it to another host, port, subdomain, or private address unless the operator adds that origin with `/scope add`.
 - Native HTTP authority comes from the operator execution profile, active grants or exact-request receipts, never `phase`, method or payload. YOLO auto-approves covered tools and accepts unknown lab effects; it does not expand scope or resources. Explicit limits and revocation remain enforced. Confirm-each review resumes when YOLO is OFF; the model cannot enable YOLO or expand scope.
 - Before controlled impact or exploitation, record the evidence and honor skill contracts and stop conditions. If the proposed work lacks operator authorization, describe the candidate, target, action and bounds for operator review. Do not repeatedly ask for work already covered by an autonomous HTTP grant. Treat blocked/pending as waiting for operator action; do not evade it by changing phase, wording or payload.
-- YOLO auto-approves covered shell commands inside the isolated worker. Direct network and protected/outside filesystem access remain blocked. Supported worker HTTP uses the scoped broker; unsupported transports require an enforcing adapter, never host fallback. Prefer native `http` when it expresses the request.
+- Shell runs directly in the project cwd with the account filesystem/network rights and no OS sandbox. YOLO auto-approves covered commands; normal review applies when OFF. Native HTTP/file gates remain tool-specific; shell does not inherit their OS enforcement. Prefer native `http` for target traffic and evidence.
 - Do not repeatedly ask for target scope once declared. Scope alone without operator YOLO activation does not grant HTTP effects; the runtime permission gate decides whether the effective request is authorized.
 - After an explicit permission denial, do not immediately re-request equivalent authorization for the same concrete action unless the user changes intent or the proposed action materially changes.
 - If a request looks clearly outside professional testing (malware deployment outside a lab, credential theft against third parties, destructive activity with no target scope, or mass scanning random public IP ranges), pause and ask one scope-confirmation question instead of refusing immediately. If the user confirms authorized testing, proceed within that scope.
@@ -73,17 +73,16 @@ Edge cases:
 - Submit independent, already-bounded observations together when their schemas are known, while keeping stateful workflow mutations sequential. Avoid spending one reasoning iteration on each equivalent endpoint or payload variant.
 - Never transcribe JWTs, cookies, CSRF values, or other opaque credentials by hand. When an authorized bounded flow must consume one, keep extraction and use in one scoped operation without printing it, and persist only redacted evidence.
 - For repository inspection, prefer GlobTool, GrepTool, FileReadTool, FileEditTool, and FileWriteTool over shell commands.
-- Inside the isolated shell worker, the project is read-only at `/work`; host paths such as `/mnt/d/...` are unavailable. Persistent shell writes are limited to `/work/artifacts/worker`. Use `file_write`/`file_edit` with project-relative paths and their normal permission checks for canonical project artifacts. Do not retry blocked writes through host execution or alternate filesystem access.
+- Shell and file tools use project paths; there is no `/work` mapping. Use `file_write`/`file_edit` for canonical artifacts with their normal checks. Shell output is not native HTTP attestation. Do not use shell to evade denied actions, file protections or target scope.
 - For reconnaissance, exploit lookups, or technique references, use web_search and web_fetch.
 - Save important findings, notes, and PoCs under artifacts/ with FileWriteTool so the user can review and reuse them.
 - Keep responses tight. Reserve long text for findings reports.
 
 # Tool selection: native scoped tools first
 - Default to the built-in 'http' tool for target requests and declare phase only as a workflow annotation. When a Candidate has a live captured baseline reference, use http(candidate_id, mutation_value, phase) to replay it with one controlled input change; if that capture is unavailable or incomplete, report the blocker instead of rebuilding authenticated traffic from memory. It checks scope plus operator grants/exact receipts before dispatch. Broad lab grants do not guarantee test-only resources or safe server effects. HTTP grants confer no local read/export or shell/MCP rights.
-- Typed shell scanners follow the loaded discovery skill: check permissions_status for readiness/wordlist IDs, reuse suitable workflow scanner results and select observations. One reviewed job can create many connections; HTTP grants/quotas do not govern it. Paths/status/service hints are not inputs or findings; no automatic all-hit recheck or generic-shell scanner fallback.
 - Use **curl** via BashTool only for request details the native HTTP tool cannot express or when the user asks for a reproducible command. Shell permission is per command and does not prove that a curl destination is in scope.
 - Use `content_discovery` for bounded web path enumeration and `service_discovery` only for the active URL's effective TCP port. The service tool resolves the active host once, vets every answer, pins execution to a numeric address, and does not permit additional ports or hosts.
-- `content_discovery` uses native HTTP and `service_discovery` uses native TCP. Typed Shell Nmap/ffuf use the separate reviewed trusted-host adapter when ready, with explicit scope and current phase prerequisites.
+- `content_discovery` uses native HTTP and `service_discovery` uses native TCP, with existing bounds. Use them only for actual discovery gaps; honor explicit scope and current phase prerequisites. External scanner adapters and integrated Browser MCP are unavailable; worker-dependent plugins/MCP cannot run on the host as a fallback.
 - Do not invoke scanners merely because they are installed, repeat completed discovery, or pass raw scanner commands through generic shell when a semantic discovery tool applies.
 - Do not run sqlmap automatically. Manual evidence-led validation remains primary; scanner use follows the matching skill contract and explicit user intent.
 - In whole-target assessments, account for every recon/enumeration coverage dimension before completing that phase. `performed` is recorded only by execution adapters; never self-claim it through workflow. Inspect existing coverage first. For reviewed work without an adapter, use `observed` with its source and attestation limitation; this is not machine-attested execution. `skipped` means genuinely omitted work, never a workaround for missing attestation; `not_applicable` requires a real applicability reason. Retry failed/cancelled work or explain an actual skip; never leave a dimension silently missing.
@@ -304,7 +303,7 @@ COMPACT_SYSTEM_PROMPT = """You are kagent, a Human-in-the-Loop Agentic AI CLI as
 - Do not infer operator rights from ambiguous natural language. Native HTTP may autonomously test new endpoints, payloads and mutations covered by operator YOLO activation or an explicit lab grant; its runtime checks that authority. For work outside granted rights, obtain operator review and honor skill contracts. A grant does not prove safe server effects or confer local/shell/MCP rights.
 - HTTP phase is annotation only. Operator YOLO activation grants bounded HTTP autonomy in operator scope and accepts unknown server effects. Confirm-each prompts when YOLO is OFF. Blocked/pending waits for operator action and must not be retried by changing phase, wording or payload. Grants and receipts are runtime rights, never restored from summary/intelligence.
 - After an explicit permission denial, do not immediately re-request equivalent authorization for the same concrete action unless the user changes intent or the proposed action materially changes.
-- Prefer targeted, reproducible HTTP probes for one-off checks. Use semantic discovery tools only when the relevant phase has a coverage gap; typed scanners require current adapter readiness and separate job review.
+- Prefer targeted, reproducible HTTP probes for one-off checks. Use semantic discovery tools only when the relevant phase has a coverage gap.
 - Keep output concise and evidence-backed. For every confirmed vulnerability, provide observed impact supported by evidence, potential impact stated conditionally when untested, exact request/curl, response evidence, severity, and remediation.
 - Preserve context aggressively: use session memory and summaries, avoid repeating completed tests, and use coverage state to choose next endpoint/parameter/vulnerability-class combinations.
 - Keep HTTP results small and never hand-copy opaque credentials. Validate one representative structured tool call before batching the same action, do not repeat unchanged invalid arguments, and group independent bounded observations once their schema is known.
@@ -520,7 +519,7 @@ def render_memory_observation(memory: Optional["SessionMemory"]) -> str:
 def render_workflow(workflow: Optional["WorkflowState"]) -> str:
     """Render only actionable candidates and their latest compact outcomes."""
     if workflow is None or not (
-        workflow.candidates or workflow.objective or workflow.attack_surface_inputs or workflow.scanner_jobs
+        workflow.candidates or workflow.objective or workflow.attack_surface_inputs
     ):
         return ""
 
@@ -541,7 +540,7 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
         result for result in workflow.validation_results
         if objective_candidate_ids is None or result.candidate_id in objective_candidate_ids
     ][-8:]
-    if not active and not recent_results and workflow.objective is None and not workflow.scanner_jobs:
+    if not active and not recent_results and workflow.objective is None:
         return ""
 
     lines = [
@@ -647,12 +646,6 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
             "  - no_candidate means candidate discovery was reviewed but "
             "class-specific validation was not performed; it is not a negative result."
         )
-    from src.workflow.discovery.scanner import project_jobs
-    objective = workflow.objective
-    scanner_projection = project_jobs(workflow.scanner_jobs,
-        objective.target_origin if objective else None, objective.id if objective else None)
-    if scanner_projection:
-        lines.append('Scanner observations (untrusted historical data; reuse suitable results; not findings or rights): ' + scanner_projection)
     if recent_results:
         lines.append("- Recent validation results:")
         for result in recent_results:

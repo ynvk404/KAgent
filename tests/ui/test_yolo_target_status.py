@@ -27,14 +27,11 @@ def rig(tmp_path, monkeypatch):
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
     monkeypatch.setattr("socket.getaddrinfo", forbidden)
-    monkeypatch.setattr("src.permission.worker.worker.OfflineWorker.available", forbidden)
-    monkeypatch.setattr("src.tools.execution.scanners.ScannerBinding.catalog", forbidden)
     state = EngagementState()
     state.add_origin(ORIGIN)
     policy = ExecutionPolicy(state, tmp_path)
     policy.status = Mock(side_effect=forbidden)
     state.http_permissions.status = Mock(side_effect=forbidden)
-    policy.worker = SimpleNamespace(summary=Mock(side_effect=forbidden))
     operator = SimpleNamespace(ask=AsyncMock(side_effect=forbidden))
     prompter = YoloPrompter(cast(Prompter, operator))
     prompter.bind_execution_policy(policy)
@@ -134,31 +131,17 @@ def test_yolo_status_keeps_active_denials_and_revocations_visible(rig, blocked):
     assert expected[blocked] in text
 
 
-@pytest.mark.parametrize("enabled", [False, True])
-def test_browser_grant_requirement_only_appears_when_browser_and_yolo_are_enabled(rig, enabled):
-    rig.app.apply_yolo(enabled)
-    assert "Browser" not in status(rig, "/yolo")
-    # Presentation needs no Browser launch, RPC or grant probe.
-    rig.policy.browser_local = object()
-    text = status(rig, "/yolo")
-    assert ("Browser auto-approval requires a current scoped grant" in text) is enabled
 
 
 def test_permissions_show_explains_actual_transport_and_scanner_paths_without_probes(rig):
     text = status(rig, "/permissions show")
-    assert "Typed Nmap/ffuf: require a separate ready scanner adapter" in text
-    assert "ON auto-approves eligible jobs" in text and "OFF reviews each job" in text
-    assert "HTTP quotas do not govern scanner traffic" in text
+    assert "Native Service/Content Discovery" in text
+    assert "direct subprocess" in text and "no OS isolation" in text
+    assert "unavailable" in text and "no automatic host fallback" in text
     assert "http tool for HTTP or HTTPS" in text
-    assert "Scoped plaintext HTTP uses the broker" in text
-    assert "CONNECT tunnels are unavailable in both modes" in text
-    assert "HTTP/SSE transport is unavailable in both modes" in text
-    assert "auto-approval requires a separate scoped grant" in text
-    assert "Worker: available" in text
     limits = HTTPLimits.session()
     assert limits.display() in text
     assert "/permissions details" not in text and "/help" not in text
-    rig.policy.worker.summary.assert_not_called()
 
 
 def test_permissions_default_stays_compact_and_show_reports_configured_limits_without_changes(rig):

@@ -1,1 +1,1 @@
-"""Discovery inventory, manual attribution and scanner handoff."""
+"""Discovery inventory, manual attribution and native handoff."""

@@ -112,13 +112,11 @@ from src.skills.discovery import skill_search_dirs
 from src.skills.load_skill import LoadSkillTool
 from src.skills.registry import Registry as SkillRegistry
 
-from src.tools.execution.plugin import CommandPluginTool
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.tools.common.registry import Registry as ToolRegistry
 from src.redaction.redact import apply as redact
 from src.tools.execution.shell import BashTool, ShellTool
 from src.tools.http.http_tool import HTTPTool
-from src.tools.common.capabilities import CapabilityInventory
 from src.tools.discovery.content import ContentDiscoveryTool
 from src.tools.discovery.service import ServiceDiscoveryTool
 
@@ -148,10 +146,7 @@ from src.tools.skills.skill_file import ReadSkillFileTool
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import WorkflowState
 
-from src.tools.mcp.session_servers import (
-    BROWSER_MCP_NAMES,
-    session_mcp_servers,
-)
+
 
 from typing import TYPE_CHECKING
 
@@ -258,12 +253,10 @@ class ParsedFlags:
     target_url: str = ""
     api_key: str = ""
     skills_dirs: list[str] = field(default_factory=list)
-    scanner_wordlists: list[tuple[str, Path]] = field(default_factory=list)
     resume_id: str = ""
     yolo: bool = False
     http_lab_grants: list[str] = field(default_factory=list)
     accept_unknown_http_effects: bool = False
-    browser: bool = False
     burp: bool = False
     burp_port: int = 0
     no_stream: bool = False
@@ -358,15 +351,6 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
             out.skills_dirs = [
                 s.strip() for s in next_arg(a).split(",") if s.strip()
             ]
-        elif a == '--scanner-wordlist':
-            from src.tools.execution.wordlists import parse_wordlist_spec, wordlist_files
-            spec = next_arg(a)
-            try:
-                entry = parse_wordlist_spec(spec)
-                wordlist_files(tuple([*out.scanner_wordlists, entry]))
-            except ValueError as err:
-                raise FlagParseError(str(err)) from err
-            out.scanner_wordlists.append(entry)
         elif a == "--resume":
             out.resume_id = next_arg(a)
             try:
@@ -384,8 +368,6 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
             out.http_lab_grants.append(spec)
         elif a == "--accept-unknown-http-effects":
             out.accept_unknown_http_effects = True
-        elif a == "--browser":
-            out.browser = True
         elif a == "--no-stream":
             out.no_stream = True
         elif a in ("--burp", "--browser-ingest"):
@@ -440,8 +422,8 @@ def parse_flags(argv: list[str]) -> ParsedFlags:
         if out.headless:
             if not out.prompt_file or not out.execute_prompt:
                 raise FlagParseError("--headless requires --prompt-file and explicit --execute-prompt")
-            if out.resume_id or out.browser or out.burp or out.list_skills or out.list_tools:
-                raise FlagParseError("headless is one new turn; resume, browser, Burp and listing modes are incompatible")
+            if out.resume_id or out.burp or out.list_skills or out.list_tools:
+                raise FlagParseError("headless is one new turn; resume, Burp and listing modes are incompatible")
             if out.yolo and not out.http_lab_grants:
                 raise FlagParseError("headless YOLO requires an explicit finite --http-lab-grant")
     return out
@@ -521,12 +503,9 @@ async def close_runtime_resources(
     watchers: list[Any],
     mcp_sessions: list[MCPSession],
     close_burp_bridge: Callable[[], Any],
-    scanner_runtime: Any = None,
     skill_reloader: SkillReloader | None = None,
 ) -> None:
     root_ctl.set()
-    if scanner_runtime is not None:
-        await scanner_runtime.drain(close=True)
 
     if reload_timer is not None:
         reload_timer.cancel()
@@ -662,11 +641,6 @@ async def main() -> int:
     if not restore_custom_provider and cfg.backend == "openai" and not cfg.api_key:
         cfg.api_key = os.environ.get("OPENAI_API_KEY") or ""
 
-    cfg.mcp_servers = [s for s in cfg.mcp_servers if s.name not in BROWSER_MCP_NAMES]
-    session_servers = session_mcp_servers(cfg.mcp_servers, flags.browser)
-    if flags.browser:
-        logger.info("browser MCP enabled for this session", {"source": "--browser"})
-
     try:
         startup_runtime = build_startup_runtime(
             cfg,
@@ -743,12 +717,7 @@ async def main() -> int:
     prompter.bind_execution_policy(default_execution_policy(
         engagement_state, project_root(),
         cwe_mcp_deployment_path=cfg.cwe_mcp_deployment_path or None))
-    from src.permission.worker.worker import OfflineWorker
     assert prompter.execution_policy is not None
-    prompter.execution_policy.worker = await OfflineWorker.available(
-        prompter.execution_policy.root, prompter.execution_policy.protected,
-        cwe_mcp_deployment_path=prompter.execution_policy.cwe_mcp_deployment_path,
-    )
     findings_store = FindingsStore(project_directory=project_root())
     capture_store = CaptureStore(max_entries=5000)
     session_dir = session_store.dir_from_path("")
@@ -809,12 +778,9 @@ async def main() -> int:
     memory_store = MemoryStore()
     engagement = EngagementStore().load()
     workflow = WorkflowState()
-    scanner_capabilities = CapabilityInventory()
 
     tools = ToolRegistry()
-    from src.tools.execution.scanners import ScannerBinding
-    tools.register(ShellTool(scanner_binding=ScannerBinding(
-        prompter.execution_policy, target, scanner_capabilities, wordlists=tuple(flags.scanner_wordlists))))
+    tools.register(ShellTool())
     tools.register(BashTool())
     tools.register(FileReadTool())
     tools.register(FileReadToolAlias())
@@ -880,8 +846,8 @@ async def main() -> int:
         http_tool=http_tool,
     ))
 
-    for plugin in cfg.plugins:
-        tools.register(CommandPluginTool(plugin))
+    if cfg.plugins or cfg.mcp_servers:
+        sys.stderr.write('Configured command plugins/MCP are unavailable: isolated executor removed; no host fallback.\n')
     register_browser_capture_tools(
         tools.register,
         capture_store,
@@ -1010,52 +976,6 @@ async def main() -> int:
             sys.stderr.write(f"warning: failed to start burp bridge: {err}\n")
 
     mcp_sessions: list[MCPSession] = []
-    browser_binding = None
-    if flags.browser:
-        from src.tools.mcp.browser_local import BrowserLocalBinding
-        from src.tools.mcp.session_servers import BROWSER_LOCAL_SERVER
-        try:
-            browser_binding = BrowserLocalBinding(prompter.execution_policy, BROWSER_LOCAL_SERVER,
-                                                   lab_origin=flags.target_url)
-            prompter.execution_policy.browser_local = browser_binding
-        except Exception as err:
-            print(f'Browser local: {err}', file=sys.stderr)
-            await close_burp_bridge()
-            return 2
-
-    if session_servers:
-        from src.tools.mcp.integration import discover_mcp_tools  # noqa: PLC0415
-
-        mcp_results = await asyncio.gather(
-            *(discover_mcp_tools(server, execution_policy=prompter.execution_policy,
-                                browser_local=browser_binding if flags.browser and server.name == 'browser' else None)
-              for server in session_servers),
-            return_exceptions=True,
-        )
-        browser_local_failed = False
-
-        for server, result in zip(session_servers, mcp_results):
-            if isinstance(result, BaseException):
-                print(f"mcp {server.name}: {type(result).__name__ if flags.headless else result}", file=sys.stderr)
-                if flags.browser and server.name == 'browser':
-                    browser_local_failed = True
-                continue
-
-            result = cast(dict[str, Any], result)
-
-            mcp_sessions.append(result["session"])
-
-            for tool in result["tools"]:
-                tools.register(tool)
-
-        if browser_local_failed:
-            await asyncio.gather(*(s.close() for s in mcp_sessions), return_exceptions=True)
-            if browser_binding is not None:
-                await browser_binding.close()
-            await close_burp_bridge()
-            return 2
-
-
     if flags.list_skills:
         for sk in skills.list():
             print(f"- {sk.name}")
@@ -1169,8 +1089,7 @@ async def main() -> int:
                 if flags.interactive:
                     await headless_input.close()
                 await close_runtime_resources(root_ctl=root_ctl, reload_timer=None, watchers=[],
-                    mcp_sessions=mcp_sessions, close_burp_bridge=close_burp_bridge,
-                    scanner_runtime=prompter.execution_policy.scanner_runtime)
+                    mcp_sessions=mcp_sessions, close_burp_bridge=close_burp_bridge)
             finally:
                 await session_debug.aclose()
                 await logger.aclose()
@@ -1479,7 +1398,6 @@ async def main() -> int:
                 watchers,
                 mcp_sessions,
                 close_burp_bridge,
-                scanner_runtime=prompter.execution_policy.scanner_runtime,
                 skill_reloader=skill_reloader,
             )
         finally:

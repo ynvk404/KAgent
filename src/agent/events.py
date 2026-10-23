@@ -69,24 +69,11 @@ class ToolResultEvent(BaseEvent):
     invocation: Invocation | None = None
     # Controller admission of a real candidate-creation receipt, never tool args.
     accepted_candidate_id: str | None = None
-    scanner_summary: dict[str, Any] | None = None
     runtime_metadata: RuntimeMetadata | None = None
 
     @property
     def durationMs(self) -> float:
         return self.duration_ms
-
-
-@dataclass(slots=True)
-class ToolStartedEvent(BaseEvent):
-    """Controller-issued actual scanner spawn; never constructed from tool text."""
-    type: Literal['tool-started'] = 'tool-started'
-    id: str = ''
-    name: str = 'shell'
-    invocation: Invocation | None = None
-    scanner: str = ''
-    job_id: str = ''
-    started_monotonic: float = 0.0
 
 
 @dataclass(slots=True)
@@ -173,7 +160,6 @@ AgentEvent: TypeAlias = (
     | AssistantDeltaEvent
     | ToolCallEvent
     | ToolResultEvent
-    | ToolStartedEvent
     | ErrorEvent
     | CompactEvent
     | DecisionEvent
@@ -216,7 +202,6 @@ __all__ = [
     "AssistantDeltaEvent",
     "ToolCallEvent",
     "ToolResultEvent",
-    "ToolStartedEvent",
     "ErrorEvent",
     "CompactEvent",
     "DecisionEvent",

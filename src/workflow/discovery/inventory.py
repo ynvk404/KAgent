@@ -224,9 +224,9 @@ def restore_discovery(state, value: dict) -> None:
         for source in sources.values():
             if source.scanner_job_id is not None:
                 job = state.scanner_jobs.get(source.scanner_job_id)
-                if job is not None and (job.objective_id != source.objective_id
-                        or job.target_origin != source.target_origin or job.scanner != source.kind
-                        or job.artifacts.get('dataset_sha256') != source.retained_hash):
+                if job is not None and (job.get('objective_id') != source.objective_id
+                        or job.get('target_origin') != source.target_origin or job.get('scanner') != source.kind
+                        or (job.get('artifacts') or {}).get('dataset_sha256') != source.retained_hash):
                     raise ValueError('persisted scanner/source mismatch')
         counts: dict[str, int] = {}
         for row in provenance.values():
@@ -294,44 +294,6 @@ def native_handoff(state, produced, call_id: str) -> SourceRecord | None:
                      limitations=tuple(dict.fromkeys(limitations)),
                      stop_reason='native handoff limited' if limitations else None)
     return state.admit_discovery(source, tuple(endpoints), tuple(links))
-
-
-def scanner_handoff(state, job, dataset: bytes) -> SourceRecord | None:
-    """Trusted finalized dataset handoff; no triage changes, no inferred origins."""
-    objective = state.objective
-    if objective is None or objective.mode != 'whole_target':
-        return None
-    if (state.scanner_jobs.get(job.job_id) is not job or job.objective_id != objective.id
-            or job.target_origin != objective.target_origin):
-        raise ValueError('scanner handoff requires the exact current objective-owned job')
-    if hashlib.sha256(dataset).hexdigest() != job.artifacts.get('dataset_sha256'):
-        raise ValueError('scanner source integrity mismatch')
-    source = SourceRecord(objective.id, job.target_origin, job.scanner, job.job_id,
-                          job.artifacts['dataset_sha256'], scanner_job_id=job.job_id)
-    endpoints, links, limitations = [], [], []
-    # Split at most the metadata bound, leaving the full dataset in its store.
-    rows = dataset.split(b'\n', MAX_SOURCE_RECORDS)
-    if rows[-1]:
-        limitations.append('scanner metadata limit: 256 rows; raw dataset contains remaining rows')
-    for raw in rows[:MAX_SOURCE_RECORDS]:
-        if not raw:
-            continue
-        row = json.loads(raw)
-        if job.scanner == 'nmap':
-            continue  # service_hint stays exclusively in the scanner dataset.
-        try:
-            endpoint = EndpointRecord(objective.id, job.target_origin, row['url'], 'GET')
-            endpoints.append(endpoint)
-            links.append(ProvenanceRecord(source.id, endpoint.id, locator=row['id']))
-        except (ValueError, KeyError, TypeError):
-            limitations.append('invalid scanner operation excluded')
-    if job.parse.get('partial') or job.execution.get('status') != 'completed':
-        limitations.append('scanner execution/dataset incomplete')
-    from dataclasses import replace
-    source = replace(source, disposition='partial' if limitations else 'processed',
-                     limitations=tuple(dict.fromkeys(limitations)),
-                     stop_reason='scanner handoff limited' if limitations else None)
-    return state.admit_discovery(source, tuple(endpoints), tuple(links), scanner_dataset=dataset)
 
 
 def observation_handoff(state, item) -> SourceRecord | None:

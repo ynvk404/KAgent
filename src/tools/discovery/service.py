@@ -48,7 +48,7 @@ class ServiceDiscoveryTool(Tool):
         return (
             "Check the active target HTTP port on its active hostname or IP. "
             "Uses native TCP connections. "
-            "External Nmap requires a separate typed Shell scanner job. No other ports, CIDR, "
+            "No other ports, CIDR, "
             "host lists, UDP, NSE scripts, OS detection, or "
             "raw scanner flags. A scan validated against the declared active "
             "target is routine reconnaissance and is eligible for YOLO; other "
@@ -73,7 +73,7 @@ class ServiceDiscoveryTool(Tool):
                 "mode": {
                     "type": "string",
                     "enum": ["auto", "socket"],
-                    "description": "auto and socket both use native TCP; external Nmap requires a typed Shell scanner job.",
+                    "description": "auto and socket both use native TCP.",
                 },
                 "timeout_seconds": {
                     "type": "integer",
@@ -432,7 +432,7 @@ class ServiceDiscoveryTool(Tool):
     def _backend_reason(mode: str) -> str:
         if mode == "socket":
             return "socket backend explicitly selected"
-        return "native TCP discovery; external Nmap uses typed Shell scanner jobs"
+        return "native TCP discovery"
 
     @staticmethod
     def _bounded_int(

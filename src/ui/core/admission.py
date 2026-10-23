@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlsplit
 
-from src.agent.events import Invocation, SkillActiveEvent, ToolCallEvent, ToolResultEvent, ToolStartedEvent
+from src.agent.events import Invocation, SkillActiveEvent, ToolCallEvent, ToolResultEvent
 from src.ui.render.sanitize import sanitize_text
 from src.ui.render.shell_outcome import shell_issues
 
@@ -28,14 +28,11 @@ class PendingCall:
     invocation: Invocation | None = None
     retired: bool = False
     resolved: bool = False
-    scanner: str = ''
-    scanner_job: str = ''
-    started_monotonic: float | None = None
     http_redirects: bool = False
 
 
 def invocation_call(calls: tuple[PendingCall, ...],
-                    event: ToolCallEvent | ToolResultEvent | ToolStartedEvent | SkillActiveEvent) -> PendingCall | None:
+                    event: ToolCallEvent | ToolResultEvent | SkillActiveEvent) -> PendingCall | None:
     identifier = event.call_id if isinstance(event, SkillActiveEvent) else event.id
     name = 'load_skill' if isinstance(event, SkillActiveEvent) else event.name
     return next((call for call in calls if identifier and call.id == identifier and call.name == name
@@ -100,19 +97,13 @@ def call_metadata(ev: ToolCallEvent) -> PendingCall:
                                  (f" · input {parameter}" if parameter else ""))
     elif operation:
         activity = sanitize_text(operation.replace("_", " "))
-    scanner = args.get('scanner', '') if ev.name == 'shell' else ''
-    scanner = scanner if isinstance(scanner, str) else ''
-    if scanner in {'nmap', 'ffuf'}:
-        activity = sanitize_text(f"preparing/reviewing {scanner} job · " +
-            (str(args.get('target', '')) + ' ports ' + str(args.get('ports', '')) if scanner == 'nmap'
-             else str(args.get('url', '')) + ' · wordlist ' + str(args.get('wordlist_id', ''))))
     skill = args.get("name") if ev.name == "load_skill" else args.get("skill_name")
     attempt_id = args.get("attempt_id")
     return PendingCall(ev.id, ev.name, operation[:80] if isinstance(operation, str) else "", identity, search,
                        candidate_id[:80] if isinstance(candidate_id, str) else "", activity, recovery_identity,
                        skill=skill if isinstance(skill, str) else "",
                        attempt_id=attempt_id if isinstance(attempt_id, str) else "",
-                       invocation=ev.invocation, scanner=scanner if scanner in {'nmap', 'ffuf'} else '',
+                       invocation=ev.invocation,
                        http_redirects=(ev.name == 'http' and type(args.get('max_redirects')) is int
                                        and 0 < args['max_redirects'] <= 5))
 
@@ -152,7 +143,7 @@ def result_issues(ev: ToolResultEvent, call: PendingCall | None) -> list[str]:
     """Use explicit failures and known receipt warnings, never success guesses."""
     issues: list[str] = []
     shell = ev.name in {"shell", "bash", "BashTool"}
-    if shell and ev.scanner_summary is None:
+    if shell:
         issues.extend(shell_issues(ev.runtime_metadata, status=ev.status, error_kind=ev.error_kind,
                                    reported_error=bool(ev.err), search=bool(call and call.search)))
     elif ev.err:

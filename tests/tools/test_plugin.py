@@ -45,29 +45,3 @@ def test_plugin_permission_cannot_be_disabled_by_legacy_config_flag():
         "noSessionCache": True,
         "riskTier": "high-impact",
     }
-
-
-@pytest.mark.asyncio
-async def test_truncates_large_plugin_output() -> None:
-    tool = CommandPluginTool(
-        PluginConfig(
-            name="big_plugin",
-            # Use the pytest interpreter independently of the shell PATH.
-            command=sys.executable,
-            args=[
-                "-c",
-                "import sys; sys.stdout.write('a' * 300000)",
-            ],
-            description="",
-            requires_permission=False,
-        )
-    )
-
-    out = await tool.run(
-        {},
-        _NeverAborted(),
-        AlwaysAllow(),
-    )
-
-    assert "truncated" in out
-    assert len(out) < 140_000

@@ -13,8 +13,6 @@ from src.engagement.state import EngagementState
 from src.permission.network.grants import EffectiveHTTP, HTTPBlocked, HTTPLimits, WARNING
 from src.permission.permission import Decision, Prompter
 from src.permission.runtime.execution import ExecutionPolicy
-from src.tools.mcp.browser_local import BrowserLocalBinding
-from src.tools.mcp.session_servers import BROWSER_LOCAL_SERVER
 from src.ui.commands.slash_handler import handle_slash
 from src.ui.core.app import KAgent
 from src.ui.render.permissions import permissions_summary
@@ -127,32 +125,6 @@ async def test_declined_review_summary_matches_the_existing_authorize_path(tmp_p
         assert receipt.grant_id == grant.id
 
 
-@pytest.mark.parametrize("state", ["none", "active", "expired", "exhausted", "yolo-off", "revoked"])
-def test_browser_summary_uses_existing_grant_validation(tmp_path, state):
-    app = make_app()
-    rights, policy = bind_permissions(app, tmp_path)
-    now = [100.0]
-    policy.clock = lambda: now[0]
-    policy.set_yolo(True)
-    binding = BrowserLocalBinding(policy, BROWSER_LOCAL_SERVER, lab_origin=ORIGIN)
-    policy.browser_local = binding
-    if state != "none":
-        grant = binding.activate_grant("read", seconds=60, calls=2)
-        if state == "expired":
-            now[0] += 61
-        elif state == "exhausted":
-            grant.remaining = 0
-        elif state == "yolo-off":
-            policy.set_yolo(False)
-        elif state == "revoked":
-            binding.revoke_grant()
-    text = permissions_summary(rights, policy)
-    expected = ("none" if state in {"none", "revoked"} else
-                "active" if state == "active" else "expired/exhausted/stale")
-    assert "Browser grant: " + expected in text
-    if state == "active":
-        assert f"active · read\nOrigin: {ORIGIN}" in text and "2 calls left · 60s left" in text
-    assert "browser_snapshot" not in text  # No duplicated action catalog.
 
 
 def test_limits_result_is_compact_and_details_does_not_expand_the_command_surface(tmp_path):

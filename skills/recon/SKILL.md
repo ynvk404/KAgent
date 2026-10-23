@@ -45,15 +45,11 @@ request detail; shell requests do not enforce target-origin scope.
 Use `service_discovery` only when the active target's service/port coverage is
 unclear and resolving it is relevant. If the active URL already establishes the
 web port and no broader service question remains, record service discovery as
-`not_applicable` with a reason. The semantic tool uses bounded native TCP checks. For a concrete TCP coverage gap,
-the typed `shell(scanner="nmap", target=numeric_ip, ports=explicit_ports)` path
-uses a reviewed trusted-host plan and managed Linux lifecycle. It requires the
-active target's effective port or explicitly declared TCP scope. Consult
-`permissions_status` for tested binary readiness. HTTP first, typed Nmap first
-within the current phase prerequisites, and no scanner are valid choices;
-choose from the current objective and existing observations. Reuse suitable
-workflow scanner jobs before proposing another pass. Do not use generic-shell `nmap`,
-`subfinder`, `httpx`, `ffuf`, or `gobuster` automatically.
+`not_applicable` with a reason. The semantic tool uses bounded native TCP checks.
+Choose HTTP, native service discovery or no extra probe from current observations.
+External scanner integration is unavailable; do not substitute shell scan loops.
+Do not automatically invoke generic-shell `nmap`, `subfinder`, `httpx`, `ffuf`,
+`gobuster`, `amass` or `assetfinder` for reconnaissance.
 The semantic tool is limited to the active URL's effective port. It resolves
 the target once, checks every resulting address against the private-host policy,
 and pins the scan to a vetted numeric address; do not supply another host or
@@ -252,71 +248,6 @@ version probes, or raw Nmap flags. An open port may
 suggest an HTTP(S) origin; do not request it or add it to scope automatically.
 If service discovery is not useful or its coverage is already established,
 record a `not_applicable` or `skipped` reason in the phase coverage record.
-
-Alternatively, typed Nmap supports TCP connect `-sT -n -Pn` with numeric IP and
-explicit ports; it has no NSE, UDP, SYN or version probes. One Registry approval
-authorizes one exact job and can produce multiple connections. Native HTTP
-grants/quotas do not authorize or limit that job. Runtime scope/deny/revoke and
-resource checks remain mandatory. Missing readiness is a limitation, never a
-reason to fall back to a scanner command string. Read bounded retained results
-selectively; service names are port-database hints and do not establish an HTTP
-origin, technology version, parameter or vulnerability. A partial/interrupted
-pass does not prove all requested ports were tested.
-
-### Nmap examples through the Shell tool
-
-Choose from existing service observations and the current scope; do not run
-all examples in order. Check `permissions_status` for binary readiness and
-reuse a suitable completed workflow job first. These examples assume the
-active authorized target is `http://127.0.0.1:3000`; replace that origin's IP
-and port with the actual target. A hostname must be resolved to its vetted
-numeric address; do not guess an address or substitute another host.
-
-**Check the target's effective TCP port:** use this only when its service state
-is still a relevant coverage gap. An HTTP response may already make it redundant:
-
-```json
-{
-  "tool": "shell",
-  "arguments": {
-    "scanner": "nmap",
-    "target": "127.0.0.1",
-    "ports": "3000",
-    "timeout_seconds": 20,
-    "rate": 10
-  }
-}
-```
-
-**Check a declared set of TCP ports:** this second example is valid only if
-the operator has already added `127.0.0.1` ports `3000,8080` to TCP scope, for
-example with `/scope tcp-add 127.0.0.1 3000,8080`. That is an operator action;
-the model cannot grant itself scope, and job approval does not add scope:
-
-```json
-{
-  "tool": "shell",
-  "arguments": {
-    "scanner": "nmap",
-    "target": "127.0.0.1",
-    "ports": "3000,8080",
-    "timeout_seconds": 30,
-    "rate": 10
-  }
-}
-```
-
-`target` is one numeric IP; `ports` is an explicit TCP set/range, not the Nmap
-default port set. The adapter supplies `-sT -n -Pn -p` and bounded XML output;
-`rate` supplies `--max-rate`. It accepts no arbitrary flags, scripts, service
-version detection or UDP probes. A native `service_discovery` call on the
-effective target port remains an alternative when it answers the same question.
-
-Read `execution.status`, `parse.coverage_complete` and the retained port rows.
-An `open` row establishes a TCP observation, while `service_hint` is only a
-port-database label. Establish HTTP behavior separately on an authorized origin.
-Retain timeout/partial/unknown coverage; do not infer per-port states from an
-aggregate or automatically request a newly discovered port as an HTTP origin.
 
 ## 2c. Record target shape and security observations
 

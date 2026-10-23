@@ -139,83 +139,8 @@ def test_bridge_issue_export_uses_existing_redacted_view():
     assert store.list_burp_issues()[0].raw_request_b64 == raw
 
 
-@pytest.mark.parametrize("failure", [None, "timeout", "cancel"])
-async def test_capture_mcp_handshake_and_discovery_cleanup(monkeypatch, failure):
-    owners, closed = [], []
-
-    @asynccontextmanager
-    async def transport(params, **kwargs):
-        assert params.args == ["-m", "src.browser.mcp_server"]
-        owners.append(asyncio.current_task())
-        try:
-            yield object(), object()
-        finally:
-            assert asyncio.current_task() is owners[0]
-            closed.append("transport")
-
-    class Session:
-        def __init__(self, *args):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            assert asyncio.current_task() is owners[0]
-            closed.append("session")
-
-        async def initialize(self):
-            if failure == "cancel":
-                raise asyncio.CancelledError
-            if failure == "timeout":
-                await asyncio.Future()
-
-        async def list_tools(self):
-            return SimpleNamespace(tools=[SimpleNamespace(name="browser_capture_get", description="Fixture capture",
-                inputSchema={"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]})])
-
-    monkeypatch.setattr(mcp_client, "stdio_client", transport)
-    monkeypatch.setattr(mcp_client, "ClientSession", Session)
-    monkeypatch.setattr(mcp_client, "HANDSHAKE_TIMEOUT_S", 0.01)
-    config = MCPServerConfig("capture_fixture", "fixture-python", ["-m", "src.browser.mcp_server"])
-    if failure:
-        with pytest.raises(TimeoutError if failure == "timeout" else asyncio.CancelledError):
-            await mcp_client.discover_mcp_tools(config)
-    else:
-        discovered = await mcp_client.discover_mcp_tools(config)
-        tool = discovered["tools"][0]
-        assert tool.name() == "mcp_capture_fixture_browser_capture_get"
-        assert tool.schema()["required"] == ["id"] and tool.requires_permission()
-        assert tool.permission_hints({"id": "fixture"})["noSessionCache"]
-        await discovered["session"].close()
-        await discovered["session"].close()
-    assert closed == ["session", "transport"]
 
 
-@pytest.mark.parametrize("stop", ["timeout", "event"])
-async def test_capture_mcp_rpc_interruption_drains_call(monkeypatch, stop):
-    from contextlib import AsyncExitStack
-    started, drained, cancellation = asyncio.Event(), asyncio.Event(), asyncio.Event()
-
-    async def call(*args, **kwargs):
-        started.set()
-        try:
-            await asyncio.Future()
-        finally:
-            drained.set()
-
-    monkeypatch.setattr(mcp_client, "MCP_CALL_TIMEOUT_S", 0.05)
-    session = mcp_client.MCPSession("capture_fixture", cast(Any, SimpleNamespace(call_tool=call)), AsyncExitStack())
-    task = asyncio.create_task(session.call_tool("browser_capture_get", {"id": "fixture"}, cancellation))
-    await asyncio.wait_for(started.wait(), 2)
-    if stop == "event":
-        cancellation.set()
-    with pytest.raises(TimeoutError if stop == "timeout" else asyncio.CancelledError):
-        await task
-    assert drained.is_set()
-    await session.close()
-    with pytest.raises(RuntimeError, match="closed"):
-        await session.call_tool("browser_capture_get", {"id": "fixture"})
 
 
 @pytest.mark.parametrize("stop", ["normal", "cancel", "error"])

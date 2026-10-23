@@ -68,6 +68,8 @@ SLASH_ITEMS: tuple[SlashItem, ...] = (
         description="plan-only mode without tools",
     ),
 
+    SlashItem(name="/cwe", args="<candidate_id>",
+              description="review an existing Finding CWE using the verified local catalog"),
     SlashItem(name="/report", args="[filename.pdf]",
               description="export the current assessment snapshot as PDF"),
     SlashItem(name="/turn-details", description="view latest turn diagnostics in this UI session"),

@@ -68,7 +68,7 @@ async def test_content_discovery_uses_native_http_without_worker(lab, monkeypatc
     registry, p, policy, operator, origin, requests = lab
     from tests.tools.test_discovery_tools import make_workflow
     workflow = make_workflow(phase="enumeration", origin=origin)
-    assert policy.worker is None
+    assert not hasattr(policy, "worker")
     launch = AsyncMock(side_effect=AssertionError("content discovery must not spawn"))
     monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
     registry.register(ContentDiscoveryTool(Target(origin), policy.engagement, workflow=workflow))
@@ -79,7 +79,7 @@ async def test_content_discovery_uses_native_http_without_worker(lab, monkeypatc
     assert result.status == "observation" and payload["backend"] == "native"
     assert payload["completed_requests"] == len(requests) == 3
     assert payload["phase_coverage"]["status"] == "performed"
-    assert policy.worker is None and policy.active == 0
+    assert not hasattr(policy, "worker") and policy.active == 0
     assert not policy.engagement.http_permissions._inflight
     assert operator.calls == 0
     launch.assert_not_awaited()

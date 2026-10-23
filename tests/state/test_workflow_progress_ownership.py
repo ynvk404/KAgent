@@ -1,6 +1,5 @@
 from src.agent.agent import WholeTargetStallTracker
 from src.workflow.state import WorkflowObjective, WorkflowState
-from tests.state.test_scanner_state import job, state as scanner_state
 
 
 def test_twenty_reason_variants_and_repeated_status_are_not_progress():
@@ -20,29 +19,6 @@ def test_twenty_reason_variants_and_repeated_status_are_not_progress():
     state.record_phase_coverage('recon', 'service_discovery', 'performed',
         objective_id='scope', target_origin='https://fixture.test')
     assert tracker.record_iteration(new_facts=state.progress_facts() - before, activity_fingerprints=[]) == 'structured_progress'
-
-
-def test_genuine_source_observation_counts_once_per_scope(tmp_path):
-    state = scanner_state()
-    row = job(tmp_path)
-    tracker = WholeTargetStallTracker()
-    assert state.objective is not None
-    tracker.set_scope(state.generation, state.objective.id)
-    before = state.progress_facts()
-    state.add_scanner_job(row, observation_fingerprints=('a' * 64,))
-    assert tracker.record_iteration(new_facts=state.progress_facts() - before, activity_fingerprints=[]) == 'structured_progress'
-    before = state.progress_facts()
-    state.add_scanner_job(row, observation_fingerprints=('a' * 64,))
-    assert tracker.record_iteration(new_facts=state.progress_facts() - before, activity_fingerprints=[]) == 'no_progress'
-    state.add_scanner_job(row, observation_fingerprints=('b' * 64,))
-    assert tracker.record_iteration(new_facts=state.progress_facts() - before, activity_fingerprints=[]) == 'structured_progress'
-    facts = state.progress_facts()
-    tracker.set_scope(state.generation, 'another-objective')
-    assert tracker.record_iteration(new_facts=facts, activity_fingerprints=[]) == 'structured_progress'
-    state.replace_from(WorkflowState.from_dict(state.to_dict()))
-    assert state.objective is not None
-    tracker.set_scope(state.generation, state.objective.id)
-    assert tracker.record_iteration(new_facts=facts, activity_fingerprints=[]) == 'structured_progress'
 
 
 def test_novelty_ledger_saturation_cannot_recredit_forgotten_facts():

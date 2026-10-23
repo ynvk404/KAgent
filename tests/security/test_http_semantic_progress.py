@@ -2,7 +2,7 @@ import httpx
 
 from src.agent.agent import WholeTargetStallTracker
 from tests.helpers.agent_fakes import FakeClient, FakeSignal
-from tests.integration.test_scanner_agent_handoff import agent_runtime
+from tests.helpers.direct_runtime import agent_runtime
 
 
 async def test_real_response_content_counts_but_fresh_ids_and_query_values_do_not(tmp_path, monkeypatch):

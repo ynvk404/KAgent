@@ -12,7 +12,6 @@ import pytest
 from src.engagement.state import EngagementState
 from src.permission.runtime.execution import default_execution_policy, ExecutionBlocked
 from src.permission.permission import Decision, YoloPrompter
-from src.permission.worker.worker import OfflineWorker
 from src.tools.common.registry import Registry
 from src.tools.execution.shell import ShellTool
 from src.tools.execution.plugin import CommandPluginTool
@@ -88,42 +87,8 @@ async def lab(tmp_path):
         await server.wait_closed()
 
 
-async def worker_for(policy):
-    if sys.platform != 'linux' or not shutil.which('bwrap'):
-        pytest.skip('real worker requires installed Linux bubblewrap')
-    worker = await OfflineWorker.available(policy.root, policy.protected)
-    assert worker is not None
-    policy.worker = worker
-    return worker
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('group', ['shell', 'plugin'])
-async def test_real_broker_valid_payload_and_outside_scope_no_dispatch(lab, group):
-    registry, p, policy, operator, origin, requests = lab
-    await worker_for(policy)
-    if group == 'shell':
-        registry.register(ShellTool())
-        args = {'command': f'curl -fsS --max-time 10 "{origin}/new?q=1%3D1"'}
-        result = await registry.execute(group, args, None, p)
-        assert 'TEST_ONLY' in result
-        result = await registry.execute(group, {'command': 'curl -sS --max-time 10 http://outside.invalid:6550/no'}, None, p)
-    else:
-        code = 'import json,sys,urllib.request; d=json.load(sys.stdin); print(urllib.request.urlopen(d["url"], timeout=10).read().decode())'
-        registry.register(CommandPluginTool(PluginConfig(name=group, command='/usr/bin/python3', args=['-c', code])))
-        result = await registry.execute(group, {'url': origin + '/new?q=1%3D1'}, None, p)
-        assert 'TEST_ONLY' in result
-        with pytest.raises(RuntimeError, match='403'):
-            await registry.execute(group, {'url': 'http://outside.invalid:6550/no'}, None, p)
-    assert len(requests) == 1 and operator.calls == 0
-    policy.engagement.http_permissions.deny_session()
-    if group == 'shell':
-        result = await registry.execute(group, args, None, p)
-        assert 'TEST_ONLY' not in result
-    else:
-        with pytest.raises(RuntimeError):
-            await registry.execute(group, {'url': origin + '/new?q=1%3D1'}, None, p)
-    assert len(requests) == 1
 
 
 MCP_SERVER = r'''
@@ -144,25 +109,6 @@ for line in sys.stdin:
 '''
 
 
-@pytest.mark.asyncio
-async def test_real_stdio_mcp_startup_and_scoped_call_yolo_on_off(lab):
-    registry, p, policy, operator, origin, requests = lab
-    await worker_for(policy)
-    discovered = await discover_mcp_tools(MCPServerConfig(name='fixture', command='/usr/bin/python3', args=['-u', '-c', MCP_SERVER]), execution_policy=policy)
-    try:
-        tool = discovered['tools'][0]
-        registry.register(tool)
-        result = await registry.execute(tool.name(), {'url': origin + '/mcp?q=1%3D1'}, None, p)
-        assert 'TEST_ONLY' in result and operator.calls == 0
-        with pytest.raises(RuntimeError, match='blocked fixture'):
-            await registry.execute(tool.name(), {'url': 'http://outside.invalid/'}, None, p)
-        assert len(requests) == 1
-        p.set_yolo(False)
-        with pytest.raises(ExecutionBlocked.__bases__[0]):
-            await registry.execute(tool.name(), {'url': origin + '/off'}, None, p)
-        assert len(requests) == 1 and operator.calls == 1
-    finally:
-        await discovered['session'].close()
 
 
 @pytest.mark.asyncio

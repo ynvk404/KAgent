@@ -1,68 +1,23 @@
-from __future__ import annotations
-
+"""Removed MCP adapters cannot launch local processes, even without a policy."""
+from unittest.mock import AsyncMock
+import asyncio
+import pytest
 from src.config.config import MCPServerConfig
-from src.tools.mcp.session_servers import (
-    BROWSER_LOCAL_SERVER,
-    session_mcp_servers,
-)
+from src.permission.runtime.execution import ExecutionBlocked
+from src.tools.mcp.integration import MCPSession, discover_mcp_tools, MCPTool
 
-other = MCPServerConfig(
-    name="other",
-    command="foo",
-    args=[],
-)
+@pytest.mark.parametrize('server', [MCPServerConfig('browser','node',[]), MCPServerConfig('custom','python',[])])
+async def test_removed_executor_rejects_discovery_and_open_before_spawn(monkeypatch, server):
+    spawn = AsyncMock(side_effect=AssertionError('must not spawn'))
+    monkeypatch.setattr(asyncio,'create_subprocess_exec',spawn)
+    for operation in (MCPSession.open, discover_mcp_tools):
+        with pytest.raises(ExecutionBlocked,match='unavailable'):
+            await operation(server)
+    spawn.assert_not_called()
 
-stale_browser = MCPServerConfig(
-    name="browser",
-    command="npx",
-    args=["old"],
-)
-
-def test_adds_no_browser_server_when_flag_off() -> None:
-    assert session_mcp_servers([], False) == []
-    assert session_mcp_servers(
-        [other],
-        False,
-    ) == [other]
-
-def test_appends_exactly_one_browser_server_when_flag_on() -> None:
-    out = session_mcp_servers([], True)
-
-    assert len(out) == 1
-    assert out[0].name == "browser"
-    assert out[0].command == "/usr/bin/node"
-
-def test_strips_stale_browser_entry_when_flag_off() -> None:
-    out = session_mcp_servers(
-        [other, stale_browser],
-        False,
-    )
-
-    assert out == [other]
-
-def test_replaces_stale_browser_entry_when_flag_on() -> None:
-    out = session_mcp_servers(
-        [other, stale_browser],
-        True,
-    )
-
-    browser = [
-        s
-        for s in out
-        if s.name == "browser"
-    ]
-
-    assert len(browser) == 1
-    assert out[0] == other
-    assert out[-1].args == BROWSER_LOCAL_SERVER.args
-    assert out[-1] is BROWSER_LOCAL_SERVER
-
-def test_does_not_mutate_input() -> None:
-    input_servers = [other]
-
-    session_mcp_servers(
-        input_servers,
-        True,
-    )
-
-    assert input_servers == [other]
+async def test_manually_constructed_mcp_cannot_dispatch_remote_call():
+    session = AsyncMock()
+    tool = MCPTool(session,'legacy','remote','',{})
+    with pytest.raises(ExecutionBlocked,match='unavailable'):
+        await tool.run({},None,None)
+    session.call_tool.assert_not_called()

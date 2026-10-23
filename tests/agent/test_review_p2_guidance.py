@@ -8,7 +8,6 @@ import pytest
 from src.agent.decision_planner import PlannerCandidate, build_whole_target_plan
 from src.workflow.discovery.inventory import SourceRecord
 from src.workflow.evidence.recovery import current_budget, MAX_TERMINAL_REPAIR_TURNS
-from src.workflow.discovery.scanner import ScannerJob
 from src.workflow.state import WorkflowState
 from src.workflow.validation.route import ValidationRoute
 from tests.agent.test_validation_continuation import (
@@ -172,29 +171,6 @@ async def test_selected_limited_source_without_pending_frontier_precedes_every_c
         assert source.id in plan.guidance and disposition in plan.guidance
         assert 'get_source' in plan.guidance and 'start_validation' not in plan.guidance
         assert 'Do not retry' in plan.guidance
-    assert rt.workflow.to_dict() == before and not sent
-
-
-@pytest.mark.parametrize('resolved', [False, True])
-async def test_selected_scanner_obligation_without_pending_source_precedes_validation(offline, resolved):
-    rt, sent = offline
-    cid = await candidate_for(rt)
-    job = ScannerJob('scan_' + 'a' * 32, 'b' * 64, ORIGIN, rt.workflow.objective.id,
-        'ffuf', {'status': 'completed'}, {'partial': False, 'coverage_complete': True},
-        {'unique_records': 1}, {'retrieval': 'unavailable'}, None, None, '',
-        dispositions={'sr_' + 'c' * 24: {'disposition': 'handled' if resolved else 'selected',
-                                      'reason': 'Synthetic retained scanner row.'}})
-    rt.workflow.scanner_jobs[job.job_id] = job
-    before = deepcopy(rt.workflow.to_dict())
-    context = rt.agent._planner_context()
-    assert context.pending_source_count == 0 and context.discovery_obligation_pending is not resolved
-    plan = build_whole_target_plan(rt.skills.list_enabled(), context)
-    assert plan is not None
-    if resolved:
-        assert plan.candidate_id == cid and 'start_validation' in plan.guidance
-    else:
-        assert plan.candidate_id is None and job.job_id in plan.guidance
-        assert 'Do not retry' in plan.guidance and 'start_validation' not in plan.guidance
     assert rt.workflow.to_dict() == before and not sent
 
 

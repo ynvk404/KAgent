@@ -121,9 +121,3 @@ def test_pre_execution_refusals_keep_explicit_categories_without_parsing_output(
     issues = result_issues(event, None)
     assert len(issues) == 1 and label in issues[0]
     assert 'PRIVATE' not in issues[0] and issue_category(issues[0], event) == category
-
-
-def test_native_scanner_error_keeps_its_existing_summary_path():
-    event = ToolResultEvent(name='shell', status='error', error_kind='tool_exception',
-        result='PRIVATE SCANNER STDOUT', err='bounded scanner failure', scanner_summary={'scanner': 'ffuf'})
-    assert result_issues(event, None) == ['bounded scanner failure']

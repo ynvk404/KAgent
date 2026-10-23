@@ -1,25 +1,20 @@
-import asyncio
 import hashlib
 import json
 import shutil
 from copy import deepcopy
-from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from components.cwe_mcp.contract import EXPECTED_CORPUS, EXPECTED_MANIFEST, GET_SCHEMA, SEARCH_SCHEMA, SearchResponse
-from src.config.config import MCPServerConfig
+from components.cwe_mcp.contract import EXPECTED_CORPUS, EXPECTED_MANIFEST, SearchResponse, LookupResponse
+from tests.cwe.conftest import entry, xml_document
 from src.findings import cwe_enrichment as enrichment
 from src.findings.cwe_enrichment import TrustedSource, parse_response
 from src.findings.store import read_report
-from src.permission.permission import UserControlledRefusal
-from src.tools.mcp.integration import MCPSession, MCPTool
 from src.workflow.evidence.review import confirmation_binding
 from tests.security.test_execution_policy import runtime
-
 
 def candidate(**changes) -> dict[str, Any]:
     data = dict(id=862, cwe_id='CWE-862', name='Missing Authorization',
@@ -30,16 +25,13 @@ def candidate(**changes) -> dict[str, Any]:
     data.update(changes)
     return data
 
-
 def search_response(item=None) -> dict[str, Any]:
     return dict(schema_version='1', corpus=enrichment.EXPECTED_CORPUS.model_dump(),
         search_algorithm='weighted-token-v1', results_limited=False,
         candidates=[dict(**(item or candidate()), rank=1, score=8, exact_id_match=False)])
 
-
 def transport(payload):
     return json.dumps([{'type': 'text', 'text': json.dumps(payload)}])
-
 
 @pytest.fixture
 async def scenario(runtime, tmp_path, monkeypatch):
@@ -49,103 +41,35 @@ async def scenario(runtime, tmp_path, monkeypatch):
     # Controller pin is independently trusted fixture config; no real acquisition
     # or ambient MCP processes are needed in these focused regression tests.
     deployment = tmp_path / 'operator-selected-cwe-mcp'
-    (deployment / 'server/cwe_mcp').mkdir(parents=True)
-    (deployment / 'corpus').mkdir()
-    raw = b'Synthetic pinned corpus fixture; no target data.'
+    (deployment / 'corpus').mkdir(parents=True)
+    raw = xml_document(entry(862))
     (deployment / 'corpus/cwec_v4.20.xml').write_bytes(raw)
     identity = EXPECTED_CORPUS.model_copy(update={'xml_sha256': hashlib.sha256(raw).hexdigest()})
     pin = EXPECTED_MANIFEST.model_copy(update={'corpus': identity})
     monkeypatch.setattr(enrichment, 'EXPECTED_CORPUS', identity)
     monkeypatch.setattr(enrichment, 'EXPECTED_MANIFEST', pin)
+    from components.cwe_mcp import catalog
+    monkeypatch.setattr(catalog, 'EXPECTED_MANIFEST', pin)
     (deployment / 'manifest.json').write_text(json.dumps(pin.model_dump()))
-    for file in ('launch.py', 'server/cwe_mcp/__init__.py', 'server/cwe_mcp/contract.py',
-                 'server/cwe_mcp/catalog.py', 'server/cwe_mcp/server.py'):
-        (deployment / file).write_text('# Reviewed synthetic fixture code\n')
+    # A legacy deployment can still contain code: the native client ignores it.
+    (deployment / 'server/cwe_mcp').mkdir(parents=True)
+    (deployment / 'server/cwe_mcp/contract.py').write_text('raise AssertionError("must never import deployment code")')
+    (deployment / 'launch.py').write_text('raise AssertionError("must never launch MCP")')
     policy.cwe_mcp_deployment_path = deployment
-    policy.worker = SimpleNamespace(summary=lambda: 'isolated fixture worker',
-                                   cwe_mcp_deployment_path=deployment)
-    remote = SimpleNamespace(item=candidate(), calls=[], closed=0, block=None, opened=asyncio.Event(),
-                             cleanup=asyncio.Event(), fail=None, search_override=None, lookup_override=None)
-    class Session:
-        server_name = 'cwe_catalog'
-        async def call_tool(self, name, args, cancel_event=None):
-            assert policy.nested_allowed()
-            remote.calls.append((name, deepcopy(args)))
-            if remote.block:
-                remote.opened.set()
-                try:
-                    await remote.block.wait()
-                finally:
-                    remote.cleanup.set()
-            if remote.fail:
-                raise remote.fail
-            payload = (remote.search_override or search_response(remote.item)) if name == 'search_cwe' else (
-                remote.lookup_override or dict(schema_version='1', corpus=identity.model_dump(), found=True, candidate=remote.item))
-            return {'isError': False, 'content': [{'type': 'text', 'text': json.dumps(payload)}]}
-        async def close(self):
-            remote.closed += 1
-        def is_closed(self):
-            return False
-    async def open_session(*args, **kwargs):
-        assert kwargs['worker'] is policy.worker and policy.nested_allowed()
-        return Session()
-    monkeypatch.setattr(MCPSession, 'open', open_session)
-    cfg = MCPServerConfig('cwe_catalog', '/usr/bin/python3', ['-I', '-B', enrichment.DEPLOYMENT_LAUNCH])
-    for name, schema in [('search_cwe', SEARCH_SCHEMA), ('get_cwe', GET_SCHEMA)]:
-        tool = MCPTool(Session(), 'mcp_cwe_catalog_'+name, name, '', deepcopy(schema))
-        tool._server = deepcopy(cfg)
-        tool._execution_policy = policy
-        registry.register(tool)
-    return SimpleNamespace(policy=policy, prompter=prompter, operator=operator, remote=remote,
+    return SimpleNamespace(policy=policy, prompter=prompter, operator=operator,
         deployment=deployment, registry=registry)
-
 
 def test_replacing_configured_deployment_invalidates_trusted_source_signature(scenario):
     s = scenario
-    source = TrustedSource(s.registry, s.policy)
+    source = TrustedSource(s.policy)
     replacement = s.deployment.parent / 'identical-trusted-deployment'
     shutil.copytree(s.deployment, replacement)
     s.policy.cwe_mcp_deployment_path = replacement
-    s.policy.worker.cwe_mcp_deployment_path = replacement
 
     assert source.current_signature() != source.signature
 
 
-def test_worker_deployment_change_invalidates_source_and_policy_stamp(scenario):
-    from src.permission.runtime.execution import ExecutionBlocked
-    s = scenario
-    source = TrustedSource(s.registry, s.policy)
-    stamp = s.policy.stamp()
-    s.policy.worker.cwe_mcp_deployment_path = s.deployment.parent / 'different-deployment'
 
-    assert s.policy.stamp() != stamp
-    with pytest.raises(ExecutionBlocked, match='policy-worker-mismatch'):
-        source.current_signature()
-
-
-@pytest.mark.asyncio
-async def test_worker_policy_deployment_mismatch_prevents_registry_dispatch(scenario):
-    from src.permission.runtime.execution import ExecutionBlocked
-    s = scenario
-    s.policy.worker.cwe_mcp_deployment_path = s.deployment.parent / 'different-deployment'
-    used = s.policy.used
-    with pytest.raises(ExecutionBlocked, match='policy-worker-mismatch'):
-        await s.registry.execute(enrichment.GET_TOOL, {'id': 862}, None, s.prompter)
-    assert not s.remote.calls and s.policy.used == used and s.policy.active == 0
-
-
-@pytest.mark.asyncio
-async def test_worker_path_change_during_initialize_closes_without_rpc(scenario, monkeypatch):
-    from src.permission.runtime.execution import ExecutionBlocked
-    s = scenario
-    session = s.registry.get(enrichment.GET_TOOL)._session
-    async def changed_open(*args, **kwargs):
-        s.policy.worker.cwe_mcp_deployment_path = s.deployment.parent / 'different-deployment'
-        return session
-    monkeypatch.setattr(MCPSession, 'open', changed_open)
-    with pytest.raises(ExecutionBlocked, match='receipt changed during initialization'):
-        await s.registry.execute(enrichment.GET_TOOL, {'id': 862}, None, s.prompter)
-    assert not s.remote.calls and s.remote.closed == 1 and s.policy.active == 0
 
 
 @pytest.mark.parametrize('change', ['server-schema', 'version', 'hash', 'adapter', 'algorithm', 'extra', 'boolean-id',
@@ -172,14 +96,12 @@ def test_independent_client_rejects_malformed_untrusted_payload(change):
     with pytest.raises(ValueError, match='invalid pinned CWE response|oversized'):
         parse_response(transport(data), 'search')
 
-
 @pytest.mark.parametrize('wrapper', [[], [{'type': 'image', 'text': '{}'}],
     [{'type': 'text', 'text': '{}', 'extra': 'x'}], [{'type': 'text', 'text': '{}', 'annotations': {'priority': 1}}],
     [{'type': 'text', 'text': '{}'}, {'type': 'text', 'text': '{}'}]])
 def test_json_in_text_exact_wrapper(wrapper):
     with pytest.raises(ValueError):
         parse_response(json.dumps(wrapper), 'search')
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('candidate_class,expected', [('sql-injection', 'verified-local'), ('access-control', None)])
@@ -198,11 +120,9 @@ async def test_new_phase1_provenance_only_when_local_path_assigns_cwe(tmp_path, 
     else:
         assert saved.cwe is None and saved.classification_provenance is None and saved.classification_revision == 0
 
-
 def test_duplicate_json_keys_rejected_independently():
     with pytest.raises(ValueError):
         parse_response('[{"type":"text","text":"{}","text":"{}"}]', 'search')
-
 
 @pytest.mark.asyncio
 async def test_model_file_tool_cannot_rewrite_deployment_even_in_yolo(scenario):
@@ -214,7 +134,6 @@ async def test_model_file_tool_cannot_rewrite_deployment_even_in_yolo(scenario):
         await s.registry.execute('file_write', {'path': str(source), 'content': '# forged authority'}, None, s.prompter)
     assert source.read_bytes() == original and not s.operator.requests
 
-
 def test_packaged_controller_contract_is_protected_from_model_writes():
     from src.permission.runtime.execution import default_execution_policy, ExecutionBlocked
     from src.engagement.state import EngagementState
@@ -224,7 +143,6 @@ def test_packaged_controller_contract_is_protected_from_model_writes():
     assert policy.require_path(path) == path
     with pytest.raises(ExecutionBlocked, match='CWE adapter control-plane'):
         policy.require_path(path, write=True)
-
 
 @pytest.mark.asyncio
 async def test_model_cannot_reclassify_legacy_report(scenario):
@@ -237,7 +155,6 @@ async def test_model_cannot_reclassify_legacy_report(scenario):
     with pytest.raises(ExecutionBlocked, match='persisted-finding-store'):
         await s.registry.execute('file_write', {'path': str(legacy), 'content': '# fabricated unresolved report'}, None, s.prompter)
     assert legacy.read_bytes() == original
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('candidate_class,expected_cwe', [('access-control', None), ('sql-injection', ['CWE-89'])])
@@ -253,7 +170,6 @@ async def test_finding_tool_ignores_model_supplied_classification_authority(tmp_
     assert saved.classification_origin != 'promoted-external'
     assert saved.classification_revision == (1 if expected_cwe else 0)
 
-
 def test_old_review_cleanup_cannot_clear_new_pending_ticket():
     from src.permission.runtime.observations import ObservationStore
     observations = ObservationStore()
@@ -262,3 +178,69 @@ def test_old_review_cleanup_cannot_clear_new_pending_ticket():
     observations.finish_review('cwe:cand_test', older)
     assert not observations.review_is_current('cwe:cand_test', older)
     assert observations.review_is_current('cwe:cand_test', newer)
+
+
+async def test_native_lookup_without_worker_mcp_or_subprocess(scenario, monkeypatch):
+    import asyncio
+    from src.tools.mcp.integration import MCPSession
+    s = scenario
+    def forbidden(*args, **kwargs):
+        raise AssertionError('no subprocess or MCP transport permitted')
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', forbidden)
+    monkeypatch.setattr(MCPSession, 'open', forbidden)
+    assert not hasattr(s.policy, 'worker')
+    before = deepcopy(s.policy.workflow.to_dict()) if getattr(s.policy, 'workflow', None) else None
+    source = TrustedSource(s.policy)
+    results = await source.retrieve('search', {'query': 'missing authorization', 'max_results': 1})
+    assert isinstance(results, SearchResponse)
+    assert results.candidates[0].cwe_id == 'CWE-862'
+    result = await source.retrieve('get', {'id': 862})
+    assert isinstance(result, LookupResponse)
+    assert result.found and result.candidate is not None and result.candidate.cwe_id == 'CWE-862'
+    missing = await source.retrieve('get', {'id': 999999})
+    assert isinstance(missing, LookupResponse) and not missing.found
+    assert not s.operator.requests
+    if before is not None:
+        assert s.policy.workflow.to_dict() == before
+
+
+@pytest.mark.parametrize('file', ['manifest.json', 'corpus/cwec_v4.20.xml'])
+async def test_native_source_rejects_modified_data(scenario, file):
+    source = TrustedSource(scenario.policy)
+    (scenario.deployment / file).write_text('{}')
+    with pytest.raises(ValueError):
+        await source.retrieve('get', {'id': 862})
+
+
+@pytest.mark.parametrize('file', ['manifest.json', 'corpus/cwec_v4.20.xml'])
+def test_native_source_rejects_symlinked_data(scenario, file):
+    path = scenario.deployment / file
+    original = path.with_suffix('.original')
+    path.rename(original)
+    path.symlink_to(original)
+    with pytest.raises(ValueError, match='unsafe CWE catalog data'):
+        TrustedSource(scenario.policy)
+
+
+async def test_native_source_revalidates_config_and_query_kind(scenario):
+    source = TrustedSource(scenario.policy)
+    with pytest.raises(ValueError, match='unsupported'):
+        await source.retrieve('execute', {'id': 862})
+    scenario.policy.cwe_mcp_deployment_path = None
+    with pytest.raises(ValueError, match='unavailable'):
+        await source.retrieve('get', {'id': 862})
+
+
+async def test_native_lookup_does_not_depend_on_legacy_deployment_executables(scenario):
+    source = TrustedSource(scenario.policy)
+    (scenario.deployment / 'launch.py').unlink()
+    shutil.rmtree(scenario.deployment / 'server')
+    (scenario.deployment / 'runtime.zip').write_bytes(b'not executable or imported')
+    assert source.current_signature() == source.signature
+    result = await source.retrieve('get', {'id': 862})
+    assert isinstance(result, LookupResponse) and result.found
+
+
+def test_native_source_missing_configuration_is_explicitly_unavailable():
+    with pytest.raises(ValueError, match='unavailable; configure cwe_mcp_deployment_path'):
+        TrustedSource(SimpleNamespace(cwe_mcp_deployment_path=None))

@@ -29,16 +29,7 @@ Flags:
                              Headless disables shell/bash/web_search; no auto-continue.
   --api-key <key>
   --skills <dirs>            comma-separated extra skill directories
-  --scanner-wordlist ID=FILE register an existing local wordlist for this session
-                             Repeatable. The model selects its ID via permissions_status.
   --resume <session-id>
-  --browser                  enable verified persistent trusted-local Browser MCP
-                             on Linux/WSL for this session. You manage Chrome and the Extension.
-                             Use a separate lab profile without personal accounts/tabs.
-                             Actions need --target, exact scope and permission or a bounded
-                             operator Browser grant in YOLO.
-                             View/revoke: /permissions browser
-                             Extension readiness has a bounded deadline. Discovery needs no Chrome.
   --burp [port]              start local Burp/KAgent bridge (default :8888)
   --browser-ingest [port]    deprecated alias for --burp
   --no-stream                disable streaming chat (fallback for backends
@@ -51,10 +42,9 @@ Flags:
                              Explicit limits and revocation remain enforced.
                              Confirm-each resumes when OFF.
                              Profile-covered tools auto-approve. Independent resource checks remain.
-                             Linux workers support brokered HTTP.
-                             Ordinary Shell/local stdio MCP need compatible configuration.
-                             Typed Nmap/ffuf require their own ready adapter and job review.
-                             CONNECT and remote MCP are unavailable.
+                             Shell runs as a direct process with account filesystem/network rights.
+                             Native Service/Content Discovery retain bounded scope and limits.
+                             Worker-dependent plugins/MCP are unavailable; no host fallback.
                              A phase never grants HTTP authority.
                              (alias: --dangerously-skip-permissions)
   --http-lab-grant <spec>     ORIGIN,MODE,SECONDS,REQUESTS,RATE,BURST,CONCURRENCY,

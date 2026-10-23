@@ -71,53 +71,27 @@ origin is the default scope; use `/scope add <origin>` in the TUI only when an
 additional origin is authorized.
 
 Use `kagent --help` to see supported flags, including provider configuration,
-extra skill directories, session resume, and local browser/Burp integration.
-For verified persistent trusted-local Browser MCP on Linux/WSL, use:
+extra skill directories, session resume, and local Burp integration.
 
-```bash
-kagent --browser --target http://juice.lab:8081
-kagent --browser --list-tools
-```
+Shell runs through a direct asyncio subprocess in the project directory, with
+account filesystem/network rights and no OS sandbox. Run KAgent in a dedicated
+lab VM/container. Registry approvals, native HTTP scope checks, file-tool roots,
+redaction and evidence requirements still apply to their own tools. Shell
+stdout is not broker-attested HTTP evidence.
 
-The operator manages Chrome and the Browser MCP Extension. Use a separate lab
-profile without personal accounts or tabs. Actions require the declared target,
-exact engagement scope, and a separate execution receipt for every invocation.
-With YOLO off, each call asks permission. With YOLO on, an explicit bounded
-Browser grant can auto-approve covered actions; missing/uncovered grants still
-ask permission. Press `g` in a Browser permission dialog to review a grant,
-then confirm its origin, actions, time and quota. Use `/permissions browser`
-for status and `/permissions browser revoke` to revoke it.
-Extension readiness has a finite deadline. Discovery needs
-no connected extension. See [Browser MCP setup and limits](components/browser_mcp/README.md).
+Native `service_discovery` checks the active target's effective TCP port;
+`content_discovery` performs bounded same-origin HTTP path discovery. Their
+existing scope, request/rate/timeout limits and provenance remain in force.
+Nmap/ffuf integration, external wordlist catalog, and integrated Browser MCP
+have been removed. Configured command plugins/MCP requiring the old executor
+are unavailable; configuration is retained without launching a host fallback.
+The old `--browser` and `--scanner-wordlist` flags are rejected.
 
 The module entry point is also available for a checkout-based run:
 
 ```bash
 python -m src.cli.main --help
 ```
-
-### Scanner wordlist files
-
-The typed ffuf tool selects existing files from `permissions_status` by ID.
-Installed DIRB `small.txt` and `common.txt` under `/usr/share/dirb/wordlists`
-are detected as `dirb-small` and `dirb-common`. No wordlist package is installed
-or downloaded automatically. The small fallback file is
-`src/tools/execution/wordlists/web-common.txt`.
-
-Register additional existing files for a session with the repeatable
-`--scanner-wordlist ID=FILE` flag. For example, if this DIRB file exists:
-
-```bash
-kagent --scanner-wordlist directory-paths=/usr/share/dirb/wordlists/common.txt
-```
-
-The same flag can register a SecLists file you already have. IDs must be
-unique; `web-common` is reserved. LLM calls use `wordlist_id`, not file paths
-or generated words. Registration supplies local input data; target scope and
-the separate permission review for each exact scanner job still apply.
-Files are bounded UTF-8 relative-path lists; unsafe paths, changed files and
-symlink/hardlink indirection are rejected before execution. Re-register extra
-files on resume; session history never restores resource authorization.
 
 ## Select captured Burp requests
 
@@ -239,6 +213,71 @@ The checkout currently has no equivalent read-only environment-health or CWE
 deployment-check command. The five tests dedicated to the retired setup/doctor
 scripts were intentionally removed; those scripts are no longer required by
 the test suite.
+
+## Local CWE catalog
+
+`src/findings/cwe_enrichment.py` now queries the packaged `Catalog` parser
+in process. It uses no Worker, MCP connection, subprocess, network request or
+code from the configured deployment. The existing configuration key
+`cwe_mcp_deployment_path` is retained for compatibility and selects a canonical
+absolute directory containing only the required data:
+
+- `manifest.json`, matching the controller's pinned manifest;
+- `corpus/cwec_v4.20.xml`, matching the controller's pinned SHA-256.
+
+An existing deployment with those files remains usable; its launcher, runtime
+archive and Python sources are ignored. Missing, modified, oversized or
+symlinked data fail closed. Corpus acquisition remains an explicit operator
+setup step; runtime never downloads it. File-tool write protection for the
+configured deployment and packaged controller contract remains in place.
+As with all control-plane files after removal of Worker, direct shell and
+other processes running as the account can modify these files; file-tool
+write protection is not operating-system containment.
+
+`confirm_finding` automatically attempts local CWE enrichment after it has
+persisted a confirmed Finding without a mapping. Existing CWE mappings are
+retained. Automatic selection requires one exact catalog-name match for the
+bound, confirmed mechanism class, complete supported mapping metadata, a
+search response with no omitted matches, and unchanged confirmation/evidence. Search rank and
+impact prose alone cannot select a CWE. Broad classes such as `access-control`,
+ambiguous metadata and unavailable catalogs stay unresolved with a saved reason.
+
+Use `/cwe <candidate_id>` to review a persisted Finding manually. Keep a suitable
+mapping, or explain the mismatch, search by mechanism and select an exact CWE
+ID after comparing its description/mapping notes with the confirmed evidence.
+Assignment requires an explicit rationale citing a registered Evidence ref.
+Choosing 0 records why the mapping remains unresolved. Manual unresolved
+reviews are not overridden automatically. An existing mapping is never replaced:
+a review annotation records the alternative, original mapping, reason, corpus
+identity, source fingerprint, confirmation binding and evidence refs. Reports
+show the reviewed CWE separately from the original mapping. A missing mapping
+uses the existing revisioned classification promotion transaction.
+
+Neither path creates Findings, validates vulnerabilities, changes severity or
+rewrites evidence. Protected evidence must already be available through the
+normal verified-evidence contract; `/cwe` grants no new read permissions.
+Session/Continue reads the persisted classification and annotation rather than
+reclassifying historical reports. Old reports without review metadata remain
+readable with their original provenance.
+
+A caller can use the local helper asynchronously:
+
+```python
+from src.async_io import run_sync
+from src.findings.cwe_enrichment import TrustedSource
+
+source = await run_sync(TrustedSource, execution_policy)
+candidates = await source.retrieve("search", {"query": "missing authorization"})
+entry = await source.retrieve("get", {"id": 862})
+```
+
+Retired external scanner adapters, result normalization, artifact I/O, triage
+and UI events have been removed. Bounded legacy `scanner_jobs` and
+`scanner_observations` metadata survive session round trips as opaque history;
+they grant no artifact access, authority, workflow progress or coverage.
+Historical files are left on disk. Native discovery and its provenance remain
+active. New scanner source admission is unavailable; existing source records
+retain their original provenance and unresolved limitations.
 
 ## Authorized use and scope
 

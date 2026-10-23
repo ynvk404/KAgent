@@ -13,8 +13,6 @@ from src.permission.permission import Decision, YoloPrompter
 from src.permission.runtime.execution import ExecutionBlocked, ExecutionPolicy
 from src.tools.execution.file import FileReadTool
 from tests.security.test_http_grants import runtime, Operator, ORIGIN, args
-from tests.security.test_browser_local import rig
-from tests.security.test_browser_yolo import call, yolo
 
 
 @pytest.mark.asyncio
@@ -140,24 +138,6 @@ def test_shared_default_ceiling_removed_but_explicit_limit_concurrency_and_fresh
     assert restored.max_calls == limit and restored.concurrency == 1
 
 
-@pytest.mark.asyncio
-async def test_browser_reviewed_session_beyond_old_caps_and_still_read_only(rig):
-    prompter = yolo(rig)
-    now = [10.0]
-    rig.policy.clock = lambda: now[0]
-    rig.operator.decision = Decision.ALLOW_SESSION
-    for _ in range(25):
-        await call(rig, prompter)
-        now[0] += 20
-    assert len(rig.operator.asks) == 1 and len(rig.calls) == 25
-    assert rig.binding.grant.remaining is rig.binding.grant.expires is None
-    rig.operator.decision = Decision.DENY
-    with pytest.raises(PermissionError):
-        await call(rig, prompter, 'click', {'ref': 's1e1', 'element': 'fixture'})
-    assert len(rig.calls) == 25
-    rig.binding.revoke_grant()
-    with pytest.raises(PermissionError):
-        await call(rig, prompter)
 
 
 @pytest.mark.asyncio

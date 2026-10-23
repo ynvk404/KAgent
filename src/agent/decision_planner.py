@@ -82,7 +82,6 @@ class PlannerContext:
     next_source_id: str | None = None
     next_source_selected: bool = False
     next_source_disposition: str | None = None
-    selected_scanner_job_id: str | None = None
 
     @property
     def structured_phase(self) -> str | None:
@@ -595,24 +594,15 @@ def build_whole_target_plan(
                 + " Other pending discovery/input obligations remain open; follow their existing contract.",
                 candidate_id=ready.id)
 
-    # Partial/blocked selected sources and selected scanner rows may remain
+    # Partial/blocked selected sources may remain
     # after the pending frontier is empty. Gate every later candidate route.
     if context.discovery_obligation_pending or context.selected_pending_source_count:
         if context.next_source_selected and source_guidance:
             guidance = source_guidance
-        elif context.selected_scanner_job_id:
-            guidance = (
-                f'\nSelected scanner observations remain unresolved for {context.selected_scanner_job_id}. '
-                f'Inspect workflow(action="list", job_id="{context.selected_scanner_job_id}") '
-                "and its retained selected records/limitations. Resolve the recorded dependency or "
-                "triage only supported observations through the existing policy. If retained data or "
-                "browser/operator/authorization prerequisites are unavailable, leave it unresolved. "
-                "Do not retry scanners/probes while the blocker is unchanged."
-            )
         else:
             guidance = (
                 "\nSelected discovery obligations remain unresolved. Inspect workflow list for the "
-                "recorded source/scanner or restore limitation and resolve that dependency first. "
+                "recorded source or restore limitation and resolve that dependency first. "
                 "Do not retry scanners/probes or infer completion while the blocker is unchanged."
             )
         return DecisionPlan(None, "selected discovery obligations require resolution", "normal", [],

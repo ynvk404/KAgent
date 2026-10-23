@@ -11,7 +11,6 @@ from src.agent.events import (
     AssistantDeltaEvent,
     ToolCallEvent,
     ToolResultEvent,
-    ToolStartedEvent,
     ErrorEvent,
     CompactEvent,
     DecisionEvent,
@@ -368,12 +367,8 @@ def reducer(state: AppState, action: Action) -> AppState:
                 known = invocation_call(state.call_history, event)
                 if (known is not None and known.retired) or (known is None and event.invocation is not None):
                     return state
-            if isinstance(event, (ToolCallEvent, ToolResultEvent, ToolStartedEvent)):
+            if isinstance(event, (ToolCallEvent, ToolResultEvent)):
                 known = invocation_call(state.call_history, event)
-                if isinstance(event, ToolStartedEvent) and (known is None or known.retired or known.resolved
-                        or known.scanner_job or not known.scanner or known.scanner != event.scanner
-                        or event.invocation is None or not event.job_id or event.started_monotonic <= 0):
-                    return state
                 if isinstance(event, ToolCallEvent) and known is not None:
                     return state
                 if isinstance(event, ToolResultEvent) and (
@@ -654,23 +649,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                     baseline = {row.key for row in state.baseline.records if row.kind == "finding"} if state.baseline else set()
                     if key not in baseline:
                         state = _milestone(state, key, text, cast(TranscriptKind, kind))
-            if (call is not None and call.scanner and ev.scanner_summary is not None
-                    and ev.scanner_summary.get('scanner') == call.scanner
-                    and (not call.scanner_job or call.scanner_job == ev.scanner_summary.get('job_id'))):
-                from src.ui.render.scanner_outcome import scanner_text
-                summary = ev.scanner_summary
-                state = _milestone(state, 'scanner:' + str(summary['job_id']), scanner_text(summary),
-                    'info' if summary['execution']['status'] == 'completed' else 'warning')
             return state
-
-        case ToolStartedEvent():
-            call = invocation_call(state.call_history, ev)
-            if call is None:
-                return state
-            return replace(state, call_history=tuple(replace(row, scanner_job=ev.job_id,
-                started_monotonic=ev.started_monotonic) if row is call else row for row in state.call_history),
-                phase=_phase_with_pending_request(state, 'running-tool'),
-                running_tool=f'{ev.scanner} running · scanner job')
 
         case ErrorEvent(err=agent_err):
             state = replace(state, phase=_phase_with_pending_request(

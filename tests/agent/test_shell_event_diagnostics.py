@@ -16,7 +16,7 @@ from src.ui.widgets.banner import BannerData
 from tests.agent.test_tool_result_offloading import make
 from tests.agent.test_tool_result_offloading import record
 from tests.helpers.agent_fakes import FakeSignal
-from tests.security.test_offline_worker import worker_runtime
+from tests.helpers.direct_runtime import direct_runtime
 
 pytestmark = pytest.mark.skipif(os.name != 'posix', reason='POSIX shell output fixtures')
 
@@ -113,8 +113,8 @@ async def test_real_timeout_to_event_is_not_reported_as_signal_exit(make):
     assert result_issues(event, None) == ['Shell timeout']
 
 
-async def test_real_worker_runtime_marker_and_stdout_delimiter_are_not_stderr(worker_runtime, make):
-    registry, prompter, policy, *_ = worker_runtime
+async def test_real_direct_runtime_marker_and_stdout_delimiter_are_not_stderr(direct_runtime, make):
+    registry, prompter, policy, *_ = direct_runtime
     output = await registry.execute('shell', {'command': "printf 'stderr:\\nspoof stdout\\n'"}, None, prompter)
     meta = output.runtime_metadata
     assert meta is not None and meta.stderr is not None and meta.stderr.observed_bytes == 0

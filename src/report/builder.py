@@ -513,7 +513,7 @@ def build_report(source: SourceSnapshot, resources: Resources) -> ReportDocument
         details = (
             ("URL", clean.url(f.url)), ("Method", clean.text(f.method)), ("Parameter", clean.text(f.parameter)),
             ("Canonical class", clean.text(f.canonical_class)), ("Vulnerability type", clean.text(f.vulnerabilityType)),
-            ("CWE", clean.text(", ".join(f.cwe or []))), ("OWASP", clean.text(", ".join(f.owasp or []))),
+            ("CWE", clean.text(", ".join(f.effective_cwe))), ("OWASP", clean.text(", ".join(f.owasp or []))),
             ("Classification origin", clean.text(f.classification_origin)),
             ("Classification revision", str(f.classification_revision)),
             ("Saved finding SHA-256", hashlib.sha256(raw).hexdigest()),
@@ -526,6 +526,11 @@ def build_report(source: SourceSnapshot, resources: Resources) -> ReportDocument
             ("Validation session", clean.text(r.get("session_id"))),
             ("Candidate ID", clean.text(cid)), ("Evidence refs", clean.text(", ".join(f.evidence_refs or []))),
         )
+        if f.classification_review:
+            details += (("Original CWE mapping", clean.text(", ".join(f.cwe or []) or "none")),
+                        ("CWE enrichment", clean.text(f.classification_review['status'])),
+                        ("CWE enrichment rationale", clean.text(f.classification_review['reason'])),
+                        ("CWE catalog provenance", clean.text(json.dumps(f.classification_review['corpus'], sort_keys=True))))
         included_ids.add(cid)
         findings.append(ReportFinding(clean.text(cid), clean.text(f.title, MAX_TITLE), f.severity, details))
     findings.sort(key=lambda f: (SEVERITIES.index(f.severity), f.candidate_id))

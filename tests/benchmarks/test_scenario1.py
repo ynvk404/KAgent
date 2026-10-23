@@ -917,7 +917,7 @@ async def test_isolation_and_permission_boundaries(tmp_path, op, settings, mock_
         assert agent.memory_store is not None and agent.intelligence is not None
         assert agent.memory_store.personal_dir.is_relative_to(root / '.personal')
         assert agent.intelligence.personal_path.is_relative_to(root / '.personal')
-        assert policy.worker is None and not policy.yolo
+        assert not hasattr(policy, "worker") and not policy.yolo
         assert len(policy.engagement.allowed_origins) == 1
         with pytest.raises(Exception, match='outside'):
             await agent.tools.execute('http', {'url': 'http://127.0.0.2:3000/fixture',

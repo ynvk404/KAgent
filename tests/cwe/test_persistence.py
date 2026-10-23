@@ -243,3 +243,62 @@ async def test_future_and_malformed_provenance_never_migrate_report(tmp_path, pr
         with pytest.raises(ValueError, match='invalid persisted classification provenance'):
             read_report(path)
     assert report_bytes(path) == raw
+
+
+def annotation(raw):
+    from src.findings.store import read_report_bytes
+    finding = read_report_bytes(raw, slug='finding')
+    return dict(status='unresolved', selected_cwe=None, reason='Confirmed evidence does not distinguish a specific mechanism.',
+        previous_cwe=list(finding.cwe or []), evidence_refs=finding.evidence_refs,
+        confirmation_binding=finding.confirmation_binding, reviewer='operator', corpus=None, source_signature=None)
+
+
+@pytest.mark.parametrize('fault', ['stale-report', 'prepare-failure', 'foreign-binding'])
+async def test_annotation_precommit_failure_preserves_all_bytes(tmp_path, monkeypatch, fault):
+    store, path, raw = await setup(tmp_path)
+    review = annotation(raw)
+    if fault == 'stale-report': path.write_bytes(raw + b'\nchanged\n')
+    elif fault == 'foreign-binding': review['confirmation_binding'] = 'b' * 64
+    else:
+        def broken(*args): raise OSError('injected annotation failure')
+        monkeypatch.setattr(module, '_prepare_classification', broken)
+    expected = report_bytes(path)
+    with pytest.raises((OSError, ValueError)):
+        await store.annotate_classification(path, expected_digest=hashlib.sha256(raw).hexdigest(),
+            review=review, guard=lambda: None, publish=lambda *_: None)
+    assert report_bytes(path) == expected and not list(path.parent.glob('.cwe-*.tmp'))
+
+
+async def test_annotation_cancellation_joins_preparation_without_late_write(tmp_path, monkeypatch):
+    store, path, raw = await setup(tmp_path)
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    prepare = module._prepare_classification
+    def slow(path, content):
+        loop.call_soon_threadsafe(entered.set)
+        if not release.wait(5): raise TimeoutError('fixture timeout')
+        return prepare(path, content)
+    monkeypatch.setattr(module, '_prepare_classification', slow)
+    task = asyncio.create_task(store.annotate_classification(path,
+        expected_digest=hashlib.sha256(raw).hexdigest(), review=annotation(raw),
+        guard=lambda: None, publish=lambda *_: None))
+    await asyncio.wait_for(entered.wait(), 2)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done() and report_bytes(path) == raw
+    release.set()
+    with pytest.raises(asyncio.CancelledError): await task
+    assert report_bytes(path) == raw and not list(path.parent.glob('.cwe-*.tmp'))
+
+
+async def test_overlapping_annotation_and_promotion_do_not_overwrite_each_other(tmp_path):
+    store, path, raw = await setup(tmp_path)
+    other = Store(project_directory=tmp_path)
+    results = await asyncio.gather(store.annotate_classification(path,
+        expected_digest=hashlib.sha256(raw).hexdigest(), review=annotation(raw),
+        guard=lambda: None, publish=lambda *_: None), promotion(other, path, raw), return_exceptions=True)
+    assert isinstance(results[1], ValueError)
+    saved = read_report(path)
+    assert saved.classification_review is not None
+    assert saved.cwe is None and saved.classification_review['status'] == 'unresolved'
+    assert not list(path.parent.glob('.cwe-*.tmp'))

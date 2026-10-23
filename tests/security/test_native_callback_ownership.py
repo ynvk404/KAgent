@@ -9,7 +9,7 @@ from src.tools.discovery.service import ServiceDiscoveryTool
 from src.tools.discovery.content import ContentDiscoveryTool
 from src.workflow.state import WorkflowObjective, WorkflowState
 from tests.helpers.agent_fakes import FakeClient, FakeSignal
-from tests.integration.test_scanner_agent_handoff import agent_runtime
+from tests.helpers.direct_runtime import agent_runtime
 
 
 @pytest.mark.parametrize('boundary', ['objective', 'objective_in_place', 'target', 'reset', 'resume', 'same_id_state', 'permission'])

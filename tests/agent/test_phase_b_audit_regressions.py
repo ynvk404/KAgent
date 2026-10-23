@@ -101,15 +101,10 @@ async def test_source_skill_rights_rechecked_after_reader_approval(make, tmp_pat
 
     operator = Operator()
     agent = make(prompter=operator, bound=bound)
-    if bound:
-        from src.permission.worker.worker import OfflineWorker
-        policy = agent.prompter.execution_policy
-        policy.worker = await OfflineWorker.available(policy.root, policy.protected)
-        assert policy.worker is not None, 'this regression requires the configured real Linux worker'
     operator.agent = agent
     path = tmp_path / 'source.txt'
     path.write_text(source(40000))
-    command_path = '/work/source.txt' if bound else str(path)
+    command_path = str(path)
     call = ToolCall('audit-shell', FunctionCall('shell', json.dumps({'command': f"cat '{command_path}'"})))
     working = list(agent.history)
     batch = await agent.execute_tool_calls([call], FakeSignal(), lambda _: None, working)
@@ -135,9 +130,11 @@ async def test_source_skill_rights_rechecked_after_reader_approval(make, tmp_pat
     else:
         assert agent.is_tool_allowed('read_tool_result', args).ok
         assert result.status == 'success', result.err_str
-        assert json.loads(result.result)['content'] == batch.calls[0].result.result[:100]
+        retained, _ = agent.result_retention.store.resolve(ref, agent.result_retention.scope['generation'])
+        assert batch.calls[0].result.result in retained
+        assert json.loads(result.result)['content'] == retained[:100]
     if bound:
-        assert policy.active == 0
+        assert agent.prompter.execution_policy.active == 0
 
 
 @pytest.mark.asyncio

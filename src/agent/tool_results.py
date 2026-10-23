@@ -91,7 +91,7 @@ def source_provenance(agent: Agent, name: str, args: dict[str, Any]) -> dict[str
 def shell_profile(policy: Any) -> str:
     # Stable resource restrictions, not an approval or a process identity.
     return digest_text(json.dumps([str(policy.root), [str(path) for path in policy.protected],
-        policy.worker.summary() if policy.worker else None,
+        "direct-shell-v1",
         str(policy.cwe_mcp_deployment_path or "")], separators=(",", ":")))
 
 
@@ -195,57 +195,6 @@ class ResultRetention:
                 self.pending[id(message)] = PendingResult(message, message.content, provenance)
         except Exception:
             return
-
-    def retain_scanner(self, produced, call_id: str) -> list[str]:
-        """Producer-only bounded shards; never convert a job failure to success."""
-        from src.tools.execution.scanner_runner import ScannerResult
-        if type(produced) is not ScannerResult:
-            raise ValueError('scanner retention requires a runtime producer object')
-        self.refresh_scope()
-        envelope = produced.envelope
-        artifacts = envelope['artifacts']
-        if self.store is None or produced.manifest_sha256 is None or not artifacts.get('manifest') or not produced.dataset:
-            if not produced.dataset and produced.manifest_sha256 is not None:
-                artifacts['retrieval'] = 'empty'
-            elif artifacts.get('retrieval') != 'retrieval_limited':
-                artifacts['retrieval'] = 'unavailable'
-            return []
-        provenance = {'kind': 'scanner', 'module': ShellTool.__module__, 'class': ShellTool.__name__,
-            'policy_required': True, 'job_id': envelope['job_id'], 'origin': produced.plan.origin.as_url(),
-            'semantic_key': produced.plan.semantic_key, 'dataset_sha256': artifacts.get('dataset_sha256'),
-            # Scope changes include explicit TCP removal. Do not mistake an
-            # unchanged logical HTTP origin for current TCP source rights.
-            # HTTP grant replacement/expiry/usage are intentionally excluded.
-            'scope_revision': produced.plan.authority_revision[2]}
-        # Leave header room below the unchanged one-MiB total-file bound.
-        from src.session.tool_results import PER_RESULT_BYTES, MAX_HEADER_BYTES
-        cap = PER_RESULT_BYTES - MAX_HEADER_BYTES
-        shards: list[bytes] = []
-        current = bytearray()
-        for line in produced.dataset.splitlines(keepends=True):
-            if current and len(current) + len(line) > cap:
-                shards.append(bytes(current))
-                current.clear()
-            current.extend(line)
-        if current:
-            shards.append(bytes(current))
-        refs = []
-        try:
-            for shard in shards:
-                ref = self.store.put(shard.decode(), generation=self.scope['generation'], provenance=provenance,
-                    tool_name='shell', tool_call_id=call_id, status='observation', error_kind=None,
-                    http_status=None, truncated=False)
-                if ref is None:
-                    artifacts['retrieval'] = 'retrieval_limited'
-                    break
-                self.references[ref.result_ref] = ref
-                refs.append(ref.result_ref)
-            else:
-                artifacts['retrieval'] = 'available'
-        except (ResultUnavailable, OSError, ValueError):
-            artifacts['retrieval'] = 'retrieval_limited'
-        artifacts['result_refs'] = refs
-        return refs
 
     def retain_native_discovery(self, output, call_id: str, generation: str):
         """Synchronous producer publication; no detached writer or new store."""
@@ -478,27 +427,7 @@ class ResultRetention:
             if policy is not None:
                 policy.require_path(provenance["path"])
         elif ref.source_kind == 'scanner':
-            if type(tool) is not ShellTool or policy is None:
-                raise ExecutionBlocked('blocked: scanner result adapter unavailable')
-            binding = cast(ShellTool, tool).scanner_binding
-            job = self.agent.workflow.scanner_jobs.get(str(provenance.get('job_id', '')))
-            objective = self.agent.workflow.objective
-            if (binding is None or binding.policy is not policy or job is None
-                    or job.semantic_key != provenance.get('semantic_key')
-                    or job.target_origin != provenance.get('origin')
-                    or provenance.get('scope_revision') != policy.engagement.revision
-                    or job.objective_id != (objective.id if objective else None)
-                    or job.artifacts.get('dataset_sha256') != provenance.get('dataset_sha256')):
-                raise ExecutionBlocked('blocked: scanner result current source ownership unavailable')
-            binding.check_authority()
-            policy.require_network(job.target_origin)
-            if policy.generic_validation is not None:
-                policy.generic_validation.validate_tool(tool, {'scanner': job.scanner})
-            try:
-                assert self.store is not None
-                job.dataset(self.store.project)
-            except (OSError, ValueError, ExecutionBlocked):
-                raise ResultUnavailable('scanner source artifact integrity/unavailability') from None
+            raise ExecutionBlocked('unavailable: historical external scanner result adapter has been removed')
         elif ref.source_kind == "shell":
             if type(tool) not in (ShellTool, BashTool) or digest_text(str(cast(ShellTool, tool).shell_path)) != provenance.get("adapter"):
                 raise ExecutionBlocked("blocked: tool result process adapter changed")

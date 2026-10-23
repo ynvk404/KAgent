@@ -48,7 +48,7 @@ def test_tui_uses_native_yolo_without_injected_grant_or_prompt(layout, monkeypat
         assert flags.yolo is yolo and flags.accept_unknown_http_effects is accept
         assert flags.max_steps == 0 and flags.http_lab_grants == []
         assert flags.prompt_file == "" and not flags.resume_id
-        assert not flags.headless and not flags.browser and not flags.burp
+        assert not flags.headless and not getattr(flags, "browser", False) and not flags.burp
         assert runtime.MemoryStore().list() == []
         assert runtime.EngagementStore().load() == ""
         assert runtime.IntelligenceStore().get_stats()["project"] == 0
@@ -131,13 +131,13 @@ def test_native_cli_options_remain_available(layout, monkeypatch):
 
     def inspect():
         flags = runtime.parse_flags(profile.sys.argv[1:])
-        assert flags.browser and flags.burp and flags.burp_port == 9099
+        assert not hasattr(flags, "browser") and flags.burp and flags.burp_port == 9099
         assert flags.model == "fixture-override" and flags.no_stream
         checked.append(True)
         return 0
 
     monkeypatch.setattr(runtime, "cli_main", inspect)
-    assert profile.main(["--launch", str(receipt), "--", "--browser", "--burp", "9099",
+    assert profile.main(["--launch", str(receipt), "--", "--burp", "9099",
                          "--model", "fixture-override", "--no-stream"]) == 0
     assert checked == [True]
 

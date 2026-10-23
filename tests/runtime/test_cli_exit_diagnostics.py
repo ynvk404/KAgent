@@ -12,7 +12,6 @@ import pytest
 from src.config.config import Backend, Config
 from src.llm.runtime.probe import ProbeResult
 from src.permission.network.grants import HTTPLimits
-from src.permission.worker.worker import OfflineWorker
 from tests.helpers.agent_fakes import FakeClient
 
 
@@ -46,10 +45,7 @@ async def offline_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.session_store, "dir_from_path", lambda _: tmp_path / "sessions")
     monkeypatch.setattr(cli.session_store, "new_id", lambda: "exit-diagnostics-session")
     monkeypatch.setattr(cli, "probe_tool_support", probe)
-    monkeypatch.setattr(OfflineWorker, "available", AsyncMock(return_value=None))
     monkeypatch.setattr("src.tools.mcp.integration.discover_mcp_tools", discover)
-    monkeypatch.setattr("src.tools.mcp.browser_local.BrowserLocalBinding",
-                        lambda *args, **kwargs: SimpleNamespace(invalidate=Mock()))
     monkeypatch.setattr(asyncio.get_running_loop(), "add_signal_handler", lambda *args: None)
     return SimpleNamespace(cli=cli, cfg=cfg, client=client, debug_path=debug_path,
                            session=session, probe=probe, discover=discover)
@@ -58,7 +54,6 @@ async def offline_cli(tmp_path, monkeypatch):
 @pytest.mark.parametrize("rights_flags", [
     [],
     ["--yolo"],
-    ["--browser", "--yolo"],
     ["--http-lab-grant", LAB_GRANT, "--accept-unknown-http-effects"],
 ])
 @pytest.mark.parametrize("debug_mode", ["off", "flag", "path", "env"])
