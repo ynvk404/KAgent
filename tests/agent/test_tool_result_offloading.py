@@ -70,6 +70,54 @@ def reference(agent):
     return next(iter(agent.result_retention.references.values()))
 
 
+def test_reader_advertises_result_namespace_not_observation_namespace(make):
+    reader = make().tools.get('read_tool_result')
+    description = reader.description()
+    field = reader.schema()['properties']['result_ref']
+    assert 'published tr_' in description and 'obs_' in description
+    assert 'Do not' in field['description'] and 'prefix' in field['description']
+    import re
+    assert re.fullmatch(field['pattern'], 'tr_' + 'a' * 32)
+    assert not re.fullmatch(field['pattern'], 'obs_' + 'a' * 32)
+
+
+@pytest.mark.parametrize('active', [False, True])
+async def test_observation_id_error_survives_agent_gate_without_converting_reference(make, active):
+    agent = make()
+    record(agent)
+    ref = reference(agent)
+    if active:
+        agent.skills.add(Skill(name='fixture', description='fixture', tools=['file_read'],
+            disable_model_invocation=False, path='/fixture/SKILL.md', body=''))
+        agent.active_skills.add('fixture')
+    before = dict(agent.result_retention.references)
+    # Same suffix as an existing tr_ must never map to that retained result.
+    wrong = 'obs_' + ref.result_ref.removeprefix('tr_')
+    call = ToolCall('wrong-namespace', FunctionCall('read_tool_result', json.dumps({
+        'result_ref': wrong, 'start_char': 0, 'max_chars': 100})))
+    result = await agent.run_parsed_tool_call(call, agent.parse_tool_call(call), FakeSignal())
+    assert result.status == 'error'
+    assert 'observation ID' in result.result and 'published tr_' in result.result
+    assert 'Do not change the prefix' in result.result
+    assert wrong not in result.result and ref.result_ref not in result.result
+    assert agent.result_retention.references == before
+    # Correct caller-supplied reference still passes the original read gates.
+    reply = json.loads(await agent.tools.execute('read_tool_result', {
+        'result_ref': ref.result_ref, 'start_char': 0, 'max_chars': 100}, FakeSignal(), agent.prompter))
+    assert reply['result_ref'] == ref.result_ref and reply['content']
+
+
+def test_unknown_result_id_stays_unavailable_and_invalid_value_is_not_echoed(make):
+    from src.session.tool_results import InvalidResultReference
+    agent = make()
+    with pytest.raises(ResultUnavailable, match='unavailable in this session/project/target generation'):
+        agent.result_retention.lookup('tr_' + '0' * 32)
+    for value in ('obs_password=PRIVATE', 'PRIVATE-invalid-value'):
+        with pytest.raises(InvalidResultReference) as caught:
+            agent.result_retention.lookup(value)
+        assert 'PRIVATE' not in str(caught.value)
+
+
 @pytest.mark.parametrize('size,threshold,offloaded', [(100, 3000, False), (40000, 50000, False),
                                                       (40000, 3000, True), (10000, 2500, True),
                                                       (4096, 20000, False)])

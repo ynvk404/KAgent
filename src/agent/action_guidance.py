@@ -41,7 +41,17 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
         if phase == "recon":
             lines.append("Recommended: gather sourced service/technology observations; inspect coverage gaps. Scanner hints are not vulnerabilities.")
         elif phase == "enumeration":
-            lines.append("Recommended: inventory endpoints/sources/inputs; inspect coverage gaps. Defer hypotheses to input analysis.")
+            lines.append(
+                'Recommended: as soon as visible documentation, a form or a request call site establishes an input, '
+                'call workflow(action="record_input", ...) before fetching another resource. '
+                'Record only the observed method, endpoint, parameter and location; do not infer fields from route names. '
+                'Use document attribution for documented fields, not request context or replay authority. '
+                'This applies even when no source is selected. Defer hypotheses to input analysis.')
+            lines.append(
+                'Write the canonical partial inventory with known inputs and source limitations; '
+                'reading all JavaScript bundles is not a prerequisite. Account for each coverage dimension honestly: '
+                'unattested review is observed, never self-claimed performed; skipped/not_applicable need actual reasons. '
+                'Resolve selected-source obligations or record supported bounded stops, then complete_skill only when ready.')
         else:
             lines.append("Recommended: analyze inputs; record disposition or record_candidate only with evidenced controllability and compatible input bindings.")
         lines.append("Reuse visible sources/input IDs; record_input may include manual source_attribution. Use list pages/cursors or get_input/get_source only for missing context. Selected sources keep obligations/limitations; unselected sources are not a backlog. Scanner completion is not discovery completion.")

@@ -437,6 +437,12 @@ class ResultRetention:
         from src.session.tool_results import valid_ref
         if not valid_ref(result_ref):
             from src.session.tool_results import InvalidResultReference
+            if isinstance(result_ref, str) and result_ref.startswith('obs_'):
+                raise InvalidResultReference(
+                    'obs_ is an observation ID, not a retained tool result reference. '
+                    'Use only a published tr_ identifier for read_tool_result. Do not change the prefix '
+                    'or invent a reference. If no tr_ was published, report the retrieval limitation; '
+                    'do not rerun the original action or create validation ownership to gain read access.')
             raise InvalidResultReference('Invalid tool result reference. Use a published tr_ identifier.')
         self.refresh_scope()
         ref = self.references.get(result_ref)

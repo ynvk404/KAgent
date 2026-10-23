@@ -27,13 +27,17 @@ class ReadToolResult:
         return "read_tool_result"
 
     def description(self) -> str:
-        return ("Read one bounded character range of a retained sanitized tool result by opaque result_ref. "
+        return ("Read one bounded character range of a retained sanitized tool result using a published tr_ result_ref. "
+                "obs_ identifies an observation, not a readable retained result. Never convert IDs by changing prefixes. "
                 "References grant no evidence or authorization. Missing/denied/corrupt results must be reported; "
                 "do not infer unseen content or rerun the original action. Offsets count Unicode characters.")
 
     def schema(self) -> dict[str, Any]:
         return {"type": "object", "properties": {
-            "result_ref": {"type": "string"},
+            "result_ref": {"type": "string", "pattern": "^tr_[0-9a-f]{32}$",
+                           "description": "Copy a published tr_ identifier exactly. obs_ is not accepted. "
+                                          "Do not change the prefix or invent an ID. If no tr_ was published, "
+                                          "report the retrieval limitation without rerunning the original action."},
             "start_char": {"type": "integer"},
             "max_chars": {"type": "integer", "maximum": MAX_READ_CHARS},
         }, "required": ["result_ref", "start_char", "max_chars"], "additionalProperties": False}

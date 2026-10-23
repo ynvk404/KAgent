@@ -1882,11 +1882,16 @@ class Agent:
             )
 
         if tool_name == "read_tool_result":
+            from src.session.tool_results import InvalidResultReference
             if capability_only:
                 return ToolAllowedResult(ok=any(self.is_tool_allowed(name, capability_only=True).ok
                     for name in self.tools.names() if name not in {"read_tool_result", "read_http_observation"}))
             try:
                 ref = self.result_retention.lookup((args or {}).get("result_ref", ""))
+            except InvalidResultReference as exc:
+                # Preserve the safe namespace diagnostic instead of masking it
+                # as cache loss. Lookup never includes the caller's value.
+                return ToolAllowedResult(ok=False, reason=str(exc))
             except ValueError:
                 return ToolAllowedResult(ok=False, reason="tool result reference unavailable")
             # Derivative access inherits the active skill's original capability
