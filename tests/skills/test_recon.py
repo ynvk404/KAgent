@@ -209,10 +209,11 @@ def test_recon_crtsh_handling_is_resilient():
 
     for phrase in [
         "crt.sh",
-        "validate the response before parsing",
-        "retry with backoff",
-        'type == "array"',
-        "[ -s subs.txt ]",
+        "502",
+        "html, empty or truncated json",
+        "validate the retained response before parsing",
+        "accept only a complete json array",
+        "record unavailable/partial data without shell retry loops",
         "artifacts/recon/<target>/subs.txt",
     ]:
         assert phrase in text, f"Missing passive subdomain robustness rule: {phrase}"

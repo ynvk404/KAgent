@@ -237,20 +237,32 @@ async def run_with_capture(
     else:
         kwargs["start_new_session"] = True
 
+    cancelled_during_spawn = False
     try:
-        proc = await asyncio.create_subprocess_exec(
+        # The child can run before this await returns its handle. Cancelling
+        # spawn directly can lose the group while stdlib kills only its leader.
+        # Acquire the handle first, then use the same owned cleanup as below.
+        spawning = asyncio.create_task(asyncio.create_subprocess_exec(
             cmd,
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             **kwargs,
-        )
+        ))
+        while not spawning.done():
+            try:
+                await asyncio.shield(spawning)
+            except asyncio.CancelledError:
+                cancelled_during_spawn = True
+        proc = spawning.result()
 
     except OSError as exc:
         # Preserve the original exception type (including FileNotFoundError).
         # This fact comes from the spawn boundary, never an error-text parser.
         setattr(exc, "runtime_metadata", RuntimeMetadata(process="not_started", delivery="unavailable"))
+        if cancelled_during_spawn:
+            raise asyncio.CancelledError from exc
         raise
 
     stdout_buf = HeadTailBuffer(MAX_OUTPUT_BYTES)
@@ -319,6 +331,8 @@ async def run_with_capture(
     watch_task = asyncio.create_task(watch_abort())
 
     try:
+        if cancelled_during_spawn:
+            raise asyncio.CancelledError
         await asyncio.wait_for(asyncio.shield(completion), timeout=timeout_seconds)
     except asyncio.TimeoutError:
         timed_out = True

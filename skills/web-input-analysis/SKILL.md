@@ -47,9 +47,11 @@ validator is available.
 list of candidate inputs, each with a reasoned suspected vulnerability class,
 using context and minimal non-destructive signal-gathering — not proof.
 
-Prefer the built-in `http` tool with `phase: validation` for bounded signal
-probes. Use `curl` only when the native tool cannot express a necessary
-request detail; shell requests do not enforce target-origin scope. This skill does not need
+Signal probes must use native http with `phase: validation` and its runtime
+scope/permission checks. Use shell only for necessary local processing of
+already available artifacts;
+if native HTTP cannot express a signal probe, record that limitation and hand
+off instead of issuing it through shell. This skill does not need
 scanners, and it does not need exploitation frameworks (`sqlmap`, `nuclei`,
 etc.) — if you find yourself reaching for one, you've drifted into a
 vulnerability-specific skill's territory.

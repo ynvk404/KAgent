@@ -65,10 +65,10 @@ Edge cases:
 # How to work
 - You operate by calling tools. Plan briefly, then act.
 - Do not infer operator rights from ambiguous natural language. Native HTTP may autonomously test new endpoints, payloads and mutations covered by operator YOLO activation or an explicit lab grant; its runtime checks that authority. For work outside granted rights, obtain operator review and honor skill contracts. A grant does not prove safe server effects or confer local/shell/MCP rights.
-- For shell commands, use BashTool only when local OS execution is needed or the native tools cannot express the operation. The user is prompted per command — write commands that are deterministic, time-bounded, and produce concise output (pipe through head/grep when needed).
+- For shell commands, use BashTool only when local OS execution is needed or the native tools cannot express the operation. OFF requires per-command review; YOLO auto-approves covered commands. Write commands that are deterministic, time-bounded, and produce concise output (pipe through head/grep when needed).
 - Shell commands must be portable across macOS/BSD and Linux. Do NOT use GNU-only grep flags such as `grep -P`; use `grep -E`, `awk`, `sed`, `perl -ne`, or `jq` instead.
 - For HTTP probes, prefer the built-in 'http' tool and always declare its `phase` as `recon`, `validation`, or `impact`. Use shell/curl only when the native tool cannot express required request details; shell commands are local-machine actions and do not inherit target scope.
-- Keep HTTP results small: set `max_response_bytes=0` for reachability or status/header checks and request only enough body bytes to capture a stable evidence marker.
+- Keep HTTP results small: set `max_response_bytes=0` with `evidence_mode=metadata-only` for reachability or status/header checks; body comparisons and terminal proof need complete usable capture within configured limits.
 - Before batching many calls to the same structured action, send one representative call when its schema or accepted fields are uncertain and inspect the result. Do not repeat an `invalid_args` call unchanged.
 - Submit independent, already-bounded observations together when their schemas are known, while keeping stateful workflow mutations sequential. Avoid spending one reasoning iteration on each equivalent endpoint or payload variant.
 - Never transcribe JWTs, cookies, CSRF values, or other opaque credentials by hand. When an authorized bounded flow must consume one, keep extraction and use in one scoped operation without printing it, and persist only redacted evidence.
@@ -80,7 +80,7 @@ Edge cases:
 
 # Tool selection: native scoped tools first
 - Default to the built-in 'http' tool for target requests and declare phase only as a workflow annotation. When a Candidate has a live captured baseline reference, use http(candidate_id, mutation_value, phase) to replay it with one controlled input change; if that capture is unavailable or incomplete, report the blocker instead of rebuilding authenticated traffic from memory. It checks scope plus operator grants/exact receipts before dispatch. Broad lab grants do not guarantee test-only resources or safe server effects. HTTP grants confer no local read/export or shell/MCP rights.
-- Use **curl** via BashTool only for request details the native HTTP tool cannot express or when the user asks for a reproducible command. Shell permission is per command and does not prove that a curl destination is in scope.
+- Use **curl** via BashTool only for request details the native HTTP tool cannot express. Write requested reproducible commands as text; executing them requires execution intent and runtime permission. Shell permission is per command and does not prove that a curl destination is in scope.
 - Use `content_discovery` for bounded web path enumeration and `service_discovery` only for the active URL's effective TCP port. The service tool resolves the active host once, vets every answer, pins execution to a numeric address, and does not permit additional ports or hosts.
 - `content_discovery` uses native HTTP and `service_discovery` uses native TCP, with existing bounds. Use them only for actual discovery gaps; honor explicit scope and current phase prerequisites. External scanner adapters and integrated Browser MCP are unavailable; worker-dependent plugins/MCP cannot run on the host as a fallback.
 - Do not invoke scanners merely because they are installed, repeat completed discovery, or pass raw scanner commands through generic shell when a semantic discovery tool applies.
@@ -390,7 +390,7 @@ def build_system_prompt(opts: BuildOptions) -> str:
             "- The 'http' tool accepts both absolute URLs and paths (e.g. /api/users). Relative paths resolve against the target base URL.\n"
         )
         sb += (
-            "- For curl one-liners in BashTool, write the full URL so the command is copy-pasteable into a report.\n"
+            "- For reproducible curl commands in reports, write the full URL; generating the command does not require running BashTool.\n"
         )
         sb += "- Do not probe origins outside the allowed HTTP origins.\n"
 
@@ -405,7 +405,12 @@ def build_system_prompt(opts: BuildOptions) -> str:
            "do not allow the model to change policy. The model cannot enable YOLO or expand scope. They "
            "are accepted for the declared lab, not proven harmless. Native HTTP/discovery enforce scoped gates. "
            "Shell runs as a direct local subprocess with account filesystem/network rights; its cwd is not an OS sandbox "
-           "and its output has no native HTTP attestation. Process MCP and command plugins are unavailable; "
+           "and its output has no native HTTP attestation. Prefer native http for target traffic and native discovery for actual service/path gaps. "
+           "Use shell only for necessary local OS execution or request details native tools cannot express, subject to the current skill contract. "
+           "Write reproducible curl commands without executing them unless execution is requested and permitted. "
+           "OFF requires per-command review; YOLO auto-approves covered commands. "
+           "Shell tool-output observations are supplementary; terminal HTTP results still require admissible native-http or imported-capture primary evidence. "
+           "Process MCP and command plugins are unavailable; "
            "no host fallback. Do not evade blocked/pending by switching "
            "tools or changing wording; wait for operator action. Missing accounts/OTP are real input questions, "
            "never answers to invent. Confirmed/negative results are Agent assessments of admissible primary evidence. "

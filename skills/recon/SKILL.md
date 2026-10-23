@@ -112,47 +112,26 @@ Only perform this step when all of the following are true:
 
 Skip this step entirely for single URLs, localhost targets, and IP addresses.
 
-Use public certificate-transparency data without adding specialized tooling.
-`crt.sh` may return `502`, HTML, or an empty body instead of JSON, so validate
-the response before parsing and retry with backoff:
-
-```sh
-APEX="example.com"  # replace with the real scoped apex
-: > subs.txt
-
-for attempt in 1 2 3; do
-  resp=$(curl -fsS --max-time 30 \
-    -H 'Accept: application/json' \
-    "https://crt.sh/?q=%25.$APEX&output=json" \
-    2>/dev/null || true)
-
-  if printf '%s' "$resp" \
-    | jq -e 'type == "array"' >/dev/null 2>&1; then
-
-    printf '%s' "$resp" \
-      | jq -r '.[].name_value' \
-      | sed 's/^\*\.//' \
-      | tr 'A-Z' 'a-z' \
-      | tr -d '\r' \
-      | sort -u > subs.txt
-
-    break
-  fi
-
-  sleep 3
-done
-
-[ -s subs.txt ] || \
-  printf 'warning: crt.sh unavailable or returned non-JSON; try another source\n' >&2
-```
+Prefer certificate-transparency data already supplied by the operator.
+crt.sh is a separate origin from the target: for a fresh lookup, the operator
+must explicitly add the lookup origin to scope and its native HTTP request
+must pass runtime permission. Then use one bounded native `http` GET with
+`phase: recon`, the real scoped apex in the query and an explicit response cap.
+Do not use shell/curl to bypass a missing scope entry, denied request or
+unavailable lookup. Without those prerequisites, record the lookup as omitted.
+`crt.sh` may return `502`, HTML, empty or truncated JSON. Validate the retained
+response before parsing; accept only a complete JSON array before extracting
+`name_value` fields. Record unavailable/partial data without shell retry
+loops or fetching again merely to recover omitted content.
 
 Save the deduplicated list with `file_write` to:
 
 `artifacts/recon/<target>/subs.txt`
 
-(using the identifier derived above for the apex, not the raw `$APEX` string).
+(using the identifier derived above for the apex, not the raw domain string).
 
-Treat each discovered hostname as a separate target for reachability checks.
+Record discovered hostnames as untested references. Reachability checks require
+the operator to add each exact origin to scope; discovery alone grants no rights.
 
 Do not automatically escalate to `subfinder`, `amass`, or `assetfinder`.
 Use them only when the operator explicitly authorizes domain/subdomain
@@ -220,8 +199,9 @@ headers with the response; a separate curl/header capture is unnecessary.
 
 ### Redirect and origin handling
 
-The native `http` tool does not follow redirects. Record each observed status
-and `Location` explicitly. Follow a redirect manually only when its destination
+For this playbook keep native `http` at its default `max_redirects=0`; optional
+per-hop redirect support is not a reason to use curl. Record each observed
+status and `Location` explicitly. Follow a redirect manually only when its destination
 is inside the active authorized origin. For a same-origin redirect, make a
 separate bounded request to the recorded path and retain both response steps.
 Treat an HTTP-to-HTTPS upgrade as a scheme change that needs its own in-scope

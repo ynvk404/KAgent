@@ -372,12 +372,21 @@ executable XSS. If browser/DOM execution evidence is unavailable, describe that
 limitation explicitly and use `browser-required` when the existing outcome
 rules require it; HTTP-only evidence cannot prove every browser-dependent case.
 
-```sh
-TARGET="http://localhost:3000"  # replace with the real target
-MARKER="xsspoc$(date +%s)"      # from payloads.txt Phase 1
+This example applies only to an established GET `/search` Candidate with query
+input `q`; otherwise use the Candidate's actual baseline and input binding.
+Choose a fresh inert marker and inspect its context in the retained response.
+Do not add syntax-breaking characters during plain-marker detection.
 
-curl -ksS "$TARGET/search?q=${MARKER}\"'<>" \
-  | grep -o ".\{20\}${MARKER}.\{20\}"
+```json
+{
+  "tool": "http",
+  "arguments": {
+    "method": "GET",
+    "url": "/search?q=xsspoc2026",
+    "phase": "validation",
+    "max_response_bytes": 8192
+  }
+}
 ```
 
 Classify what you see around the marker:
