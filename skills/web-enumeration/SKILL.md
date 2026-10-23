@@ -144,12 +144,21 @@ Native HTTP returns a bounded response
 inline; its raw ObservationStore bytes are not a general discovery reader or
 an automatic `read_tool_result` cache. Context omission and response truncation
 are different: `complete=true` does not mean omitted text is still visible.
+`workflow(action="get_source", discovery_source_id=...)` returns metadata only.
+In Whole-target mode, read retained HTTP discovery content with
+`read_discovery_source` using that exact `ds_` ID, `start_char`, and
+`max_chars` ≤2,000; follow `next_start_char`.
+Each range requires current scope, provenance, HTTP capability and permission;
+selection grants no access. The reader sends no HTTP, reads only the existing
+≤64 KiB body, and grants no Candidate/Attempt ownership or terminal evidence.
 Do not fetch again, increase caps or cache-bust just because context lacks a
 part that was already retained. `read_http_observation` keeps its validation
 ownership contract: do not use it for an unowned discovery observation, create
 a Candidate/validation attempt to gain read rights, or infer authority from a
 source ID. If content is unavailable, evicted, outside limits or unreadable
 under current rights, record that limitation and work with known inputs.
+Do not repeat an identical rejected read. Inspect another observed form,
+request or call site when useful; Swagger is not a prerequisite for Enumeration.
 Do not raise the bound or restart retrieval.
 Use `content_discovery` only for an actual path gap, not to download a blob.
 Partial review is sufficient for a bounded inventory; do not make complete
@@ -359,9 +368,11 @@ deobfuscation, or resolving computed/dynamic values. Enumerate every visible
 operation parameters (name/location, type and required state), operation
 overrides, and `requestBody.content` media types and schema fields. Preserve
 unresolved `$ref`, truncated definitions and unseen fields as limitations;
-never invent missing operations or request fields. Read applicable document
-`security` and operation overrides, including `security: []`, alongside
-`components.securitySchemes`. Bearer/JWT declarations describe documented
+never invent missing operations or request fields.
+Treat familiar product endpoints from prior knowledge as hypotheses for bounded
+in-scope verification, never as operations observed in this specification.
+Read applicable document `security` and operation overrides, including
+`security: []`, alongside `components.securitySchemes`. Bearer/JWT declarations describe documented
 security, not available credentials or successful authentication; a scheme
 definition alone does not apply it to every operation. Never copy token values.
 

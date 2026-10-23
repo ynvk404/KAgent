@@ -202,5 +202,5 @@ def result_issues(ev: ToolResultEvent, call: PendingCall | None) -> list[str]:
             issues.append("Tool output truncated. Omitted output may limit validation.")
     if ev.status not in {"success", "observation", "error", "cancelled", "pending"}:
         issues.append("Unrecognized tool outcome. Review the operation.")
-    return list(dict.fromkeys(re.sub(r"\b(?:cand(?:idate)?|result|attempt|ev|goal)_[0-9a-f]{12,}\b",
-                                    "[reference]", sanitize_text(issue)) for issue in issues))
+    # Failure references can be needed for repair; retain them in the safe copy.
+    return list(dict.fromkeys(sanitize_text(issue) for issue in issues))

@@ -573,7 +573,7 @@ def test_planner_same_validator_resolves_scoped_candidate_context_and_keeps_dedu
     assert 'GET /search' in lines[0] and 'input q' in lines[0]
     assert 'POST /login' in lines[1] and 'input email' in lines[1]
     for line, candidate in zip(lines, candidates):
-        assert candidate.id[-8:] in line
+        assert candidate.id[-8:] not in line
     assert 'private-query' not in repr(lines) and 'private-credential' not in repr(lines)
     assert workflow.to_dict() == before
 

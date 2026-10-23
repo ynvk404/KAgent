@@ -827,12 +827,15 @@ def _exploration_fingerprint(
             material = curl_shape if curl_shape is not None else shlex.join(tokens)
         except ValueError:
             material = re.sub(r"\s+", " ", command.strip())
-    elif tool_name == 'read_tool_result':
+    elif tool_name in {'read_tool_result', 'read_discovery_source'}:
         try:
-            page = json.loads(str(result.result))
+            text = str(result.result)
+            page = json.loads(text.split('\n', 1)[0] if tool_name == 'read_discovery_source' else text)
             # Four bounded page regions per retained payload can be novel;
             # shifting offsets/endpoints forever cannot manufacture progress.
-            material = [page['sha256'], min(3, max(0, page['actual_start']) // 2000)]
+            material = ([page['response_hash'], min(3, max(0, page['start_char']) // 2000)]
+                        if tool_name == 'read_discovery_source' else
+                        [page['sha256'], min(3, max(0, page['actual_start']) // 2000)])
         except (ValueError, KeyError, TypeError):
             return None
     elif tool_name in {"file_write", "file_edit"}:
@@ -1266,10 +1269,13 @@ class Agent:
             reader = ReadToolResult(self.result_retention) if self.result_retention.store is not None else None
             self.tools = self.tools.scoped_tool("read_tool_result", reader)
         from src.permission.runtime.execution import policy_for
-        from src.tools.common.tool_result import ReadHTTPObservation
+        from src.tools.common.tool_result import ReadHTTPObservation, ReadDiscoverySource
         existing_http_reader = self.tools.get("read_http_observation")
         if policy_for(self.prompter) is not None and (existing_http_reader is None or type(existing_http_reader) is ReadHTTPObservation):
             self.tools = self.tools.scoped_tool("read_http_observation", ReadHTTPObservation(self))
+        existing_discovery_reader = self.tools.get("read_discovery_source")
+        if policy_for(self.prompter) is not None and (existing_discovery_reader is None or type(existing_discovery_reader) is ReadDiscoverySource):
+            self.tools = self.tools.scoped_tool("read_discovery_source", ReadDiscoverySource(self))
         self.turn_executed_tool = False
         self._trace_enabled = False
         self._trace_run_id = ""
@@ -1871,6 +1877,9 @@ class Agent:
                         execution.generic_validation.validate_tool(tool, args or {})
                     except (TypeError, ValueError) as exc:
                         return ToolAllowedResult(ok=False, reason=str(exc))
+        if tool_name == "read_discovery_source" and (
+                self.workflow.objective is None or self.workflow.objective.mode != "whole_target"):
+            return ToolAllowedResult(ok=False, reason="discovery content requires a whole-target objective")
         if not self.active_skills and not self._skill_admission_restricted:
             return ToolAllowedResult(
                 ok=True,
@@ -1880,7 +1889,7 @@ class Agent:
             from src.session.tool_results import InvalidResultReference
             if capability_only:
                 return ToolAllowedResult(ok=any(self.is_tool_allowed(name, capability_only=True).ok
-                    for name in self.tools.names() if name not in {"read_tool_result", "read_http_observation"}))
+                    for name in self.tools.names() if name not in {"read_tool_result", "read_http_observation", "read_discovery_source"}))
             try:
                 ref = self.result_retention.lookup((args or {}).get("result_ref", ""))
             except InvalidResultReference as exc:
@@ -1893,10 +1902,10 @@ class Agent:
             # boundary; generic validation was already checked above.
             return self.is_tool_allowed(ref.tool_name)
 
-        if tool_name == "read_http_observation":
-            from src.tools.common.tool_result import ReadHTTPObservation
+        if tool_name in {"read_http_observation", "read_discovery_source"}:
+            from src.tools.common.tool_result import ReadHTTPObservation, ReadDiscoverySource
             reader = self.tools.get(tool_name)
-            if type(reader) is ReadHTTPObservation and reader.agent is self:
+            if (type(reader) is ReadHTTPObservation or type(reader) is ReadDiscoverySource) and reader.agent is self:
                 return self.is_tool_allowed("http", capability_only=capability_only)
 
         tool = self.tools.get(tool_name)
@@ -6626,13 +6635,13 @@ class Agent:
         from src.permission.runtime.execution import policy_for
         from src.tools.http.http_tool import HTTPTool
         from src.tools.common.browser_capture import BrowserCaptureGetTool
-        from src.tools.common.tool_result import ReadHTTPObservation
+        from src.tools.common.tool_result import ReadHTTPObservation, ReadDiscoverySource
         from src.workflow.assessment import digest, source_row
         policy = policy_for(self.prompter)
         output = res.result
         tool = self.tools.get(tc.function.name)
         if (policy is None or not isinstance(output, ToolOutput) or not output.http_sources
-                or type(tool) not in {HTTPTool, BrowserCaptureGetTool, ReadHTTPObservation} or res.err_str
+                or type(tool) not in {HTTPTool, BrowserCaptureGetTool, ReadHTTPObservation, ReadDiscoverySource} or res.err_str
                 or res.status not in {"success", "observation"}
                 or output.http_session != (policy.session_id or policy.engagement.http_permissions.session_id)
                 or output.http_stamp != policy.stamp()
@@ -6658,13 +6667,17 @@ class Agent:
                                or output[start:end] != item.body.decode(errors="replace")
                                for (start, end), item in zip(output.http_body_ranges, items))):
                     return None
-            elif type(tool) is ReadHTTPObservation:
+            elif type(tool) is ReadHTTPObservation or type(tool) is ReadDiscoverySource:
                 if tool.agent is not self or len(items) != 1 or "http" in policy.revoked:
                     return None
-                tool.validate_rights(parsed_args(tc.function), self.prompter, receipt=False)
+                reader_args = parsed_args(tc.function)
+                tool.validate_rights(reader_args, self.prompter, receipt=False)
                 row = json.loads(str(output).split("\n", 1)[0])
                 start, end = output.http_body_ranges[0]
-                if (len(output.http_body_ranges) != 1
+                if (tool.observation_id(reader_args) != items[0].id
+                        or row["observation_id"] != items[0].id or row["retained_hash"] != items[0].retained_hash
+                        or row.get("discovery_source_id") != reader_args.get("discovery_source_id")
+                        or len(output.http_body_ranges) != 1
                         or output[start:end] != items[0].body.decode(errors="replace")[row["start_char"]:row["end_char"]]):
                     return None
             else:
@@ -6718,7 +6731,7 @@ class Agent:
         policy = policy_for(self.prompter)
         for index, message in enumerate(messages):
             if message.role != "tool" or (not message.http_response_sources and (
-                    message.name != "read_http_observation" or message.tool_status == "error")):
+                    message.name not in {"read_http_observation", "read_discovery_source"} or message.tool_status == "error")):
                 continue
             try:
                 if (not message.http_response_sources or policy is None
@@ -6732,19 +6745,22 @@ class Agent:
                             or (item.source_details or {}).get("analysis_session") != session):
                         raise ValueError
                     policy.require_network(item.url)
-                if message.name == "read_http_observation":
-                    from src.tools.common.tool_result import ReadHTTPObservation
+                if message.name in {"read_http_observation", "read_discovery_source"}:
+                    from src.tools.common.tool_result import ReadHTTPObservation, ReadDiscoverySource
                     reader = self.tools.get(message.name)
-                    if type(reader) is not ReadHTTPObservation or reader.agent is not self:
+                    expected = ReadDiscoverySource if message.name == "read_discovery_source" else ReadHTTPObservation
+                    if type(reader) is not expected or reader.agent is not self:
                         raise ValueError
                     raw_header, content = message.content.split("\n", 1)
                     header = json.loads(raw_header)
-                    reader.validate_rights({"observation_id": header["observation_id"],
+                    identity_key = "discovery_source_id" if message.name == "read_discovery_source" else "observation_id"
+                    reader.validate_rights({identity_key: header[identity_key],
                         "start_char": header["start_char"], "max_chars": 2000}, self.prompter, receipt=False)
                     item = policy.observations._items[header["observation_id"]]
                     body = item.body.decode(errors="replace")
                     start, end = header["start_char"], header["end_char"]
-                    if (message.http_response_sources != [item.id]
+                    if (reader.observation_id({identity_key: header[identity_key]}) != item.id
+                            or message.http_response_sources != [item.id]
                             or header["retained_hash"] != item.retained_hash
                             or type(start) is not int or type(end) is not int
                             or not 0 <= start <= end <= len(body)
@@ -6770,7 +6786,8 @@ class Agent:
         analysis = self._http_analysis_content(tc, res, parsed.invocation)
         if analysis is not None:
             content = analysis
-            if parsed.invocation is not None and parsed.invocation.scope == runtime_scope(self):
+            if (tc.function.name != "read_discovery_source" and parsed.invocation is not None
+                    and parsed.invocation.scope == runtime_scope(self)):
                 from src.workflow.discovery.inventory import observation_handoff
                 from src.permission.runtime.execution import policy_for
                 policy = policy_for(self.prompter)

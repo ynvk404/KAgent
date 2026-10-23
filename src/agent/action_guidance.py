@@ -45,6 +45,7 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
                 'Recommended: as soon as visible documentation, a form or a request call site establishes an input, '
                 'call workflow(action="record_input", ...) before fetching another resource. '
                 'Record only the observed method, endpoint, parameter and location; do not infer fields from route names. '
+                'Prior knowledge is a verification hypothesis, never observed OpenAPI paths or fields. '
                 'Use document attribution for documented fields, not request context or replay authority. '
                 'This applies even when no source is selected. Defer hypotheses to input analysis.')
             lines.append(
@@ -54,7 +55,10 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
                 'Resolve selected-source obligations or record supported bounded stops, then complete_skill only when ready.')
         else:
             lines.append("Recommended: analyze inputs; record disposition or record_candidate only with evidenced controllability and compatible input bindings.")
-        lines.append("Reuse visible sources/input IDs; record_input may include manual source_attribution. Use list pages/cursors or get_input/get_source only for missing context. Selected sources keep obligations/limitations; unselected sources are not a backlog. Scanner completion is not discovery completion.")
+        if phase == "enumeration":
+            lines.append("get_source is metadata only. For omitted HTTP content use read_discovery_source(ds_ ID) under current range permission; read_http_observation requires Candidate/Attempt ownership. Do not repeat failed reads unchanged; continue with other observed sources if unavailable. Selection grants no read rights or completion; unselected sources are not a backlog.")
+        else:
+            lines.append("Reuse visible sources/input IDs; record_input may include manual source_attribution. Use list pages/cursors or get_input/get_source only for missing context. Selected sources keep obligations/limitations; unselected sources are not a backlog. Scanner completion is not discovery completion.")
         lines.append("Check permissions_status; use native discovery only for actual gaps. complete_skill requires ready state and canonical artifacts; repair blockers or state bounded stops.")
     elif context.objective_mode == "whole_target" and context.workflow_status in {"completed", "blocked"}:
         lines.append("Recommended: list current status and blockers; report the bounded outcome or repair the stated dependency. Readiness grants no finding eligibility.")

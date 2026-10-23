@@ -682,7 +682,11 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                                     if row.kind == "candidate" and row.key == ev.candidate_id), None) if facts else None
                     label = "Planner recommended · " + concise_text(ev.recommended_skill, 100)
                     if context:
-                        label += " · " + concise_text(context.label, 180) + " · " + context.key[-8:]
+                        context_label = concise_text(context.label, 180)
+                        label += " · " + context_label
+                        if facts and any(row.kind == "candidate" and row.key != context.key
+                                         and concise_text(row.label, 180) == context_label for row in facts.records):
+                            label += " · " + context.key[-8:]
                     state = replace(state, planner_recommendation=recommendation,
                                     transcript=(*state.transcript, TranscriptEntry(kind="info",
                                         text=label)))

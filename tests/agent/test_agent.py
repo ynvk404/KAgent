@@ -1969,6 +1969,8 @@ async def test_stores_structured_memory_after_manual_compaction():
     )
 
     agent = result["agent"]
+    # Exercise manual compaction independently of prompt-size-driven auto compaction.
+    agent.set_auto_compact_threshold(0)
     seed_compactable_history(agent)
 
     collector = collect()
@@ -1993,6 +1995,7 @@ async def test_stores_structured_memory_after_manual_compaction():
     stats = agent.get_memory_stats()
 
     assert stats["items"] > 0
+    assert [record.purpose for record in agent.request_metrics.records] == ["agent_turn", "compaction"]
 
 @pytest.mark.asyncio
 async def test_parses_plan_and_completed_tasks_headings_into_structured_memory():

@@ -361,6 +361,14 @@ def build_system_prompt(opts: BuildOptions) -> str:
     # Chọn prompt đầy đủ hoặc prompt rút gọn
     sb = COMPACT_SYSTEM_PROMPT if opts.prompt_profile == "compact" else BASE_SYSTEM_PROMPT
 
+    sb += (
+        "\n# Presentation\n"
+        "Keep summaries concise: phase, endpoint, status, findings, coverage, errors, limitations. "
+        "Use internal IDs only for actionable references or troubleshooting. "
+        "Omit routine temporary/state paths and metadata; keep report/finding paths. "
+        "Narration only; preserve tool references.\n"
+    )
+
     # Thêm cấu hình reasoning
     if opts.thinking_enabled:
         sb += (

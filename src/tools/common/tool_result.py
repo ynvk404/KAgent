@@ -136,7 +136,8 @@ class ReadHTTPObservation:
         return "read_http_observation"
 
     def description(self) -> str:
-        return ("Read a bounded response-body character range of an existing owned obs_ HTTP observation. "
+        return ("Read a bounded response-body character range of a Candidate/Attempt-owned obs_ HTTP observation. "
+                "For Whole-target discovery content use read_discovery_source; workflow get_source returns metadata only. "
                 "Use the returned next_start_char; offsets count decoded Unicode characters. "
                 "No HTTP is sent. Retrieval grants no evidence acceptance or ownership. "
                 "Unavailable/revoked observations must be reported, never replaced with invented content.")
@@ -157,6 +158,12 @@ class ReadHTTPObservation:
 
     def context_reduction_policy(self):
         return "preserve"
+
+    def observation_id(self, args: dict[str, Any]) -> str:
+        return args["observation_id"]
+
+    def range_metadata(self, args: dict[str, Any]) -> dict[str, Any]:
+        return {}
 
     def validate_args(self, args: dict[str, Any]) -> None:
         import re
@@ -190,7 +197,10 @@ class ReadHTTPObservation:
                 or attempt.get("status") not in {"active", "completed"}
                 or objective.target_origin != self.agent.target.origin().as_url()):
             raise HTTPObservationUnavailable(
-                'HTTP observation ownership or scope is unavailable. Use workflow(action="list") for current owned observation IDs. Do not rerun HTTP.')
+                'HTTP observation ownership or scope is unavailable. Do not repeat this read unchanged or rerun HTTP. '
+                'Use workflow(action="list") for current owned observation IDs. '
+                'For Whole-target discovery, list(view="sources")/get_source return metadata only; use read_discovery_source with the exact ds_ ID '
+                'under current permissions, or continue with other observed sources. Never create ownership to read discovery content.')
         from src.workflow.assessment import candidate_binding, resolve_sources, attempt_owner
         if candidate_binding(candidate) != item.candidate_binding:
             raise ExecutionBlocked("blocked: HTTP observation candidate binding changed")
@@ -233,7 +243,7 @@ class ReadHTTPObservation:
                 raise UserControlledRefusal("HTTP observation range read denied")
         check_cancelled(signal)
         self.validate_rights(args, prompter, receipt=True)
-        item = policy.observations._items[args["observation_id"]]
+        item = policy.observations._items[self.observation_id(args)]
         assert item.retained_hash is not None
         text = item.body.decode(errors="replace")
         from src.tools.common.outcome import ToolOutput
@@ -242,8 +252,9 @@ class ReadHTTPObservation:
         def encode(size):
             region = read_region(text, args["start_char"], size)
             body = region.pop("content")
-            header = json.dumps({"observation_id": item.id, "retained_hash": item.retained_hash,
+            header = json.dumps({**self.range_metadata(args), "observation_id": item.id, "retained_hash": item.retained_hash,
                 "status": item.status, "elapsed_ms": item.elapsed_ms, "request_hash": item.request_hash,
+                "response_hash": item.response_hash,
                 "offset_unit": "unicode_characters", "complete": item.complete,
                 "adapter_truncated": item.truncated, "start_char": region["actual_start"],
                 "end_char": region["actual_end"], "source_chars": region["total_length"],
@@ -265,3 +276,92 @@ class ReadHTTPObservation:
         output.http_session = policy.session_id or policy.engagement.http_permissions.session_id
         output.http_stamp = policy.stamp()
         return output
+
+
+class ReadDiscoverySource(ReadHTTPObservation):
+    """Explicit range authorization for retained discovery, never validation ownership.
+
+    Reuses the observation reader's per-range permission and outbound envelope.
+    No network/filesystem access, new cache, or mutable workflow receipt. The
+    64 KiB observation retention cap and 2,000-character output cap still apply.
+    """
+
+    def name(self) -> str:
+        return "read_discovery_source"
+
+    def description(self) -> str:
+        return ("Read one bounded retained HTTP discovery-body range using an exact current Whole-target ds_ source ID. "
+                "get_source returns metadata, not content; read_http_observation requires Candidate/Attempt ownership. "
+                "Requires current scope, source integrity, HTTP skill capability and fresh range permission. No HTTP is sent. "
+                "Selection is unnecessary and grants no rights. Reading grants no ownership, replay authority, coverage or terminal evidence. "
+                "Use next_start_char; do not repeat failed reads, refetch or infer unseen content. Continue from other observed sources if unavailable.")
+
+    def schema(self) -> dict[str, Any]:
+        schema = super().schema()
+        schema["properties"]["discovery_source_id"] = {"type": "string", "pattern": "^ds_[0-9a-f]{64}$"}
+        del schema["properties"]["observation_id"]
+        schema["required"] = ["discovery_source_id", "start_char", "max_chars"]
+        return schema
+
+    def permission_hints(self, args: dict[str, Any]) -> PermissionHints:
+        return {"noSessionCache": True, "riskTier": "high-impact",
+                "cacheKey": f"discovery:{args.get('discovery_source_id')}:{args.get('start_char')}:{args.get('max_chars')}"}
+
+    def validate_args(self, args: dict[str, Any]) -> None:
+        import re
+        if (set(args) != {"discovery_source_id", "start_char", "max_chars"}
+                or not isinstance(args["discovery_source_id"], str)
+                or not re.fullmatch(r"ds_[0-9a-f]{64}", args["discovery_source_id"])
+                or type(args["start_char"]) is not int or args["start_char"] < 0
+                or type(args["max_chars"]) is not int or not 1 <= args["max_chars"] <= MAX_READ_CHARS):
+            raise ValueError("use an exact ds_ source ID and bounded integer character offsets")
+
+    def observation_id(self, args: dict[str, Any]) -> str:
+        ref = self.agent.workflow.discovery_sources[args["discovery_source_id"]].retained_ref
+        assert isinstance(ref, str)
+        return ref
+
+    def range_metadata(self, args: dict[str, Any]) -> dict[str, Any]:
+        return {"discovery_source_id": args["discovery_source_id"]}
+
+    def validate_rights(self, args: dict[str, Any], prompter: Any, *, receipt: bool) -> None:
+        import hashlib
+        from src.target.origin import HTTPOrigin
+        from src.workflow.assessment import digest, source_row
+        self.validate_args(args)
+        policy = policy_for(prompter)
+        if policy is None or policy is not policy_for(self.agent.prompter):
+            raise ExecutionBlocked("blocked: discovery content controller unavailable")
+        if receipt and not policy.nested_allowed():
+            raise ExecutionBlocked("blocked: discovery read without current receipt")
+        if {"*", "http", self.name()} & policy.revoked or not self.agent.is_tool_allowed("http").ok:
+            raise ExecutionBlocked("blocked: discovery HTTP capability unavailable/revoked")
+        state = self.agent.workflow
+        objective = state.objective
+        if (objective is None or objective.mode != "whole_target"
+                or objective.target_origin != self.agent.target.origin().as_url()):
+            raise HTTPObservationUnavailable("Discovery content requires the active whole-target origin. Continue with other observed sources.")
+        source = state.discovery_source(args["discovery_source_id"], generation=state.generation)
+        item = policy.observations._items.get(source.retained_ref)
+        session = policy.session_id or policy.engagement.http_permissions.session_id
+        if (source.kind not in {"http", "capture"} or item is None
+                or item.source_kind != ("native-http" if source.kind == "http" else "imported-capture")
+                or item.producer != ("http" if source.kind == "http" else "scoped-capture-bridge")
+                or item.candidate_id is not None or item.attempt_id is not None
+                or item.objective_id not in {None, objective.id}
+                or item.epoch != policy.engagement.http_permissions.epoch
+                or (item.source_details or {}).get("analysis_session") != session
+                or source.target_origin != HTTPOrigin.from_url(item.url).as_url()
+                or source.document_url != item.url or source.retained_hash != item.retained_hash
+                or digest(source_row(item)) != item.retained_hash
+                or hashlib.sha256(item.body).hexdigest() != item.response_hash
+                or len(item.body) > 65536):
+            raise HTTPObservationUnavailable("Retained discovery content unavailable or provenance changed. Do not repeat unchanged; continue with other observed sources.")
+        if source.kind == "capture" and "browser_capture_get" in policy.revoked:
+            raise ExecutionBlocked("blocked: discovery capture capability revoked")
+        policy.require_network(item.url)
+        body = item.body.decode(errors="replace")
+        if any(secret in body for secret in self.agent._managed_http_secrets()):
+            raise ExecutionBlocked("blocked: retained discovery body contains a known internal secret")
+        if args["start_char"] > len(body):
+            raise ValueError("discovery character offset exceeds retained body")

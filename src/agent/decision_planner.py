@@ -367,12 +367,14 @@ def source_frontier_guidance(context: PlannerContext) -> str:
             "otherwise preserve it as unresolved. Do not retry scanners/probes or refetch the source "
             "while its blocker is unchanged. Partial processing needs a truthful supported disposition "
             "or explicit bounded stop under the existing policy; never invent completion. "
-            "Continue manual review only from visible content or an artifact readable under existing rights; "
+            "Continue manual review from visible content, HTTP content via read_discovery_source under current range permission, "
+            "or an artifact readable under existing rights; "
             "automatic extraction is unavailable and historical provenance grants no read authority."
         )
     return (
         f"\nSelected unresolved source {context.next_source_id} still requires review. "
-        "Reuse content already visible or an artifact readable under existing rights, record each established "
+        "Reuse visible content, HTTP content via read_discovery_source under current range permission, "
+        "or an artifact readable under existing rights; record each established "
         "field with record_input and optional source_attribution, then reconcile the inventory. "
         "Use get_source only for missing metadata. Explicitly set_source_disposition with an honest outcome "
         "or supported bounded stop; unavailable, truncated or dynamic portions remain limitations. "
