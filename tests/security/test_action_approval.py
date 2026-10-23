@@ -96,8 +96,8 @@ async def test_shell_review_receipt_worker_and_dispatch_keep_original_arguments(
         dispatched.append((cmd, list(argv), timeout))
         return ToolOutput("fixture output")
 
-    # Keep the real Registry and receipt lifecycle; only the worker/broker and
-    # subprocess boundary are fakes. No host command or network is dispatched.
+    # Keep the real Registry and receipt lifecycle; only the capture runner
+    # at the subprocess boundary is replaced. No host command or network is dispatched.
     prompter = YoloPrompter(Approve())
     prompter.bind_execution_policy(policy)
     monkeypatch.setattr("src.tools.execution.shell.run_with_capture", capture)

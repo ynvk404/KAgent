@@ -128,7 +128,5 @@ async def drain(runtime):
         await join(task)
     if runtime.agent._background_tasks:
         await asyncio.gather(*tuple(runtime.agent._background_tasks))
-    if runtime.policy.scanner_runtime is not None:
-        await runtime.policy.scanner_runtime.drain(close=True)
     assert not runtime.agent.running and not runtime.agent._background_tasks
     assert runtime.policy.active == 0 and not runtime.policy._active_receipts

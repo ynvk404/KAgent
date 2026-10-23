@@ -125,17 +125,14 @@ never invent it, borrow another request, or convert an observation into a baseli
 
 Read every entry. Drop entries that are clearly not worth analyzing:
 
-For a large scanner inventory, read its compact workflow job summary first and
-select observations that can improve existing input context. Scanner rows are
-discovery observations, not input records: a path/status/service hint supplies
-no parameter or vulnerability classification. Reuse documented or captured
-request structure, and recheck selected paths only when context is missing;
-do not Native-verify every ffuf hit or rerun a scanner to recover unavailable
-result refs. Use bounded reader pages and reasoned scanner triage dispositions
-for selected/handled/deferred/dropped record IDs. This does not replace actual
-input dispositions or validator evidence. Preserve incomplete coverage and
-unresolved selected records in the handoff. Harmless probes below retain their
-existing bounds and permission gates.
+Native discovery observations are not input records: a path/status/service
+hint supplies no parameter or vulnerability classification. Reuse documented
+or captured request structure, and recheck selected paths only when context is
+missing. External scanner jobs, result readers and triage actions are
+unavailable. Historical scanner metadata is opaque history; do not attempt to
+recover it with shell scans or fabricate input dispositions from it. Preserve
+incomplete coverage and unresolved selected records in the handoff. Harmless
+probes below retain their existing bounds and permission gates.
 
 - static assets with no parameters (images, fonts, plain CSS/JS with no
   route clues);

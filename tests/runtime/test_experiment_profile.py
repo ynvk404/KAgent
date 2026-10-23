@@ -51,15 +51,48 @@ def original_bytes(layout):
     return {p: p.read_bytes() for root in (repo, home) for p in root.rglob("*") if p.is_file()}
 
 
-def test_default_dry_run_is_read_only_and_does_not_disclose_credentials(layout, monkeypatch, capsys):
+@pytest.mark.parametrize("legacy_bounded", [False, True])
+def test_dry_run_is_read_only_and_does_not_disclose_credentials(layout, monkeypatch, capsys, legacy_bounded):
     repo, home, config, run = layout
     before = original_bytes(layout)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.setenv("kagent_CONFIG", str(config))
-    assert profile.main(["--repo", str(repo), "--run-dir", str(run)]) == 0
+    args = ["--dry-run", "--repo", str(repo), "--run-dir", str(run)]
+    if legacy_bounded:
+        args.append("--legacy-bounded")
+    assert profile.main(args) == 0
     out = capsys.readouterr().out
     assert "fixture-secret" not in out
     assert json.loads(out)["existing_files_to_modify"] == []
+    assert not run.exists() and original_bytes(layout) == before
+
+
+@pytest.mark.parametrize("override", [
+    {},
+    {"name": "other_catalog"},
+    {"command": "/usr/bin/python"},
+    {"args": ["-B", "/opt/kagent-cwe-mcp/launch.py"]},
+    {"args": ["-I", "-B", "/tmp/launch.py"]},
+    {"env": {"EXTRA": "fixture-secret"}},
+])
+def test_legacy_cwe_allowlist_is_preserved_without_loading_retired_adapter(layout, override):
+    repo, home, config, run = layout
+    cfg = json.loads(config.read_text())
+    cfg["mcp_servers"] = [{
+        "name": "cwe_catalog", "command": "/usr/bin/python3",
+        "args": ["-I", "-B", "/opt/kagent-cwe-mcp/launch.py"], "env": {},
+    } | override]
+    config.write_text(json.dumps(cfg))
+    before = original_bytes(layout)
+
+    if override:
+        with pytest.raises(ValueError, match="unreviewed MCP data source"):
+            profile.plan(repo, home, config, run, "http://127.0.0.1:8081", legacy_bounded=True)
+    else:
+        value = profile.plan(repo, home, config, run, "http://127.0.0.1:8081", legacy_bounded=True)
+        assert value["version"] == 2
+        assert value["limits"]["max_steps"] == 60
+
     assert not run.exists() and original_bytes(layout) == before
 
 
@@ -95,6 +128,34 @@ def test_no_run_reuse_or_overwrite(layout):
     with pytest.raises(ValueError):
         profile.apply(value)
     assert receipt.read_bytes() == before
+
+
+@pytest.mark.parametrize("boundary", ["prepare", "verify", "during-copy"])
+def test_local_catalog_runtime_is_pinned_with_other_runtime_sources(layout, monkeypatch, boundary):
+    catalog = layout[0] / "components/cwe_mcp/catalog.py"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text("# reviewed catalog parser\n")
+    value = make_plan(layout)
+    assert value["component_files"]["cwe_mcp/catalog.py"] == profile.digest(catalog.read_bytes())
+    if boundary == "verify":
+        receipt = profile.apply(value)
+        catalog.write_text("# changed catalog parser\n")
+        with pytest.raises(ValueError, match="runtime changed"):
+            profile.verify(receipt)
+        assert not (layout[3] / "launch-started.json").exists()
+    else:
+        if boundary == "prepare":
+            catalog.write_text("# changed catalog parser\n")
+        else:
+            original = profile.private_write
+            def write(path, data):
+                original(path, data)
+                if path.name == "SKILL.md":
+                    catalog.write_text("# changed during snapshot\n")
+            monkeypatch.setattr(profile, "private_write", write)
+        with pytest.raises(ValueError, match="stale|runtime/config changed"):
+            profile.apply(value)
+        assert not (Path(value["profile"]) / "profile.json").exists()
 
 
 def test_scenario3_profiles_and_run_outputs_are_separate(layout):

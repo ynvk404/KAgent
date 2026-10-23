@@ -26,6 +26,19 @@ from src.agent.system_prompt import (
 )
 
 class TestBuildSystemPrompt:
+    @pytest.mark.parametrize("profile", ["full", "compact"])
+    def test_controller_policy_describes_current_execution_capabilities(self, profile):
+        prompt = build_system_prompt(BuildOptions(Registry(), False, None, prompt_profile=profile))
+        policy = prompt.split("# Controller execution policy\n", 1)[1].split("\n", 1)[0]
+        assert "Shell runs as a direct local subprocess" in policy
+        assert "account filesystem/network rights" in policy and "cwd is not an OS sandbox" in policy
+        assert "no native HTTP attestation" in policy
+        assert "Process MCP and command plugins are unavailable" in policy
+        assert "no host fallback" in policy
+        assert "Scope, explicit deny/revoke, resources, budgets and skill prerequisites remain independent" in policy
+        assert "Linux workers" not in policy and "through a broker" not in policy
+        assert "Isolated local stdio MCP" not in policy
+
     @pytest.mark.parametrize("with_goals", [False, True])
     def test_wide_inputs_preserve_active_context_and_pending_counts(self, with_goals):
         workflow = WorkflowState(objective=WorkflowObjective(

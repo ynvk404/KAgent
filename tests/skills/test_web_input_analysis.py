@@ -504,6 +504,9 @@ def test_no_scanner_or_exploitation_frameworks(
     assert "does not need exploitation frameworks" in flat_lower
     assert "sqlmap" in flat_lower
     assert "nuclei" in flat_lower
+    assert "external scanner jobs, result readers and triage actions are unavailable" in flat_lower
+    assert "historical scanner metadata is opaque history" in flat_lower
+    assert "read its compact workflow job summary" not in flat_lower
 
 
 # ---------------------------------------------------------------------------

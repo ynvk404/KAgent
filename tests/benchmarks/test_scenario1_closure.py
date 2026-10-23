@@ -47,7 +47,7 @@ async def active_case(op, settings, root, *, whole=False):
         discovery.load_dir('skills')
         tool = agent.tools.get('workflow')
         assert isinstance(tool, WorkflowTool) and tool.skills is not None
-        for name in ('recon', 'web-enumeration'):
+        for name in ('recon', 'web-enumeration', 'web-input-analysis'):
             skill = discovery.get(name)
             assert skill is not None
             tool.skills.add(skill)

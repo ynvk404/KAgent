@@ -1,1 +1,1 @@
-"""Standalone pinned CWE adapter; no KAgent runtime imports."""
+"""Pinned local CWE catalog; package name retained for stored source identity."""

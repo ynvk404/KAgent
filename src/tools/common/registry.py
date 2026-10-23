@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import asyncio
 from copy import deepcopy
 from collections.abc import Iterator, MutableMapping
 from typing import Any, cast
@@ -286,7 +285,6 @@ class Registry:
                     False,
                 ),
                 force_operator=hints.get("forceOperator", False),
-                offer_browser_grant=hints.get("browserGrant"),
             )
             review_guard = capture_review(signal=signal)
             if policy is not None:
@@ -298,27 +296,9 @@ class Registry:
             if type(tool).__module__ not in {
                     'src.tools.execution.file', 'src.tools.discovery.content', 'src.tools.discovery.service'}:
                 request.no_session_cache = True
-            if type(tool).__module__ != 'src.tools.mcp.integration':
-                request.offer_browser_grant = None
-            if request.offer_browser_grant:
-                request.session_scope_display, grant_detail = getattr(tool, 'browser_grant_review')(args)
-                request.detail += '\n\n' + redact(grant_detail)
-
             decision = (Decision.ALLOW_ONCE if policy is not None and policy.yolo
                         and (not request.force_operator or request.yolo_auto_approve)
                         else await prompter.ask(request, signal))
-
-            check_cancelled(signal)
-            if request.is_current is not None and not request.is_current():
-                raise (ExecutionBlocked if policy is not None else PermissionReviewStale)('blocked: stale permission review')
-
-            if decision == Decision.GRANT_LAB and request.offer_browser_grant:
-                decision = await getattr(tool, 'review_browser_grant')(args, prompter, signal, is_current=request.is_current)
-            elif decision == Decision.ALLOW_SESSION and request.offer_browser_grant:
-                if request.is_current is not None and not request.is_current():
-                    raise PermissionReviewStale('blocked: stale Browser permission review')
-                getattr(tool, 'activate_reviewed_browser_grant')(args, signal)
-                decision = Decision.ALLOW_ONCE
 
             check_cancelled(signal)
             if request.is_current is not None and not request.is_current():

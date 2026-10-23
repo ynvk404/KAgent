@@ -177,7 +177,7 @@ async def test_yolo_does_not_bypass_non_cacheable_coverage_clear(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["shell", "file_write", "http", "plugin"])
+@pytest.mark.parametrize("action", ["shell", "file_write", "http"])
 async def test_unprofiled_generic_tools_and_ordinary_http_keep_review(action, tmp_path, monkeypatch):
     send = AsyncMock()
     monkeypatch.setattr("src.tools.http.http_tool.httpx.AsyncClient.send", send)
@@ -190,16 +190,6 @@ async def test_unprofiled_generic_tools_and_ordinary_http_keep_review(action, tm
         path = tmp_path / "must-not-write.txt"
         registry.register(FileWriteTool())
         args = {"path": str(path), "content": "must not be written"}
-        expected_tier = "high-impact"
-    elif action == "plugin":
-        registry.register(CommandPluginTool(PluginConfig(
-            name="plugin",
-            command="python",
-            args=["-c", "raise SystemExit(99)"],
-            description="external action",
-            requires_permission=False,
-        )))
-        args = {}
         expected_tier = "high-impact"
     else:
         target = Target("https://target.test")
@@ -222,6 +212,22 @@ async def test_unprofiled_generic_tools_and_ordinary_http_keep_review(action, tm
     send.assert_not_called()
     if action == "file_write":
         assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_removed_plugin_executor_fails_before_review_or_process_launch(monkeypatch):
+    from src.permission.runtime.execution import ExecutionBlocked
+    spawn = AsyncMock()
+    monkeypatch.setattr("asyncio.create_subprocess_exec", spawn)
+    registry = Registry()
+    registry.register(CommandPluginTool(PluginConfig(
+        name="plugin", command="python", args=["-c", "raise SystemExit(99)"],
+        requires_permission=False)))
+    inner = SpyPrompter(Decision.ALLOW_ONCE)
+    with pytest.raises(ExecutionBlocked, match="unavailable"):
+        await registry.execute("plugin", {}, None, YoloPrompter(inner, True))
+    assert not inner.calls
+    spawn.assert_not_called()
 
 
 @pytest.mark.asyncio

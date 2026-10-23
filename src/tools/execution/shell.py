@@ -180,11 +180,6 @@ class BashTool(ShellTool):
             "Prefer for bash features: [[ ]] tests, process substitution <(...), arrays or $'...' quoting."
         )
 
-def rewrite_portable_command(command: str) -> str:
-    """Compatibility helper: execute the reviewed command without translation."""
-    return command
-
-
 async def run_with_capture(
     cmd: str,
     argv: list[str],
@@ -277,47 +272,59 @@ async def run_with_capture(
     timed_out = False
     abort_requested = False
 
+    # The command is finished only when its output pipes close too. A child
+    # can inherit them after the group leader exits; proc.wait() alone may
+    # already return while those readers still wait indefinitely.
+    completion = asyncio.gather(proc.wait(), stdout_task, stderr_task)
+    termination: asyncio.Task[None] | None = None
+
+    async def terminate() -> None:
+        kill_process_group(proc.pid)
+        try:
+            await asyncio.wait_for(asyncio.shield(completion), TERMINATE_GRACE_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            # The leader may have exited while a descendant ignored TERM.
+            kill_process_group(proc.pid, signal.SIGKILL)
+        await completion
+
+    async def terminate_owned() -> None:
+        nonlocal termination
+        if termination is None:
+            termination = asyncio.create_task(terminate())
+        cancelled = False
+        while not termination.done():
+            try:
+                await asyncio.shield(termination)
+            except asyncio.CancelledError:
+                # Repeated cancellation cannot release the command's receipt
+                # while its process group and pipe readers are still draining.
+                cancelled = True
+        termination.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
     async def watch_abort() -> None:
         nonlocal abort_requested
         if abort_signal is None:
             return
-        while proc.returncode is None:
+        while not completion.done():
             if getattr(abort_signal, "aborted", False):
                 abort_requested = True
-                kill_process_group(proc.pid)
-                try:
-                    await asyncio.wait_for(
-                        proc.wait(),
-                        timeout=TERMINATE_GRACE_SECONDS,
-                    )
-                except asyncio.TimeoutError:
-                    kill_process_group(proc.pid, signal.SIGKILL)
-                    await proc.wait()
+                await terminate_owned()
                 return
             await asyncio.sleep(ABORT_POLL_SECONDS)
 
     watch_task = asyncio.create_task(watch_abort())
 
     try:
-        await asyncio.wait_for(proc.wait(), timeout=timeout_seconds)
+        await asyncio.wait_for(asyncio.shield(completion), timeout=timeout_seconds)
     except asyncio.TimeoutError:
         timed_out = True
-        kill_process_group(proc.pid)
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=TERMINATE_GRACE_SECONDS)
-        except asyncio.TimeoutError:
-            kill_process_group(proc.pid, signal.SIGKILL)
-            await proc.wait()
+        await terminate_owned()
     except asyncio.CancelledError:
-        kill_process_group(proc.pid)
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=TERMINATE_GRACE_SECONDS)
-        except asyncio.TimeoutError:
-            kill_process_group(proc.pid, signal.SIGKILL)
-            await proc.wait()
-        stdout_task.cancel()
-        stderr_task.cancel()
-        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        await terminate_owned()
         raise
     finally:
         watch_task.cancel()
@@ -325,8 +332,6 @@ async def run_with_capture(
             await watch_task
         except asyncio.CancelledError:
             pass
-
-    await asyncio.gather(stdout_task, stderr_task)
 
     stdout = stdout_buf.render()
     stderr = stderr_buf.render()

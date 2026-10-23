@@ -4,7 +4,6 @@ from dataclasses import asdict, replace
 import json
 import socket
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -560,7 +559,6 @@ async def test_generic_validation_boundary_and_active_skill_unchanged(make):
 async def test_shell_profile_changes_and_http_origin_revocation(make):
     agent = make(bound=True)
     policy = agent.prompter.execution_policy
-    policy.worker = SimpleNamespace(summary=lambda: 'fixture isolated resource profile')
     msg, _, _, _ = record(agent, name='shell', args={'command':'fixture'})
     ref = reference(agent)
     policy.protected += (policy.root/'new-protected',)

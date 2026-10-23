@@ -111,7 +111,7 @@ def plan(repo: Path, home: Path, config: Path, run: Path, origin: str, max_steps
         raise ValueError("profile directory must be new and not symlinked")
     # A run may live under the project's ignored .kagent, never in source/Git.
     if repo.is_relative_to(run) or home.is_relative_to(run) or any(run.is_relative_to(repo / name) for name in (
-        "src", "skills", "tests", "scripts", "docs", "artifacts", ".git",
+        "src", "components", "skills", "tests", "scripts", "docs", "artifacts", ".git",
     )) or run.is_relative_to(home / ".kagent"):
         raise ValueError("run directory overlaps protected or existing user data")
     raw = regular(config)
@@ -128,13 +128,20 @@ def plan(repo: Path, home: Path, config: Path, run: Path, origin: str, max_steps
         raise ValueError("max steps must be positive")
     if legacy_bounded and (cfg.skills_dirs or cfg.plugins):
         raise ValueError("extra skill/plugin paths require a separate reviewed profile")
-    # Legacy experiments admitted only the pinned, generic CWE catalog. Normal
-    # isolation profiles retain the operator's configured integrations.
-    from src.tools.mcp.cwe_deployment import is_designated_cwe_server
-    if legacy_bounded and any(not is_designated_cwe_server(s) for s in cfg.mcp_servers):
+    # Preserve the legacy profile's exact CWE launch-identity allowlist without
+    # importing the retired MCP deployment adapter. This only validates stored
+    # configuration; MCP execution still follows the normal runtime gates.
+    # Normal isolation profiles retain the operator's configured integrations.
+    if legacy_bounded and any(
+        server.name != "cwe_catalog"
+        or server.command != "/usr/bin/python3"
+        or tuple(server.args) != ("-I", "-B", "/opt/kagent-cwe-mcp/launch.py")
+        or server.env
+        for server in cfg.mcp_servers
+    ):
         raise ValueError("unreviewed MCP data source in configuration")
-    if enable_headless_shell and not legacy_bounded:
-        raise ValueError("shell preset requires --legacy-bounded; normal headless policy is unchanged")
+    if enable_headless_shell:
+        raise ValueError("legacy headless shell preset is unavailable after removal of the isolated executor")
     backups = []
     for label, path in (
         ("project-intelligence", repo / ".kagent/intelligence/scenarios.jsonl"),
@@ -148,6 +155,7 @@ def plan(repo: Path, home: Path, config: Path, run: Path, origin: str, max_steps
             "original_home": str(home), "config": str(config), "config_sha256": digest(raw),
             "run": str(run), "profile": str(profile), "origin": normalized_origin(origin), "backup_sources": backups,
             "runtime_files": tree(repo / "src"), "skill_files": tree(repo / "skills"),
+            "component_files": tree(repo / "components"),
             "script_sha256": digest(regular(Path(__file__))),
             "launcher_sha256": digest(regular(Path(__file__).with_name("run_experiment.sh"))),
             "provider": {"backend": str(cfg.backend), "model": cfg.model,
@@ -184,13 +192,6 @@ def plan(repo: Path, home: Path, config: Path, run: Path, origin: str, max_steps
         value["version"] = 3 if legacy_bounded else 4
         value["reviewed_request"] = {"source": str(source), "sha256": digest(raw_request),
                                      "bytes": len(raw_request)}
-    if enable_headless_shell:
-        if prompt_file is None:
-            raise ValueError("shell preset requires an explicitly reviewed request")
-        value["execution_preset"] = "headless-shell"
-        # This existing runtime has one active scanner slot, but no aggregate
-        # scanner-job quota. Do not misrepresent permission as an enforced cap.
-        value["limits"]["scanner_jobs_authorized"] = None
     return value
 
 
@@ -246,7 +247,9 @@ def apply(value: dict) -> Path:
             raise ValueError("skill changed during preparation")
         private_write(run / "project/skills" / relative, data)
         (run / "project/skills" / relative).chmod(0o400)
-    if tree(repo / "src") != value["runtime_files"] or digest(regular(Path(value["config"]))) != value["config_sha256"]:
+    if (tree(repo / "src") != value["runtime_files"]
+            or tree(repo / "components") != value["component_files"]
+            or digest(regular(Path(value["config"]))) != value["config_sha256"]):
         raise ValueError("runtime/config changed during preparation")
     profile = Path(value["profile"])
     profile.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -269,16 +272,14 @@ def verify(receipt: Path) -> dict:
         raise ValueError("run contains pre-existing logs")
     if receipt.absolute() != Path(value["profile"]) / "profile.json" or value.get("version") not in (2, 3, 4):
         raise ValueError("invalid profile receipt")
-    if "execution_preset" in value and (
-        value["execution_preset"] != "headless-shell" or value["version"] != 3
-        or value["limits"]["scanner_jobs_authorized"] is not None
-    ):
-        raise ValueError("invalid shell execution preset")
+    if "execution_preset" in value:
+        raise ValueError("legacy headless shell preset is unavailable after removal of the isolated executor")
     if digest(regular(Path(__file__))) != value["script_sha256"]:
         raise ValueError("profile launcher changed")
     if digest(regular(Path(__file__).with_name("run_experiment.sh"))) != value["launcher_sha256"]:
         raise ValueError("shell launcher changed")
-    if tree(repo / "src") != value["runtime_files"]:
+    if (tree(repo / "src") != value["runtime_files"]
+            or tree(repo / "components") != value["component_files"]):
         raise ValueError("runtime changed since preparation")
     if tree(run / "project/skills") != value["skill_files"]:
         raise ValueError("profile skills changed")
@@ -366,37 +367,6 @@ def whole_target_request(value: dict) -> str:
     )
 
 
-@contextmanager
-def headless_shell_runtime(value: dict):
-    """One launch only: restore existing session rights at the frontend boundary.
-
-    CLI startup installs its fixed Headless revocations before calling this
-    runner. Use the existing controller API once, then delegate to the official
-    runner; later revocations, receipts, worker and scanner gates stay intact.
-    No Agent, Registry, ExecutionPolicy or tool implementation is replaced.
-    """
-    from src.cli import headless
-    from src.permission.runtime.execution import policy_for
-    from src.target.origin import HTTPOrigin
-    original = headless.run_headless
-
-    async def run(agent, *args, **kwargs):
-        policy = policy_for(agent.prompter)
-        if (policy is None or policy.worker is None or "*" in policy.revoked
-                or "BashTool" in policy.revoked
-                or policy.root != (Path(value["run"]) / "project").resolve()
-                or agent.target.origin() != HTTPOrigin.from_url(value["origin"])
-                or policy.engagement.allowed_origins != {HTTPOrigin.from_url(value["origin"])}
-                or policy.engagement.allowed_tcp):
-            raise ValueError("shell preset requires its fresh scoped runtime and enforcing worker")
-        for name in ("shell", "bash"):
-            policy.restore_tool(name)
-        return await original(agent, *args, **kwargs)
-
-    with patch.object(headless, "run_headless", run):
-        yield
-
-
 def launch_isolated(value: dict, receipt: Path, max_steps: int | None, *, headless: bool,
                     interactive: bool, non_interactive: bool, execute_prompt: bool,
                     yolo: bool, accept_unknown_http_effects: bool, cli_args: list[str]) -> int:
@@ -457,10 +427,10 @@ def launch(receipt: Path, max_steps: int | None = None, *, headless: bool = Fals
         raise ValueError("run requires the current interactive WSL terminal")
     if headless and interactive and not sys.stderr.isatty():
         raise ValueError("interactive headless requires stderr TTY")
+    if enable_headless_shell:
+        raise ValueError("legacy headless shell preset is unavailable after removal of the isolated executor")
     value = verify(receipt)
     if value["version"] == 4:
-        if enable_headless_shell:
-            raise ValueError("shell preset requires a legacy bounded profile")
         return launch_isolated(value, receipt, max_steps, headless=headless,
                                interactive=interactive, non_interactive=non_interactive,
                                execute_prompt=execute_prompt, yolo=yolo,
@@ -470,9 +440,6 @@ def launch(receipt: Path, max_steps: int | None = None, *, headless: bool = Fals
         raise ValueError("native CLI arguments require an isolation profile")
     if yolo and not accept_unknown_http_effects:
         raise ValueError("YOLO requires explicit acceptance of bounded HTTP effects")
-    shell_preset = value.get("execution_preset") == "headless-shell"
-    if enable_headless_shell != shell_preset or (shell_preset and not headless):
-        raise ValueError("shell preset requires matching explicit --headless and --enable-headless-shell")
     if value["provider"]["backend"] != "deepseek" or value["provider"]["model"] != "deepseek-flash":
         raise ValueError("Scenario 3 requires the reviewed DeepSeek model identity")
     approved_steps = value["limits"]["max_steps"]
@@ -483,7 +450,7 @@ def launch(receipt: Path, max_steps: int | None = None, *, headless: bool = Fals
     # Exclusive marker forbids silently repeating a run using the same profile.
     private_write(run / "launch-started.json", encode({"profile_sha256": digest(regular(receipt)),
         "max_steps": max_steps, "headless": headless, "interactive": interactive,
-        "yolo": yolo, "execute_prompt": execute_prompt, "enable_headless_shell": shell_preset}))
+        "yolo": yolo, "execute_prompt": execute_prompt, "enable_headless_shell": False}))
     argv = ["kagent", "--target", value["origin"], "--max-steps", str(max_steps),
             "--prompt-file", str(Path(value["profile"]) / "whole-target-request.txt"),
             "--log", str(run / "logs/kagent.log"), "--debug-session-path", str(run / "logs/session.jsonl")]
@@ -501,10 +468,7 @@ def launch(receipt: Path, max_steps: int | None = None, *, headless: bool = Fals
         print("Opening the official KAgent TUI; review the prefilled user draft and press Enter to start.")
         print("Provider startup probes may consume API tokens before a workflow is submitted.")
     with bound_runtime(value) as runtime, patch.object(sys, "argv", argv):
-        with ExitStack() as stack:
-            if shell_preset:
-                stack.enter_context(headless_shell_runtime(value))
-            return runtime.cli_main()
+        return runtime.cli_main()
 
 
 def main(argv=None) -> int:
@@ -521,7 +485,7 @@ def main(argv=None) -> int:
     parser.add_argument("--approve-plan-sha256")
     parser.add_argument("--prompt-file", type=Path, help="Dry-run only: pin this reviewed request's exact bytes and SHA-256")
     parser.add_argument("--enable-headless-shell", action="store_true",
-                        help="Legacy bounded profiles only: opt into the existing headless shell preset")
+                        help="Retired isolated shell preset; always rejected")
     parser.add_argument("--legacy-bounded", action="store_true",
                         help="Dry-run only: select the old Scenario 3 limits and generated request")
     parser.add_argument("--max-steps", type=int, help="Optional native CLI override; otherwise use normal KAgent defaults/config")

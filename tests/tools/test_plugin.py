@@ -2,18 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 
-import pytest
 
 from src.config.config import PluginConfig
-from src.permission.permission import AlwaysAllow
 from src.tools.execution.plugin import CommandPluginTool
-
-
-class _NeverAborted:
-
-    aborted = False
 
 
 def test_permission_required_plugin_cannot_be_yolo_or_session_trusted():

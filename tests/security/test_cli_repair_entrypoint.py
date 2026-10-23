@@ -1,18 +1,14 @@
 """Actual main()/Textual wiring with FakeLLM and real CLI protected profile."""
 import importlib
-import asyncio
 import json
-import threading
 import logging
 from pathlib import Path
-from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from src.config.config import Config, Backend
 from src.llm.runtime.probe import ProbeResult
-from src.llm.core.types import ChatResponse, Message, ToolCall, FunctionCall
 from src.permission.runtime.execution import ExecutionBlocked
 from src.permission.permission import Decision, UserControlledRefusal
 from src.ui.core.state import SetPerm

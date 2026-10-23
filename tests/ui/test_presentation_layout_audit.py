@@ -136,7 +136,7 @@ async def test_status_badge_stays_visible_with_long_runtime_metadata(
         agent.get_auto_compact_threshold.return_value = 6000
         app.state = replace(
             app.state, busy=busy, phase="running-tool" if busy else "idle",
-            running_tool="ffuf preparing/reviewing · scanner job",
+            running_tool="content_discovery preparing/reviewing · native request",
             banner_data=replace(app.state.banner_data,
                 model="organization/research-model-with-a-long-name-and-version-2026", tool_support="yes"),
         )

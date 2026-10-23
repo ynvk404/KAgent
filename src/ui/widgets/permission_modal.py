@@ -32,17 +32,6 @@ _CAPTURE_SCOPE = (
     "Use only this immutable capture and its identity for input mutations. "
     "No redirects or shared HTTP context import. Rights end on target/scope/session reset."
 )
-_BROWSER_WARNINGS = {
-    "read": "Read access may expose page data, screenshots and console logs.",
-    "navigate": "Navigation changes the selected tab location.",
-    "interaction": ("Click/type may submit forms, change application state or enter sensitive data. "
-                    "Accept unknown application effects on this lab."),
-}
-_BROWSER_EXTENSION = (
-    "The Extension does not authenticate tab/profile identity or constrain all Chrome traffic. "
-    "Revoke: /permissions browser revoke"
-)
-
 
 def _sensitive_action(req: BridgedPermissionRequest) -> tuple[str, str, str] | None:
     if req.tool != "file" or not req.no_session_cache:
@@ -128,52 +117,6 @@ class PermissionModal:
         # clarifies that no remaining lifetime/quota has been calculated here.
         return detail.replace("\nCurrent HTTP execution limits: ",
                               "\nReviewed HTTP limits (configured, not remaining): ", 1)
-
-    def _browser_preview(self, detail: str, supports_reuse: bool) -> tuple[str, bool]:
-        """Deduplicate only the complete, adapter-owned Browser grant trailer."""
-        req = self.req
-        if not req.force_operator or not req.no_session_cache:
-            return detail, False
-        scope = req.session_scope_display or ""
-        group = req.offer_browser_grant
-        if group in _BROWSER_WARNINGS and supports_reuse and scope:
-            remote = req.tool.removeprefix("mcp_browser_")
-            if not req.tool.startswith("mcp_browser_browser_") or req.summary != "mcp: browser/" + remote:
-                return detail, False
-            preview, separator, trailer = detail.rpartition("\n\n" + scope + "\n")
-            if not separator:
-                return detail, False
-            # Validate the producer's envelope, but preserve its JSON verbatim.
-            try:
-                value = json.loads(preview)
-            except (TypeError, ValueError, RecursionError):
-                return detail, False
-            if (not isinstance(value, dict) or set(value) != {"server", "executor", "tool", "args"}
-                    or value["server"] != "browser" or value["tool"] != remote
-                    or not isinstance(value["args"], dict)):
-                return detail, False
-        elif req.tool == "browser_lab_grant" and req.summary.startswith("Activate Browser "):
-            scope = req.summary.removeprefix("Activate ")
-            if not detail.startswith(scope + "\n"):
-                return detail, False
-            preview = ""
-            trailer = detail[len(scope) + 1:]
-            group = next((key for key, warning in _BROWSER_WARNINGS.items()
-                          if trailer == "Session lifetime; no call quota. " + warning + "\n" + _BROWSER_EXTENSION), None)
-            if group is None:
-                return detail, False
-        else:
-            return detail, False
-        warning = _BROWSER_WARNINGS[group]
-        if trailer != "Session lifetime; no call quota. " + warning + "\n" + _BROWSER_EXTENSION:
-            return detail, False
-        # Keep the consequence and Extension limitation, without repeating scope
-        # or the second generic statement about accepting unknown effects.
-        warning = warning.removesuffix(" Accept unknown application effects on this lab.")
-        compact = ("Session lifetime · no call quota\n" + warning + "\n"
-                   "Extension does not authenticate tab/profile or constrain all Chrome traffic.\n"
-                   "Revoke: /permissions browser revoke")
-        return (preview + "\n\n" if preview else "") + compact, True
 
     def _discovery_presentation(self, detail: str, supports_reuse: bool) -> tuple[str, str, bool]:
         req = self.req
@@ -341,8 +284,6 @@ class PermissionModal:
             self.req.resolve(Decision.DENY)
 
     def _reuse_label(self) -> str:
-        if self.req.offer_browser_grant:
-            return "trust Browser " + self.req.offer_browser_grant
         if self.req.tool == "http":
             return "trust origin"
         if self.req.tool in {"file_write", "FileWriteTool", "file_edit", "FileEditTool"}:
@@ -351,7 +292,7 @@ class PermissionModal:
         return "trust scope"
 
     def instructions(self, *, ui: UIPalette = DARK_UI) -> Text:
-        grant_review = self.req.tool in {"http_lab_grant", "browser_lab_grant"}
+        grant_review = self.req.tool == "http_lab_grant"
         kind = self._review_kind()
         keys = "y " + ("authorize capture use" if kind == "capture"
                        else "approve grant" if grant_review else "allow once")
@@ -369,15 +310,12 @@ class PermissionModal:
         preview, notices = self._preview_detail()
         if kind == "capture":
             preview = self._capture_detail(preview)
-        preview, browser_compact = self._browser_preview(preview, supports_reuse)
         summary, preview, other_compact = self._other_presentation(preview, supports_reuse)
         # Framing operates on the presentation copy, never the reviewed request.
         action = _framed_action(replace(req, detail=preview))
-        parts: list[RenderableType] = [] if action or kind or browser_compact or other_compact else [Text(f"Tool: {display_tool_name(req.tool)}")]
+        parts: list[RenderableType] = [] if action or kind or other_compact else [Text(f"Tool: {display_tool_name(req.tool)}")]
 
         scope = req.session_scope_display if supports_reuse else "current invocation only"
-        if supports_reuse and not scope and req.offer_browser_grant:
-            scope = "Browser " + req.offer_browser_grant + ". Review adapter grant scope before activation."
         scope_row = Text(("Session trust: " if supports_reuse else "Allow once: ") + redact(scope or ""))
         if (not supports_reuse and action is not None and req.session_scope_display
                 and req.tool in {"file_write", "FileWriteTool", "file_edit", "FileEditTool"}):
@@ -389,7 +327,7 @@ class PermissionModal:
 
         if action is None:
             parts.append(Text(redact(summary), style=BOLD_ACCENT))
-            if req.tool not in {"http_lab_grant", "browser_lab_grant"}:
+            if req.tool != "http_lab_grant":
                 parts.append(scope_row)
 
         if action is not None:
@@ -404,14 +342,7 @@ class PermissionModal:
             if explanation:
                 parts.append(Text(redact(explanation), style=WARNING if req.tool == "file" else ""))
 
-        if req.offer_browser_grant == "interaction" and not browser_compact:
-            parts.append(Text("Click/type may submit forms or change application state.", style=WARNING))
-
         if action is None and show_detail:
-            # A Browser grant repeats its scope verbatim in summary and detail.
-            scope_head = req.summary.removeprefix("Activate ")
-            if req.tool == "browser_lab_grant" and preview.startswith(scope_head + "\n"):
-                preview = preview[len(scope_head) + 1:]
             parts.extend((Text(""), Text(redact(preview))))
 
         if include_instructions:

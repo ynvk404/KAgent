@@ -11,7 +11,7 @@ import pytest
 from components.cwe_mcp.contract import EXPECTED_CORPUS, EXPECTED_MANIFEST, SearchResponse, LookupResponse
 from tests.cwe.conftest import entry, xml_document
 from src.findings import cwe_enrichment as enrichment
-from src.findings.cwe_enrichment import TrustedSource, parse_response
+from src.findings.cwe_enrichment import TrustedSource, validate_payload
 from src.findings.store import read_report
 from src.workflow.evidence.review import confirmation_binding
 from tests.security.test_execution_policy import runtime
@@ -29,9 +29,6 @@ def search_response(item=None) -> dict[str, Any]:
     return dict(schema_version='1', corpus=enrichment.EXPECTED_CORPUS.model_dump(),
         search_algorithm='weighted-token-v1', results_limited=False,
         candidates=[dict(**(item or candidate()), rank=1, score=8, exact_id_match=False)])
-
-def transport(payload):
-    return json.dumps([{'type': 'text', 'text': json.dumps(payload)}])
 
 @pytest.fixture
 async def scenario(runtime, tmp_path, monkeypatch):
@@ -94,14 +91,7 @@ def test_independent_client_rejects_malformed_untrusted_payload(change):
     elif change == 'order': data['candidates'].append(dict(c, id=42, cwe_id='CWE-42', rank=2, score=8))
     else: c['description'] = 'x' * 70000
     with pytest.raises(ValueError, match='invalid pinned CWE response|oversized'):
-        parse_response(transport(data), 'search')
-
-@pytest.mark.parametrize('wrapper', [[], [{'type': 'image', 'text': '{}'}],
-    [{'type': 'text', 'text': '{}', 'extra': 'x'}], [{'type': 'text', 'text': '{}', 'annotations': {'priority': 1}}],
-    [{'type': 'text', 'text': '{}'}, {'type': 'text', 'text': '{}'}]])
-def test_json_in_text_exact_wrapper(wrapper):
-    with pytest.raises(ValueError):
-        parse_response(json.dumps(wrapper), 'search')
+        validate_payload(data, 'search')
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('candidate_class,expected', [('sql-injection', 'verified-local'), ('access-control', None)])
@@ -119,10 +109,6 @@ async def test_new_phase1_provenance_only_when_local_path_assigns_cwe(tmp_path, 
         assert saved.classification_provenance['origin'] == expected
     else:
         assert saved.cwe is None and saved.classification_provenance is None and saved.classification_revision == 0
-
-def test_duplicate_json_keys_rejected_independently():
-    with pytest.raises(ValueError):
-        parse_response('[{"type":"text","text":"{}","text":"{}"}]', 'search')
 
 @pytest.mark.asyncio
 async def test_model_file_tool_cannot_rewrite_deployment_even_in_yolo(scenario):
@@ -202,6 +188,22 @@ async def test_native_lookup_without_worker_mcp_or_subprocess(scenario, monkeypa
     assert not s.operator.requests
     if before is not None:
         assert s.policy.workflow.to_dict() == before
+
+
+@pytest.mark.parametrize('query', ['CWE-862', ' cwe-862 ', 'ＣＷＥ－８６２'])
+async def test_native_exact_id_search_preserves_catalog_contract(scenario, query):
+    source = TrustedSource(scenario.policy)
+    response = await source.retrieve('search', {'query': query})
+    assert isinstance(response, SearchResponse)
+    assert [(item.cwe_id, item.exact_id_match) for item in response.candidates] == [('CWE-862', True)]
+
+
+@pytest.mark.parametrize('query', [None, 'authorization', 'CWE-89', 'CWE-0862'])
+def test_exact_match_flag_requires_the_matching_canonical_query(query):
+    payload = search_response()
+    payload['candidates'][0]['exact_id_match'] = True
+    with pytest.raises(ValueError, match='invalid pinned CWE response'):
+        validate_payload(payload, 'search', query=query)
 
 
 @pytest.mark.parametrize('file', ['manifest.json', 'corpus/cwec_v4.20.xml'])

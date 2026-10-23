@@ -1,5 +1,9 @@
 # CWE enrichment cho Finding
 
+Kết quả audit/cleanup tiếp nối được ghi tại
+[FINAL POST-REFACTOR AUDIT](final-post-refactor-audit.md). Các số kiểm thử theo
+đợt ở phần cuối tài liệu này là lịch sử, không phải kết quả full suite mới nhất.
+
 ## Luồng đã truy vết trước khi chỉnh sửa
 
 - Validator/agent assessment tạo ValidationResult confirmed, có evidence refs,

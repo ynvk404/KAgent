@@ -26,7 +26,6 @@ from tests.ui.test_app import make_app
     ("http", "Approve exact HTTP request", "POST http://juice.lab:3000/login", "Captured credentials require review"),
     ("mcp_plugin_action", "mcp: fixture-server action", "Arguments:", "Unsupported adapter limitations"),
     ("http_lab_grant", "Activate broad lab grant for http://juice.lab:3000", "Expires in 60s; 10 calls; 2/s", "WARNING: unknown server effects"),
-    ("browser_grant", "Review bounded Browser grant", "Origin: http://juice.lab:3000", "Click/type may submit forms; expires in 60s; at most 10 calls"),
 ])
 async def test_complete_permission_tails_are_directly_scrollable(monkeypatch, size, tool, summary, head, warning):
     monkeypatch.setattr(KAgent, "on_mount", lambda self: None)

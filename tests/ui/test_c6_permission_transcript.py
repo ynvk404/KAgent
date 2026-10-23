@@ -22,7 +22,6 @@ from tests.ui.test_progress_milestones import dispatch
 @pytest.mark.parametrize('offer', [
     {'cache_key': 'artifact-root', 'session_scope_display': 'writes under artifact-root'},
     {'offer_http_lab': True, 'session_scope_display': 'bounded exact-origin HTTP grant'},
-    {'offer_browser_grant': 'routine', 'session_scope_display': 'bounded Browser grant'},
 ])
 def test_reusable_shortcut_tracks_current_request_without_changing_authority(offer):
     current = [True]
@@ -103,7 +102,11 @@ def test_default_transcript_summarizes_successes_and_preserves_pending_and_failu
     assert isinstance(app._local_modal, TurnDetailsModal)
     assert 'file_write (30)' in app._local_modal.render().plain
     assert 'PRIVATE RAW OUTPUT' not in text
-    assert 'Permission review timed out' in text and 'Fixture execution failed' in text
+    assert 'Permission review timed out' in text
+    assert 'Shell execution error; process/stream metadata unavailable' in text
+    assert 'Fixture execution failed' not in text
+    assert any(issue.category == 'failure' and 'Shell execution error' in issue.text
+               and not issue.recovered for issue in app.state.issues)
     assert 'Unrecognized tool outcome' not in text and 'user refused' not in text.lower()
     assert 'unresolved permission outcome' in text
     assert len(app.state.transcript) <= 5

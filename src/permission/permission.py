@@ -60,14 +60,13 @@ class PermissionRequest:
     yolo_auto_approve: bool = field(default=False, kw_only=True)
     # Trusted tool adapter can require manual review even while YOLO is ON.
     force_operator: bool = field(default=False, kw_only=True)
-    offer_browser_grant: str | None = field(default=None, kw_only=True)
     offer_http_lab: bool = field(default=False, kw_only=True)
     # Lifecycle callback is authority metadata, not reviewed display content.
     is_current: Callable[[], bool] | None = field(default=None, kw_only=True, repr=False, compare=False)
 
     @property
     def supports_session(self) -> bool:
-        return bool(self.offer_http_lab or self.offer_browser_grant or
+        return bool(self.offer_http_lab or
                     (not self.no_session_cache and self.cache_key and self.session_scope_display))
 
     def __post_init__(self) -> None:

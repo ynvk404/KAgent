@@ -4,7 +4,6 @@ import sys
 import pytest
 
 from src.agent.agent import map_with_concurrency
-from src.tools.execution.plugin import run_plugin
 from src.tools.execution.shell import run_with_capture
 from tests.helpers.agent_fakes import FakeSignal
 

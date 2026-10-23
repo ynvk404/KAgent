@@ -3,11 +3,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-import hashlib
 import json
-import os
 from pathlib import Path
-import shutil
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -17,7 +14,6 @@ from textual import events
 from src.llm.core.client import StreamingClient
 from src.llm.core.types import Message
 from src.permission.network.grants import HTTPLimits
-from src.tools.execution.shell import ShellTool
 from src.ui.core import app as app_module
 from src.workflow.evidence import artifacts as evidence_module
 from tests.helpers.agent_fakes import ScriptedModel
@@ -107,7 +103,6 @@ async def test_successful_subsystem_variants(tmp_path, monkeypatch, local_lab, v
         traffic.expected[:0] = [({"url": path, "method": "GET"}, (status, body, "text/plain")) for path, status, body in extra]
     # A bounded controller grant, rather than a model-created authorization.
     rt.engagement.http_permissions.activate(local_lab.origin, HTTPLimits(requests=40, rate=1000, burst=40))
-    pids = []
     if variant == "approve":
         rt.engagement.http_permissions.reset()
         assert not rt.engagement.http_permissions.grants
@@ -184,9 +179,6 @@ async def test_successful_subsystem_variants(tmp_path, monkeypatch, local_lab, v
             "functional": "accepted finding, coverage, fresh resume", "state": "owned sources, immutable proof, exact origin", **metrics}))
     finally:
         await drain(rt)
-        for pid in pids:
-            with pytest.raises(ProcessLookupError):
-                os.kill(pid, 0)
 
 
 async def test_resume_interrupted_validation_then_complete_without_inheriting_authority(tmp_path, monkeypatch, local_lab, record_property):

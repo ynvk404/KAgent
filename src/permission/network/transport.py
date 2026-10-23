@@ -22,7 +22,7 @@ from src.tools.common.runtime_metadata import PersistenceState
 
 @dataclass(slots=True)
 class ResponseDiagnostics:
-    """Native per-request state, optionally supplied by the controller broker."""
+    """Native per-request state supplied by the current HTTP controller."""
     eof: bool = False
     truncated: bool = False
     transport_failed: bool = False

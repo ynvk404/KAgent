@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -71,11 +72,11 @@ class TrustedSource:
             self.unchanged()
             payload = self._catalog.search(args) if kind == 'search' else self._catalog.get(args)
             self.unchanged()
-            return validate_payload(payload, kind)
+            return validate_payload(payload, kind, query=args.get('query'))
         return await run_sync(lookup)
 
 
-def validate_payload(payload: Any, kind: str) -> SearchResponse | LookupResponse:
+def validate_payload(payload: Any, kind: str, *, query: str | None = None) -> SearchResponse | LookupResponse:
     try:
         if kind not in {'search', 'get'}:
             raise ValueError('unsupported lookup kind')
@@ -84,31 +85,10 @@ def validate_payload(payload: Any, kind: str) -> SearchResponse | LookupResponse
         response = SearchResponse.model_validate(payload) if kind == 'search' else LookupResponse.model_validate(payload)
         if response.corpus != EXPECTED_CORPUS:
             raise ValueError('CWE corpus identity mismatch')
-        if isinstance(response, SearchResponse) and any(c.exact_id_match for c in response.candidates):
-            raise ValueError('unexpected exact-ID search flag')
+        if isinstance(response, SearchResponse):
+            normalized = unicodedata.normalize('NFKC', query).casefold().strip() if isinstance(query, str) else ''
+            if any(c.exact_id_match and normalized != f'cwe-{c.id}' for c in response.candidates):
+                raise ValueError('exact-ID search flag does not match the query')
         return response
     except (ValueError, TypeError, RecursionError) as exc:
-        raise ValueError('invalid pinned CWE response') from exc
-
-
-def parse_response(output: str, kind: str) -> SearchResponse | LookupResponse:
-    # Registry returns JSON text wrapping MCP content, not structuredContent.
-    if not isinstance(output, str) or len(output.encode('utf-8')) > RESPONSE_BYTES * 2:
-        raise ValueError('oversized CWE transport content')
-    try:
-        blocks = strict_json(output)
-        if (not isinstance(blocks, list) or len(blocks) != 1 or not isinstance(blocks[0], dict)
-                or not {'type', 'text'} <= set(blocks[0])
-                or not set(blocks[0]) <= {'type', 'text', 'annotations', 'meta', '_meta'}
-                or blocks[0]['type'] != 'text' or not isinstance(blocks[0]['text'], str)
-                or any(value is not None for key, value in blocks[0].items() if key not in {'type', 'text'})):
-            raise ValueError('expected exactly one plain MCP text block')
-        # Use the actual payload + canonical MCP wrapper, including JSON escapes.
-        envelope = {'content': blocks, 'isError': False}
-        if len(json.dumps(envelope, ensure_ascii=True, separators=(',', ':')).encode('utf-8')) > RESPONSE_BYTES:
-            raise ValueError('oversized CWE MCP response')
-        payload = strict_json(blocks[0]['text'])
-        return validate_payload(payload, kind)
-    except (ValueError, TypeError, RecursionError) as exc:
-        # Do not include Pydantic's input_value (untrusted source text) in errors.
         raise ValueError('invalid pinned CWE response') from exc

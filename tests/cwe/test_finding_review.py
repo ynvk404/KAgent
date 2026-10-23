@@ -77,12 +77,13 @@ async def test_existing_suitable_mapping_needs_no_catalog_or_reclassification(sc
     assert workflow(tool).to_dict() == snapshot
 
 
-async def test_missing_mapping_uses_existing_promotion_with_explicit_evidence_review(scenario):
+@pytest.mark.parametrize('query', ['missing authorization', 'CWE-862'])
+async def test_missing_mapping_uses_existing_promotion_with_explicit_evidence_review(scenario, query):
     tool, cid, path = await persisted(scenario)
     before = read_report(path)
     state = deepcopy(workflow(tool).to_dict())
     ref = proof_refs(before)[0]
-    prompt, calls = answers('missing authorization', 'CWE-862', f'{ref}: object access omits authorization, matching the missing check mechanism.')
+    prompt, calls = answers(query, 'CWE-862', f'{ref}: object access omits authorization, matching the missing check mechanism.')
     notice = await review_finding(tool, cid, scenario.policy, prompt)
     after = read_report(path)
     assert 'CWE-862' in notice and after.cwe == ['CWE-862'] and after.classification_revision == 1

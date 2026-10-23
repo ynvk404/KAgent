@@ -1,7 +1,5 @@
 import asyncio
 import json
-import sys
-import shutil
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -10,17 +8,13 @@ import httpx
 import pytest
 
 from src.engagement.state import EngagementState
-from src.permission.runtime.execution import default_execution_policy, ExecutionBlocked
+from src.permission.runtime.execution import default_execution_policy
 from src.permission.permission import Decision, YoloPrompter
 from src.tools.common.registry import Registry
-from src.tools.execution.shell import ShellTool
-from src.tools.execution.plugin import CommandPluginTool
 from src.tools.http.http_tool import HTTPTool
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.skills.registry import Registry as SkillRegistry
 from src.tools.workflow.finding import ConfirmFindingTool
-from src.tools.mcp.integration import discover_mcp_tools
-from src.config.config import PluginConfig, MCPServerConfig
 from src.coverage.store import CoverageStore
 from src.findings.store import Store as FindingsStore
 from src.target.target import Target
@@ -87,26 +81,6 @@ async def lab(tmp_path):
         await server.wait_closed()
 
 
-
-
-
-
-MCP_SERVER = r'''
-import json,sys,urllib.request
-for line in sys.stdin:
-    msg=json.loads(line); ident=msg.get('id'); method=msg.get('method')
-    if ident is None: continue
-    if method=='initialize':
-        result={'protocolVersion':msg['params']['protocolVersion'],'capabilities':{'tools':{}},'serverInfo':{'name':'fixture','version':'1'}}
-    elif method=='tools/list':
-        result={'tools':[{'name':'fetch','description':'fixture','inputSchema':{'type':'object','properties':{'url':{'type':'string'}},'required':['url']}}]}
-    elif method=='tools/call':
-        try: text=urllib.request.urlopen(msg['params']['arguments']['url'],timeout=10).read().decode(); error=False
-        except Exception: text='blocked fixture transport'; error=True
-        result={'content':[{'type':'text','text':text}],'isError':error}
-    else: result={}
-    print(json.dumps({'jsonrpc':'2.0','id':ident,'result':result}),flush=True)
-'''
 
 
 

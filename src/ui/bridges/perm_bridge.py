@@ -8,7 +8,6 @@ from src.permission.permission import (
     Decision,
     PermissionRequest,
     Prompter,
-    UserControlledRefusal,
     PermissionReviewStale,
 )
 from src.permission.runtime.invocations import capture_review, ReviewGuard
@@ -232,7 +231,6 @@ class BridgedPrompter(Prompter):
             risk_tier=req.risk_tier,
             yolo_auto_approve=req.yolo_auto_approve,
             force_operator=req.force_operator,
-            offer_browser_grant=req.offer_browser_grant,
             offer_http_lab=req.offer_http_lab,
             is_current=active,
             resolve=resolve,

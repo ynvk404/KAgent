@@ -186,6 +186,33 @@ def test_legacy_v2_profiles_keep_generated_request(layout):
     assert profile.verify(receipt) == value
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_removed_shell_preset_cannot_create_or_launch_a_profile(layout, reviewed, legacy):
+    source, _ = reviewed
+    before = original_bytes(layout)
+    with pytest.raises(ValueError, match="preset is unavailable"):
+        profile.plan(layout[0], layout[1], layout[2], layout[3], "http://127.0.0.1:8081", prompt_file=source,
+                     legacy_bounded=legacy, enable_headless_shell=True)
+    assert original_bytes(layout) == before and not layout[3].exists()
+
+
+def test_historical_shell_preset_is_rejected_without_consuming_profile(layout, reviewed):
+    source, _ = reviewed
+    value = profile.plan(layout[0], layout[1], layout[2], layout[3], "http://127.0.0.1:8081",
+                         prompt_file=source, legacy_bounded=True)
+    receipt = profile.apply(value)
+    value["execution_preset"] = "headless-shell"
+    value["limits"]["scanner_jobs_authorized"] = None
+    receipt.write_bytes(profile.encode(value))
+    before = original_bytes(layout)
+    with pytest.raises(ValueError, match="preset is unavailable"):
+        profile.launch(receipt, headless=True, execute_prompt=True)
+    with pytest.raises(ValueError, match="preset is unavailable"):
+        profile.launch(receipt, headless=True, execute_prompt=True, enable_headless_shell=True)
+    assert original_bytes(layout) == before
+    assert not (layout[3] / "launch-started.json").exists()
+
+
 def test_legacy_reviewed_launch_uses_verified_copy_and_unchanged_flags(layout, reviewed, monkeypatch):
     from src.cli import runtime
     source, _ = reviewed

@@ -325,10 +325,16 @@ def whole_target_script(runtime, definition) -> Script:
         metadata.append(http_observation(output)["observation_id"])
         if path == "/openapi.json":
             assert app.endpoint in output and app.parameter in output
+    # A documentation GET establishes a declared input, not request context for
+    # the documented endpoint. Use the admitted document's exact attribution.
+    source = next(source for source in runtime.workflow.discovery_sources.values()
+                  if source.retained_ref == metadata[-1])
     inventory = receipt((yield "workflow", {"action": "record_input", "endpoint": definition.endpoint,
         "method": definition.method, "parameter": definition.parameter, "location": "query",
         "input_type": "string", "sample_payload": definition.input_value,
-        "source_ref": metadata[-1]}))
+        "source_attribution": {"discovery_source_id": source.id, "retained_ref": source.retained_ref,
+            "retained_hash": source.retained_hash,
+            "document_location": f"/paths/{definition.endpoint.replace('/', '~1')}/get/parameters/0"}}))
     iid = inventory["input"]["id"]
     dispositions = (
         ("standard_metadata", "observed", f"robots.txt and sitemap.xml returned 404; reviewed native HTTP {metadata[:2]}. No metadata adapter attestation."),

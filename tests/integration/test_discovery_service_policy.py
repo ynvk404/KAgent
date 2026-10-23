@@ -84,7 +84,7 @@ def boundary(monkeypatch):
 
 @pytest.fixture
 def runtime_factory(tmp_path, boundary):
-    def factory(*, legacy_config=None, nmap="/tools/nmap", coverage="missing", yolo=False, client=None, origin=ORIGIN):
+    def factory(*, legacy_config=None, coverage="missing", yolo=False, client=None, origin=ORIGIN):
         runtime = make_runtime(tmp_path, client, origin=origin, yolo=yolo)
         runtime.workflow.objective = WorkflowObjective(
             id="n1-service", mode="whole_target", target_origin=origin)
@@ -120,12 +120,11 @@ def assert_idle(runtime, boundary):
 
 @pytest.mark.parametrize("legacy_config", [{"tooling_profile": "minimal"}, {"tooling_profile": "full"}, {"tooling_profile": None}, {}])
 @pytest.mark.parametrize("mode", ["auto", "socket"])
-@pytest.mark.parametrize("nmap", [None, "/tools/nmap"])
 @pytest.mark.parametrize("coverage", ["missing", "performed", "no-workflow"])
 async def test_registry_selects_native_before_review_and_consumes_socket_budget(
-    runtime_factory, boundary, legacy_config, mode, nmap, coverage,
+    runtime_factory, boundary, legacy_config, mode, coverage,
 ):
-    runtime = runtime_factory(legacy_config=legacy_config, nmap=nmap, coverage=coverage)
+    runtime = runtime_factory(legacy_config=legacy_config, coverage=coverage)
     result = await runtime.registry.execute("service_discovery", {"mode": mode}, FakeSignal(), runtime.prompter)
     payload = json.loads(result)
 

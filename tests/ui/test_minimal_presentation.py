@@ -107,17 +107,6 @@ def test_unknown_http_format_and_payload_metadata_stay_in_default_preview():
     assert all(line in frame for line in detail.splitlines())
 
 
-@pytest.mark.parametrize("group", ["read", "navigate", "interaction"])
-def test_browser_reuse_footer_names_actual_action_group(group):
-    from src.ui.widgets.permission_modal import PermissionModal
-    from tests.ui.test_permission_modal import make_req
-    modal = PermissionModal(make_req(tool="mcp_browser", offer_browser_grant=group))
-    assert f"a trust Browser {group}" in modal.instructions().plain
-    if group == "interaction":
-        from tests.ui.test_permission_modal import rendered
-        assert "Click/type may submit" in rendered(modal, width=160)
-
-
 def test_native_grant_review_keeps_scope_and_quota_without_details():
     from src.permission.network.grants import HTTPLimits, WARNING as HTTP_WARNING
     from src.permission.permission import Decision

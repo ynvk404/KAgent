@@ -1,7 +1,6 @@
 import json
 import asyncio
 import importlib
-from typing import cast
 
 import pytest
 
@@ -29,7 +28,6 @@ from src.logger.session_debug import (
     SessionDebugOptions,
     create_session_debug_log,
 )
-from src.tools.mcp.integration import MCPSession
 from src.llm.core.types import Message
 from src.session.store import Store
 
@@ -287,10 +285,6 @@ def test_normal_shutdown_closes_runtime_resources():
         def join(self, timeout):
             calls.append(("join", timeout))
 
-    class Session:
-        async def close(self):
-            calls.append("session")
-
     async def close_bridge():
         calls.append("bridge")
 
@@ -300,13 +294,12 @@ def test_normal_shutdown_closes_runtime_resources():
             root_ctl,
             None,
             [Observer()],
-            cast(list[MCPSession], [Session()]),
             close_bridge,
         )
     )
 
     assert root_ctl.is_set()
-    assert calls == ["stop", ("join", 1), "session", "bridge"]
+    assert calls == ["stop", ("join", 1), "bridge"]
 
 
 def test_parse_flags_handles_max_steps_option():

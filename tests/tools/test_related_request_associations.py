@@ -7,7 +7,7 @@ import pytest
 
 from src.permission.permission import AlwaysAllow
 from src.redaction.redact import apply_evidence
-from src.skills.registry import Registry as Skills
+from src.skills.registry import Registry as Skills, Skill, normalize_candidate_class
 from src.target.target import Target
 from src.tools.common.outcome import ToolOutput
 from src.tools.common.registry import Registry
@@ -25,6 +25,15 @@ def dispatch(tmp_path, monkeypatch):
     skills = Skills()
     skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
     assert not skills.load_errors
+    # Supplement the two shipped validators with explicit custom validators.
+    # Related-request associations support any installed expert playbook; the
+    # retired IDOR/CSRF/SSRF/SSTI built-ins are not part of this fixture.
+    for name in CLASSES:
+        canonical = normalize_candidate_class(name)
+        if not skills.validators_for_class(canonical):
+            skills.add(Skill(f"fixture-{canonical}", "Association fixture", [], False,
+                str(tmp_path / canonical / "SKILL.md"), "",
+                stage="validation", candidate_classes=[canonical]))
     state = WorkflowState(objective=WorkflowObjective("association-objective", "direct", ORIGIN))
     tool = WorkflowTool(state, Target(ORIGIN), skills=skills, evidence_root=tmp_path,
                         session_id="association-session")

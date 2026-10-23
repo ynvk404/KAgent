@@ -104,6 +104,12 @@ async def test_sibling_creation_never_recovers_original_candidate(tmp_path, chan
             'endpoint': '/login', 'method': 'POST', 'parameter': 'email'}
     bad = {**args, 'objective_id': state.objective.id}
     await result(app, tool, 'bad', bad, call(app, 'bad', bad))
+    if 'baseline_request_ref' in change:
+        from tests.helpers.workflow import bind_capture_baseline
+        change = {**change, 'baseline_request_ref': bind_capture_baseline(tool, '/login')}
+        assert tool.http_tool is not None
+        tool.http_tool.workflow = state
+        tool.http_tool.engagement = app.agent.engagement_state
     sibling = {**args, **change}
     output = await result(app, tool, 'sibling', sibling, call(app, 'sibling', sibling))
     assert json.loads(output)['ok'] is True

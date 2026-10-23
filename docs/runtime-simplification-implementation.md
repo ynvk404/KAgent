@@ -1,5 +1,9 @@
 # Triển khai runtime tối giản
 
+Đây là báo cáo của đợt triển khai. Kết quả audit/cleanup tiếp nối được ghi tại
+[FINAL POST-REFACTOR AUDIT](final-post-refactor-audit.md); các số test và failure
+dưới đây mô tả thời điểm triển khai, không phải trạng thái nghiệm thu mới nhất.
+
 ## Phạm vi
 
 Thực hiện theo `docs/design-runtime-simplification.md`, trên HEAD `5b1554d`.

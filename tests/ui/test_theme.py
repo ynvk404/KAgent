@@ -213,12 +213,12 @@ def test_skill_description_markers_do_not_gain_emphasis_in_light():
 
 
 def test_permission_preview_status_and_callbacks_are_unchanged():
-    req = make_req(tool="mcp_browser", summary="Review interaction", detail="fixture preview",
-                   offer_browser_grant="interaction")
+    req = make_req(tool="http", summary="Review request", detail="fixture preview",
+                   no_session_cache=True)
     modal = PermissionModal(req)
     dark, light = rich_text(modal.render()), rich_text(modal.render(ui=LIGHT_UI))
     assert dark.plain == light.plain
-    for label in ("Review interaction", "Click/type may submit"):
+    for label in ("Review request", "fixture preview"):
         assert style_at(dark, label) == style_at(light, label)
     assert req.detail == "fixture preview"
     req.resolve.assert_not_called()

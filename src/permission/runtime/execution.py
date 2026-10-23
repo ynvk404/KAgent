@@ -77,7 +77,7 @@ class ExecutionPolicy:
         self.engagement = engagement
         self.root = root.resolve()
         self.protected = tuple(p.resolve() for p in protected)
-        # Preserve the configured spelling so worker validation can reject
+        # Preserve the configured spelling so local catalog validation can reject
         # symlinked and noncanonical roots instead of resolving them away.
         self.cwe_mcp_deployment_path = (Path(cwe_mcp_deployment_path).expanduser()
                                         if cwe_mcp_deployment_path else None)

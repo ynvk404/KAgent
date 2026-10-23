@@ -12,6 +12,7 @@ from src.report.builder import build_report
 from src.report.model import Resources, SourceSnapshot
 from src.report.pdf import render_pdf
 from src.session.store import Store as SessionStore
+from src.skills.registry import Skill
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.ui.commands.report_handler import capture_workflow
 from src.workflow.assessment import accepted_result, seal
@@ -29,9 +30,16 @@ from tests.security.test_execution_policy import runtime, ORIGIN
 async def test_session_finding_and_pdf_roundtrip_with_current_and_historical_metadata(
     runtime, tmp_path, candidate_class, source, enriched, expected_cwe,
 ):
-    state, candidate, _, args, _ = await setup(runtime, tmp_path, candidate_class=candidate_class)
+    # Historical access-control metadata still needs a valid current result
+    # for this round-trip check. Install an explicit custom test validator;
+    # this class has no shipped expert playbook after catalog simplification.
+    extra = (Skill("fixture-access-control", "Historical metadata fixture", ["http"], False,
+        str(tmp_path / "custom/SKILL.md"), "", stage="validation",
+        candidate_classes=["access-control"]),) if candidate_class == "access-control" else ()
+    state, candidate, _, args, _ = await setup(runtime, tmp_path,
+        candidate_class=candidate_class, extra_skills=extra)
     if candidate_class == "access-control":
-        args["skill_name"] = "access-control"
+        args["skill_name"] = "fixture-access-control"
     registry, prompter, policy, operator, *_ = runtime
     assessed = await registry.execute("workflow", args, None, prompter)
     assert not assessed.startswith("error:"), assessed
@@ -50,6 +58,8 @@ async def test_session_finding_and_pdf_roundtrip_with_current_and_historical_met
     if source == "operator":
         # Simulate a previously persisted operator revision with its original
         # evidence contract intact; this fixture grants no execution authority.
+        # These historical reports predate automatic CWE review annotations.
+        finding.classification_review = None
         result.assessment_source = "operator"
         result.assessment_binding = seal(result)
         finding.assessment_source = "operator"

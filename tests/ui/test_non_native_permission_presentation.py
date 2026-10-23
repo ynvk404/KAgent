@@ -7,21 +7,17 @@ from unittest.mock import Mock, AsyncMock
 import pytest
 
 from src.permission.permission import Decision, PermissionRequest
-from src.permission.permission import PermissionReviewCancelled, YoloPrompter
+from src.permission.permission import PermissionReviewCancelled
 from src.permission.network.grants import HTTPLimits
 from src.ui.bridges.perm_bridge import BridgedPermissionRequest, BridgedPrompter
 from src.ui.widgets.permission_modal import PermissionModal
 from src.tools.common.registry import Registry
-from src.tools.execution.file import (FileReadTool, FileWriteTool, FileEditTool, FileWriteToolAlias,
+from src.tools.execution.file import (FileWriteTool, FileEditTool, FileWriteToolAlias,
                                       FileEditToolAlias, gate_sensitive_path)
-from src.tools.mcp.integration import MCPTool
-from src.config.config import MCPServerConfig, PluginConfig
-from src.tools.execution.plugin import CommandPluginTool
 from src.tools.common.browser_capture import BrowserCaptureClearTool
 from src.browser.store import CaptureStore
 from src.coverage.store import CoverageStore
 from src.tools.workflow.coverage import CoverageTool
-from tests.security.test_action_approval import Session
 from tests.tools.test_discovery_tools import make_content_tool, make_service_tool
 from tests.agent.test_tool_result_offloading import make, record, reference
 from src.tools.http.private_host import gate_private_request, parse_http_url
@@ -39,13 +35,13 @@ from tests.security.test_execution_policy import runtime
 
 
 
-def test_unknown_browser_trailer_is_not_removed_or_reclassified():
-    detail = '{"args":{"text":"FULL_ARGUMENT_TAIL"}}\n\nCUSTOM_BROWSER_TRAILER'
-    req = make_req(tool="mcp_browser_browser_click", summary="mcp: browser/browser_click",
-                   detail=detail, offer_browser_grant="interaction", force_operator=True,
+def test_unknown_action_trailer_is_not_removed_or_reclassified():
+    detail = '{"args":{"text":"FULL_ARGUMENT_TAIL"}}\n\nCUSTOM_ACTION_TRAILER'
+    req = make_req(tool="custom_action", summary="Review custom action",
+                   detail=detail, force_operator=True,
                    no_session_cache=True, session_scope_display="custom scope")
     frame = rendered(PermissionModal(req), width=200)
-    assert detail in frame and "CUSTOM_BROWSER_TRAILER" in frame
+    assert detail in frame and "CUSTOM_ACTION_TRAILER" in frame
 
 
 

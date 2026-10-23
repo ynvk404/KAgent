@@ -17,7 +17,6 @@ from src.tools.execution.shell import (
     DENY_PATTERNS,
     ShellTool,
     run_with_capture,
-    rewrite_portable_command,
     shell_invocation,
 )
 
@@ -236,18 +235,6 @@ async def test_native_grep_semantics(native_shell_tool, native_grep_p, command, 
 @pytest.mark.parametrize("command", SHELL_TEXT_COMMANDS)
 async def test_shell_text_and_native_utilities_are_not_portability_blocked(native_shell_tool, command):
     await assert_native_shell_result(native_shell_tool, command)
-
-
-@pytest.mark.parametrize("command", [
-    "printf 'abc' | grep -P 'a'",
-    "printf 'abc' | grep -voP 'a' -A1",
-    'pat=abc; printf abc | grep -P "$pat"',
-    "grep -P '@{[ `id` ]}' /dev/null",
-    "cat <<'DATA'\n| grep -P 'abc'\nDATA",
-    "printf abc | sed -r 's/a/A/'",
-])
-def test_legacy_rewrite_helper_preserves_original_command(command):
-    assert rewrite_portable_command(command) == command
 
 
 @pytest.mark.asyncio
@@ -534,12 +521,6 @@ def test_honors_pflow_windows_shell_override_on_windows(
     )
     cmd, _argv = inv
     assert cmd == "pwsh.exe"
-
-
-@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
-def test_legacy_rewrite_is_identity_on_every_platform(monkeypatch, platform):
-    cmd = "type x | grep -P 'a'"
-    assert with_platform(monkeypatch, platform, lambda: rewrite_portable_command(cmd)) == cmd
 
 
 def test_surfaces_powershell_appropriate_guidance_on_windows(monkeypatch):

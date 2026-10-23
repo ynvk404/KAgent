@@ -147,12 +147,6 @@ from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.state import WorkflowState
 
 
-
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from src.tools.mcp.integration import MCPSession
-
 from src.browser.store import CaptureStore
 
 from src.tools.common.browser_capture import (
@@ -501,7 +495,6 @@ async def close_runtime_resources(
     root_ctl: asyncio.Event,
     reload_timer: asyncio.TimerHandle | None,
     watchers: list[Any],
-    mcp_sessions: list[MCPSession],
     close_burp_bridge: Callable[[], Any],
     skill_reloader: SkillReloader | None = None,
 ) -> None:
@@ -518,10 +511,6 @@ async def close_runtime_resources(
     for observer in watchers:
         await run_sync(observer.join, timeout=1)
 
-    await asyncio.gather(
-        *(session.close() for session in mcp_sessions),
-        return_exceptions=True,
-    )
     await close_burp_bridge()
 
 
@@ -975,14 +964,12 @@ async def main() -> int:
         except Exception as err:
             sys.stderr.write(f"warning: failed to start burp bridge: {err}\n")
 
-    mcp_sessions: list[MCPSession] = []
     if flags.list_skills:
         for sk in skills.list():
             print(f"- {sk.name}")
             print(f"    {sk.description}")
             print(f"    ({sk.path})")
 
-        await asyncio.gather(*(s.close() for s in mcp_sessions))
         await close_burp_bridge()
         return 0
 
@@ -993,7 +980,6 @@ async def main() -> int:
             print(f"- {name}{gated}")
             print(f"    {tool.description() if tool else ''}")
 
-        await asyncio.gather(*(s.close() for s in mcp_sessions))
         await close_burp_bridge()
         return 0
 
@@ -1065,7 +1051,7 @@ async def main() -> int:
     except (ValueError, PermissionError) as err:
         print(f"HTTP grant: {err}", file=sys.stderr)
         await close_runtime_resources(root_ctl=root_ctl, reload_timer=None, watchers=[],
-                                      mcp_sessions=mcp_sessions, close_burp_bridge=close_burp_bridge)
+                                      close_burp_bridge=close_burp_bridge)
         return 2
     if session_debug.enabled and (flags.http_lab_grants or flags.yolo):
         print("HTTP operator grants:\n" + engagement_state.http_permissions.status(), file=sys.stderr)
@@ -1089,7 +1075,7 @@ async def main() -> int:
                 if flags.interactive:
                     await headless_input.close()
                 await close_runtime_resources(root_ctl=root_ctl, reload_timer=None, watchers=[],
-                    mcp_sessions=mcp_sessions, close_burp_bridge=close_burp_bridge)
+                    close_burp_bridge=close_burp_bridge)
             finally:
                 await session_debug.aclose()
                 await logger.aclose()
@@ -1396,7 +1382,6 @@ async def main() -> int:
                 root_ctl,
                 reload_timer,
                 watchers,
-                mcp_sessions,
                 close_burp_bridge,
                 skill_reloader=skill_reloader,
             )

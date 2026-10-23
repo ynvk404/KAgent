@@ -1,4 +1,4 @@
-"""Strict wire schemas shared by the offline server and independently checked client."""
+"""Strict identities, schemas and query bounds for the pinned local catalog."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,6 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 XML_SHA256 = '1f5a78bd62e00f86436b4fe32d5034a57e8f0da88e4063b2072b664ae510912e'
-ZIP_SHA256 = '3976f599e5e5200219a3108bb896d06e2a88fbb293369e1883cb423a5e9d7d50'
 NAMESPACE = 'http://cwe.mitre.org/cwe-7'
 SCHEMA_IDENTITY = 'http://cwe.mitre.org/data/xsd/cwe_schema_v7.3.xsd'
 ADAPTER_VERSION = '1.0.0'
@@ -142,13 +141,6 @@ class LookupResponse(StrictModel):
             raise ValueError('inconsistent lookup')
         return self
 
-SEARCH_SCHEMA = {'type': 'object', 'additionalProperties': False,
-                 'properties': {'query': {'type': 'string', 'minLength': 1, 'maxLength': 512},
-                                'max_results': {'type': 'integer', 'minimum': 1, 'maximum': 5, 'default': 5}},
-                 'required': ['query']}
-GET_SCHEMA = {'type': 'object', 'additionalProperties': False,
-              'properties': {'id': {'type': 'integer', 'minimum': 1, 'maximum': 999999}}, 'required': ['id']}
-
 def tokens(text: str) -> frozenset[str]:
     """NFKC, casefold, maximal Unicode alphanumeric runs (underscore separates)."""
     normalized = unicodedata.normalize('NFKC', text).casefold()
@@ -171,6 +163,3 @@ def strict_json(text: str):
             result[key] = value
         return result
     return json.loads(text, object_pairs_hook=pairs, parse_constant=lambda _: (_ for _ in ()).throw(ValueError('invalid JSON constant')))
-
-def wire_text(payload: dict) -> str:
-    return json.dumps(payload, ensure_ascii=True, separators=(',', ':'), allow_nan=False)

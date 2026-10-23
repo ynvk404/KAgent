@@ -4,7 +4,7 @@ import json
 from dataclasses import is_dataclass, asdict
 from datetime import datetime, timezone
 import sys
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, List, Optional, cast
 
 import mcp.types as types
 from mcp.server import Server, NotificationOptions
@@ -69,7 +69,7 @@ def print_help() -> None:
     sys.stderr.write(f"""kagent-capture-mcp {SERVER_VERSION}
 
 Standalone MCP stdio server that bridges the kagent Chrome extension
-to any MCP-aware client (Cursor, kagent, ...).
+to an external MCP-aware client. KAgent process MCP execution is unavailable.
 
 Usage:
   python -m src.browser.capture_mcp [flags]

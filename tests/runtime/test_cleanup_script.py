@@ -65,7 +65,7 @@ def protected(root: Path) -> list[Path]:
     return [put(root, relative, f"preserve {relative}") for relative in (
         "src/ui/app.py", "src/report/model.py", "tests/test_report.py",
         "skills/recon/SKILL.md", "skills/sql-injection/payloads.txt",
-        "components/cwe_mcp/server.py", "integrations/burp/kagent_burp.py",
+        "components/cwe_mcp/catalog.py", "integrations/burp/kagent_burp.py",
         "benchmarks/scenario1/core/dataset.py", "benchmarks/docs/scenario1.md",
         "benchmarks/scenario1/reset/java/ResetGate.java",
         "benchmarks/scenario1/reset/evidence/.gitignore",

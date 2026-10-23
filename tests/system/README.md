@@ -13,14 +13,13 @@ venv-linux/bin/pyright
 Leave `KAGENT_SYSTEM_LIVE`, `KAGENT_RUN_LIVE_TOOL_CHARACTERIZATION` and
 `KAGENT_S1_EXISTING_CONTAINER` unset for offline runs. `offline_suite` rejects
 real Python socket connections/DNS outside loopback, including swallowed
-errors. Existing scanner responsibility tests use their own disposable local
-servers and bounded process fixtures. The new system tests impose a stricter
-boundary: exactly their lab's numeric address/ephemeral port, no subprocess by
-default, private scratch stores only. The scanner variant admits only the
-trusted prlimit/ffuf command targeting that origin and its approved wordlist;
-it verifies the child's PID has exited. `/dev/null` is the only special-file
-exception for subprocess standard input. No sandbox or production permission
-gate is bypassed.
+errors. Native discovery and direct-shell responsibility tests use disposable
+local servers, mocked transports and bounded process fixtures. System tests
+restrict connections to their lab's numeric address/ephemeral port and keep
+private scratch stores. They deny subprocesses by default. `/dev/null` is the
+only special-file exception for subprocess standard input. Production permission
+gates remain active. Shell runs with the host account's rights; its cwd is not
+an OS sandbox.
 
 `LocalLab` uses `asyncio.start_server` on `127.0.0.1:0`, probes `/ready`, and
 owns/joins connection tasks. It offers public/hidden routes, form/OpenAPI input,
@@ -41,7 +40,6 @@ the test operator uses real key handlers.
 | Successful path | Independent functional, state and cleanup checks |
 | --- | --- |
 | Whole target/native HTTP | All discovery phases, input/candidate linkage, repeated comparison, accepted result, finding, coverage, real TUI idle/timers, fresh resume |
-| Whole target/scanner | Real ffuf child, two approved routes, result reader, triage, manifest/hash verification, complete workflow, scratch/PID cleanup |
 | Direct endpoint/input | Six actual validation responses, source/attempt identity, immutable derived proof, exactly one finding/coverage row |
 | Initially missing permission | No initial grant, exact-request/modal approvals, continuation to persisted completion; no reusable grant invented |
 | Resume midway | Cancel pending model after actual start-validation checkpoint, fresh runtime restores interrupted attempt with no grants/sources, new attempt completes |
@@ -56,8 +54,8 @@ the test operator uses real key handlers.
 | B insufficient/inconclusive/dedup/completion/stall | `tests/scenarios/test_safety.py`, `test_recovery.py`; `tests/agent`, whole-target integration tests |
 | C permission/scope | `test_local_boundaries`; HTTP invocation lifecycle, native callback ownership, scope event lifecycle |
 | D reset/resume/objective/generation | `test_ui_lifecycle`, resume happy path; turn ownership, native callback ownership, workflow progress ownership |
-| E scanner | Scanner happy path; scanner lifecycle, I/O responsiveness, artifact limits, workflow recovery (real loopback and explicit synthetic process fixtures) |
-| F MCP | `test_mcp_ui`; owned-session queue/timeout/caller/owner cancellation, overlapping close and teardown regressions |
+| E native discovery / shell | Native TCP/HTTP scope and budgets, retained-result provenance, direct subprocess timeout/cancellation and descendant cleanup |
+| F retired adapters / CWE | MCP/plugin execution fails closed; pinned local catalog, automatic enrichment and `/cwe` review |
 | G evidence/persistence | Workflow snapshots and fresh resume; evidence atomic publication/source binding, UI persistence responsiveness, async I/O and session persistence tests |
 | H stream/TUI | Real streaming Agent tests, per-delta semantic/read counters; existing transcript/context responsiveness tests |
 | I input/UI | Real runtime input/picker/resize test; full `tests/ui` for selection, scroll/follow-tail and modal contracts |

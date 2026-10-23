@@ -10,8 +10,10 @@ as `juice.lab` is only an operator-defined local alias, never the sole or
 implicit target.
 
 The runtime is a Python 3.11+ CLI and Textual TUI. `src/cli/main.py` wires the
-agent loop, providers, tool registry, permission bridge, stores, browser/Burp
-ingest, plugins, and MCP tools. The active `Target` is session state
+agent loop, providers, tool registry, permission bridge, stores, native discovery,
+direct shell, Burp ingest, and local CWE enrichment. Configured command plugins
+and process MCP adapters are unavailable without the retired isolated executor;
+they must not fall back to host execution. The active `Target` is session state
 (`src/target/target.py`); the system prompt directs HTTP work to that base URL,
 but contributors must still preserve scope in tool and workflow changes.
 
@@ -47,9 +49,9 @@ but contributors must still preserve scope in tool and workflow changes.
   metadata is discovered/validated in `src/skills/`; `load_skill` supplies the
   playbook on demand.
 
-- KAgent includes discovery/reconnaissance skills; web enumeration and input
-  analysis; and vulnerability-specific validation skills for SQL injection,
-  XSS, access control, authentication, CSRF, SSRF, SSTI, and future classes.
+- KAgent ships reconnaissance, web enumeration, web input analysis, SQL injection
+  and XSS skills. Other vulnerability classes use the bounded generic workflow
+  or explicitly installed custom validators; they have no shipped expert playbook.
 
 - The general lifecycle is detection/discovery -> confirmation -> optional
   bounded impact validation -> stop/report. Each skill's own `SKILL.md`,
@@ -165,8 +167,8 @@ but contributors must still preserve scope in tool and workflow changes.
 - `Target & scope` should be shown only when a target/scope is supplied,
   restored, or initialized for the current startup.
 
-- `Integrations` should be shown only when optional integrations such as MCP,
-  Burp, or configured plugins are actually relevant to the current startup.
+- `Integrations` should be shown only when optional integrations such as Burp
+  are actually relevant to the current startup.
 
 - `StartupSplash` is presentation/status UI. Do not move session restoration,
   target authorization, provider validation, integration initialization, or
@@ -219,7 +221,7 @@ but contributors must still preserve scope in tool and workflow changes.
 
 - Target, permissions, network-origin checks, and execution: `src/target/`,
   `src/permission/`, `src/permission/network/`, `src/permission/runtime/`,
-  `src/permission/worker/`, `src/tools/common/registry.py`,
+  `src/tools/common/registry.py`,
   `src/tools/http/private_host.py`, `src/tools/http/http_tool.py`,
   `src/tools/http/web.py`, `src/tools/discovery/`, `src/tools/execution/`,
   `src/tools/mcp/`, `src/tools/skills/`, and `src/tools/workflow/`.

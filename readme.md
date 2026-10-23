@@ -195,7 +195,7 @@ python3 scripts/cleanup.py --scope benchmark --reset-intelligence
 ```
 
 `runtime` clears transient project state (including tool-result files) and known
-skill/finding/worker outputs. `benchmark` additionally clears benchmark outputs
+skill/finding outputs and historical worker output paths. `benchmark` additionally clears benchmark outputs
 under `.kagent/` and `artifacts/benchmarks/`. Both retain docs, audits, checkpoints,
 archived runs, caches and the containing runtime directories. Intelligence is
 retained unless `--reset-intelligence` is explicitly passed with `all` or `benchmark`;

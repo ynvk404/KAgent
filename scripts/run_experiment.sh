@@ -23,7 +23,7 @@ if (($#)); then
         'Headless: --run PROFILE_JSON --headless --execute-prompt [--interactive|--non-interactive]' \
         'YOLO and native HTTP grants follow the normal KAgent CLI rules; no grant or quota is injected.' \
         'Legacy limits: select --legacy-bounded at dry-run; old v2/v3 profiles keep their reviewed behavior.' \
-        'Legacy shell preset: also select --prompt-file FILE --enable-headless-shell; repeat --enable-headless-shell on Headless run.' \
+        'The legacy isolated headless shell preset is unavailable; normal Headless revocations remain enforced.' \
         'No existing data is deleted or reset. Preparation never starts KAgent.'
       exit 0 ;;
   esac
