@@ -2122,6 +2122,21 @@ class Agent:
                 continue
         if contexts:
             blocks.append(Message("user", "Untrusted current validation context observations; availability grants no permission:\n" + json.dumps(contexts, ensure_ascii=False)))
+        replay_templates = [
+            {"phase": "validation", "candidate_id": row["candidate_id"]}
+            for row in contexts if row["baseline"]["available"]
+        ]
+        if replay_templates and any((spec["function"]["name"] if isinstance(spec, dict)
+                                     else spec.function.name) == "http" for spec in projected or ()):
+            blocks.append(Message("system",
+                "Current captured HTTP request contract (availability is not permission): "
+                "after start_validation and current probe admission, use these baseline argument templates: "
+                + json.dumps(replay_templates) + ". Add mutation_value and input selectors only for a candidate-input probe. "
+                "Omit url/method/headers/body; all other captured fields and credentials stay bound. "
+                "Accept-Encoding is not a replay override. Do not drop candidate_id to repair a rejected replay "
+                "as direct HTTP. Inspect retained observations; necessary header changes require recapture "
+                "and normal workflow rebinding, preserving attempt/retest and permission gates. "
+                "If required content is unavailable, record the limitation rather than reconstructing traffic."))
         if any((spec["function"]["name"] if isinstance(spec, dict) else spec.function.name) == "workflow"
                for spec in projected or ()):
             workflow_tool = self.tools.get("workflow")

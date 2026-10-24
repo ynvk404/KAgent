@@ -79,7 +79,8 @@ class HTTPTool(Tool):
             'Exact requests need approval unless an exact-origin lab grant or bounded YOLO applies. '
             'If blocked, await operator action; never reword/retry to bypass. '
             'Redirects: max_redirects and per-hop approval; stop cross-origin/captured redirects. '
-            'candidate_id replays captured baselines; mutation_value varies one input. '
+            'Two modes: direct url with method/headers/body, or captured candidate_id with mutation_value/selectors; never combine. '
+            'Replay preserves non-candidate headers; Accept-Encoding is not an override. For other header changes recapture; do not drop candidate_id as a repair. '
             'Captured credentials need bounded operator approval even in YOLO. '
             'Terminal evidence: complete responses within configured limits, not marker prefixes. '
             'Reuse complete captures; never add truncated sources to sufficient manifests.'
@@ -94,8 +95,9 @@ class HTTPTool(Tool):
                 'phase': {'type': 'string', 'enum': ['recon', 'validation', 'impact'],
                         'description': 'Workflow annotation; never permission.'},
                 'url': {'type': 'string', 'description': 'Required for a direct request unless candidate_id selects captured replay. Use the exact in-scope request URL/path; replay must omit url.'},
-                'headers': {'type': 'object', 'additionalProperties': {'type': 'string'}},
-                'body': {'type': 'string'},
+                'headers': {'type': 'object', 'additionalProperties': {'type': 'string'},
+                            'description': 'Direct-request headers only. Omit with candidate_id, even for Accept-Encoding: identity; replay preserves captured headers.'},
+                'body': {'type': 'string', 'description': 'Direct-request body only; omit with candidate_id. Use mutation_value to vary the captured candidate input.'},
                 'candidate_id': {'type': 'string', 'description': 'Captured baseline Candidate ID from workflow; omit replacement url/method/headers/body. Needs an available bound replay capture; an ordinary Candidate/obs_ does not create one.'},
                 'mutation_value': {'type': 'string', 'description': 'Replacement input value.'},
                 'input_path': {'type': 'string', 'description': 'Captured replay selector; requires mutation_value and candidate_id. Omit for direct requests.'},
@@ -275,7 +277,15 @@ class HTTPTool(Tool):
         if candidate is None:
             raise ValueError('candidate has no captured baseline reference')
         if any(key in args for key in ('url', 'method', 'body', 'headers')):
-            raise ValueError('captured replay does not accept replacement url/method/headers/body')
+            raise ValueError(
+                'captured replay does not accept replacement url/method/headers/body. '
+                'Remove those fields; use phase + candidate_id for the baseline, or add mutation_value '
+                'and selectors to vary only the candidate input. To change other headers '
+                '(including Accept-Encoding), recapture and bind the new baseline through workflow, '
+                'preserving active-attempt/retest gates; '
+                'do not drop candidate_id to reconstruct this replay as direct HTTP. '
+                'Inspect retained observations before another probe; report unavailable content as a limitation.'
+            )
         if 'auth_context_ref' in args and arg_string(args, 'auth_context_ref') != (candidate.auth_context_ref or ''):
             raise ValueError('replay identity differs from candidate')
         row, baseline, source = self.captured_baseline(candidate)

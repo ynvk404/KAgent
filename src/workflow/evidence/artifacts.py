@@ -108,22 +108,28 @@ def check_proof_references(content: bytes, candidate_id: str, parents: list[str]
                        re.IGNORECASE)
     # Only a field made of handles/list punctuation/placeholders is unambiguous.
     values = re.compile(rf"(?:{observation}|\[REDACTED(?:[^\]]*)\]|[\s`,;\[\]])+")
-    claimed = set()
+    claimed: dict[str, list[int]] = {}
     for position, line in active:
         if not start <= position < end:
             continue
+        references = set()
         match = single.fullmatch(line)
         if match:
-            claimed.add(match[1])
+            references.add(match[1])
         match = field.fullmatch(line)
         if match and values.fullmatch(match[1]):
-            claimed.update(re.findall(observation, re.sub(r"\[REDACTED[^\]]*\]", "", match[1])))
+            references.update(re.findall(observation, re.sub(r"\[REDACTED[^\]]*\]", "", match[1])))
         if re.match(r"^ {0,3}#{1,6}\s+", line) or line.strip().startswith("|"):
-            claimed.update(re.findall(observation, re.sub(r"\[REDACTED[^\]]*\]", "", line)))
-    if claimed - set(parents):
+            references.update(re.findall(observation, re.sub(r"\[REDACTED[^\]]*\]", "", line)))
+        for reference in sorted(references):
+            claimed.setdefault(reference, []).append(position + 1)
+    parent_ids = set(parents)
+    missing = {reference: positions for reference, positions in claimed.items() if reference not in parent_ids}
+    if missing:
         raise EvidenceSubmissionError("PROOF_PARENT_MISMATCH",
             "proof observation reference lacks a declared primary parent; "
-            "correct the candidate artifact and dependent claims before re-registering"
+            "correct the candidate artifact and dependent claims before re-registering",
+            missing_primary_parents=missing,
         )
 
 

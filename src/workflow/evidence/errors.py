@@ -2,13 +2,19 @@
 from __future__ import annotations
 
 import json
+import re
+
+MAX_PROOF_PARENT_DIAGNOSTICS = 16
+MAX_PROOF_PARENT_LINES = 8
 
 
 class EvidenceSubmissionError(ValueError):
-    def __init__(self, code: str, message: str, *, validation_step: bool = False):
+    def __init__(self, code: str, message: str, *, validation_step: bool = False,
+                 missing_primary_parents: dict[str, list[int]] | None = None):
         super().__init__(message)
         self.code = code
         self.repair_kind = "validation-step" if validation_step else "manifest"
+        self.missing_primary_parents = missing_primary_parents or {}
 
     @property
     def repair_hint(self) -> str:
@@ -20,6 +26,13 @@ class EvidenceSubmissionError(ValueError):
             return ("Identify the predeclared required request still missing usable evidence. "
                     "Continue only that bounded validation step through existing gates, or submit an unresolved outcome.")
         specific = {
+            "PROOF_PARENT_MISMATCH": (
+                "Compare missing_primary_parents with record_evidence.observation_ids; proof_line_numbers are "
+                "1-based lines in the redacted snapshot. Explicit observation fields, headings and table rows "
+                "are parent claims, including inconclusive history. Declare every cited source only after "
+                "checking its current attempt ownership and usability; a diagnostic ID is not ownership proof. "
+                "Keep adverse evidence. record_attempt_state only declares effects and cannot set proof parents; "
+                "reordering the same IDs cannot repair a missing parent. "),
             "SOURCE_OWNERSHIP_MISMATCH": (
                 "A source may be unowned (captured before start_validation), not necessarily from a prior attempt. "
                 "It cannot be adopted or rebound. observations_total counts only the current owned inventory, "
@@ -45,12 +58,26 @@ class EvidenceSubmissionError(ValueError):
                 "exists, submit insufficient-evidence with a reason and omit unavailable references.")
 
     def response(self, action: str) -> str:
-        # The message and hint contain fixed diagnostics, never supplied IDs,
-        # paths, response bodies or request credentials.
-        return f"error: {self}\n" + json.dumps({"ok": False, "error": {
+        # Fixed prose never echoes input. The sole contextual diagnostic is a
+        # bounded list of canonical observation handles and physical line numbers;
+        # never include proof text, paths, payloads, credentials or other IDs.
+        error: dict[str, object] = {
             "code": self.code, "action": action, "repair_kind": self.repair_kind,
             "message": str(self), "repair_hint": self.repair_hint,
-        }})
+        }
+        if self.code == "PROOF_PARENT_MISMATCH" and self.missing_primary_parents:
+            gaps = [(reference, sorted(set(line for line in lines if type(line) is int and line > 0)))
+                    for reference, lines in self.missing_primary_parents.items()
+                    if re.fullmatch(r"obs_[0-9a-f]{32}", reference)]
+            gaps = sorted((row for row in gaps if row[1]), key=lambda row: (row[1][0], row[0]))
+            error["missing_primary_parent_count"] = len(gaps)
+            error["missing_primary_parents"] = [
+                {"observation_id": reference, "proof_line_numbers": lines[:MAX_PROOF_PARENT_LINES]}
+                for reference, lines in gaps[:MAX_PROOF_PARENT_DIAGNOSTICS]]
+            error["missing_primary_parents_truncated"] = (
+                len(gaps) > MAX_PROOF_PARENT_DIAGNOSTICS or
+                any(len(lines) > MAX_PROOF_PARENT_LINES for _, lines in gaps))
+        return f"error: {self}\n" + json.dumps({"ok": False, "error": error})
 
 
 def evidence_repair_kind(value: str) -> str | None:

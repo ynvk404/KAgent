@@ -408,7 +408,7 @@ class WorkflowTool(Tool):
             'status': 'Registration/list status; not used by record_result. Omit or use queued for unstarted supported work. Explicit deferred requires deferred_reason; it is not a synonym for unconfirmed. Only start_validation owns validating.',
             'deferred_reason': 'record_candidate: actual dependency for an intentional deferral, preserved on enrichment. To resolve it before any result, explicitly use status=queued and deferred_reason=null after repairing the dependency. record_result: unresolved outcome reason.',
             'input_id': 'Whole-target: reuse the exact input_id from record_input/list; get_input returns canonical endpoint, method and source provenance. Inherit these fields rather than replacing a concrete path with a template. Do not drop input_id or source_ref to recover from a binding error.',
-            'observation_ids': 'Exact HTTP/authoritative evidence IDs matching candidate, attempt and request. Terminal sources: complete, untruncated, completed.',
+            'observation_ids': 'Exact HTTP/authoritative evidence IDs matching candidate, attempt and request. record_evidence: declare a primary parent for every explicit observation ID in the candidate proof fields, headings or table rows, including inconclusive history; effects observation_ids do not declare proof parents. Terminal sources: complete, untruncated, completed.',
             'outcome': 'Required for record_result.',
             'related_requests': (
                 'Optional supplementary request associations for start_validation; a single legacy explicit primary association remains valid. '

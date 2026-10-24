@@ -162,6 +162,21 @@ the candidate's proof remains immutable even though the shared `results.md`
 continues to be updated for later candidates. Do not edit the stored snapshot;
 register the updated source again to create a new proof version. The snapshot
 must remain available through finding creation and session resume.
+
+Every explicit observation ID in the selected candidate's proof fields, headings
+or table rows is a primary parent claim, including inconclusive history and
+syntax-adjustment rows. Include all cited, correctly owned sources in
+`record_evidence.observation_ids`; the four successful boolean pair observations
+alone do not cover additional ledger rows. Keep adverse evidence and its actual
+labels. `PROOF_PARENT_MISMATCH` identifies missing IDs and 1-based line numbers
+in the redacted snapshot; verify them against the current owned ledger before
+repairing the manifest. These diagnostics do not establish ownership or usability.
+`record_attempt_state.observation_ids` records effects only and cannot declare
+proof parents; reordering an unchanged parent set cannot repair this mismatch.
+Correct the source artifact if its references/claims are wrong; otherwise supply
+its actual owned parents. Never edit an immutable snapshot or resend HTTP for
+this repair, and keep the existing recovery budget.
+
 If coverage sync is `pending`, call `workflow(action="sync_coverage",
 candidate_id="...")` before `confirm_finding`.
 
@@ -528,6 +543,32 @@ path.
 the candidate input.** This applies regardless of method or content type —
 GET query string, POST form body, JSON body, path segment, header, or
 cookie. Don't simplify a request down to just the parameter under test.
+
+For native `http`, choose the request mode before building arguments. A
+Candidate with an available bound capture uses `candidate_id`: omit `url`,
+`method`, `headers` and `body`, even if their proposed values match the capture.
+Baseline replay uses `{"phase":"validation","candidate_id":"<candidate>"}`;
+to vary the JSON email input, add `"mutation_value":"<value>"` and
+`"input_path":"/email"`. Use selectors appropriate to the actual input.
+Captured replay preserves the other fields, headers, credentials and provenance.
+Direct requests use `url` with explicit request fields and omit replay arguments;
+they do not inherit selected-capture provenance or credential approval.
+
+An unreadable compressed response does not permit a replay header override,
+including `Accept-Encoding: identity`. Inspect the existing retained observation
+with `read_http_observation` first; readback does not add decoding capabilities.
+After a replacement-field rejection, remove those fields to keep replay mode.
+Do not drop `candidate_id` and reconstruct the selected request as direct HTTP
+to repair the error. If changing a non-candidate header is necessary, recapture
+the intended request and bind the new baseline through the normal workflow and
+permission gates. Active request context is immutable: close unresolved work
+honestly and follow the existing retest/new-attempt path when rebinding requires
+it. Do not transplant old provenance or observations onto a different request.
+If the needed content remains unavailable, record the limitation and use
+`insufficient-evidence` when it prevents an assessment. Avoid resending an
+unchanged request merely to fix display/decoding; retain existing retry bounds.
+A valid later request or saved finding does not prove an equivalent retry of
+the rejected operation.
 
 In particular, if the candidate's endpoint requires authentication or a
 session (check `auth:` on the inventory/candidate entry), the baseline and
