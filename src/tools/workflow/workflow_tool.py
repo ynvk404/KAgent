@@ -22,7 +22,9 @@ from src.coverage.context import project_candidate_coverage
 from src.target.target import Target
 from src.target.input_admission import admit_input_fields, identity_text, canonical_endpoint
 from src.workflow.discovery.input_view import input_page, input_summary
-from src.workflow.discovery.inventory import MAX_SOURCE_REASON_LENGTH
+from src.workflow.discovery.inventory import (
+    BOUND_NAMES, MAX_SOURCE_REASON_LENGTH, MAX_PROCESSING_BOUND, REFERENCE_HEX_PATTERN,
+)
 from src.workflow.state import (
     CANDIDATE_STATUSES,
     CLEANUP_STATES,
@@ -97,6 +99,7 @@ ACTION_REQUIRED = {
     'get_endpoint': ('endpoint_id',),
     'set_source_disposition': ('discovery_source_id', 'source_disposition', 'source_reason'),
     'get_input': ('input_id',),
+    'record_input': ('endpoint', 'parameter', 'location'),
     'set_input_disposition': ('input_id', 'disposition'),
     'link_input_candidate': ('input_id', 'candidate_id'),
     'record_candidate': ('candidate_class',),
@@ -159,6 +162,10 @@ def describe_action_contract(properties: dict[str, Any], actions: tuple[str, ...
         base = field.get('description', '').partition('\nAction use:')[0]
         field['description'] = base + '\nAction use: ' + (', '.join(allowed) or 'none; omit') + '.' + (
             ' Required for: ' + ', '.join(required) + '.' if required else '')
+
+
+def _missing_action_fields(action: str, args: dict[str, Any]) -> list[str]:
+    return [key for key in ACTION_REQUIRED.get(action, ()) if not arg_string(args, key)]
 
 
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
@@ -239,12 +246,13 @@ class WorkflowTool(Tool):
                     "required": ['role', 'method', 'url'], "additionalProperties": False}},
                 "assessment": {"type": "object"},
                 "input_id": optional_string,
-                "discovery_source_id": optional_string,
+                "discovery_source_id": {"type": "string", "pattern": "^ds_" + REFERENCE_HEX_PATTERN + "$",
+                    "description": 'Exact current ds_ ID from workflow(list, view="sources"); copy all 64 lowercase hex digits. Never convert obs_ or guess an ID.'},
                 "source_attribution": {
                     "type": "object",
                     "description": "Optional manual declaration of a field read in an admitted HTTP/capture document. Metadata only; never request context, extraction proof, read permission or test evidence.",
                     "properties": {
-                        "discovery_source_id": {"type": "string"},
+                        "discovery_source_id": {"type": "string", "pattern": "^ds_" + REFERENCE_HEX_PATTERN + "$"},
                         "retained_ref": {"type": "string"},
                         "retained_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
                         "document_location": {"type": "string", "minLength": 1, "maxLength": 233,
@@ -253,13 +261,17 @@ class WorkflowTool(Tool):
                     "required": ["discovery_source_id", "retained_ref", "retained_hash", "document_location"],
                     "additionalProperties": False,
                 },
-                "endpoint_id": optional_string,
+                "endpoint_id": {"type": "string", "pattern": "^ep_" + REFERENCE_HEX_PATTERN + "$",
+                    "description": 'Exact ep_ ID from workflow(list, view="endpoints"); not a ds_ source or input ID.'},
                 "retained_ref": optional_string,
                 "discovery_cursor": optional_string,
                 "source_disposition": {"type": "string", "enum": ['pending', 'processed', 'partial', 'blocked', 'not_applicable']},
                 "source_reason": {"type": "string", "maxLength": MAX_SOURCE_REASON_LENGTH},
                 "source_limitations": {"type": "array", "maxItems": 16, "items": {"type": "string", "maxLength": 240}},
-                "source_bounds": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}},
+                "source_bounds": {"type": "object", "properties": {
+                    name: {"type": "integer", "minimum": 1, "maximum": MAX_PROCESSING_BOUND}
+                    for name in sorted(BOUND_NAMES)}, "additionalProperties": False,
+                    "description": f"Explicit processing limits; known names only, each 1..{MAX_PROCESSING_BOUND}. Partial bounded stop also needs acknowledgement, reason and limitations."},
                 "acknowledge_bounded_stop": {"type": "boolean"},
                 "view": {"type": "string", "enum": ["all", "inputs", "sources", "endpoints", "provenance"],
                          "description": "list view; inputs returns only a bounded input page (16 KiB maximum)."},
@@ -371,6 +383,10 @@ class WorkflowTool(Tool):
         # Flat descriptions are portable on the current DeepSeek Chat
         # Completions path. No unverified union/conditional or strict mode.
         descriptions = {
+            'endpoint': 'record_input requires an observed endpoint plus parameter/location. A method prefix such as GET /search supplies method; otherwise also supply method. Preserve canonical input geometry.',
+            'method': 'record_input: required unless endpoint includes its method prefix. Must match the observed request; never infer it from a response.',
+            'parameter': 'record_input requires the exact non-secret input name, not a value or a whole endpoint.',
+            'location': 'record_input requires query/path/body/form/json/header/cookie/raw for the observed input.',
             'phase': 'record_phase_coverage only: recon or enumeration. Input analysis closes through input dispositions and complete_skill.',
             'coverage_dimension': '; '.join(
                 phase + ': ' + ', '.join(dimensions)
@@ -459,7 +475,9 @@ class WorkflowTool(Tool):
                                  'Inspect list for current attempt, prerequisites and recovery; Continue cannot reset its budget.'
                                  if action == 'start_validation' and 'force' in unsupported else ''),
                               status='error', error_kind='invalid_args')
-        missing = [key for key in ACTION_REQUIRED.get(action, ()) if not arg_string(args, key)]
+        # record_input first resolves its existing objective/target context;
+        # missing fields must not mask an authoritative workflow-state error.
+        missing = _missing_action_fields(action, args) if action != 'record_input' else []
         if missing:
             if action == 'record_evidence' and 'evidence_path' in missing:
                 return self._workflow_error('record_evidence requires ' + ', '.join(missing),
@@ -879,7 +897,14 @@ class WorkflowTool(Tool):
                     bounded_stop=args.get('acknowledge_bounded_stop', False))
             return json.dumps({'ok': True, 'discovery_source': source.to_dict(), 'unresolved': source.unresolved})
         except (ValueError, TypeError, KeyError) as err:
-            return f'error: {err}'
+            view = 'endpoints' if action == 'get_endpoint' else 'sources'
+            return self._workflow_error(str(err), code='DISCOVERY_ACTION_REJECTED',
+                category='missing_prerequisite',
+                next_action=f'Inspect workflow(action="list", view="{view}") for exact current IDs. '
+                'Keep the action and resource binding; never guess or convert ID prefixes. '
+                'For disposition errors correct the stated state/bounds/limitations, then retry the same source. '
+                'If the original source is unavailable, report that limitation rather than substituting evidence.',
+                allowed_source_bounds=sorted(BOUND_NAMES), max_source_bound=MAX_PROCESSING_BOUND)
 
     def _get_input(self, args: dict[str, Any]) -> str:
         input_id = arg_string(args, "input_id")
@@ -924,6 +949,9 @@ class WorkflowTool(Tool):
                 return f"error: {err}"
             if supplied_target_origin != target_origin:
                 return "error: supplied target does not match the active whole-target origin"
+        if missing := _missing_action_fields("record_input", args):
+            return ToolOutput('error: record_input requires ' + ', '.join(missing),
+                              status='error', error_kind='invalid_args')
         try:
             # The shorthand parser must not strip unsafe raw identity text
             # before the shared admission boundary can inspect it.

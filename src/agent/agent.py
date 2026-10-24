@@ -3140,10 +3140,7 @@ class Agent:
                     result.cleanup_state if result else None,
                     result.coverage_synced if result else None,
                     self.workflow.persisted_findings.get(candidate.id),
-                    tuple((a["id"], a["status"], bool(a.get("probing_stopped")),
-                           json.dumps(a.get("effects", {}).get("declaration"), sort_keys=True))
-                          for a in self.workflow.attempts.values()
-                          if a.get("candidate_id") == candidate.id and a.get("objective_id") == objective.id),
+                    tuple(sorted(self.workflow.attempt_progress_facts(candidate.id))),
                     tuple((e.id, e.sha256) for e in self.workflow.evidence.values()
                           if e.candidate_id == candidate.id),
                 ))

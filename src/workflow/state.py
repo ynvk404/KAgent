@@ -1821,6 +1821,36 @@ class WorkflowState:
         self.mark_committed()
         return True
 
+    def attempt_progress_facts(self, candidate_id: str) -> frozenset[str]:
+        """Scoped semantic lifecycle/effects facts, without handles or prose.
+
+        These are progress observations, never admission or evidence. Repeated
+        declarations and fresh Attempt IDs cannot manufacture new credit.
+        """
+        objective = self.objective
+        candidate = self.candidates.get(candidate_id)
+        if (objective is None or candidate is None
+                or not self.candidate_belongs_to_objective(candidate, objective)
+                or candidate_origin(candidate.target) != objective.target_origin):
+            return frozenset()
+        from .assessment import candidate_binding
+        binding = candidate_binding(candidate)
+        facts: set[str] = set()
+        for attempt in self.attempts.values():
+            if (attempt.get("candidate_id") != candidate_id
+                    or attempt.get("objective_id") != objective.id
+                    or attempt.get("target_origin") != objective.target_origin
+                    or attempt.get("candidate_binding") != binding):
+                continue
+            facts.add(f"attempt:{candidate_id}:{attempt.get('status')}")
+            if attempt.get("probing_stopped"):
+                facts.add(f"probing-stopped:{candidate_id}")
+            declaration = attempt.get("effects", {}).get("declaration")
+            if isinstance(declaration, dict):
+                facts.add(f"effects:{candidate_id}:{declaration.get('mutation_state')}:"
+                          f"{declaration.get('cleanup_state')}")
+        return frozenset(facts)
+
     def progress_facts(self) -> frozenset[str]:
         """Return semantic state facts for the active whole-target objective."""
         objective = self.objective
@@ -1875,12 +1905,16 @@ class WorkflowState:
         objective_candidates = {candidate.id: candidate for candidate in self.objective_candidates()}
         for candidate in objective_candidates.values():
             facts.add(f"candidate:{candidate.id}")
+            facts.update(self.attempt_progress_facts(candidate.id))
         for result in self.validation_results:
             if result.candidate_id not in objective_candidates:
                 continue
             fingerprint = validation_result_fingerprint(result)
             candidate = objective_candidates[result.candidate_id]
             facts.add(f"result:{candidate.id}:{fingerprint}")
+            # Cleanup is mutable on a same-revision retry and deliberately
+            # excluded from the assessment seal/fingerprint.
+            facts.add(f"result-cleanup:{candidate.id}:{fingerprint}:{result.cleanup_state}")
             coverage_status = {
                 "confirmed": "failed",
                 "not-confirmed": "passed",

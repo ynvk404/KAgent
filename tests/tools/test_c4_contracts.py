@@ -11,7 +11,8 @@ from src.tools.skills.skill_file import ReadSkillFileTool
 from src.tools.workflow.workflow_tool import WorkflowTool, ACTION_REQUIRED
 from src.tools.workflow.coverage import CoverageTool
 from src.coverage.store import CoverageStore
-from src.workflow.state import WorkflowState
+from src.workflow.state import WorkflowState, WorkflowObjective
+from src.target.target import Target
 
 
 @pytest.mark.parametrize('factory,key', [(ReadSkillFileTool, 'path'), (ReadPayloadsTool, 'file')])
@@ -55,8 +56,11 @@ async def test_auxiliary_pages_are_byte_bounded_and_source_bound(tmp_path, facto
 
 @pytest.mark.parametrize('action,required', list(ACTION_REQUIRED.items()))
 async def test_action_only_calls_explain_missing_fields_without_state_mutation(action, required):
-    state = WorkflowState()
-    tool = WorkflowTool(state)
+    # Input argument validation follows authoritative objective/target checks.
+    # Give this case valid context so it actually exercises missing arguments.
+    origin = 'https://fixture.test'
+    state = WorkflowState(objective=WorkflowObjective('fixture', 'whole_target', origin)) if action == 'record_input' else WorkflowState()
+    tool = WorkflowTool(state, target=Target(origin))
     before = state.to_dict()
     output = await tool.run({'action': action}, None, AlwaysAllow())
     assert isinstance(output, ToolOutput) and output.error_kind == 'invalid_args'

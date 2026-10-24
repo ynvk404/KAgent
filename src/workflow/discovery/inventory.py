@@ -20,6 +20,8 @@ MAX_SOURCES = 128
 MAX_PROVENANCE = 8192
 MAX_SOURCE_RECORDS = 256
 MAX_SOURCE_REASON_LENGTH = 240
+MAX_PROCESSING_BOUND = 16 * 1024**2
+REFERENCE_HEX_PATTERN = r'[0-9a-f]{64}'
 SOURCE_KINDS = frozenset({'native', 'ffuf', 'nmap', 'capture', 'http'})
 SOURCE_STATES = frozenset({'pending', 'processed', 'partial', 'blocked', 'not_applicable'})
 BOUND_NAMES = frozenset({'max_bytes', 'max_nodes', 'max_records', 'max_paths', 'max_operations',
@@ -48,7 +50,7 @@ def notes(values: Any) -> tuple[str, ...]:
 
 
 def check_id(value: str, prefix: str) -> None:
-    if not isinstance(value, str) or not re.fullmatch(prefix + r'[0-9a-f]{64}', value):
+    if not isinstance(value, str) or not re.fullmatch(prefix + REFERENCE_HEX_PATTERN, value):
         raise ValueError('invalid exact discovery reference')
 
 
@@ -125,7 +127,7 @@ class SourceRecord:
         if (not isinstance(self.processing_bounds, (tuple, list)) or len(self.processing_bounds) > len(BOUND_NAMES)
                 or any(not isinstance(pair, (tuple, list)) or len(pair) != 2
                        or pair[0] not in BOUND_NAMES or type(pair[1]) is not int
-                       or not 1 <= pair[1] <= 16 * 1024**2 for pair in self.processing_bounds)):
+                       or not 1 <= pair[1] <= MAX_PROCESSING_BOUND for pair in self.processing_bounds)):
             raise ValueError('processing bounds require known names and bounded positive integers')
         bounds = tuple(sorted(tuple(pair) for pair in self.processing_bounds))
         if len({key for key, _ in bounds}) != len(bounds):
