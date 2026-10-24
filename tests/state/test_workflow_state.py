@@ -741,15 +741,25 @@ def test_cleanup_lifecycle_updates_latest_result_without_creating_a_retest():
     (False, 'pending', 'awaiting permission'),
     (False, 'succeeded', 'deleted and verified'),
     (False, 'not-required', 'deleted and verified'),
+    (False, 'not-required', 'No errors; resource deleted and verified.'),
+    (False, 'not-required', 'No state was created or deleted; resource removed and verified.'),
+    (False, 'not-required', 'Resource was not deleted; Agent cleanup restored the fixture.'),
+    (False, 'not-required', 'No state was created and the resource was deleted and verified.'),
+    (False, 'not-required', 'No state was deleted; cleanup pending; resource removed and verified.'),
+    (False, 'not-required', 'No state was deleted; parent reset succeeded; Agent cleanup restored the fixture.'),
+    (False, 'not-required', 'Resource was not deleted but was restored; verification pending.'),
+    (None, 'not-required', 'No state was created, modified or deleted.'),
+    (None, 'succeeded', 'Agent cleanup deleted and verified the resource.'),
 ])
 def test_new_cleanup_submissions_reject_contradictions_but_history_restores(mutation, cleanup, status):
     state = WorkflowState()
     candidate, _ = state.add_candidate(make_candidate())
     result = ValidationResult(candidate.id, 'sql-injection', 'insufficient-evidence',
                               mutation_performed=mutation, cleanup_state=cleanup, cleanup_status=status)
+    before = state.to_dict()
     with pytest.raises(ValueError, match='cleanup'):
         state.add_validation_result(result)
-    assert not state.validation_results
+    assert state.to_dict() == before
     historical = state.to_dict()
     historical['validation_results'] = [result.to_dict()]
     restored = WorkflowState.from_dict(historical)
@@ -761,9 +771,15 @@ def test_new_cleanup_submissions_reject_contradictions_but_history_restores(muta
     (False, 'not-required', None),
     (False, 'not-required', 'not applicable: reflected input, nothing stored'),
     (False, 'not-required', 'parent benchmark reset succeeded; Agent cleanup was unnecessary'),
+    (False, 'not-required', 'Read-only GET search endpoint; no server-side state was created, modified or deleted.'),
+    (False, 'not-required', 'Read-only GET search endpoint; no server-side state was created, modified or deleted by any probe.'),
+    (False, 'not-required', 'No persistent state was created, modified, or deleted.'),
+    (False, 'not-required', 'The resource was not created, modified or deleted.'),
+    (None, 'unknown', 'No state was created, modified or deleted.'),
     (True, 'pending', None),
     (True, 'pending', 'awaiting separate permission'),
     (True, 'pending', 'deletion requested, awaiting verification'),
+    (True, 'pending', 'No state was deleted; cleanup pending.'),
     (True, 'failed', 'failed: cleanup endpoint returned 500'),
     (True, 'requires-user-action', 'operator action required: no cleanup capability'),
     (True, 'succeeded', 'resource deletion verified'),
@@ -779,6 +795,18 @@ def test_new_cleanup_submissions_accept_supported_states(mutation, cleanup, stat
                               mutation_performed=mutation, cleanup_state=cleanup, cleanup_status=status)
     assert state.add_validation_result(result)
     assert state.latest_result(candidate.id) is result
+
+
+@pytest.mark.parametrize('mutation,expected', [(False, 'not-required'), (True, 'succeeded'), (None, 'unknown')])
+def test_cleanup_negation_does_not_change_historical_inference(mutation, expected):
+    historical = {
+        'candidate_id': 'historical-candidate', 'skill_name': 'sql-injection',
+        'outcome': 'insufficient-evidence', 'mutation_performed': mutation,
+        'cleanup_status': 'Read-only GET search endpoint; no server-side state was created, modified or deleted.',
+    }
+    restored = ValidationResult.from_dict(historical)
+    assert restored is not None and restored.cleanup_state == expected
+    assert ValidationResult.from_dict(restored.to_dict()) == restored
 
 
 def test_cleanup_state_is_separate_from_confirmation_and_blocks_clean_completion():

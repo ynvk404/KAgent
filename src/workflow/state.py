@@ -907,21 +907,17 @@ class ValidationResult:
             if self.cleanup_state not in {"unknown", "not-attempted", "pending", "failed", "requires-user-action"}:
                 raise ValueError("unknown mutation cannot establish cleanup succeeded/not-required")
             return
-        inferred = _infer_cleanup_state(True, self.cleanup_status)
-        parent_reset_only = bool(re.search(
-            r"\b(?:parent(?: benchmark)?|benchmark|external) reset\b", detail,
-        )) and not re.search(r"\bagent cleanup\s+(?:deleted|removed|rolled back|performed|verified|succeeded)\b", detail)
-        awaiting = bool(re.search(
-            r"\b(?:pending|awaiting|waiting|unverified|not verified|not yet requested|"
-            r"not performed|not attempted|not done|no cleanup|not cleaned|not deleted|"
-            r"not removed|not restored|not rolled back)\b", detail,
-        ))
         if not self.mutation_performed:
-            if self.cleanup_state != "not-required" or (
-                    inferred in {"succeeded", "failed", "requires-user-action"}
-                    and not awaiting and not parent_reset_only):
+            detail = _without_negated_state_changes(detail)
+            if self.cleanup_state != "not-required":
                 raise ValueError("cleanup declaration contradicts mutation_performed=false")
+            for clause in re.split(r"[.;!?]|\b(?:but|however)\b", detail):
+                inferred, parent_reset_only, awaiting = _cleanup_submission_signals(clause)
+                if (inferred in {"succeeded", "failed", "requires-user-action"}
+                        and not parent_reset_only and (inferred == "succeeded" or not awaiting)):
+                    raise ValueError("cleanup declaration contradicts mutation_performed=false")
             return
+        inferred, parent_reset_only, awaiting = _cleanup_submission_signals(detail)
         if self.cleanup_state == "not-required":
             # A categorical 'not performed/not required' is not a justification.
             reason = re.sub(
@@ -1034,6 +1030,34 @@ def validation_result_fingerprint(result: ValidationResult) -> str:
         semantic_identity["result_id"] = result.result_id
     body = json.dumps(semantic_identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _cleanup_submission_signals(detail: str) -> tuple[CleanupState, bool, bool]:
+    parent_reset_only = bool(re.search(
+        r"\b(?:parent(?: benchmark)?|benchmark|external) reset\b", detail,
+    )) and not re.search(r"\bagent cleanup\s+(?:deleted|removed|rolled back|performed|verified|succeeded)\b", detail)
+    awaiting = bool(re.search(
+        r"\b(?:pending|awaiting|waiting|unverified|not verified|not yet requested|"
+        r"not performed|not attempted|not done|no cleanup|not cleaned|not deleted|"
+        r"not removed|not restored|not rolled back)\b", detail,
+    ))
+    return _infer_cleanup_state(True, detail), parent_reset_only, awaiting
+
+
+def _without_negated_state_changes(detail: str) -> str:
+    """Scope explicit absence claims for new no-mutation submissions only.
+
+    Consume a passive action list, never a later subject/clause. Keep failure,
+    pending and reset language, and any remaining affirmative cleanup claims.
+    Hydration deliberately retains the historical inference below.
+    """
+    action = r"(?:created|modified|cleaned|deleted|removed|restored|rolled back|performed|attempted|done)\b"
+    actions = rf"{action}(?:\s*(?:,\s*(?:or\s+)?|or\s+){action})*"
+    return re.sub(
+        r"\b(?:no\s+(?:(?:server[- ]side|persistent)\s+)?(?:state|resources?|records?|data)\s+"
+        r"(?:was|were|has been|have been)\s+|no\s+cleanup\s+(?:(?:was|has been)\s+)?|not\s+)"
+        + actions, "", detail,
+    )
 
 
 def _infer_cleanup_state(

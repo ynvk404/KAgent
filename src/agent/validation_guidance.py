@@ -57,10 +57,10 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
                      'must pass current admission and cannot adopt captures from before start.')
     elif action == 'finalize_owned':
         lines.append('Resume local finalization of the owned active attempt only: probing has stopped. '
-                     'Inspect list for usable owned sources, save minimal proof, record_evidence then record_result; '
+                     'Reuse visible owned sources; list only missing metadata, save minimal proof, record_evidence then record_result; '
                      'without usable proof record an honest unresolved outcome. Stopped probing alone is not recovery exhaustion.')
     else:
-        lines.append('Resume this owned active attempt; do not open a replacement. Inspect list for its sources; '
+        lines.append('Resume this owned active attempt; do not open a replacement. Reuse visible sources; list only missing metadata; '
                      'continue only an identified missing bounded validation step, or save proof, record_evidence and record_result.')
     skill = route.skill_name if route and route.kind == 'expert' else None
     if skill and action not in {'preserve_result', 'stop_recovery'}:
@@ -70,7 +70,10 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
         if skill == 'sql-injection':
             lines.append('Boolean SQLi confirmation needs two complete TRUE/FALSE repetitions, at least four distinct owned '
                          'observations and structured confirmation under the SQLi skill. Syntax-shape adjustments: '
-                         'at most three after the initial signal, guided by observed query shape; no punctuation walk.')
+                         'at most three after the initial signal (possibly in Input Analysis). '
+                         'The first confirmation shape change counts; phase changes and recapture do not reset the allowance. '
+                         'Count executed requests, not proposals; no punctuation walk. '
+                         'Retrieval/ownership failure does not justify resend; unresolved compatibility need not force a FALSE request.')
         elif skill == 'cross-site-scripting':
             lines.append('Raw HTML in JSON is an observation, not an XSS Candidate when rendering context or a compatible '
                          'source-to-sink path is unknown. Do not mutate to rescue an unsupported hypothesis. '

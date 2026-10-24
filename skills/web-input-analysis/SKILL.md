@@ -229,13 +229,17 @@ empty data, reflection and auth limitations. A sibling endpoint is a discovery
 clue, not evidence of this input's implementation or vulnerability class.
 Most candidates should be classifiable from this alone, including a disposition
 that records ambiguity rather than a vulnerability candidate.
-Ambiguous vulnerability context after completed triage can be `analyzed`;
-an unmet prerequisite that prevents that triage is `blocked`. A documented
-field behind a JWT gate has not been analyzed merely because the auth failure
-was classified. Do not substitute an auth-gate observation for the input's
-handler behavior, and do not infer a missing credential from HTTP 401 alone.
-Use `list(view="sources")` and `read_discovery_source` with the exact `ds_` ID
-for retained discovery bodies; `get_source` is metadata only.
+Completed passive triage can be `analyzed` even when tested/authenticated behavior
+remains unknown; only an actual unmet prerequisite preventing that triage is
+`blocked`. A bearer/security declaration alone does not establish a missing
+credential or blocked prerequisite. Documented inputs belong in canonical records
+without sending their operation; preserve servers precedence/base prefix, method,
+request media type and `source_attribution`, not the GET document as POST request
+context/replay. A classified auth failure alone is not triage of every field.
+Do not substitute it for handler behavior or infer a missing credential from
+HTTP 401 alone. Reuse visible sources; list only missing metadata and use
+`read_discovery_source` with the exact `ds_` ID only for missing retained ranges;
+`get_source` is metadata only.
 `read_http_observation` requires Candidate/Attempt ownership, which analysis
 traffic does not acquire. `read_tool_result` accepts only a published `tr_`
 reference under its producer capability. Failed/denied reads are not reasons
@@ -413,7 +417,24 @@ produce identical status, size, and content markers, record them as
 FALSE returning none. Signal gathering here is not confirmation, and a later
 validator must not inherit a contradicted conclusion from free-form prose.
 
-Write `artifacts/web-input-analysis/<target>/candidates.md`, using the same target
+Immediately before `file_write`, reconcile claims with their source/reference:
+effective method/endpoint, HTTP status, response media type, redacted body marker,
+capture flags and claim confidence. Observations/documents actually read take
+precedence over conflicting LLM summaries or inventory prose. Distinguish direct
+observation, observed from specification, inference/hypothesis and unknown without
+new Workflow fields. Request Content-Type is not response Content-Type; preserve
+an error's actual text/format rather than inventing a JSON envelope. JSON results
+do not show a SQL statement; parser diagnostics do not show full queries or
+controlled evaluation. Metadata-only capture, 200/HTML or a filename does not
+prove body review, operation success or SPA calibration.
+
+Keep retained completeness, ranges read and content still in context separate;
+Content-Length is not bytes inspected. Reuse trustworthy visible evidence, listing
+metadata/reading ranges only when missing and permitted. Otherwise record the
+limitation, without refetch, cap increases, cache-busters or shell recovery. Keep
+this canonical artifact concise, redacted and attributed, without per-response
+artifacts or extra ledgers. Write
+`artifacts/web-input-analysis/<target>/candidates.md`, using the same target
 identifier as `recon` and `web-enumeration`.
 
 This skill permits `file_write`, not `file_edit`. For an update, rewrite the

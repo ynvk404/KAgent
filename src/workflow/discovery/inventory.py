@@ -6,14 +6,18 @@ uses independent ds_/ep_/pv_ references and never supplies replay context.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from collections.abc import Mapping
 import hashlib
 import json
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from src.redaction.redact import apply as redact
 from src.target.input_admission import canonical_endpoint, identity_text
 from src.target.origin import HTTPOrigin
+
+if TYPE_CHECKING:
+    from src.permission.runtime.observations import Observation
 
 MAX_ENDPOINTS = 4096
 MAX_SOURCES = 128
@@ -316,7 +320,46 @@ def observation_handoff(state, item) -> SourceRecord | None:
     return state.admit_discovery(source, (endpoint,), (ProvenanceRecord(source.id, endpoint.id),))
 
 
-def discovery_page(state, args: dict[str, Any]) -> dict[str, Any]:
+def source_summary(state, source: SourceRecord, item: Observation | None = None) -> dict[str, Any]:
+    """Display admitted geometry and matching retained response metadata, never traffic.
+
+    Manual document attribution can link other operations to the same source;
+    only its original operation describes the source request. Response metadata
+    is optional when observations have been evicted or cannot be verified.
+    This projection neither tests nor restores content-read authority.
+    """
+    methods = {endpoint.method for link in state.discovery_provenance.values()
+               if link.source_id == source.id and link.locator == 'operation' and link.input_id is None
+               and (endpoint := state.endpoints.get(link.endpoint_id)) is not None
+               and endpoint.objective_id == source.objective_id and endpoint.target_origin == source.target_origin
+               and endpoint.url == source.document_url and endpoint.method is not None}
+    summary: dict[str, Any] = {
+        'document_url': redact(source.document_url) if source.document_url is not None else None,
+        'method': next(iter(methods)) if len(methods) == 1 else None,
+    }
+    from src.workflow.assessment import digest, source_row
+    if (source.kind not in {'http', 'capture'} or item is None
+            or item.id != source.retained_ref or item.url != source.document_url
+            or item.source_kind != ('native-http' if source.kind == 'http' else 'imported-capture')
+            or item.producer != ('http' if source.kind == 'http' else 'scoped-capture-bridge')
+            or item.objective_id not in {None, source.objective_id}
+            or source.retained_hash != item.retained_hash or digest(source_row(item)) != item.retained_hash
+            or hashlib.sha256(item.body).hexdigest() != item.response_hash):
+        return summary
+    # Only the media type is useful for selection. Never expose arbitrary header
+    # parameters, Location, cookies, request previews, or a body-derived title.
+    media_types = {redact(value).partition(';')[0].strip().lower()
+                   for name, value in item.response_headers if name.lower() == 'content-type'}
+    media = next(iter(media_types)) if len(media_types) == 1 else ''
+    summary.update(status=item.status, retained_body_bytes=len(item.body),
+                   response_complete=item.complete, response_truncated=item.truncated)
+    if len(media) <= 128 and re.fullmatch(r'[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+', media):
+        summary['media_type'] = media
+    return summary
+
+
+def discovery_page(state, args: dict[str, Any], *,
+                   observations: Mapping[str, Observation] | None = None) -> dict[str, Any]:
     """Bounded read-only projection. Cursors confer no source read rights."""
     import base64
     view = args.get('view')
@@ -367,6 +410,7 @@ def discovery_page(state, args: dict[str, Any]) -> dict[str, Any]:
                 item = {key: item[key] for key in ('id', 'kind', 'disposition', 'selected', 'bounded_stop', 'retained_ref')}
                 item['unresolved'] = row.unresolved
                 item['limitations_count'] = len(row.limitations)
+                item.update(source_summary(state, row, observations.get(row.retained_ref or '') if observations else None))
             shown.append(item)
         page = {'ok': True, 'view': view, 'total': len(rows), 'returned': count, 'complete': next_cursor is None,
                 'discovery_restore_invalid': state.discovery_restore_invalid,

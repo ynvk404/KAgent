@@ -332,7 +332,12 @@ class ReadDiscoverySource(ReadHTTPObservation):
         return ref
 
     def range_metadata(self, args: dict[str, Any]) -> dict[str, Any]:
-        return {"discovery_source_id": args["discovery_source_id"]}
+        from src.workflow.discovery.inventory import source_summary
+        policy = policy_for(self.agent.prompter)
+        assert policy is not None  # run has already rechecked range rights
+        source = self.agent.workflow.discovery_sources[args["discovery_source_id"]]
+        return {"discovery_source_id": source.id,
+                **source_summary(self.agent.workflow, source, policy.observations._items[source.retained_ref])}
 
     def validate_rights(self, args: dict[str, Any], prompter: Any, *, receipt: bool) -> None:
         import hashlib
@@ -374,4 +379,6 @@ class ReadDiscoverySource(ReadHTTPObservation):
         if any(secret in body for secret in self.agent._managed_http_secrets()):
             raise ExecutionBlocked("blocked: retained discovery body contains a known internal secret")
         if args["start_char"] > len(body):
-            raise ValueError("discovery character offset exceeds retained body")
+            raise ValueError(f"discovery character offset exceeds retained body; source_chars={len(body)}. "
+                             'Check the source method/document_url/status/media_type in workflow(action="list", view="sources"). '
+                             'For this source restart at start_char=0, then follow next_start_char; do not refetch.')

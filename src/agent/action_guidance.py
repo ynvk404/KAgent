@@ -21,7 +21,7 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
             lines.append("Recommended: finish current validation/recovery before discovery.")
         if owned_active:
             lines.append(
-                "Recommended: list and reconcile the required request ledger, owned observations and effects. "
+                "Recommended: reconcile the request ledger, owned observations and effects; list only missing metadata. "
                 "Use actual IDs/timing; obs_ is not a read_tool_result reference. "
                 "Use record_attempt_state promptly for supported effects while ownership/action remains valid; "
                 "do not wait for proof. GET or no write acknowledgement does not establish mutation=false; unknown stays unknown.")
@@ -75,8 +75,9 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
                     'an exclusion is untested work, not a negative result or new authority.')
         if phase != "recon":
             lines.append(
-                'Readers: get_source is metadata only. Use list(view="sources") then read_discovery_source with an exact ds_ ID '
-                'for retained discovery bodies; read_http_observation needs Candidate/Attempt ownership. '
+                'Readers: reuse visible metadata/body; list(view="sources") only for missing references, '
+                'read_discovery_source only for missing ranges with an exact ds_ ID. get_source is metadata only; '
+                'read_http_observation needs Candidate/Attempt ownership. '
                 'Use read_tool_result only for a published tr_ result_ref while its producer capability is allowed. '
                 'Use bounded offsets/continuation; missing/truncated content is a limitation, not authority to refetch. '
                 'Do not repeat failed reads unchanged or target requests to repair retrieval. Shell HTTP is not a truncation fallback; '

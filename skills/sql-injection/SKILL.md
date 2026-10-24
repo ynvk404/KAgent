@@ -68,13 +68,16 @@ Continue does not authorize a retest or reset declaration/recovery allowances.
 Read the applicable payload guidance before the first confirmation probe, not
 after spending syntax adjustments. Use its published continuation only until
 the chosen technique is visible; unrelated later sections are not prerequisites.
-Before HTTP, choose a benign seed and describe the expected oracle and the
-prefix/predicate/suffix hypothesis. Do not use an arbitrary nonmatching seed for
-an AND-filter test. Earlier analysis observations inform that plan but remain
-unowned; capture the necessary benign control inside the active attempt before
-comparison. A quote-containing search match may be ordinary string matching,
-not an established breakout shape. Parser positions alone do not pin a LIKE
-literal or balance its quotes and parentheses.
+Before each HTTP probe, state a short hypothesis, its supporting evidence,
+expected observation and what would falsify it in the existing ledger/checkpoint;
+no separate artifact or full query reconstruction is required. Choose a benign
+seed and explain the expected oracle and prefix/predicate/suffix hypothesis.
+Do not use an arbitrary nonmatching seed for an AND-filter test. Earlier analysis
+observations inform planning only and remain unowned: do not copy their IDs into
+terminal proof or imply ownership. Capture a necessary benign control inside the
+active attempt only for an identified comparison. A quote-containing search match
+may be ordinary string matching, not an established breakout shape. Parser
+positions alone do not pin a LIKE literal or balance its quotes and parentheses.
 
 Exhausted syntax adjustments are a finalization checkpoint: use another technique
 only if it has a distinct evidence-supported plan within the existing bounds.
@@ -122,11 +125,14 @@ cleanup action/verification evidence and separate action authority.
 Explicit `mutation_performed`/cleanup fields remain accepted on `record_result`;
 omitted fields use current attempt bookkeeping and otherwise remain unknown.
 
-Use `workflow(action="list", candidate_id=...)` to copy current observation IDs
-and adapter `elapsed_ms`; `next_observation_offset` paginates this metadata.
+Reuse visible authoritative metadata; use `workflow(action="list", candidate_id=...)`
+only for missing observation IDs or adapter `elapsed_ms`;
+`next_observation_offset` paginates this metadata.
 Use `read_http_observation` for `obs_` response ranges, `read_tool_result` only
-for `tr_` references, and registered `ev_` IDs for proof. Retrieval failure is
-not a reason to resend HTTP or invent an ID. Date headers are not timing proof.
+for `tr_` references, and registered `ev_` IDs for proof. Retrieval or ownership
+failure is not a reason to resend HTTP or invent an ID. Recapturing a signal
+just to read it does not resolve an oracle or identify a missing validation step.
+Date headers are not timing proof.
 When runtime says probing stopped, use remaining existing budget for local
 effect bookkeeping, proof registration and result disposition. Do not send
 more target actions or infer a negative result from anti-stall. If operator
@@ -242,7 +248,7 @@ After an argument rejection, correct that action once using its schema and
 returned IDs; do not repeat unchanged invalid calls or issue HTTP to fix JSON.
 When complete, correctly owned sources already meet this playbook's evidence
 contract, prioritize proof registration → result submission → required finding
-persistence. Probe again only for an identified missing validation/proof step.
+persistence. Probe again only for an identified missing validation step.
 
 For a boolean-based confirmed result under this playbook, include structured
 `confirmation` evidence. Use `kind: boolean-differential`, one shared
@@ -601,15 +607,25 @@ behavior change without an explicit error string (e.g. a size/status delta)
 is enough to establish **SQLI-1** — a syntax-sensitivity signal — but is not
 by itself confirmation; Phase 2 is required before reporting SQLI-2.
 
-Before changing quote, parenthesis, or comment syntax, write down the query
+Before changing quote, parenthesis, comment or wildcard syntax, write down the query
 shape supported by the latest database error (or `unknown` / a justified
 hypothesis when ambiguous) and choose the next single probe
 that distinguishes the remaining possibilities. Do not walk a punctuation
 list (`--`, `-- `, `/*`, `')`, `'))`, and so on) one request at a time without
 using the returned parser position/message. Cap syntax-shape adjustments at
-three after the initial signal; if they do not converge, move to a different
-applicable bounded confirmation technique or record the appropriate unresolved
-outcome when context/proof remains insufficient; `inconclusive` is not an outcome.
+three after the initial signal, which may already have occurred in Input Analysis.
+The first confirmation request counts if it changes quote/parenthesis/comment/
+wildcard structure. Phase changes, technique renaming and recapture do not reset
+the allowance; neither a new Attempt nor Continue may be used to reset it.
+Reconcile adjustments from executed requests, not self-labelled "adjustments",
+`proposal.values` or a mislabelled ledger. Account for pre-attempt requests in
+planning without adopting their unowned IDs as terminal proof. A benign control,
+TRUE/FALSE predicate flip within the same syntax shape, and valid repetition are
+not adjustments; a predicate flip that also changes syntax shape still counts.
+This is guidance bookkeeping, not a new Runtime counter/schema. If adjustments
+do not converge, use a different applicable bounded technique only with a distinct
+evidence-supported plan; otherwise record the appropriate unresolved outcome.
+`inconclusive` is not an outcome.
 
 A SQL syntax-error fragment supports parser sensitivity, not the exact `LIKE`
 clause, parenthesis balance, suffix, or constructed query. Without observed full
@@ -618,12 +634,11 @@ outside a string literal comments through the next newline or end of input;
 a space after `--` does not terminate the line comment or restore its suffix.
 This syntax note is not a new payload or a reason to send additional probes.
 
-If neither the single-quote probe nor any variant in the Phase 1 section
-produces any observable change from baseline, that's a valid outcome. Don't
-conclude SQL injection is absent from one probe alone — continue into an
-applicable Phase 2 technique. A context-compatible boolean-based check can
-surface injection that a syntax probe alone misses (e.g. numeric contexts
-where a stray quote is silently tolerated or stripped).
+If a syntax probe produces no observable change, preserve that observation;
+it does not establish SQL injection's absence. Continue only with an applicable,
+context-compatible bounded Phase 2 plan and an observable oracle. A useful boolean
+check can surface injection a syntax probe misses; unresolved compatibility is
+not a reason to force a pair or cycle techniques.
 
 **Quoted vs. numeric context — use observed SQL evidence.** A numeric-looking
 input or a value rendered inside quotes elsewhere does not establish its SQL
@@ -720,6 +735,13 @@ not for every SQLi technique.
 - HTTP 200 with identical TRUE/FALSE bodies does not prove that either predicate
   was evaluated as intended. If the seed/oracle is not established, the equal
   pair remains unresolved rather than automatically becoming a completed negative.
+  `data:[]` does not prove the whole payload was treated as literal text or that
+  the evaluator ran its predicate. Parser errors establish parser sensitivity.
+- Do not force a FALSE request while compatibility remains unresolved merely to
+  fill a pair. Report that the pair was not executed when only intended TRUE or
+  syntax variants ran; a benign control, intended truth value and controlled
+  evaluation are distinct. An unusable probe is not a reason to try another
+  technique without a useful bounded plan.
 
 Use the `PHASE 2 — VALIDATION` section of `payloads.txt` as context-adapted
 examples. Send otherwise identical TRUE/FALSE requests with the baseline's
@@ -741,7 +763,7 @@ record that 2a was inconclusive; never preserve a signal claiming they differed.
 Identify whether the seed/oracle, predicate compatibility or another prerequisite
 is unresolved. Continue only with remaining budget and a new discriminating test;
 all syntax adjustments share the existing three-adjustment limit. Do not repeat
-an effective request without a specific stability/repetition or missing-proof
+an effective request without a specific stability/repetition or missing-validation
 reason. Identical bodies/ETags alone do not establish caching or quote rewriting.
 If no useful bounded test remains, apply the outcome rules below: unfinished or
 unsupported context/proof stays unresolved; a completed bounded negative needs
@@ -1013,9 +1035,16 @@ Recheck mutation/cleanup bookkeeping for the entire attempt, including
 baseline successful-write acknowledgements, under the state-changing endpoint
 contract above. Record readback limitations and honest cleanup state.
 
-Maintain a compact baseline/control/probe ledger from each captured HTTP result:
-observation ID, effective method/URL, redacted request payload, HTTP status,
-relevant body excerpt, completeness/truncation and execution status. The runtime
+Immediately before `file_write`, reconcile each claim with the existing compact
+baseline/control/probe ledger: source/reference (observation ID), effective
+method/endpoint URL, redacted request payload, HTTP status, response media type,
+body marker/excerpt, capture flags (completeness/truncation and execution status)
+and claim confidence. Observations/documents actually read take precedence over
+conflicting LLM summaries. Keep direct observation, observed from specification,
+inference/hypothesis and unknown distinct in prose, without new Workflow fields.
+Request Content-Type is not response Content-Type. JSON product results do not
+show a SQL statement, and parser diagnostics do not prove full query shape or
+controlled evaluation. The runtime
 HTTP evidence envelope supplies the effective request preview, including replay
 changes; `request_preview_complete: false` means unseen request text remains
 unknown. A source ID or request hash alone does not recover a payload or body.
@@ -1027,11 +1056,16 @@ observed differences in headers, credentials and non-candidate fields; do not
 infer their preservation from the same URL, payload or Candidate/Attempt owner.
 Encoded response bytes are not decoded SQL diagnostics. Readback preserves the
 retained representation; it does not add a missing content decoder.
-Read retained output through an available evidence-reading API when a real
-reference exists; never invent a reader or bypass its gates. If capture or
-context reduction omitted required bytes and they cannot be retrieved, record
-that limitation rather than reconstructing them from intended payloads,
-Markdown proof or conversation memory. Check every claimed repetition against
+Retained response completeness, ranges read and content still in context are
+separate; Content-Length is not bytes inspected. Status 200, HTML media type,
+a filename or metadata-only capture proves neither body review, SPA calibration
+nor operation success. Reuse trustworthy visible sources; list/read only missing
+metadata or ranges through an available permitted API with real references.
+If bytes cannot be retrieved, record that limitation rather than reconstructing
+them from intended payloads, Markdown proof or conversation memory; never refetch,
+raise caps, cache-bust or switch to shell just to recover content. Keep proof
+concise, redacted and attributed in the existing artifact, without an extra ledger
+or mandatory artifact for every response. Check every claimed repetition against
 distinct executed observations: repeating a sentence, registering another
 snapshot or reusing an observation ID does not establish repeatability.
 

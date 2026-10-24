@@ -74,9 +74,14 @@ async def test_stale_nested_review_is_not_user_refusal_and_never_executes(tmp_pa
     assert 'PRIVATE-FIXTURE' not in working[0].content
     result = next(event for event in events if event['type'] == 'tool-result')
     assert result['error_kind'] == 'permission_stale'
+    assert working[0].role == 'tool' and working[0] is agent.history[-1]
+    assert 'stale' in working[0].content and 'stale' in result['result']
+    assert not app.state.pending_perm and not app.state.pending_calls
+    assert not any(row.kind in {'error', 'warning'} for row in app.state.transcript)
     dispatch(app, DoneEvent(stop_reason='stop'))
     text = '\n'.join(row.text for row in app.state.transcript)
-    assert 'stale' in text and 'unresolved permission outcome' in text
+    # Plan B keeps intermediate feedback in model history and raw events.
+    assert 'stale' not in text and 'unresolved permission outcome' not in text
     assert 'Permission denied by user' not in text and 'PRIVATE-FIXTURE' not in text
 
 

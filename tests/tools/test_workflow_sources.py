@@ -127,3 +127,36 @@ def test_late_source_blocks_current_readiness_without_rewriting_history(tmp_path
     s.update_discovery_source(src.id, generation=s.generation, disposition='not_applicable',
                               stop_reason='Selected document has no request syntax relevant to this objective')
     assert tool.phase_completion_readiness('web-input-analysis')['prerequisites_valid']
+
+
+def test_source_projection_paging_is_bounded_and_keeps_exact_operation_identity():
+    from src.workflow.discovery.inventory import (
+        SourceRecord, EndpointRecord, ProvenanceRecord, discovery_page,
+    )
+    from tests.state.test_discovery_inventory import state
+    s = state()
+    expected = set()
+    for index in range(30):
+        url = 'http://target.test/' + str(index) + '/' + 'x' * 440
+        src = SourceRecord('objective', 'http://target.test', 'http', f'obs-{index}',
+                           'a' * 64, document_url=url, retained_ref=f'obs-{index}')
+        ep = EndpointRecord('objective', 'http://target.test', url, 'GET')
+        # A documented POST at the same URL must not change the GET source method.
+        documented = EndpointRecord('objective', 'http://target.test', url, 'POST')
+        s.admit_discovery(src, (ep, documented), (ProvenanceRecord(src.id, ep.id),
+            ProvenanceRecord(src.id, documented.id, locator='manual:paths.post')))
+        expected.add(src.id)
+    before = s.to_dict()
+    args = {'view': 'sources', 'limit': 25}
+    found = []
+    while True:
+        page = discovery_page(s, args)
+        assert len(json.dumps(page, ensure_ascii=True).encode()) <= 16 * 1024
+        for row in page['sources']:
+            assert row['document_url'] == s.discovery_sources[row['id']].document_url
+            assert row['method'] == 'GET'
+            found.append(row['id'])
+        if page['next_discovery_cursor'] is None: break
+        args['discovery_cursor'] = page['next_discovery_cursor']
+    assert len(found) == len(set(found)) == 30 and set(found) == expected
+    assert s.to_dict() == before

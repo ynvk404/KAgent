@@ -264,7 +264,10 @@ class WorkflowTool(Tool):
                 "endpoint_id": {"type": "string", "pattern": "^ep_" + REFERENCE_HEX_PATTERN + "$",
                     "description": 'Exact ep_ ID from workflow(list, view="endpoints"); not a ds_ source or input ID.'},
                 "retained_ref": optional_string,
-                "discovery_cursor": optional_string,
+                "discovery_cursor": {"type": "string", "description":
+                    "Copy next_discovery_cursor from the same list view/filter into discovery_cursor, never cursor. "
+                    "After source/state changes a stale cursor must be discarded; restart the view without discovery_cursor. "
+                    "Do not invent a source ID to locate a new response."},
                 "source_disposition": {"type": "string", "enum": ['pending', 'processed', 'partial', 'blocked', 'not_applicable']},
                 "source_reason": {"type": "string", "maxLength": MAX_SOURCE_REASON_LENGTH},
                 "source_limitations": {"type": "array", "maxItems": 16, "items": {"type": "string", "maxLength": 240}},
@@ -2441,7 +2444,9 @@ class WorkflowTool(Tool):
         try:
             if args.get('view') in {'sources', 'endpoints', 'provenance'}:
                 from src.workflow.discovery.inventory import discovery_page
-                return json.dumps(discovery_page(self.state, args), ensure_ascii=True, separators=(',', ':'))
+                store = policy.observations if policy is not None else self.observations
+                return json.dumps(discovery_page(self.state, args, observations=store._items),
+                                  ensure_ascii=True, separators=(',', ':'))
             inputs = input_page(self.state, args)
         except (ValueError, TypeError) as err:
             return f"error: {err}"

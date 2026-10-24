@@ -314,7 +314,25 @@ brute-forcing, or parameter enumeration. Those tasks belong to
 
 ## 5. Record reconnaissance results
 
-Write a concise summary to:
+Immediately before `file_write`, reconcile each claim with its source/reference:
+effective method/endpoint, HTTP status, response media type, redacted body marker,
+capture flags and claim confidence. Observations/documents actually read take
+precedence over conflicting LLM summaries. In prose distinguish direct observation,
+observed from specification, inference/hypothesis and unknown; these are not new
+Workflow fields or outcomes. Request Content-Type is not response Content-Type.
+JSON product results do not show a SQL statement; a parser diagnostic establishes
+parser sensitivity, not the full query or controlled evaluation.
+
+Retained response completeness, ranges actually read and content still in context
+are separate. Content-Length is not the number of bytes inspected. Status 200,
+HTML media type, a filename or metadata-only capture proves neither body review,
+SPA fallback nor operation success. Reuse trustworthy sources already in context;
+list metadata or read a missing range only when needed and currently permitted.
+If unavailable, state the limitation; do not refetch, raise caps, cache-bust or
+switch to shell to recover content. Keep attribution short and redacted in the
+canonical summary, without a mandatory artifact/ledger for every response.
+
+Write that concise summary to:
 
 `artifacts/recon/<target>/summary.md`
 

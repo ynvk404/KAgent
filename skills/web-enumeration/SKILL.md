@@ -113,8 +113,9 @@ inventory or for an entire Swagger document, directory listing, or bundle.
 Reuse sufficiently specific evidence from recon. A route name or a GET error
 on a login path does not establish a POST body field: record only the method,
 parameter, and location actually observed. Documented inputs may be recorded
-without submitting a form; retain their source and unknown reachability in the
-inventory. Record each newly established input once; reuse its returned ID.
+without sending the documented operation, including login/order submission;
+retain specification attribution and unknown reachability in the inventory.
+Record each newly established input once; reuse its returned ID.
 
 For a whole-target objective, record every discovered request input
 surface with `workflow(action="record_input", method=..., endpoint=...,
@@ -123,10 +124,12 @@ sample_payload=...)` when those details are known. Use one compact record per
 method/endpoint/parameter/location/type/media combination. `content_type` is
 optional, but known media types distinguish input identities; charset and
 multipart boundary parameters do not. `sample_payload` does not change identity. Store a
-small body skeleton, not raw traffic: retain the structure and replace values
-with inert examples or `{INJECTION_POINT}`. Omit passwords, tokens, cookies,
-PII, and unrelated fields. Record query, body, path, header, and cookie inputs
-that were actually observed. The runtime assigns the active objective and
+small body skeleton, not raw traffic: keep evidenced field names and structure,
+including password/token/cookie fields; redact secret values and PII, using inert
+examples or `{INJECTION_POINT}` only where appropriate. Omit unrelated fields;
+never store real passwords, tokens or cookies. Record query, body, path, header,
+and cookie inputs actually evidenced. `content_type` describes request
+Content-Type, never response Content-Type. The runtime assigns the active objective and
 target origin and deduplicates semantic duplicates.
 
 Keep these inputs pending for `web-input-analysis`. Do not call
@@ -147,8 +150,20 @@ read permissions, with at most 40 matches and 4,000 output characters.
 Native HTTP returns a bounded response
 inline; its raw ObservationStore bytes are not a general discovery reader or
 an automatic `read_tool_result` cache. Context omission and response truncation
-are different: `complete=true` does not mean omitted text is still visible.
+are different: retained response completeness, the ranges actually read and the
+content still in context are separate. `complete=true` does not mean omitted
+text is still visible. Content-Length is not the number of bytes inspected.
 `workflow(action="get_source", discovery_source_id=...)` returns metadata only.
+`workflow(action="list", view="sources")` shows the source request's method and
+`document_url`, plus status, media type and retained size when its observation
+is available. Check these before choosing an ID: a redirect, HTML Swagger UI,
+JS initializer and JSON specification are different sources. A filename or
+media type alone does not establish OpenAPI contents; inspect the retained body.
+Copy `next_discovery_cursor` into `discovery_cursor` for the same view/filter,
+never `cursor`. Reuse trustworthy metadata/body already in context; list only
+missing metadata and read only a missing range, not every observation again.
+After a stale-cursor error, restart without `discovery_cursor`;
+new sources may change the page set. Never guess a source ID to find a new response.
 In Whole-target mode, read retained HTTP discovery content with
 `read_discovery_source` using that exact `ds_` ID, `start_char`, and
 `max_chars` ≤2,000; follow `next_start_char`.
@@ -596,12 +611,38 @@ next phase.
 
 ## 7. Build the normalized inventory
 
+Immediately before `file_write`, reconcile each claim with its source/reference:
+effective method/endpoint, HTTP status, response media type, redacted body marker,
+capture flags and claim confidence. Observations/documents actually read take
+precedence over conflicting LLM summaries. Distinguish direct observation, observed
+from specification, inference/hypothesis and unknown in prose, not new Workflow
+fields. Status 200, HTML media type, a filename or metadata-only capture does not
+prove body review, SPA calibration or operation success. A partial body supports
+only its inspected markers; unknown content stays a limitation under the bounded
+reading rules. Keep the attributed inventory concise and redacted; no mandatory
+per-response artifact or extra ledger.
+
 Write the inventory to:
 
 `artifacts/web-enumeration/<target>/inventory.md`
 
 using the same target identifier defined in `recon/SKILL.md`.
 Record one endpoint or route per entry. Prefer a consistent Markdown format:
+
+Before closing Whole-target Enumeration, inspect the overall workflow state:
+
+```json
+{"tool":"workflow","arguments":{"action":"list"}}
+```
+
+Use its `phase_coverage`, `completed_phases` and input records to reconcile
+the work below. `view="sources"` pages only discovery metadata; it does not
+show phase coverage. Write the bounded inventory from facts actually reviewed,
+account for missing coverage with supported review/omission reasons, then call
+`complete_skill`. Reading another source does not perform these closing actions.
+Coverage skips and truncation limit this pass; completion does not survey the
+entire target or require every bundle, endpoint or documented operation to be read
+or requested.
 
 After writing the inventory, call `workflow(action="complete_skill",
 skill_name="web-enumeration",
@@ -631,18 +672,17 @@ truly does not apply, each with a short valid reason. Do not overwrite runtime
 `performed` records. Retry failed/cancelled dimensions or explain an actual
 skip before completion; a missing observation never implies `performed`.
 
-Reconcile the inventory with the input records already committed incrementally.
-Do not re-record unchanged inputs or wait until this step to record them.
-Record every actually known request field separately, including password fields
-and secondary fields recovered at a visible JS call site; keep field names and
-redact secret values. Reuse existing input identities and provenance. A path
-name, GET collection or general application knowledge supplies no POST body
-schema. Check missing fields, speculative fields, concrete/template identities
-and attribution against sources actually read; fields nested in a sample do
-not replace separate records. Compare structured inputs/endpoints/provenance
-with readable retained sources before closing; manual Markdown inventory entries are
-not automatically synchronized. Phase completion checks the workflow contract,
-not semantic completeness of Markdown. State any remaining reconciliation gap.
+Reconcile each evidenced field with the input records already committed;
+do not re-record unchanged inputs. Record fields separately, including password fields
+and secondary fields at a visible JS call site: keep names, redact values. Reuse canonical
+identities and provenance. Check missing/speculative fields, concrete/template
+identities and attribution against sources actually read; fields nested in a
+sample do not replace separate records. Manual Markdown entries are not
+automatically synchronized. Phase completion checks the workflow contract,
+not semantic completeness of Markdown; state reconciliation gaps. Documented or
+referenced-only, reachable, authenticated and tested are distinct claims. Even a
+successful request you sent does not establish that every submitted field was
+consumed. A path name or GET collection supplies no POST body schema.
 
 `Unexpected path` does not establish a handler, method or body schema. A 401
 alone does not establish a missing-session prerequisite: invalid credentials,
