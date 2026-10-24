@@ -229,7 +229,11 @@ def _replace_json(body: bytes, parameter: str, value: str, input_path: str | Non
         raise ValueError("JSON scalar path is absent from baseline")
     start, end, before = target
     if before == value:
-        raise ValueError("mutation value equals baseline value")
+        raise ValueError(
+            "mutation value equals baseline value. For unchanged baseline replay, use phase + candidate_id only; "
+            "omit mutation_value, input_path, old_value and occurrence. "
+            "For a probe, choose a value different from the baseline."
+        )
     return (source[:start] + json.dumps(value, ensure_ascii=False) + source[end:]).encode("utf-8")
 
 

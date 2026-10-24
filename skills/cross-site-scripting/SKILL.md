@@ -372,8 +372,13 @@ executable XSS. If browser/DOM execution evidence is unavailable, describe that
 limitation explicitly and use `browser-required` when the existing outcome
 rules require it; HTTP-only evidence cannot prove every browser-dependent case.
 
-This example applies only to an established GET `/search` Candidate with query
-input `q`; otherwise use the Candidate's actual baseline and input binding.
+Follow the shared `http` tool contract and current Candidate validation context
+for mode choice and replay/recapture rules. This Direct HTTP example applies
+only to an established GET `/search` Candidate with query input `q` and no bound
+capture, or an independent request allowed by the current workflow, scope and
+permissions. For a bound capture use its replay recipe; an unavailable bound
+capture is a blocker, not permission to reconstruct this example. Otherwise
+use the Candidate's actual baseline and input binding.
 Choose a fresh inert marker and inspect its context in the retained response.
 Do not add syntax-breaking characters during plain-marker detection.
 

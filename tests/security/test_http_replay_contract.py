@@ -3,14 +3,19 @@ import copy
 import gzip
 import json
 
+import brotli
 import httpx
+from httpx._decoders import SUPPORTED_DECODERS
 import pytest
 
 from src.agent.events import DoneEvent
 from src.agent.agent import AgentRunOptions
 from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.llm.providers.openai import OpenAIClient
+from src.permission.runtime.observations import ObservationStore
 from src.ui.core.state import AgentEventAction
+from src.tools.http.http_tool import MAX_RESPONSE_BYTE_CAP, RESPONSE_BYTE_CAP
+from src.workflow.assessment import digest, source_row
 from src.workflow.state import AttackSurfaceInput, Candidate, WorkflowObjective
 from tests.agent.test_native_recovery_receipts import attach, invoke
 from tests.agent.test_workflow_request_preparation import SnapshotClient
@@ -30,7 +35,7 @@ async def replay_contract(tmp_path, monkeypatch, request):
         'kind': 'burp', 'id': 'login-fixture', 'method': 'POST', 'url': ORIGIN + '/login',
         'requestHeaders': [
             {'name': 'Content-Type', 'value': 'application/json'},
-            {'name': 'Accept-Encoding', 'value': 'gzip'},
+            {'name': 'Accept-Encoding', 'value': 'gzip, deflate, br'},
             {'name': 'User-Agent', 'value': 'CapturedFixture/1'},
             {'name': 'Cookie', 'value': 'sid=fixture-secret'},
         ],
@@ -100,19 +105,29 @@ async def test_published_schema_explains_modes_and_header_repair(replay_contract
     assert 'Accept-Encoding' in fields['headers']['description']
     assert 'recapture' in spec['description'].lower()
     assert 'do not drop candidate_id' in spec['description'].lower()
+    assert 'phase + candidate_id only' in fields['candidate_id']['description']
+    assert 'must differ from the baseline' in fields['mutation_value']['description']
+    assert 'Omit for unchanged baseline replay' in fields['mutation_value']['description']
+    assert all(selector in fields['candidate_id']['description']
+               for selector in ('mutation_value', 'input_path', 'old_value', 'occurrence'))
 
 
-async def test_first_http_decision_and_repair_receive_projected_contract(replay_contract):
+@pytest.mark.parametrize('invalid_operation', ['header-override', 'baseline-equality'])
+async def test_first_http_decision_and_repair_receive_projected_contract(replay_contract, invalid_operation):
     rt, _, args, sent = replay_contract
 
     def call(identifier, name, fields):
         return ChatResponse(Message('assistant', '', tool_calls=[
             ToolCall(identifier, FunctionCall(name, json.dumps(fields)))]), 'tool_calls')
 
+    invalid = (args | {'headers': {'Accept-Encoding': 'identity'}} if invalid_operation == 'header-override'
+               else args | {'mutation_value': 'benign'})
+    corrected = args if invalid_operation == 'header-override' else {
+        'phase': 'validation', 'candidate_id': args['candidate_id']}
     client = SnapshotClient([
         call('load', 'load_skill', {'name': 'sql-injection'}),
-        call('invalid', 'http', args | {'headers': {'Accept-Encoding': 'identity'}}),
-        call('corrected', 'http', args),
+        call('invalid', 'http', invalid),
+        call('corrected', 'http', corrected),
         *[ChatResponse(Message('assistant', 'Fixture diagnostic retained; validation incomplete.'), 'stop')
           for _ in range(3)],
     ])
@@ -127,6 +142,8 @@ async def test_first_http_decision_and_repair_receive_projected_contract(replay_
     first = client.requests[1]
     loaded = next(m for m in first.messages if m.role == 'tool' and m.name == 'load_skill')
     assert loaded.skill_activation and 'Do not drop `candidate_id`' in loaded.content
+    assert 'omit `mutation_value` and all selectors' in loaded.content
+    assert 'separate request' in loaded.content and 'not request equivalence' in loaded.content
     encoder = OpenAIClient('https://provider.invalid', model='offline-fixture', provider_name='deepseek')
     for index in (1, 2):
         for stream in (False, True):
@@ -141,14 +158,24 @@ async def test_first_http_decision_and_repair_receive_projected_contract(replay_
             guidance = guides[0]
             assert args['candidate_id'] in guidance and 'Omit url/method/headers/body' in guidance
             assert 'Do not drop candidate_id' in guidance
+            assert 'mutation_value must differ from the baseline' in guidance
+            assert 'For unchanged baseline replay omit mutation_value and all selectors' in guidance
+            assert 'request_mode, request_hash and baseline_request_ref' in guidance
+            assert 'never a decoded version of the captured replay' in guidance
             templates = json.loads(guidance.split('templates: ', 1)[1].split('. Add ', 1)[0])
             assert templates == [{'phase': 'validation', 'candidate_id': args['candidate_id']}]
             rt.http.validate_args(templates[0])
     rejected = next(m for m in client.requests[2].messages if m.role == 'tool' and m.tool_status == 'error')
-    assert 'recapture' in rejected.content and 'do not drop candidate_id' in rejected.content
+    if invalid_operation == 'header-override':
+        assert 'recapture' in rejected.content and 'do not drop candidate_id' in rejected.content
+    else:
+        assert 'mutation value equals baseline value' in rejected.content
+        assert 'use phase + candidate_id only' in rejected.content
+        assert all(selector in rejected.content for selector in ('mutation_value', 'input_path', 'old_value', 'occurrence'))
     results = [e for e in events if e.type == 'tool-result' and e.name == 'http']
     assert [e.status for e in results] == ['error', 'observation']
     assert len(sent) == 1 and sent[0].headers['Cookie'] == 'sid=fixture-secret'
+    assert json.loads(sent[0].content)['email'] == ("'" if invalid_operation == 'header-override' else 'benign')
     assert not rt.workflow.persisted_findings
     assert all(result.outcome == 'insufficient-evidence' for result in rt.workflow.validation_results)
     assert events[-1].type == 'done' and events[-1].stop_reason != 'runtime_error'
@@ -180,7 +207,7 @@ async def test_valid_repair_preserves_capture_and_reads_retained_body_without_re
     assert str(sent[0].url) == action.url == str(expected.url)
     assert tuple(sent[0].headers.raw) == action.headers == tuple(expected.headers.raw)
     assert sent[0].content == action.body == expected.content
-    assert sent[0].headers['Accept-Encoding'] == 'gzip'
+    assert sent[0].headers['Accept-Encoding'] == 'gzip, deflate, br'
     assert sent[0].headers['User-Agent'] == 'CapturedFixture/1'
     assert sent[0].headers['Cookie'] == 'sid=fixture-secret'
     assert json.loads(sent[0].content) == {'email': "'", 'password': 'fixture-secret'}
@@ -210,10 +237,199 @@ async def test_direct_followup_is_a_distinct_request_and_keeps_original_issue(re
     assert sent[0].headers['User-Agent'] != 'CapturedFixture/1'
     observation = next(iter(rt.policy.observations._items.values()))
     assert 'baseline_request_ref' not in observation.source_details
+    assert observation.source_details['request_mode'] == 'direct'
     assert not app.state.issues[0].recovered and not app.state.call_history[-1].retry_of
     app.dispatch(AgentEventAction(DoneEvent(stop_reason='final_response')))
     assert '1 unresolved operation issue' in app.state.transcript[-1].text
     assert not rt.client.requests
+
+
+@pytest.mark.parametrize('selectors', [{}, {'input_path': '/email'}, {'old_value': 'benign'}, {'occurrence': 0}])
+async def test_equal_mutation_is_rejected_without_dispatch_or_state_change(replay_contract, selectors):
+    rt, app, args, sent = replay_contract
+    before = copy.deepcopy(rt.workflow.to_dict())
+    used = rt.policy.used
+    failed, event = await invoke(app, 'equal', 'http', {
+        'phase': 'validation', 'candidate_id': args['candidate_id'], 'mutation_value': 'benign', **selectors})
+    assert failed.status == 'error' and failed.error_kind == 'invalid_args'
+    assert event.http_status is None and event.recovery_receipt is None
+    assert 'mutation value equals baseline value' in failed.result
+    assert 'use phase + candidate_id only' in failed.result
+    assert 'omit mutation_value, input_path, old_value and occurrence' in failed.result
+    assert 'choose a value different from the baseline' in failed.result
+    assert 'fixture-secret' not in failed.result
+    assert not sent and not rt.http.dispatch_attempts and not rt.operator.requests
+    assert not rt.policy.observations._items and rt.workflow.to_dict() == before
+    assert rt.policy.used == used
+    assert not rt.http.permissions._receipts and not rt.http.permissions._inflight
+    assert not rt.client.requests
+
+
+async def test_baseline_recipe_sends_unchanged_capture_on_first_http_call(replay_contract):
+    rt, app, args, sent = replay_contract
+    baseline = {'phase': 'validation', 'candidate_id': args['candidate_id']}
+    action, expected = rt.http.prepare(baseline)
+    result, _ = await invoke(app, 'baseline', 'http', baseline)
+    assert result.status == 'observation' and len(sent) == rt.http.dispatch_attempts == 1
+    assert sent[0].content == expected.content == b'{"email":"benign","password":"fixture-secret"}'
+    assert tuple(sent[0].headers.raw) == action.headers
+    assert [q.tool for q in rt.operator.requests] == ['http_capture_credentials']
+    observation = next(iter(rt.policy.observations._items.values()))
+    assert observation.source_details['request_mode'] == 'captured-replay'
+    assert observation.source_details['baseline_request_ref'] == action.capture_source.baseline_ref
+    assert not app.state.issues and not rt.client.requests
+
+
+def brotli_reply(monkeypatch, sent, body):
+    encoded = brotli.compress(body)
+
+    def transport(outbound):
+        sent.append(outbound)
+        # Stream the wire bytes through HTTPX's real content decoder.
+        return httpx.Response(500, stream=httpx.ByteStream(encoded), request=outbound,
+                              headers={'Content-Encoding': 'br', 'Content-Length': str(len(encoded))})
+
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: REAL_CLIENT(
+        transport=httpx.MockTransport(transport), **kw))
+    return encoded
+
+
+def request_args(args, request_mode):
+    if request_mode == 'captured-replay':
+        return dict(args)
+    return {'phase': 'validation', 'method': 'POST', 'url': ORIGIN + '/login',
+            'headers': {'Accept-Encoding': 'br', 'Content-Type': 'application/json'},
+            'body': '{"email":"\'","password":"different-fixture"}'}
+
+
+@pytest.mark.parametrize('request_mode', ['captured-replay', 'direct'])
+async def test_brotli_decodes_in_httpx_and_readback_preserves_identity(replay_contract, monkeypatch, tmp_path, request_mode):
+    rt, app, args, sent = replay_contract
+    storage = tmp_path / 'brotli-observations.json'
+    rt.policy.observations.attach_storage(storage)
+    body = '{"error":"offline diagnostic", "text":"Unicode ✓"}'.encode()
+    encoded = brotli_reply(monkeypatch, sent, body)
+    fields = request_args(args, request_mode)
+    action, expected = rt.http.prepare(fields)
+    result, _ = await invoke(app, 'brotli', 'http', fields)
+    assert result.status == 'observation' and len(sent) == 1
+    assert sent[0].content == expected.content and tuple(sent[0].headers.raw) == action.headers
+    assert body.decode() in result.result
+    assert f'decoded body bytes retained before redaction: {len(body)}' in result.result
+    assert f'wire Content-Length: {len(encoded)}' in result.result
+    observation = next(iter(rt.policy.observations._items.values()))
+    details = observation.source_details
+    assert observation.body == body and observation.complete and not observation.truncated
+    assert details['body_representation'] == 'bounded-native-decoded-bytes'
+    assert details['response_cap_unit'] == 'decoded-bytes' and details['request_mode'] == request_mode
+    assert ('baseline_request_ref' in details) == (request_mode == 'captured-replay')
+    assert ('cookie' in sent[0].headers) == (request_mode == 'captured-replay')
+    assert observation.retained_hash == digest(source_row(observation))
+    envelope_line = next(line for line in result.result.splitlines() if line.startswith('Runtime HTTP evidence '))
+    envelope = json.loads(envelope_line.split(': ', 1)[1])
+    assert envelope['request_mode'] == request_mode and envelope['request_hash'] == observation.request_hash
+    assert envelope['body_representation'] == details['body_representation']
+    assert ('baseline_request_ref' in envelope) == (request_mode == 'captured-replay')
+    restored = ObservationStore()
+    restored.attach_storage(storage)
+    assert restored._items[observation.id] == observation
+    read, _ = await invoke(app, 'read-brotli', 'read_http_observation', {
+        'observation_id': observation.id, 'start_char': 0, 'max_chars': 2000})
+    header, content = read.result.split('\n', 1)
+    metadata = json.loads(header)
+    assert content == body.decode() and metadata['request_hash'] == observation.request_hash
+    assert metadata['request_mode'] == request_mode
+    assert metadata['body_representation'] == details['body_representation']
+    assert metadata['response_cap_unit'] == 'decoded-bytes'
+    assert ('baseline_request_ref' in metadata) == (request_mode == 'captured-replay')
+    assert len(sent) == rt.http.dispatch_attempts == 1 and not rt.client.requests
+
+
+@pytest.mark.parametrize('request_mode', ['captured-replay', 'direct'])
+@pytest.mark.parametrize('limited', [False, True])
+async def test_unavailable_brotli_decoder_retains_encoded_body_honestly(
+        replay_contract, monkeypatch, request_mode, limited):
+    rt, app, args, sent = replay_contract
+    monkeypatch.delitem(SUPPORTED_DECODERS, 'br')
+    encoded = brotli_reply(monkeypatch, sent, b'An offline compressed diagnostic' * 10)
+    cap = len(encoded) - 1 if limited else len(encoded)
+    fields = request_args(args, request_mode) | {'max_response_bytes': cap}
+    result, _ = await invoke(app, 'unsupported-brotli', 'http', fields)
+    assert result.status == 'observation' and len(sent) == 1
+    assert 'decoded body bytes retained' not in result.result
+    assert f'encoded body bytes retained before redaction: {cap}' in result.result
+    assert 'Content decoding unavailable' in result.result
+    observation = next(iter(rt.policy.observations._items.values()))
+    details = observation.source_details
+    assert observation.body == encoded[:cap]
+    assert observation.complete == (not limited) and observation.truncated == limited
+    assert details['body_representation'] == 'bounded-native-encoded-bytes'
+    assert details['response_cap_unit'] == 'encoded-bytes' and details['request_mode'] == request_mode
+    assert ('baseline_request_ref' in details) == (request_mode == 'captured-replay')
+    assert observation.retained_hash == digest(source_row(observation))
+    read, _ = await invoke(app, 'read-encoded', 'read_http_observation', {
+        'observation_id': observation.id, 'start_char': 0, 'max_chars': 2000})
+    header, content = read.result.split('\n', 1)
+    metadata = json.loads(header)
+    assert content == observation.body.decode(errors='replace')
+    assert metadata['body_representation'] == 'bounded-native-encoded-bytes'
+    assert metadata['response_cap_unit'] == 'encoded-bytes'
+    assert metadata['request_mode'] == request_mode and metadata['request_hash'] == observation.request_hash
+    assert len(sent) == 1 and not rt.client.requests
+
+
+@pytest.mark.parametrize('request_mode', ['captured-replay', 'direct'])
+@pytest.mark.parametrize('cap,length', [
+    (0, 100), (64, 63), (64, 64), (64, 1000),
+    (None, RESPONSE_BYTE_CAP + 1), (MAX_RESPONSE_BYTE_CAP, MAX_RESPONSE_BYTE_CAP + 1),
+])
+async def test_brotli_limits_apply_after_decompression(replay_contract, monkeypatch, request_mode, cap, length):
+    rt, app, args, sent = replay_contract
+    body = b'A' * length
+    encoded = brotli_reply(monkeypatch, sent, body)
+    fields = request_args(args, request_mode)
+    if cap is not None:
+        fields['max_response_bytes'] = cap
+    if cap == 0:
+        fields['evidence_mode'] = 'metadata-only'
+    limit = RESPONSE_BYTE_CAP if cap is None else cap
+    result, _ = await invoke(app, 'bounded-brotli', 'http', fields)
+    assert result.status == 'observation' and len(sent) == 1
+    observation = next(iter(rt.policy.observations._items.values()))
+    assert observation.body == body[:limit] and len(observation.body) <= MAX_RESPONSE_BYTE_CAP
+    assert observation.response_cap == limit
+    assert observation.truncated == (length > limit) and observation.complete == (length <= limit)
+    assert result.truncated == (length > limit)
+    assert observation.source_details['body_representation'] == 'bounded-native-decoded-bytes'
+    assert observation.source_details['response_cap_unit'] == 'decoded-bytes'
+    if length > limit and limit:
+        assert len(encoded) < limit < length
+        assert f'truncated at {limit} decoded bytes' in result.result
+    assert not rt.client.requests
+
+
+async def test_direct_and_replay_observations_keep_distinct_provenance(replay_contract, monkeypatch):
+    rt, app, args, sent = replay_contract
+    brotli_reply(monkeypatch, sent, b'Offline diagnostic')
+    await invoke(app, 'captured', 'http', args)
+    await invoke(app, 'direct-different', 'http', request_args(args, 'direct'))
+    replay, direct = rt.policy.observations._items.values()
+    assert replay.candidate_id == direct.candidate_id == args['candidate_id']
+    assert replay.attempt_id == direct.attempt_id and replay.candidate_binding == direct.candidate_binding
+    assert replay.request_hash != direct.request_hash
+    assert replay.source_details['request_mode'] == 'captured-replay'
+    assert direct.source_details['request_mode'] == 'direct'
+    assert 'baseline_request_ref' in replay.source_details and 'baseline_request_ref' not in direct.source_details
+    assert sent[0].headers['Cookie'] == 'sid=fixture-secret' and 'cookie' not in sent[1].headers
+    assert json.loads(sent[0].content)['password'] != json.loads(sent[1].content)['password']
+    assert sent[0].headers['User-Agent'] != sent[1].headers['User-Agent']
+    assert all(o.retained_hash == digest(source_row(o)) for o in (replay, direct))
+    read, _ = await invoke(app, 'read-direct', 'read_http_observation', {
+        'observation_id': direct.id, 'start_char': 0, 'max_chars': 2000})
+    metadata = json.loads(read.result.split('\n', 1)[0])
+    assert metadata['request_mode'] == 'direct' and metadata['request_hash'] == direct.request_hash
+    assert 'baseline_request_ref' not in metadata
+    assert len(sent) == rt.http.dispatch_attempts == 2 and not rt.client.requests
 
 
 @pytest.mark.parametrize('variant', ['exact', 'payload', 'capture', 'headers', 'missing-receipt'])

@@ -50,11 +50,16 @@ async def test_effective_requests_statuses_and_roles_stay_with_their_sources(run
         assert receipt['complete'] and not receipt['truncated']
         assert receipt['execution_status'] == 'completed'
         assert receipt['retained_body_bytes'] == len(body)
+        assert receipt['request_mode'] == 'direct'
+        assert receipt['response_cap_unit'] == 'decoded-bytes'
+        assert receipt['body_representation'] == 'bounded-native-decoded-bytes'
+        assert 'baseline_request_ref' not in receipt
         preview = output.split('Effective request preview (redacted):\n', 1)[1].split(
             '\nEnd effective request preview\n', 1)[0]
         assert f'GET {item.url}' in preview
         assert item.source_details == {'request_preview_hex': preview.encode().hex(), **{key: receipt[key] for key in (
             'request_preview_complete', 'request_body_bytes')},
+            'request_mode': 'direct', 'response_cap_unit': 'decoded-bytes',
             'body_representation': 'bounded-native-decoded-bytes',
             'analysis_session': policy.session_id or policy.engagement.http_permissions.session_id}
         ids.append(oid)

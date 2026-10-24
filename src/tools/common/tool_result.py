@@ -140,6 +140,8 @@ class ReadHTTPObservation:
                 "For Whole-target discovery content use read_discovery_source; workflow get_source returns metadata only. "
                 "Use the returned next_start_char; offsets count decoded Unicode characters. "
                 "No HTTP is sent. Retrieval grants no evidence acceptance or ownership. "
+                "Readback preserves body_representation; it does not add content decoding. "
+                "request_mode/request_hash and baseline_request_ref describe provenance; a direct request is not an equivalent replay. "
                 "Unavailable/revoked observations must be reported, never replaced with invented content.")
 
     def schema(self) -> dict[str, Any]:
@@ -247,13 +249,17 @@ class ReadHTTPObservation:
         item = policy.observations._items[self.observation_id(args)]
         assert item.retained_hash is not None
         text = item.body.decode(errors="replace")
+        details = item.source_details or {}
+        provenance = {key: details[key] for key in (
+            "request_mode", "baseline_request_ref", "body_representation", "response_cap_unit"
+        ) if key in details}
         from src.tools.common.outcome import ToolOutput
         # Use the same lab HTTP outbound analysis guard as native capture. The
         # envelope stays small and body offsets describe only retained text.
         def encode(size):
             region = read_region(text, args["start_char"], size)
             body = region.pop("content")
-            header = json.dumps({**self.range_metadata(args), "observation_id": item.id, "retained_hash": item.retained_hash,
+            header = json.dumps({**self.range_metadata(args), **provenance, "observation_id": item.id, "retained_hash": item.retained_hash,
                 "status": item.status, "elapsed_ms": item.elapsed_ms, "request_hash": item.request_hash,
                 "response_hash": item.response_hash,
                 "offset_unit": "unicode_characters", "complete": item.complete,

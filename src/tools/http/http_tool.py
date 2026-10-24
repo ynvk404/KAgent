@@ -12,6 +12,7 @@ import sys
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, parse_qsl
 import httpx
+from httpx._decoders import SUPPORTED_DECODERS
 from src.engagement.state import EngagementState
 from src.permission.permission import Prompter, UserControlledRefusal, PermissionPolicyBlocked, YoloPrompter
 from src.permission.network.grants import CaptureSource, CaptureReplayPending, EffectiveHTTP, HTTPPending, check_cancelled
@@ -79,8 +80,14 @@ class HTTPTool(Tool):
             'Exact requests need approval unless an exact-origin lab grant or bounded YOLO applies. '
             'If blocked, await operator action; never reword/retry to bypass. '
             'Redirects: max_redirects and per-hop approval; stop cross-origin/captured redirects. '
-            'Two modes: direct url with method/headers/body, or captured candidate_id with mutation_value/selectors; never combine. '
+            'Two modes: direct url with method/headers/body, or captured candidate_id; never combine. '
+            'For the current Candidate, prefer Captured Replay for an available bound baseline and supported input mutations. '
+            'Direct HTTP is for a Candidate with no bound capture or an independent request allowed by the current workflow, scope and permissions. '
+            'A bound but stale/incomplete/unavailable capture is a blocker: recapture/rebind, never reconstruct it as Direct HTTP. '
+            'Baseline replay uses phase + candidate_id only: omit mutation_value and all selectors. '
+            'For a replay probe, add mutation_value different from the baseline and the necessary selectors. '
             'Replay preserves non-candidate headers; Accept-Encoding is not an override. For other header changes recapture; do not drop candidate_id as a repair. '
+            'Direct HTTP has its own request identity; decoded response bytes do not make it an equivalent captured replay. '
             'Captured credentials need bounded operator approval even in YOLO. '
             'Terminal evidence: complete responses within configured limits, not marker prefixes. '
             'Reuse complete captures; never add truncated sources to sufficient manifests.'
@@ -98,8 +105,8 @@ class HTTPTool(Tool):
                 'headers': {'type': 'object', 'additionalProperties': {'type': 'string'},
                             'description': 'Direct-request headers only. Omit with candidate_id, even for Accept-Encoding: identity; replay preserves captured headers.'},
                 'body': {'type': 'string', 'description': 'Direct-request body only; omit with candidate_id. Use mutation_value to vary the captured candidate input.'},
-                'candidate_id': {'type': 'string', 'description': 'Captured baseline Candidate ID from workflow; omit replacement url/method/headers/body. Needs an available bound replay capture; an ordinary Candidate/obs_ does not create one.'},
-                'mutation_value': {'type': 'string', 'description': 'Replacement input value.'},
+                'candidate_id': {'type': 'string', 'description': 'Captured baseline Candidate ID from workflow; omit replacement url/method/headers/body. For unchanged baseline replay, use phase + candidate_id only and omit mutation_value/input_path/old_value/occurrence. Needs an available bound replay capture; an ordinary Candidate/obs_ does not create one.'},
+                'mutation_value': {'type': 'string', 'description': 'Probe replacement input value; must differ from the baseline value. Omit for unchanged baseline replay, together with input_path/old_value/occurrence.'},
                 'input_path': {'type': 'string', 'description': 'Captured replay selector; requires mutation_value and candidate_id. Omit for direct requests.'},
                 'old_value': {'type': 'string', 'description': 'Captured replay selector; requires mutation_value and candidate_id.'},
                 'occurrence': {'type': 'integer', 'minimum': 0, 'description': 'Zero-based captured input occurrence; requires mutation_value and candidate_id.'},
@@ -605,6 +612,14 @@ class HTTPTool(Tool):
                     and action.epoch == self.permissions.epoch
                     and action.target_revision == self.target.revision
                     and action.scope_revision == self.engagement.revision)
+                # Pinned HTTPX silently skips unsupported Content-Encoding entries.
+                # Match its actual decoder registry before describing retained bytes
+                # as decoded; decoding itself stays with HTTPX's aiter_bytes().
+                content_decoded = all(
+                    value.strip().lower() in SUPPORTED_DECODERS
+                    for value in httpx.Headers(response.headers).get_list('content-encoding', split_commas=True)
+                )
+                representation = 'decoded' if content_decoded else 'encoded'
                 redact = (http_credential_redactor(request.headers.multi_items(), response.headers.multi_items())
                         if action.capture_source else redact_evidence)
                 def capture_response(content, *, complete, execution_status, truncated):
@@ -629,12 +644,14 @@ class HTTPTool(Tool):
                         'request_preview_hex': request_preview.encode().hex(),
                         'request_preview_complete': len(request_text) <= REQUEST_PREVIEW_CHARS,
                         'request_body_bytes': len(action.body),
+                        'request_mode': 'captured-replay' if action.capture_source is not None else 'direct',
+                        'response_cap_unit': representation + '-bytes',
                     }
                     if action.capture_source is not None:
                         request_details['baseline_request_ref'] = action.capture_source.baseline_ref
                     if trusted_http:
                         assert policy is not None
-                        request_details['body_representation'] = 'bounded-native-decoded-bytes'
+                        request_details['body_representation'] = f'bounded-native-{representation}-bytes'
                         request_details['analysis_session'] = policy.session_id or self.permissions.session_id
                     observation = evidence_store.capture(action, response.status_code, content, complete=complete, execution_status=execution_status, truncated=truncated,
                         validation_binding=(generic_probe[0], generic_probe[2]) if generic_probe else None,
@@ -681,16 +698,20 @@ class HTTPTool(Tool):
                     # not pass through this header/request export guard.
                     output += redact(f'{k}: {v}') + '\n'
                 output += (f'final URL: {redact(action.url)}\n'
-                        f'decoded body bytes retained before redaction: {len(content)}\n'
+                        f'{representation} body bytes retained before redaction: {len(content)}\n'
                         f'wire Content-Length: {response.headers.get("content-length", "unknown")}\n'
                         f'Content-Encoding: {response.headers.get("content-encoding", "identity")}\n')
+                if not content_decoded:
+                    output += ('Content decoding unavailable: retained body is still encoded; '
+                               'observation readback does not decode it. Do not reconstruct or resend '
+                               'the captured request to repair decoding.\n')
                 header_length = len(output)
                 output += '\n'
                 body_start = len(output)
                 output += content.decode(errors='replace') if trusted_http else redact(content.decode(errors='replace'))
                 body_end = len(output)
                 if truncated:
-                    output += f'\n[response body truncated at {action.response_cap} decoded bytes]'
+                    output += f'\n[response body truncated at {action.response_cap} {representation} bytes]'
                 if evidence_store is not None:
                     observation, request_details = capture_response(content, complete=not truncated,
                         execution_status="completed", truncated=truncated)
@@ -713,6 +734,9 @@ class HTTPTool(Tool):
                         'request_preview_complete': request_details['request_preview_complete'],
                         'request_body_bytes': request_details['request_body_bytes'],
                     }
+                    for key in ('request_mode', 'baseline_request_ref', 'body_representation', 'response_cap_unit'):
+                        if key in request_details:
+                            envelope[key] = request_details[key]
                     evidence_line = ('Runtime HTTP evidence ('
                         + ('bounded raw lab capture' if trusted_http else 'redacted capture')
                         + '; not a semantic verdict): ' + json.dumps(envelope, ensure_ascii=False) + '\n')

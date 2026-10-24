@@ -544,31 +544,19 @@ the candidate input.** This applies regardless of method or content type —
 GET query string, POST form body, JSON body, path segment, header, or
 cookie. Don't simplify a request down to just the parameter under test.
 
-For native `http`, choose the request mode before building arguments. A
-Candidate with an available bound capture uses `candidate_id`: omit `url`,
-`method`, `headers` and `body`, even if their proposed values match the capture.
-Baseline replay uses `{"phase":"validation","candidate_id":"<candidate>"}`;
-to vary the JSON email input, add `"mutation_value":"<value>"` and
-`"input_path":"/email"`. Use selectors appropriate to the actual input.
-Captured replay preserves the other fields, headers, credentials and provenance.
-Direct requests use `url` with explicit request fields and omit replay arguments;
-they do not inherit selected-capture provenance or credential approval.
+Follow the shared `http` tool contract and current Candidate validation context
+for mode choice and replay/recapture rules. For a captured baseline use
+`{"phase":"validation","candidate_id":"<candidate>"}`;
+omit `mutation_value` and all selectors (`input_path`, `old_value`, `occurrence`).
+For a JSON email probe, add a `mutation_value` different from the baseline and
+`"input_path":"/email"`; adapt the selector to the actual Candidate input.
 
-An unreadable compressed response does not permit a replay header override,
-including `Accept-Encoding: identity`. Inspect the existing retained observation
-with `read_http_observation` first; readback does not add decoding capabilities.
-After a replacement-field rejection, remove those fields to keep replay mode.
-Do not drop `candidate_id` and reconstruct the selected request as direct HTTP
-to repair the error. If changing a non-candidate header is necessary, recapture
-the intended request and bind the new baseline through the normal workflow and
-permission gates. Active request context is immutable: close unresolved work
-honestly and follow the existing retest/new-attempt path when rebinding requires
-it. Do not transplant old provenance or observations onto a different request.
-If the needed content remains unavailable, record the limitation and use
-`insufficient-evidence` when it prevents an assessment. Avoid resending an
-unchanged request merely to fix display/decoding; retain existing retry bounds.
-A valid later request or saved finding does not prove an equivalent retry of
-the rejected operation.
+Do not drop `candidate_id` to repair a rejected replay. Inspect retained output
+with `read_http_observation` before considering another request for unreadable
+SQL diagnostics; readback adds no decoder. Recapture/rebinding follows existing
+attempt/retest and permission gates. If required baseline or diagnostic content
+remains unavailable, record the limitation and use `insufficient-evidence` when
+it prevents assessment; preserve retry bounds and existing request provenance.
 
 In particular, if the candidate's endpoint requires authentication or a
 session (check `auth:` on the inventory/candidate entry), the baseline and
@@ -1031,6 +1019,14 @@ relevant body excerpt, completeness/truncation and execution status. The runtime
 HTTP evidence envelope supplies the effective request preview, including replay
 changes; `request_preview_complete: false` means unseen request text remains
 unknown. A source ID or request hash alone does not recover a payload or body.
+Record `request_mode`, `request_hash`, and `baseline_request_ref` when supplied.
+`body_representation` describes retained response bytes, not request equivalence.
+A Direct HTTP observation with a different request identity is a separate request,
+never a decoded version or equivalent replay of the captured request. Document
+observed differences in headers, credentials and non-candidate fields; do not
+infer their preservation from the same URL, payload or Candidate/Attempt owner.
+Encoded response bytes are not decoded SQL diagnostics. Readback preserves the
+retained representation; it does not add a missing content decoder.
 Read retained output through an available evidence-reading API when a real
 reference exists; never invent a reader or bypass its gates. If capture or
 context reduction omitted required bytes and they cannot be retrieved, record

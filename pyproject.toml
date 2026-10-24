@@ -10,7 +10,7 @@ readme = "readme.md"
 requires-python = ">=3.11"
 
 dependencies = [
-    "httpx==0.28.1",
+    "httpx[brotli]==0.28.1",
     "mcp==1.28.1",
     "PyYAML==6.0.3",
     "requests==2.34.2",
