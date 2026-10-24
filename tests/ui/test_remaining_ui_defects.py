@@ -28,7 +28,7 @@ async def test_workflow_mutations_project_progress_at_result(tmp_path, action):
         await tool.run(args, None, AlwaysAllow())
         item = next(iter(workflow.attack_surface_inputs.values()))
         if action == 'set_input_disposition':
-            args = {'action': action, 'input_id': item.id, 'disposition': 'analyzed'}
+            args = {'action': action, 'input_id': item.id, 'disposition': 'analyzed', 'analysis_complete': True}
             expected = '1 analyzed'
         elif action == 'record_candidate':
             args = {'action': action, 'candidate_class': 'xss', 'endpoint': '/search', 'method': 'GET', 'parameter': 'q'}

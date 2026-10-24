@@ -57,7 +57,7 @@ async def test_blocked_inputs_require_real_resolution_or_operator_exclusion(tmp_
     public = json.loads((await execute(rt, 'workflow', {'action': 'record_input',
         'endpoint': '/search', 'method': 'GET', 'parameter': 'q', 'location': 'query'})).result)['input']['id']
     await execute(rt, 'workflow', {'action': 'link_input_candidate', 'input_id': public, 'candidate_id': candidate})
-    await execute(rt, 'workflow', {'action': 'set_input_disposition', 'input_id': public, 'disposition': 'analyzed'})
+    await execute(rt, 'workflow', {'action': 'set_input_disposition', 'input_id': public, 'disposition': 'analyzed', 'analysis_complete': True})
     blocked = []
     for field in ('customer', 'lines'):
         item = json.loads((await execute(rt, 'workflow', {'action': 'record_input',

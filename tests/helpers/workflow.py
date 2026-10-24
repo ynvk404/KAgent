@@ -218,7 +218,7 @@ async def prepare_validation_prerequisites(tool, candidate_id: str) -> None:
     else:
         input_id = existing.id
     result = await tool.run({"action": "set_input_disposition", "input_id": input_id,
-                             "disposition": "analyzed"}, None, AlwaysAllow())
+                             "disposition": "analyzed", "analysis_complete": True}, None, AlwaysAllow())
     assert json.loads(result)["ok"], result
     if "input_analysis" not in tool.state.completed_phases():
         skill = tool.skills.get("web-input-analysis")

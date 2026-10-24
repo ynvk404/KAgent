@@ -176,7 +176,7 @@ async def test_whole_target_pipeline_reaches_completion_through_runtime_state(tm
     assert state.candidates[candidate_id].auth_context_ref == "captures/auth-context.md"
     await run_workflow_fixture(workflow_tool, {
         "action": "set_input_disposition", "input_id": input_result["input"]["id"],
-        "disposition": "analyzed",
+        "disposition": "analyzed", "analysis_complete": True,
     }, None, AlwaysAllow())
     analysis_ref = "artifacts/web-input-analysis/target-test/candidates.md"
     _artifact(tmp_path, analysis_ref)

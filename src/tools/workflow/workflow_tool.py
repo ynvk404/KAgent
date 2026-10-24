@@ -124,7 +124,7 @@ ACTION_INPUTS = {
     'record_input': ('objective_id', 'target_origin', 'target', 'endpoint', 'method', 'parameter',
                      'location', 'input_type', 'content_type', 'sample_payload',
                      'baseline_request_ref', 'auth_context_ref', 'source_ref', 'source', 'source_attribution'),
-    'set_input_disposition': ('input_id', 'disposition', 'disposition_reason'),
+    'set_input_disposition': ('input_id', 'disposition', 'disposition_reason', 'analysis_complete'),
     'link_input_candidate': ('input_id', 'candidate_id'),
     'record_candidate': ('candidate_class', 'target', 'endpoint', 'method', 'parameter', 'location',
                          'test_case', 'priority', 'signals', 'baseline_request_ref', 'auth_context_ref',
@@ -291,6 +291,7 @@ class WorkflowTool(Tool):
                 },
                 "disposition": {"type": "string", "enum": sorted(INPUT_DISPOSITIONS)},
                 "disposition_reason": optional_string,
+                "analysis_complete": {"type": "boolean"},
                 "candidate_class": optional_string,
                 "target": {
                     "type": "string",
@@ -383,6 +384,8 @@ class WorkflowTool(Tool):
         # Flat descriptions are portable on the current DeepSeek Chat
         # Completions path. No unverified union/conditional or strict mode.
         descriptions = {
+            'disposition': 'analyzed requires analysis_complete=true for completed input triage. If a missing JWT/credential or another unmet prerequisite prevents analysis, use blocked with disposition_reason; unavailable credentials are not an operator exclusion. blocked inputs prevent phase completion. After resolving the dependency, set the same input pending and analyze it before closing it.',
+            'analysis_complete': 'Required as true when disposition=analyzed: attest that this input analysis is complete and no unmet prerequisite prevents it. This is an agent declaration, not runtime verification or vulnerability validation. Do not attest true for an input whose handler/behavior could not be analyzed because required JWT/credentials are unavailable. Otherwise use disposition=blocked with the actual dependency; a credential-shaped field or HTTP 401 alone does not establish one.',
             'endpoint': 'record_input requires an observed endpoint plus parameter/location. A method prefix such as GET /search supplies method; otherwise also supply method. Preserve canonical input geometry.',
             'method': 'record_input: required unless endpoint includes its method prefix. Must match the observed request; never infer it from a response.',
             'parameter': 'record_input requires the exact non-secret input name, not a value or a whole endpoint.',
@@ -1138,6 +1141,19 @@ class WorkflowTool(Tool):
         return match.group(2).strip(), prefixed_method, None
 
     def _set_input_disposition(self, args: dict[str, Any]) -> str:
+        # Require an explicit analysis decision, never infer credential needs
+        # from a status code, field name or free-form reason. Historical inputs
+        # remain readable; this only guards new tool mutations.
+        if 'analysis_complete' in args and type(args['analysis_complete']) is not bool:
+            return ToolOutput('error: analysis_complete must be a boolean',
+                              status='error', error_kind='invalid_args')
+        if args.get('disposition') == 'analyzed' and args.get('analysis_complete') is not True:
+            return ToolOutput(
+                'error: analyzed requires analysis_complete=true after completing this input analysis. '
+                'If required JWT/credentials or another prerequisite are unavailable, '
+                'set disposition=blocked with disposition_reason and leave the phase incomplete. '
+                'After resolving the dependency, set the same input pending and analyze it before closing it.',
+                status='error', error_kind='workflow_state')
         try:
             item = self.state.set_input_disposition(
                 arg_string(args, "input_id"),

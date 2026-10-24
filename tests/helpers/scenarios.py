@@ -352,7 +352,8 @@ def whole_target_script(runtime, definition) -> Script:
     created = receipt((yield "workflow", record_candidate(definition, input_id=iid)))
     cid = created["candidate"]["id"]
     receipt((yield "workflow", {"action": "set_input_disposition", "input_id": iid,
-        "disposition": "analyzed", "disposition_reason": "SQL filter hypothesis from a single syntax signal; delegated confirmation."}))
+        "disposition": "analyzed", "analysis_complete": True,
+        "disposition_reason": "SQL filter hypothesis from a single syntax signal; delegated confirmation."}))
     yield from phase_artifact(runtime, "web-input-analysis", f"# Candidates\nInput: {iid}; Candidate: {cid}; class: sql-injection.\nBaseline products and quote syntax sensitivity are observed; no confirmation yet.\nRecommended validator: sql-injection.\n")
     yield from dedicated_validation(runtime, definition, cid)
 

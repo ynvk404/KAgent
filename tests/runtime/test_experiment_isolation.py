@@ -61,7 +61,7 @@ def test_tui_uses_native_yolo_without_injected_grant_or_prompt(layout, monkeypat
     assert checked == [True] and original_bytes(layout) == before
 
 
-@pytest.mark.parametrize("planned,override,expected", [(None, None, 0), (17, None, 17), (17, 29, 29)])
+@pytest.mark.parametrize("planned,override,expected", [(None, None, 0), (17, None, 17), (17, 29, 29), (90, None, 90)])
 def test_only_explicit_step_limits_are_forwarded(layout, monkeypatch, planned, override, expected):
     from src.cli import runtime
     value = profile.plan(layout[0], layout[1], layout[2], layout[3], "http://127.0.0.1:8081", planned)

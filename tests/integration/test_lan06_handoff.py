@@ -74,7 +74,7 @@ async def test_supported_unreasoned_deferral_is_consistently_queued_and_routes_t
     early = await execute(rt, 'workflow', {'action': 'start_validation', 'candidate_id': cid}, success=False)
     assert early.status == 'error' and 'input_analysis must complete' in early.result
     await execute(rt, 'workflow', {'action': 'set_input_disposition', 'input_id': inp['id'],
-                                  'disposition': 'analyzed'})
+                                  'disposition': 'analyzed', 'analysis_complete': True})
     skill = rt.skills.get('web-input-analysis')
     assert skill is not None and skill.completion_artifact
     ref = completion_artifact_path(skill.completion_artifact, ORIGIN)
@@ -108,7 +108,7 @@ async def test_explicit_deferral_survives_enrichment_resume_and_requires_depende
     handoff = rt.workflow_tool.validation_handoff(first['id'], rt.policy)
     assert handoff is not None and handoff['next_action'] == 'resolve_dependency'
     complete_phase(rt, 'input_analysis', 'web-input-analysis')
-    await execute(rt, 'workflow', {'action': 'set_input_disposition', 'input_id': inp['id'], 'disposition': 'analyzed'})
+    await execute(rt, 'workflow', {'action': 'set_input_disposition', 'input_id': inp['id'], 'disposition': 'analyzed', 'analysis_complete': True})
     blocked = await execute(rt, 'workflow', {'action': 'start_validation', 'candidate_id': first['id']}, success=False)
     assert blocked.status == 'error' and 'dependency' in blocked.result
     assert not rt.workflow.attempts and len(sent) == 1
@@ -196,7 +196,7 @@ async def test_autonomous_loop_crosses_analysis_handoff_and_preserves_unresolved
         cid = recorded['candidate']['id']
         candidate_ids.append(cid)
         assert recorded['candidate']['status'] == 'queued'
-        yield 'workflow', {'action': 'set_input_disposition', 'input_id': inp['id'], 'disposition': 'analyzed'}
+        yield 'workflow', {'action': 'set_input_disposition', 'input_id': inp['id'], 'disposition': 'analyzed', 'analysis_complete': True}
         written = yield 'file_write', {'path': str(rt.policy.root / ref), 'content': 'Offline hypothesis, not a finding.'}
         assert 'wrote' in written, written
         feedback = yield 'workflow', {'action': 'complete_skill', 'skill_name': 'web-input-analysis',

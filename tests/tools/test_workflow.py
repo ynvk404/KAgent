@@ -1576,7 +1576,7 @@ async def test_input_analysis_readiness_requires_input_resolution_or_explicit_no
                    None, AlwaysAllow())
     assert "pending or blocked" in tool.phase_completion_readiness("web-input-analysis")["reason"]
     await run_workflow_fixture(tool, {"action": "set_input_disposition", "input_id": item["id"],
-                    "disposition": "analyzed"}, None, AlwaysAllow())
+                    "disposition": "analyzed", "analysis_complete": True}, None, AlwaysAllow())
     assert tool.phase_completion_readiness("web-input-analysis")["ready"] is True
     result = json.loads(await run_workflow_fixture(tool, {"action": "complete_skill", "skill_name": "web-input-analysis",
                                         "artifact_ref": ref}, None, AlwaysAllow()))
@@ -1784,7 +1784,7 @@ async def test_whole_target_phase_completion_checks_order_and_inventory(tmp_path
     }, None, AlwaysAllow())
     disposition = await run_workflow_fixture(tool, {
         "action": "set_input_disposition", "input_id": input_result["input"]["id"],
-        "disposition": "analyzed",
+        "disposition": "analyzed", "analysis_complete": True,
     }, None, AlwaysAllow())
     assert json.loads(disposition)["input"]["disposition"] == "analyzed"
     analysis = json.loads(await run_workflow_fixture(tool, {

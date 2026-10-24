@@ -39,7 +39,7 @@ async def linked(tool, *, analyze=True, endpoint='/fixture'):
         parameter='q', location='query'))['input']
     candidate = json.loads(await action(tool, 'record_candidate', candidate_class='xss', input_id=item['id']))['candidate']
     if analyze:
-        assert json.loads(await action(tool, 'set_input_disposition', input_id=item['id'], disposition='analyzed'))['ok']
+        assert json.loads(await action(tool, 'set_input_disposition', input_id=item['id'], disposition='analyzed', analysis_complete=True))['ok']
     return item, candidate
 
 

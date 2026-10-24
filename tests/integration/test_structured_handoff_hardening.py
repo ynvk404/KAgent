@@ -369,7 +369,8 @@ async def test_f4_late_inventory_review_and_session_semantics(tmp_path, disposit
     await execute(registry, "set_input_disposition", input_id=item["id"], disposition="blocked", disposition_reason="dependency unavailable")
     assert "remains blocked" in str(await execute(registry, "review_no_candidate", goal_id=goal.id))
     await execute(registry, "set_input_disposition", input_id=item["id"], disposition="pending")
-    await execute(registry, "set_input_disposition", input_id=item["id"], disposition=disposition, disposition_reason=reason)
+    await execute(registry, "set_input_disposition", input_id=item["id"], disposition=disposition,
+                  analysis_complete=disposition == "analyzed", disposition_reason=reason)
     review = json.loads(await execute(registry, "review_no_candidate", goal_id=goal.id))
     assert review["goal"]["status"] == "no_candidate" and goal.review_binding != original_binding
     assert not review["class_specific_validation_performed"]
@@ -385,7 +386,8 @@ async def test_f4_late_inventory_review_and_session_semantics(tmp_path, disposit
     await record(registry, "record_input", method="GET", endpoint="/late", parameter="q", location="query")
     assert goal.review_binding == binding
     # Disposition reason enrichment changes the inventory/review binding.
-    await execute(registry, "set_input_disposition", input_id=item["id"], disposition=disposition, disposition_reason="Reviewed late input again")
+    await execute(registry, "set_input_disposition", input_id=item["id"], disposition=disposition,
+                  analysis_complete=disposition == "analyzed", disposition_reason="Reviewed late input again")
     assert goal.status == "pending" and goal.review_binding is None
     json.loads(await execute(registry, "review_no_candidate", goal_id=goal.id))
     await record(registry, "record_candidate", candidate_class="xss", input_id=item["id"])

@@ -229,6 +229,11 @@ empty data, reflection and auth limitations. A sibling endpoint is a discovery
 clue, not evidence of this input's implementation or vulnerability class.
 Most candidates should be classifiable from this alone, including a disposition
 that records ambiguity rather than a vulnerability candidate.
+Ambiguous vulnerability context after completed triage can be `analyzed`;
+an unmet prerequisite that prevents that triage is `blocked`. A documented
+field behind a JWT gate has not been analyzed merely because the auth failure
+was classified. Do not substitute an auth-gate observation for the input's
+handler behavior, and do not infer a missing credential from HTTP 401 alone.
 Use `list(view="sources")` and `read_discovery_source` with the exact `ds_` ID
 for retained discovery bodies; `get_source` is metadata only.
 `read_http_observation` requires Candidate/Attempt ownership, which analysis
@@ -354,6 +359,23 @@ that reason, preserve the auth limitation and state they remain untested.
 Otherwise keep `blocked` and report incomplete; do not relabel as `analyzed`
 or `dropped` merely to open validation. An existing explicit assessment boundary
 can justify dropping work outside it; unavailable credentials alone cannot.
+For example, if an operation's required bearer JWT is unavailable and its
+documented JSON fields cannot be analyzed beyond the auth gate, keep each of
+those same input IDs `blocked` with its actual limitation. Do not create a
+negative Candidate/ValidationResult or mark vulnerability Coverage as tested.
+Record completed triage with `disposition="analyzed", analysis_complete=true`
+only when no unmet prerequisite prevents that input analysis. The workflow
+requires this explicit completion declaration; it does not verify the claim
+or grant authorization. Do not attest completion merely to satisfy the gate.
+An input can be analyzed without a live probe when existing evidence suffices;
+the presence of an email/password field alone is not a credential dependency.
+
+Resolve a blocked input without replacing its ID: after the operator supplies
+the missing prerequisite, set it to `pending`, perform the remaining bounded
+analysis, then attest `analyzed` with `analysis_complete=true`. If the operator
+explicitly excludes it instead, set `dropped` with that exclusion reason and
+retain the untested limitation. Until then, finish other pending inputs and
+report this dependency; do not loop on the same auth failure or complete the phase.
 New validation still requires completed phases and compatible analyzed linkage.
 
 For every candidate strong enough to include in the list, also call
