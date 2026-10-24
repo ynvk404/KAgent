@@ -204,7 +204,7 @@ Actual DoneEvent mapping:
 
 | Production stop / source | Execution status |
 | --- | --- |
-| final_response, workflow_completed, workflow_blocked, workflow_stalled, all_tools_refused, plan_only_blocked; no ErrorEvent | completed |
+| final_response, workflow_completed, workflow_blocked, all_tools_refused, plan_only_blocked; no ErrorEvent | completed |
 | client_error | provider-error |
 | max_steps, context_capacity, native explicit tool/HTTP budget denial | budget-exhausted |
 | runtime_error, cancelled, invalid_response, missing/unknown done, other ErrorEvent/raised error | runtime-error |

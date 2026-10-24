@@ -74,12 +74,12 @@ def test_failed_activation_cannot_become_a_skill_milestone_and_duplicates_are_su
     dispatch(app, ToolResultEvent(id='denied',name='load_skill',status='error',err='permission denied'))
     dispatch(app, SkillActiveEvent(name='alpha',call_id='denied'))
     assert app.state.active_skill is None
-    assert any(entry.kind == 'warning' for entry in app.state.transcript)
+    assert not app.state.transcript
     dispatch(app, ToolCallEvent(id='loaded',name='load_skill',args={'name':'alpha'}))
     dispatch(app, ToolResultEvent(id='loaded',name='load_skill',result='offline successful receipt'))
     for _ in range(2):dispatch(app, SkillActiveEvent(name='alpha',call_id='loaded'))
     assert sum(entry.text == 'Skill activated · alpha' for entry in app.state.transcript) == 1
-    assert not app.state.issues[0].recovered
+    assert not any(row.kind == "error" for row in app.state.transcript)
     assert app.state.active_skill == 'alpha'
 
 
@@ -293,7 +293,7 @@ def test_shared_endpoint_candidates_do_not_share_recovery_or_conclusions(tmp_pat
     dispatch(app, ToolResultEvent(id='first',name='http',err='transient failure',status='error',error_kind='network'))
     assert len(app.state.pending_calls) == 1
     dispatch(app, ToolResultEvent(id='second',name='http',http_status=200,status='observation'))
-    assert not app.state.issues[0].recovered
+    assert not any(row.kind == "error" for row in app.state.transcript)
     assert app.state.running_tool is None and app.state.running_skill is None
     for index, candidate in enumerate(candidates):
         result = accepted_fixture(tmp_path,workflow,candidate,outcome='confirmed' if index==0 else 'not-confirmed')
@@ -318,7 +318,7 @@ def test_old_attempt_receipt_cannot_recover_failure_from_a_new_attempt(tmp_path)
     dispatch(app, ToolResultEvent(id='failed',name='workflow',result='{"ok":false,"error":"stale attempt"}'))
     dispatch(app, ToolCallEvent(id='replay',name='workflow',args=args))
     dispatch(app, ToolResultEvent(id='replay',name='workflow',result=json.dumps({'ok':True,'result':old.public_dict()})))
-    assert not app.state.issues[0].recovered
+    assert not any(row.kind == "error" for row in app.state.transcript)
 
 
 @pytest.mark.parametrize('outcome', ['blocked','deferred','browser-required','authorization-required','insufficient-evidence'])

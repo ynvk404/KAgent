@@ -92,7 +92,7 @@ async def test_blocked_inputs_require_real_resolution_or_operator_exclusion(tmp_
 
 
 @pytest.mark.parametrize('mode', ['direct', 'whole_target'])
-async def test_new_payload_pages_are_progress_but_repeated_pages_still_stop(offline, mode: WorkflowMode):
+async def test_payload_page_repetition_does_not_stop_probing_before_explicit_result(offline, mode: WorkflowMode):
     rt, sent = offline
     rt.workflow.objective = WorkflowObjective('offline-objective', mode, ORIGIN)
     rt.workflow.objective.add_requested_goal('sql-injection')
@@ -115,20 +115,23 @@ async def test_new_payload_pages_are_progress_but_repeated_pages_still_stop(offl
             assert not rt.workflow.attempts[aid].get('probing_stopped')
             page = json.loads(text.rsplit('\nContinuation: ', 1)[1])
             args = {**args, 'source_ref': page['source_ref'], 'start_char': page['next_start_char']}
-        # Re-reading an already consumed range cannot replenish progress.
-        for _ in range(4):
+        # Repeated pages remain available through the existing outer budget.
+        for _ in range(16):
             yield 'read_payloads', {'skill': 'sql-injection', 'file': 'payloads.txt', 'limit': 2}
-        assert rt.workflow.attempts[aid]['probing_stopped']
+            assert not rt.workflow.attempts[aid].get('probing_stopped')
         yield workflow('record_result', candidate_id=cid, skill_name='sql-injection',
             outcome='insufficient-evidence', deferred_reason='Oracle not established; bounded local review complete.')
 
     model = InspectModel(script())
     rt.agent.set_client(model)
     trace = collect()
-    await rt.agent.run('Continue the SQL injection assessment.', FakeSignal(), trace['sink'], AgentRunOptions(max_steps=14))
+    await rt.agent.run('Continue the SQL injection assessment.', FakeSignal(), trace['sink'], AgentRunOptions(max_steps=26))
     assert not model.errors and model.consumed
-    kinds = [e.metrics.get('progress_kind') for e in trace['events'] if e.type == 'workflow-progress' and e.stage == 'iteration_evaluated']
-    assert kinds.count('reader_progress') == 5
+    assert sum(name == 'read_payloads' for name, _ in model.calls) == 21
+    result = rt.workflow.latest_result(cid)
+    assert result is not None and result.outcome == 'insufficient-evidence' and not result.evidence_refs
+    assert result.mutation_performed is None and result.cleanup_state == 'unknown'
+    assert rt.workflow.attempts[aid]['status'] == 'unresolved'
     assert len(sent) == 1 and not rt.workflow.evidence and not rt.workflow.eligible_for_finding(cid)
 
 

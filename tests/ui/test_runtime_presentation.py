@@ -87,8 +87,7 @@ def test_errors_keep_actionable_ids_business_ids_and_diagnostic_paths():
     event = ToolResultEvent(name='workflow', status='error', error_kind='evidence', err=detail)
     before = asdict(event)
     state = reducer(seed(), AgentEventAction(event))
-    assert detail in transcript(state)
-    assert state.transcript[0].kind == 'error'
+    assert not state.transcript
     assert asdict(event) == before
     state = reducer(state, AgentEventAction(ErrorEvent(err=RuntimeError(detail))))
     assert detail in state.transcript[-1].text
@@ -141,7 +140,7 @@ async def test_summary_guidance_reaches_model_without_rewriting_answer(profile, 
     if synthesis:
         await agent._whole_target_synthesis(agent.history.copy(), FakeSignal(), events.append,
             thinking_enabled=False, reasoning_level=ReasoningLevel.OFF,
-            requested_reasoning_level=ReasoningLevel.OFF, stop_reason='workflow_stalled',
+            requested_reasoning_level=ReasoningLevel.OFF, stop_reason='workflow_blocked',
             instruction='Summarize the existing observations.', max_steps=1)
     else:
         await agent.run('Summarize the existing observations.', FakeSignal(), events.append,
@@ -177,7 +176,7 @@ async def test_fake_llm_stream_survives_tui_and_session_persistence(tmp_path, sy
     if synthesis:
         await agent._whole_target_synthesis(agent.history.copy(), FakeSignal(), events.append,
             thinking_enabled=False, reasoning_level=ReasoningLevel.OFF,
-            requested_reasoning_level=ReasoningLevel.OFF, stop_reason='workflow_stalled',
+            requested_reasoning_level=ReasoningLevel.OFF, stop_reason='workflow_blocked',
             instruction='Summarize.', max_steps=1)
     else:
         await agent.run('Summarize.', FakeSignal(), events.append, AgentRunOptions(tools=False))

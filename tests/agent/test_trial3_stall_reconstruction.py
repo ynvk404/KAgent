@@ -1,4 +1,4 @@
-"""Trial 3's 13-iteration shape through real tools and offline transports.
+"""Extend Trial 3's shape beyond its former stall through offline transports.
 
 Synthetic response bodies and a scripted client reproduce the retained facts,
 not a live experiment. No historical session, provider, or target is resumed.
@@ -41,9 +41,9 @@ class Trial3Replay(FakeClient):
         self.requests.append(deepcopy(request))
         step = len(self.requests)
         if request.tools is None:
-            assert step == 14
+            assert step == 17
             return ChatResponse(Message("assistant", "Incomplete offline assessment."), "stop")
-        assert step <= 13
+        assert step <= 16
         calls = {
             1: [("load_skill", {"name": "recon"}), ("permissions_status", {})],
             2: [("http", {"method": "GET", "url": "/", "phase": "recon", "max_response_bytes": 8192})],
@@ -64,7 +64,7 @@ class Trial3Replay(FakeClient):
             if step == 9:
                 calls[step] = [("workflow", {"action": "select_source", "discovery_source_id": source.id,
                                              "retained_ref": source.retained_ref})]
-            elif step == 13 and self.disposition:
+            elif step == 16 and self.disposition:
                 calls[step] = [("workflow", {"action": "set_source_disposition", "discovery_source_id": source.id,
                     "retained_ref": source.retained_ref, "source_disposition": "partial",
                     "acknowledge_bounded_stop": True, "source_bounds": {"max_bytes": 8192},
@@ -80,8 +80,8 @@ class Trial3Replay(FakeClient):
         ]), "tool_calls")
 
 
-@pytest.mark.parametrize("disposition", [False, True], ids=["four-read-stall", "explicit-bounded-progress"])
-async def test_trial3_shape_stalls_only_without_workflow_progress(tmp_path, monkeypatch, disposition):
+@pytest.mark.parametrize("disposition", [False, True], ids=["repeated-reads", "explicit-bounded-disposition"])
+async def test_trial3_shape_continues_past_old_boundary_to_budget(tmp_path, monkeypatch, disposition):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("KAGENT_PROJECT_ROOT", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -113,7 +113,7 @@ async def test_trial3_shape_stalls_only_without_workflow_progress(tmp_path, monk
     # Keep production socket_budget and Registry/permission checks; replace
     # only the actual TCP transport. No socket is opened.
     monkeypatch.setattr("src.tools.discovery.service.asyncio.open_connection", connect)
-    runtime = make_runtime(tmp_path, max_steps=13 if disposition else 60)
+    runtime = make_runtime(tmp_path, max_steps=16)
     runtime.agent.tools.register(PermissionStatusTool())
     runtime.agent.tools.register(ServiceDiscoveryTool(runtime.target, runtime.engagement, workflow=runtime.workflow))
     for capability in ("shell", "bash", "web_search"):
@@ -126,23 +126,22 @@ async def test_trial3_shape_stalls_only_without_workflow_progress(tmp_path, monk
         events.append(event)
         if isinstance(event, WorkflowProgressEvent):
             if event.stage == "iteration_started":
-                before.append(runtime.workflow.progress_facts())
+                before.append(deepcopy(runtime.workflow.to_dict()))
             elif event.stage == "iteration_evaluated":
                 evaluated.append(event.metrics.copy())
-                after.append(runtime.workflow.progress_facts())
+                after.append(deepcopy(runtime.workflow.to_dict()))
                 quotas.append(sum(b.used for b in runtime.engagement.http_permissions._budgets.values()))
 
     await runtime.agent.run(PROMPT, FakeSignal(), emit)
     done = events[-1]
-    assert done.stop_reason == ("max_steps" if disposition else "workflow_stalled")
-    assert (done.agent_loop_llm_calls, done.compaction_llm_calls, done.final_synthesis_llm_calls) == (13, 0, 1)
+    assert done.stop_reason == "max_steps"
+    assert (done.agent_loop_llm_calls, done.compaction_llm_calls, done.final_synthesis_llm_calls) == (16, 0, 1)
     assert len(sent) == 3 and sockets == [("127.0.0.1", 3000)]
-    assert quotas == [0, 1, 3, 3] + [4] * 9
-    assert [r["observed_new_facts"] for r in evaluated[:12]] == [0, 9, 12, 0, 1, 5, 0, 0, 1, 0, 0, 0]
-    assert [r["no_progress"] for r in evaluated] == [0] * 7 + [1, 0, 1, 2, 3, 0 if disposition else 4]
-    for index in range(9, 12 if disposition else 13):
+    assert quotas == [0, 1, 3, 3] + [4] * 12
+    assert [r["outer_iterations"] for r in evaluated] == list(range(1, 17))
+    assert all(r["workflow_status"] == "actionable" for r in evaluated)
+    for index in range(9, 15 if disposition else 16):
         assert before[index] == after[index]
-        assert evaluated[index]["novel_activities"] == evaluated[index]["credited_new_facts"] == 0
     assert len(runtime.workflow.endpoints) == len(runtime.workflow.discovery_sources) == 3
     assert len(runtime.workflow.discovery_provenance) == 3
     assert not runtime.workflow.attack_surface_inputs and not runtime.workflow.candidates
@@ -155,9 +154,9 @@ async def test_trial3_shape_stalls_only_without_workflow_progress(tmp_path, monk
 
     # Inspect actual successful get_source receipts, not error strings parsed
     # as a nonexistent discovery readback envelope.
-    read_ids = {f"trial3-{step}-0" for step in range(10, 13 if disposition else 14)}
+    read_ids = {f"trial3-{step}-0" for step in range(10, 16 if disposition else 17)}
     readers = [m for m in client.requests[-1].messages if m.tool_call_id in read_ids]
-    assert len(readers) == (3 if disposition else 4)
+    assert len(readers) == (6 if disposition else 7)
     for message in readers:
         assert message.name == "workflow" and message.tool_status == "success"
         row = json.loads(message.content)
@@ -171,4 +170,4 @@ async def test_trial3_shape_stalls_only_without_workflow_progress(tmp_path, monk
     retained = runtime.policy.observations._items[root.retained_ref]
     assert retained.body == ROOT[:8192] and retained.truncated and not retained.complete
     assert retained.candidate_id is None and retained.attempt_id is None
-    assert runtime.store.load().workflow.progress_facts() == runtime.workflow.progress_facts()
+    assert runtime.store.load().workflow.to_dict() == runtime.workflow.to_dict()

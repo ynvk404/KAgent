@@ -135,7 +135,7 @@ def entry_view(
             color = ui.text
         elif entry.kind == "user":
             color = ui.accent
-        # Other role colors, including system notices and recovery, are statuses.
+        # Other role colors, including system notices and warnings, are statuses.
         lines.append(RenderedLine(text=text, color=color,
             trusted_ansi=entry.kind in MARKDOWN_KINDS and not streaming))
     return lines

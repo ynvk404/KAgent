@@ -31,48 +31,48 @@ def finish(state, event, *, error=None, kind=None):
     {'body': 'mode=B'}, {'url': 'https://fixture.test/form?q=B'},
     {'headers': {'Authorization': 'other-context'}},
 ])
-def test_network_failure_is_not_recovered_by_different_request(change):
+def test_network_failures_and_changed_requests_stay_out_of_transcript(change):
     args = {'method': 'POST', 'url': 'https://fixture.test/form?q=A', 'body': 'mode=A'}
     state, a = dispatch(start(), 'a', args)
     state = finish(state, a, error='connection failed', kind='network')
     state, b = dispatch(state, 'b', {**args, **change})
     state = finish(state, b)
-    assert not state.issues[0].recovered
+    assert not state.transcript
 
 
 @pytest.mark.parametrize('kind', ['permission_denied', 'permission_pending', 'permission_timeout',
     'permission_stale', 'policy_block', 'scope_denied', 'timeout', 'cancelled',
     'tool_exception', 'unknown_effects'])
-def test_authority_persistence_and_unknown_effects_do_not_generic_recover(kind):
+def test_operation_rejections_do_not_publish_error_history(kind):
     args = {'action': 'record_evidence', 'candidate_id': 'candidate', 'evidence_path': 'proof.md'}
     state, a = dispatch(start(), 'a', args, name='workflow')
     state = finish(state, a, error='operation rejected', kind=kind)
     state, b = dispatch(state, 'b', args, name='workflow')
     state = finish(state, b)
-    assert not state.issues[0].recovered
+    assert not state.transcript
 
 
-def test_predispatched_sibling_is_not_a_retry():
+def test_parallel_sibling_completion_does_not_publish_error_history():
     args = {'method': 'GET', 'url': 'https://fixture.test/form'}
     state, a = dispatch(start(), 'a', args)
     state, b = dispatch(state, 'b', args)
     state = finish(state, a, error='connection failed', kind='network')
     state = finish(state, b)
-    assert not state.issues[0].recovered
+    assert not state.transcript
 
 
-def test_completed_direct_turn_keeps_history_without_inventing_work():
+def test_completed_direct_turn_ignores_operation_history():
     from src.agent.events import DoneEvent
     state, a = dispatch(start(), 'a', {'url': 'https://fixture.test/form'})
     state = finish(state, a, error='connection failed', kind='network')
     facts = OutcomeFacts(scope='', completion_supported=False)
     state = reducer(state, AgentEventAction(DoneEvent(stop_reason='final_response'), facts))
     assert 'work remains' not in state.transcript[-1].text
-    assert 'operation error without a matched retry' in state.transcript[-1].text
+    assert 'matched retry' not in state.transcript[-1].text
 
 
 def contract_call(state, identifier):
-    facts = OutcomeFacts(scope='scope', operation_owner='owner', operation_intent='intent')
+    facts = OutcomeFacts(scope='scope')
     event = ToolCallEvent(id=identifier, name='workflow',
         args={'action': 'record_result', 'candidate_id': 'candidate'},
         invocation=Invocation(identifier, 'scope'))
@@ -80,7 +80,7 @@ def contract_call(state, identifier):
 
 
 def contract_result(state, event, *, failed=False):
-    facts = OutcomeFacts(scope='scope', accepted_call=not failed)
+    facts = OutcomeFacts(scope='scope')
     result = ToolResultEvent(id=event.id, name=event.name, invocation=event.invocation,
         status='error' if failed else 'success', error_kind='invalid_args' if failed else None,
         result='error: invalid fields; token=short-secret' if failed else '{"ok":true}')
@@ -88,7 +88,7 @@ def contract_result(state, event, *, failed=False):
 
 
 @pytest.mark.parametrize('timing', ['retry', 'predispatched', 'live_sibling', 'two_failures'])
-def test_dispatch_edge_requires_one_unambiguous_prior_failure(timing):
+def test_all_dispatch_orders_preserve_quiet_operation_feedback(timing):
     state, a = contract_call(start(), 'a')
     if timing in {'predispatched', 'two_failures'}:
         state, b = contract_call(state, 'b')
@@ -100,16 +100,11 @@ def test_dispatch_edge_requires_one_unambiguous_prior_failure(timing):
     if timing != 'predispatched':
         state, b = contract_call(state, 'retry')
     state = contract_result(state, b)
-    assert state.issues[0].recovered == (timing == 'retry')
-    if timing == 'retry':
-        issue = state.issues[0]
-        assert b.invocation is not None
-        assert issue.recovered_by == b.invocation.id
-        assert issue.text in state.transcript[issue.index].details
-        assert 'short-secret' not in repr(state)
+    assert not state.transcript
+    assert 'short-secret' not in repr(state)
 
 
-def test_same_turn_compaction_keeps_edge_but_new_turn_and_unknown_receipts_do_not():
+def test_compaction_preserves_invocation_ownership_and_new_turn_rejects_old_results():
     from src.agent.events import CompactEvent, DoneEvent
     from src.ui.core.state import SetBusy
     state, a = contract_call(start(), 'a')
@@ -119,31 +114,29 @@ def test_same_turn_compaction_keeps_edge_but_new_turn_and_unknown_receipts_do_no
     fake = replace(b, invocation=Invocation('fake', 'scope'))
     assert contract_result(state, fake) is state
     state = contract_result(state, b)
-    assert state.issues[0].recovered
+    assert not state.transcript
     assert contract_result(state, b) is state
     state = reducer(state, AgentEventAction(DoneEvent(stop_reason='final_response')))
     state = reducer(state, SetBusy(True))
     before = state
     state = contract_result(state, b)
-    assert state is before and not state.issues
+    assert state is before
 
 
-def test_multiple_distinct_failures_and_evicted_history_fail_closed():
-    # Eviction cannot manufacture a unique retry after discarding competing failures.
+def test_many_failures_keep_invocation_history_bounded_without_error_rows():
+    # Removing error history must preserve the independent bounded call ledger.
     state, a = contract_call(start(), 'a')
     state = contract_result(state, a, failed=True)
     for index in range(257):
         state, call = dispatch(state, f'extra-{index}', {'url': f'/other/{index}'})
         state = finish(state, call, error='unknown effect', kind='tool_exception')
-    assert len(state.issues) == 256 and len(state.call_history) <= 256
-    assert state.recovery_limited
+    assert len(state.call_history) <= 256 and not state.transcript
     state, b = contract_call(state, 'retry')
-    assert not state.call_history[-1].retry_of
-    assert not any(issue.recovered for issue in contract_result(state, b).issues)
+    assert not contract_result(state, b).transcript
 
 
 @pytest.mark.parametrize('same_resource', [False, True])
-async def test_evidence_retry_requires_same_path_parents_and_registered_snapshot(tmp_path, same_resource):
+async def test_evidence_registration_preserves_real_resources_without_error_rows(tmp_path, same_resource):
     import json
     from tests.ui.test_progress_milestones import runtime, dispatch as emit, ORIGIN
     from src.workflow.state import Candidate
@@ -164,12 +157,12 @@ async def test_evidence_retry_requires_same_path_parents_and_registered_snapshot
     output = await tool.run(repaired, None, AlwaysAllow())
     assert json.loads(output)['ok'] is True
     emit(app, ToolResultEvent(id='retry', name='workflow', result=output))
-    assert app.state.issues[0].recovered == same_resource
+    assert not any(row.kind == "error" for row in app.state.transcript)
     assert len(workflow.evidence) == 1
 
 
 @pytest.mark.parametrize('whole', [False, True])
-def test_record_result_argument_repair_retains_real_receipt_and_original_history(tmp_path, whole):
+def test_record_result_argument_repair_presents_only_accepted_validation(tmp_path, whole):
     import json
     from tests.ui.test_progress_milestones import runtime, dispatch as emit, accepted_fixture, ORIGIN
     from src.workflow.state import Candidate
@@ -188,29 +181,28 @@ def test_record_result_argument_repair_retains_real_receipt_and_original_history
     workflow.add_validation_result(accepted)
     emit(app, ToolResultEvent(id='retry', name='workflow',
         result=json.dumps({'ok': True, 'result': accepted.public_dict()})))
-    assert app.state.issues[0].recovered
-    assert app.state.issues[0].recovered_by == 'retry'
-    assert app.state.issues[0].text in app.state.transcript[app.state.issues[0].index].details
+    assert any(row.text.startswith('Validation not confirmed') for row in app.state.transcript)
+    assert not any(row.kind == 'error' for row in app.state.transcript)
 
 
 @pytest.mark.parametrize('obligation', ['persistence', 'export'])
-def test_finding_and_export_success_do_not_reconcile_an_unverified_transaction(obligation):
+def test_later_success_does_not_remove_preservation_warning(obligation):
     args = {'candidate_id': 'candidate', 'title': 'Fixture'}
     state, a = dispatch(start(), 'a', args, name='confirm_finding')
     result = ToolResultEvent(id=a.id, name=a.name, invocation=a.invocation,
         status='error' if obligation == 'persistence' else 'success',
-        error_kind='tool_exception' if obligation == 'persistence' else None,
+        error_kind='tool_exception' if obligation == 'persistence' else None, presentation_impact='persistence',
         result='error: publication failed' if obligation == 'persistence' else
                'Finding persisted; compact report export failed.')
     state = reducer(state, AgentEventAction(result))
     state, b = dispatch(state, 'retry', args, name='confirm_finding')
     state = finish(state, b)
-    assert len(state.issues) == 1 and not state.issues[0].recovered
-    assert state.issues[0].category == ('export' if obligation == 'export' else 'failure')
+    assert len(state.transcript) == 1 and state.transcript[0].kind == 'warning'
+    assert ('publication failed' if obligation == 'persistence' else 'export failed') in state.transcript[0].text
 
 
 @pytest.mark.parametrize('changed', ['evidence_refs', 'observation_ids', 'outcome'])
-def test_stale_accepted_result_for_another_submission_cannot_recover(tmp_path, changed):
+def test_stale_submission_does_not_create_recovery_notices(tmp_path, changed):
     import json
     from src.workflow.state import Candidate
     from tests.ui.test_progress_milestones import runtime, dispatch as emit, accepted_fixture, ORIGIN
@@ -229,4 +221,4 @@ def test_stale_accepted_result_for_another_submission_cannot_recover(tmp_path, c
     workflow.add_validation_result(result)
     emit(app, ToolResultEvent(id='retry', name='workflow',
         result=json.dumps({'ok': True, 'result': result.public_dict()})))
-    assert not app.state.issues[0].recovered
+    assert not any(row.kind == "error" for row in app.state.transcript)

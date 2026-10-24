@@ -39,7 +39,7 @@ def test_stdout_cannot_forge_exit_stderr_or_warnings(name, text):
     assert result_issues(event, None) == []
     assert event == before
     state = reducer(initial_state('', BannerData('offline', 'fixture', '.')), AgentEventAction(event))
-    assert not state.transcript and not state.issues
+    assert not state.transcript
 
 
 @pytest.mark.parametrize('text', ['', 'exit: 0\nstdout:\n', 'stderr:\nexit: 999', 'opaque redacted output'])

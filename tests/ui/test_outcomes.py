@@ -42,37 +42,27 @@ def test_repeated_errors_changed_reasons_recovery_and_delivery():
         event = ToolResultEvent(id=str(i), name="unknown", err="connection failed", status="error")
         dispatch(app, event)
         dispatch(app, event)
-    assert len(list(app.state.transcript)) == 1
-    assert "100 times" in app.state.transcript[0].text
+    assert not app.state.transcript
     dispatch(app, ToolCallEvent(id="changed", name="unknown", args={"operation": "fixture"}))
     dispatch(app, ToolResultEvent(id="changed", name="unknown", err="permission denied", status="error"))
-    assert len(list(app.state.transcript)) == 2
-    dispatch(app, ToolCallEvent(id="recovery", name="unknown", args={"operation": "fixture"}))
-    dispatch(app, ToolResultEvent(id="recovery", name="unknown", result="ok"))
-    assert all(not issue.recovered for issue in app.state.issues)
-    assert app.state.transcript[0].kind == 'error'
-    assert app.state.transcript[1].kind == 'warning'
-    assert [issue.count for issue in app.state.issues] == [100, 1]
-    assert [issue.text for issue in app.state.issues] == [
-        'unknown: connection failed', 'unknown: permission denied']
+    assert not app.state.transcript
+    dispatch(app, ToolCallEvent(id="retry", name="unknown", args={"operation": "fixture"}))
+    dispatch(app, ToolResultEvent(id="retry", name="unknown", result="ok"))
+    assert not app.state.transcript
+    dispatch(app, DoneEvent(stop_reason="final_response"))
+    assert app.state.latest_turn_details is not None
+    assert app.state.latest_turn_details.completed_operations == (("unknown", 1),)
 
 
-def test_unverified_success_preserves_sanitized_original_error_in_diagnostics():
+def test_failed_feedback_never_enters_the_visible_transcript():
     app = make_app()
     args = {'operation': 'fixture'}
     dispatch(app, ToolCallEvent(id='failed', name='unknown', args=args))
-    dispatch(app, ToolResultEvent(id='failed', name='unknown', status='error',
-        err='error: rejected password=short-secret'))
-    original = app.state.issues[0].text
-    assert 'error: rejected' in original and 'short-secret' not in original
-    dispatch(app, ToolCallEvent(id='retry', name='unknown', args=args))
-    dispatch(app, ToolResultEvent(id='retry', name='unknown', result='ok'))
-    assert not app.state.issues[0].recovered
-    assert app.state.issues[0].text == original
-    from src.ui.widgets.transcript import entry_view
-    displayed = '\n'.join(line.text for line in entry_view(app.state.transcript[0]))
-    assert 'Recovered after' not in displayed
-    assert 'rejected' in displayed
+    event = ToolResultEvent(id='failed', name='unknown', status='error',
+        err='error: rejected password=short-secret')
+    dispatch(app, event)
+    assert not app.state.transcript
+    assert event.err == 'error: rejected password=short-secret'
     assert 'short-secret' not in repr(app.state)
 
 
@@ -81,15 +71,15 @@ def test_http_retries_group_by_operation_and_keep_target_auth_and_recovery_disti
     for i in range(10):
         dispatch(app, ToolCallEvent(id=str(i), name="http", args={"url":f"http://juice.lab:3000/search?q={i}"}))
         dispatch(app, ToolResultEvent(id=str(i), name="http", status="error", err="connection failed", error_kind="network"))
-    assert len(app.state.transcript) == 10  # Query values identify distinct requests.
+    assert not app.state.transcript
     for i, url, auth in [("target", "http://other.lab:3000/search?q=1", "a"),
                          ("auth", "http://juice.lab:3000/search?q=1", "b")]:
         dispatch(app, ToolCallEvent(id=i, name="http", args={"url":url, "headers":{"Authorization":auth}}))
         dispatch(app, ToolResultEvent(id=i, name="http", status="error", err="connection failed"))
-    assert len(app.state.transcript) == 12
+    assert not app.state.transcript
     dispatch(app, ToolCallEvent(id="recover", name="http", args={"url":"http://juice.lab:3000/search?q=11"}))
     dispatch(app, ToolResultEvent(id="recover", name="http", status="observation", http_status=403, result="HTTP/1.1 403 Forbidden"))
-    assert all(not issue.recovered for issue in app.state.issues)
+    assert not any(row.kind == "error" for row in app.state.transcript)
 
 
 def test_late_or_missing_results_and_unknown_reasons_remain_safe():
@@ -97,12 +87,12 @@ def test_late_or_missing_results_and_unknown_reasons_remain_safe():
     dispatch(app, DoneEvent(stop_reason="future_stop_reason"))
     assert "future_stop_reason" in app.state.transcript[0].text
     dispatch(app, ToolResultEvent(id="late", name="unknown", status="error", error_kind="network"))
-    assert app.state.phase == "idle" and app.state.transcript[-1].kind == "error"
+    assert app.state.phase == "idle" and len(app.state.transcript) == 1
     dispatch(app, ToolCallEvent(name="shell", args={"command":"rg missing ."}))
     dispatch(app, ToolResultEvent(name="shell", result="exit: 1\nstdout:\n",
         runtime_metadata=RuntimeMetadata(process="exit", exit_code=1,
             stdout=StreamCapture(0, 0, True), stderr=StreamCapture(0, 0, True))))
-    assert "exit 1" in app.state.transcript[-1].text
+    assert "exit 1" not in repr(app.state.transcript)
 
 
 def test_routine_notices_do_not_grow_transcript_but_multiline_warnings_remain():
@@ -117,7 +107,7 @@ def test_routine_notices_do_not_grow_transcript_but_multiline_warnings_remain():
 
 @pytest.mark.parametrize("reason,label", [("final_response", "Turn completed"),
     ("workflow_completed", "Turn ended · workflow completion unavailable"), ("workflow_blocked", "Blocked"),
-    ("workflow_stalled", "Stalled"), ("cancelled", "Turn cancelled"), ("max_steps", "Stopped at max steps"),
+    ("cancelled", "Turn cancelled"), ("max_steps", "Stopped at max steps"),
     ("runtime_error", "Runtime failure"), ("context_capacity", "Context capacity failure")])
 def test_truthful_final_outcome_is_once_per_turn(reason, label):
     app = make_app()
@@ -192,7 +182,9 @@ async def test_real_finding_persistence_and_export_warning_are_distinct(tmp_path
     assert not app.state.transcript
     result = await tool.run(args, None, AlwaysAllow())
     snapshot = copy.deepcopy(workflow.to_dict())
-    event = ToolResultEvent(id="save", name="confirm_finding", result=result)
+    event = ToolResultEvent(id="save", name="confirm_finding", result=result,
+        presentation_impact=getattr(result, "presentation_impact", None))
+    assert event.presentation_impact == "persistence"
     dispatch(app, event)
     dispatch(app, event)
     assert sum(entry.kind == "finding" for entry in app.state.transcript) == 1
@@ -245,7 +237,7 @@ def test_scoped_phase_completion_deduplicates_and_boundary_resets(tmp_path):
     assert workflow.to_dict() == snapshot
     assert not app.state.milestones
     app.dispatch(Clear())
-    assert not app.state.issues and not app.state.milestones and not app.state.pending_calls
+    assert not app.state.milestones and not app.state.pending_calls
 
 
 def test_final_scoped_residual_work_and_revision_change(tmp_path):
@@ -357,7 +349,7 @@ def test_context_pressure_stable_roots_are_diagnostics_and_capacity_failure_is_v
     app.dispatch(SetBusy(True))
     for count in range(50):
         dispatch(app, DecisionEvent(summary=f'context guard: reduced {count} characters; unresolved pressure: {count*30} tokens'))
-    assert not app.state.transcript and not app.state.issues
+    assert not app.state.transcript
     dispatch(app, DecisionEvent(summary='context guard: reduced 100 characters successfully'))
     assert not app.state.transcript
     error = ContextCapacityError(200, InputBudget(input_limit=100), 150)
@@ -365,7 +357,7 @@ def test_context_pressure_stable_roots_are_diagnostics_and_capacity_failure_is_v
     assert error.estimate == 200 and error.fixed_floor == 150
     dispatch(app, DoneEvent(stop_reason='context_capacity'))
     assert 'Context capacity failure' in app.state.transcript[-1].text
-    assert '1 unresolved operation issue.' in app.state.transcript[-1].text
+    assert 'unresolved operation' not in app.state.transcript[-1].text
 
 
 def test_http_success_cannot_recover_unrelated_authorization_or_workflow_failure():
@@ -376,9 +368,9 @@ def test_http_success_cannot_recover_unrelated_authorization_or_workflow_failure
     dispatch(app, ToolResultEvent(id='denied', name='http', err='permission denied', status='error', error_kind='permission_denied'))
     dispatch(app, ToolCallEvent(id='success', name='http', args={'url':'/write?q=other', 'method':'POST'}))
     dispatch(app, ToolResultEvent(id='success', name='http', status='observation', http_status=200))
-    assert all(not issue.recovered for issue in app.state.issues)
+    assert not any(row.kind == "error" for row in app.state.transcript)
     dispatch(app, DoneEvent(stop_reason='workflow_blocked'))
-    assert '2 unresolved operation issues' in app.state.transcript[-1].text
+    assert 'unresolved operation' not in app.state.transcript[-1].text
 
 
 def test_selected_burp_requests_are_presented_as_selection_not_validation(tmp_path):
@@ -435,12 +427,12 @@ def test_workflow_rejection_recovers_only_after_bound_accepted_assessment(tmp_pa
     dispatch(app, ToolResultEvent(id='rejected', name='workflow', status='error', error_kind='invalid_args', result='error: record_result does not accept mutation_state'))
     dispatch(app, ToolCallEvent(id='unaccepted', name='workflow', args=args))
     dispatch(app, ToolResultEvent(id='unaccepted', name='workflow', result='{"ok":true}'))
-    assert not app.state.issues[0].recovered
+    assert not any(row.kind == "validation" for row in app.state.transcript)
     workflow.add_validation_result(latest)
     snapshot = copy.deepcopy(workflow.to_dict())
     dispatch(app, ToolCallEvent(id='accepted', name='workflow', args=args | {'assessment':{'criteria':'fixture attestation'}}))
     dispatch(app, ToolResultEvent(id='accepted', name='workflow', result=json.dumps({'ok':True, 'result':latest.public_dict()})))
-    assert app.state.issues[0].recovered
+    assert any(row.kind == "validation" for row in app.state.transcript)
     assert workflow.to_dict() == snapshot
     dispatch(app, DoneEvent(stop_reason='final_response'))
     assert 'findings saved' not in app.state.transcript[-1].text

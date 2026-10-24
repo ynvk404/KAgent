@@ -1,20 +1,19 @@
 """Immutable, scoped presentation of runtime records; never advance Workflow."""
 from __future__ import annotations
 
-import hashlib
 import json
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from src.agent.events import AgentEvent, SkillActiveEvent, ToolCallEvent, ToolResultEvent
 from src.agent.scope import runtime_scope
-from src.permission.runtime.execution import policy_for, ExecutionBlocked
-from src.ui.core.admission import PendingCall, call_metadata, invocation_call, result_matches_call
+from src.permission.runtime.execution import policy_for
+from src.ui.core.admission import PendingCall, call_metadata, invocation_call
 from src.ui.render.sanitize import sanitize_text
-from src.workflow.assessment import accepted_result, candidate_binding, digest
+from src.workflow.assessment import accepted_result, candidate_binding
 from src.workflow.state import WorkflowState, candidate_origin, validation_result_fingerprint
 
 
@@ -44,10 +43,6 @@ class OutcomeFacts:
     stale_event: bool = False
     overview: str = ""
     completion_supported: bool = False
-    accepted_call: bool = False
-    operation_owner: str = ''
-    operation_candidate_id: str = ''
-    operation_intent: str = ''
 
 
 def _evidence_summary(result) -> str:
@@ -115,10 +110,6 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
     pending: list[str] = []
     blockers: list[str] = []
     incomplete = goals = validations = 0
-    accepted_call = False
-    operation_owner = ''
-    operation_candidate_id = ''
-    operation_intent = ''
     tool = getattr(agent, "tools", {}).get("workflow")
     root = getattr(tool, "evidence_root", None)
     from src.tools.workflow.workflow_tool import WorkflowTool
@@ -200,17 +191,6 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
             detail = concise_text(impact, shortened_marker="… [shortened]") if isinstance(impact, str) else ""
             records.append(ProgressRecord("validation", identity, validation_label(candidate), result.outcome, detail,
                                           _evidence_summary(result), workflow.validation_results.index(result)))
-            if (isinstance(event, ToolResultEvent) and call and call.operation == "record_result"
-                    and call.candidate_id == candidate.id and event.status == "success" and not event.err):
-                try:
-                    receipt = json.loads(event.result)
-                except (ValueError, TypeError):
-                    receipt = None
-                recorded = receipt.get("result") if isinstance(receipt, dict) else None
-                accepted_call = (isinstance(receipt, dict) and receipt.get("ok") is True
-                    and (not call.attempt_id or call.attempt_id == result.attempt_id)
-                    and isinstance(recorded, dict) and recorded == result.public_dict()
-                    and result_matches_call(call, recorded))
             if result.outcome == "confirmed" and not workflow.finding_is_persisted(candidate.id):
                 records.append(ProgressRecord("unsaved", identity, label))
                 pending.append("finding persistence pending")
@@ -313,74 +293,8 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
     activity = ""
     activity_skill = ""
     if call:
-        if call.name == 'workflow' and call.operation == 'record_candidate' and isinstance(tool, WorkflowTool):
-            if isinstance(event, ToolCallEvent):
-                try:
-                    args = (agent._selected_capture_presentation_args(event.args)
-                            if hasattr(agent, '_selected_capture_presentation_args') else event.args)
-                    proposal = tool.candidate_proposal(args)
-                except (TypeError, ValueError, ExecutionBlocked):
-                    proposal = None
-                if (proposal is not None and candidate_origin(proposal.target) == origin
-                        and scoped_endpoint(proposal.endpoint)):
-                    # Canonical business identity plus immutable runtime scope;
-                    # a rejected caller ownership field cannot change either.
-                    operation_owner = hashlib.sha256(repr((scope, call.operation, candidate_binding(proposal),
-                        event.args.get('input_id') or '')).encode()).hexdigest()
-                    operation_intent = operation_owner
-                    operation_candidate_id = proposal.id
-                    call = replace(call, candidate_id=proposal.id)
-            elif (isinstance(event, ToolResultEvent) and call.invocation is not None
-                    and event.status == 'success' and not event.err and not event.error_kind):
-                try:
-                    receipt = json.loads(event.result)
-                except (ValueError, TypeError):
-                    receipt = None
-                stored = workflow.candidates.get(call.candidate_id)
-                recorded = receipt.get('candidate') if isinstance(receipt, dict) else None
-                accepted_call = (isinstance(receipt, dict) and receipt.get('ok') is True
-                    and stored is not None and stored in candidates
-                    and event.accepted_candidate_id == stored.id
-                    and isinstance(recorded, dict) and recorded == stored.to_dict())
-        if isinstance(event, ToolCallEvent) and call.name == 'http':
-            owner = policy.observations.owner_provider() if policy is not None else None
-            # Effective request/auth is independently matched at completion by
-            # the native receipt; implicit owner changes separate dispatches.
-            operation_owner = digest((scope, 'http', owner, call.identity))
-            operation_intent = digest((operation_owner, call.recovery_identity))
         candidate = workflow.candidates.get(call.candidate_id)
         if candidate in candidates and candidate is not None:
-            if isinstance(event, ToolCallEvent) and call.name == 'workflow' and call.operation != 'record_candidate':
-                active = next((attempt['id'] for attempt in workflow.attempts.values()
-                    if attempt.get('candidate_id') == candidate.id and attempt.get('status') == 'active'), None)
-                position = sum(result.candidate_id == candidate.id for result in workflow.validation_results)
-                if call.operation == 'record_result':
-                    latest = workflow.latest_result(candidate.id)
-                    proposed = workflow.attempts.get(call.attempt_id)
-                    owner = (proposed if proposed and proposed.get('candidate_id') == candidate.id
-                             and proposed.get('candidate_binding') == candidate_binding(candidate) else
-                             workflow.attempts.get(active or (latest.attempt_id if latest else '') or ''))
-                    if owner is not None:
-                        active, position = owner['id'], owner.get('result_position', position)
-                operation_owner = hashlib.sha256(repr((scope, call.operation, candidate_binding(candidate), active,
-                    position,
-                    event.args.get('force') is True,
-                    call.attempt_id if call.attempt_id and call.attempt_id != active else active)).encode()).hexdigest()
-                if call.operation == 'record_result':
-                    operation_intent = digest((operation_owner, {key: event.args.get(key) for key in
-                        ('outcome', 'skill_name', 'evidence_refs', 'observation_ids')}))
-                elif call.operation == 'record_evidence' and isinstance(root, Path):
-                    parents = event.args.get('observation_ids', [])
-                    if isinstance(parents, list) and all(isinstance(ref, str) for ref in parents):
-                        parents = sorted(parents)
-                    operation_intent = digest((operation_owner,
-                        str(root.absolute() / str(event.args.get('evidence_path', ''))), parents))
-                elif call.operation == 'start_validation':
-                    # Only typed contract repairs are eligible; accepted attempt
-                    # receipts must still prove the actual state transition.
-                    operation_intent = operation_owner
-                else:
-                    operation_intent = digest((operation_owner, call.recovery_identity))
             activity = endpoint_label(candidate.method, candidate.endpoint, candidate.parameter)
             if call.name == "http" and call.activity:
                 geometry = endpoint_label(candidate.method, candidate.endpoint)
@@ -394,23 +308,6 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
             route = resolve_validation_route(getattr(tool, "skills", None), candidate.candidate_class)
             if route.kind == "expert":
                 activity_skill = route.skill_name or ""
-            if (isinstance(event, ToolResultEvent) and call.operation == "record_evidence"
-                    and event.status == "success" and not event.err and not event.error_kind
-                    and isinstance(root, Path)):
-                try:
-                    receipt = json.loads(event.result)
-                    recorded = receipt.get('evidence')
-                    artifact = workflow.evidence.get(str(recorded.get('id', ''))) if isinstance(recorded, dict) else None
-                    parents = receipt.get('primary_parents')
-                    accepted_call = bool(receipt.get('ok') is True and artifact is not None
-                        and artifact.candidate_id == candidate.id and recorded == artifact.to_dict()
-                        and isinstance(parents, list) and all(isinstance(ref, str) for ref in parents)
-                        and workflow.evidence_sources.get(artifact.id, []) == parents
-                        and artifact.source_path is not None
-                        and digest((call.identity, artifact.source_path, sorted(parents))) == call.resource
-                        and artifact.is_available_for_resume(root))
-                except (ValueError, TypeError, AttributeError):
-                    accepted_call = False
             if (isinstance(event, ToolResultEvent) and call.operation == "start_validation"
                     and event.status == "success" and not event.err and not event.error_kind):
                 try:
@@ -431,7 +328,6 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
                         and (policy is None or attempt.get("epoch") == policy.engagement.http_permissions.epoch)):
                     milestones.append(("attempt:" + attempt["id"], "info", "Validation started · " +
                                        validation_label(candidate)))
-                    accepted_call = True
         if (isinstance(event, ToolResultEvent) and event.status == "success" and not event.err
                 and event.name == "confirm_finding"):
             receipt = re.match(r'^Finding "([^\n]*)" written to ([^\n]+)', event.result)
@@ -446,6 +342,4 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
                                    f"Finding saved · {concise_text(receipt[1])}{label}\n  {sanitize_text(receipt[2])}"))
     return OutcomeFacts(scope, tuple(milestones), tuple(dict.fromkeys(pending)), validations,
                         tuple(dict.fromkeys(records)), activity, incomplete, goals, tuple(dict.fromkeys(blockers)),
-                        activity_skill, overview=overview, completion_supported=completion_supported, accepted_call=accepted_call,
-                        operation_owner=operation_owner, operation_candidate_id=operation_candidate_id,
-                        operation_intent=operation_intent)
+                        activity_skill, overview=overview, completion_supported=completion_supported)

@@ -13,6 +13,7 @@ from src.workflow.state import (
     WorkflowState,
     candidate_fingerprint,
     attack_surface_input_fingerprint,
+    validation_result_fingerprint,
 )
 from tests.helpers.workflow import record_completed_phase
 from src.workflow.evidence.artifacts import EvidenceArtifact
@@ -567,7 +568,7 @@ def test_current_phase_completion_with_incomplete_coverage_fails_closed_and_roun
     assert WorkflowState.from_dict(restored.to_dict()).to_dict() == restored.to_dict()
 
 
-def test_pending_phase_coverage_is_workflow_progress_and_retry_changes_the_fact():
+def test_pending_phase_coverage_preserves_failure_and_allows_performed_retry():
     state = whole_target_state("coverage-progress")
     objective = state.objective
     assert objective is not None
@@ -578,17 +579,19 @@ def test_pending_phase_coverage_is_workflow_progress_and_retry_changes_the_fact(
         target_origin=objective.target_origin or "",
         reason="temporary DNS failure",
     )
-    failed_facts = state.progress_facts()
-    assert any("reachability:failed" in fact for fact in failed_facts)
+    failed = state.phase_coverage_record('recon', 'reachability')
+    assert failed is not None and failed.status == 'failed'
+    assert state.needs_phase_coverage('recon', 'reachability')
 
     state.record_phase_coverage(
         "recon", "reachability", "performed",
         objective_id=objective.id,
         target_origin=objective.target_origin or "",
     )
-    performed_facts = state.progress_facts()
-    assert performed_facts - failed_facts
-    assert any("reachability:performed" in fact for fact in performed_facts)
+    performed = state.phase_coverage_record('recon', 'reachability')
+    assert performed is not None and performed.status == 'performed'
+    assert not state.needs_phase_coverage('recon', 'reachability')
+    assert WorkflowState.from_dict(state.to_dict()).to_dict() == state.to_dict()
 
 
 def test_phase_completion_moves_pending_coverage_into_the_compact_marker():
@@ -606,7 +609,6 @@ def test_phase_completion_moves_pending_coverage_into_the_compact_marker():
     key = f"{objective.id}:recon"
     assert key not in state.phase_coverage
     assert set(state.phase_completions[key].coverage) == set(PHASE_COVERAGE_DIMENSIONS["recon"])
-    assert not any(f"phase-coverage-pending:{key}:" in fact for fact in state.progress_facts())
     restored = WorkflowState.from_dict(state.to_dict())
     assert restored.to_dict() == state.to_dict()
 
@@ -1229,7 +1231,7 @@ def test_dismissed_candidate_with_terminal_result_is_a_valid_disposition():
     assert status == "completed" and actionable == () and blockers == ()
 
 
-def test_progress_facts_ignore_prose_timestamps_and_candidate_status_oscillation():
+def test_assessment_identity_excludes_prose_timestamps_and_coverage_sync():
     state = whole_target_state()
     objective = state.objective
     assert objective is not None
@@ -1240,26 +1242,28 @@ def test_progress_facts_ignore_prose_timestamps_and_candidate_status_oscillation
         candidate.id, "sql-injection", "not-confirmed", notes="first", recorded_at="t1",
     )
     state.add_validation_result(result)
-    facts = state.progress_facts()
+    identity = validation_result_fingerprint(result)
     state.set_candidate_status(candidate.id, "queued")
     state.set_candidate_status(candidate.id, "validating")
     result.notes = "edited prose"
     result.recorded_at = "t2"
-    assert state.progress_facts() == facts
+    assert state.latest_result(candidate.id) is result
+    assert validation_result_fingerprint(result) == identity
     retest = ValidationResult(
         candidate.id, "sql-injection", "confirmed", evidence_refs=["ev-new"],
     )
     state.add_validation_result(retest, force=True)
-    after_result = state.progress_facts()
-    assert after_result - facts
+    assert state.latest_result(candidate.id) is retest
+    retest_identity = validation_result_fingerprint(retest)
+    assert retest_identity != identity
     retest.notes = "different prose"
     retest.recorded_at = "t3"
-    assert state.progress_facts() == after_result
+    assert validation_result_fingerprint(retest) == retest_identity
     retest.coverage_synced = False
-    pending_sync = state.progress_facts()
+    assert retest.coverage_synced is False and state.latest_result(candidate.id) is retest
     retest.coverage_synced = True
-    synced = state.progress_facts()
-    assert synced - pending_sync
+    assert retest.coverage_synced is True and state.latest_result(candidate.id) is retest
+    assert validation_result_fingerprint(retest) == retest_identity
 
 
 def test_result_requires_known_candidate_and_valid_values():

@@ -38,7 +38,7 @@ def test_short_summary_and_details_share_source_counts_independent_of_transcript
 @pytest.mark.parametrize("reason,label", [
     ("final_response", "Turn completed"), ("runtime_error", "Runtime failure"),
     ("cancelled", "Turn cancelled"), ("max_steps", "Stopped at max steps"),
-    ("workflow_blocked", "Blocked"), ("workflow_stalled", "Stalled"),
+    ("workflow_blocked", "Blocked"),
     ("plan_only_blocked", "Plan-only tool request blocked"),
     ("future", "Turn ended (future)"),
 ])
@@ -62,12 +62,12 @@ def test_partial_work_permissions_exports_and_unsaved_findings_remain_visible():
     text = state.transcript[-1].text
     assert text.startswith("Turn ended · work remains")
     for phrase in ("1 accepted-but-unsaved validation", "1 incomplete validation", "2 incomplete goals",
-                   "1 unresolved operation issue", "1 unresolved permission outcome", *facts.pending):
+                   *facts.pending):
         assert phrase in text
     details = state.latest_turn_details
     assert details is not None
     assert details.saved_findings == 0 and details.unsaved_validations == 1
-    assert details.unresolved_issues == 1 and details.pending_permissions == 1
+    assert "unresolved" not in text
     assert details.incomplete_validations == 1 and details.incomplete_goals == 2
 
 
@@ -192,14 +192,15 @@ async def test_mounted_turn_details_scroll_copy_escape_and_snapshot_ownership(mo
 
 
 def test_pending_review_and_export_counters_are_not_hidden_by_final_response():
-    from src.ui.core.state import PresentedIssue, SetPerm
+    from src.ui.core.state import SetPerm
     from tests.ui.test_permission_modal import make_req
     state = state_for_turn()
-    state = replace(state, issues=(PresentedIssue("export", "finding", 0, "export failed", category="export"),))
+    state = reducer(state, AgentEventAction(ToolResultEvent(name="confirm_finding",
+        result="Finding persisted; compact report export failed.", presentation_impact="persistence")))
     state = reducer(state, SetPerm(make_req()))
     state = finish(state)
-    assert "optional export failure" in state.transcript[-1].text
+    assert any("export failed" in row.text for row in state.transcript)
     assert "permission review pending" in state.transcript[-1].text
     assert state.latest_turn_details is not None
-    assert state.latest_turn_details.export_failures == 1
+    assert "unresolved" not in state.latest_turn_details.outcome
     assert state.transcript[-1].kind == "warning"

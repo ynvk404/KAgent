@@ -20,7 +20,7 @@ from benchmarks.scenario1.core.storage import (allocate_run, bind_storage, read_
 from benchmarks.scenario1.reporting import writer
 from benchmarks.scenario1.reporting.loader import load_report
 from benchmarks.scenario1.reporting.projection import json_bytes
-from tests.benchmarks.test_scenario1 import (ScriptedClient, execute_case, isolated_project_environment,
+from tests.benchmarks.test_scenario1 import (FindingClient, execute_case, isolated_project_environment,
     mock_http, op, settings, single_manifest)
 from tests.benchmarks.test_scenario1_reporting import _fixture
 from tests.benchmarks.test_scenario1_reset import Controller
@@ -108,7 +108,8 @@ async def test_public_selected_evidence_and_secrets(tmp_path, monkeypatch, op, s
     workspace = tmp_path / 'fixture-workspace'
     workspace.mkdir()
     monkeypatch.chdir(workspace)
-    execution = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient())
+    execution = await execute_case(op, settings, workspace, 'run', 'ex', FindingClient())
+    assert execution.status == 'completed' and execution.stop_reason == 'final_response'
     secret = 'sk-' + 'S' * 40
     raw = asdict(execution)
     raw['runtime_metadata'].update(transcript=secret, provider_configuration={'api_key': secret},

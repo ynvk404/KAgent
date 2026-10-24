@@ -28,4 +28,4 @@ def test_coverage_endpoint_method_is_displayed_once(endpoint, method, expected):
     state = reducer(state, AgentEventAction(event))
     assert state.running_tool and state.running_tool.endswith(expected)
     assert 'GET GET' not in state.running_tool and 'private' not in state.running_tool
-    assert event == original and metadata.identity == call_metadata(original).identity
+    assert event == original and metadata == call_metadata(original)

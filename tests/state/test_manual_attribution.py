@@ -44,13 +44,16 @@ def test_atomic_manual_linkage_dedup_no_context_or_fake_source_completion():
     assert s.endpoints[link.endpoint_id].method == 'POST' and link.media_type == 'application/json'
     assert item.source_ref is item.baseline_request_ref is item.auth_context_ref is None
     assert s.discovery_sources[src.id] == src and not src.selected
-    before, revision, progress = s.to_dict(), s.committed_revision, s.progress_facts()
+    before, revision = s.to_dict(), s.committed_revision
     again, created, same_link = record(s, src)
     assert not created and again is item and same_link == link
-    assert s.to_dict() == before and s.committed_revision == revision and s.progress_facts() == progress
-    # Distinct document occurrences link the same canonical input without new progress.
+    assert s.to_dict() == before and s.committed_revision == revision
+    # Distinct document occurrences link the same canonical input.
+    input_before = item.to_dict()
     record(s, src, document_location='/paths/~1orders/post/requestBody/cid')
-    assert len(s.attack_surface_inputs) == 1 and s.progress_facts() == progress
+    assert len(s.attack_surface_inputs) == 1 and item.to_dict() == input_before
+    assert {p.locator for p in s.discovery_provenance.values() if p.input_id == item.id} == {
+        'manual:/components/schemas/Order/properties/cid', 'manual:/paths/~1orders/post/requestBody/cid'}
     assert not s.candidates and not s.attempts and not s.evidence and not s.selected_sources
 
 

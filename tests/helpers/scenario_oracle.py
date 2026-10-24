@@ -291,7 +291,7 @@ class InvariantOracle:
             assert done[0]["stop_reason"] == ("workflow_completed" if definition.mode == "whole_target" else "final_response")
             assert not runtime.agent._validation_completion_blockers()
         else:
-            assert done[0]["stop_reason"] in {"workflow_blocked", "workflow_stalled"}
+            assert done[0]["stop_reason"] in {"workflow_blocked"}
         await self.persisted(run, runtime)
 
     async def persisted(self, run, runtime) -> None:

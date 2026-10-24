@@ -16,6 +16,7 @@ import uuid
 import math
 from typing import Any, TYPE_CHECKING, Callable
 
+from src.tools.common.outcome import annotate_error
 from src.permission.permission import UserControlledRefusal
 from src.permission.network.grants import check_cancelled
 from src.permission.runtime.invocations import review_id, on_review_end, capture_review, ReviewGuard, REVIEW_TIMEOUT_SECONDS
@@ -328,7 +329,7 @@ class ExecutionPolicy:
         if digest in self._pending:
             raise ExecutionBlocked("pending: equivalent invocation review already open")
         if self.max_calls is not None and self.used >= self.max_calls:
-            raise ExecutionBlocked("blocked: session-call-budget-exhausted")
+            raise annotate_error(ExecutionBlocked("blocked: session-call-budget-exhausted"), "session")
         if len(self._receipts) >= 1024:
             raise ExecutionBlocked("pending: receipt-capacity")
         guard = capture_review(signal=signal, clock=self.clock,

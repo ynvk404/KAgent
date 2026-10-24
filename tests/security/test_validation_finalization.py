@@ -28,12 +28,17 @@ from tests.benchmarks.test_scenario1 import ASSESSMENT
 @pytest.mark.parametrize("mode", ["stall", "reader", "mixed"])
 async def test_owned_stop_without_declaration_records_unknown_not_false(
         tmp_path, monkeypatch, op, settings, mock_http, mode):
+    settings = replace(settings, agent_calls=16, timeout_seconds=60)
     from benchmarks.scenario1.core.runtime import HeadlessPermissions
     if mode in {"reader", "mixed"}:
         monkeypatch.setattr(HeadlessPermissions, "_owned_readback", lambda *_: False)
     op = replace(op, vulnerability_class="sql-injection")
-    ex = await execute_case(op, settings, tmp_path, "offline", "execution", StopClient(mode))
-    assert ex.status == "completed", ex.error
+    client = StopClient(mode)
+    ex = await execute_case(op, settings, tmp_path, "offline", "execution", client)
+    assert ex.stop_reason == ("all_tools_refused" if mode == "reader" else "max_steps")
+    assert ex.status == ("completed" if mode == "reader" else "budget-exhausted"), ex.error
+    if mode != "reader":
+        assert client.step == settings.agent_calls == 16
     assert ex.result is not None and not ex.result["accepted_at_freeze"]
     state = ex.result["workflow"]
     result = state["validation_results"][-1]
@@ -65,7 +70,7 @@ async def test_attempt_declaration_is_independent_of_submission_failure(
     assert json.loads(declared)["ok"], declared
     assert not agent.workflow.evidence_recovery and not agent.workflow.validation_results
     events = collect()
-    await agent._close_terminal_attempt("workflow_stalled", FakeSignal(), events["sink"], agent.history.copy())
+    await agent._close_terminal_attempt("max_steps", FakeSignal(), events["sink"], agent.history.copy())
     result = agent.workflow.latest_result(cid)
     assert result is not None and result.attempt_id == aid
     assert result.mutation_performed is flag and result.cleanup_state == cleanup
@@ -122,7 +127,7 @@ async def test_failed_or_cancelled_send_has_dispatch_without_fake_observation(
     # A later explicit terminal stop reports uncertainty; cancellation itself
     # does not invoke closure or create a result.
     assert not agent.workflow.validation_results
-    await agent._close_terminal_attempt("workflow_stalled", FakeSignal(), collect()["sink"], agent.history.copy())
+    await agent._close_terminal_attempt("max_steps", FakeSignal(), collect()["sink"], agent.history.copy())
     result = agent.workflow.latest_result(cid)
     assert result is not None and result.mutation_performed is None
 
@@ -150,7 +155,7 @@ async def test_genuine_closure_failure_keeps_incomplete_state(tmp_path, op, sett
 async def test_duplicate_closure_and_historical_round_trip(tmp_path, op, settings, mock_http):
     agent, policy, cid, aid = await active_case(op, settings, tmp_path)
     events = collect()
-    await asyncio.gather(*[agent._close_terminal_attempt("workflow_stalled", FakeSignal(),
+    await asyncio.gather(*[agent._close_terminal_attempt("max_steps", FakeSignal(),
         events["sink"], agent.history.copy()) for _ in range(2)])
     assert len(agent.workflow.validation_results) == 1
     assert not [e for e in events["events"] if e["type"] == "error"]
@@ -172,14 +177,14 @@ async def test_retest_cannot_erase_prior_acknowledged_write(tmp_path, op, settin
         "candidate_id": cid, "mutation_state": "reported-write", "effect_basis": "Controlled write acknowledgement",
         "observation_ids": [oid], "cleanup_state": "requires-user-action",
         "cleanup_status": "Agent cleanup not performed; operator action required"}, None, agent.prompter))["ok"]
-    await agent._close_terminal_attempt("workflow_stalled", FakeSignal(), collect()["sink"], agent.history.copy())
+    await agent._close_terminal_attempt("max_steps", FakeSignal(), collect()["sink"], agent.history.copy())
     started = json.loads(await agent.tools.execute("workflow", {"action": "start_validation", "candidate_id": cid}, None, agent.prompter))
     assert started["ok"] and policy.generic_validation.durable_attempt != old_attempt
     denied = await agent.tools.execute("workflow", {"action": "record_result", "candidate_id": cid,
         "skill_name": op.vulnerability_class, "outcome": "insufficient-evidence", "mutation_performed": False,
         "deferred_reason": "No current dispatch"}, None, agent.prompter)
     assert denied.startswith("error:") and len(agent.workflow.validation_results) == 1
-    await agent._close_terminal_attempt("workflow_stalled", FakeSignal(), collect()["sink"], agent.history.copy())
+    await agent._close_terminal_attempt("max_steps", FakeSignal(), collect()["sink"], agent.history.copy())
     latest = agent.workflow.latest_result(cid)
     assert latest is not None
     assert latest.mutation_performed is True and latest.cleanup_state == "requires-user-action"
@@ -202,8 +207,9 @@ async def test_unresolved_effect_states_block_whole_target_completion(runtime, t
 
 
 @pytest.mark.parametrize("skill", ["sql-injection", "cross-site-scripting"])
-async def test_stall_stops_http_and_allows_proof_result_within_original_budget(
+async def test_repetition_can_finish_proof_result_within_original_budget(
         tmp_path, monkeypatch, op, settings, mock_http, skill):
+    settings = replace(settings, timeout_seconds=60)
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: REAL_CLIENT(
         transport=httpx.MockTransport(lambda req: (mock_http.append(req) or httpx.Response(200, content=b"same", request=req))), **kw))
     class Finalize(StopClient):
@@ -213,11 +219,11 @@ async def test_stall_stops_http_and_allows_proof_result_within_original_budget(
             self.final_step = 0
         async def chat(self, request, signal=None):
             response = await super().chat(request, signal)
-            if not any(m.content.startswith("Bounded probing has stopped") for m in request.messages):
+            if self.step <= 16:
                 return response
             self.final_step += 1
             if self.final_step <= 3:
-                assert all(spec["function"]["name"] != "http" for spec in request.tools or [])
+                assert any(spec["function"]["name"] == "http" for spec in request.tools or [])
             if self.final_step == 1:
                 return self.tool("file_write", {"path": str(tmp_path / "artifacts/proof.md"), "content": "Controlled baseline/controls returned identical fixture responses."})
             if self.final_step == 2:
@@ -235,9 +241,9 @@ async def test_stall_stops_http_and_allows_proof_result_within_original_budget(
     assert ex.status == "completed" and ex.result["accepted_at_freeze"], ex.error
     result = ex.result["workflow"]["validation_results"][-1]
     attempt = ex.result["workflow"]["attempts"][result["attempt_id"]]
-    assert attempt["probing_stopped"] and attempt["status"] == "completed"
+    assert not attempt.get("probing_stopped") and attempt["status"] == "completed"
     assert result["outcome"] == "not-confirmed" and result["evidence_manifest"] and result["evidence_refs"]
-    assert len(mock_http) <= 6 and client.step < settings.agent_calls
+    assert len(mock_http) == 14 and client.step == 20 < settings.agent_calls
 
 
 async def test_owned_inventory_timing_and_foreign_isolation(tmp_path, op, settings, mock_http):
@@ -350,7 +356,7 @@ async def test_reported_verified_write_and_cleanup_need_owned_readback(runtime, 
         cleanup_state="succeeded", cleanup_status="Agent cleanup performed; subsequent owned readback verifies removal")
     assert json.loads(await registry.execute("workflow", declaration, None, prompter))["ok"]
     agent = agent_for(runtime, tool, state, args)
-    await agent._close_terminal_attempt("workflow_stalled", FakeSignal(), collect()["sink"], agent.history.copy())
+    await agent._close_terminal_attempt("max_steps", FakeSignal(), collect()["sink"], agent.history.copy())
     latest = state.latest_result(candidate.id)
     assert latest is not None
     assert latest.outcome == "insufficient-evidence" and latest.mutation_performed is True
@@ -463,7 +469,7 @@ async def test_admitted_http_waiting_before_handoff_cannot_be_closed(tmp_path, m
         attempt = agent.workflow.attempts[aid]
         assert len(attempt["effects"]["admissions"]) == 1 and not attempt["effects"]["dispatches"]
         events = collect()
-        await agent._close_terminal_attempt("workflow_stalled", FakeSignal(), events["sink"], agent.history.copy())
+        await agent._close_terminal_attempt("max_steps", FakeSignal(), events["sink"], agent.history.copy())
         assert attempt["status"] == "active" and not agent.workflow.validation_results
         assert any(e["type"] == "error" for e in events["events"])
     finally:
@@ -471,6 +477,6 @@ async def test_admitted_http_waiting_before_handoff_cannot_be_closed(tmp_path, m
         with pytest.raises(asyncio.CancelledError):
             await task
     assert not mock_http and policy.active == 0
-    await agent._close_terminal_attempt("workflow_stalled", FakeSignal(), collect()["sink"], agent.history.copy())
+    await agent._close_terminal_attempt("max_steps", FakeSignal(), collect()["sink"], agent.history.copy())
     result = agent.workflow.latest_result(cid)
     assert result is not None and result.mutation_performed is False

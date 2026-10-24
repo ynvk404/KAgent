@@ -348,20 +348,6 @@ def test_whole_target_status_is_blocked_when_only_blocked_input_remains():
     assert status == "blocked" and actionable == () and blockers
 
 
-def test_whole_target_progress_signature_stays_stable_without_semantic_changes():
-    state = WorkflowState(objective=WorkflowObjective(
-        id="assessment-stalled", mode="whole_target", target_origin="https://target.test",
-    ))
-    candidate, _ = state.add_candidate(Candidate(
-        candidate_class="sql-injection", target="https://target.test",
-        endpoint="/search", objective_id="assessment-stalled",
-    ))
-    before = state.progress_facts()
-    candidate.status = "validating"
-    candidate.status = "queued"
-    assert state.progress_facts() == before
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize('input_args', [
     {'endpoint': '/search', 'method': 'GET', 'parameter': 'q', 'location': 'query'},
@@ -369,7 +355,6 @@ def test_whole_target_progress_signature_stays_stable_without_semantic_changes()
      'content_type': 'application/json', 'sample_payload': '{"email":"{INJECTION_POINT}"}'},
 ])
 async def test_incremental_enumeration_records_progress_without_advancing_phase(tmp_path, input_args):
-    from src.agent.agent import WholeTargetStallTracker, MAX_CONSECUTIVE_NO_PROGRESS
 
     target = Target('https://target.test')
     state = WorkflowState(objective=WorkflowObjective(
@@ -387,29 +372,21 @@ async def test_incremental_enumeration_records_progress_without_advancing_phase(
     agent.tools.register(tool)
     record_completed_phase(state, 'recon', objective_id='incremental',
                            target_origin=target.base_url(), artifact_ref=recon_ref)
-    tracker = WholeTargetStallTracker()
-    tracker.set_phase('enumeration')
-    for _ in range(MAX_CONSECUTIVE_NO_PROGRESS - 1):
-        tracker.record_iteration(new_facts=frozenset(), activity_fingerprints=[])
-    before = state.progress_facts()
+    assert not state.objective_inputs()
     args = {'action': 'record_input', **input_args}
     first = json.loads(await tool.run(args, None, AlwaysAllow()))
-    assert tracker.record_iteration(new_facts=state.progress_facts() - before,
-                                    activity_fingerprints=[]) == 'structured_progress'
-    assert tracker.consecutive_no_progress == tracker.phase_exploration_steps == 0
+    assert first['created'] and state.objective_inputs()[0].id == first['input']['id']
     assert not state.candidates
     assert state.is_next_phase('enumeration')
     assert state.objective_inputs()[0].disposition == 'pending'
     plan = build_decision_plan('continue', skills.list_enabled(), target, agent._planner_context())
     assert plan is not None and plan.recommended_skill == 'web-enumeration'
 
-    before = state.progress_facts()
+    before = state.to_dict()
     duplicate = json.loads(await tool.run(args, None, AlwaysAllow()))
     assert duplicate['input']['id'] == first['input']['id']
     assert len(state.objective_inputs()) == 1
-    assert state.progress_facts() == before
-    assert tracker.record_iteration(new_facts=state.progress_facts() - before,
-                                    activity_fingerprints=[]) == 'no_progress'
+    assert state.to_dict() == before
 
     _artifact(tmp_path, 'artifacts/web-enumeration/target-test/inventory.md')
     await record_phase_coverage_for_test(tool, 'enumeration')
@@ -419,27 +396,3 @@ async def test_incremental_enumeration_records_progress_without_advancing_phase(
     plan = build_decision_plan('continue', skills.list_enabled(), target, agent._planner_context())
     assert plan is not None and plan.recommended_skill == 'web-input-analysis'
     assert not state.candidates
-
-
-def test_large_resource_byte_escalation_and_empty_query_never_renew_exploration():
-    from src.agent.agent import (
-        WholeTargetStallTracker, _exploration_fingerprint, MAX_CONSECUTIVE_NO_PROGRESS,
-        ExecutedToolCall, ToolCallResult,
-    )
-
-    tracker = WholeTargetStallTracker()
-    tracker.set_phase('enumeration')
-    fingerprints = [_exploration_fingerprint(ExecutedToolCall('http',
-                    {'url': '/docs/spec' + suffix, 'max_response_bytes': cap}, True,
-                    ToolCallResult('truncated', '', 0, status='observation', truncated=True)),
-                    'https://target.test')
-                    for suffix, cap in [('', 400), ('?', 12000), ('', 30000),
-                                        ('?', 40000), ('', 60000)]]
-    assert fingerprints[0] is not None and len(set(fingerprints)) == 1
-    for index, fingerprint in enumerate(fingerprints):
-        assert fingerprint is not None
-        verdict = tracker.record_iteration(new_facts=frozenset(),
-                                           activity_fingerprints=[fingerprint])
-        assert verdict == ('novel_exploration' if index == 0 else 'no_progress')
-    assert tracker.consecutive_no_progress == MAX_CONSECUTIVE_NO_PROGRESS
-    assert tracker.phase_exploration_steps == 1

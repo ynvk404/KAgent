@@ -23,6 +23,7 @@ from src.workflow.assessment import accepted_result
 from src.skills.registry import normalize_candidate_class
 from src.target.origin import HTTPOrigin
 from src.workflow.validation.route import GENERIC_VALIDATOR
+from src.tools.common.outcome import ToolOutput, annotate_error
 from src.tools.common.types import Tool, arg_string
 
 SEVERITIES: tuple[Severity, ...] = (
@@ -424,7 +425,11 @@ class ConfirmFindingTool:
         )
 
         check_generic_snapshot()
-        path = await self.store.save(finding)
+        try:
+            path = await self.store.save(finding)
+        except Exception as error:
+            annotate_error(error, "persistence")
+            raise
         if review_snapshot(self.workflow, candidate_id) != result_snapshot:
             raise ValueError("candidate validation result changed during finalization")
         if (finding.confirmation_binding != confirmation_binding(self.workflow, candidate_id)
@@ -478,6 +483,7 @@ class ConfirmFindingTool:
             raise ValueError('assessment evidence changed during CWE enrichment')
 
         summary_notice = ""
+        export_failed = False
         try:
             summary_path = await self.write_summary(candidate_id)
             if summary_path:
@@ -489,6 +495,7 @@ class ConfirmFindingTool:
                 "\nFinding persisted; compact report export failed. "
                 "Retry confirm_finding with the same candidate_id to regenerate the report."
             )
+            export_failed = True
             log.warning("compact finding report export failed")
 
         try:
@@ -501,11 +508,12 @@ class ConfirmFindingTool:
         if review_snapshot(self.workflow, candidate_id) != result_snapshot:
             raise ValueError("candidate validation result changed during finalization")
 
-        return (f'Finding "{finding.title}" written to {path}\n'
+        return ToolOutput(f'Finding "{finding.title}" written to {path}\n'
                 f'Classification: {finding.vulnerabilityType or "unknown"} · '
                 f'CWE: {", ".join(finding.effective_cwe) or "none"} · '
                 f'OWASP: {", ".join(finding.owasp or []) or "none"}' + summary_notice
-                + ('\n' + enrichment_notice if enrichment_notice else ''))
+                + ('\n' + enrichment_notice if enrichment_notice else ''),
+                presentation_impact="persistence" if export_failed else None)
 
 def is_severity(value: str) -> TypeGuard[Severity]:
     return value in SEVERITIES

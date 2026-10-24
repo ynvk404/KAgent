@@ -316,15 +316,6 @@ def observation_handoff(state, item) -> SourceRecord | None:
     return state.admit_discovery(source, (endpoint,), (ProvenanceRecord(source.id, endpoint.id),))
 
 
-def source_progress_identity(state, source: SourceRecord) -> str:
-    if source.content_identity is not None:
-        return source.content_identity
-    links = [row for row in state.discovery_provenance.values() if row.source_id == source.id]
-    operations = sorted({(state.endpoints[row.endpoint_id].url, state.endpoints[row.endpoint_id].method or '')
-                         for row in links})
-    return fingerprint('', [source.kind, source.document_url, operations])
-
-
 def discovery_page(state, args: dict[str, Any]) -> dict[str, Any]:
     """Bounded read-only projection. Cursors confer no source read rights."""
     import base64

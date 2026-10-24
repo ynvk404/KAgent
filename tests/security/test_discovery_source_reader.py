@@ -7,7 +7,6 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from src.agent.agent import _exploration_fingerprint, ExecutedToolCall, WholeTargetStallTracker
 from src.llm.core.types import ChatRequest, FunctionCall, Message, ToolCall
 from src.permission.permission import Decision
 from src.skills.artifacts import completion_artifact_path
@@ -127,13 +126,13 @@ async def test_production_reduction_and_request_expose_bounded_recovery(discover
 async def test_inspected_unselected_document_can_record_grounded_input(discovery):
     rt, source, body, _, sent = discovery
     await execute(rt, 'read_discovery_source', read_args(source, body.index('"paths"')))
-    before = rt.workflow.progress_facts()
+    before = len(rt.workflow.objective_inputs())
     result = json.loads((await execute(rt, 'workflow', {'action': 'record_input', 'method': 'POST',
         'endpoint': '/b2b/v2/orders', 'parameter': 'cid', 'location': 'json', 'input_type': 'string',
         'content_type': 'application/json', 'source_attribution': attribution(source, 'paths./orders.post.requestBody')})).result)
     assert result['created'] and result['attribution_kind'] == 'manual_declaration'
     assert result['input']['source_ref'] is None and result['input']['baseline_request_ref'] is None
-    assert rt.workflow.progress_facts() - before
+    assert len(rt.workflow.objective_inputs()) == before + 1
     assert not rt.workflow.discovery_sources[source.id].selected and len(sent) == 1
     assert not rt.workflow_tool.phase_completion_readiness('web-enumeration')['ready']
     assert not rt.workflow.candidates and not rt.workflow.evidence
@@ -184,20 +183,17 @@ async def test_range_requires_fresh_permission_and_rechecks_after_review(discove
     assert denied.status == 'error' and len(sent) == 1
 
 
-async def test_repeated_pages_and_wrong_reads_cannot_manufacture_progress(discovery):
-    rt, source, _, _, _ = discovery
+async def test_repeated_pages_preserve_workflow_and_wrong_namespace_fails(discovery):
+    rt, source, _, _, sent = discovery
+    before = deepcopy(rt.workflow.to_dict())
     good = await execute(rt, 'read_discovery_source', read_args(source))
-    call = ExecutedToolCall('read_discovery_source', read_args(source), True, good)
-    fingerprint = _exploration_fingerprint(call, ORIGIN)
-    assert fingerprint is not None
-    tracker = WholeTargetStallTracker()
-    assert tracker.record_iteration(new_facts=frozenset(), activity_fingerprints=[fingerprint]) == 'novel_exploration'
-    for _ in range(4):
-        assert tracker.record_iteration(new_facts=frozenset(), activity_fingerprints=[fingerprint]) == 'no_progress'
-    assert tracker.consecutive_no_progress == 4
+    for _ in range(16):
+        page = await execute(rt, 'read_discovery_source', read_args(source))
+        assert page.result == good.result and page.status == 'success'
     failed = await execute(rt, 'read_http_observation', {'observation_id': source.retained_ref,
         'start_char': 0, 'max_chars': 2000}, success=False)
-    assert _exploration_fingerprint(ExecutedToolCall('read_http_observation', {}, True, failed), ORIGIN) is None
+    assert failed.status == 'error' and len(sent) == 1
+    assert rt.workflow.to_dict() == before
 
 
 async def test_read_pages_are_preserved_then_revalidated_before_outbound(discovery):
@@ -260,10 +256,10 @@ async def test_content_failure_does_not_block_other_observed_input(discovery):
                  responseComplete=True, status=200)
     await execute(rt, 'browser_capture_get', {'id': row['id']})
     form = next(s for s in rt.workflow.discovery_sources.values() if s.kind == 'capture')
-    before = rt.workflow.progress_facts()
+    before = len(rt.workflow.objective_inputs())
     await execute(rt, 'workflow', {'action': 'record_input', 'method': 'GET', 'endpoint': '/app/form',
         'parameter': 'q', 'location': 'query', 'source_attribution': attribution(form, 'form input[name=q]')})
-    assert rt.workflow.progress_facts() - before and len(sent) == 1
+    assert len(rt.workflow.objective_inputs()) == before + 1 and len(sent) == 1
     assert all(not s.selected for s in rt.workflow.discovery_sources.values())
     assert not rt.workflow.candidates and not rt.workflow.attempts
 

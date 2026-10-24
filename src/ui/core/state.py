@@ -31,7 +31,7 @@ else:
     BannerData = Any
 
 from src.tools.common.tool_display import display_tool_name
-from src.tools.common.outcome import RecoveryReceipt
+from src.tools.common.runtime_metadata import RuntimeMetadata
 from src.ui.core.admission import PendingCall, call_metadata, invocation_call, result_issues, issue_category, http_activity
 from src.ui.core.outcomes import OutcomeFacts, ProgressRecord, concise_text
 from src.ui.render.sanitize import sanitize_text
@@ -68,26 +68,6 @@ class TranscriptEntry:
 
 
 @dataclass(frozen=True, slots=True)
-class PresentedIssue:
-    key: str
-    operation: str
-    index: int
-    text: str
-    count: int = 1
-    recovered: bool = False
-    category: str = "failure"
-    recovery_identity: str = ""
-    presentation_label: str = ""
-    error_kind: str = ""
-    failed_invocation: str = ""
-    failure_order: int = 0
-    retryable: bool = False
-    ambiguous: bool = False
-    recovered_by: str = ""
-    resource: str = ""
-
-
-@dataclass(frozen=True, slots=True)
 class TurnDetails:
     """Latest local UI outcome snapshot; never serialized into a session."""
     turn_number: int
@@ -97,9 +77,6 @@ class TurnDetails:
     unsaved_validations: int
     incomplete_validations: int
     incomplete_goals: int
-    unresolved_issues: int
-    pending_permissions: int
-    export_failures: int
     remaining: tuple[str, ...]
     completed_operations: tuple[tuple[str, int], ...]
 
@@ -122,9 +99,6 @@ class AppState:
     phase: UiPhase = "idle"
     running_tool: str | None = None
     presentation_scope: str = ""
-    operation_sequence: int = 0
-    recovery_limited: bool = False
-    issues: tuple[PresentedIssue, ...] = field(default=(), repr=False)
     milestones: tuple[str, ...] = field(default=(), repr=False)
     delivered_results: tuple[str, ...] = field(default=(), repr=False)
     outcome_written: bool = False
@@ -304,8 +278,7 @@ def reducer(state: AppState, action: Action) -> AppState:
 
         case SetBusy(busy=busy, facts=facts):
             if busy and not state.busy:
-                state = replace(state, issues=(), milestones=(), delivered_results=(), call_history=_retire_calls(state), outcome_written=False,
-                                recovery_limited=False,
+                state = replace(state, milestones=(), delivered_results=(), call_history=_retire_calls(state), outcome_written=False,
                                 turn_number=state.turn_number + 1,
                                 deferred_outcome=None, deferred_facts=None,
                                 baseline=replace(facts, records=tuple(row for row in facts.records if row.kind != "capture")) if facts else None,
@@ -352,8 +325,8 @@ def reducer(state: AppState, action: Action) -> AppState:
                 transcript_revision=state.transcript_revision + 1,
                 stream_chunks=(),
                 call_history=_retire_calls(state),
-                issues=(), milestones=(), delivered_results=(), outcome_written=False,
-                presentation_scope="", deferred_outcome=None, deferred_facts=None, recovery_limited=False,
+                milestones=(), delivered_results=(), outcome_written=False,
+                presentation_scope="", deferred_outcome=None, deferred_facts=None,
                 baseline=None, latest_facts=None, progress_rows=(), observed=(),
                 activated_skills=(), skill_receipts=(), running_skill=None, running_tool=None, planner_recommendation=None,
                 clear_message=sanitize_text(message) if message is not None else None,
@@ -397,14 +370,14 @@ def reducer(state: AppState, action: Action) -> AppState:
                             return replace(state, call_history=tuple(
                                 replace(call, retired=True) if call is known else call for call in state.call_history))
                     return state
-                return replace(state, presentation_scope=facts.scope, call_history=_retire_calls(state), recovery_limited=False,
-                               issues=(), milestones=(), delivered_results=(), outcome_written=False,
+                return replace(state, presentation_scope=facts.scope, call_history=_retire_calls(state),
+                               milestones=(), delivered_results=(), outcome_written=False,
                                deferred_outcome=None, deferred_facts=None, baseline=None, latest_facts=facts,
                                progress_rows=(), observed=(), activated_skills=(), skill_receipts=(), planner_recommendation=None,
                                running_tool=None, running_skill=None, active_skill=None,
                                phase=_phase_with_pending_request(state, "answering" if state.busy else "idle"))
             if facts and facts.scope != state.presentation_scope:
-                state = replace(state, presentation_scope=facts.scope, issues=(), milestones=(), recovery_limited=False,
+                state = replace(state, presentation_scope=facts.scope, milestones=(),
                                 delivered_results=(), outcome_written=False, deferred_outcome=None, deferred_facts=None,
                                 baseline=replace(facts, records=tuple(row for row in facts.records if row.kind != "capture")),
                                 latest_facts=facts, progress_rows=(), observed=(), call_history=_retire_calls(state),
@@ -416,104 +389,6 @@ def reducer(state: AppState, action: Action) -> AppState:
 
         case _:
             raise AssertionError(f"Unhandled action: {action!r}")
-
-
-def _repairable(event: ToolResultEvent, call: PendingCall | None) -> bool:
-    # No inference of authority, effects or persistence from a later success.
-    if call is None or call.invocation is None or event.status != 'error':
-        return False
-    if event.error_kind == "network":
-        receipt = event.recovery_receipt
-        return bool(call.name == "http" and isinstance(receipt, RecoveryReceipt)
-                    and receipt.retry_safe and not receipt.completed and receipt.resource)
-    if call.name != "workflow" or call.operation not in {
-            "record_candidate", "start_validation", "record_evidence", "record_result"}:
-        return False
-    if event.error_kind == "invalid_args":
-        return True
-    if event.error_kind == "workflow_state":
-        try:
-            payload = json.loads(event.result.partition('\n')[2])
-            code = payload['error']['code']
-        except (ValueError, TypeError, KeyError):
-            return False
-        return code in {"DUPLICATE_REQUEST_ASSOCIATION", "MISSING_EVIDENCE_FILE"}
-    return False
-
-
-def _present_issue(state: AppState, operation: str, text: str, *, category: str = "failure",
-                   root: str | None = None, recovery_identity: str = "",
-                   presentation_label: str = "", call: PendingCall | None = None,
-                   event: ToolResultEvent | None = None) -> AppState:
-    error_kind = event.error_kind or "" if event else ""
-    key = hashlib.sha256((operation + "\n" + recovery_identity + "\n" + category + "\n"
-                          + error_kind + "\n" + (root or text)).encode()).hexdigest()
-    kind: TranscriptKind = ("system" if category == "diagnostic" else "warning"
-                            if category in {"incomplete", "denial", "cancelled", "export", "pending"} else "error")
-    previous = next((issue for issue in state.issues if issue.key == key), None)
-    invocation = call.invocation.id if call and call.invocation else ""
-    receipt = event.recovery_receipt if event and isinstance(event.recovery_receipt, RecoveryReceipt) else None
-    metadata: dict[str, Any] = dict(error_kind=error_kind, failed_invocation=invocation,
-                    failure_order=state.operation_sequence,
-                    retryable=bool(category in {"failure", "network"} and event and _repairable(event, call)), recovered_by="",
-                    resource=receipt.resource if receipt else call.resource if call else "")
-    if previous:
-        ambiguous = (not previous.recovered and (previous.ambiguous or not call
-                     or not call.retry_of or call.retry_of != previous.failed_invocation))
-        updated = replace(previous, count=previous.count + 1, recovered=False,
-                          recovery_identity=recovery_identity, ambiguous=ambiguous, **metadata)
-        transcript = list(state.transcript)
-        transcript[previous.index] = TranscriptEntry(kind=kind, text=f"{text} (repeated {updated.count} times)")
-        return replace(state, issues=tuple(updated if item is previous else item for item in state.issues),
-                       transcript=tuple(transcript), transcript_revision=state.transcript_revision + 1)
-    issue = PresentedIssue(key, operation, len(state.transcript), text, category=category,
-                           recovery_identity=recovery_identity, presentation_label=presentation_label, **metadata)
-    limited = state.recovery_limited or (len(state.issues) >= 256 and not state.issues[0].recovered)
-    return replace(state, issues=(*state.issues[-255:], issue), recovery_limited=limited,
-                   transcript=(*state.transcript, TranscriptEntry(kind=kind, text=text)))
-
-
-def _retry_call(state: AppState, call: PendingCall) -> PendingCall:
-    if state.recovery_limited or call.invocation is None:
-        return call
-    operation = call.name + ":" + call.identity
-    matching = [issue for issue in state.issues if not issue.recovered
-                and issue.operation == operation and issue.recovery_identity == call.recovery_identity]
-    # A live sibling is a competing operation, never implicit retry authority.
-    siblings = any(item.identity == call.identity and item.name == call.name
-                   and item.recovery_identity == call.recovery_identity for item in state.pending_calls)
-    if (len(matching) == 1 and not siblings and matching[0].retryable and not matching[0].ambiguous
-            and matching[0].failure_order < call.dispatch_order):
-        return replace(call, retry_of=matching[0].failed_invocation)
-    return call
-
-
-def _recover_issues(state: AppState, call: PendingCall, event: ToolResultEvent,
-                    presentation_label: str = "") -> AppState:
-    if state.recovery_limited or not call.retry_of or call.invocation is None:
-        return state
-    matching = [issue for issue in state.issues if not issue.recovered
-                and issue.operation == call.name + ":" + call.identity
-                and issue.recovery_identity == call.recovery_identity]
-    if len(matching) != 1:
-        return state
-    issue = matching[0]
-    if (not issue.retryable or issue.ambiguous or issue.failed_invocation != call.retry_of
-            or issue.failure_order >= call.dispatch_order):
-        return state
-    if issue.category == "network":
-        receipt = event.recovery_receipt
-        if not isinstance(receipt, RecoveryReceipt) or not receipt.completed or receipt.resource != issue.resource:
-            return state
-    elif issue.resource != call.resource:
-        return state
-    transcript = list(state.transcript)
-    transcript[issue.index] = TranscriptEntry(kind="info", text=
-        presentation_label or issue.presentation_label or issue.operation.partition(":")[0], details=(
-            f"Recovered after {issue.count} failed attempt{'s' if issue.count != 1 else ''}", issue.text))
-    updated = replace(issue, recovered=True, recovered_by=call.invocation.id)
-    return replace(state, issues=tuple(updated if item is issue else item for item in state.issues),
-                   transcript=tuple(transcript), transcript_revision=state.transcript_revision + 1)
 
 
 def _finish_stream(state: AppState, text: str | None = None) -> AppState:
@@ -634,20 +509,11 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
             return reducer(state, AppendDelta(text=text))
 
         case ToolCallEvent():
-            state = replace(state, operation_sequence=state.operation_sequence + 1)
             call = call_metadata(ev)
             if facts and facts.activity:
                 call = replace(call, activity=facts.activity)
             call = replace(call, scope=state.presentation_scope,
-                           candidate_id=(facts.operation_candidate_id if facts and facts.operation_candidate_id else call.candidate_id),
-                           identity=(facts.operation_owner if facts and facts.operation_owner else call.identity),
-                           skill=(facts.activity_skill if facts and facts.activity_skill else call.skill),
-                           recovery_identity=(facts.operation_intent if facts and facts.operation_intent else call.recovery_identity),
-                           resource=(facts.operation_intent if facts and facts.operation_intent else call.recovery_identity),
-                           dispatch_order=state.operation_sequence)
-            call = _retry_call(state, call)
-            if len(state.pending_calls) >= 256:
-                state = replace(state, recovery_limited=True)
+                           skill=(facts.activity_skill if facts and facts.activity_skill else call.skill))
             if call.operation == "start_validation":
                 state = _flush_progress(state)
             elif call.name == "http":
@@ -661,7 +527,6 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                             if (facts and facts.activity) or call.activity else "")))
 
         case ToolResultEvent():
-            state = replace(state, operation_sequence=state.operation_sequence + 1)
             call = invocation_call(state.call_history, ev)
             if call is not None:
                 state = replace(state, call_history=tuple(
@@ -680,24 +545,22 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
             if ev.id:
                 state = replace(state, delivered_results=(*state.delivered_results[-255:], delivery))
             issues = result_issues(ev, call)
-            operation = ev.name + ":" + (call.identity if call else "uncorrelated:" + ev.id)
-            recovery_identity = call.recovery_identity if call else "uncorrelated:" + ev.id
             context = facts.activity if facts and facts.activity else call.activity if call else ""
-            if issues:
-                groups: dict[str, list[str]] = {}
-                for issue in issues:
-                    if issue.startswith("Validation ") and facts and any(
-                            key.startswith("validation-pause:") for key, _, _ in facts.milestones):
-                        continue
-                    groups.setdefault(issue_category(issue, ev), []).append(issue)
-                for category, notices in groups.items():
-                    presentation_label = sanitize_text(display_tool_name(ev.name) +
-                                                       (" · " + context if context else ""))
-                    if ev.name == "http":
-                        presentation_label = http_activity(ev, call, context)
-                    state = _present_issue(state, operation, presentation_label + ": " + "; ".join(notices),
-                                           category=category, recovery_identity=recovery_identity,
-                                           presentation_label=presentation_label, call=call, event=ev)
+            # Feedback stays in the raw event/model history. Only current
+            # intervention, session and preservation failures enter the view.
+            exports = [notice for notice in issues if issue_category(notice, ev) == "export"]
+            if ev.presentation_impact in {"intervention", "session", "persistence"}:
+                notices = exports or issues or ["Result preservation unavailable" if ev.presentation_impact == "persistence"
+                                               else "User intervention required" if ev.presentation_impact == "intervention"
+                                               else "Session blocked"]
+                state = replace(state, transcript=(*state.transcript, TranscriptEntry(
+                    kind="warning", text=sanitize_text(display_tool_name(ev.name) + ": " + "; ".join(notices)))))
+            metadata = ev.runtime_metadata
+            if type(metadata) is RuntimeMetadata and metadata.persistence in {"failed", "memory-only"}:
+                notice = ("Result persistence failed" if metadata.persistence == "failed" else
+                          "Result retained in memory only; unavailable after resume")
+                state = replace(state, transcript=(*state.transcript, TranscriptEntry(
+                    kind="warning", text=sanitize_text(display_tool_name(ev.name) + ": " + notice))))
             completed = bool(call and ev.status in {"success", "observation"} and not ev.err and not ev.error_kind
                              and all(issue_category(issue, ev) in {"diagnostic", "incomplete"} for issue in issues))
             if completed and ev.name == "workflow":
@@ -706,11 +569,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                 except (ValueError, TypeError):
                     receipt = None
                 completed = isinstance(receipt, dict) and receipt.get("ok") is True
-                if completed and call and call.operation in {"record_candidate", "record_result", "start_validation", "record_evidence"}:
-                    completed = bool(facts and facts.accepted_call)
             if completed and call:
-                state = _recover_issues(state, call, ev,
-                                        http_activity(ev, call, context) if ev.name == "http" else "")
                 if call and call.name == "load_skill":
                     state = replace(state, skill_receipts=(*state.skill_receipts, (call.invocation.id if call.invocation else call.id, call.skill)))
                 elif ev.name not in {"http", "workflow", "confirm_finding", "read_skill_file", "read_payloads", "browser_capture_status"}:
@@ -734,16 +593,13 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
         case ErrorEvent(err=agent_err):
             state = replace(state, phase=_phase_with_pending_request(
                 state, "running-tool" if state.pending_calls else "answering" if state.busy else state.phase))
-            from src.llm.runtime.context_budget import ContextCapacityError
-            from src.agent.agent import IneffectiveCompactionError
-            if (isinstance(agent_err, IneffectiveCompactionError) or
-                    (str(agent_err).startswith('auto-compact failed (') and
-                     'compact result rejected: projected request would not shrink meaningfully' in str(agent_err))):
+            if getattr(agent_err, "presentation_impact", None) == "operation":
                 return state
-            return _present_issue(state, "runtime", sanitize_text(str(agent_err)),
-                                  root="context capacity" if isinstance(agent_err, ContextCapacityError) else None,
-                                  category="cancelled" if isinstance(agent_err, BaseException)
-                                  and str(agent_err) == "turn cancelled" else "failure")
+            from src.agent.agent import IneffectiveCompactionError
+            if isinstance(agent_err, IneffectiveCompactionError):
+                return state
+            return replace(state, transcript=(*state.transcript,
+                TranscriptEntry(kind="error", text=sanitize_text(str(agent_err)))))
 
         case DecisionEvent(summary=summary):
             if not state.pending_calls and not state.pending_perm and not state.pending_ask:
@@ -825,46 +681,27 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
         return state
     label = {
         "final_response": "Turn completed", "workflow_completed": "Workflow completed",
-        "workflow_blocked": "Blocked", "workflow_stalled": "Stalled", "cancelled": "Turn cancelled",
+        "workflow_blocked": "Blocked", "cancelled": "Turn cancelled",
         "max_steps": "Stopped at max steps", "runtime_error": "Runtime failure",
         "context_capacity": "Context capacity failure", "client_error": "Provider failure",
         "all_tools_refused": "Blocked by tool refusals", "plan_only_blocked": "Plan-only tool request blocked",
         "invalid_response": "Invalid response",
     }.get(reason or "", f"Turn ended ({reason})" if reason else "Turn ended (runtime outcome unavailable)")
     pending = list(facts.pending if facts else ())
-    # Operation history cannot add work to the authoritative workflow. A
-    # corrected call may change identity and therefore remain unmatched here.
+    # Only authoritative workflow facts establish remaining assessment work.
     workflow_residual = bool(pending or (facts and (facts.incomplete or facts.goals or facts.blockers)))
     state = _flush_progress(state)
-    outstanding = [issue for issue in state.issues if not issue.recovered
-                   and issue.category in {"failure", "denial", "network"}]
     displayed_cause = ''
-    if reason in {"workflow_blocked", "workflow_stalled", "all_tools_refused"}:
-        current_denial = next((issue.text for issue in reversed(outstanding) if issue.category == 'denial'), '')
-        cause = (current_denial if reason == 'all_tools_refused' else
-                 facts.blockers[0] if facts and facts.blockers else pending[0] if pending else '')
+    if reason == "workflow_blocked":
+        cause = facts.blockers[0] if facts and facts.blockers else pending[0] if pending else ''
         if cause:
             label += " · " + concise_text(cause)
             displayed_cause = cause
-    unresolved = sum(not issue.recovered and issue.category in {"failure", "denial", "network"} for issue in state.issues)
-    exports = sum(not issue.recovered and issue.category == "export" for issue in state.issues)
-    if unresolved:
-        if reason in {"workflow_completed", "final_response"} and facts and not workflow_residual:
-            pending.append(_quantity(unresolved, "operation error without a matched retry",
-                                     "operation errors without matched retries"))
-        else:
-            pending.append(_quantity(unresolved, "unresolved operation issue"))
-    permission_pending = sum(not issue.recovered and issue.category == 'pending' for issue in state.issues)
-    if permission_pending:
-        pending.append(_quantity(permission_pending, 'unresolved permission outcome'))
     if state.pending_perm is not None:
         pending.append("permission review pending")
-    if exports:
-        pending.append(_quantity(exports, "optional export failure"))
-    residual = workflow_residual or bool(unresolved or permission_pending or state.pending_perm is not None or exports
-                                              or state.recovery_limited)
-    if state.recovery_limited:
-        pending.append("local operation history limit reached; retry correlation unavailable")
+    if state.pending_ask is not None:
+        pending.append("user input pending")
+    residual = workflow_residual or state.pending_perm is not None or state.pending_ask is not None
     saved = unsaved = 0
     if facts and facts.scope:
         saved, unsaved = len(_new_records(state, "finding")), len(_new_records(state, "unsaved"))
@@ -895,10 +732,10 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
     summary = sanitize_text(label + suffix + ".")
     details = TurnDetails(state.turn_number, reason, summary, saved, unsaved,
         facts.incomplete if facts else 0, facts.goals if facts else 0,
-        unresolved, permission_pending, exports, tuple(sanitize_text(item) for item in pending),
+        tuple(sanitize_text(item) for item in pending),
         tuple((sanitize_text(name), count) for name, count in operation_counts.items()))
     return replace(state, outcome_written=True, deferred_outcome=None, deferred_facts=None,
                    latest_turn_details=details, transcript=(*state.transcript,
                    TranscriptEntry(kind="error" if reason in {"runtime_error", "context_capacity", "client_error", "invalid_response"}
-                                   else "warning" if residual or reason in {"workflow_blocked", "workflow_stalled", "cancelled"}
+                                   else "warning" if residual or reason in {"workflow_blocked", "all_tools_refused", "cancelled", "max_steps"}
                                    else "info", text=summary)))

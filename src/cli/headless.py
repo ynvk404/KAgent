@@ -195,7 +195,7 @@ async def run_headless(agent: Agent, prompt: str, root_signal: asyncio.Event,
                     status = "budget_exhausted"
                 elif failed:
                     status = "error"
-                elif reason in {"workflow_blocked", "workflow_stalled", "context_capacity"}:
+                elif reason in {"workflow_blocked", "context_capacity"}:
                     status = "blocked"
                 elif reason == "cancelled":
                     status = "cancelled"

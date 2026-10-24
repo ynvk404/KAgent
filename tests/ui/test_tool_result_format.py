@@ -83,11 +83,14 @@ def test_http_status_and_native_body_warning_keep_request_and_metadata_source(st
     event = ToolResultEvent(id="http", name="http", status="observation", http_status=status,
                             truncated=True, result="HTTP/1.1 999 fabricated\nHIDDEN_BODY")
     state = reducer(state, AgentEventAction(event))
-    assert len(state.transcript) == 1 and state.transcript[0].kind == "system"
-    text = state.transcript[0].text
+    assert not state.transcript
+    from src.ui.core.admission import http_activity
+    call = call_metadata(ToolCallEvent(name="http", args={"method": "POST", "url": "/start",
+        "parameter": "email", "max_redirects": redirects}))
+    text = http_activity(event, call, call.activity)
     assert "POST /start · input email" in text
-    assert "validation may be limited" in text
-    assert ("Last response body truncated" if redirects else "Response body truncated") in text
+    assert "validation may be limited" in result_issues(event, call)[0]
+    assert ("Last response body truncated" if redirects else "Response body truncated") in result_issues(event, call)[0]
     assert ("initial request" in text) == bool(redirects)
     if status is not None:
         assert (f"Last response {status}" if redirects else f"· {status}") in text
@@ -113,13 +116,13 @@ def test_sparse_http_activity_adds_status_without_new_success_rows_and_keeps_cor
         before = state
         state = reducer(state, AgentEventAction(event))
         assert state is before
-    assert not state.transcript and not state.issues
+    assert not state.transcript
     state = reducer(state, AgentEventAction(AssistantTextEvent(text="Observed responses.")))
     assert len(state.transcript) == 2
     activity = state.transcript[0].text
     assert "initial request · GET /second · Last response 503" in activity
     assert "GET /first · 403" in activity
-    assert not state.issues
+    assert not any(row.kind == "error" for row in state.transcript)
 
 
 def test_missing_status_and_context_elision_never_infer_http_metadata_or_completeness():
@@ -143,9 +146,9 @@ def test_http_status_without_native_completion_cannot_recover_an_unknown_failure
                                ("ok", ToolResultEvent(id="ok", name="http", status="observation", http_status=500))]:
         state = reducer(state, AgentEventAction(ToolCallEvent(id=identifier, name="http", args={"url":"/path"})))
         state = reducer(state, AgentEventAction(result))
-    assert len(state.transcript) == 1 and state.transcript[0].kind == "error"
-    assert 'connection failed' in state.transcript[0].text
-    assert not state.issues[0].recovered
+    assert not state.transcript
+    assert not state.pending_calls
+    assert not any(row.kind == "error" for row in state.transcript)
 
 
 @pytest.mark.parametrize('name', ['read_payloads', 'read_skill_file'])
@@ -184,11 +187,7 @@ async def test_skill_reader_pages_show_actual_character_ranges_without_duplicate
             assert not result_issues(result, call_metadata(call))
         page = json.loads(output.rsplit('\nContinuation: ', 1)[1])
         args.update(source_ref=page['source_ref'], start_char=page['next_start_char'])
-    assert [row.text for row in state.transcript] == [
-        f'{name}: payloads.txt · chars 0–8234 · more available',
-        f'{name}: payloads.txt · chars 8234–12609 · more available',
-    ]
-    assert all(issue.category == 'diagnostic' for issue in state.issues)
+    assert not state.transcript  # Pagination diagnostics remain raw tool feedback.
 
 
 @pytest.mark.parametrize('changes', [

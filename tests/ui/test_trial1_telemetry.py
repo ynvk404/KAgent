@@ -14,13 +14,13 @@ def test_tui_accepts_telemetry_without_flushing_stream_or_changing_state():
     state = initial_state('', BannerData('offline', 'fixture', '/tmp'))
     state = reducer(state, SetBusy(True))
     state = reducer(state, AgentEventAction(AssistantDeltaEvent(text='partial')))
-    after = reducer(state, AgentEventAction(WorkflowProgressEvent(stage='iteration_evaluated', metrics={'no_progress': 2})))
+    after = reducer(state, AgentEventAction(WorkflowProgressEvent(stage='iteration_evaluated', metrics={'outer_iterations': 2})))
     assert after is state and after.stream_chunks == ('partial',)
 
 
 async def test_cli_headless_and_session_serialize_additive_telemetry(tmp_path, capsys):
     event = WorkflowProgressEvent(stage='iteration_evaluated', metrics={
-        'outer_iterations': 3, 'no_progress': 2, 'required_phase': 'enumeration'})
+        'outer_iterations': 3, 'workflow_status': 'actionable', 'required_phase': 'enumeration'})
     emit(asdict(event))
     assert capsys.readouterr().out == ''  # Legacy CLI has no extra user-facing noise.
     sink = EventSink(tmp_path / 'headless')

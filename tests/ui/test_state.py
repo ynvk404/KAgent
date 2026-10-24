@@ -207,10 +207,10 @@ def test_interleaved_search_results_correlate_by_id():
     assert not state.transcript and state.running_tool == "shell"
     state = emit(state, ToolResultEvent(id="other", name="shell", result="exit: 1\nstdout:\n",
         runtime_metadata=shell_metadata(1)))
-    assert len(state.transcript) == 1 and "exit 1" in state.transcript[0].text
+    assert not state.transcript and not state.pending_calls
     missing = emit(seed(), ToolResultEvent(id="missing", name="shell", result="exit: 1\nstdout:\n",
         runtime_metadata=shell_metadata(1)))
-    assert "exit 1" in missing.transcript[0].text
+    assert not missing.transcript
 
 
 @pytest.mark.parametrize("event,reason", [
@@ -219,7 +219,7 @@ def test_interleaved_search_results_correlate_by_id():
     (ToolResultEvent(name="workflow", result="error: evidence changed"), "evidence changed"),
     (ToolResultEvent(name="workflow", result='{"ok":true,"coverage_sync":"pending","coverage_error":"disk full"}'), "disk full"),
     (ToolResultEvent(name="workflow", result='{"ok":true,"result":{"outcome":"insufficient-evidence","cleanup_state":"requires-user-action"}}'), "Cleanup requires-user-action"),
-    (ToolResultEvent(name="confirm_finding", result="Finding persisted; compact report export failed."), "export failed"),
+    (ToolResultEvent(name="confirm_finding", result="Finding persisted; compact report export failed.", presentation_impact="persistence"), "export failed"),
     (ToolResultEvent(name="unknown", err="connection failed\npassword=short-secret"), "connection failed"),
     (ToolResultEvent(name="unknown", truncated=True), "truncated"),
     (ToolResultEvent(name="shell", result="exit: 0\nstdout:\nok\nstderr:\ncleanup required",
@@ -227,13 +227,13 @@ def test_interleaved_search_results_correlate_by_id():
 ])
 def test_actionable_outcomes_survive_success_metadata(event, reason):
     state = emit(seed(), event)
-    assert len(state.transcript) == 1
-    expected = "system" if event.truncated or event.name == "shell" else (
-        "warning" if reason in {"permission_denied", "cancelled", "disk full", "Cleanup requires-user-action", "export failed"} else "error")
-    assert state.transcript[0].kind == expected
-    assert reason in state.transcript[0].text
+    if reason == "export failed":
+        assert len(state.transcript) == 1 and state.transcript[0].kind == "warning"
+        assert reason in state.transcript[0].text
+    else:
+        assert not state.transcript
     assert "short-secret" not in repr(state.transcript)
-    assert "[ok]" not in state.transcript[0].text
+    assert not any(row.kind in {"finding", "validation"} for row in state.transcript)
 
 
 def test_unknown_json_is_not_authoritative_or_dumped():

@@ -1,11 +1,9 @@
 """Independent offline regressions for benchmark-audited runtime mechanisms."""
 import json
-from types import SimpleNamespace
 
 import pytest
 
 from src.llm.core.types import Message
-from src.agent.agent import WholeTargetStallTracker, ExecutedToolCall, ToolCallResult
 from src.llm.runtime.context_budget import ContextCapacityError
 from src.tools.common.outcome import ToolOutput
 from src.skills.registry import Registry as Skills
@@ -68,84 +66,18 @@ def test_heading_and_table_source_handles_require_selected_parents(claim):
     check_proof_references(content, "candidate", [unknown])
 
 
-async def test_direct_tool_batches_stall_before_hard_limit_without_negative(tmp_path):
+async def test_direct_tool_batches_reach_hard_limit_without_negative(tmp_path):
     client = NoProgressToolClient()
     agent, _ = _direct_goal_agent(tmp_path, client=client, max_steps=24, extra_tools=(EchoTool(),))
     output = collect()
     await agent.run("Test SQL injection for GET /fixture?q=sample", FakeSignal(), output["sink"])
-    assert len(client.requests) < 24
-    assert output["events"][-1].stop_reason == "workflow_stalled"
+    assert len(client.requests) == 25 and client.requests[-1].tools is None
+    assert output["events"][-1].stop_reason == "max_steps"
+    assert output["events"][-1].agent_loop_llm_calls == 24
     assert not agent.workflow.validation_results
     assert agent.workflow.objective is not None
-    assert all(goal.status not in {"tested_confirmed", "tested_not_confirmed"}
-               for goal in agent.workflow.objective.requested_goals)
-
-
-def batch_call(name, text, args=None):
-    return ExecutedToolCall(name, args or {}, True, ToolCallResult(text, "", 0))
-
-
-def test_pagination_progress_counts_new_ranges_but_not_overlap_or_eof():
-    tracker = WholeTargetStallTracker()
-    def page(start, end):
-        return batch_call("read_payloads", "# fixture\ncontent\nContinuation: " + json.dumps({
-            "sha256": "source-digest", "start_char": start, "end_char": end, "source_chars": 20}))
-    def record(call):
-        return tracker.record_validation_batch([call], new_facts=frozenset(), target_base_url=None)
-    assert record(page(0, 10)) == "reader_progress"
-    assert record(page(3, 8)) == "no_progress"
-    assert record(page(5, 15)) == "reader_progress"
-    assert record(page(15, 20)) == "reader_progress"
-    for _ in range(4):
-        assert record(page(20, 20)) == "no_progress"
-    assert tracker.consecutive_no_progress == 4
-
-
-def test_http_ids_and_changed_arguments_do_not_renew_response_progress():
-    tracker = WholeTargetStallTracker()
-    observations = SimpleNamespace(_items={})
-    for step in range(6):
-        key = f"obs_{step:032x}"
-        observations._items[key] = SimpleNamespace(status=200, response_hash="same-response", complete=True, truncated=False)
-        output = ToolOutput("same response")
-        output.http_sources = ((key, "hash"),)
-        tracker.record_validation_batch([batch_call("http", output, {"body": f"different-{step}"})],
-            new_facts=frozenset(), target_base_url=None, observations=observations)
-    assert tracker.consecutive_no_progress >= 4
-
-
-def test_controlled_http_repetitions_and_bounded_novel_responses_remain_allowed():
-    tracker = WholeTargetStallTracker()
-    for response in ["baseline", "true", "false", "true", "false"]:
-        tracker.record_validation_batch([batch_call("http", response)], new_facts=frozenset(), target_base_url=None)
-        assert tracker.consecutive_no_progress < 4
-    tracker.record_validation_batch([], new_facts=frozenset({"registered-proof"}), target_base_url=None)
-    assert tracker.consecutive_no_progress == 0
-    for step in range(20):
-        tracker.record_validation_batch([batch_call("http", str(step))], new_facts=frozenset(), target_base_url=None)
-    assert tracker.consecutive_no_progress >= 4
-
-
-def test_diagnostic_correction_is_bounded_and_arguments_do_not_renew_it():
-    tracker = WholeTargetStallTracker()
-    for step in range(6):
-        result = ToolCallResult('error:\n' + json.dumps({"error": {"code": "INVALID_REFERENCE"}}),
-                               "invalid reference", 0, status="error", error_kind="workflow_state")
-        tracker.record_validation_batch([ExecutedToolCall("workflow", {"id": f"changed-{step}"}, True, result)],
-            new_facts=frozenset(), target_base_url=None)
-    assert tracker.consecutive_no_progress >= 4
-    tracker = WholeTargetStallTracker()
-    for step in range(16):
-        result = ToolCallResult('error:\n' + json.dumps({"error": {"code": f"CODE-{step}"}}),
-                               "rejected", 0, status="error", error_kind="workflow_state")
-        tracker.record_validation_batch([ExecutedToolCall("workflow", {}, True, result)],
-            new_facts=frozenset(), target_base_url=None)
-    assert tracker.consecutive_no_progress >= 4
-    before = tracker.phase_exploration_steps
-    denied = ToolCallResult("denied", "permission denied", 0, status="error", error_kind="permission_denied")
-    tracker.record_validation_batch([ExecutedToolCall("http", {}, True, denied)],
-        new_facts=frozenset(), target_base_url=None)
-    assert tracker.phase_exploration_steps == before
+    assert [goal.status for goal in agent.workflow.objective.requested_goals] == ["pending"]
+    assert not agent.workflow.candidates and not agent.workflow.attempts
 
 
 async def test_preserved_page_cannot_bypass_hard_context_admission():
@@ -173,8 +105,5 @@ async def test_complete_first_page_and_smaller_reread_share_identity_and_eof(tmp
     second = await reader.run({**args, "limit": 1}, None, AlwaysAllow())
     part = json.loads(second.rsplit("\nContinuation: ", 1)[1])
     assert part["source_ref"] == full["source_ref"] and part["sha256"] == full["sha256"]
-    tracker = WholeTargetStallTracker()
-    assert tracker.record_validation_batch([batch_call(reader.name(), first)], new_facts=frozenset(),
-                                          target_base_url=None) == "reader_progress"
-    assert tracker.record_validation_batch([batch_call(reader.name(), second)], new_facts=frozenset(),
-                                          target_base_url=None) == "no_progress"
+    assert part["start_char"] == full["start_char"] == 0
+    assert part["end_char"] <= full["end_char"]

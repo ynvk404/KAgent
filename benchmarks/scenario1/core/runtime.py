@@ -417,7 +417,7 @@ def execution_status(done: dict | None, errors: list[str], *, timed_out=False, e
         return 'budget-exhausted'
     if raised or errors or stop in {'runtime_error', 'cancelled', 'invalid_response'} or done is None:
         return 'runtime-error'
-    if stop in {'final_response', 'workflow_completed', 'workflow_blocked', 'workflow_stalled', 'all_tools_refused', 'plan_only_blocked'}:
+    if stop in {'final_response', 'workflow_completed', 'workflow_blocked', 'all_tools_refused', 'plan_only_blocked'}:
         return 'completed'
     return 'runtime-error'
 

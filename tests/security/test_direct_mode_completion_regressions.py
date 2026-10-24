@@ -241,7 +241,7 @@ async def synthesize(agent, *, reason="final_response"):
     )
 
 
-@pytest.mark.parametrize("reason", ["final_response", "max_steps", "workflow_stalled"])
+@pytest.mark.parametrize("reason", ["final_response", "max_steps", "max_steps"])
 async def test_direct_pending_work_stays_incomplete_even_with_final_response(runtime, tmp_path, reason):
     state, sql, tool, _ = await validated(runtime, tmp_path, outcome="not-confirmed")
     assert state.objective is not None
@@ -317,7 +317,7 @@ async def complete_input_analysis(tool):
     assert output["ok"], output
 
 
-@pytest.mark.parametrize("reason,steps", [("max_steps", 1), ("workflow_stalled", 20), ("workflow_blocked", 20)])
+@pytest.mark.parametrize("reason,steps", [("max_steps", 1), ("max_steps", 20), ("workflow_blocked", 20)])
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_whole_target_partial_synthesis_retains_results_blockers_and_checkpoint(runtime, tmp_path, reason, steps, streaming):
     agent, _, sql, xss, attempt = await prepared(runtime, tmp_path, mode="whole_target", steps=steps)

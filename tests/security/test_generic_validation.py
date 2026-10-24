@@ -621,7 +621,7 @@ async def test_f02_direct_stream_respects_generic_completion_obligations(runtime
     else:
         assert "All complete." not in visible
         assert "incomplete" in visible
-        assert collector["events"][-1]["stop_reason"] == "workflow_stalled"
+        assert collector["events"][-1]["stop_reason"] == "max_steps"
         assert agent.history[-1].content == visible
         assert all(m.content != "All complete." for m in agent.history if m.role == "assistant")
 

@@ -19,6 +19,7 @@ from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from src.permission.permission import Decision, PermissionRequest, Prompter, UserControlledRefusal, PermissionReviewStale
 from src.target.origin import HTTPOrigin
+from src.tools.common.outcome import annotate_error
 from src.tools.common.approval_display import redact_approval
 from src.redaction.redact import http_credential_redactor
 from src.permission.runtime.invocations import review_id, on_review_end, permission_invocation, capture_review, ReviewGuard, REVIEW_TIMEOUT_SECONDS
@@ -589,9 +590,9 @@ class HTTPPermissions:
         now = self.clock()
         limits = budget.limits
         if budget.expired(now):
-            raise HTTPBlocked('Authorization or exact-action execution envelope expired. An operator grant is required.')
+            raise annotate_error(HTTPBlocked('Authorization or exact-action execution envelope expired. An operator grant is required.'), "intervention")
         if budget.exhausted():
-            raise HTTPBlocked("blocked: request budget exhausted; operator grant required")
+            raise annotate_error(HTTPBlocked("blocked: request budget exhausted; operator grant required"), "intervention")
         if action.size > limits.request_bytes or action.response_cap > limits.response_bytes:
             raise HTTPBlocked('Request or response byte limit exceeded. The operator must change the limits.')
         if self._inflight.get(action.origin, 0) >= limits.concurrency:
@@ -735,7 +736,7 @@ class HTTPPermissions:
                 raise CaptureReplayPending("pending: operator declined captured credential use; no dispatch")
             # Bound memory without silently renewing expired/exhausted rights.
             if len(self._capture_grants) >= 1024:
-                raise HTTPBlocked('Capture authorization limit reached. Reset is required.')
+                raise annotate_error(HTTPBlocked('Capture authorization limit reached. Reset is required.'), "intervention")
             now = self.clock()
             self._capture_grants[source] = _Budget(budget.limits, budget.expires_at, 0, now)
         finally:

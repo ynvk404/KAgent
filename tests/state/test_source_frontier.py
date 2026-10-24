@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from src.agent.agent import WholeTargetStallTracker
+from src.workflow.state import WorkflowState
 from src.agent.system_prompt import render_workflow
 from src.workflow.discovery.inventory import discovery_page
 from tests.state.test_discovery_inventory import state, source, endpoint
@@ -97,21 +97,21 @@ def test_late_source_invalidates_review_and_historical_completion_remains():
     assert 'sources=1' in prompt and 'unresolved=1' in prompt
 
 
-def test_duplicate_content_fresh_refs_reason_changes_and_finite_progress():
+def test_source_disposition_and_duplicate_content_keep_independent_locator_records():
     s, src = setup()
-    tracker = WholeTargetStallTracker()
-    for disposition, result in [('pending', 'structured_progress'), ('processed', 'structured_progress'),
-                                ('processed', 'no_progress'), ('pending', 'no_progress')]:
+    for disposition in ('pending', 'processed', 'processed', 'pending'):
         update(s, src, disposition=disposition, stop_reason='bounded outcome')
-        assert tracker.record_iteration(new_facts=s.progress_facts(), activity_fingerprints=[]) == result
-    before = s.progress_facts()
+        assert s.discovery_sources[src.id].disposition == disposition
     for index in range(20):
         fresh = replace(src, locator=f'obs-random-{index}', retained_hash=f'{index:064x}', id='')
         s.admit_discovery(fresh)
         update(s, fresh, stop_reason=f'Rewording {index}', selected=True)
-        assert s.progress_facts() == before
-        assert tracker.record_iteration(new_facts=s.progress_facts(), activity_fingerprints=[]) == 'no_progress'
-    assert tracker.consecutive_no_progress == 22
+        row = s.discovery_sources[fresh.id]
+        assert row.id != src.id and row.content_identity == src.content_identity
+        assert row.selected and row.disposition == 'pending'
+    assert len(s.objective_sources()) == 21
+    assert not s.attempts and not s.evidence_sources and not s.validation_results
+    assert WorkflowState.from_dict(s.to_dict()).to_dict() == s.to_dict()
 
 
 def test_frontier_paging_restore_stale_cursor_and_read_only():

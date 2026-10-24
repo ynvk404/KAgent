@@ -37,7 +37,8 @@ def isolated_project_environment(tmp_path, monkeypatch):
 
 @pytest.fixture
 def settings():
-    return RuntimeSettings(ORIGIN, '/benchmark', True, 'confirmation-only', timeout_seconds=10)
+    # Scripted runs may now consume the full outer budget, including synthesis.
+    return RuntimeSettings(ORIGIN, '/benchmark', True, 'confirmation-only', timeout_seconds=60)
 
 
 @pytest.fixture
@@ -337,7 +338,11 @@ ASSESSMENT = {'hypothesis': 'Marker reaches an executable response position',
 
 
 class ScriptedClient(Client):
-    """Fake only model I/O. Extract opaque IDs from actual production context/results."""
+    """Fake only model I/O; extract IDs from production context/results.
+
+    Confirmed results leave Finding persistence pending. FindingClient adds
+    that step for fixtures requiring a completed confirmed execution.
+    """
     def __init__(self, outcome='confirmed', mode='normal', skill='cross-site-scripting', name_case=None):
         self.outcome, self.mode = outcome, mode
         self.skill = skill
@@ -428,6 +433,22 @@ class ScriptedClient(Client):
         return ChatResponse(Message('assistant', 'Finished supplied-input validation with the recorded bounded assessment.'), 'stop')
 
 
+class FindingClient(ScriptedClient):
+    """Complete confirmed export fixtures through production Finding admission."""
+
+    async def chat(self, request, signal=None):
+        response = await super().chat(request, signal)
+        if self.step == 8 and self.outcome == 'confirmed':
+            return self.tool('confirm_finding', {
+                'candidate_id': self.candidate, 'title': 'Confirmed fixture',
+                'severity': ASSESSMENT['severity'], 'url': ORIGIN + '/benchmark/fixture',
+                'method': 'GET', 'parameter': 'q', 'vuln_class': self.skill,
+                'observed_impact': ASSESSMENT['observed_impact'],
+                'potential_impact': 'No additional impact assessed.',
+            })
+        return response
+
+
 @pytest.fixture
 def mock_http(monkeypatch):
     real = httpx.AsyncClient
@@ -447,7 +468,7 @@ async def test_real_agent_native_assessment(tmp_path, monkeypatch, op, settings,
     monkeypatch.chdir(tmp_path)
     client = ScriptedClient(outcome)
     execution = await execute_case(op, settings, tmp_path, 'run', 'ex', client)
-    assert execution.status == 'completed', asdict(execution)
+    assert execution.status == ('budget-exhausted' if outcome == 'confirmed' else 'completed'), asdict(execution)
     assert len(mock_http) == 2
     exported = execution.result
     assert exported is not None and execution.metrics is not None
@@ -465,7 +486,8 @@ async def test_real_agent_native_assessment(tmp_path, monkeypatch, op, settings,
     assert execution.runtime_metadata['yolo'] is False
     recorded_run(tmp_path / 'recorded', single_manifest(op, settings), execution)
     report = evaluate(tmp_path / 'recorded')
-    assert report['records'][0]['partition'] == ('evaluable' if outcome in {'confirmed', 'not-confirmed'} else 'unresolved')
+    assert report['records'][0]['partition'] == ('execution-failed' if outcome == 'confirmed'
+        else 'evaluable' if outcome == 'not-confirmed' else 'unresolved')
     if outcome == 'not-confirmed':
         assert report['metrics']['overall']['FN'] == 1
 
@@ -483,7 +505,7 @@ async def test_name_component_requires_recorded_baseline_replacement(
     workspace.mkdir()
     monkeypatch.chdir(workspace)
     execution = await execute_case(op_name, settings, workspace, 'run', 'ex',
-                                   ScriptedClient(skill='cross-site-scripting', name_case=name_case))
+                                   ScriptedClient(outcome="not-confirmed", skill='cross-site-scripting', name_case=name_case))
     assert execution.result is not None and execution.result['accepted_at_freeze']
     root = tmp_path / f'run-{name_case}'
     recorded_run(root, single_manifest(op_name, settings), execution)
@@ -500,27 +522,27 @@ async def test_name_component_requires_recorded_baseline_replacement(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('mode,status', [('timeout', 'timeout'), ('provider-error', 'provider-error'), ('empty', 'completed'), ('late-error', 'provider-error')])
+@pytest.mark.parametrize('mode,status', [('timeout', 'timeout'), ('provider-error', 'provider-error'), ('empty', 'budget-exhausted'), ('late-error', 'provider-error')])
 async def test_execution_failures_never_negative(tmp_path, monkeypatch, op, settings, mock_http, mode, status):
     monkeypatch.chdir(tmp_path)
-    timeout = .05 if mode == 'timeout' else 10
+    timeout = .05 if mode == 'timeout' else settings.timeout_seconds
     ex = await execute_case(op, replace(settings, timeout_seconds=timeout), tmp_path, 'run', 'ex', ScriptedClient(mode=mode))
     assert ex.status == status
     assert ex.result is not None
     if mode == 'late-error':
         assert ex.result['result_id'] and ex.result['accepted_at_freeze']
     if mode == 'empty':
-        assert ex.result['result_id'] is None
+        assert ex.result['result_id'] is None and ex.stop_reason == 'max_steps'
     recorded_run(tmp_path / 'recorded', single_manifest(op, settings), ex)
     report = evaluate(tmp_path / 'recorded')
-    assert report['records'][0]['partition'] == ('unresolved' if mode == 'empty' else 'execution-failed')
+    assert report['records'][0]['partition'] == 'execution-failed'
 
 
 @pytest.mark.asyncio
 async def test_multiple_native_revisions_one_final_export(tmp_path, monkeypatch, op, settings, mock_http):
     monkeypatch.chdir(tmp_path)
     ex = await execute_case(op, settings, tmp_path, 'run', 'ex', ScriptedClient(mode='revisions'))
-    assert ex.status == 'completed' and ex.result is not None
+    assert ex.status == 'budget-exhausted' and ex.stop_reason == 'max_steps' and ex.result is not None
     assert len(ex.result['workflow']['validation_results']) == 2
     assert ex.result['latest_position'] == 1
     value, error = inspect_export(ex.result, run_id='run', case_id=op.case_id, execution_id='ex',
@@ -739,7 +761,7 @@ async def test_parent_final_status_controls_timing_after_terminal_export(tmp_pat
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     monkeypatch.chdir(workspace)
-    execution = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient())
+    execution = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient(outcome="not-confirmed"))
     assert execution.status == 'completed' and execution.result is not None
     assert execution.result['accepted_at_freeze'] and execution.metrics is not None
     duration = execution.metrics['agent_seconds']
@@ -760,7 +782,7 @@ async def test_parent_final_status_controls_timing_after_terminal_export(tmp_pat
                   report['metrics']['strata'][f'{op.vulnerability_class}/vulnerable']]
         for group in groups:
             assert group['agent_seconds_by_status'] == {status: distribution([duration])}
-            assert group['completed'] == group['evaluable'] == group['TP'] == (status == 'completed')
+            assert group['completed'] == group['evaluable'] == group['FN'] == (status == 'completed')
             assert group['execution-failed'] == (status != 'completed')
         assert report['metrics']['strata'][f'{op.vulnerability_class}/safe']['agent_seconds_by_status'] == {}
         assert json.loads(contents)['status'] == 'completed'
@@ -773,12 +795,12 @@ async def test_offline_join_invalid_bindings_and_revisions(tmp_path, monkeypatch
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     monkeypatch.chdir(workspace)
-    ex = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient())
+    ex = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient(outcome="not-confirmed"))
     assert ex.result is not None
     manifest = single_manifest(op, settings)
     recorded_run(tmp_path / 'run', manifest, ex)
     report = evaluate(tmp_path / 'run')
-    assert report['metrics']['overall']['TP'] == 1
+    assert report['metrics']['overall']['FN'] == 1
     assert report['metrics']['overall']['fpr'] is None
     before = (tmp_path / 'run/events.jsonl').read_bytes()
     assert evaluate(tmp_path / 'run') == report
@@ -809,7 +831,7 @@ async def test_only_exact_case_evidence_is_scoreable(tmp_path, monkeypatch, op, 
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     monkeypatch.chdir(workspace)
-    execution = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient())
+    execution = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient(outcome="not-confirmed"))
     assert execution.result is not None and execution.result['accepted_at_freeze']
     candidate_args = candidate_arguments(op, settings)
 
@@ -877,7 +899,7 @@ async def test_wrong_http_method_is_not_case_scoreable(tmp_path, monkeypatch, op
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     monkeypatch.chdir(workspace)
-    execution = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient())
+    execution = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient(outcome="not-confirmed"))
     assert execution.result is not None
 
     def edit_method(sources, _result, _workflow):
@@ -934,7 +956,7 @@ async def test_sqli_production_path(tmp_path, monkeypatch, op, settings, mock_ht
     monkeypatch.chdir(tmp_path)
     sql = replace(op, vulnerability_class='sql-injection')
     ex = await execute_case(sql, settings, tmp_path, 'run', 'ex', ScriptedClient(skill='sql-injection'))
-    assert ex.status == 'completed' and ex.result is not None
+    assert ex.status == 'budget-exhausted' and ex.stop_reason == 'max_steps' and ex.result is not None
     value, error = inspect_export(ex.result, run_id='run', case_id=sql.case_id, execution_id='ex',
                                   candidate_args=candidate_arguments(sql, settings), target=ORIGIN + '/benchmark')
     assert value == 'confirmed' and error is None
@@ -993,7 +1015,7 @@ async def test_offline_corruption_and_duplicate_export(tmp_path, monkeypatch, op
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     monkeypatch.chdir(workspace)
-    ex = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient())
+    ex = await execute_case(op, settings, workspace, 'run', 'ex', ScriptedClient(outcome="not-confirmed"))
     root = tmp_path / 'run'
     recorded_run(root, single_manifest(op, settings), ex)
     output = root / 'results' / f'{op.case_id}.json'
@@ -1035,7 +1057,7 @@ from benchmarks.scenario1.core.worker import main
 from tests.benchmarks.test_scenario1 import ScriptedClient
 real = httpx.AsyncClient
 httpx.AsyncClient = lambda **kw: real(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b'bounded fixture', request=r)), **kw)
-asyncio.run(main(client_factory=lambda cfg: ScriptedClient()))
+asyncio.run(main(client_factory=lambda cfg: ScriptedClient(outcome="not-confirmed")))
 '''
     pids = []
     def start(cmd, **kwargs):

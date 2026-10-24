@@ -115,7 +115,7 @@ def assert_closed(agent, sql, xss, aid, *, outcome="insufficient-evidence"):
 
 
 @pytest.mark.parametrize("mode", ["whole_target", "direct"])
-@pytest.mark.parametrize("reason,steps", [("max_steps", 1), ("workflow_stalled", 20)])
+@pytest.mark.parametrize("reason,steps", [("max_steps", 1), ("max_steps", 20)])
 async def test_terminal_synthesis_uses_reconciled_persisted_goals(runtime, tmp_path, mode, reason, steps):
     agent, client, sql, xss, aid = await prepared(runtime, tmp_path, mode=mode, steps=steps)
     sql_before = deepcopy(result_for(agent, sql).to_dict())
@@ -329,13 +329,13 @@ async def test_duplicate_closure_and_checkpoint_are_idempotent_and_isolated(runt
     await agent._checkpoint_terminal_workflow()
     assert_closed(agent, sql, xss, aid)
     before = deepcopy(agent.workflow.to_dict())
-    revision, facts = agent.workflow.committed_revision, agent.workflow.progress_facts()
+    revision = agent.workflow.committed_revision
     saves = agent.store.save_count
     for _ in range(2):
-        await agent._close_terminal_attempt("workflow_stalled", FakeSignal(), collect()["sink"], agent.history.copy())
+        await agent._close_terminal_attempt("max_steps", FakeSignal(), collect()["sink"], agent.history.copy())
         await agent._checkpoint_terminal_workflow()
     assert agent.workflow.to_dict() == before
-    assert agent.workflow.committed_revision == revision and agent.workflow.progress_facts() == facts
+    assert agent.workflow.committed_revision == revision
     assert agent.store.save_count == saves
     assert foreign.to_dict() == foreign_before and objective.requested_goals[2].status == "cancelled"
 

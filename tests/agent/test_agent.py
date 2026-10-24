@@ -3311,24 +3311,24 @@ async def test_whole_target_early_final_is_buffered_and_continues_to_runtime_com
 
 
 @pytest.mark.asyncio
-async def test_whole_target_stalls_after_four_iterations_without_semantic_progress():
-    responses = [tool_batch(agent_tool_call(f"noop-{i}", "echo", {"msg": "same"})) for i in range(4)]
+async def test_whole_target_repetition_reaches_outer_budget():
+    responses = [tool_batch(agent_tool_call(f"noop-{i}", "echo", {"msg": "same"})) for i in range(16)]
     responses.append(ChatResponse(
-        message=Message(role="assistant", content="The assessment is stalled."),
+        message=Message(role="assistant", content="The assessment is incomplete."),
         finish_reason="stop",
     ))
-    agent, client = whole_target_agent(responses, [EchoTool()], max_steps=10)
+    agent, client = whole_target_agent(responses, [EchoTool()], max_steps=16)
     collector = collect()
     await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
-    assert collector["events"][-1].stop_reason == "workflow_stalled"
-    assert len(client.requests) == 5
+    assert collector["events"][-1].stop_reason == "max_steps"
+    assert len(client.requests) == 17
     assert client.requests[-1].tools is None
-    assert any(event.type == "assistant-text" and event.text == "The assessment is stalled." for event in collector["events"])
+    assert any(event.type == "assistant-text" and event.text == "The assessment is incomplete." for event in collector["events"])
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("recovery_action", ["list", "complete_skill"])
-async def test_ready_workflow_list_grants_one_completion_turn(tmp_path, recovery_action):
+async def test_phase_readiness_remains_available_after_repetition(tmp_path, recovery_action):
     state = WorkflowState(objective=WorkflowObjective(
         id="ready-phase", mode="whole_target", target_origin="https://target.test",
     ))
@@ -3348,7 +3348,7 @@ async def test_ready_workflow_list_grants_one_completion_turn(tmp_path, recovery
     artifact.parent.mkdir(parents=True)
     artifact.write_text("inventory", encoding="utf-8")
     workflow_tool = WorkflowTool(state, Target("https://target.test"), evidence_root=tmp_path)
-    responses = [tool_batch(agent_tool_call(f"echo-{i}", "echo", {"msg": "same"})) for i in range(3)]
+    responses = [tool_batch(agent_tool_call(f"echo-{i}", "echo", {"msg": "same"})) for i in range(14)]
     responses.append(tool_batch(agent_tool_call("first-list", "workflow", {"action": "list"})))
     final_args = ({"action": "list"} if recovery_action == "list" else {
         "action": "complete_skill", "skill_name": "web-enumeration", "artifact_ref": ref,
@@ -3356,16 +3356,16 @@ async def test_ready_workflow_list_grants_one_completion_turn(tmp_path, recovery
     responses.append(tool_batch(agent_tool_call("recovery", "workflow", final_args)))
     responses.append(ChatResponse(message=Message(role="assistant", content="Summary."), finish_reason="stop"))
     agent, client = whole_target_agent(responses, [EchoTool(), workflow_tool],
-                                       workflow=state, max_steps=5)
+                                       workflow=state, max_steps=16)
     workflow_tool.skills = agent.skills
     collector = collect()
     await agent.run("Continue the whole-target assessment", FakeSignal(), collector["sink"])
-    guidance = [message.content for message in client.requests[4].messages
+    guidance = [message.content for message in client.requests[15].messages
                 if message.role == "system" and "Decision planner guidance" in message.content]
     assert any(f'workflow(action="complete_skill", skill_name="web-enumeration", artifact_ref="{ref}")'
                in message for message in guidance)
     if recovery_action == "list":
-        assert collector["events"][-1].stop_reason == "workflow_stalled"
+        assert collector["events"][-1].stop_reason == "max_steps"
         assert "enumeration" not in state.completed_phases()
     else:
         assert "enumeration" in state.completed_phases()
@@ -3430,11 +3430,11 @@ async def test_whole_target_streaming_does_not_emit_rejected_final_text():
         ChatResponse(message=Message(role="assistant", content="I am done."), finish_reason="stop"),
         *[
             tool_batch(agent_tool_call(f"echo-{i}", "echo", {"msg": "same"}))
-            for i in range(3)
+            for i in range(15)
         ],
-        ChatResponse(message=Message(role="assistant", content="The workflow stalled."), finish_reason="stop"),
+        ChatResponse(message=Message(role="assistant", content="The workflow remains incomplete."), finish_reason="stop"),
     ]
-    deltas = [["I am ", "done."]] + [[] for _ in range(3)] + [["The ", "workflow ", "stalled."]]
+    deltas = [["I am ", "done."]] + [[] for _ in range(15)] + [["The ", "workflow ", "remains incomplete."]]
     client = ScriptedStreamingClient(scripted, deltas)
     registry = ToolRegistry()
     registry.register(EchoTool())
@@ -3442,21 +3442,21 @@ async def test_whole_target_streaming_does_not_emit_rejected_final_text():
     skills.load_dir(Path(__file__).resolve().parents[2] / "skills")
     agent = Agent(AgentOptions(
         client=client, tools=registry, skills=skills, prompter=AlwaysAllow(), store=None,
-        target=Target("https://target.test"), max_steps=10, streaming_enabled=True,
+        target=Target("https://target.test"), max_steps=16, streaming_enabled=True,
     ))
     collector = collect()
     await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
     emitted_deltas = [event.text for event in collector["events"] if event.type == "assistant-delta"]
-    assert emitted_deltas == ["The ", "workflow ", "stalled."], [
+    assert emitted_deltas == ["The ", "workflow ", "remains incomplete."], [
         (event.type, getattr(event, "text", None), getattr(event, "stop_reason", None))
         for event in collector["events"]
     ]
     assert not any(event.type == "assistant-text" and "I am done" in event.text for event in collector["events"])
-    assert collector["events"][-1].stop_reason == "workflow_stalled"
+    assert collector["events"][-1].stop_reason == "max_steps"
 
 
 @pytest.mark.asyncio
-async def test_whole_target_meaningful_progress_resets_stall_counter():
+async def test_whole_target_phase_progress_preserved_at_outer_budget():
     class OneFactTool(EchoTool):
         def __init__(self):
             super().__init__()
@@ -3476,20 +3476,20 @@ async def test_whole_target_meaningful_progress_resets_stall_counter():
             return "unchanged"
 
     progress_tool = OneFactTool()
-    responses = [tool_batch(agent_tool_call(f"call-{i}", "echo", {"msg": "same"})) for i in range(4)]
+    responses = [tool_batch(agent_tool_call(f"call-{i}", "echo", {"msg": "same"})) for i in range(16)]
     responses.append(ChatResponse(
         message=Message(role="assistant", content="Hard cap summary."), finish_reason="stop",
     ))
-    agent, client = whole_target_agent(responses, [progress_tool], max_steps=4)
+    agent, client = whole_target_agent(responses, [progress_tool], max_steps=16)
     progress_tool.state = agent.workflow
     collector = collect()
     await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
     assert collector["events"][-1].stop_reason == "max_steps"
-    assert len(client.requests) == 5
+    assert len(client.requests) == 17
 
 
 @pytest.mark.asyncio
-async def test_malformed_tool_call_retry_counts_as_one_outer_no_progress_iteration():
+async def test_malformed_tool_call_retry_counts_as_one_outer_iteration():
     malformed = ChatResponse(
         message=Message(
             role="assistant",
@@ -3503,17 +3503,17 @@ async def test_malformed_tool_call_retry_counts_as_one_outer_no_progress_iterati
     )]
     responses.extend(
         tool_batch(agent_tool_call(f"noop-{i}", "echo", {"msg": "same"}))
-        for i in range(3)
+        for i in range(15)
     )
     responses.append(ChatResponse(
-        message=Message(role="assistant", content="The workflow stalled."),
+        message=Message(role="assistant", content="The workflow remains incomplete."),
         finish_reason="stop",
     ))
-    agent, client = whole_target_agent(responses, [EchoTool()], max_steps=10)
+    agent, client = whole_target_agent(responses, [EchoTool()], max_steps=16)
     collector = collect()
     await agent.run("Perform a whole-target assessment", FakeSignal(), collector["sink"])
-    assert collector["events"][-1].stop_reason == "workflow_stalled"
-    assert len(client.requests) == 6
+    assert collector["events"][-1].stop_reason == "max_steps"
+    assert len(client.requests) == 18
     assert client.requests[-1].tools is None
 
 
@@ -6669,9 +6669,9 @@ async def test_whole_target_synthesis_retries_markup_once_and_emits_only_clean_s
     status = await agent._whole_target_synthesis(
         working, FakeSignal(), emitted.append, thinking_enabled=False,
         reasoning_level=ReasoningLevel.OFF, requested_reasoning_level=ReasoningLevel.OFF,
-        stop_reason='workflow_stalled', instruction='Summarize the stalled assessment.', max_steps=40,
+        stop_reason='max_steps', instruction='Summarize the incomplete assessment.', max_steps=40,
     )
-    assert status == 'workflow_stalled'
+    assert status == 'max_steps'
     assert len(client.requests) == 2
     assert agent._llm_call_counts['final_synthesis_llm_calls'] == 2
     assert all(request.tools is None for request in client.requests)
@@ -6687,7 +6687,7 @@ async def test_whole_target_synthesis_retries_markup_once_and_emits_only_clean_s
     if retry_clean:
         assert visible == ['Plain assessment summary.']
     else:
-        assert 'workflow_stalled' in visible[0] and 'one summary retry' in visible[0]
+        assert 'max_steps' in visible[0] and 'one summary retry' in visible[0]
 
 
 @pytest.mark.asyncio
@@ -6718,8 +6718,8 @@ async def test_whole_target_synthesis_normal_text_unchanged_and_single_call():
     assert await agent._whole_target_synthesis(
         [], FakeSignal(), events.append, thinking_enabled=False,
         reasoning_level=ReasoningLevel.OFF, requested_reasoning_level=ReasoningLevel.OFF,
-        stop_reason='workflow_stalled', instruction='Summarize.', max_steps=40,
-    ) == 'workflow_stalled'
+        stop_reason='max_steps', instruction='Summarize.', max_steps=40,
+    ) == 'max_steps'
     assert len(client.requests) == 1
     assert [e['text'] for e in events if e['type'] == 'assistant-text'] == [text]
     assert agent.history[-1].content == text
@@ -6746,9 +6746,9 @@ async def test_whole_target_synthesis_discards_malformed_stream_even_with_clean_
     status = await agent._whole_target_synthesis(
         [], FakeSignal(), events.append, thinking_enabled=False,
         reasoning_level=ReasoningLevel.OFF, requested_reasoning_level=ReasoningLevel.OFF,
-        stop_reason='workflow_stalled', instruction='Summarize.', max_steps=40,
+        stop_reason='max_steps', instruction='Summarize.', max_steps=40,
     )
-    assert status == 'workflow_stalled' and len(calls) == 2
+    assert status == 'max_steps' and len(calls) == 2
     visible = ''.join(e['text'] for e in events if e['type'] in {'assistant-text', 'assistant-delta'})
     assert 'DSML' not in visible
     if clean_retry:

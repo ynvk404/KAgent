@@ -226,13 +226,14 @@ class StopClient(ScriptedClient):
 @pytest.mark.parametrize('mode,stop,status', [
     ('unavailable', 'workflow_blocked', 'completed'),
     ('reader', 'all_tools_refused', 'completed'),
-    ('mixed', 'workflow_stalled', 'completed'),
-    ('stall', 'workflow_stalled', 'completed'),
-    ('write', 'workflow_stalled', 'completed'),
+    ('mixed', 'max_steps', 'budget-exhausted'),
+    ('stall', 'max_steps', 'budget-exhausted'),
+    ('write', 'max_steps', 'budget-exhausted'),
 ])
 async def test_terminal_stop_closes_safely_or_exports_explicit_failure(
         tmp_path, monkeypatch, op, settings, mock_http, mode, stop, status):
     from benchmarks.scenario1.core.runtime import HeadlessPermissions
+    settings = replace(settings, agent_calls=16, timeout_seconds=60)
     op = replace(op, vulnerability_class='sql-injection')
     monkeypatch.chdir(tmp_path)
     if mode in {'reader', 'mixed'}:
@@ -252,12 +253,12 @@ async def test_terminal_stop_closes_safely_or_exports_explicit_failure(
     client = StopClient(mode)
     ex = await execute_case(op, settings, tmp_path, 'run', 'execution', client)
     assert ex.stop_reason == stop and ex.status == status, ex.error
-    assert client.step < settings.agent_calls
+    assert client.step == settings.agent_calls if stop == 'max_steps' else client.step < settings.agent_calls
     assert ex.result is not None
     state = ex.result['workflow']
     results = state['validation_results']
     assert not state['persisted_findings'] and not ex.result['accepted_at_freeze']
-    if status == 'completed':
+    if results:
         result = results[-1]
         assert result['outcome'] == ('blocked' if mode in {'unavailable', 'reader'} else 'insufficient-evidence')
         assert state['attempts'][client.attempt]['status'] == 'unresolved'
@@ -276,7 +277,7 @@ async def test_terminal_stop_closes_safely_or_exports_explicit_failure(
         else:
             assert not result['evidence_manifest']
             assert result['mutation_performed'] is None and result['cleanup_state'] == 'unknown'
-            assert len(mock_http) <= 6
+            assert len(mock_http) == (settings.agent_calls - 2 if mode == 'stall' else 2)
     else:
         assert not results and state['attempts'][client.attempt]['status'] == 'active'
         assert ex.runtime_metadata['closure_diagnostic'] == 'active-case-attempt-without-closure'
@@ -285,7 +286,7 @@ async def test_terminal_stop_closes_safely_or_exports_explicit_failure(
         assert not any(tc['function']['name'] == 'workflow'
             and json.loads(tc['function']['arguments']).get('action') == 'record_result'
             for m in session['messages'] for tc in (m.get('tool_calls') or []))
-        assert len(mock_http) <= 6  # threshold=4 stops probing; no closure HTTP
+        assert len(mock_http) <= settings.agent_calls - 2  # Closure itself sends no HTTP.
     assert inspect_export(ex.result, run_id='run', case_id=op.case_id, execution_id='execution',
                           candidate_args=candidate_arguments(op, settings),
                           target=settings.target + settings.context_path) == (result['outcome'], None)
@@ -308,6 +309,7 @@ async def test_worker_catches_active_orphan_when_agent_skips_closure(tmp_path, m
 
 @pytest.mark.parametrize('mode', ['no-start', 'terminal'])
 async def test_worker_preserves_no_attempt_or_existing_terminal(tmp_path, monkeypatch, op, settings, mock_http, mode):
+    settings = replace(settings, timeout_seconds=60)
     monkeypatch.chdir(tmp_path)
     class NoStart(ScriptedClient):
         async def chat(self, request, signal=None):
@@ -316,7 +318,8 @@ async def test_worker_preserves_no_attempt_or_existing_terminal(tmp_path, monkey
 
     ex = await execute_case(op, settings, tmp_path, 'run', 'execution',
                             NoStart() if mode == 'no-start' else ScriptedClient())
-    assert ex.status == 'completed' and ex.runtime_metadata['closure_diagnostic'] is None
+    assert ex.status == ('completed' if mode == 'no-start' else 'budget-exhausted')
+    assert ex.runtime_metadata['closure_diagnostic'] is None
     assert ex.result is not None
     if mode == 'no-start':
         assert ex.result['workflow']['attempts'] == {} and ex.result['result_id'] is None
@@ -327,7 +330,7 @@ async def test_worker_preserves_no_attempt_or_existing_terminal(tmp_path, monkey
 async def test_zero_action_closure_is_saved_idempotent_and_freeze_is_pure(tmp_path, op, settings, mock_http):
     agent, policy, cid, aid = await active_case(op, settings, tmp_path)
     events = collect()
-    await agent._close_terminal_attempt('workflow_stalled', FakeSignal(), events['sink'], agent.history.copy())
+    await agent._close_terminal_attempt('max_steps', FakeSignal(), events['sink'], agent.history.copy())
     latest = agent.workflow.latest_result(cid)
     assert latest is not None and policy.session_id is not None
     assert latest.outcome == 'insufficient-evidence' and latest.attempt_id == aid
@@ -387,9 +390,9 @@ async def test_closure_failure_preserves_owned_state_or_reports_unsaved_commit(
     events = collect()
     if fault == 'cancelled':
         with pytest.raises(asyncio.CancelledError):
-            await agent._close_terminal_attempt('workflow_stalled', FakeSignal(), events['sink'], agent.history.copy())
+            await agent._close_terminal_attempt('max_steps', FakeSignal(), events['sink'], agent.history.copy())
     else:
-        await agent._close_terminal_attempt('workflow_stalled', FakeSignal(), events['sink'], agent.history.copy())
+        await agent._close_terminal_attempt('max_steps', FakeSignal(), events['sink'], agent.history.copy())
         assert any(e['type'] == 'error' for e in events['events'])
         assert any('Workflow closure failed' in str(e) for e in events['events'])
         assert 'secret' not in ''.join(m.content for m in agent.history if m.role == 'assistant')
@@ -442,7 +445,7 @@ async def test_concurrent_duplicate_closure_never_overwrites_or_creates_second_r
     agent, policy, cid, _ = await active_case(op, settings, tmp_path)
     events = collect()
     await asyncio.gather(*[
-        agent._close_terminal_attempt('workflow_stalled', FakeSignal(), events['sink'], agent.history.copy())
+        agent._close_terminal_attempt('max_steps', FakeSignal(), events['sink'], agent.history.copy())
         for _ in range(2)])
     latest = agent.workflow.latest_result(cid)
     assert latest is not None and len(agent.workflow.validation_results) == 1
@@ -452,8 +455,9 @@ async def test_concurrent_duplicate_closure_never_overwrites_or_creates_second_r
     assert mock_http == [] and case_closure_diagnostic(agent.workflow, cid) is None
 
 
-async def test_wrong_name_component_stalls_with_zero_admitted_http_and_honest_unresolved(
+async def test_wrong_name_component_reaches_budget_with_zero_admitted_http_and_honest_unresolved(
         tmp_path, monkeypatch, op, settings, mock_http):
+    settings = replace(settings, agent_calls=16, timeout_seconds=60)
     monkeypatch.chdir(tmp_path)
     op = replace(op, method='POST', query=[], body=[['SafeText', op.case_id]],
                  input_name='SafeText', input_location='body', input_component='name')
@@ -469,9 +473,9 @@ async def test_wrong_name_component_stalls_with_zero_admitted_http_and_honest_un
 
     client = WrongComponent()
     ex = await execute_case(op, settings, tmp_path, 'run', 'execution', client)
-    assert ex.status == 'completed' and ex.stop_reason == 'workflow_stalled'
+    assert ex.status == 'budget-exhausted' and ex.stop_reason == 'max_steps'
     assert mock_http == [] and ex.metrics is not None and ex.metrics['http_admitted'] == 0
-    assert client.step < settings.agent_calls and ex.result is not None
+    assert client.step == settings.agent_calls and ex.result is not None
     results = ex.result['workflow']['validation_results']
     assert len(results) == 1 and results[0]['outcome'] == 'insufficient-evidence'
     assert not results[0]['mutation_performed'] and not results[0]['evidence_manifest']
@@ -483,7 +487,7 @@ async def test_closure_cannot_repair_stale_controller_binding(tmp_path, op, sett
     restored = deepcopy(agent.workflow, {id(agent.workflow.mutation_lock): asyncio.Lock()})
     agent.workflow = restored
     events = collect()
-    await agent._close_terminal_attempt('workflow_stalled', FakeSignal(), events['sink'], agent.history.copy())
+    await agent._close_terminal_attempt('max_steps', FakeSignal(), events['sink'], agent.history.copy())
     assert any(e['type'] == 'error' for e in events['events'])
     assert restored.attempts[aid]['status'] == 'active' and restored.latest_result(cid) is None
     assert mock_http == []
@@ -495,7 +499,7 @@ async def test_terminal_closure_leaves_hydrated_interruption_for_existing_resume
     agent.workflow = restored
     before = deepcopy(restored.to_dict())
     events = collect()
-    await agent._close_terminal_attempt('workflow_stalled', FakeSignal(), events['sink'], agent.history.copy())
+    await agent._close_terminal_attempt('max_steps', FakeSignal(), events['sink'], agent.history.copy())
     assert restored.to_dict() == before and restored.attempts[aid]['status'] == 'interrupted'
     assert restored.latest_result(cid) is None and mock_http == [] and not events['events']
 
@@ -536,7 +540,7 @@ async def test_cancellation_during_closure_save_joins_without_claiming_persisten
 
     monkeypatch.setattr(agent, 'save', held_save)
     events = collect()
-    task = asyncio.create_task(agent._close_terminal_attempt('workflow_stalled', FakeSignal(),
+    task = asyncio.create_task(agent._close_terminal_attempt('max_steps', FakeSignal(),
         events['sink'], agent.history.copy()))
     try:
         await asyncio.wait_for(entered.wait(), 5)

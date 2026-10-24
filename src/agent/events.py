@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
 from src.tools.common.runtime_metadata import RuntimeMetadata
-from src.tools.common.outcome import RecoveryReceipt
+from src.tools.common.outcome import RecoveryReceipt, PresentationImpact
 
 
 @dataclass(slots=True)
@@ -72,6 +72,7 @@ class ToolResultEvent(BaseEvent):
     accepted_candidate_id: str | None = None
     runtime_metadata: RuntimeMetadata | None = None
     recovery_receipt: RecoveryReceipt | None = None
+    presentation_impact: PresentationImpact | None = None
 
     @property
     def durationMs(self) -> float:

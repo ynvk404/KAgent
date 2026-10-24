@@ -11,7 +11,7 @@ from tests.ui.test_progress_milestones import runtime, dispatch, ORIGIN
 
 
 @pytest.mark.parametrize('retry_candidate', ['same', 'other', 'fake_receipt', 'failed', 'other_operation'])
-async def test_corrected_start_recovers_only_owned_real_transition(tmp_path, retry_candidate):
+async def test_start_milestone_requires_owned_real_transition(tmp_path, retry_candidate):
     app, state, tool = runtime(tmp_path)
     candidate, _ = state.add_candidate(Candidate(candidate_class='xss', target=ORIGIN,
         endpoint='/search', method='GET', parameter='q', objective_id='fixture-objective'))
@@ -26,7 +26,7 @@ async def test_corrected_start_recovers_only_owned_real_transition(tmp_path, ret
     assert state.to_dict() == before
     dispatch(app, ToolResultEvent(id='bad', name='workflow', result=failed,
         status=failed.status, error_kind=failed.error_kind, err=str(failed)))
-    issue = app.state.issues[0]
+    assert not any(row.kind == "error" for row in app.state.transcript)
     if retry_candidate == 'other':
         candidate, _ = state.add_candidate(Candidate(candidate_class='xss', target=ORIGIN,
             endpoint='/other', method='GET', parameter='q', objective_id='fixture-objective'))
@@ -49,20 +49,6 @@ async def test_corrected_start_recovers_only_owned_real_transition(tmp_path, ret
         err=str(output) if retry_candidate == 'failed' else '')
     dispatch(app, event)
     dispatch(app, event)  # Redelivery must not add another failed attempt.
-    updated = next(row for row in app.state.issues if row.key == issue.key)
-    assert updated.recovered is (retry_candidate == 'same')
-    assert updated.text == issue.text
-    assert updated.count == (2 if retry_candidate == 'failed' else 1)
-    entry = app.state.transcript[updated.index]
-    displayed = '\n'.join(line.text for line in entry_view(entry))
-    if retry_candidate == 'same':
-        assert entry.kind == 'info'
-        assert entry.text == 'workflow · start validation · GET /search · input q'
-        assert entry.details == ('Recovered after 1 failed attempt', updated.text)
-        assert 'ambiguous duplicate' in displayed  # Original diagnostic remains inspectable.
-        assert 'ambiguous duplicate' in updated.text
-    else:
-        assert entry.kind == 'error'
-        assert 'ambiguous duplicate' in displayed
-        assert 'Recovered after' not in displayed
+    assert not any(row.kind == 'error' for row in app.state.transcript)
+    assert 'ambiguous duplicate' not in repr(app.state.transcript)
     assert sum(row.text.startswith('Validation started') for row in app.state.transcript) == (retry_candidate in {'same', 'other'})

@@ -65,7 +65,7 @@ async def test_selected_observation_repair_requires_trusted_current_association(
     candidate = next(iter(runtime.workflow.candidates.values()))
     assert candidate.source_ref == capture['id']
     assert candidate.baseline_request_ref == capture['baseline_request_ref']
-    assert app.state.issues[-1].recovered == (association == 'trusted')
+    assert not any(row.kind == 'error' for row in app.state.transcript)
     assert not runtime.client.requests  # No model invocation.
 
 
@@ -99,8 +99,8 @@ async def test_native_network_retry_needs_no_send_and_same_effective_request(tmp
         runtime.http.context_store._authorization[(runtime.target.origin(), 'fixture-identity')] = 'Bearer changed-fixture'
     success, event = await invoke(app, 'retry', 'http', repaired)
     assert success.status == 'observation' and len(sent) == 2
-    assert app.state.issues[0].recovered == (variant == 'exact')
+    assert not any(row.kind == 'error' for row in app.state.transcript)
     if variant == 'exact':
         assert event.recovery_receipt and event.recovery_receipt.completed
-        assert app.state.issues[0].recovered_by == event.invocation.id
+        assert failure_event.recovery_receipt.resource == event.recovery_receipt.resource
     assert not runtime.client.requests

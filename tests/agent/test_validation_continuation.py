@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 import httpx
 import pytest
 
-from src.agent.agent import AgentRunOptions, WholeTargetStallTracker
+from src.agent.agent import AgentRunOptions
 from src.agent.events import MaxStepsError
 from src.agent.decision_planner import build_whole_target_plan
 from src.agent.validation_guidance import render_validation_guidance
@@ -236,11 +236,13 @@ async def test_stopped_probing_and_recovery_exhaustion_remain_distinct_across_co
     budget = current_budget(rt.workflow, cid, create=True)
     assert budget is not None
     budget.update(rejections=MAX_EVIDENCE_REJECTIONS if exhausted else 1, repair_turns=1)
-    assert rt.agent._begin_validation_finalization(WholeTargetStallTracker(), [], 0, 10)
+    # Legacy stopped attempts remain closed to probing after Continue/compaction.
+    rt.workflow.attempts[aid]["probing_stopped"] = True
+    rt.workflow.mark_committed()
     row = rt.workflow_tool.validation_handoff(cid, rt.policy)
     assert row['probing_stopped'] and row['owned_active']
     assert row['recovery']['status'] == ('exhausted' if exhausted else 'available')
-    await rt.agent._close_terminal_attempt('workflow_stalled', FakeSignal(), collect()['sink'], rt.agent.history.copy())
+    await rt.agent._close_terminal_attempt('max_steps', FakeSignal(), collect()['sink'], rt.agent.history.copy())
     assert rt.workflow.attempts[aid]['status'] == 'unresolved'
     counters = deepcopy(budget)
     await compact_with_misleading_summary(rt)

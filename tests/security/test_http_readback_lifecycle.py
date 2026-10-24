@@ -2,22 +2,19 @@
 import hashlib
 import json
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 
-from src.agent.agent import Agent, AgentOptions, WholeTargetStallTracker
+from src.agent.agent import Agent, AgentOptions
 from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
 from src.permission.permission import UserControlledRefusal
 from src.session.store import Store
 from src.skills.registry import Skill
 from src.tools.skills.payloads import ReadPayloadsTool
-from src.tools.common.outcome import ToolOutput
 from src.tools.workflow.workflow_tool import WorkflowTool
 from src.workflow.assessment import digest, source_row
 from src.workflow.planning.goals import RequestedGoal
 from src.workflow.state import WorkflowObjective
-from tests.agent.test_bounded_validation_regressions import batch_call
 from tests.helpers.agent_fakes import FakeClient, FakeSignal, ScriptedModel, collect
 from tests.security.test_execution_policy import runtime  # noqa: F401
 from tests.security.test_http_observation_reader import reader_runtime
@@ -63,7 +60,7 @@ class RecordingScriptedModel(ScriptedModel):
         return await super().chat(request, signal)
 
 
-async def test_direct_identical_http_readback_stalls_before_24_steps(runtime, tmp_path):
+async def test_direct_identical_http_readback_reaches_24_steps(runtime, tmp_path):
     agent, state, candidate, _, _ = await reader_runtime(runtime, tmp_path)
     assert state.objective is not None
     state.objective.mode = "direct"
@@ -75,12 +72,14 @@ async def test_direct_identical_http_readback_stalls_before_24_steps(runtime, tm
     attempts = {key: value.copy() for key, value in state.attempts.items()}
     events = collect()
     await agent.run("continue", FakeSignal(), events["sink"])
-    assert events["events"][-1].stop_reason == "workflow_stalled"
-    assert client.tool_iterations < 24 and len(client.requests) < 24
+    assert events["events"][-1].stop_reason == "max_steps"
+    assert client.tool_iterations == 24 and len(client.requests) == 25
     # The embedded controller has a WorkflowTool session owner. Missing effect
     # interpretation is now honest unknown, not a forced false or orphan.
     errors = [event for event in events["events"] if event["type"] == "error"]
-    assert not errors and not state.persisted_findings
+    from src.agent.events import MaxStepsError
+    assert len(errors) == 1 and isinstance(errors[0].err, MaxStepsError)
+    assert not state.persisted_findings
     result = state.latest_result(candidate.id)
     assert result is not None and result.attempt_id is not None
     assert result.outcome == "insufficient-evidence" and result.mutation_performed is None
@@ -92,29 +91,31 @@ async def test_direct_identical_http_readback_stalls_before_24_steps(runtime, tm
     assert len({item.response_hash for item in runtime[2].observations._items.values()}) == 1
 
 
-async def test_http_readback_content_and_unseen_ranges_remain_progress(runtime, tmp_path):
+async def test_http_readback_ranges_repeats_and_eof_do_not_dispatch(runtime, tmp_path):
     agent, _, _, _, oid = await reader_runtime(runtime, tmp_path)
     _, prompter, policy, _, sent, *_ = runtime
-    tracker = WholeTargetStallTracker()
     before = len(sent)
 
     async def read(start=0, maximum=2):
         args = {"observation_id": oid, "start_char": start, "max_chars": maximum}
         output = await agent.tools.execute("read_http_observation", args, None, prompter)
-        kind = tracker.record_validation_batch([batch_call("read_http_observation", output, args)],
-            new_facts=frozenset(), target_base_url=None, observations=policy.observations)
-        return kind, json.loads(output.split("\n", 1)[0])
+        header, body = output.split("\n", 1)
+        page = json.loads(header)
+        assert page["start_char"] == start and page["end_char"] == start + len(body)
+        assert body == policy.observations._items[oid].body.decode()[start:page["end_char"]]
+        return output, page
 
-    assert (await read())[0] == "reader_progress"
-    assert (await read())[0] == "no_progress"
-    assert (await read(2))[0] == "reader_progress"
-    assert (await read(4))[0] == "reader_progress"
-    assert (await read(7))[0] == "no_progress"  # EOF
+    first, _ = await read()
+    assert (await read())[0] == first
+    await read(2)
+    await read(4)
+    _, eof = await read(7)
+    assert eof["next_start_char"] is None and eof["start_char"] == eof["end_char"]
     item = policy.observations._items[oid]
     body = b"a genuinely different retained response"
     updated = replace(item, body=body, response_hash=hashlib.sha256(body).hexdigest())
     policy.observations._items[oid] = replace(updated, retained_hash=digest(source_row(updated)))
-    assert (await read())[0] == "reader_progress"
+    assert (await read())[0] != first
     assert len(sent) == before
 
 
@@ -151,7 +152,7 @@ async def test_retired_skill_page_reread_can_finish_direct_validation(runtime, t
     await agent.run("continue", FakeSignal(), events["sink"])
     assert client.consumed and not client.errors
     assert not [event for event in events["events"] if event["type"] == "error"]
-    assert events["events"][-1].stop_reason != "workflow_stalled"
+    assert events["events"][-1].stop_reason == "final_response"
     assert state.objective.requested_goals[0].status == "tested_not_confirmed"
     assert len(runtime[4]) == sent_before
     assert all(not m.content.startswith("[Older skill page omitted;")
@@ -270,38 +271,6 @@ async def test_resumed_reader_fails_closed_without_new_http(runtime, tmp_path, f
     assert len(sent) == before
 
 
-def test_http_timing_changes_do_not_refresh_exploration():
-    tracker = WholeTargetStallTracker()
-    observations = SimpleNamespace(_items={})
-    for step in range(6):
-        key = f"obs_{step:032x}"
-        observations._items[key] = SimpleNamespace(status=200, response_hash="same-body",
-            complete=True, truncated=False, elapsed_ms=step)
-        output = ToolOutput("same-body")
-        output.http_sources = ((key, "integrity"),)
-        tracker.record_validation_batch([batch_call("http", output, {"url": f"/different-{step}"})],
-            new_facts=frozenset(), target_base_url=None, observations=observations)
-    assert tracker.consecutive_no_progress == 4
-
-
-def test_distinct_http_content_has_only_bounded_exploration():
-    tracker = WholeTargetStallTracker()
-    observations = SimpleNamespace(_items={})
-    for step in range(12):
-        body = f"distinct response {step}"
-        key = f"obs_{step:032x}"
-        observations._items[key] = SimpleNamespace(status=200,
-            response_hash=hashlib.sha256(body.encode()).hexdigest(), complete=True, truncated=False,
-            elapsed_ms=step)
-        output = ToolOutput(body)
-        output.http_sources = ((key, "integrity"),)
-        kind = tracker.record_validation_batch([batch_call("http", output)], new_facts=frozenset(),
-            target_base_url=None, observations=observations)
-        if step < 8:
-            assert kind == "novel_exploration" and tracker.consecutive_no_progress == 0
-    assert tracker.phase_exploration_steps == 8 and tracker.consecutive_no_progress == 4
-
-
 async def test_reader_error_without_body_keeps_its_diagnostic(runtime, tmp_path):
     agent, _, _, _, _ = await reader_runtime(runtime, tmp_path)
     message = Message("tool", "error: primary reference unavailable", name="read_http_observation",
@@ -309,4 +278,3 @@ async def test_reader_error_without_body_keeps_its_diagnostic(runtime, tmp_path)
     working = [message]
     agent._protect_http_context(working)
     assert working == [message]
-

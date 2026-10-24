@@ -40,7 +40,7 @@ async def result(app, tool, identifier, args, invocation):
 
 
 @pytest.mark.parametrize('whole', [False, True])
-async def test_corrected_candidate_retry_recovers_owned_issue_once(tmp_path, whole):
+async def test_corrected_candidate_creates_one_authoritative_milestone(tmp_path, whole):
     app, state, tool = runtime(tmp_path, whole=whole)
     assert state.objective is not None
     args = {'action': 'record_candidate', 'candidate_class': 'sqli',
@@ -54,22 +54,18 @@ async def test_corrected_candidate_retry_recovers_owned_issue_once(tmp_path, who
     failed = await result(app, tool, 'bad', bad, call(app, 'bad', bad))
     assert 'objective_id is assigned by the runtime' in failed
     assert not state.candidates
-    assert sum(not issue.recovered for issue in app.state.issues) == 1
+    assert not any(row.kind == "error" for row in app.state.transcript)
     output = await result(app, tool, 'good', args, call(app, 'good', args))
     assert json.loads(output)['ok'] is True
     assert len(state.candidates) == 1
-    issue = app.state.issues[0]
-    assert issue.recovered and issue.count == 1
-    assert 'objective_id is assigned by the runtime' in issue.text
-    recovered_entry = app.state.transcript[issue.index]
-    assert recovered_entry.kind == 'info'
-    assert 'Recovered after 1 failed attempt' in recovered_entry.details
+    assert 'objective_id is assigned by the runtime' not in repr(app.state.transcript)
+    assert sum(row.text.startswith('Candidate recorded') for row in app.state.transcript) == 1
     await result(app, tool, 'again', args, call(app, 'again', args))
     assert len(state.candidates) == 1
-    assert len(app.state.issues) == 1
+    assert not any(row.kind == "error" for row in app.state.transcript)
 
 
-async def test_canonical_aliases_and_method_endpoint_forms_share_recovery(tmp_path):
+async def test_canonical_candidate_aliases_preserve_recorded_result(tmp_path):
     app, state, tool = runtime(tmp_path)
     assert state.objective is not None
     bad = {'action': 'record_candidate', 'candidate_class': 'sqli',
@@ -78,7 +74,7 @@ async def test_canonical_aliases_and_method_endpoint_forms_share_recovery(tmp_pa
     args = {'action': 'record_candidate', 'candidate_class': 'sql-injection',
             'endpoint': '/login', 'method': 'post', 'parameter': 'email', 'signals': ['observed']}
     await result(app, tool, 'good', args, call(app, 'good', args))
-    assert app.state.issues[0].recovered
+    assert not any(row.kind == "error" for row in app.state.transcript)
     assert len(state.candidates) == 1
 
 
@@ -97,7 +93,7 @@ async def test_creation_rejects_runtime_owned_arguments(tmp_path, reserved):
     {'baseline_request_ref': 'other-capture'}, {'content_type': 'application/json'},
     {'request_template': '{"email":"{INJECTION_POINT}"}'}, {'source_ref': 'other-source'},
 ])
-async def test_sibling_creation_never_recovers_original_candidate(tmp_path, change):
+async def test_sibling_creation_keeps_operation_errors_hidden(tmp_path, change):
     app, state, tool = runtime(tmp_path)
     assert state.objective is not None
     args = {'action': 'record_candidate', 'candidate_class': 'sqli',
@@ -113,11 +109,11 @@ async def test_sibling_creation_never_recovers_original_candidate(tmp_path, chan
     sibling = {**args, **change}
     output = await result(app, tool, 'sibling', sibling, call(app, 'sibling', sibling))
     assert json.loads(output)['ok'] is True
-    assert not app.state.issues[0].recovered
+    assert not any(row.kind == "error" for row in app.state.transcript)
 
 
 @pytest.mark.parametrize('boundary', ['target', 'objective', 'scope', 'turn'])
-async def test_recovery_never_crosses_runtime_boundary(tmp_path, boundary):
+async def test_old_receipts_never_cross_runtime_boundary(tmp_path, boundary):
     app, state, tool = runtime(tmp_path)
     assert state.objective is not None
     args = {'action': 'record_candidate', 'candidate_class': 'sqli', 'endpoint': '/login'}
@@ -141,7 +137,7 @@ async def test_recovery_never_crosses_runtime_boundary(tmp_path, boundary):
 
 
 @pytest.mark.parametrize('fabrication', ['no_state', 'existing_candidate', 'sibling', 'wrong_invocation'])
-async def test_fabricated_or_unowned_receipt_cannot_recover(tmp_path, fabrication):
+async def test_fabricated_or_unowned_receipt_does_not_publish_recovery(tmp_path, fabrication):
     app, state, tool = runtime(tmp_path)
     assert state.objective is not None
     args = {'action': 'record_candidate', 'candidate_class': 'sqli', 'endpoint': '/login'}
@@ -162,10 +158,10 @@ async def test_fabricated_or_unowned_receipt_cannot_recover(tmp_path, fabricatio
             invocation = Invocation('fabricated', runtime_scope(app.agent))
         event = ToolResultEvent(id='retry', name='workflow', result=receipt, invocation=invocation)
     dispatch(app, event)
-    assert not app.state.issues[0].recovered
+    assert not any(row.kind == "error" for row in app.state.transcript)
 
 
-async def test_recovery_keeps_other_errors_and_ignores_duplicate_and_late_delivery(tmp_path):
+async def test_rejected_operations_preserve_duplicate_and_late_delivery_protection(tmp_path):
     app, state, tool = runtime(tmp_path)
     assert state.objective is not None
     args = {'action': 'record_candidate', 'candidate_class': 'sqli', 'endpoint': '/login'}
@@ -182,12 +178,12 @@ async def test_recovery_keeps_other_errors_and_ignores_duplicate_and_late_delive
     before = app.state
     dispatch(app, event)
     assert app.state == before
-    # A later failure reopens its own issue; a retired success cannot clear it.
+    # A late result stays ignored even after another rejected operation.
     await result(app, tool, 'bad-again', bad, call(app, 'bad-again', bad))
     dispatch(app, event)
-    assert sum(not issue.recovered for issue in app.state.issues) == 3
+    assert not any(row.kind == "error" for row in app.state.transcript)
     await result(app, tool, 'correct-again', args, call(app, 'correct-again', args))
-    assert sum(not issue.recovered for issue in app.state.issues) == 2
+    assert not any(row.kind == "error" for row in app.state.transcript)
     dispatch(app, DoneEvent(stop_reason='final_response'))
-    assert '2 unresolved operation issues' in app.state.transcript[-1].text
+    assert 'unresolved operation' not in app.state.transcript[-1].text
     assert len(state.candidates) == 1

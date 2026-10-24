@@ -102,19 +102,17 @@ def test_default_transcript_summarizes_successes_and_preserves_pending_and_failu
     assert isinstance(app._local_modal, TurnDetailsModal)
     assert 'file_write (30)' in app._local_modal.render().plain
     assert 'PRIVATE RAW OUTPUT' not in text
-    assert 'Permission review timed out' in text
-    assert 'Shell execution error; process/stream metadata unavailable' in text
+    assert 'Permission review timed out' not in text
+    assert 'Shell execution error; process/stream metadata unavailable' not in text
     assert 'Fixture execution failed' not in text
-    assert any(issue.category == 'failure' and 'Shell execution error' in issue.text
-               and not issue.recovered for issue in app.state.issues)
     assert 'Unrecognized tool outcome' not in text and 'user refused' not in text.lower()
-    assert 'unresolved permission outcome' in text
+    assert 'unresolved permission outcome' not in text
     assert len(app.state.transcript) <= 5
 
 
 def test_completion_presents_its_current_cause_once():
     facts = OutcomeFacts(pending=('input review incomplete',))
     state = initial_state('', BannerData('fixture', 'fixture', '.'))
-    state = reducer(state, AgentEventAction(DoneEvent(stop_reason='workflow_stalled'), facts=facts))
+    state = reducer(state, AgentEventAction(DoneEvent(stop_reason='workflow_blocked'), facts=facts))
     assert state.transcript[-1].text.count('input review incomplete') == 1
     assert state.transcript[-1].kind == 'warning'

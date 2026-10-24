@@ -41,10 +41,9 @@ def test_completed_workflow_keeps_unmatched_errors_without_inventing_blockers(tm
     summary = app.state.transcript[-1].text
     assert summary.startswith('Workflow completed;')
     assert '1 validation not confirmed' in summary
-    assert '1 operation error without a matched retry' in summary
+    assert 'matched retry' not in summary
     assert 'work remains' not in summary and 'unresolved operation' not in summary
-    assert not app.state.issues[0].recovered  # No fabricated retry correlation.
-    assert 'unavailable replay baseline' in app.state.issues[0].text
+    assert 'unavailable replay baseline' not in repr(app.state.transcript)
     assert workflow.to_dict() == before
 
 
@@ -78,7 +77,7 @@ def test_recovery_and_runtime_stop_remain_distinct(tmp_path, whole, reason, retr
         repaired = args if retry == 'same' else {k: v for k, v in args.items() if k != 'baseline_request_ref'}
         dispatch(app, ToolCallEvent(id='retry', name='workflow', args=repaired))
         dispatch(app, ToolResultEvent(id='retry', name='workflow', result='{"ok":true}'))
-    assert not app.state.issues[0].recovered  # An ok envelope without a runtime receipt proves no repair.
+    assert not any(row.kind == 'error' for row in app.state.transcript)
     stop = ('workflow_completed' if whole else 'final_response') if reason == 'normal' else reason
     dispatch(app, DoneEvent(stop_reason=stop))
     summary = app.state.transcript[-1].text
@@ -86,12 +85,12 @@ def test_recovery_and_runtime_stop_remain_distinct(tmp_path, whole, reason, retr
         expected = 'Workflow completed' if whole else 'Turn completed'
         assert summary.startswith(expected)
         if whole:
-            assert 'operation error without a matched retry' in summary
+            assert 'matched retry' not in summary
     else:
         expected = {'max_steps': 'Stopped at max steps', 'context_capacity': 'Context capacity failure',
                     'all_tools_refused': 'Blocked by tool refusals'}[reason]
         assert summary.startswith(expected) and not summary.startswith('Workflow completed')
-        assert 'unresolved operation issue' in summary
+        assert 'unresolved operation issue' not in summary
     assert workflow.to_dict() == before
 
 
@@ -105,8 +104,8 @@ def test_discovery_pagination_distinguishes_next_page_from_missing_capture(captu
                             result=json.dumps(page) + '\n' + 'x' * 700)
     original = copy.deepcopy(event)
     notices = result_issues(event, None)
-    assert notices == (['Retained body · chars 0–700 of 5457 · more available']
-                       if capture_complete else ['Tool output truncated. Omitted output may limit validation.'])
+    assert notices == ['Tool output truncated. Omitted output may limit validation.']
+    assert json.loads(event.result.partition('\n')[0]) == page
     assert issue_category(notices[0], event) == 'diagnostic'
     assert event == original
 

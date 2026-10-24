@@ -2,6 +2,7 @@
 from copy import deepcopy
 from src.agent.events import CompactEvent, DecisionEvent, ErrorEvent
 from src.agent.agent import IneffectiveCompactionError
+from src.tools.common.outcome import annotate_error
 from src.llm.runtime.context_budget import ContextCapacityError, InputBudget
 from tests.ui.test_progress_milestones import dispatch
 from tests.ui.test_app import make_app
@@ -19,7 +20,7 @@ def test_changing_pressure_diagnostics_stay_out_of_transcript():
             'fixed/non-compactable floor; unresolved pressure: soft threshold exceeded',
             context_diagnostics={'estimated_total': 41735+count, 'estimate_only': True}))
     assert not app.state.transcript
-    assert not app.state.issues
+    assert not any(row.kind == "error" for row in app.state.transcript)
 
 
 def test_real_compaction_receipt_is_concise_and_displayed_once():
@@ -46,8 +47,8 @@ def test_ineffective_reduction_stays_quiet_and_hard_failure_is_visible():
     for i in range(15):
         message = 'compact result rejected: projected request would not shrink meaningfully'
         dispatch(app, ErrorEvent(err=IneffectiveCompactionError(message)))
-        dispatch(app, ErrorEvent(err=RuntimeError(f'auto-compact failed ({i}/3): {message}')))
-    assert not app.state.transcript and not app.state.issues
+        dispatch(app, ErrorEvent(err=annotate_error(RuntimeError(f'auto-compact failed ({i}/3): {message}'), 'operation')))
+    assert not app.state.transcript
     dispatch(app, ErrorEvent(err=ContextCapacityError(44000, InputBudget(input_limit=32000), 35000)))
     assert app.state.transcript[-1].kind == 'error'
     assert '44000' in app.state.transcript[-1].text

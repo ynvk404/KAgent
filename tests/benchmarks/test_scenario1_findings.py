@@ -15,7 +15,7 @@ from src.findings.store import Finding, render
 from src.workflow.evidence.review import confirmation_binding
 from src.workflow.state import validation_result_fingerprint
 from tests.benchmarks.test_scenario1 import (
-    ScriptedClient, execute_case, isolated_project_environment, mock_http, op, settings, single_manifest,
+    FindingClient, execute_case, isolated_project_environment, mock_http, op, settings, single_manifest,
 )
 
 
@@ -25,7 +25,8 @@ async def finding_run(tmp_path, monkeypatch, op, settings, mock_http, request):
     workspace.mkdir()
     monkeypatch.chdir(workspace)
     execution = await execute_case(op, settings, workspace, 'run', 'ex',
-                                   ScriptedClient(getattr(request, 'param', 'confirmed')))
+                                   FindingClient(getattr(request, 'param', 'confirmed')))
+    assert execution.status == 'completed' and execution.stop_reason == 'final_response'
     raw = asdict(execution)
     state = projection(raw['result']['workflow'])
     cid = raw['result']['candidate_id']
@@ -43,6 +44,7 @@ async def finding_run(tmp_path, monkeypatch, op, settings, mock_http, request):
         import copy
         data = copy.deepcopy(raw)
         wf = data['result']['workflow']
+        wf['persisted_findings'].pop(cid, None)
         if kind != 'unpersisted':
             wf['persisted_findings'][cid] = validation_result_fingerprint(latest)
         if kind == 'old-fingerprint':

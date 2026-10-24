@@ -35,7 +35,10 @@ def test_legacy_metadata_round_trip_never_reads_artifacts_or_creates_progress(mo
         assert saved['scanner_observations'] == snapshot['scanner_observations']
         restored = WorkflowState.from_dict(saved)
     empty = WorkflowState(objective=deepcopy(restored.objective))
-    assert restored.progress_facts() == empty.progress_facts()
+    def status(state):
+        return state.whole_target_status(target_origin="http://fixture.test", available_phases=frozenset(),
+                                         validator_classes=frozenset(), coverage_sync_available=False)
+    assert status(restored) == status(empty)
     assert not restored.attack_surface_inputs and not restored.candidates and not restored.phase_completions
     assert 'scan_' not in render_workflow(restored)
     assert not hasattr(restored, 'add_scanner_job')

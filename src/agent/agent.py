@@ -34,7 +34,7 @@ from typing import (
     TypeVar,
     cast,
 )
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from .context_estimate import (
     ContextEstimate, approximate_message_tokens, estimate_request, schema_tokens, text_tokens,
@@ -95,7 +95,6 @@ from src.skills.registry import (
     Registry as SkillRegistry,
     materialize_skill_body,
     normalize_candidate_class,
-    normalize_metadata_name,
 )
 
 from src.target.origin import HTTPOrigin
@@ -108,7 +107,7 @@ from src.workflow.planning.goals import RequestedGoal, extract_requested_classes
 from src.tools.common.aliases import canonical_tool_name
 from src.tools.common.registry import InvalidToolArguments, Registry as ToolRegistry
 from src.tools.common.types import ActionPermissionTool
-from src.tools.common.outcome import ErrorKind, ToolOutput, ToolStatus
+from src.tools.common.outcome import annotate_error, ErrorKind, ToolOutput, ToolStatus
 from src.tools.common.runtime_metadata import (
     RuntimeMetadata, collect_runtime_limitations, load_runtime_limitations, process_diagnostic, runtime_view,
 )
@@ -159,8 +158,6 @@ EventSink = Callable[[AgentEvent], None]
 
 DEFAULT_MAX_STEPS = 30
 DEFAULT_WHOLE_TARGET_MAX_STEPS = 60
-MAX_CONSECUTIVE_NO_PROGRESS = 4
-MAX_PHASE_EXPLORATION_STEPS = 8
 REASONING_POLICY_ID = "reasoning-baseline-v1"
 
 _EVENT_FACTORIES = {
@@ -450,6 +447,7 @@ class ToolCallResult:
         from src.tools.common.outcome import RecoveryReceipt
         self.recovery_receipt: RecoveryReceipt | None = (
             result.recovery_receipt if isinstance(result, ToolOutput) else None)
+        self.presentation_impact = result.presentation_impact if isinstance(result, ToolOutput) else None
         self.runtime_metadata = (runtime_metadata if runtime_metadata is not None else
                                  result.runtime_metadata if isinstance(result, ToolOutput) else None)
         self.result = result
@@ -529,489 +527,6 @@ class ExecutedToolCall:
 class ToolExecutionBatch:
     all_refused: bool
     calls: list[ExecutedToolCall]
-
-
-def _stable_activity_fingerprint(tool_name: str, value: Any) -> str:
-    canonical = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-        default=str,
-    )
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return f"{tool_name}:{digest}"
-
-
-_VOLATILE_HTTP_HEADERS = frozenset({
-    "accept",
-    "accept-encoding",
-    "accept-language",
-    "connection",
-    "content-length",
-    "host",
-    "user-agent",
-    "x-correlation-id",
-    "x-request-id",
-    "x-trace-id",
-})
-
-
-def _normalize_activity_url(value: str, target_base_url: str | None = None) -> str:
-    raw = value.strip()
-    if target_base_url and not re.match(r"^https?://", raw, re.IGNORECASE):
-        base = target_base_url.rstrip("/")
-        raw = base + (raw if raw.startswith("/") else f"/{raw}")
-
-    try:
-        parsed = urlsplit(raw)
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-            return raw
-        scheme = parsed.scheme.lower()
-        host = parsed.hostname.lower()
-        port = parsed.port
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        if port is not None and not (
-            (scheme == "http" and port == 80)
-            or (scheme == "https" and port == 443)
-        ):
-            host = f"{host}:{port}"
-        if parsed.username is not None:
-            credentials = parsed.username
-            if parsed.password is not None:
-                credentials += f":{parsed.password}"
-            host = f"{credentials}@{host}"
-        query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=True)), doseq=True)
-        return urlunsplit((scheme, host, parsed.path or "/", query, ""))
-    except ValueError:
-        return raw
-
-
-def _normalized_http_shape(args: dict[str, Any], target_base_url: str | None) -> dict[str, Any]:
-    method = args.get("method", "GET")
-    method = method.strip().upper() if isinstance(method, str) else "GET"
-    raw_url = args.get("url", "")
-    url = _normalize_activity_url(
-        raw_url if isinstance(raw_url, str) else "", target_base_url,
-    )
-    raw_headers = args.get("headers", {})
-    headers: list[tuple[str, str]] = []
-    if isinstance(raw_headers, dict):
-        headers = sorted(
-            (str(name).strip().lower(), str(value).strip())
-            for name, value in raw_headers.items()
-            if str(name).strip().lower() not in _VOLATILE_HTTP_HEADERS
-        )
-    body = args.get("body", "")
-    body_text = body if isinstance(body, str) else ""
-    if body_text:
-        is_json = any(
-            name == "content-type" and "json" in value.lower()
-            for name, value in headers
-        ) or body_text.strip().startswith(("{", "["))
-        if is_json:
-            try:
-                body_text = json.dumps(
-                    json.loads(body_text), ensure_ascii=False, sort_keys=True,
-                    separators=(",", ":"),
-                )
-            except (TypeError, ValueError):
-                pass
-    return {"method": method, "url": url, "headers": headers, "body": body_text}
-
-
-_CURL_VALUE_OPTIONS = {
-    "-X": "method", "--request": "method",
-    "-H": "header", "--header": "header",
-    "-d": "data", "--data": "data", "--data-raw": "data",
-    "--data-binary": "data", "--json": "json",
-    "--url": "url", "-u": "user", "--user": "user",
-    "-b": "cookie", "--cookie": "cookie",
-}
-_CURL_OUTPUT_OPTIONS = {
-    "-o", "--output", "-w", "--write-out", "-m", "--max-time",
-    "--connect-timeout",
-}
-_CURL_IGNORED_OPTIONS = {
-    "-s", "-S", "--silent", "--show-error",
-    "-f", "--fail", "--fail-with-body",
-    "-k", "--insecure",
-    "-L", "--location",
-    "--compressed",
-    "-i", "--include",
-    "-v", "--verbose",
-    "--no-progress-meter",
-}
-_CURL_SEMANTIC_FLAGS = {
-    "--path-as-is",
-    "--globoff",
-}
-_PIPELINE_OR_REDIRECT_OPS = {
-    "|", ">", ">>", "<", "2>&1", "2>", "1>&2", "2>>",
-}
-_COMPLEX_SHELL_OPS = {
-    "&&", "||", ";", "&",
-}
-
-
-def _normalized_curl_command(
-    tokens: list[str], target_base_url: str | None,
-) -> dict[str, Any] | None:
-    if not tokens or posixpath.basename(tokens[0]).lower() not in {"curl", "curl.exe"}:
-        return None
-    if any(token in _COMPLEX_SHELL_OPS for token in tokens):
-        return None
-
-    curl_tokens = tokens
-    for i, token in enumerate(tokens):
-        if token in _PIPELINE_OR_REDIRECT_OPS or (
-            len(token) > 1 and (token.startswith(">") or token.startswith("<") or token.startswith("2>"))
-        ):
-            curl_tokens = tokens[:i]
-            break
-
-    if not curl_tokens or posixpath.basename(curl_tokens[0]).lower() not in {"curl", "curl.exe"}:
-        return None
-
-    method: str | None = None
-    headers: list[tuple[str, str]] = []
-    bodies: list[tuple[str, str]] = []
-    users: list[str] = []
-    cookies: list[str] = []
-    urls: list[str] = []
-    flags: set[str] = set()
-    head_flag = False
-    get_flag = False
-
-    index = 1
-    while index < len(curl_tokens):
-        token = curl_tokens[index]
-        option, value = token, None
-        if token.startswith("--") and "=" in token:
-            option, value = token.split("=", 1)
-        elif token.startswith("-") and not token.startswith("--") and len(token) > 2:
-            short_option = token[:2]
-            if short_option in _CURL_VALUE_OPTIONS:
-                option, value = short_option, token[2:]
-            elif short_option in _CURL_OUTPUT_OPTIONS:
-                index += 1
-                continue
-            elif set(token[1:]).issubset(set("sSfkLviIG")):
-                for flag in token[1:]:
-                    if flag == "I":
-                        head_flag = True
-                    elif flag == "G":
-                        get_flag = True
-                index += 1
-                continue
-            else:
-                return None
-
-        if option in _CURL_VALUE_OPTIONS:
-            if value is None:
-                index += 1
-                if index >= len(curl_tokens):
-                    return None
-                value = curl_tokens[index]
-            kind = _CURL_VALUE_OPTIONS[option]
-            if kind == "method":
-                method = value.upper()
-            elif kind == "header":
-                name, separator, content = value.partition(":")
-                header_name = name.strip().lower()
-                if header_name not in _VOLATILE_HTTP_HEADERS:
-                    headers.append((header_name, content.strip() if separator else ""))
-            elif kind in {"data", "json"}:
-                body_val = value
-                if kind == "json" or body_val.strip().startswith(("{", "[")):
-                    try:
-                        parsed_json = json.loads(body_val)
-                        body_val = json.dumps(
-                            parsed_json,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        )
-                    except (TypeError, ValueError):
-                        pass
-                bodies.append((kind, body_val))
-            elif kind == "user":
-                users.append(value)
-            elif kind == "cookie":
-                cookies.append(value)
-            elif kind == "url":
-                urls.append(value)
-            index += 1
-            continue
-
-        if option in _CURL_OUTPUT_OPTIONS:
-            if value is None:
-                index += 1
-                if index >= len(curl_tokens):
-                    return None
-            index += 1
-            continue
-
-        if option in _CURL_IGNORED_OPTIONS:
-            index += 1
-            continue
-
-        if option in {"-I", "--head"}:
-            head_flag = True
-            index += 1
-            continue
-
-        if option in {"-G", "--get"}:
-            get_flag = True
-            index += 1
-            continue
-
-        if option in _CURL_SEMANTIC_FLAGS:
-            flags.add(option)
-            index += 1
-            continue
-
-        if token.startswith("-"):
-            return None
-        urls.append(token)
-        index += 1
-
-    if not urls:
-        return None
-    if method is None:
-        method = "HEAD" if head_flag else ("GET" if get_flag else ("POST" if bodies else "GET"))
-
-    return {
-        "method": method,
-        "urls": sorted(_normalize_activity_url(url, target_base_url) for url in urls),
-        "headers": sorted(headers),
-        "bodies": bodies,
-        "users": users,
-        "cookies": cookies,
-        "flags": sorted(flags),
-    }
-
-
-def _exploration_fingerprint(
-    execution: ExecutedToolCall,
-    target_base_url: str | None,
-) -> str | None:
-    result = execution.result
-    if (
-        not execution.parsed
-        or result.terminal_user_controlled_refusal
-        or result.err_str
-        or result.status not in {"success", "observation"}
-        or result.error_kind is not None
-    ):
-        return None
-
-    tool_name = canonical_tool_name(execution.name)
-    args = execution.args
-    if tool_name == "load_skill":
-        name = args.get("name")
-        if not isinstance(name, str) or not name.strip():
-            return None
-        material: Any = normalize_metadata_name(name.strip())
-    elif tool_name == "http":
-        material = _normalized_http_shape(args, target_base_url)
-    elif tool_name == "web_fetch":
-        url = args.get("url")
-        if not isinstance(url, str) or not url.strip():
-            return None
-        material = _normalize_activity_url(url, target_base_url)
-    elif tool_name == "shell":
-        if 'scanner' in args:
-            return None  # Retired execution form cannot earn progress.
-        command = args.get("command")
-        if not isinstance(command, str) or not command.strip():
-            return None
-        try:
-            tokens = shlex.split(command, posix=True)
-            curl_shape = _normalized_curl_command(tokens, target_base_url)
-            material = curl_shape if curl_shape is not None else shlex.join(tokens)
-        except ValueError:
-            material = re.sub(r"\s+", " ", command.strip())
-    elif tool_name in {'read_tool_result', 'read_discovery_source'}:
-        try:
-            text = str(result.result)
-            page = json.loads(text.split('\n', 1)[0] if tool_name == 'read_discovery_source' else text)
-            # Four bounded page regions per retained payload can be novel;
-            # shifting offsets/endpoints forever cannot manufacture progress.
-            material = ([page['response_hash'], min(3, max(0, page['start_char']) // 2000)]
-                        if tool_name == 'read_discovery_source' else
-                        [page['sha256'], min(3, max(0, page['actual_start']) // 2000)])
-        except (ValueError, KeyError, TypeError):
-            return None
-    elif tool_name in {"file_write", "file_edit"}:
-        path = args.get("path")
-        if not isinstance(path, str) or not path.strip():
-            return None
-        material = posixpath.normpath(path.strip().replace("\\", "/"))
-    else:
-        return None
-    return _stable_activity_fingerprint(tool_name, material)
-
-
-
-class WholeTargetStallTracker:
-    """Transient per-phase exploration allowance; structured facts remain authoritative."""
-
-    MAX_NOVELTY_FACTS: int = 8192
-
-    def __init__(self, exploration_cap: int = MAX_PHASE_EXPLORATION_STEPS) -> None:
-        self.exploration_cap = exploration_cap
-        self.consecutive_no_progress = 0
-        self.phase_exploration_steps = 0
-        self.phase: str | None = None
-        self.seen_facts: set[str] = set()
-        self.seen_fingerprints: set[str] = set()
-        self.read_ranges: dict[str, list[tuple[int, int]]] = {}
-        self.response_repetitions: dict[str, int] = {}
-        self.completion_recovery_used = False
-        self.scope: tuple | None = None
-        self.last_credit: dict[str, int] = {}
-
-    def set_scope(self, generation: str, objective_id: str | None) -> None:
-        scope = (generation, objective_id)
-        if self.scope != scope:
-            self.__init__(self.exploration_cap)
-            self.scope = scope
-
-    def set_phase(self, phase: str | None) -> None:
-        if phase == self.phase:
-            return
-        self.phase = phase
-        self.phase_exploration_steps = 0
-        self.seen_fingerprints.clear()
-        self.completion_recovery_used = False
-
-    def record_iteration(
-        self,
-        *,
-        new_facts: frozenset[str],
-        activity_fingerprints: list[str],
-    ) -> str:
-        # A state transition can reintroduce an old fact (for example scanner
-        # selected -> deferred -> selected). Credit each fact once per run.
-        # Never evict: a forgotten fact could become artificial progress again.
-        # Saturation conservatively stops granting additional novelty credit.
-        available = max(0, self.MAX_NOVELTY_FACTS - len(self.seen_facts))
-        novel_facts = sorted(new_facts - self.seen_facts)[:available]
-        self.seen_facts.update(novel_facts)
-        self.last_credit = {"credited_new_facts": len(novel_facts), "novel_activities": 0}
-        if novel_facts:
-            self.consecutive_no_progress = 0
-            self.phase_exploration_steps = 0
-            self.seen_fingerprints.clear()
-            self.response_repetitions.clear()
-            return "structured_progress"
-
-        available = max(0, self.MAX_NOVELTY_FACTS - len(self.seen_fingerprints))
-        novel_fingerprints = sorted(set(activity_fingerprints) - self.seen_fingerprints)[:available]
-        self.seen_fingerprints.update(novel_fingerprints)
-        self.last_credit["novel_activities"] = len(novel_fingerprints)
-        if novel_fingerprints and self.phase_exploration_steps < self.exploration_cap:
-            self.phase_exploration_steps += 1
-            self.consecutive_no_progress = 0
-            return "novel_exploration"
-
-        self.consecutive_no_progress += 1
-        return "no_progress"
-
-    def record_validation_batch(self, calls: list[ExecutedToolCall], *, new_facts: frozenset[str],
-                                target_base_url: str | None, observations=None) -> str:
-        """Validation uses returned data, never fresh handles as progress.
-
-        Actual new reader ranges are finite producer-bounded progress. Response
-        novelty is exploration, with the existing finite allowance. Repeats
-        remain possible within the no-progress window for verification/repair.
-        """
-        self.last_credit = {"credited_new_facts": 0, "novel_activities": 0}
-        fingerprints = []
-        new_range = False
-        for execution in calls:
-            result = execution.result
-            if result.status == "error" and result.error_kind in {
-                    "invalid_args", "workflow_state", "reference_unavailable", "tool_exception"}:
-                # Different controller diagnostics can support a bounded
-                # correction sequence. Arguments/error prose are not progress,
-                # and repeated errors cannot renew this finite allowance.
-                diagnostic = {"kind": result.error_kind, "parsed": execution.parsed}
-                if canonical_tool_name(execution.name) == "workflow":
-                    try:
-                        error = json.loads(str(result.result).split("\n", 1)[1])["error"]
-                        diagnostic["code"] = error["code"]
-                    except (ValueError, KeyError, IndexError, TypeError):
-                        pass
-                fingerprints.append(_stable_activity_fingerprint("validation_feedback", diagnostic))
-                continue
-            if not execution.parsed or result.err_str or result.error_kind or result.status not in {"success", "observation"}:
-                continue
-            name = canonical_tool_name(execution.name)
-            text = str(result.result)
-            reader_page = name in {"read_payloads", "read_skill_file"} and text.startswith("# ")
-            if reader_page or name in {"read_http_observation", "read_tool_result"}:
-                try:
-                    if reader_page:
-                        page = json.loads(text.rpartition("\nContinuation: ")[2])
-                        identity = str(page["sha256"])
-                        start, end, total = page["start_char"], page["end_char"], page["source_chars"]
-                    elif name == "read_http_observation":
-                        page = json.loads(text.split("\n", 1)[0])
-                        item = observations._items.get(page["observation_id"]) if observations else None
-                        if item is None or item.retained_hash != page["retained_hash"]:
-                            continue
-                        # Integrity binds a capture; progress binds its content.
-                        # New IDs/requests must not make identical bytes unread again.
-                        identity = item.response_hash
-                        start, end, total = page["start_char"], page["end_char"], page["source_chars"]
-                    else:
-                        page = json.loads(text)
-                        identity = str(page["sha256"])
-                        start, end, total = page["actual_start"], page["actual_end"], page["total_length"]
-                    if type(start) is not int or type(end) is not int or not 0 <= start <= end <= total:
-                        continue
-                except (ValueError, KeyError, TypeError):
-                    if not reader_page:
-                        continue
-                    identity = _stable_activity_fingerprint(name, text)
-                    start, end = 0, len(text)
-                ranges = self.read_ranges.setdefault(identity, [])
-                cursor = start
-                for left, right in sorted(ranges):
-                    if left > cursor:
-                        break
-                    cursor = max(cursor, right)
-                if end > start and cursor < end:
-                    new_range = True
-                    ranges.append((start, end))
-            elif name == "http":
-                output = result.result
-                sources = getattr(output, "http_sources", ())
-                items = [observations._items.get(key) for key, _ in sources] if observations else []
-                if items and all(item is not None for item in items):
-                    material = [(item.status, item.response_hash, item.complete, item.truncated)
-                                for item in items]
-                else:
-                    # Exclude opaque IDs and request previews; changed requests
-                    # alone cannot reset a stalled validation.
-                    material = re.sub(r"obs_[0-9a-f]{32}", "obs", text.split(
-                        "[End HTTP response; following text is request metadata]", 1)[0])
-                response = _stable_activity_fingerprint(name, material)
-                repetitions = self.response_repetitions.get(response, 0)
-                self.response_repetitions[response] = repetitions + 1
-                # One bounded verification repeat is exploration, not proof.
-                # Further identical responses cannot renew the allowance.
-                fingerprints.append(f"{response}:sample-{min(repetitions, 1)}")
-            else:
-                fingerprint = _exploration_fingerprint(execution, target_base_url)
-                if fingerprint:
-                    fingerprints.append(fingerprint)
-        if new_range:
-            self.consecutive_no_progress = 0
-            # Pagination must not replenish HTTP's exploration allowance.
-            if not new_facts - self.seen_facts:
-                return "reader_progress"
-        return self.record_iteration(new_facts=new_facts, activity_fingerprints=fingerprints)
 
 
 def _weighted_window_lengths(total: int) -> list[int]:
@@ -2286,7 +1801,7 @@ class Agent:
                 try:
                     await self.save()
                 except Exception as err:
-                    emit({"type": "error", "err": Exception(f"save session: {err}")})
+                    emit({"type": "error", "err": annotate_error(Exception(f"save session: {err}"), "persistence")})
         estimate = estimate_request(req, self.client.name())
         budget = self.input_budget()
         if budget.input_limit is not None and estimate.estimated_total > budget.input_limit:
@@ -2710,35 +2225,6 @@ class Agent:
         return {**args, "baseline_request_ref": selected.baseline_request_ref,
                 "source_ref": source or selected.retrieval_id}
 
-    def _selected_capture_presentation_args(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Read-only UI intent for one typed pre-proposal error; never dispatched."""
-        from src.browser.selection import SelectedCaptureArgumentError
-        from src.permission.runtime.execution import policy_for
-        self._validate_turn_capture_selection()
-        try:
-            return self._selected_capture_workflow_args(args)
-        except SelectedCaptureArgumentError as error:
-            if error.code != 'SELECTED_OBSERVATION_REFERENCE':
-                raise
-            selection = self._turn_capture_selection()
-            policy = policy_for(self.prompter)
-            item = policy.observations._items.get(str(args.get('source_ref', ''))) if policy is not None else None
-            if (selection is None or policy is None or item is None
-                    or item.source_kind != 'imported-capture'
-                    or item.producer != 'scoped-capture-bridge'
-                    or item.epoch != self.engagement_state.http_permissions.epoch
-                    or not isinstance(item.source_details, dict)
-                    or args.get('source_ref') in policy.observations._historical
-                    or item.source_details.get('analysis_session') != (policy.session_id
-                        or self.engagement_state.http_permissions.session_id)):
-                raise
-            capture_id = item.source_details.get('capture_id')
-            selected = next((row for row in selection.requests if row.retrieval_id == capture_id), None)
-            if selected is None:
-                raise
-            # Resolver still enforces geometry, asserted baseline and unique match.
-            return self._selected_capture_workflow_args({**args, 'source_ref': selected.retrieval_id})
-
     def _clear_permission_cache(self) -> None:
         self.cancel_capture_selection()
         clear = getattr(self.prompter, "clear_session_cache", None)
@@ -3159,29 +2645,6 @@ class Agent:
             for candidate in self.workflow.candidates.values()
         )
 
-    def _requested_goal_progress_signature(self) -> tuple[Any, ...]:
-        objective = self.workflow.objective
-        if objective is None:
-            return ()
-        rows: list[tuple[Any, ...]] = []
-        for goal in objective.requested_goals:
-            rows.append((goal.id, goal.status, tuple(goal.candidate_ids), goal.reason))
-            for candidate in self.workflow.objective_goal_candidates(goal):
-                result = self.workflow.latest_result(candidate.id)
-                rows.append((
-                    candidate.id, candidate.status,
-                    result.outcome if result else None,
-                    result.objective_id if result else None,
-                    tuple(result.evidence_refs) if result else (),
-                    result.cleanup_state if result else None,
-                    result.coverage_synced if result else None,
-                    self.workflow.persisted_findings.get(candidate.id),
-                    tuple(sorted(self.workflow.attempt_progress_facts(candidate.id))),
-                    tuple((e.id, e.sha256) for e in self.workflow.evidence.values()
-                          if e.candidate_id == candidate.id),
-                ))
-        return tuple(rows)
-
     def _requested_goal_summary_text(self) -> str:
         objective = self.workflow.objective
         if objective is None or not objective.requested_goals:
@@ -3421,26 +2884,6 @@ class Agent:
                 for item in cookie.split(";")
             )
         return parameter in query_names or body_has_parameter or parameter in header_names
-
-    def _whole_target_exploration_phase(self) -> str | None:
-        _, actionable, _ = self._whole_target_state()
-        for item in actionable:
-            if item.startswith("phase:"):
-                return item.partition(":")[2]
-        for item in actionable:
-            if item.startswith("input:"):
-                return "input_analysis"
-            if item.startswith("candidate:"):
-                return "validation"
-            if item.startswith("revalidate:"):
-                return "validation"
-            if item.startswith("coverage-sync:"):
-                return "coverage_sync"
-            if item.startswith("finding:"):
-                return "finding_persistence"
-            if item.startswith("cleanup:"):
-                return "cleanup"
-        return None
 
     def _initialize_request_objective(self, user_msg: str, tools_enabled: bool) -> None:
         #Hàm _initialize_request_objective() có nhiệm vụ phân loại yêu cầu của người dùng
@@ -4160,7 +3603,6 @@ class Agent:
                 frontier_partial=sum(row.disposition == "partial" for row in sources),
                 frontier_blocked=sum(row.disposition == "blocked" for row in sources),
                 frontier_not_applicable=sum(row.disposition == "not_applicable" for row in sources),
-                phase_exploration_cap=MAX_PHASE_EXPLORATION_STEPS,
                 active_skill_phases=sorted({active_phase for name in self.active_skills
                     if name in self._skill_contracts and self._skill_contracts[name].owner == self._skill_owner()
                     and (skill := self.skills.get(name)) is not None
@@ -4181,36 +3623,16 @@ class Agent:
         status: str,
         actionable: tuple[str, ...],
         blockers: tuple[str, ...],
-        before_facts: frozenset[str],
-        after_facts: frozenset[str],
-        consecutive_no_progress: int,
-        progress_kind: str,
-        phase_exploration_steps: int,
         emit=None,
-        credit: dict[str, int] | None = None,
     ) -> None:
         self._workflow_progress(emit, "iteration_evaluated",
-            no_progress=consecutive_no_progress, progress_kind=progress_kind,
-            observed_new_facts=len(after_facts - before_facts),
-            phase_exploration_steps=phase_exploration_steps,
-            stall_threshold=MAX_CONSECUTIVE_NO_PROGRESS,
-            stall_threshold_reached=consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS,
-            workflow_status=status, actionable_count=len(actionable), blocker_count=len(blockers),
-            no_progress_reset_reason=progress_kind if consecutive_no_progress == 0 else None,
-            **(credit or {}))
+            workflow_status=status, actionable_count=len(actionable), blocker_count=len(blockers))
         self._trace(
             "whole_target_gate",
             step=step,
             workflow_status=status,
             actionable=list(actionable),
             blockers=list(blockers),
-            before_facts_count=len(before_facts),
-            after_facts_count=len(after_facts),
-            new_facts_count=len(after_facts - before_facts),
-            consecutive_no_progress=consecutive_no_progress,
-            progress_kind=progress_kind,
-            phase_exploration_steps=phase_exploration_steps,
-            phase_exploration_cap=MAX_PHASE_EXPLORATION_STEPS,
         )
 
     @permission_turn
@@ -4244,8 +3666,7 @@ class Agent:
         self._trace("run_started")
         self.running = True
         self._reset_llm_call_counts()
-        self._workflow_metrics = {"outer_iterations": 0, "no_progress": 0,
-            "validation_rejections": 0, "validation_finalizations": 0,
+        self._workflow_metrics = {"outer_iterations": 0, "validation_rejections": 0,
             "planner_recommended_phase": None}
         self._turn_client_error = False
         self._pending_context = _TurnContext(None, None, False, None, capture_selection=selection)
@@ -4327,7 +3748,7 @@ class Agent:
                     # Keep the committed revision dirty for retry and preserve the
                     # original cancellation even if the final checkpoint fails.
                     log_error("agent: cancellation checkpoint failed", {"err": err_message(err)})
-                    safe_emit({"type": "error", "err": Exception(f"save session: {err}")})
+                    safe_emit({"type": "error", "err": annotate_error(Exception(f"save session: {err}"), "persistence")})
                 finally:
                     if not self._tool_results_unsaved:
                         self.result_retention.pending.clear()
@@ -4501,7 +3922,7 @@ class Agent:
         try:
             await self.save()
         except Exception as err:
-            emit({"type": "error", "err": Exception(f"save session: {err}")})
+            emit({"type": "error", "err": annotate_error(Exception(f"save session: {err}"), "persistence")})
 
         objective = self.workflow.objective
         whole_target = bool(
@@ -4528,8 +3949,6 @@ class Agent:
         else:
             max_steps = self._max_steps
 
-        stall_tracker = WholeTargetStallTracker()
-        requested_goal_no_progress = 0
         # Manifest repair is bounded independently of HTTP/tool budgets. Missing
         # declared validation steps use a different error and retain normal flow.
         evidence_recovery: dict[str, tuple[int | None, int, dict]] = {}
@@ -4574,20 +3993,12 @@ class Agent:
         for step in range(max_steps):
 
             ownership.check(self)
-            stall_tracker.set_scope(self.workflow.generation,
-                                    self.workflow.objective.id if self.workflow.objective else None)
 
             if signal.aborted:
                 raise Exception("aborted")
 
-            if whole_target:
-                stall_tracker.set_phase(self._whole_target_exploration_phase())
             self._workflow_progress(emit, "iteration_started", outer_iterations=step + 1,
-                max_outer_iterations=max_steps, no_progress_before=stall_tracker.consecutive_no_progress)
-            before_goal_signature = (
-                self._requested_goal_progress_signature() if requested_goal_run else ()
-            )
-            before_facts = self.workflow.progress_facts() if whole_target else frozenset()
+                max_outer_iterations=max_steps)
             response_chunks: list[str] | None = [] if whole_target or requested_goal_run or self._validation_completion_blockers() else None
 
             req = ChatRequest(
@@ -4677,9 +4088,9 @@ class Agent:
                 )
                 emit({
                     "type": "error",
-                    "err": RuntimeError(
+                    "err": annotate_error(RuntimeError(
                         'The model emitted malformed tool-call text instead of a structured tool call. The intended action was not executed. Retrying once with structured tool calling.'
-                    ),
+                    ), "operation"),
                 })
                 retry_instruction = Message(
                     role="user",
@@ -4698,7 +4109,7 @@ class Agent:
                 try:
                     await self.save()
                 except Exception as err:
-                    emit({"type": "error", "err": Exception(f"save session: {err}")})
+                    emit({"type": "error", "err": annotate_error(Exception(f"save session: {err}"), "persistence")})
 
                 retry_req = ChatRequest(
                     model=self.client.model(),
@@ -4746,7 +4157,7 @@ class Agent:
                         "Warning: the model did not return a structured tool call "
                         "after one retry; the intended action was not executed."
                     )
-                    emit({"type": "error", "err": RuntimeError(warning)})
+                    emit({"type": "error", "err": annotate_error(RuntimeError(warning), "operation")})
                     resp.message.content = (
                         f"{resp.message.content.rstrip()}\n\n{warning}"
                         if resp.message.content.strip()
@@ -4766,22 +4177,8 @@ class Agent:
 
                 if whole_target:
                     status, actionable, blockers = self._whole_target_state()
-                    after_facts = self.workflow.progress_facts()
-                    progress_kind = stall_tracker.record_iteration(
-                        new_facts=after_facts - before_facts,
-                        activity_fingerprints=[],
-                    )
                     self._trace_workflow_gate(
-                        step=step,
-                        status=status,
-                        actionable=actionable,
-                        blockers=blockers,
-                        before_facts=before_facts,
-                        after_facts=after_facts,
-                        consecutive_no_progress=stall_tracker.consecutive_no_progress,
-                        progress_kind=progress_kind,
-                        phase_exploration_steps=stall_tracker.phase_exploration_steps,
-                        emit=emit, credit=stall_tracker.last_credit,
+                        step=step, status=status, actionable=actionable, blockers=blockers, emit=emit,
                     )
                     if status == "completed":
                         return await self._whole_target_synthesis(
@@ -4812,23 +4209,6 @@ class Agent:
                                 "Give a concise status summary, state that assessment is incomplete, "
                                 "and explain these blockers without claiming completion: "
                                 + "; ".join(blockers)
-                            ),
-                            max_steps=max_steps,
-                        )
-                    if stall_tracker.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
-                        if self._begin_validation_finalization(stall_tracker, working, step, max_steps):
-                            continue
-                        return await self._whole_target_synthesis(
-                            working, signal, emit,
-                            thinking_enabled=turn_request_thinking,
-                            reasoning_level=turn_reasoning_level,
-                            requested_reasoning_level=turn_requested_level,
-                            stop_reason="workflow_stalled",
-                            instruction=(
-                                "The whole-target workflow has made no new structured progress for "
-                                f"{MAX_CONSECUTIVE_NO_PROGRESS} consecutive iterations. The objective "
-                                "is incomplete. Summarize what was established and identify the "
-                                "remaining structured work: " + "; ".join(actionable)
                             ),
                             max_steps=max_steps,
                         )
@@ -4889,39 +4269,7 @@ class Agent:
                                 "learn_intelligence",
                         )
                         return "workflow_blocked" if self._validation_completion_blockers() else "final_response"
-                    after_goal_signature = self._requested_goal_progress_signature()
-                    requested_goal_no_progress = (
-                        requested_goal_no_progress + 1
-                        if after_goal_signature == before_goal_signature
-                        else 0
-                    )
-                    stall_tracker.consecutive_no_progress = requested_goal_no_progress
-                    self._workflow_progress(emit, "iteration_evaluated", no_progress=requested_goal_no_progress,
-                        progress_kind="no_progress" if requested_goal_no_progress else "structured_progress",
-                        stall_threshold=MAX_CONSECUTIVE_NO_PROGRESS,
-                        stall_threshold_reached=requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS)
-                    if requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
-                        if self._begin_validation_finalization(stall_tracker, working, step, max_steps):
-                            requested_goal_no_progress = 0
-                            continue
-                        objective = self.workflow.objective
-                        if objective is not None:
-                            for goal in objective.requested_goals:
-                                if goal.status == "pending" and not self.workflow.objective_goal_candidates(goal):
-                                    self.workflow.set_requested_goal_status(
-                                        goal, "deferred",
-                                        reason="Planner guidance produced no structured candidate or validation progress.",
-                                    )
-                        self._reconcile_requested_goals()
-                        return await self._whole_target_synthesis(
-                            working, signal, emit,
-                            thinking_enabled=turn_request_thinking,
-                            reasoning_level=turn_reasoning_level,
-                            requested_reasoning_level=turn_requested_level,
-                            stop_reason="workflow_stalled",
-                            instruction="The direct objective stalled without structured requested-goal progress.",
-                            max_steps=max_steps,
-                        )
+                    self._workflow_progress(emit, "iteration_evaluated", workflow_status="incomplete")
                     if self._has_actionable_requested_goal():
                         if step < max_steps - 1:
                             working.append(Message(
@@ -5074,41 +4422,8 @@ class Agent:
 
             if whole_target:
                 status, actionable, blockers = self._whole_target_state()
-                after_facts = self.workflow.progress_facts()
-                activity_fingerprints = [
-                    fingerprint
-                    for execution in execution_batch.calls
-                    if (
-                        fingerprint := _exploration_fingerprint(
-                            execution,
-                            self.target.base_url() if self.target else None,
-                        )
-                    ) is not None
-                ]
-                if stall_tracker.phase == "validation":
-                    from src.permission.runtime.execution import policy_for
-                    policy = policy_for(self.prompter)
-                    progress_kind = stall_tracker.record_validation_batch(
-                        execution_batch.calls, new_facts=after_facts - before_facts,
-                        target_base_url=self.target.base_url() if self.target else None,
-                        observations=policy.observations if policy else None,
-                    )
-                else:
-                    progress_kind = stall_tracker.record_iteration(
-                        new_facts=after_facts - before_facts,
-                        activity_fingerprints=activity_fingerprints,
-                    )
                 self._trace_workflow_gate(
-                    step=step,
-                    status=status,
-                    actionable=actionable,
-                    blockers=blockers,
-                    before_facts=before_facts,
-                    after_facts=after_facts,
-                    consecutive_no_progress=stall_tracker.consecutive_no_progress,
-                    progress_kind=progress_kind,
-                    phase_exploration_steps=stall_tracker.phase_exploration_steps,
-                    emit=emit, credit=stall_tracker.last_credit,
+                    step=step, status=status, actionable=actionable, blockers=blockers, emit=emit,
                 )
                 if status == "completed":
                     return await self._whole_target_synthesis(
@@ -5142,38 +4457,6 @@ class Agent:
                         ),
                         max_steps=max_steps,
                     )
-                if stall_tracker.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS:
-                    if self._begin_validation_finalization(stall_tracker, working, step, max_steps):
-                        continue
-                    listed = any(
-                        execution.name == "workflow"
-                        and execution.args.get("action") == "list"
-                        and execution.result.status == "success"
-                        for execution in execution_batch.calls
-                    )
-                    readiness = self._phase_completion_readiness() if listed else None
-                    if (
-                        listed and readiness is not None and readiness["ready"]
-                        and not stall_tracker.completion_recovery_used
-                        and step < max_steps - 1
-                    ):
-                        self._workflow_metrics["completion_recoveries"] = self._workflow_metrics.get("completion_recoveries", 0) + 1
-                        stall_tracker.completion_recovery_used = True
-                        continue
-                    return await self._whole_target_synthesis(
-                        working, signal, emit,
-                        thinking_enabled=turn_request_thinking,
-                        reasoning_level=turn_reasoning_level,
-                        requested_reasoning_level=turn_requested_level,
-                        stop_reason="workflow_stalled",
-                        instruction=(
-                            "The whole-target workflow has made no new structured progress for "
-                            f"{MAX_CONSECUTIVE_NO_PROGRESS} consecutive iterations. The objective "
-                            "is incomplete. Summarize current evidence and remaining work: "
-                            + "; ".join(actionable)
-                        ),
-                        max_steps=max_steps,
-                    )
                 if step == max_steps - 1:
                     return await self._whole_target_synthesis(
                         working, signal, emit,
@@ -5193,24 +4476,6 @@ class Agent:
                 statuses = self._reconcile_requested_goals()
                 from src.permission.runtime.execution import policy_for
                 policy = policy_for(self.prompter)
-                after_goal_signature = self._requested_goal_progress_signature()
-                progress_kind = stall_tracker.record_validation_batch(
-                    execution_batch.calls,
-                    new_facts=(frozenset({_stable_activity_fingerprint('requested-goal-state', after_goal_signature)})
-                               if after_goal_signature != before_goal_signature
-                               else frozenset()),
-                    target_base_url=self.target.base_url() if self.target else None,
-                    observations=policy.observations if policy else None,
-                )
-                requested_goal_no_progress = stall_tracker.consecutive_no_progress
-                self._workflow_progress(emit, "iteration_evaluated", no_progress=requested_goal_no_progress,
-                    progress_kind=progress_kind, phase_exploration_steps=stall_tracker.phase_exploration_steps,
-                    stall_threshold=MAX_CONSECUTIVE_NO_PROGRESS,
-                    stall_threshold_reached=requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS,
-                    **stall_tracker.last_credit)
-                self._trace("direct_progress", step=step, progress_kind=progress_kind,
-                            consecutive_no_progress=requested_goal_no_progress,
-                            exploration_steps=stall_tracker.phase_exploration_steps)
                 incomplete = any(status not in {"tested_confirmed", "tested_not_confirmed"}
                                  for status in statuses.values())
                 if self.workflow.objective is not None and self.workflow.objective.mode == "direct":
@@ -5226,20 +4491,17 @@ class Agent:
                     for candidate in self._direct_objective_candidates()
                 )
                 blocked = incomplete and operator_cleanup and not self._has_actionable_requested_goal()
-                stalled = incomplete and requested_goal_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS
-                if stalled and self._begin_validation_finalization(stall_tracker, working, step, max_steps):
-                    continue
-                if blocked or stalled:
+                self._workflow_progress(emit, "iteration_evaluated",
+                    workflow_status="blocked" if blocked else "incomplete" if incomplete else "completed")
+                if blocked:
                     return await self._whole_target_synthesis(
                         working, signal, emit,
                         thinking_enabled=turn_request_thinking,
                         reasoning_level=turn_reasoning_level,
                         requested_reasoning_level=turn_requested_level,
-                        stop_reason="workflow_blocked" if blocked else "workflow_stalled",
-                        instruction="Direct validation remains unresolved: " + (
-                            "operator action or an external repair is required."
-                            if blocked else "bounded exploration made no further progress; stop probing."
-                        ), max_steps=max_steps,
+                        stop_reason="workflow_blocked",
+                        instruction="Direct validation remains unresolved: operator action or an external repair is required.",
+                        max_steps=max_steps,
                     )
 
             if requested_goal_run and step == max_steps - 1:
@@ -5348,36 +4610,6 @@ class Agent:
             eligible.append(candidate.id)
         return tuple(eligible)
 
-    def _begin_validation_finalization(self, tracker, working, step, max_steps):
-        """Spend remaining existing iterations on local disposition, once per attempt."""
-        from src.permission.runtime.execution import policy_for
-        from src.tools.workflow.workflow_tool import WorkflowTool
-        from src.workflow.assessment import attempt_owner
-        policy = policy_for(self.prompter)
-        tool = self.tools.get("workflow")
-        if policy is None or not isinstance(tool, WorkflowTool) or step >= max_steps - 1:
-            return False
-        aid = policy.generic_validation.durable_attempt if policy.generic_validation else None
-        attempt = self.workflow.attempts.get(aid) if aid is not None else None
-        if (not attempt or attempt.get("probing_stopped") or "effects" not in attempt
-                or attempt_owner(self.workflow, aid, policy.engagement.http_permissions.epoch,
-                                 self.target.revision, policy.session_id or tool.session_id) is None):
-            return False
-        attempt["probing_stopped"] = True
-        self.workflow.mark_committed()
-        self._workflow_metrics["validation_finalizations"] = self._workflow_metrics.get("validation_finalizations", 0) + 1
-        self._workflow_metrics["no_progress_reset_reason"] = "validation_finalization"
-        self._workflow_metrics["no_progress"] = 0
-        tracker.consecutive_no_progress = 0
-        working.append(Message("system",
-            f"Bounded probing has stopped for attempt {aid}. No more target actions are available for this attempt. "
-            "Use remaining existing iterations for owned observation metadata/readback, effect declaration, "
-            "minimal proof registration and record_result. Identical controls may support a bounded negative "
-            "only if the playbook's test actually completed; otherwise record insufficient-evidence/blocked. "
-            "Do not invent references, mutation=false, cleanup success or a finding. No extra budget is granted. "
-            "Independent attempts retain their own current scope and admission gates."))
-        return True
-
     async def _submit_unresolved_closure(self, args, signal, emit, working, *, call_id):
         """Submit through normal admission, verify the owned commit, then save."""
         from src.permission.network.grants import check_cancelled
@@ -5476,7 +4708,7 @@ class Agent:
             if route.kind != "expert" or route.skill_name is None:
                 raise RuntimeError("validator-unavailable")
             # A real refusal/input blocker differs from absent admissible proof.
-            # A stall by itself supplies no assessment outcome or cleanup fact.
+            # A budget limit supplies no assessment outcome or cleanup fact.
             outcome = "blocked" if blocker else "insufficient-evidence"
             reason = f"Validation stopped ({stop_reason}); " + (
                 blocker if blocker else "no admissible conclusion/proof was committed within bounded validation"
@@ -5507,7 +4739,7 @@ class Agent:
             if signal.aborted:
                 return "cancelled"
             try:
-                await self._close_terminal_attempt("workflow_stalled", signal, emit, working, step=step)
+                await self._close_terminal_attempt("workflow_blocked", signal, emit, working, step=step)
             except asyncio.CancelledError:
                 task = asyncio.current_task()
                 # Operator aborts use the normal turn result; Task.cancel() must
@@ -5570,7 +4802,7 @@ class Agent:
         try:
             await self.save()
         except Exception as err:
-            emit({"type": "error", "err": Exception(f"save session: {err}")})
+            emit({"type": "error", "err": annotate_error(Exception(f"save session: {err}"), "persistence")})
         if emit_text and resp.message.content and not streamed:
             emit({"type": "assistant-text", "text": resp.message.content})
 
@@ -5645,7 +4877,7 @@ class Agent:
         reasoning_level: ReasoningLevel,
         requested_reasoning_level: ReasoningLevel,
         stop_reason: Literal[
-            "workflow_completed", "workflow_blocked", "workflow_stalled", "max_steps", "final_response"
+            "workflow_completed", "workflow_blocked", "max_steps", "final_response"
         ],
         instruction: str,
         max_steps: int,
@@ -5658,7 +4890,7 @@ class Agent:
                              and b["repair_turns"] < MAX_TERMINAL_REPAIR_TURNS
                              for b in self.workflow.evidence_recovery.values()
                              if current_budget(self.workflow, b["candidate_id"]) is b)
-        if stop_reason == "workflow_stalled" or stop_reason == "max_steps" and not repair_pending:
+        if stop_reason == "max_steps" and not repair_pending:
             await self._close_terminal_attempt(stop_reason, signal, emit, working)
         await self._checkpoint_terminal_workflow()
         # Closure can commit after the last tool-bearing projection. Reporting
@@ -6211,7 +5443,7 @@ class Agent:
                 emit(
                     {
                         "type": "error",
-                        "err": Exception(f"save session: {err}"),
+                        "err": annotate_error(Exception(f"save session: {err}"), "persistence"),
                     }
                 )
 
@@ -6332,9 +5564,9 @@ class Agent:
                 emit(
                     {
                         "type": "error",
-                        "err": Exception(
+                        "err": annotate_error(Exception(
                             f"save session: {err}"
-                        ),
+                        ), "persistence"),
                     }
                 )
 
@@ -6410,9 +5642,9 @@ class Agent:
             emit(
                 {
                     "type": "error",
-                    "err": Exception(
+                    "err": annotate_error(Exception(
                         f"save session: {err}"
-                    ),
+                    ), "persistence"),
                 }
             )
 
@@ -6653,6 +5885,8 @@ class Agent:
 
         from src.tools.common.outcome import RecoveryReceipt
         from src.tools.http.http_tool import HTTPTool
+        if run_err is not None:
+            outcome.presentation_impact = getattr(run_err, "presentation_impact", None)
         receipt = getattr(run_err, 'recovery_receipt', None)
         if isinstance(receipt, RecoveryReceipt) and type(self.tools.get(tc.function.name)) is HTTPTool:
             outcome.recovery_receipt = receipt
@@ -6749,6 +5983,7 @@ class Agent:
                     and type(self.tools.get('http')) is HTTPTool and invocation is not None
                     and invocation.scope == runtime_scope(self) else None,
                 "runtime_metadata": runtime,
+                "presentation_impact": res.presentation_impact,
             }
 
     def _managed_http_secrets(self) -> tuple[str, ...]:
@@ -7261,12 +6496,12 @@ class Agent:
             emit(
                 {
                     "type": "error",
-                    "err": RuntimeError(
+                    "err": annotate_error(RuntimeError(
                         f"auto-compact failed "
                         f"({self.consecutive_compact_failures}/"
                         f"{MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES}): "
                         f"{err_message(err)}"
-                    ),
+                    ), "operation"),
                 }
             )
 

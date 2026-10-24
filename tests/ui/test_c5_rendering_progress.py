@@ -39,7 +39,7 @@ def test_old_operation_errors_do_not_become_current_blocker_count_or_final_cause
         dispatch(app, ToolCallEvent(id=identity, name='workflow', args={'action': 'record_result', 'candidate_id': identity}))
         dispatch(app, ToolResultEvent(id=identity, name='workflow', result='error: OLD-ERROR-' + identity,
                                      status='error', error_kind='workflow_state'))
-    dispatch(app, DoneEvent(stop_reason='workflow_stalled'))
+    dispatch(app, DoneEvent(stop_reason='workflow_blocked'))
     summary = app.state.transcript[-1].text
-    assert '2 unresolved operation issues' in summary
+    assert 'unresolved operation' not in summary
     assert 'unresolved blocker' not in summary and 'OLD-ERROR' not in summary

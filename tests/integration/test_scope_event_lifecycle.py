@@ -110,7 +110,7 @@ def test_stale_siblings_keep_original_scope_in_either_order(tmp_path, order):
     for identifier in order:
         app.dispatch(AgentEventAction(ToolResultEvent(id=identifier, name='http', status='error',
                                                     error_kind='network', err='old target failed')))
-        assert not app.state.issues
+        assert not any(row.kind == "error" for row in app.state.transcript)
         assert not app.state.observed and not app.state.skill_receipts
         assert app.state.presentation_scope == runtime_scope(agent)
     assert not app.state.transcript
@@ -149,7 +149,7 @@ async def test_target_mutation_immediately_invalidates_old_permissions_and_event
         assert rights.epoch == epoch
     agent.record_tool_result(tc, parsed, ToolCallResult('loaded', '', 0), emit, [])
     assert not app.state.skill_receipts and not app.state.activated_skills
-    assert not app.state.observed and not app.state.issues
+    assert not app.state.observed
     assert 'recon' not in agent.active_skills
 
 
@@ -189,12 +189,12 @@ async def test_real_parallel_http_results_interleave_with_current_scope(tmp_path
         await agent.set_target_base_url(B)
         release[order[0]].set()
         await asyncio.wait_for(delivered[order[0]].wait(), 5)
-        assert not app.state.issues and not app.state.observed
+        assert not app.state.observed
         assert app.state.presentation_scope == runtime_scope(agent)
         # Reusing a provider call ID does not transfer the old dispatch's ownership.
         await agent.execute_tool_calls([call('old0', 'http', url='/new')], FakeSignal(), emit, [])
         assert app.state.presentation_scope == runtime_scope(agent) != old_scope
-        assert len(app.state.observed) == 1 and not app.state.issues
+        assert len(app.state.observed) == 1
         current = app.state
         release[order[1]].set()
         await asyncio.wait_for(batch, 5)

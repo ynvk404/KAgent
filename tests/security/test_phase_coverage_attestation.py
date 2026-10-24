@@ -74,14 +74,14 @@ async def test_http_attests_core_dimensions_only_after_observed_response(runtime
         assert coverage is not None and coverage.status == 'performed'
         assert coverage.reason and observation.id in coverage.reason
     assert state.phase_coverage_record('enumeration', 'html_navigation') is None
-    facts = state.progress_facts()
+    sources = {d: state.phase_coverage_record('recon', d).source_fingerprints
+               for d in ('target_resolution', 'reachability', 'http_fingerprint')}
     await registry.execute('http', {'url': '/', 'phase': 'recon'}, None, p)
     # Metadata-only -> captured body supplies actual new source content.
-    full_facts = state.progress_facts()
-    assert full_facts - facts
-    assert all(fact.startswith('phase-source:') for fact in full_facts - facts)
+    full_sources = {d: state.phase_coverage_record('recon', d).source_fingerprints for d in sources}
+    assert all(set(full_sources[d]) > set(sources[d]) for d in sources)
     await registry.execute('http', {'url': '/', 'phase': 'recon'}, None, p)
-    assert state.progress_facts() == full_facts
+    assert {d: state.phase_coverage_record('recon', d).source_fingerprints for d in sources} == full_sources
 
 
 @pytest.mark.asyncio
@@ -89,14 +89,14 @@ async def test_http_attests_core_dimensions_only_after_observed_response(runtime
 async def test_model_cannot_replace_attested_execution_with_workaround(runtime, status):
     registry, p, _, state, _, _, _ = runtime
     await registry.execute('http', {'url': '/', 'phase': 'recon'}, None, p)
-    before = state.progress_facts()
+    before = state.to_dict()
     result = await registry.execute('workflow', {
         'action': 'record_phase_coverage', 'phase': 'recon',
         'coverage_dimension': 'reachability', 'coverage_status': status,
         'coverage_reason': 'executed but adapter unavailable',
     }, None, p)
     assert result.status == 'error'
-    assert state.progress_facts() == before
+    assert state.to_dict() == before
     assert state.phase_coverage_record('recon', 'reachability').status == 'performed'
 
 

@@ -220,7 +220,7 @@ async def test_valid_repair_preserves_capture_and_reads_retained_body_without_re
         'observation_id': observation.id, 'start_char': 0, 'max_chars': 1000})
     assert read.status == 'success' and 'Offline database diagnostic' in read.result
     assert len(sent) == 1 and not rt.workflow.validation_results and not rt.workflow.persisted_findings
-    assert not app.state.issues[0].recovered  # Changed args are not an equivalent native retry.
+    assert not any(row.kind == "error" for row in app.state.transcript)
     assert not rt.client.requests
 
 
@@ -238,9 +238,9 @@ async def test_direct_followup_is_a_distinct_request_and_keeps_original_issue(re
     observation = next(iter(rt.policy.observations._items.values()))
     assert 'baseline_request_ref' not in observation.source_details
     assert observation.source_details['request_mode'] == 'direct'
-    assert not app.state.issues[0].recovered and not app.state.call_history[-1].retry_of
+    assert not any(row.kind == "error" for row in app.state.transcript)
     app.dispatch(AgentEventAction(DoneEvent(stop_reason='final_response')))
-    assert '1 unresolved operation issue' in app.state.transcript[-1].text
+    assert 'unresolved operation' not in app.state.transcript[-1].text
     assert not rt.client.requests
 
 
@@ -277,7 +277,7 @@ async def test_baseline_recipe_sends_unchanged_capture_on_first_http_call(replay
     observation = next(iter(rt.policy.observations._items.values()))
     assert observation.source_details['request_mode'] == 'captured-replay'
     assert observation.source_details['baseline_request_ref'] == action.capture_source.baseline_ref
-    assert not app.state.issues and not rt.client.requests
+    assert not rt.client.requests
 
 
 def brotli_reply(monkeypatch, sent, body):
@@ -479,9 +479,8 @@ async def test_captured_network_retry_requires_same_args_capture_and_native_rece
         monkeypatch.setattr(rt.agent, '_tool_result_event', without_receipt)
     success, event = await invoke(app, 'retry', 'http', corrected)
     assert success.status == 'observation' and len(sent) == 2
-    assert app.state.issues[0].recovered == (variant == 'exact')
+    assert not any(row.kind == 'error' for row in app.state.transcript)
     if variant == 'exact':
         assert event.recovery_receipt and event.recovery_receipt.completed
-        assert app.state.issues[0].recovered_by == event.invocation.id
         assert failure.recovery_receipt.resource == event.recovery_receipt.resource
     assert not rt.client.requests

@@ -40,9 +40,9 @@ async def test_capture_document_attribution_session_dedup_and_no_reader_rights(t
     assert first['attribution_kind'] == 'manual_declaration'
     item = first['input']
     assert item['source_ref'] is item['baseline_request_ref'] is item['auth_context_ref'] is None
-    before, progress = runtime.workflow.to_dict(), runtime.workflow.progress_facts()
+    before = runtime.workflow.to_dict()
     assert not json.loads((await record(runtime, source)).result)['created']
-    assert runtime.workflow.to_dict() == before and runtime.workflow.progress_facts() == progress
+    assert runtime.workflow.to_dict() == before
     refused = await execute(runtime, 'read_http_observation', {'observation_id': source.retained_ref,
         'start_char': 0, 'max_chars': 100}, success=False)
     assert refused.status == 'error' and 'ownership or scope is unavailable' in refused.result

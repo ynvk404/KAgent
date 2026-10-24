@@ -142,7 +142,7 @@ async def safety_outcomes(run):
     if run.definition.expected_stop is not None:
         assert done[0]["stop_reason"] == run.definition.expected_stop[1]
     assert done[0]["stop_reason"] in ({"final_response", "workflow_completed"} if expected.complete
-        else {"workflow_blocked", "workflow_stalled", "max_steps", "all_tools_refused"})
+        else {"workflow_blocked", "max_steps", "all_tools_refused"})
     saved = json.loads(runtime.store.path.read_text())["workflow"]
     # Actual production checkpoints, without a harness save or flush.
     for field in ("attempts", "validation_results", "evidence", "persisted_findings", "candidates", "objective",

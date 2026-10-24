@@ -27,7 +27,7 @@ from src.permission.runtime.execution import policy_for, file_resource_identity
 from src.permission.runtime.invocations import capture_review, REVIEW_TIMEOUT_SECONDS
 from src.permission.network.grants import check_cancelled
 from src.tools.common.arguments import string_fields
-from src.tools.common.outcome import ToolOutput
+from src.tools.common.outcome import ToolOutput, annotate_error
 
 READ_BYTE_CAP = 200 * 1024
 
@@ -367,21 +367,29 @@ class FileWriteTool(Tool):
             parent = Path(real).parent
             file_existed = Path(real).exists()
 
-            parent.mkdir(
-                parents=True,
-                exist_ok=True,
-                mode=WRITE_DIR_MODE,
-            )
+            try:
+                parent.mkdir(
+                    parents=True,
+                    exist_ok=True,
+                    mode=WRITE_DIR_MODE,
+                )
+            except OSError as error:
+                annotate_error(error, "persistence")
+                raise
 
             if policy is not None:
                 policy.revalidate_active(self, args, signal)
 
             check_worker()
             check_cancelled(signal)
-            Path(real).write_text(
-                content,
-                encoding="utf-8"
-            )
+            try:
+                Path(real).write_text(
+                    content,
+                    encoding="utf-8"
+                )
+            except OSError as error:
+                annotate_error(error, "persistence")
+                raise
 
             if not file_existed:
                 try:
@@ -546,10 +554,14 @@ class FileEditTool(Tool):
 
             check_worker()
             check_cancelled(signal)
-            Path(real).write_text(
-                updated,
-                encoding="utf-8"
-            )
+            try:
+                Path(real).write_text(
+                    updated,
+                    encoding="utf-8"
+                )
+            except OSError as error:
+                annotate_error(error, "persistence")
+                raise
 
             return (
                 f"edited {real} "

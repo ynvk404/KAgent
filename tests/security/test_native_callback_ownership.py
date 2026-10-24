@@ -86,15 +86,15 @@ async def test_late_native_callback_does_not_credit_replacement(tmp_path, monkey
         assert objective is not None
         record_completed_phase(rt.agent.workflow, 'recon', objective_id=objective.id,
             target_origin=rt.target.base_url(), artifact_ref='artifacts/recon/fixture/summary.md')
-    facts = rt.agent.workflow.progress_facts()
+    facts = rt.agent.workflow.to_dict()
     coverage = rt.agent.workflow.to_dict()['phase_coverage']
     release.set()
     # Stale completion remains a terminal tool result, without attributing its
     # observations or coverage to the new objective.
     await asyncio.wait_for(task, 5)
-    assert rt.agent.workflow.progress_facts() == facts
+    assert rt.agent.workflow.to_dict() == facts
     assert rt.agent.workflow.to_dict()['phase_coverage'] == coverage
     await rt.agent.save()
     restored = rt.agent.store.load().workflow
-    assert restored.progress_facts() == facts
+    assert restored.to_dict() == facts
     assert restored.to_dict()['phase_coverage'] == coverage
