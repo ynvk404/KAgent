@@ -139,6 +139,8 @@ inventory and account for coverage before `complete_skill`.
 
 ## Large responses: bounded reading, then move on
 
+Choose capture bounds for the intended source review before the first fetch,
+within existing HTTP limits; a tiny prefix may omit the relevant reference.
 A response truncation marker or context-guard omission is a strategy signal.
 Do not repeatedly fetch the same large resource, increase `max_response_bytes`,
 or add empty queries/cache-busters to obtain the whole blob. Check status and
@@ -170,8 +172,9 @@ In Whole-target mode, read retained HTTP discovery content with
 Each range requires current scope, provenance, HTTP capability and permission;
 selection grants no access. The reader sends no HTTP, reads only the existing
 ≤64 KiB body, and grants no Candidate/Attempt ownership or terminal evidence.
-Do not fetch again, increase caps or cache-bust just because context lacks a
-part that was already retained. `read_http_observation` keeps its validation
+A newly referenced source does not require refetching its parent. Do not fetch
+again, increase caps or cache-bust just because context lacks a part that was
+already retained. `read_http_observation` keeps its validation
 ownership contract: do not use it for an unowned discovery observation, create
 a Candidate/validation attempt to gain read rights, or infer authority from a
 source ID. If content is unavailable, evicted, outside limits or unreadable
@@ -629,7 +632,24 @@ Write the inventory to:
 using the same target identifier defined in `recon/SKILL.md`.
 Record one endpoint or route per entry. Prefer a consistent Markdown format:
 
-Before closing Whole-target Enumeration, inspect the overall workflow state:
+Before closing Whole-target Enumeration, apply this checkpoint:
+
+- SQLi-only narrows vulnerability class, not endpoint/input discovery. A bounded
+  pass can hand off useful inputs without claiming a survey of the whole target.
+- Reconcile valuable clues actually seen: Swagger initializer/definition references,
+  relevant robots entries, script/module references and visible network call
+  sites, API base/schema references. Follow a clue within existing bounds for a
+  concrete discovery question, or record its omission reason and specific limitation
+  in the inventory. A guessed spec URL returning HTML does not close the documentation
+  branch while retained HTML still has an initializer/definition clue. Resolve
+  relative references against the document URL; reuse retained content or permitted
+  missing-range reads under the bounded-reading rules.
+- Account for these clues without selecting every source or reading every link/chunk.
+  Known sources sufficient for the next step need no broad scan or endpoint/input
+  quota. References alone supply no input fields; commit each evidenced request
+  shape incrementally under the structured handoff contract.
+
+Inspect the overall workflow state, reusing it if already visible:
 
 ```json
 {"tool":"workflow","arguments":{"action":"list"}}

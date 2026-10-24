@@ -103,26 +103,28 @@
 #   SQLite:   "SQLITE_ERROR", "SQLite3::", "sqlite3.OperationalError", Sequelize "dialects/sqlite/"
 # SQLSTATE is shared across DBMSs; Sequelize alone does not identify its dialect.
 
-# --- Quoted-string vs. numeric context — try both if unclear ---
-# Per SKILL.md 1b: if the parameter's data type/context isn't already
-# clear (e.g. an ID that always renders as a bare number vs. a value
-# rendered inside quotes elsewhere in the app), don't guess which context
-# applies — try one quoted-string-style probe and one bare-numeric probe
-# as a pair, and record which one produced a signal in the result's
-# `injection_context` field. See the paired boolean examples in Phase 2
-# below (`1 AND 1=1` vs `1' AND '1'='1`) for the standard pairing to reuse
-# here at the syntax-detection stage too, substituted with the Phase 1
-# quote/paren probes above instead of full boolean logic.
+# --- Quoted-string vs. numeric context — evidence-supported selection ---
+# Per SKILL.md 1b, select from observed SQL evidence or a justified hypothesis,
+# not a numeric-looking field or quotes in ordinary application output. Do not
+# require both contexts. A discriminating quoted/numeric comparison uses the
+# same three syntax-shape adjustments after the initial signal, not a new budget.
+# Record unresolved context in injection_context; it is not a validation outcome.
 
 # ============================================================================
 # ========================== PHASE 2 — VALIDATION ============================
 # ============================================================================
-# Boolean-, error-, and time-based confirmation. These change query logic
-# (TRUE/FALSE conditions, deliberate delays) but do not read, modify, or
-# exfiltrate any data. Use the pair together and compare against baseline;
-# a one-off difference is not evidence — repeat before concluding.
+# Choose a technique from observed behavior, candidate context, capability and
+# oracle per SKILL.md Phase 2; no mandatory order or technique cycling. These
+# examples are not a sequence to execute. Each switch needs a distinct
+# evidence-supported plan and shares the existing syntax allowance.
+# Boolean pairs and timing controls use their own comparison/repetition rules.
+# For controlled error-based or bounded UNION-based proof, follow the Phase 2
+# paths in SKILL.md: owned control, compatible expression/projection and a
+# repeatable non-sensitive computed result, never parser errors/input echo alone.
+# No column-count probing, schema/table enumeration, real-row or secret reads;
+# fingerprints remain gated Phase 3. No drop-in error/UNION payload pack is supplied.
 
-# --- Boolean-based (engine-agnostic, try first) -----------------------------
+# --- Boolean-based (when a meaningful differential is available) ------------
 # Adapt the seed and quote/parenthesis/prefix/suffix to observed context per
 # SKILL.md 2a. These are not drop-in LIKE-pattern probes: a trailing wildcard can
 # change an equality's truth value. Equal responses are inconclusive for this pair.
@@ -130,7 +132,7 @@
 1 AND 1=2                  # purpose: boolean FALSE, numeric context | applies: should differ from baseline/TRUE if injectable | limit: confirmation only, no data read
 1' AND '1'='1              # purpose: boolean TRUE, quoted-string context | applies: use when parameter is rendered inside quotes | limit: confirmation only, no data read
 1' AND '1'='2              # purpose: boolean FALSE, quoted-string context | applies: pairs with the TRUE variant above | limit: confirmation only, no data read
-1 OR 1=1                   # purpose: alternate TRUE form | applies: only if AND-form was inconclusive, some WHERE clauses behave differently under OR | limit: confirmation only, no data read
+1 OR 1=1                   # purpose: alternate intended TRUE form | applies: evidence supports an OR-compatible context/oracle; AND failure alone is insufficient | limit: confirmation only, no data read
 
 # --- Time-based, per engine (pick ONE engine per "Engine identification") ---
 # NOTE — stacked queries: every payload below that uses a leading `;` is a
@@ -140,9 +142,9 @@
 # payload that produces no delay and no error is NOT evidence against SQL
 # injection — it may simply mean stacked queries aren't permitted here. If
 # a stacked time-based probe is inconclusive, don't treat that as a
-# negative on its own; fall back to boolean-based (above) or, if
-# available, an in-line (non-stacked) time-based form for the same engine
-# before concluding "not confirmed" for this technique.
+# negative on its own. Select another bounded plan only with distinct context
+# and oracle support; do not force boolean or in-line timing variants to complete
+# a sequence. Missing compatibility/oracle remains unresolved.
 
 # MySQL
 1;SELECT SLEEP(5)--        # purpose: 5s delay | applies: MySQL, stacked queries permitted | limit: confirmation only, bounded fixed delay
@@ -164,13 +166,14 @@
 # If DBMS_LOCK is unavailable or unauthorized (e.g. the probe errors with
 # insufficient privileges rather than timing out), do not substitute an
 # expensive recursive/heavy query as a workaround. Fall back to
-# boolean-based validation (above) instead.
+# boolean-based validation (above) only if its context/oracle supports a distinct
+# bounded plan; otherwise retain the limitation as unresolved.
 
 # SQLite: no native SLEEP()-equivalent. Do not attempt to fabricate a delay
 # via recursive/heavy queries — that risks unintended load or denial of
-# service on the target. If the engine is SQLite, rely on boolean-based
-# (above) or OOB (Phase 2D, if the capability exists and is authorized)
-# instead. See SKILL.md 2b note.
+# service on the target. If the engine is SQLite, skip timing. Select another
+# applicable Phase 2 plan only with supporting context/oracle, or retain the
+# limitation. OOB keeps its capability/authorization gates. See SKILL.md 2b note.
 
 # ============================================================================
 # ==================== PHASE 2D — OUT-OF-BAND (GATED) ========================
@@ -224,8 +227,9 @@
 # ============ everything below this line is PHASE 3 — IMPACT ===============
 # ============================================================================
 # Do not use without explicit ask_user authorization obtained after SQL
-# injection has already been confirmed at SQLI-2 above (via 2a, 2b, or,
-# once available and authorized, 2d).
+# injection has already been confirmed at SQLI-2 above (via an applicable Phase 2
+# proof, including controlled error-based or bounded UNION-based; OOB only once
+# available and authorized).
 # Merely having read this far into the file is not authorization to run
 # anything below this banner. See SKILL.md "Relationship to payloads.txt"
 # and the Phase 3 contract box in SKILL.md for the exact bound: a single

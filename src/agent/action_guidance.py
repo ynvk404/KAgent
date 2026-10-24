@@ -49,6 +49,12 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
                 'Use document attribution for documented fields, not request context or replay authority. '
                 'This applies even when no source is selected. Defer hypotheses to input analysis.')
             lines.append(
+                'Whole-target SQLi-only narrows vulnerability class, not endpoint/input discovery. '
+                'Before handoff, reconcile seen clues: Swagger initializer/definition references, robots entries, '
+                'script/module and network call sites, API base/schema references. '
+                'Follow a valuable clue within bounds for a concrete discovery question, or record its omission reason '
+                'and specific limitation. Guessed-spec HTML does not close docs while a retained initializer clue remains; '
+                'resolve relative references against the document URL. '
                 'Write the canonical partial inventory with known inputs and source limitations; '
                 'reading all JavaScript bundles is not a prerequisite. Account for each coverage dimension honestly: '
                 'unattested review is observed, never self-claimed performed; skipped/not_applicable need actual reasons. '

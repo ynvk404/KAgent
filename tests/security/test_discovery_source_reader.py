@@ -3,6 +3,7 @@ import json
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any, cast
+from urllib.parse import urljoin
 
 import httpx
 import pytest
@@ -91,6 +92,43 @@ async def test_metadata_wrong_reader_and_authorized_content_are_distinct(discove
     item = rt.policy.observations._items[source.retained_ref]
     assert item.candidate_id is item.attempt_id is None
     assert not rt.workflow.candidates and not rt.workflow.attempts and not rt.workflow.evidence
+
+
+async def test_html_reference_can_lead_to_new_source_without_refetch(tmp_path, monkeypatch):
+    html = '<title>API docs</title>' + ' ' * 2200 + '<script src="./init.js"></script>'
+    definition = json.dumps({'openapi': '3.0.3', 'paths': {'/widgets': {'get': {
+        'parameters': [{'name': 'label', 'in': 'query', 'schema': {'type': 'string'}}]}}}})
+    initializer = 'SwaggerUIBundle({spec:' + definition + '});'
+    sent = []
+    real_client = httpx.AsyncClient
+
+    def respond(request):
+        sent.append(request)
+        assert request.url.path in {'/docs/guess.json', '/docs/init.js'}
+        body, media = (html, 'text/html') if request.url.path.endswith('.json') else (initializer, 'application/javascript')
+        return httpx.Response(200, content=body.encode(), headers={'Content-Type': media}, request=request)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: real_client(transport=httpx.MockTransport(respond), **kw))
+    rt = make_runtime(tmp_path)
+    rt.workflow.objective = WorkflowObjective('reference-review', 'whole_target', ORIGIN)
+    await execute(rt, 'http', {'url': '/docs/guess.json', 'phase': 'recon', 'max_response_bytes': 4096})
+    source = next(iter(rt.workflow.discovery_sources.values()))
+    original = rt.policy.observations._items[source.retained_ref]
+    # Test-authored missing-range selection, not automatic reference extraction.
+    page = await execute(rt, 'read_discovery_source', read_args(source, html.index('<script')))
+    assert './init.js' in page.result and len(sent) == 1
+    new_url = urljoin(source.document_url, './init.js')
+    await execute(rt, 'http', {'url': new_url, 'phase': 'recon', 'max_response_bytes': 8192})
+    new_source = next(row for row in rt.workflow.discovery_sources.values() if row.id != source.id)
+    await execute(rt, 'workflow', {'action': 'record_input', 'method': 'GET', 'endpoint': '/widgets',
+        'parameter': 'label', 'location': 'query', 'input_type': 'string',
+        'source_attribution': attribution(new_source, 'spec.paths./widgets.get.parameters.0')})
+    assert [request.url.path for request in sent] == ['/docs/guess.json', '/docs/init.js']
+    assert rt.policy.observations._items[source.retained_ref] == original and original.response_cap == 4096
+    item = rt.workflow.objective_inputs()[0]
+    assert item.source_ref is item.baseline_request_ref is None and item.disposition == 'pending'
+    assert all(not row.selected for row in rt.workflow.discovery_sources.values())
+    assert not rt.workflow.attempts and not rt.workflow.candidates
 
 
 async def test_production_reduction_and_request_expose_bounded_recovery(discovery):

@@ -68,12 +68,19 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
             lines.append(f'Reload load_skill(name="{skill}") before validation probes/proof work; '
                          'skill activation expires per turn and grants no authority.')
         if skill == 'sql-injection':
-            lines.append('Boolean SQLi confirmation needs two complete TRUE/FALSE repetitions, at least four distinct owned '
-                         'observations and structured confirmation under the SQLi skill. Syntax-shape adjustments: '
-                         'at most three after the initial signal (possibly in Input Analysis). '
-                         'The first confirmation shape change counts; phase changes and recapture do not reset the allowance. '
-                         'Count executed requests, not proposals; no punctuation walk. '
-                         'Retrieval/ownership failure does not justify resend; unresolved compatibility need not force a FALSE request.')
+            if action in {'start_validation', 'resume_owned'}:
+                lines.append('Choose technique by evidence/context/capability/oracle. Capture a needed control in the active attempt. '
+                             'Full query text is not required: state hypothesis, expected observation and falsifier.')
+            elif action == 'finalize_owned':
+                lines.append('Reconcile used/remaining syntax allowance and the actual stop reason; never call it exhausted while unused. '
+                             'Keep Candidate status, ValidationResult outcome, goal status and finding eligibility separate; '
+                             'Phase 3 unmet prerequisites do not turn insufficient-evidence into not-confirmed.')
+            lines.append('Boolean confirmation only: two complete TRUE/FALSE repetitions, four distinct owned observations '
+                         'and structured confirmation. '
+                         'Syntax shapes: at most three after the initial signal (Input Analysis included). '
+                         'First confirmation change counts; phases/recapture never reset allowance. '
+                         'Count executed requests, not proposals. No retrieval/ownership resends; '
+                         'Reassess unusable TRUE before FALSE; bounded plans only, else unresolved.')
         elif skill == 'cross-site-scripting':
             lines.append('Raw HTML in JSON is an observation, not an XSS Candidate when rendering context or a compatible '
                          'source-to-sink path is unknown. Do not mutate to rescue an unsupported hypothesis. '

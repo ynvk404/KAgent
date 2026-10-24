@@ -106,6 +106,20 @@ def test_web_enumeration_body_has_all_phase_boundaries():
         assert heading in body, f"Missing required section: {heading}"
 
 
+def test_inventory_closure_accounts_for_observed_clues_without_full_ingestion():
+    _, body, _ = read_skill()
+    closing = collapse_ws(body.split('## 7.', 1)[1].split('## 8.', 1)[0]).replace('`', '').lower()
+    assert re.search(r'sqli-only.{0,140}(?:class|classes).{0,140}discovery', closing)
+    for clue in ('initializer', 'definition reference', 'robots', 'script/module', 'network call', 'api base'):
+        assert clue in closing
+    assert re.search(r'follow.{0,200}omission reason.{0,160}limitation', closing)
+    assert re.search(r'guessed.{0,120}html.{0,170}(?:not|never).{0,140}(?:close|absen)', closing)
+    assert re.search(r'relative references.{0,100}document url', closing)
+    # Existing bounded-pass and provenance protections remain part of closure.
+    assert 'unselected' in body.lower() and 'mandatory backlog' in body.lower()
+    assert 'documented' in closing and 'referenced-only' in closing and 'tested' in closing
+
+
 def test_enumeration_preserves_route_provenance_and_request_shape():
     _, body, _ = read_skill()
     text = collapse_ws(body).lower()

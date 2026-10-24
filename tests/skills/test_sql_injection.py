@@ -1023,3 +1023,45 @@ def test_sqlite_space_after_line_comment_does_not_restore_suffix(after_marker):
         assert db.execute(f'SELECT 1 --{after_marker}\n+ 1').fetchone() == (2,)
         with pytest.raises(sqlite3.OperationalError, match='incomplete input'):
             db.execute(f'SELECT (1 --{after_marker})')
+
+
+def test_phase2_selection_has_no_unconditional_boolean_priority(skill_text, payloads_text):
+    phase = _norm(skill_text.split('## Phase 2: Validation', 1)[1]
+                  .split('## Phase 3:', 1)[0]).lower()
+    corpus = _norm(payloads_text).lower()
+    assert not re.search(r'boolean-based[^\n]{0,65}try first', corpus)
+    assert 'use only when 1b and 2a are both inconclusive' not in phase
+    assert not re.search(r'try techniques in order', phase)
+    assert re.search(r'(?:select|choose).{0,120}technique.{0,180}(?:oracle|capability)', phase)
+    assert re.search(r'(?:change|switch).{0,90}technique.{0,160}distinct.{0,100}evidence-supported plan', phase)
+
+
+def test_phase2_summary_and_block_guard_cover_recognized_paths(skill_text):
+    matrix = _norm(skill_text.split('## Authorization matrix', 1)[1]
+                   .split('## Relationship', 1)[0]).lower()
+    assert all(technique in matrix for technique in ('boolean', 'error-based', 'union', 'time-based'))
+    assert 'oracle' in matrix
+    guard = _norm(skill_text.split('### 2c.', 1)[1].split('### 2d.', 1)[0]).lower()
+    assert re.search(r'any.{0,70}(?:phase 1/2|confirmation).{0,70}probe', guard)
+
+
+@pytest.mark.parametrize('technique', ['error-based', 'union'])
+def test_phase2_recognized_techniques_have_bounded_execution_paths(skill_text, payloads_text, technique):
+    phase = skill_text.split('## Phase 2: Validation', 1)[1].split('## Phase 3:', 1)[0]
+    sections = re.split(r'(?m)^### ', phase)
+    # Existing outcome/checkpoint mentions alone are not an execution path.
+    section = next((part for part in sections if technique in part.splitlines()[0].lower()), None)
+    assert section is not None, f'{technique} is recognized for SQLI-2 but lacks a Phase 2 plan'
+    text = _norm(section).replace('`', '').lower()
+    for concept in ('prerequisite', 'control', 'oracle', 'bounded', 'repeat', 'stop', 'non-sensitive'):
+        assert concept in text
+    assert re.search(r'(?:not|never|no).{0,100}(?:enumerat|real.row|credentials)', text)
+    if technique == 'union':
+        assert re.search(r'(?:known|established).{0,70}(?:projection|column|shape)', text)
+        assert re.search(r'(?:computed|evaluated).{0,100}(?:marker|expression|result)', text)
+    else:
+        assert 'parser' in text and 'controlled' in text and 'evaluation' in text
+    # The corpus must point to this route without adding an exploitation pack.
+    guidance = _norm(payloads_text.split('PHASE 2 — VALIDATION', 1)[1]
+                     .split('PHASE 2D — OUT-OF-BAND', 1)[0]).lower()
+    assert technique in guidance and 'skill.md' in guidance

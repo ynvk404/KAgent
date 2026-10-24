@@ -325,7 +325,7 @@ is authoritative.
 | Phase | Requires to run | Who authorizes | Can it be skipped? |
 |-------|------------------|-----------------|---------------------|
 | 1 (Detection/Baseline) | Scope confirmed (Preconditions) | — (standard precondition) | No — always run first |
-| 2a/2b (Validation) | A Phase 1 signal (or context strongly suggesting injection) | Automatic — part of normal technique selection | 2b may be skipped if 1b/2a already gave a clear signal ("stop at the first clear signal") |
+| 2 (Boolean, controlled error-based, bounded UNION-based, time-based) | A Phase 1 signal (or context strongly suggesting injection) + compatible context/oracle | Automatic — part of normal technique selection | Select an applicable plan; no mandatory sequence; stop at the first clear, repeatable signal |
 | 2c (WAF/rate-limit check) | — | — | Never — always applies whenever a block-like response is observed |
 | 2d (Out-of-band) | OOB capability present in `allowed-tools` + 2a–2c exhausted/inconclusive + separate `ask_user` authorization (incl. callback domain) | User, via `ask_user` | Effectively always skipped today — no OOB tool is currently available (capability check fails at step 1) |
 | 3 (Impact) | SQLI-2 already confirmed + separate `ask_user` authorization | User, via `ask_user` | Cannot be skipped into — requires explicit authorization every time, never inferred from Phase 2d authorization |
@@ -432,8 +432,8 @@ top of `payloads.txt`'s Phase 1 section.
 
 ## Scope checkpoint (entering Phase 2d or Phase 3)
 
-Phase 1 (baseline + syntax signal) and Phase 2a–2c (boolean/error/
-time-based confirmation) are standard non-destructive confirmation
+Phase 1 (baseline + syntax signal) and Phase 2 confirmation (boolean, controlled
+error-based, bounded UNION-based and time-based) are standard non-destructive
 techniques and do not require a checkpoint beyond the normal per-candidate
 scope confirmed in Preconditions.
 
@@ -491,7 +491,7 @@ confirmation if it has not already been established for this engagement.
 
 Use `ask_user` when:
 
-- SQL injection has just been confirmed (SQLI-2, via 2a or 2b — or 2d, if that capability is ever available) and the user hasn't yet said whether impact characterization is wanted,
+- SQL injection has just been confirmed (SQLI-2 via an applicable Phase 2 technique) and the user hasn't yet said whether impact characterization is wanted,
 - the target is a shared/production-like environment and the impact of even a minimal read is unclear,
 - the user's original request didn't already specify impact characterization as part of the task.
 
@@ -544,6 +544,16 @@ Before sending anything syntax-sensitive, capture a normal response to
 compare against. Send the equivalent request with a known-valid, benign
 value in the candidate parameter — same method, same content type, same
 path.
+
+A baseline capture is not a `baseline_request_ref` for replay. Never create a
+replay reference from an observation ID. With no replay baseline, use the
+evidenced Direct request shape under existing gates. Before comparison, define
+the validation question and capture any necessary benign control in the active
+attempt, unless a suitable owned control already exists. Pre-attempt responses
+inform planning only; do not adopt/rebind them as owned proof. Taking a needed
+control for a missing validation step is distinct from resending traffic to repair
+a manifest or retrieve an omitted body. A matching seed, a predicate that retains
+its intended truth value, and an observable response oracle are separate prerequisites.
 
 **General rule: preserve the original request structure, and modify only
 the candidate input.** This applies regardless of method or content type —
@@ -622,6 +632,8 @@ Reconcile adjustments from executed requests, not self-labelled "adjustments",
 planning without adopting their unowned IDs as terminal proof. A benign control,
 TRUE/FALSE predicate flip within the same syntax shape, and valid repetition are
 not adjustments; a predicate flip that also changes syntax shape still counts.
+Calling a request a benign control cannot exempt a syntax-shape change. All
+techniques share this allowance, including error-based and bounded UNION-based.
 This is guidance bookkeeping, not a new Runtime counter/schema. If adjustments
 do not converge, use a different applicable bounded technique only with a distinct
 evidence-supported plan; otherwise record the appropriate unresolved outcome.
@@ -683,10 +695,11 @@ stores it, which endpoint/action triggers the query) in `notes`.
 ## Phase 2: Validation
 
 Once Phase 1 has produced a syntax-sensitivity signal (or is inconclusive
-but context still suggests injection), continue into validation. Try
-techniques in order of intrusiveness. Stop at the first one that gives you
-a clear, reproducible signal — don't run every technique against every
-candidate.
+but context still suggests injection), continue into validation. Choose the least
+intrusive applicable technique from observed behavior, candidate context, available
+capability and an observable oracle. Stop at the first clear, reproducible signal;
+do not run every technique. Switch techniques only for a distinct evidence-supported
+plan within the shared syntax allowance, not merely because the previous test failed.
 
 Select a technique using the SQL context supported by target evidence:
 
@@ -714,8 +727,8 @@ submitting confirmation, whatever technique supplies the proof.
 
 ### 2a. Boolean-based differential check
 
-When boolean probes fit the observed SQL context, use this as a minimum
-confirmation step, including after a clear error-based SQLI-1 signal: Phase 1
+When boolean probes fit the observed SQL context and offer a meaningful differential,
+use this as one confirmation method, including after a clear error-based SQLI-1 signal: Phase 1
 syntax sensitivity alone does not establish SQLI-2. It also applies when 1b
 was absent or ambiguous but the surrounding context suggests an observable
 boolean evaluation. A TRUE/FALSE pair is required for boolean confirmation,
@@ -784,9 +797,9 @@ separately authorized workflow.
 
 ### 2b. Time-based check
 
-Use only when 1b and 2a are both inconclusive (e.g. no visible content
-difference and no error, but you still suspect injection based on context —
-typically a blind, non-reflective sink). The `PHASE 2 — VALIDATION` section
+Use when evidence supports an engine-compatible delay and timing oracle within
+resource limits, typically at a blind, non-reflective sink. An unusable boolean
+pair is not a prerequisite. The `PHASE 2 — VALIDATION` section
 also contains delay payloads per engine — see "Engine identification" above
 for how to pick which engine's syntax to try, and avoid firing every
 engine's delay payload at the same target speculatively.
@@ -800,14 +813,47 @@ slow response is not evidence. A confirmed, repeatable delay establishes
 **SQLI-2**.
 
 Note: SQLite has no native `SLEEP()`-equivalent function. If the
-fingerprinted or suspected engine is SQLite, skip 2b and rely on 2a
-(boolean-based) instead — or 2d if that capability is ever available and
-authorized. Do not attempt to force a delay via recursive/heavy queries, as
+fingerprinted or suspected engine is SQLite, skip 2b; select another applicable
+Phase 2 plan only with supporting context/oracle, or retain the limitation.
+Do not attempt to force a delay via recursive/heavy queries, as
 that risks unintended load or denial-of-service on the target.
+
+### Error-based controlled evaluation
+
+Prerequisites: evidence-supported expression position, compatible DBMS behavior
+and a response oracle that can distinguish an evaluated result from input echo
+or parser diagnostics. Use a suitable owned benign control; plan one bounded,
+non-sensitive constant-expression test and its falsifier. The error must expose
+the computed result, absent from the control and not merely reflected request
+text. Repeat the positive to establish reproducibility under the same context.
+Parser sensitivity or differing syntax errors alone remain SQLI-1. Stop at
+repeatable controlled evaluation (SQLI-2), or record the missing oracle/context
+as unresolved when no useful bounded plan remains. No schema/table enumeration,
+real-row reads, credentials or session material; fingerprint reads remain Phase 3.
+
+### Bounded UNION-based controlled evaluation
+
+Prerequisites: a compatible SELECT/projection hypothesis, already known projection
+shape and an observable non-sensitive output slot. Do not discover column counts
+or types by a sequence of UNION guesses. With an owned benign control and the
+shared allowance, test only a bounded constant expression whose computed marker
+is distinguishable from reflected text and ordinary rows. A synthetic computation
+such as `7 * 7` illustrates evaluation; echoed `7 * 7` alone is not that oracle.
+Reproduce the evaluated result under the same context before SQLI-2 confirmation.
+Keep controls, errors and positives separate; a success/error contrast is not a
+Boolean pair. Stop at the repeatable bounded proof. If projection compatibility
+or the oracle is unknown and no discriminating bounded test is justified, retain
+that limitation as unresolved. Never enumerate schema/tables, extract real rows,
+credentials or session material. Version/banner reads still require Phase 3.
+
+Both paths use existing `record_evidence` and `record_result` contracts with usable
+owned observations, registered proof and the applicable repeatability evidence.
+The Boolean `confirmation` pair schema and four-observation threshold apply only
+to Boolean confirmation. These paths do not lower SQLI-2 or authorize Phase 3.
 
 ### 2c. WAF / rate-limiting check
 
-If any probe in 1b–2b comes back as `403`, `429`, a generic "request
+If any Phase 1/2 probe comes back as `403`, `429`, a generic "request
 blocked" page, or a CAPTCHA/challenge page — instead of an application-level
 response — that is not a negative result. It means the probe was
 intercepted before reaching application logic. Don't retry with encoding
@@ -1072,12 +1118,23 @@ snapshot or reusing an observation ID does not establish repeatability.
 Before writing proof and calling `record_evidence` / `record_result`, reconcile
 the outcome and every countable claim against that owned ledger:
 successful exploit executions, complete positive repetitions, controls and errors.
+Reconcile syntax allowance used/remaining from executed requests since the initial
+signal across phases and techniques. Never write exhausted when allowance remains;
+state the actual stop reason without forcing its consumption. Intended probes are
+not established controls or positives until the observations support those labels.
+Keep Candidate status, ValidationResult outcome, goal status and finding eligibility
+separate; quote canonical state when available. Phase 3 is not eligible without
+SQLI-2 and its separate authorization; `insufficient-evidence` is not `not-confirmed`.
 Use the effective request and actual response to assign each proof label
 (`control`, `positive`, `error`, `incomplete`); do not copy a label from an earlier
 LLM summary or change the controller's source association. A complete control
 cannot become an exploit repeat because its observation ID was cited alongside
 a positive. HTTP 200 alone does not identify a successful exploit. Keep syntax
 errors separate from evidence of controlled evaluation.
+Partial product responses do not establish a full catalog. HTTP 200 does not prove
+SQL parsing/evaluation; equal empty bodies do not establish literal handling,
+default-deny behavior or SQLi absence. Keep these explanations hypothetical unless
+a discriminating observation supports them.
 
 For example, one complete UNION positive, two complete benign controls and one
 truncated UNION positive support counts of one complete positive and two controls.
@@ -1119,7 +1176,7 @@ tested:
 - **deferred_reason:** <required when outcome is deferred>
 - **sqli_level:** <1 | 2 | 3 | none>
 - **engine:** <mysql | postgres | mssql | oracle | sqlite | undetermined | n/a>
-- **technique(s) tried:** <e.g. 1b error-based, 2a boolean-based, 2b time-based, 2d OOB — list all tried, mark which produced the result>
+- **technique(s) tried:** <e.g. 1b syntax sensitivity, boolean-based, controlled error-based, bounded UNION-based, time-based, gated OOB — list only executed techniques, mark which produced the result>
 - **structured confirmation:** <for boolean SQLI-2: shared request template, distinct TRUE/FALSE predicates, and both paired observations from at least two repetitions>
 - **evidence:**
   - baseline: <status/size/timing/marker>
@@ -1128,7 +1185,7 @@ tested:
 - **injection_context:** <e.g. "appears to be inside a quoted string in a WHERE clause" | "unquoted numeric context" | unknown — inferred from behavior, not confirmed query text>
 - **order:** <first-order (reflected same request) | second-order-suspected — describe trigger path if second-order>
 - **phase_2d_used:** <yes/no> — if yes: <callback domain used, token, result>; if no because the capability wasn't available, note that explicitly here too
-- **phase_3_status:** <not attempted | authorized and run | authorization declined | not applicable — outcome not-confirmed>
+- **phase_3_status:** <not attempted — state unmet SQLI-2/authorization prerequisite | authorized and run | authorization declined | not needed — existing evidence sufficient>
 - **notes:** <anything else relevant — WAF behavior, session issues, ambiguous signals, "OOB unavailable (no OOB callback tool in this environment)" when applicable>
 ```
 

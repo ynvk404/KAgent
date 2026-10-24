@@ -5,6 +5,7 @@ Scripted calls verify guidance delivery and contracts, not model compliance.
 from copy import deepcopy
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -13,6 +14,42 @@ from src.workflow.state import WorkflowObjective, WorkflowState
 from tests.agent.test_workflow_request_preparation import SnapshotClient, block, setup
 from tests.helpers.agent_fakes import FakeSignal
 from tests.helpers.workflow import record_completed_phase
+
+
+@pytest.mark.parametrize('restored', [False, True])
+async def test_whole_target_sqli_closing_checkpoint_is_delivered(tmp_path, restored):
+    state = WorkflowState(objective=WorkflowObjective('bounded-survey', 'whole_target', 'https://fixture.test'))
+    assert state.objective is not None
+    state.objective.add_requested_goal('sqli')
+    recon = 'artifacts/recon/fixture-test/summary.md'
+    path = tmp_path / recon
+    path.parent.mkdir(parents=True)
+    path.write_text('Synthetic recon baseline', encoding='utf-8')
+    record_completed_phase(state, 'recon', objective_id='bounded-survey',
+                           target_origin='https://fixture.test', artifact_ref=recon)
+    if restored:
+        state = WorkflowState.from_dict(state.to_dict())
+    client = SnapshotClient([ChatResponse(Message('assistant', 'offline'), 'stop')])
+    agent = setup(tmp_path, client, state)
+    agent.active_skills = {'web-enumeration'}
+    before = deepcopy(state.to_dict())
+    # Supplied clues test advice delivery only. The fake model makes no decision
+    # and cannot prove that a model follows the initializer or robots reference.
+    visible = Message('tool', 'GET /docs/guessed.json -> 200 text/html; '
+                      '<script src="./init.js"></script>; robots: Disallow: /archive',
+                      name='http', tool_call_id='synthetic-clues')
+    req = ChatRequest(client.model(), [visible, Message('user', 'Finish this bounded pass; SQLi-only.')],
+                      tools=agent.tools.as_llm_tools())
+    await agent._chat_for_turn(req, FakeSignal(), lambda _: None)
+    advice = ' '.join(block(client.requests[-1], 'Workflow action guidance:').lower().split())
+    assert re.search(r'sqli-only.{0,150}(?:class|classes).{0,160}discovery', advice)
+    assert re.search(r'before.{0,60}(?:handoff|closing|inventory).{0,160}(?:clues|references)', advice)
+    for clue in ('initializer', 'robots', 'script', 'api base'):
+        assert clue in advice
+    assert re.search(r'follow.{0,180}omission.{0,100}limitation', advice)
+    assert re.search(r'html.{0,160}(?:not|never).{0,100}(?:absent|close)', advice)
+    assert 'partial inventory' in advice and 'unselected sources are not a backlog' in advice
+    assert state.to_dict() == before and not state.attack_surface_inputs
 
 
 @pytest.mark.parametrize("restored", [False, True])

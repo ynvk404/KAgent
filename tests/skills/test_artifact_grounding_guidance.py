@@ -84,6 +84,51 @@ async def test_sql_adjustments_start_at_first_signal_and_use_executed_shapes(ski
     assert re.search(r'(?:phase|recaptur).{0,170}(?:not|never).{0,65}reset', syntax)
     assert re.search(r'executed requests.{0,180}proposal.values', syntax)
     assert re.search(r'benign control.{0,120}predicate flip.{0,120}repetition.{0,160}(?:not|excluded)', syntax)
+    assert re.search(r'all techniques.{0,80}(?:share|same).{0,70}allowance', syntax)
+    assert re.search(r'benign control.{0,80}cannot exempt.{0,70}syntax.shape change', syntax)
+
+
+async def test_sql_control_capture_and_replay_reference_are_separate(skills):
+    text = await loaded(skills, 'sql-injection')
+    baseline = text.split('1a. establish a clean baseline', 1)[1].split('1b.', 1)[0]
+    assert re.search(r'baseline capture.{0,100}(?:not|different|distinct).{0,90}baseline_request_ref', baseline)
+    assert re.search(r'(?:not|never).{0,60}(?:invent|create|derive).{0,50}replay.{0,80}observation id', baseline)
+    assert re.search(r'(?:necessary|needed).{0,90}control.{0,160}(?:active|owned) attempt', baseline)
+    assert re.search(r'missing validation step.{0,200}(?:manifest|retriev)', baseline)
+
+
+async def test_sql_write_checkpoint_reconciles_allowance_labels_and_status_layers(skills):
+    text = await loaded(skills, 'sql-injection')
+    checkpoint = text.split('before writing proof and calling', 1)[1].split('standard result entry template', 1)[0]
+    assert re.search(r'(?:allowance|adjustment).{0,160}(?:used|remaining).{0,160}exhausted', checkpoint)
+    assert re.search(r'intended.{0,100}(?:not|never).{0,100}(?:control|positive)', checkpoint)
+    for layer in ('candidate status', 'validationresult outcome', 'goal status', 'finding eligibility'):
+        assert layer in checkpoint
+    assert re.search(r'phase 3.{0,200}sqli-2.{0,140}(?:not-confirmed|insufficient-evidence)', checkpoint)
+    assert re.search(r'partial.{0,80}(?:catalog|product).{0,90}(?:not|never).{0,60}full catalog', text)
+
+
+@pytest.mark.parametrize('action', ['start_validation', 'resume_owned', 'finalize_owned'])
+def test_sql_continuation_delivers_planning_or_local_closure(action):
+    owned = action != 'start_validation'
+    handoff = {'next_action': action, 'candidate_id': 'can_fixture',
+               'attempt_id': 'attempt_fixture' if owned else None,
+               'attempt_status': 'active' if owned else None, 'owned_active': owned,
+               'probing_stopped': action == 'finalize_owned',
+               'recovery': {'status': 'none', 'rejections': 0, 'rejection_limit': 2,
+                            'repair_turns': 0, 'repair_turn_limit': 3}}
+    text = render_validation_guidance(handoff, ValidationRoute('expert', 'sql-injection'), frozenset()).lower()
+    if action == 'finalize_owned':
+        assert 'local finalization' in text and 'probing has stopped' in text
+        assert re.search(r'(?:used|remaining).{0,100}(?:allowance|adjustment)', text)
+        assert 'candidate status' in text and 'validationresult outcome' in text
+        assert 'capture a necessary' not in text
+    else:
+        assert re.search(r'(?:select|choose).{0,140}technique.{0,170}oracle', text)
+        assert re.search(r'control.{0,160}(?:active|owned) attempt', text)
+        assert re.search(r'full query.{0,100}(?:not required|unnecessary)', text)
+        assert re.search(r'(?:falsif|discriminating)', text)
+        assert re.search(r'boolean[^.\n]*confirmation[^.\n]*(?:only|conditional)', text)
 
 
 @pytest.mark.parametrize('completed', [frozenset({'recon'}), frozenset({'recon', 'enumeration'})])
