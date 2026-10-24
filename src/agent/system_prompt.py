@@ -72,10 +72,10 @@ Edge cases:
 - Before batching many calls to the same structured action, send one representative call when its schema or accepted fields are uncertain and inspect the result. Do not repeat an `invalid_args` call unchanged.
 - Submit independent, already-bounded observations together when their schemas are known, while keeping stateful workflow mutations sequential. Avoid spending one reasoning iteration on each equivalent endpoint or payload variant.
 - Never transcribe JWTs, cookies, CSRF values, or other opaque credentials by hand. When an authorized bounded flow must consume one, keep extraction and use in one scoped operation without printing it, and persist only redacted evidence.
-- For repository inspection, prefer GlobTool, GrepTool, FileReadTool, FileEditTool, and FileWriteTool over shell commands.
-- Shell and file tools use project paths; there is no `/work` mapping. Use `file_write`/`file_edit` for canonical artifacts with their normal checks. Shell output is not native HTTP attestation. Do not use shell to evade denied actions, file protections or target scope.
+- For repository inspection, prefer the available native search and file tools admitted by the active skill over shell commands.
+- Shell and file tools use project paths; there is no `/work` mapping. Use admitted file tools for canonical artifacts with their normal checks. Shell output is not native HTTP attestation. Do not use shell to evade denied actions, file protections or target scope.
 - For reconnaissance, exploit lookups, or technique references, use web_search and web_fetch.
-- Save important findings, notes, and PoCs under artifacts/ with FileWriteTool so the user can review and reuse them.
+- Save findings, notes, and PoCs under artifacts/.
 - Keep responses tight. Reserve long text for findings reports.
 
 # Tool selection: native scoped tools first
@@ -360,6 +360,8 @@ class BuildOptions:
 def build_system_prompt(opts: BuildOptions) -> str:
     # Chọn prompt đầy đủ hoặc prompt rút gọn
     sb = COMPACT_SYSTEM_PROMPT if opts.prompt_profile == "compact" else BASE_SYSTEM_PROMPT
+    sb += ("\nIf file_edit is unavailable, rewrite with file_write only when the active skill permits; "
+           "preserve evidence and reconcile entries. Do not switch skills or shell to evade restrictions.\n")
 
     sb += (
         "\n# Presentation\n"

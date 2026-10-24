@@ -144,7 +144,8 @@ class ReadHTTPObservation:
 
     def schema(self) -> dict[str, Any]:
         return {"type": "object", "properties": {
-            "observation_id": {"type": "string"},
+            "observation_id": {"type": "string", "pattern": "^obs_[0-9a-f]{32}$",
+                               "description": "Candidate/Attempt-owned obs_ observation ID; not a Burp retrieval ID, baseline, ds_ discovery source or tr_ stored result."},
             "start_char": {"type": "integer", "minimum": 0},
             "max_chars": {"type": "integer", "minimum": 1, "maximum": MAX_READ_CHARS},
         }, "required": ["observation_id", "start_char", "max_chars"], "additionalProperties": False}
@@ -291,6 +292,7 @@ class ReadDiscoverySource(ReadHTTPObservation):
 
     def description(self) -> str:
         return ("Read one bounded retained HTTP discovery-body range using an exact current Whole-target ds_ source ID. "
+                'Copy discovery_source_id from workflow(action="list", view="sources"); never replace an obs_ prefix with ds_. '
                 "get_source returns metadata, not content; read_http_observation requires Candidate/Attempt ownership. "
                 "Requires current scope, source integrity, HTTP skill capability and fresh range permission. No HTTP is sent. "
                 "Selection is unnecessary and grants no rights. Reading grants no ownership, replay authority, coverage or terminal evidence. "
@@ -314,7 +316,9 @@ class ReadDiscoverySource(ReadHTTPObservation):
                 or not re.fullmatch(r"ds_[0-9a-f]{64}", args["discovery_source_id"])
                 or type(args["start_char"]) is not int or args["start_char"] < 0
                 or type(args["max_chars"]) is not int or not 1 <= args["max_chars"] <= MAX_READ_CHARS):
-            raise ValueError("use an exact ds_ source ID and bounded integer character offsets")
+            raise ValueError('use an exact ds_ source ID and bounded integer character offsets; '
+                             'copy the ID from workflow(action="list", view="sources"), '
+                             'never convert an obs_ ID to ds_')
 
     def observation_id(self, args: dict[str, Any]) -> str:
         ref = self.agent.workflow.discovery_sources[args["discovery_source_id"]].retained_ref

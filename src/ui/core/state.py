@@ -31,6 +31,7 @@ else:
     BannerData = Any
 
 from src.tools.common.tool_display import display_tool_name
+from src.tools.common.outcome import RecoveryReceipt
 from src.ui.core.admission import PendingCall, call_metadata, invocation_call, result_issues, issue_category, http_activity
 from src.ui.core.outcomes import OutcomeFacts, ProgressRecord, concise_text
 from src.ui.render.sanitize import sanitize_text
@@ -77,6 +78,13 @@ class PresentedIssue:
     category: str = "failure"
     recovery_identity: str = ""
     presentation_label: str = ""
+    error_kind: str = ""
+    failed_invocation: str = ""
+    failure_order: int = 0
+    retryable: bool = False
+    ambiguous: bool = False
+    recovered_by: str = ""
+    resource: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +122,8 @@ class AppState:
     phase: UiPhase = "idle"
     running_tool: str | None = None
     presentation_scope: str = ""
+    operation_sequence: int = 0
+    recovery_limited: bool = False
     issues: tuple[PresentedIssue, ...] = field(default=(), repr=False)
     milestones: tuple[str, ...] = field(default=(), repr=False)
     delivered_results: tuple[str, ...] = field(default=(), repr=False)
@@ -295,6 +305,7 @@ def reducer(state: AppState, action: Action) -> AppState:
         case SetBusy(busy=busy, facts=facts):
             if busy and not state.busy:
                 state = replace(state, issues=(), milestones=(), delivered_results=(), call_history=_retire_calls(state), outcome_written=False,
+                                recovery_limited=False,
                                 turn_number=state.turn_number + 1,
                                 deferred_outcome=None, deferred_facts=None,
                                 baseline=replace(facts, records=tuple(row for row in facts.records if row.kind != "capture")) if facts else None,
@@ -342,7 +353,7 @@ def reducer(state: AppState, action: Action) -> AppState:
                 stream_chunks=(),
                 call_history=_retire_calls(state),
                 issues=(), milestones=(), delivered_results=(), outcome_written=False,
-                presentation_scope="", deferred_outcome=None, deferred_facts=None,
+                presentation_scope="", deferred_outcome=None, deferred_facts=None, recovery_limited=False,
                 baseline=None, latest_facts=None, progress_rows=(), observed=(),
                 activated_skills=(), skill_receipts=(), running_skill=None, running_tool=None, planner_recommendation=None,
                 clear_message=sanitize_text(message) if message is not None else None,
@@ -386,14 +397,14 @@ def reducer(state: AppState, action: Action) -> AppState:
                             return replace(state, call_history=tuple(
                                 replace(call, retired=True) if call is known else call for call in state.call_history))
                     return state
-                return replace(state, presentation_scope=facts.scope, call_history=_retire_calls(state),
+                return replace(state, presentation_scope=facts.scope, call_history=_retire_calls(state), recovery_limited=False,
                                issues=(), milestones=(), delivered_results=(), outcome_written=False,
                                deferred_outcome=None, deferred_facts=None, baseline=None, latest_facts=facts,
                                progress_rows=(), observed=(), activated_skills=(), skill_receipts=(), planner_recommendation=None,
                                running_tool=None, running_skill=None, active_skill=None,
                                phase=_phase_with_pending_request(state, "answering" if state.busy else "idle"))
             if facts and facts.scope != state.presentation_scope:
-                state = replace(state, presentation_scope=facts.scope, issues=(), milestones=(),
+                state = replace(state, presentation_scope=facts.scope, issues=(), milestones=(), recovery_limited=False,
                                 delivered_results=(), outcome_written=False, deferred_outcome=None, deferred_facts=None,
                                 baseline=replace(facts, records=tuple(row for row in facts.records if row.kind != "capture")),
                                 latest_facts=facts, progress_rows=(), observed=(), call_history=_retire_calls(state),
@@ -407,40 +418,102 @@ def reducer(state: AppState, action: Action) -> AppState:
             raise AssertionError(f"Unhandled action: {action!r}")
 
 
+def _repairable(event: ToolResultEvent, call: PendingCall | None) -> bool:
+    # No inference of authority, effects or persistence from a later success.
+    if call is None or call.invocation is None or event.status != 'error':
+        return False
+    if event.error_kind == "network":
+        receipt = event.recovery_receipt
+        return bool(call.name == "http" and isinstance(receipt, RecoveryReceipt)
+                    and receipt.retry_safe and not receipt.completed and receipt.resource)
+    if call.name != "workflow" or call.operation not in {
+            "record_candidate", "start_validation", "record_evidence", "record_result"}:
+        return False
+    if event.error_kind == "invalid_args":
+        return True
+    if event.error_kind == "workflow_state":
+        try:
+            payload = json.loads(event.result.partition('\n')[2])
+            code = payload['error']['code']
+        except (ValueError, TypeError, KeyError):
+            return False
+        return code in {"DUPLICATE_REQUEST_ASSOCIATION", "MISSING_EVIDENCE_FILE"}
+    return False
+
+
 def _present_issue(state: AppState, operation: str, text: str, *, category: str = "failure",
                    root: str | None = None, recovery_identity: str = "",
-                   presentation_label: str = "") -> AppState:
-    key = hashlib.sha256((operation + "\n" + category + "\n" + (root or text)).encode()).hexdigest()
+                   presentation_label: str = "", call: PendingCall | None = None,
+                   event: ToolResultEvent | None = None) -> AppState:
+    error_kind = event.error_kind or "" if event else ""
+    key = hashlib.sha256((operation + "\n" + recovery_identity + "\n" + category + "\n"
+                          + error_kind + "\n" + (root or text)).encode()).hexdigest()
     kind: TranscriptKind = ("system" if category == "diagnostic" else "warning"
                             if category in {"incomplete", "denial", "cancelled", "export", "pending"} else "error")
     previous = next((issue for issue in state.issues if issue.key == key), None)
+    invocation = call.invocation.id if call and call.invocation else ""
+    receipt = event.recovery_receipt if event and isinstance(event.recovery_receipt, RecoveryReceipt) else None
+    metadata: dict[str, Any] = dict(error_kind=error_kind, failed_invocation=invocation,
+                    failure_order=state.operation_sequence,
+                    retryable=bool(category in {"failure", "network"} and event and _repairable(event, call)), recovered_by="",
+                    resource=receipt.resource if receipt else call.resource if call else "")
     if previous:
-        updated = replace(previous, count=previous.count + 1, recovered=False, recovery_identity=recovery_identity)
+        ambiguous = (not previous.recovered and (previous.ambiguous or not call
+                     or not call.retry_of or call.retry_of != previous.failed_invocation))
+        updated = replace(previous, count=previous.count + 1, recovered=False,
+                          recovery_identity=recovery_identity, ambiguous=ambiguous, **metadata)
         transcript = list(state.transcript)
         transcript[previous.index] = TranscriptEntry(kind=kind, text=f"{text} (repeated {updated.count} times)")
         return replace(state, issues=tuple(updated if item is previous else item for item in state.issues),
                        transcript=tuple(transcript), transcript_revision=state.transcript_revision + 1)
     issue = PresentedIssue(key, operation, len(state.transcript), text, category=category,
-                           recovery_identity=recovery_identity, presentation_label=presentation_label)
-    return replace(state, issues=(*state.issues[-255:], issue),
+                           recovery_identity=recovery_identity, presentation_label=presentation_label, **metadata)
+    limited = state.recovery_limited or (len(state.issues) >= 256 and not state.issues[0].recovered)
+    return replace(state, issues=(*state.issues[-255:], issue), recovery_limited=limited,
                    transcript=(*state.transcript, TranscriptEntry(kind=kind, text=text)))
 
 
-def _recover_issues(state: AppState, operation: str, recovery_identity: str, presentation_label: str = "") -> AppState:
+def _retry_call(state: AppState, call: PendingCall) -> PendingCall:
+    if state.recovery_limited or call.invocation is None:
+        return call
+    operation = call.name + ":" + call.identity
+    matching = [issue for issue in state.issues if not issue.recovered
+                and issue.operation == operation and issue.recovery_identity == call.recovery_identity]
+    # A live sibling is a competing operation, never implicit retry authority.
+    siblings = any(item.identity == call.identity and item.name == call.name
+                   and item.recovery_identity == call.recovery_identity for item in state.pending_calls)
+    if (len(matching) == 1 and not siblings and matching[0].retryable and not matching[0].ambiguous
+            and matching[0].failure_order < call.dispatch_order):
+        return replace(call, retry_of=matching[0].failed_invocation)
+    return call
+
+
+def _recover_issues(state: AppState, call: PendingCall, event: ToolResultEvent,
+                    presentation_label: str = "") -> AppState:
+    if state.recovery_limited or not call.retry_of or call.invocation is None:
+        return state
+    matching = [issue for issue in state.issues if not issue.recovered
+                and issue.operation == call.name + ":" + call.identity
+                and issue.recovery_identity == call.recovery_identity]
+    if len(matching) != 1:
+        return state
+    issue = matching[0]
+    if (not issue.retryable or issue.ambiguous or issue.failed_invocation != call.retry_of
+            or issue.failure_order >= call.dispatch_order):
+        return state
+    if issue.category == "network":
+        receipt = event.recovery_receipt
+        if not isinstance(receipt, RecoveryReceipt) or not receipt.completed or receipt.resource != issue.resource:
+            return state
+    elif issue.resource != call.resource:
+        return state
     transcript = list(state.transcript)
-    issues = list(state.issues)
-    changed = False
-    for i, issue in enumerate(issues):
-        if (issue.operation == operation and not issue.recovered
-                and issue.category in {"failure", "denial", "export", "network", "pending"}
-                and (issue.recovery_identity == recovery_identity or issue.category == "network")):
-            issues[i] = replace(issue, recovered=True)
-            transcript[issue.index] = TranscriptEntry(kind="info", text=
-                presentation_label or issue.presentation_label or issue.operation.partition(":")[0], details=(
-                    f"Recovered after {issue.count} failed attempt{'s' if issue.count != 1 else ''}",))
-            changed = True
-    return replace(state, issues=tuple(issues), transcript=tuple(transcript),
-                   transcript_revision=state.transcript_revision + 1) if changed else state
+    transcript[issue.index] = TranscriptEntry(kind="info", text=
+        presentation_label or issue.presentation_label or issue.operation.partition(":")[0], details=(
+            f"Recovered after {issue.count} failed attempt{'s' if issue.count != 1 else ''}", issue.text))
+    updated = replace(issue, recovered=True, recovered_by=call.invocation.id)
+    return replace(state, issues=tuple(updated if item is issue else item for item in state.issues),
+                   transcript=tuple(transcript), transcript_revision=state.transcript_revision + 1)
 
 
 def _finish_stream(state: AppState, text: str | None = None) -> AppState:
@@ -561,6 +634,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
             return reducer(state, AppendDelta(text=text))
 
         case ToolCallEvent():
+            state = replace(state, operation_sequence=state.operation_sequence + 1)
             call = call_metadata(ev)
             if facts and facts.activity:
                 call = replace(call, activity=facts.activity)
@@ -568,7 +642,12 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                            candidate_id=(facts.operation_candidate_id if facts and facts.operation_candidate_id else call.candidate_id),
                            identity=(facts.operation_owner if facts and facts.operation_owner else call.identity),
                            skill=(facts.activity_skill if facts and facts.activity_skill else call.skill),
-                           recovery_identity=(facts.operation_owner if facts and facts.operation_owner else call.recovery_identity))
+                           recovery_identity=(facts.operation_intent if facts and facts.operation_intent else call.recovery_identity),
+                           resource=(facts.operation_intent if facts and facts.operation_intent else call.recovery_identity),
+                           dispatch_order=state.operation_sequence)
+            call = _retry_call(state, call)
+            if len(state.pending_calls) >= 256:
+                state = replace(state, recovery_limited=True)
             if call.operation == "start_validation":
                 state = _flush_progress(state)
             elif call.name == "http":
@@ -582,6 +661,7 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                             if (facts and facts.activity) or call.activity else "")))
 
         case ToolResultEvent():
+            state = replace(state, operation_sequence=state.operation_sequence + 1)
             call = invocation_call(state.call_history, ev)
             if call is not None:
                 state = replace(state, call_history=tuple(
@@ -617,8 +697,8 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                         presentation_label = http_activity(ev, call, context)
                     state = _present_issue(state, operation, presentation_label + ": " + "; ".join(notices),
                                            category=category, recovery_identity=recovery_identity,
-                                           presentation_label=presentation_label)
-            completed = bool(call and ev.status in {"success", "observation"} and not ev.err
+                                           presentation_label=presentation_label, call=call, event=ev)
+            completed = bool(call and ev.status in {"success", "observation"} and not ev.err and not ev.error_kind
                              and all(issue_category(issue, ev) in {"diagnostic", "incomplete"} for issue in issues))
             if completed and ev.name == "workflow":
                 try:
@@ -626,10 +706,10 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
                 except (ValueError, TypeError):
                     receipt = None
                 completed = isinstance(receipt, dict) and receipt.get("ok") is True
-                if completed and call and call.operation in {"record_candidate", "record_result", "start_validation"}:
+                if completed and call and call.operation in {"record_candidate", "record_result", "start_validation", "record_evidence"}:
                     completed = bool(facts and facts.accepted_call)
-            if completed:
-                state = _recover_issues(state, operation, recovery_identity,
+            if completed and call:
+                state = _recover_issues(state, call, ev,
                                         http_activity(ev, call, context) if ev.name == "http" else "")
                 if call and call.name == "load_skill":
                     state = replace(state, skill_receipts=(*state.skill_receipts, (call.invocation.id if call.invocation else call.id, call.skill)))
@@ -752,6 +832,9 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
         "invalid_response": "Invalid response",
     }.get(reason or "", f"Turn ended ({reason})" if reason else "Turn ended (runtime outcome unavailable)")
     pending = list(facts.pending if facts else ())
+    # Operation history cannot add work to the authoritative workflow. A
+    # corrected call may change identity and therefore remain unmatched here.
+    workflow_residual = bool(pending or (facts and (facts.incomplete or facts.goals or facts.blockers)))
     state = _flush_progress(state)
     outstanding = [issue for issue in state.issues if not issue.recovered
                    and issue.category in {"failure", "denial", "network"}]
@@ -766,7 +849,11 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
     unresolved = sum(not issue.recovered and issue.category in {"failure", "denial", "network"} for issue in state.issues)
     exports = sum(not issue.recovered and issue.category == "export" for issue in state.issues)
     if unresolved:
-        pending.append(_quantity(unresolved, "unresolved operation issue"))
+        if reason in {"workflow_completed", "final_response"} and facts and not workflow_residual:
+            pending.append(_quantity(unresolved, "operation error without a matched retry",
+                                     "operation errors without matched retries"))
+        else:
+            pending.append(_quantity(unresolved, "unresolved operation issue"))
     permission_pending = sum(not issue.recovered and issue.category == 'pending' for issue in state.issues)
     if permission_pending:
         pending.append(_quantity(permission_pending, 'unresolved permission outcome'))
@@ -774,7 +861,10 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
         pending.append("permission review pending")
     if exports:
         pending.append(_quantity(exports, "optional export failure"))
-    residual = bool(pending or (facts and (facts.incomplete or facts.goals or facts.blockers)))
+    residual = workflow_residual or bool(unresolved or permission_pending or state.pending_perm is not None or exports
+                                              or state.recovery_limited)
+    if state.recovery_limited:
+        pending.append("local operation history limit reached; retry correlation unavailable")
     saved = unsaved = 0
     if facts and facts.scope:
         saved, unsaved = len(_new_records(state, "finding")), len(_new_records(state, "unsaved"))
@@ -783,6 +873,7 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
         pending[0:0] = ([_quantity(saved, "finding saved", "findings saved")] if saved else []) + [
             _quantity(count, noun) for count, noun in counts if count]
         residual = residual or bool(unsaved)
+        workflow_residual = workflow_residual or bool(unsaved)
         negative = sum(row.disposition == "not-confirmed" for row in _new_records(state, "validation"))
         if negative:
             pending.insert(0, f"{_quantity(negative, 'validation')} not confirmed")
@@ -797,9 +888,9 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
     if operations:
         for row in operations:
             operation_counts[row.label] = operation_counts.get(row.label, 0) + 1
-    if reason == "workflow_completed" and (residual or not facts or not facts.completion_supported):
-        label = "Turn ended · workflow work remains" if residual else "Turn ended · workflow completion unavailable"
-    elif reason == "final_response" and residual:
+    if reason == "workflow_completed" and (workflow_residual or not facts or not facts.completion_supported):
+        label = "Turn ended · workflow work remains" if workflow_residual else "Turn ended · workflow completion unavailable"
+    elif reason == "final_response" and workflow_residual:
         label = "Turn ended · work remains"
     summary = sanitize_text(label + suffix + ".")
     details = TurnDetails(state.turn_number, reason, summary, saved, unsaved,

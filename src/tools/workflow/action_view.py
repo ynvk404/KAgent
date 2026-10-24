@@ -5,7 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from .workflow_tool import ACTIONS, ACTION_INPUTS, ACTION_REQUIRED
+from .workflow_tool import ACTIONS, describe_action_contract
 
 
 WHOLE_TARGET_ACTIONS = frozenset({
@@ -36,10 +36,5 @@ class ActionView:
             schema = function["parameters"] if isinstance(function, dict) else function.parameters
             properties = schema["properties"]
             properties["action"]["enum"] = list(self.available)
-            properties["action"]["description"] = (
-                "Action fields (* required); omit others.\n" + "\n".join(
-                    action + "(" + ",".join(
-                        key + ("*" if key in ACTION_REQUIRED.get(action, ()) else "")
-                        for key in ACTION_INPUTS[action] if key in properties) + ")"
-                    for action in self.available))
+            describe_action_contract(properties, self.available)
         return projected

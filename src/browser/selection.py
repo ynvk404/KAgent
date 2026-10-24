@@ -32,7 +32,11 @@ and request recapture. Follow the user's analysis/testing intent. Selection alon
 does not choose an input, create a Candidate, authorize HTTP, or request batch tests.
 Use the existing Workflow and validators after resolving the relevant inputs.
 For direct validation or same-input enrichment of a matching endpoint/method,
-carry its exact source_ref and baseline_request_ref when recording a Candidate.
+copy the selected metadata id (also source_ref) into record_candidate.source_ref,
+and copy baseline_request_ref exactly. runtime_observation_id (obs_...) is a separate
+observation/evidence reference, never the selected retrieval ID or replay baseline.
+Optional references may be omitted only when a unique selected request matches;
+Whole-target input_id/source ownership still applies.
 A different endpoint is independent discovery, not enrichment of this capture:
 do not borrow these references, rebind the capture, change selection, or broaden scope.
 Report the new input and obtain appropriate operator intent/scope for independent
@@ -46,6 +50,14 @@ identify unevaluated requests and never claim completion after budget/error stop
 This selection lasts only this turn. Durable follow-up context comes from actual
 tool history, Candidate, Evidence and Finding records, not this transient snapshot.
 """
+
+
+class SelectedCaptureArgumentError(ValueError):
+    error_kind = "invalid_args"
+
+    def __init__(self, field: str, message: str, *, code: str = "SELECTED_REFERENCE_MISMATCH"):
+        self.field, self.code = field, code
+        super().__init__(f"{field}: {message}")
 
 
 @dataclass(frozen=True)
@@ -71,7 +83,7 @@ class SelectedCapture:
                    view["url"][:1024], CaptureStore._request_signature(row))
 
     def metadata(self) -> dict[str, str | None]:
-        return {"id": self.retrieval_id, "baseline_request_ref": self.baseline_request_ref,
+        return {"id": self.retrieval_id, "source_ref": self.retrieval_id, "baseline_request_ref": self.baseline_request_ref,
                 "method": self.method, "url": self.endpoint, "source": "burp"}
 
 

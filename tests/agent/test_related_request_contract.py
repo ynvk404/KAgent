@@ -125,8 +125,8 @@ async def test_schema_examples_and_error_text_survive_supported_provider_encodin
     tool = agent.tools.get("workflow")
     assert tool is not None
     local = tool.schema()
-    primary = json.loads(local["properties"]["candidate_id"]["description"].partition("Example: ")[2])
-    supplementary = json.loads(local["properties"]["related_requests"]["description"].partition("readback: ")[2])
+    primary = json.JSONDecoder().raw_decode(local["properties"]["candidate_id"]["description"].partition("Example: ")[2])[0]
+    supplementary = json.JSONDecoder().raw_decode(local["properties"]["related_requests"]["description"].partition("readback: ")[2])[0]
     assert primary == {"action": "start_validation", "candidate_id": "<returned candidate.id>"}
     assert supplementary["related_requests"] == [{"role": "readback", "method": "GET", "url": "/comments/123"}]
     related = local["properties"]["related_requests"]
@@ -136,6 +136,8 @@ async def test_schema_examples_and_error_text_survive_supported_provider_encodin
         assert not {"oneOf", "anyOf", "allOf", "if", "then", "else", "uniqueItems"} & field.keys()
     specs = ActionView.for_objective("direct").project_tools(agent.tools.as_llm_tools())
     original = deepcopy(specs)
+    assert original is not None
+    projected_schema = next(spec["function"]["parameters"] for spec in original if spec["function"]["name"] == "workflow")
     tc = ToolCall("duplicate", FunctionCall("workflow", json.dumps(duplicate_args(cid))))
     messages = [Message("user", "Continue"), Message("assistant", "", tool_calls=[tc]),
         Message("tool", str(output), tool_call_id=tc.id, name="workflow", tool_status="error", tool_error_kind="workflow_state")]
@@ -150,8 +152,8 @@ async def test_schema_examples_and_error_text_survive_supported_provider_encodin
         encoded = gemini.encode_request(request)
         schema = encoded["tools"][0]["functionDeclarations"][0]["parameters"]
     assert specs == original
-    assert schema["properties"]["candidate_id"]["description"] == local["properties"]["candidate_id"]["description"]
-    assert schema["properties"]["related_requests"]["description"] == related["description"]
+    assert schema["properties"]["candidate_id"]["description"] == projected_schema["properties"]["candidate_id"]["description"]
+    assert schema["properties"]["related_requests"]["description"] == projected_schema["properties"]["related_requests"]["description"]
     body = json.dumps(encoded)
     error = json.loads(output.partition("\n")[2])["error"]
     assert error["code"] in body and json.dumps(error["repair_hint"])[1:-1] in body

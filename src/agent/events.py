@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
 from src.tools.common.runtime_metadata import RuntimeMetadata
+from src.tools.common.outcome import RecoveryReceipt
 
 
 @dataclass(slots=True)
@@ -70,6 +71,7 @@ class ToolResultEvent(BaseEvent):
     # Controller admission of a real candidate-creation receipt, never tool args.
     accepted_candidate_id: str | None = None
     runtime_metadata: RuntimeMetadata | None = None
+    recovery_receipt: RecoveryReceipt | None = None
 
     @property
     def durationMs(self) -> float:

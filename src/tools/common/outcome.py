@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal, TYPE_CHECKING
+from dataclasses import dataclass
 
 from src.tools.common.runtime_metadata import RuntimeMetadata
 
@@ -18,9 +19,18 @@ ErrorKind = Literal[
 ]
 
 
+@dataclass(frozen=True, slots=True)
+class RecoveryReceipt:
+    """Native transient presentation evidence; never model input or session state."""
+    resource: str
+    completed: bool = False
+    retry_safe: bool = False
+
+
 class ToolOutput(str):
     """A string result with metadata; existing consumers still see text."""
 
+    recovery_receipt: RecoveryReceipt | None
     runtime_metadata: RuntimeMetadata | None
     status: ToolStatus
     error_kind: ErrorKind | None
@@ -44,6 +54,7 @@ class ToolOutput(str):
         runtime_metadata: RuntimeMetadata | None = None,
     ) -> "ToolOutput":
         value = super().__new__(cls, text)
+        value.recovery_receipt = None
         value.runtime_metadata = runtime_metadata
         value.status = status
         value.error_kind = error_kind

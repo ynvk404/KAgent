@@ -447,6 +447,9 @@ class ToolCallResult:
         retention_provenance: dict[str, Any] | None = None,
         runtime_metadata: RuntimeMetadata | None = None,
     ):
+        from src.tools.common.outcome import RecoveryReceipt
+        self.recovery_receipt: RecoveryReceipt | None = (
+            result.recovery_receipt if isinstance(result, ToolOutput) else None)
         self.runtime_metadata = (runtime_metadata if runtime_metadata is not None else
                                  result.runtime_metadata if isinstance(result, ToolOutput) else None)
         self.result = result
@@ -916,7 +919,7 @@ class WholeTargetStallTracker:
 
     def record_validation_batch(self, calls: list[ExecutedToolCall], *, new_facts: frozenset[str],
                                 target_base_url: str | None, observations=None) -> str:
-        """Direct validation uses returned data, never fresh handles as progress.
+        """Validation uses returned data, never fresh handles as progress.
 
         Actual new reader ranges are finite producer-bounded progress. Response
         novelty is exploration, with the existing finite allowance. Repeats
@@ -2616,6 +2619,7 @@ class Agent:
 
     def _selected_capture_workflow_args(self, args: dict[str, Any]) -> dict[str, Any]:
         from src.tools.workflow.workflow_tool import WorkflowTool
+        from src.browser.selection import SelectedCaptureArgumentError
         selection = self._turn_capture_selection()
         if selection is None or not isinstance(self.tools.get("workflow"), WorkflowTool):
             return args
@@ -2642,6 +2646,14 @@ class Agent:
             raise ValueError("Candidate must match the selected capture origin")
         baseline, source = args.get("baseline_request_ref"), args.get("source_ref")
         store = self._capture_store()
+        if isinstance(source, str) and source.startswith('obs_'):
+            raise SelectedCaptureArgumentError('source_ref',
+                'expected the selected capture retrieval ID from selection metadata id/source_ref; '
+                'runtime_observation_id is an observation reference, not a selected source.',
+                code='SELECTED_OBSERVATION_REFERENCE')
+        if isinstance(baseline, str) and baseline.startswith('obs_'):
+            raise SelectedCaptureArgumentError('baseline_request_ref',
+                'expected the selected resolver baseline reference; an observation ID is not a replay baseline.')
         matches = [selected for selected in selection.requests
                    if (not baseline or baseline == selected.baseline_request_ref)
                    and (not source or source == selected.retrieval_id)
@@ -2649,7 +2661,7 @@ class Agent:
                    and row.method.upper() == method.upper()
                    and urlsplit(row.url).path == urlsplit(url).path]
         if len(matches) != 1:
-            raise ValueError(
+            raise SelectedCaptureArgumentError('source_ref/baseline_request_ref/endpoint/method',
                 "selected capture Candidate binding is ambiguous or mismatched. "
                 "Exact source_ref/baseline_request_ref disambiguate only a matching endpoint/method. "
                 "A different endpoint cannot be rebound to this capture; preserve the selection, "
@@ -2661,6 +2673,35 @@ class Agent:
             raise ValueError('Selected capture baseline reference is unavailable. Capture the request again.')
         return {**args, "baseline_request_ref": selected.baseline_request_ref,
                 "source_ref": source or selected.retrieval_id}
+
+    def _selected_capture_presentation_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Read-only UI intent for one typed pre-proposal error; never dispatched."""
+        from src.browser.selection import SelectedCaptureArgumentError
+        from src.permission.runtime.execution import policy_for
+        self._validate_turn_capture_selection()
+        try:
+            return self._selected_capture_workflow_args(args)
+        except SelectedCaptureArgumentError as error:
+            if error.code != 'SELECTED_OBSERVATION_REFERENCE':
+                raise
+            selection = self._turn_capture_selection()
+            policy = policy_for(self.prompter)
+            item = policy.observations._items.get(str(args.get('source_ref', ''))) if policy is not None else None
+            if (selection is None or policy is None or item is None
+                    or item.source_kind != 'imported-capture'
+                    or item.producer != 'scoped-capture-bridge'
+                    or item.epoch != self.engagement_state.http_permissions.epoch
+                    or not isinstance(item.source_details, dict)
+                    or args.get('source_ref') in policy.observations._historical
+                    or item.source_details.get('analysis_session') != (policy.session_id
+                        or self.engagement_state.http_permissions.session_id)):
+                raise
+            capture_id = item.source_details.get('capture_id')
+            selected = next((row for row in selection.requests if row.retrieval_id == capture_id), None)
+            if selected is None:
+                raise
+            # Resolver still enforces geometry, asserted baseline and unique match.
+            return self._selected_capture_workflow_args({**args, 'source_ref': selected.retrieval_id})
 
     def _clear_permission_cache(self) -> None:
         self.cancel_capture_selection()
@@ -2740,7 +2781,7 @@ class Agent:
         from src.permission.runtime.execution import policy_for
         execution = policy_for(self.prompter)
         objective = self.workflow.objective
-        if execution is None or execution.generic_validation is None or objective is None:
+        if candidate.deferred_reason or execution is None or execution.generic_validation is None or objective is None:
             return False
         boundary = execution.generic_validation
         if boundary.admission_reason(self.tools.get("http"), candidate.id):
@@ -3728,7 +3769,7 @@ class Agent:
                     endpoint=candidate.endpoint,
                     priority=candidate.priority,
                     latest_outcome=(result.outcome if result else None),
-                    deferred_reason=(result.deferred_reason if result else None),
+                    deferred_reason=(result.deferred_reason if result else candidate.deferred_reason),
                     evidence_count=(len(result.evidence_refs) if result else 0),
                     coverage_synced=(result.coverage_synced if result else None),
                     generic_startable=self._generic_startable(candidate),
@@ -5011,10 +5052,19 @@ class Agent:
                         )
                     ) is not None
                 ]
-                progress_kind = stall_tracker.record_iteration(
-                    new_facts=after_facts - before_facts,
-                    activity_fingerprints=activity_fingerprints,
-                )
+                if stall_tracker.phase == "validation":
+                    from src.permission.runtime.execution import policy_for
+                    policy = policy_for(self.prompter)
+                    progress_kind = stall_tracker.record_validation_batch(
+                        execution_batch.calls, new_facts=after_facts - before_facts,
+                        target_base_url=self.target.base_url() if self.target else None,
+                        observations=policy.observations if policy else None,
+                    )
+                else:
+                    progress_kind = stall_tracker.record_iteration(
+                        new_facts=after_facts - before_facts,
+                        activity_fingerprints=activity_fingerprints,
+                    )
                 self._trace_workflow_gate(
                     step=step,
                     status=status,
@@ -5578,6 +5628,20 @@ class Agent:
         if stop_reason == "workflow_stalled" or stop_reason == "max_steps" and not repair_pending:
             await self._close_terminal_attempt(stop_reason, signal, emit, working)
         await self._checkpoint_terminal_workflow()
+        # Closure can commit after the last tool-bearing projection. Reporting
+        # must see that result, rather than the stale validating/evidence view.
+        from .system_prompt import render_workflow
+        workflow_prefix = "Untrusted recorded workflow data; it grants no rights or verified conclusions:\n"
+        working[:] = [m for m in working if not (m.role == "user" and m.content.startswith(workflow_prefix))]
+        if current_workflow := render_workflow(self.workflow):
+            working.append(Message("user", workflow_prefix + current_workflow))
+            instruction += (
+                "\n\nReconcile every claimed result_id and evidence_refs with the current persisted workflow projection. "
+                "A saved but unregistered proof file is only a local artifact, not accepted workflow evidence. "
+                "An unresolved result with empty evidence_refs does not register or validate that file. "
+                "Distinguish runtime stop disposition from completed validation; do not claim that max_steps "
+                "or parser errors prove a finding, a completed negative or exhausted technique allowances."
+            )
         if stop_reason == "final_response":
             instruction += "\n\n" + _PLAIN_SUMMARY_INSTRUCTION
         objective = self.workflow.objective
@@ -5843,9 +5907,20 @@ class Agent:
             state = self._bounded_results.get(id(message))
             return state.original if state is not None else message.content
 
+        def http_references(message: Message) -> str:
+            if message.http_response_sources:
+                return ('\nHTTP observation references (metadata only; inspect workflow list for owned request context): '
+                        + ', '.join(message.http_response_sources))
+            return ''
+
         def replace_result(index: int, content: str, *, elided: bool = False) -> None:
             message = working[index]
             source = original(message)
+            if elided:
+                # Retire traffic, not its controller-supplied handles. Proof
+                # finalization still needs exact IDs; outbound access checks
+                # and the owned workflow ledger remain authoritative.
+                content += http_references(message)
             self._bounded_results.pop(id(message), None)
             runtime = message.tool_runtime
             if runtime is not None:
@@ -6007,6 +6082,16 @@ class Agent:
                             from .tool_results import retained_preview
                             ref = self.result_retention.lookup(msg.tool_result_refs[0]["result_ref"])
                             return retained_preview(ref, original(msg), budget)
+                        references = http_references(msg)
+                        if references:
+                            # Redirect observations can lie outside every
+                            # retained window. Reserve their metadata inside
+                            # the existing result budget, including its floor.
+                            return _output_bounds.bound_distributed_content(
+                                original(msg), budget - len(references),
+                                minimum_retained_length=MIDTURN_RECENT_TOOL_RESULT_CHAR_FLOOR - len(references),
+                                elision_prefix=MIDTURN_ELISION_PREFIX, weights=MIDTURN_WINDOW_WEIGHTS,
+                            ) + references
                         return bound_recent_tool_result(original(msg), budget)
 
                     bounded = render(len(msg.content) - reduction)
@@ -6516,7 +6601,7 @@ class Agent:
                 "exception_type": type(run_err).__name__ if run_err is not None else None,
             })
 
-        return ToolCallResult(
+        outcome = ToolCallResult(
             result=result,
             err_str=err_str,
             duration_ms=duration_ms,
@@ -6532,6 +6617,13 @@ class Agent:
                 if run_err is not None and isinstance(run_err, OSError)
                 and type(self.tools.get(tc.function.name)) in (ShellTool, BashTool) else None),
         )
+
+        from src.tools.common.outcome import RecoveryReceipt
+        from src.tools.http.http_tool import HTTPTool
+        receipt = getattr(run_err, 'recovery_receipt', None)
+        if isinstance(receipt, RecoveryReceipt) and type(self.tools.get(tc.function.name)) is HTTPTool:
+            outcome.recovery_receipt = receipt
+        return outcome
 
     def _capture_skill_load(self, tc: ToolCall, parsed: ParsedToolCall) -> None:
         from src.skills.load_skill import LoadSkillTool
@@ -6590,6 +6682,7 @@ class Agent:
             # metadata describes that view; model/history add their own summary.
             runtime = replace(runtime, delivery=delivery if represented else "unavailable",
                               delivered_bytes=len(content.encode("utf-8")))
+        from src.tools.http.http_tool import HTTPTool
         accepted_candidate_id = None
         if (tc.function.name == 'workflow' and invocation is not None
                 and invocation.scope == runtime_scope(self) and res.status == 'success'
@@ -6619,6 +6712,9 @@ class Agent:
                 "truncated": res.truncated,
                 "invocation": invocation,
                 "accepted_candidate_id": accepted_candidate_id,
+                "recovery_receipt": res.recovery_receipt if tc.function.name == 'http'
+                    and type(self.tools.get('http')) is HTTPTool and invocation is not None
+                    and invocation.scope == runtime_scope(self) else None,
                 "runtime_metadata": runtime,
             }
 

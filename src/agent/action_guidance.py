@@ -53,12 +53,36 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
                 'reading all JavaScript bundles is not a prerequisite. Account for each coverage dimension honestly: '
                 'unattested review is observed, never self-claimed performed; skipped/not_applicable need actual reasons. '
                 'Resolve selected-source obligations or record supported bounded stops, then complete_skill only when ready.')
+            lines.append(
+                'Reconcile each retained discovery row before grouping routes: JSON, 401/403, handler errors and '
+                'a calibrated SPA wildcard are different observations. A 500 proves neither method/body schema nor auth. '
+                'Trace visible JS request methods/fields, not only path strings. Derive totals from reconciled entries. '
+                'Keep quote/syntax probes for input analysis; phase=recon is only an annotation. '
+                'record_phase_coverage accepts phase, coverage_dimension, coverage_status, coverage_reason; omit coverage_phase.')
         else:
-            lines.append("Recommended: analyze inputs; record disposition or record_candidate only with evidenced controllability and compatible input bindings.")
-        if phase == "enumeration":
-            lines.append("get_source is metadata only. For omitted HTTP content use read_discovery_source(ds_ ID) under current range permission; read_http_observation requires Candidate/Attempt ownership. Do not repeat failed reads unchanged; continue with other observed sources if unavailable. Selection grants no read rights or completion; unselected sources are not a backlog.")
-        else:
-            lines.append("Reuse visible sources/input IDs; record_input may include manual source_attribution. Use list pages/cursors or get_input/get_source only for missing context. Selected sources keep obligations/limitations; unselected sources are not a backlog. Scanner completion is not discovery completion.")
+            lines.append(
+                'Recommended: analyze inputs; record disposition or record_candidate only with evidenced controllability '
+                'and a class-specific hypothesis. Reflection, ordinary search differences and sibling endpoints do not establish SQLi. '
+                'Keep exact baseline/status/size/content, including empty data and adverse evidence; a parser error leaves SQL shape unknown. '
+                'Use input_id and get_input for canonical endpoint/source context; never drop identity after a binding error. '
+                'Unstarted supported work is queued; deferred needs an actual deferred_reason, not merely unconfirmed status.')
+            if context.blocked_input_count:
+                lines.append(
+                    'Blocked inputs prevent complete_skill and new validation admission. Finish other pending triage; '
+                    'do not guess credentials or tokens to clear readiness. Use ask_user once for missing input or an '
+                    'operator exclusion; only an actual exclusion justifies dropped for that dependency. '
+                    'Otherwise keep blocked and report incomplete. Update the artifact before completion; '
+                    'an exclusion is untested work, not a negative result or new authority.')
+        if phase != "recon":
+            lines.append(
+                'Readers: get_source is metadata only. Use list(view="sources") then read_discovery_source with an exact ds_ ID '
+                'for retained discovery bodies; read_http_observation needs Candidate/Attempt ownership. '
+                'Use read_tool_result only for a published tr_ result_ref while its producer capability is allowed. '
+                'Use bounded offsets/continuation; missing/truncated content is a limitation, not authority to refetch. '
+                'Do not repeat failed reads unchanged or target requests to repair retrieval. Shell HTTP is not a truncation fallback; '
+                'ordinary GET needs no Shell exception. Selected sources keep obligations/limitations; unselected sources are not a backlog.')
+        if phase != "enumeration":
+            lines.append('Reuse visible input IDs and list pages/cursors; record_input may include manual source_attribution. Scanner completion is not discovery completion.')
         lines.append("Check permissions_status; use native discovery only for actual gaps. complete_skill requires ready state and canonical artifacts; repair blockers or state bounded stops.")
     elif context.objective_mode == "whole_target" and context.workflow_status in {"completed", "blocked"}:
         lines.append("Recommended: list current status and blockers; report the bounded outcome or repair the stated dependency. Readiness grants no finding eligibility.")

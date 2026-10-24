@@ -26,7 +26,7 @@ def digest(value: Any) -> str:
 def candidate_binding(candidate) -> str:
     row = candidate.to_dict().copy()
     # Bookkeeping/enrichment annotations do not alter request ownership.
-    for key in ("status", "priority", "signals", "source_skill"):
+    for key in ("status", "priority", "signals", "source_skill", "deferred_reason"):
         row.pop(key, None)
     return digest(row)
 

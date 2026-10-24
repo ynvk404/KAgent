@@ -44,7 +44,7 @@ from src.workflow.state import (
 from src.workflow.evidence.artifacts import EvidenceArtifact, verify_evidence_reads, check_proof_references
 from src.workflow.evidence.source import EvidenceSource
 from src.workflow.assessment import (start_attempt, references, resolve_sources, candidate_binding,
-                                     seal, accepted_result, check_excerpts, DuplicateRequestAssociation)
+                                     seal, accepted_result, check_excerpts, DuplicateRequestAssociation, MAX_SOURCES)
 import uuid
 from src.workflow.evidence.errors import EvidenceSubmissionError
 from src.skills.registry import (
@@ -89,6 +89,8 @@ DEFAULT_LIST_LIMIT = 8
 MAX_LIST_LIMIT = 25
 MAX_LIST_COMPLETED_SKILLS = 20
 LIST_TEXT_LIMIT = 200
+MAX_EFFECT_BASIS_LENGTH = 2000
+MAX_EVIDENCE_REFS = 16
 ACTION_REQUIRED = {
     'select_source': ('discovery_source_id',),
     'get_source': ('discovery_source_id',),
@@ -124,7 +126,7 @@ ACTION_INPUTS = {
     'record_candidate': ('candidate_class', 'target', 'endpoint', 'method', 'parameter', 'location',
                          'test_case', 'priority', 'signals', 'baseline_request_ref', 'auth_context_ref',
                          'content_type', 'request_template', 'source_ref', 'source_skill', 'status',
-                         'input_id', 'current_phase'),
+                         'input_id', 'current_phase', 'deferred_reason'),
     'record_evidence': ('candidate_id', 'evidence_path', 'observation_ids'),
     'start_validation': ('candidate_id', 'probe', 'related_requests', 'assessment'),
     'record_attempt_state': ('candidate_id', 'attempt_id', 'mutation_state', 'effect_basis',
@@ -139,6 +141,26 @@ ACTION_INPUTS = {
     'list': ('candidate_id', 'status', 'candidate_class', 'limit', 'observation_offset',
              'view', 'input_limit', 'input_cursor', 'input_disposition', 'discovery_cursor', 'discovery_source_id'),
 }
+
+
+def describe_action_contract(properties: dict[str, Any], actions: tuple[str, ...] = ACTIONS) -> None:
+    """Portable flat contract generated from the runtime action tables."""
+    properties['action']['description'] = (
+        'Action fields (* required); omit others.\n' + '\n'.join(
+            action + '(' + ','.join(
+                key + ('*' if key in ACTION_REQUIRED.get(action, ()) else '')
+                for key in ACTION_INPUTS[action] if key in properties) + ')'
+            for action in actions))
+    for key, field in properties.items():
+        if key == 'action':
+            continue
+        allowed = [action for action in actions if key in ACTION_INPUTS[action]]
+        required = [action for action in allowed if key in ACTION_REQUIRED.get(action, ())]
+        base = field.get('description', '').partition('\nAction use:')[0]
+        field['description'] = base + '\nAction use: ' + (', '.join(allowed) or 'none; omit') + '.' + (
+            ' Required for: ' + ', '.join(required) + '.' if required else '')
+
+
 _STATUS_PRIORITY = {"validating": 0, "queued": 1, "new": 2}
 
 
@@ -272,7 +294,8 @@ class WorkflowTool(Tool):
                 "evidence_path": {
                     "type": "string",
                 },
-                "observation_ids": {"type": "array", "items": {"type": "string"}},
+                "observation_ids": {"type": "array", "maxItems": MAX_SOURCES, "uniqueItems": True,
+                                    "items": {"type": "string", "minLength": 1, "pattern": r"^\S(?:[\s\S]*\S)?$"}},
                 "signals": {"type": "array", "items": {"type": "string"}},
                 "baseline_request_ref": optional_string,
                 "auth_context_ref": optional_string,
@@ -293,7 +316,8 @@ class WorkflowTool(Tool):
                     "type": "string",
                     "enum": sorted(VALIDATION_OUTCOMES),
                 },
-                "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                "evidence_refs": {"type": "array", "maxItems": MAX_EVIDENCE_REFS, "uniqueItems": True,
+                                  "items": {"type": "string", "minLength": 1, "pattern": r"^\S(?:[\s\S]*\S)?$"}},
                 "techniques": {"type": "array", "items": {"type": "string"}},
                 "repeatable": {"type": "boolean"},
                 "confirmation": {
@@ -302,7 +326,8 @@ class WorkflowTool(Tool):
                 "mutation_performed": {"type": ["boolean", "null"]},
                 "mutation_state": {"type": "string", "enum": ["unknown", "possible", "reported-write",
                                       "verified-write", "no-mutation-established"]},
-                "effect_basis": optional_string,
+                "effect_basis": {"type": "string", "minLength": 1, "maxLength": MAX_EFFECT_BASIS_LENGTH,
+                                 "pattern": r"\S", "description": "Explicit observed basis for record_attempt_state.mutation_state; never a record_result field."},
                 "observation_offset": {"type": "integer", "minimum": 0},
                 "cleanup_status": optional_string,
                 "cleanup_state": {
@@ -345,12 +370,6 @@ class WorkflowTool(Tool):
         schema['properties'] = properties
         # Flat descriptions are portable on the current DeepSeek Chat
         # Completions path. No unverified union/conditional or strict mode.
-        properties['action']['description'] = (
-            'Action fields (* required); omit others.\n' + '\n'.join(
-                action + '(' + ','.join(
-                    key + ('*' if key in ACTION_REQUIRED.get(action, ()) else '')
-                    for key in fields if key in properties) + ')'
-                for action, fields in ACTION_INPUTS.items()))
         descriptions = {
             'phase': 'record_phase_coverage only: recon or enumeration. Input analysis closes through input dispositions and complete_skill.',
             'coverage_dimension': '; '.join(
@@ -363,12 +382,16 @@ class WorkflowTool(Tool):
                 'and current prerequisites are met. Runtime resolves Candidate context; do not repeat endpoint/method or '
                 'assign runtime identity, infer missing body/auth/credentials/templates, or bypass Generic probe/proposal admission. '
                 'Example: {"action":"start_validation","candidate_id":"<returned candidate.id>"}'),
-            'attempt_id': 'Runtime ID from start_validation; cannot assign an attempt. record_result only; omit from record_evidence.',
+            'attempt_id': 'Runtime ID from start_validation; cannot assign an attempt. Equality assertion on record_attempt_state or record_result; omit from record_evidence.',
             'assessment': 'hypothesis,criteria,limitations,completed_attempt,observed_impact,severity.',
             'evidence_path': 'Existing project proof file, written first with file_write outside artifacts/findings. Registration reads this file; it does not create it. Use returned evidence.id (ev_...) in record_result.evidence_refs, never the path.',
             'evidence_refs': 'Canonical ev_... IDs returned as evidence.id by record_evidence for this Candidate. Never a file path or obs_ ID.',
             'request_template': 'Redacted body skeleton; mark {INJECTION_POINT}.',
-            'status': 'Registration/list status; not used by record_result. Only start_validation owns validating; never register validating.',
+            'baseline_request_ref': 'Replay baseline returned by the capture-store resolver. An obs_ observation ID is not a replay baseline; omit this field when no replay capture exists. Use source_ref for matching HTTP observation provenance.',
+            'source_ref': 'For selected Burp record_candidate, copy the selected retrieval ID from metadata id/source_ref (browser_capture_get.id), never runtime_observation_id (obs_...). Optional refs may be omitted only for a unique matching selection. Otherwise matching request observation provenance is checked by method/origin/path/session/epoch. An obs_ ID is not replay authority or a baseline. Whole-target input provenance must remain bound. For fields found inside another document use source_attribution.',
+            'status': 'Registration/list status; not used by record_result. Omit or use queued for unstarted supported work. Explicit deferred requires deferred_reason; it is not a synonym for unconfirmed. Only start_validation owns validating.',
+            'deferred_reason': 'record_candidate: actual dependency for an intentional deferral, preserved on enrichment. To resolve it before any result, explicitly use status=queued and deferred_reason=null after repairing the dependency. record_result: unresolved outcome reason.',
+            'input_id': 'Whole-target: reuse the exact input_id from record_input/list; get_input returns canonical endpoint, method and source provenance. Inherit these fields rather than replacing a concrete path with a template. Do not drop input_id or source_ref to recover from a binding error.',
             'observation_ids': 'Exact HTTP/authoritative evidence IDs matching candidate, attempt and request. Terminal sources: complete, untruncated, completed.',
             'outcome': 'Required for record_result.',
             'related_requests': (
@@ -387,6 +410,8 @@ class WorkflowTool(Tool):
         }
         for key, description in descriptions.items():
             properties[key]['description'] = description
+        properties['deferred_reason']['type'] = ['string', 'null']
+        describe_action_contract(properties)
         return schema
 
     def requires_permission(self) -> bool:
@@ -428,7 +453,8 @@ class WorkflowTool(Tool):
         unsupported = sorted(set(args) - {'action', *ACTION_INPUTS[action]})
         if unsupported:
             return ToolOutput('error: ' + action + ' does not accept ' + ', '.join(unsupported)
-                              + '; omit these arguments (runtime identities cannot be assigned)'
+                              + '; omit these arguments. Allowed fields: ' + ', '.join(ACTION_INPUTS[action])
+                              + '. Runtime identities cannot be assigned'
                               + ('; force is record_result-only for explicit retests, not a start/recovery override. '
                                  'Inspect list for current attempt, prerequisites and recovery; Continue cannot reset its budget.'
                                  if action == 'start_validation' and 'force' in unsupported else ''),
@@ -631,6 +657,8 @@ class WorkflowTool(Tool):
                     or input_item.target_origin != objective.target_origin
                 ):
                     raise ValueError("input does not belong to the active whole-target objective")
+                if input_item.source_ref and args.get("source_ref") not in (None, input_item.source_ref):
+                    raise ValueError("candidate source_ref conflicts with input provenance")
         elif (
             objective is not None
             and objective.mode == "direct"
@@ -687,6 +715,7 @@ class WorkflowTool(Tool):
             objective_id=objective_id,
             identity_media_type=assigned.identity_media_type if assigned else None,
             status=args.get("status", "queued"),
+            deferred_reason=args.get("deferred_reason"),
         )
         if assigned is not None:
             from dataclasses import replace
@@ -702,12 +731,41 @@ class WorkflowTool(Tool):
         try:
             candidate = self.candidate_proposal(args)
             existing = self.state.candidates.get(candidate.id)
+            if (self.state.objective is not None and self.state.objective.mode == "whole_target"
+                    and self.state.objective_inputs() and not arg_string(args, "input_id")
+                    and not any(existing is not None and existing.id in row.candidate_ids
+                                for row in self.state.objective_inputs())):
+                # Legacy callers may supply the complete, exact request geometry
+                # instead. Reuse only a unique compatible input; never resolve a
+                # template, guess an ID, or discard its source/baseline bindings.
+                matches = []
+                if all(getattr(candidate, key) is not None for key in ("endpoint", "method", "parameter", "location")):
+                    for row in self.state.objective_inputs():
+                        try:
+                            self.state.validate_input_candidate(row.id, candidate)
+                        except ValueError:
+                            continue
+                        matches.append(row)
+                source_skill = self.skills.get(candidate.source_skill or '') if self.skills else None
+                if (len(matches) > 1 or not matches and (
+                        source_skill is not None and source_skill.stage == 'analysis'
+                        or any(char in (candidate.endpoint or '') for char in '{}'))):
+                    raise ValueError("Whole-target candidates require an exact input_id; no unique compatible input")
+                if matches:
+                    args = {**args, "input_id": matches[0].id}
+                    candidate = self.candidate_proposal(args)
+                    existing = self.state.candidates.get(candidate.id)
             if existing is None or candidate_binding(existing) != candidate_binding(candidate):
                 self._validate_input_http_source({**candidate.to_dict(),
                     "target_origin": candidate_origin(candidate.target)}, policy)
                 self._validate_replay_baseline(candidate, policy)
         except (TypeError, ValueError) as err:
-            return f"error: {err}"
+            if self.state.objective is None or self.state.objective.mode != "whole_target":
+                return f"error: {err}"
+            return self._workflow_error(str(err), code="CANDIDATE_CONTEXT_INVALID", category="argument_error",
+                next_action='Use workflow(action="get_input", input_id=...) for canonical request context. '
+                'Keep input_id and inherit endpoint/method/source_ref; Do not drop identity or provenance to bypass a binding error. '
+                'Correct a wrong input through disposition/replacement with actual evidence. Do not resend HTTP to fix arguments.')
         candidate_class = candidate.candidate_class
         objective = self.state.objective
         assigned = self.state.candidates.get(objective.candidate_id or "") if (
@@ -725,6 +783,13 @@ class WorkflowTool(Tool):
         validator_resolution = "unique" if route.kind == "expert" else route.kind
         if supported is False:
             candidate.status = "deferred"
+        if candidate.deferred_reason and candidate.status != "deferred":
+            return self._workflow_error("deferred_reason requires status=deferred", code="INVALID_DEFERRAL",
+                category="argument_error", next_action="Use queued for unstarted work; use deferred with its actual dependency.")
+        if (candidate.deferred_reason and existing is not None
+                and (existing.status == "validating" or self.state.latest_result(existing.id) is not None)):
+            return self._workflow_error("registration cannot defer an active or assessed candidate", code="INVALID_DEFERRAL",
+                category="argument_error", next_action="Preserve the current attempt/result; record an honest unresolved result for an owned active attempt.")
         try:
             reason = route.reason
             if route.kind == "generic":
@@ -736,9 +801,13 @@ class WorkflowTool(Tool):
                         if candidate.id in self.state.candidates else
                         "generic context-needed: concrete proposal and verified endpoint/action context required")
                 supported = reason is None
-                candidate.status = "queued" if supported else "deferred"
+                candidate.status = "queued" if supported and not candidate.deferred_reason else "deferred"
             elif route.kind != "expert" and self.skills is not None:
                 candidate.status = "deferred"
+            elif route.kind == "expert" and candidate.status == "deferred" and not candidate.deferred_reason:
+                # Unstarted is queued. Intentional dependencies and recorded
+                # outcomes remain deferred; enrichment must obey the same rule.
+                candidate.status = "queued"
             stored, created = self.state.add_candidate(candidate, input_id=requested_input_id or None)
             input_id = arg_string(args, "input_id")
             if input_id:
@@ -748,9 +817,15 @@ class WorkflowTool(Tool):
                     if goal.candidate_class == stored.candidate_class:
                         self.state.link_requested_goal_candidate(goal.id, stored.id)
             if not created and self.skills and self.state.latest_result(stored.id) is None:
+                if candidate.deferred_reason and stored.status in {"new", "queued", "deferred"}:
+                    stored.deferred_reason = candidate.deferred_reason
+                    stored = self.state.set_candidate_status(stored.id, "deferred")
+                elif ('deferred_reason' in args and args['deferred_reason'] is None
+                      and args.get('status') == 'queued' and stored.status == 'deferred'):
+                    stored.deferred_reason = None
                 if supported is False and stored.status in {"new", "queued"}:
                     stored = self.state.set_candidate_status(stored.id, "deferred")
-                elif supported and route.kind == "expert" and stored.status == "deferred":
+                elif supported and route.kind == "expert" and stored.status == "deferred" and not stored.deferred_reason:
                     stored = self.state.set_candidate_status(stored.id, "queued")
         except (TypeError, ValueError) as err:
             return f"error: {err}"
@@ -1146,7 +1221,7 @@ class WorkflowTool(Tool):
             action = 'stop_recovery'
         elif owned:
             action = 'finalize_owned' if stopped else 'resume_owned'
-        elif latest and latest.outcome in {'blocked', 'browser-required', 'authorization-required', 'deferred'}:
+        elif candidate.deferred_reason or latest and latest.outcome in {'blocked', 'browser-required', 'authorization-required', 'deferred'}:
             action = 'resolve_dependency'
         else:
             action = 'repair_prerequisites' if prerequisite else 'start_validation'
@@ -1188,6 +1263,10 @@ class WorkflowTool(Tool):
                         candidate_id=candidate_id)
             if candidate is None:
                 raise ValueError(f"unknown candidate: {candidate_id}")
+            if candidate.status == 'deferred' and candidate.deferred_reason:
+                return self._workflow_error("candidate dependency remains deferred", code="CANDIDATE_DEFERRED",
+                    category="missing_prerequisite", next_action="Resolve the recorded dependency before starting. "
+                    "Then explicitly record_candidate with status=queued and deferred_reason=null; runtime admission and permissions still apply.")
             policy = policy_for(prompter)
             if policy is not None:
                 policy.generic_validation.idle()
@@ -1458,7 +1537,7 @@ class WorkflowTool(Tool):
             flags = {"unknown": None, "possible": None, "reported-write": True,
                      "verified-write": True, "no-mutation-established": False}
             if (mutation not in flags or not isinstance(args.get("effect_basis"), str)
-                    or not args["effect_basis"].strip() or len(args["effect_basis"]) > 2000):
+                    or not args["effect_basis"].strip() or len(args["effect_basis"]) > MAX_EFFECT_BASIS_LENGTH):
                 raise ValueError("mutation_state and explicit effect_basis required")
             flag = flags[mutation]
             if metadata["mutation_performed"] is True and flag is not True:
@@ -1489,7 +1568,7 @@ class WorkflowTool(Tool):
                 require_cleanup_evidence(sources)
             from src.redaction.redact import apply_evidence
             attempt["effects"]["declaration"] = {
-                "mutation_state": mutation, "effect_basis": apply_evidence(args["effect_basis"])[:2000],
+                "mutation_state": mutation, "effect_basis": apply_evidence(args["effect_basis"])[:MAX_EFFECT_BASIS_LENGTH],
                 "mutation_performed": flag, "cleanup_state": declaration.cleanup_state,
                 "cleanup_status": declaration.cleanup_status, "observation_ids": ids}
             # Pin only selected, checked sources using the existing bounded
@@ -1542,7 +1621,7 @@ class WorkflowTool(Tool):
             for reserved in ("assessment_source", "assessment_contract_version", "result_id", "assessment_binding", "evidence_manifest", "candidate_binding", "source_kind", "session_id", "objective_id"):
                 if reserved in args:
                     raise ValueError("assessment authority/identity fields are controller-owned")
-            refs = references(args.get("evidence_refs", []), "evidence_refs", 16)
+            refs = references(args.get("evidence_refs", []), "evidence_refs", MAX_EVIDENCE_REFS)
             ids = references(args.get("observation_ids", []), "observation_ids")
             result = ValidationResult(
                 candidate_id=arg_string(args, "candidate_id"),
@@ -2476,6 +2555,7 @@ class WorkflowTool(Tool):
             "test_case": WorkflowTool._brief(candidate.test_case),
             "priority": candidate.priority,
             "status": candidate.status,
+            "deferred_reason": candidate.deferred_reason,
             "signals": [WorkflowTool._brief(item) for item in candidate.signals[:2]],
             "baseline_request_ref": WorkflowTool._brief(
                 candidate.baseline_request_ref

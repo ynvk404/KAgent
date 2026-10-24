@@ -1,8 +1,12 @@
 """Keep Shell outcome parsing and uncertainty when deleting raw previews."""
+from copy import deepcopy
+import json
+
 import pytest
 from src.ui.render.shell_outcome import _parse_shell_result
 from src.ui.core.admission import call_metadata, result_issues, issue_category
 from src.agent.events import ToolCallEvent, ToolResultEvent
+from src.tools.common.outcome import ToolOutput
 from src.tools.common.runtime_metadata import RuntimeMetadata, StreamCapture
 
 
@@ -131,7 +135,7 @@ def test_missing_status_and_context_elision_never_infer_http_metadata_or_complet
     assert result_issues(event, None) == ["Tool output truncated. Omitted output may limit validation."]
 
 
-def test_http_recovery_status_updates_only_the_already_visible_activity():
+def test_http_status_without_native_completion_cannot_recover_an_unknown_failure():
     from src.ui.core.state import AgentEventAction, initial_state, reducer
     from src.ui.widgets.banner import BannerData
     state = initial_state("", BannerData("offline", "fixture", "."))
@@ -139,6 +143,70 @@ def test_http_recovery_status_updates_only_the_already_visible_activity():
                                ("ok", ToolResultEvent(id="ok", name="http", status="observation", http_status=500))]:
         state = reducer(state, AgentEventAction(ToolCallEvent(id=identifier, name="http", args={"url":"/path"})))
         state = reducer(state, AgentEventAction(result))
-    assert len(state.transcript) == 1 and state.transcript[0].kind == "info"
-    assert state.transcript[0].text == "http · GET /path · 500"
-    assert state.transcript[0].details == ("Recovered after 1 failed attempt",)
+    assert len(state.transcript) == 1 and state.transcript[0].kind == "error"
+    assert 'connection failed' in state.transcript[0].text
+    assert not state.issues[0].recovered
+
+
+@pytest.mark.parametrize('name', ['read_payloads', 'read_skill_file'])
+async def test_skill_reader_pages_show_actual_character_ranges_without_duplicate_results(tmp_path, name):
+    from src.agent.events import Invocation
+    from src.permission.permission import AlwaysAllow
+    from src.skills.registry import Registry, Skill
+    from src.tools.skills.payloads import ReadPayloadsTool
+    from src.tools.skills.skill_file import ReadSkillFileTool
+    from src.ui.core.state import AgentEventAction, initial_state, reducer
+    from src.ui.widgets.banner import BannerData
+
+    # The second page's UTF-8 byte count differs from its character range.
+    (tmp_path / 'payloads.txt').write_text('a' * 8233 + '\n' + 'é' * 4374 + '\n' + 'done\n', encoding='utf-8')
+    skills = Registry()
+    skills.add(Skill('fixture', 'Offline reader fixture', [], False, str(tmp_path / 'SKILL.md'), ''))
+    reader = ReadPayloadsTool(skills) if name == 'read_payloads' else ReadSkillFileTool(skills)
+    args = {'skill': 'fixture', 'file' if name == 'read_payloads' else 'path': 'payloads.txt', 'limit': 1}
+    state = initial_state('', BannerData('offline', 'fixture', '.'))
+    for index in range(3):
+        call = ToolCallEvent(id=f'page-{index}', name=name, args=deepcopy(args),
+                             invocation=Invocation(f'invocation-{index}', 'offline'))
+        state = reducer(state, AgentEventAction(call))
+        output = await reader.run(args, None, AlwaysAllow())
+        assert isinstance(output, ToolOutput)
+        result = ToolResultEvent(id=call.id, name=name, result=output,
+                                 truncated=output.truncated, invocation=call.invocation)
+        original = deepcopy(result)
+        state = reducer(state, AgentEventAction(result))
+        repeated = reducer(state, AgentEventAction(result))
+        assert repeated is state and result == original
+        if index < 2:
+            notices = result_issues(result, call_metadata(call))
+            assert len(notices) == 1 and issue_category(notices[0], result) == 'diagnostic'
+        else:
+            assert not result_issues(result, call_metadata(call))
+        page = json.loads(output.rsplit('\nContinuation: ', 1)[1])
+        args.update(source_ref=page['source_ref'], start_char=page['next_start_char'])
+    assert [row.text for row in state.transcript] == [
+        f'{name}: payloads.txt · chars 0–8234 · more available',
+        f'{name}: payloads.txt · chars 8234–12609 · more available',
+    ]
+    assert all(issue.category == 'diagnostic' for issue in state.issues)
+
+
+@pytest.mark.parametrize('changes', [
+    {'start_char': True}, {'end_char': -1}, {'source_chars': 5},
+    {'next_start_char': None}, {'next_start_char': 8}, {'offset_unit': 'bytes'},
+])
+def test_invalid_skill_pagination_metadata_keeps_generic_truncation_notice(changes):
+    page = {'start_char': 0, 'end_char': 10, 'source_chars': 20,
+            'next_start_char': 10, 'offset_unit': 'unicode_characters', **changes}
+    event = ToolResultEvent(name='read_payloads', truncated=True,
+        result='# fixture/payloads.txt — 3 line(s), 20 bytes\nHIDDEN_BODY\nContinuation: ' + json.dumps(page))
+    assert result_issues(event, None) == ['Tool output truncated. Omitted output may limit validation.']
+
+
+@pytest.mark.parametrize('name', ['read_payloads', 'read_skill_file', 'fixture'])
+def test_missing_skill_page_metadata_keeps_truncation_and_failure_details(name):
+    event = ToolResultEvent(name=name, truncated=True, result='HIDDEN_BODY\nContinuation: malformed')
+    assert result_issues(event, None) == ['Tool output truncated. Omitted output may limit validation.']
+    event.status = 'error'
+    event.error_kind = 'reference_unavailable'
+    assert result_issues(event, None) == ['reference_unavailable', 'Tool output truncated. Omitted output may limit validation.']

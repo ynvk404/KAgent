@@ -24,7 +24,7 @@ from src.workflow.state import WorkflowPhase, WorkflowState, normalize_target_or
 from src.workflow.ownership import invocation as workflow_invocation, current as workflow_current
 from src.tools.http.private_host import gate_private_request, parse_http_url, PrivateHostDeclined
 from src.tools.common.types import Tool, PermissionHints, arg_string
-from src.tools.common.outcome import ToolOutput
+from src.tools.common.outcome import ToolOutput, RecoveryReceipt
 from src.tools.common.arguments import string_fields
 from src.tools.common.approval_display import redact_approval
 from src.tools.http.context import HTTPContextStore
@@ -422,6 +422,12 @@ class HTTPTool(Tool):
                 receipt = await self.permissions.authorize(action, prompter, signal, lambda: self.target.revision)
             try:
                 result, location, cookie_updated = await self._dispatch(action, request, receipt, policy, signal, prompter, identity, generic_probe, args)
+            except httpx.ConnectError as error:
+                # A later redirect hop cannot prove the original operation had
+                # no effects. Keep all multi-hop failures unmatched.
+                if max_redirects:
+                    setattr(error, 'recovery_receipt', None)
+                raise
             finally:
                 self.permissions.discard_receipt(receipt)
             hop_prefix = f'[hop {hop}]\n' if max_redirects else ''
@@ -478,6 +484,8 @@ class HTTPTool(Tool):
         text = safe_prefix + '\n'.join(outputs)
         output = ToolOutput(text if sources else redact_evidence(text), status='observation',
                             http_status=result.http_status, truncated=result.truncated)
+        if max_redirects == 0:
+            output.recovery_receipt = result.recovery_receipt
         if sources and policy is not None:
             output.http_sources = tuple(sources)
             output.http_body_ranges = tuple((a + len(safe_prefix), b + len(safe_prefix))
@@ -560,7 +568,16 @@ class HTTPTool(Tool):
                                                 action.invocation_id or receipt.id, action.digest,
                                                 execution[1].id if execution and execution[0] is policy else None)
                 self.dispatch_attempts += 1
-                response = await client.send(request, stream=True)
+                # Receipt covers the actual authorized request, including
+                # runtime auth/cookies, capture binding and current owner.
+                resource = hashlib.sha256(repr((action.digest, source_owner, identity,
+                    policy.session_id if policy else None)).encode()).hexdigest()
+                try:
+                    response = await client.send(request, stream=True)
+                except httpx.ConnectError as error:
+                    if type(self) is HTTPTool and policy is not None and policy.nested_allowed():
+                        setattr(error, 'recovery_receipt', RecoveryReceipt(resource, retry_safe=True))
+                    raise
                 check_response_current()
                 self.context_store.sync_target(self.target.revision, self.engagement.revision, self.permissions.epoch)
                 if action.capture_source is None:
@@ -707,6 +724,7 @@ class HTTPTool(Tool):
                 result = ToolOutput(output if trusted_http else redact_evidence(output),
                                     status='observation', http_status=response.status_code, truncated=truncated)
                 if trusted_http and evidence_store is not None:
+                    result.recovery_receipt = RecoveryReceipt(resource, completed=True)
                     assert captured.retained_hash is not None
                     result.http_sources = ((observation, captured.retained_hash),)
                     result.http_body_ranges = ((body_start, body_end),)

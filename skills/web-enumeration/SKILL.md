@@ -58,6 +58,10 @@ request detail; shell requests do not enforce target-origin scope.
 For a necessary new source via shell, keep the exact active origin, one GET,
 no redirects, timeout ≤8 seconds and download cap ≤64 KiB. Shell approval
 does not authorize another origin or a replacement fetch for omitted content.
+Shell HTTP is not a truncation fallback. A normal GET is already expressible
+by native HTTP; a local output filename or desire to parse a whole bundle does
+not justify another download through shell. Describe the action actually taken,
+not a new fetch as processing a retained response.
 Use `content_discovery` only when steps 2–5 leave a concrete path-coverage gap.
 `content_discovery` uses native HTTP through the runtime permission gate.
 Discovery stays on the active origin, is bounded, and requires
@@ -524,6 +528,12 @@ subpath. For example, if a retained page actually references the same-origin
 Inspect bounded retained content for fetch/XHR/axios calls, API base URLs
 and router definitions. Keep surrounding call-site evidence; a path string
 alone is insufficient. Apply the large-response strategy if content is cut.
+Trace visible method, URL construction, query parameters and field assignments
+at a call site, including separate frontend object construction passed to a
+service. Record those sourced fields incrementally; if the service's transport
+binding or media type is unresolved, retain that limitation instead of guessing
+POST or claiming no field-level evidence exists. Appending a guessed parameter
+without an error does not establish that the server consumes it.
 
 Skip JavaScript or other resources that resolve to clearly unauthorized
 cross-origin domains.
@@ -541,6 +551,16 @@ compare content type, normalized body hash or length, and redirect behavior.
 Matching an SPA shell or wildcard response does not make a backend endpoint
 valid. The bounded `content_discovery` tool already performs this calibration;
 do not repeat it manually when its result is definitive.
+
+Reconcile each retained discovery row before grouping endpoints. If the output
+publishes a `tr_` result_ref, use bounded `read_tool_result` pages under the
+producer's current capability to inspect omitted rows; do not rerun discovery.
+A completed request count and a truncated output/body are separate facts.
+Keep observed JSON, 401/403, handler errors such as 500, and calibrated wildcard
+matches distinct. Never label a whole group SPA or unknown just because some
+rows were omitted. A 500 response alone establishes neither an expected POST
+body nor an authentication requirement. Do not infer body schemas from JSON
+response fields or claim unseen contents were reviewed.
 
 Group REST identifiers as `/users/{id}` only after at least two observed paths
 with different values share the same method, surrounding route shape, and
@@ -685,6 +705,12 @@ When the inventory is stable, add a short summary at the beginning containing:
 - notable API surfaces such as Swagger/OpenAPI or GraphQL;
 - endpoints referenced but not currently reachable;
 - recommendation to proceed to web-input-analysis.
+
+Derive summary totals from the reconciled entries using an explicit counting
+unit (for example method plus endpoint); distinguish templates, concrete probes,
+inputs and sources. Keep observed, referenced-only, wildcard and partial groups
+consistent with their individual rows. Unknown authentication/method/schema is
+a limitation, not a simulated requirement or proof of absence.
 
 Do not select the "most interesting" parameters yourself and do not recommend
 a vulnerability class for a specific endpoint.

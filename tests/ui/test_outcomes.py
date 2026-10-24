@@ -21,7 +21,17 @@ from src.tools.common.runtime_metadata import RuntimeMetadata, StreamCapture
 
 def dispatch(app, event):
     original = copy.deepcopy(event)
-    app.dispatch(AgentEventAction(event))
+    from dataclasses import replace
+    from src.agent.events import Invocation
+    from src.agent.scope import runtime_scope
+    delivered = event
+    if isinstance(event, ToolCallEvent) and event.invocation is None and event.id:
+        delivered = replace(event, invocation=Invocation(event.id, runtime_scope(app.agent) if hasattr(app.agent, 'target') else ''))
+    elif isinstance(event, ToolResultEvent) and event.invocation is None:
+        known = next((row for row in app.state.call_history if row.id == event.id and row.name == event.name), None)
+        if known:
+            delivered = replace(event, invocation=known.invocation)
+    app.dispatch(AgentEventAction(delivered))
     assert original == event
 
 
@@ -39,16 +49,15 @@ def test_repeated_errors_changed_reasons_recovery_and_delivery():
     assert len(list(app.state.transcript)) == 2
     dispatch(app, ToolCallEvent(id="recovery", name="unknown", args={"operation": "fixture"}))
     dispatch(app, ToolResultEvent(id="recovery", name="unknown", result="ok"))
-    assert all(issue.recovered for issue in app.state.issues)
-    assert [entry.text for entry in app.state.transcript] == ['unknown', 'unknown']
-    assert [entry.details for entry in app.state.transcript] == [
-        ('Recovered after 100 failed attempts',), ('Recovered after 1 failed attempt',)]
+    assert all(not issue.recovered for issue in app.state.issues)
+    assert app.state.transcript[0].kind == 'error'
+    assert app.state.transcript[1].kind == 'warning'
     assert [issue.count for issue in app.state.issues] == [100, 1]
     assert [issue.text for issue in app.state.issues] == [
         'unknown: connection failed', 'unknown: permission denied']
 
 
-def test_recovery_preserves_sanitized_original_error_in_diagnostics():
+def test_unverified_success_preserves_sanitized_original_error_in_diagnostics():
     app = make_app()
     args = {'operation': 'fixture'}
     dispatch(app, ToolCallEvent(id='failed', name='unknown', args=args))
@@ -58,12 +67,12 @@ def test_recovery_preserves_sanitized_original_error_in_diagnostics():
     assert 'error: rejected' in original and 'short-secret' not in original
     dispatch(app, ToolCallEvent(id='retry', name='unknown', args=args))
     dispatch(app, ToolResultEvent(id='retry', name='unknown', result='ok'))
-    assert app.state.issues[0].recovered
+    assert not app.state.issues[0].recovered
     assert app.state.issues[0].text == original
     from src.ui.widgets.transcript import entry_view
     displayed = '\n'.join(line.text for line in entry_view(app.state.transcript[0]))
-    assert 'Recovered after 1 failed attempt' in displayed
-    assert 'error:' not in displayed and 'rejected' not in displayed
+    assert 'Recovered after' not in displayed
+    assert 'rejected' in displayed
     assert 'short-secret' not in repr(app.state)
 
 
@@ -72,15 +81,15 @@ def test_http_retries_group_by_operation_and_keep_target_auth_and_recovery_disti
     for i in range(10):
         dispatch(app, ToolCallEvent(id=str(i), name="http", args={"url":f"http://juice.lab:3000/search?q={i}"}))
         dispatch(app, ToolResultEvent(id=str(i), name="http", status="error", err="connection failed", error_kind="network"))
-    assert len(app.state.transcript) == 1 and "10 times" in app.state.transcript[0].text
+    assert len(app.state.transcript) == 10  # Query values identify distinct requests.
     for i, url, auth in [("target", "http://other.lab:3000/search?q=1", "a"),
                          ("auth", "http://juice.lab:3000/search?q=1", "b")]:
         dispatch(app, ToolCallEvent(id=i, name="http", args={"url":url, "headers":{"Authorization":auth}}))
         dispatch(app, ToolResultEvent(id=i, name="http", status="error", err="connection failed"))
-    assert len(app.state.transcript) == 3
+    assert len(app.state.transcript) == 12
     dispatch(app, ToolCallEvent(id="recover", name="http", args={"url":"http://juice.lab:3000/search?q=11"}))
     dispatch(app, ToolResultEvent(id="recover", name="http", status="observation", http_status=403, result="HTTP/1.1 403 Forbidden"))
-    assert app.state.issues[0].recovered and not app.state.issues[1].recovered
+    assert all(not issue.recovered for issue in app.state.issues)
 
 
 def test_late_or_missing_results_and_unknown_reasons_remain_safe():
@@ -422,15 +431,15 @@ def test_workflow_rejection_recovers_only_after_bound_accepted_assessment(tmp_pa
     workflow.validation_results.clear()
     app.dispatch(SetBusy(True))
     args = {'action':'record_result', 'candidate_id':candidate.id, 'attempt_id':latest.attempt_id}
-    dispatch(app, ToolCallEvent(id='rejected', name='workflow', args=args | {'assessment':{'criteria':'unattested'}}))
-    dispatch(app, ToolResultEvent(id='rejected', name='workflow', result='{"ok":false,"error":"assessment rejected"}'))
+    dispatch(app, ToolCallEvent(id='rejected', name='workflow', args=args | {'mutation_state':'unknown'}))
+    dispatch(app, ToolResultEvent(id='rejected', name='workflow', status='error', error_kind='invalid_args', result='error: record_result does not accept mutation_state'))
     dispatch(app, ToolCallEvent(id='unaccepted', name='workflow', args=args))
     dispatch(app, ToolResultEvent(id='unaccepted', name='workflow', result='{"ok":true}'))
     assert not app.state.issues[0].recovered
     workflow.add_validation_result(latest)
     snapshot = copy.deepcopy(workflow.to_dict())
     dispatch(app, ToolCallEvent(id='accepted', name='workflow', args=args | {'assessment':{'criteria':'fixture attestation'}}))
-    dispatch(app, ToolResultEvent(id='accepted', name='workflow', result='{"ok":true}'))
+    dispatch(app, ToolResultEvent(id='accepted', name='workflow', result=json.dumps({'ok':True, 'result':latest.public_dict()})))
     assert app.state.issues[0].recovered
     assert workflow.to_dict() == snapshot
     dispatch(app, DoneEvent(stop_reason='final_response'))

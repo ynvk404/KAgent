@@ -101,6 +101,9 @@ and path must come from the checked request-context source. Unexpected paths
 do not prove endpoint behavior; HTTP 500 alone does not establish absence.
 Correct an erroneous input through existing disposition/replacement actions
 with honest attribution; do not rewrite historical records or fabricate refs.
+Do not drop input_id or source_ref after a source-path rejection. Read
+`get_input(input_id=...)`, inherit its canonical endpoint/method/provenance,
+and correct the proposal once; a template is not a captured concrete path.
 Reuse the returned `input_id` for each disposition and Candidate. Write each
 disposition reason for that exact input and its evidence; do not copy a sibling's
 reason. A documented serialization field is not automatically an object ID.
@@ -220,10 +223,18 @@ notes). Only reach for the steps below when context isn't enough to decide
 whether — and how — a candidate is worth prioritizing. Each step below is
 more intrusive than the last; stop as soon as you have enough signal.
 
-**Tier 1 — passive, no new requests.** Re-read what `web-enumeration` already
-recorded: observed response, whether the value appeared in the body, auth
-state, sibling endpoints. Most candidates should be classifiable from this
-alone.
+**Tier 1 — passive, no new requests.** Re-read the exact baseline and changed
+responses already recorded for this input: status, size, semantic content,
+empty data, reflection and auth limitations. A sibling endpoint is a discovery
+clue, not evidence of this input's implementation or vulnerability class.
+Most candidates should be classifiable from this alone, including a disposition
+that records ambiguity rather than a vulnerability candidate.
+Use `list(view="sources")` and `read_discovery_source` with the exact `ds_` ID
+for retained discovery bodies; `get_source` is metadata only.
+`read_http_observation` requires Candidate/Attempt ownership, which analysis
+traffic does not acquire. `read_tool_result` accepts only a published `tr_`
+reference under its producer capability. Failed/denied reads are not reasons
+to repeat HTTP, invent IDs, acquire fake ownership or switch to shell HTTP.
 
 **Tier 2 — harmless marker, at most once per input.** If context alone
 doesn't tell you whether a value is reflected, send one request with a
@@ -239,10 +250,14 @@ This tells you *whether reflection happens*, not whether it's exploitable.
 **Tier 3 — minimal value-change probe, only if tiers 1–2 leave the input
 unclassifiable, and at most one probe per parameter.** Tier 3 exists solely to
 help you classify and prioritize a candidate — it is never a way to "weakly
-confirm" that a vulnerability exists. A different response shape tells you a
-parameter is worth handing to `sql-injection` with higher confidence; it does
-not tell you SQLi is present, and it must not be written up or treated as
-partial evidence of a finding. Use this tier only to resolve genuine
+confirm" that a vulnerability exists. A different response shape can establish
+input consumption, but a SQLi handoff needs a class-specific hypothesis.
+This does not tell you SQLi is present and is not partial confirmation.
+Reflection, ordinary search differences and a sibling endpoint's SQL error do
+not establish that hypothesis. The same empty result on both sides establishes
+no differential; numeric/string acceptance alone does not identify a SQL sink.
+Keep SQL shape hypothetical when a parser error shows no query text.
+Use this tier only to resolve genuine
 ambiguity, compare with a known-good baseline, and use the scoped `http` tool
 with its current permission decision. A minimal syntax perturbation may be
 used for a query/filter input when the exact request is permitted. Do not use
@@ -283,7 +298,7 @@ validators handle these classes:
 | Context / signal | Suspected class |
 |---|---|
 | Controllable value appears in an HTML rendering context with encoding or DOM handling that remains unclear | `cross-site-scripting`; raw JSON reflection alone is not a candidate |
-| Query/filter param + syntax-sensitive response (error/size/timing shift) | `sql-injection` |
+| Query/filter param + syntax-sensitive response with a SQL-specific signal or other grounded SQL hypothesis, distinguished from ordinary search/result variability | `sql-injection` |
 
 These are signal examples, not a frozen list of available validators. The
 loaded skill registry is the source of truth: `workflow(record_candidate)`
@@ -292,6 +307,12 @@ metadata. If no validator handles a suspected class, retain the observation
 with `status: deferred` and explain the missing capability. Do not call a
 validator from this analysis skill. Do not invent a workflow for a
 vulnerability class that doesn't have a skill yet.
+
+For an enabled expert validator, omit status or use `queued`: not yet tested
+does not mean deferred. An intentional dependency uses `status: deferred`
+with `deferred_reason`; enrichment preserves it. After resolving that dependency
+and before any result, explicitly use `status: queued, deferred_reason: null`.
+Recorded unresolved results keep their own recovery/retest contract.
 
 A candidate can map to more than one suspected class; list all of them with
 independent confidence.
@@ -322,6 +343,18 @@ short reason when it is out of scope for this analysis, or `blocked` with the
 current dependency when analysis cannot proceed. A blocked input remains an
 objective blocker and must not be reported as complete. If a blocker is later
 resolved, set the same input back to `pending` and analyze it in this objective.
+
+Before `complete_skill`, inspect current readiness and dispositions. Missing
+credentials do not require guessing a login, fabricating a bearer token or
+retrying the same auth failure. Finish other pending triage, then use `ask_user`
+once for the missing input or an explicit operator exclusion of these inputs
+from this assessment. This is an input/scope decision, not permission review;
+YOLO does not answer it. If excluded, record `dropped` on those same inputs with
+that reason, preserve the auth limitation and state they remain untested.
+Otherwise keep `blocked` and report incomplete; do not relabel as `analyzed`
+or `dropped` merely to open validation. An existing explicit assessment boundary
+can justify dropping work outside it; unavailable credentials alone cannot.
+New validation still requires completed phases and compatible analyzed linkage.
 
 For every candidate strong enough to include in the list, also call
 `workflow(action="record_candidate", source_skill="web-input-analysis", ...)`
@@ -359,7 +392,14 @@ FALSE returning none. Signal gathering here is not confirmation, and a later
 validator must not inherit a contradicted conclusion from free-form prose.
 
 Write `artifacts/web-input-analysis/<target>/candidates.md`, using the same target
-identifier as `recon` and `web-enumeration`. One entry per candidate:
+identifier as `recon` and `web-enumeration`.
+
+This skill permits `file_write`, not `file_edit`. For an update, rewrite the
+canonical file with `file_write`, preserving evidence and reconciling summary,
+per-input entries and handoff state. Do not switch skills or use shell merely
+to evade the unavailable editor.
+
+One entry per candidate:
 
 ```
 - endpoint: GET /product
@@ -440,6 +480,15 @@ skill_name="web-input-analysis",
 artifact_ref="artifacts/web-input-analysis/<target>/candidates.md",
 current_phase="validation")`. This records
 workflow progress independently of the conversational summary.
+
+For an autonomous Whole-target request, continue autonomously after this
+completion: inspect canonical actionable work, load its enabled validator and
+call `start_validation` before confirmation probes. Stop only for a recorded
+dependency, exhausted bound or actual permission/input requirement. Phase
+handoff itself does not require the operator to start each candidate. Never
+force a result or finding to keep the workflow moving. Derive summary totals,
+priorities and deferred counts from the current structured records and keep
+them consistent with the detailed entries and observed evidence.
 
 If a whole-target input remains `blocked`, leave the phase incomplete, explain
 the dependency, and let the runtime report the objective as blocked. Resume the

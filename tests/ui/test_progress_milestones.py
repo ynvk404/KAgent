@@ -41,6 +41,14 @@ def runtime(tmp_path, *, whole=False):
 
 
 def dispatch(app, event):
+    from src.agent.events import Invocation
+    from src.agent.scope import runtime_scope
+    if isinstance(event, ToolCallEvent) and event.invocation is None and event.id:
+        event = replace(event, invocation=Invocation(event.id, runtime_scope(app.agent) if hasattr(app.agent, 'target') else ''))
+    elif isinstance(event, ToolResultEvent) and event.invocation is None:
+        known = next((row for row in app.state.call_history if row.id == event.id and row.name == event.name), None)
+        if known:
+            event = replace(event, invocation=known.invocation)
     app.dispatch(AgentEventAction(event))
 
 
@@ -71,7 +79,7 @@ def test_failed_activation_cannot_become_a_skill_milestone_and_duplicates_are_su
     dispatch(app, ToolResultEvent(id='loaded',name='load_skill',result='offline successful receipt'))
     for _ in range(2):dispatch(app, SkillActiveEvent(name='alpha',call_id='loaded'))
     assert sum(entry.text == 'Skill activated · alpha' for entry in app.state.transcript) == 1
-    assert app.state.issues[0].recovered
+    assert not app.state.issues[0].recovered
     assert app.state.active_skill == 'alpha'
 
 

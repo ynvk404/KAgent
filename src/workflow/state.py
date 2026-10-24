@@ -262,6 +262,9 @@ class Candidate:
     identity_media_type: str | None = None
     request_template: str | None = None
     source_ref: str | None = None
+    # A declared dependency is distinct from an unstarted/unsupported candidate.
+    # Descriptive session state only; never an authorization grant.
+    deferred_reason: str | None = None
 
     def __post_init__(self) -> None:
         self.candidate_class = normalize_candidate_class(self.candidate_class)
@@ -291,6 +294,7 @@ class Candidate:
             self.request_template, self.content_type, location=self.location
         )
         self.source_ref = _text(self.source_ref)
+        self.deferred_reason = _text(self.deferred_reason)
         self.source_skill = (
             normalize_metadata_name(self.source_skill) if self.source_skill else None
         )
@@ -352,6 +356,7 @@ class Candidate:
             "source_skill": self.source_skill,
             "objective_id": self.objective_id,
             "status": self.status,
+            **({"deferred_reason": self.deferred_reason} if self.deferred_reason is not None else {}),
         }
 
     @classmethod
@@ -379,6 +384,7 @@ class Candidate:
                 source_skill=value.get("source_skill"),
                 objective_id=value.get("objective_id"),
                 status=value.get("status", "new"),
+                deferred_reason=value.get("deferred_reason"),
             )
         except (TypeError, ValueError):
             return None
@@ -2046,7 +2052,7 @@ class WorkflowState:
             elif result and result.cleanup_state in {"unknown", "not-attempted"}:
                 blockers.append(f"mutation effects/cleanup unresolved:{candidate.id}:{result.cleanup_state}")
             if (candidate.status in {"new", "queued", "validating"}
-                    or candidate.status == "deferred" and result is None
+                    or candidate.status == "deferred" and not candidate.deferred_reason and result is None
                     and candidate.id in generic_eligible_candidate_ids):
                 if candidate.candidate_class in normalized_validators or candidate.id in generic_eligible_candidate_ids:
                     actionable.append(f"candidate:{candidate.id}")
@@ -2054,7 +2060,7 @@ class WorkflowState:
                     blockers.append(f"candidate validator unavailable:{candidate.id}")
                 continue
             if candidate.status == "deferred":
-                reason = result.deferred_reason if result else None
+                reason = result.deferred_reason if result else candidate.deferred_reason
                 blockers.append(f"candidate deferred:{candidate.id}:{reason or 'condition not recorded'}")
                 continue
             if candidate.status == "dismissed" and (

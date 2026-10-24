@@ -58,8 +58,8 @@ async def test_corrected_start_recovers_only_owned_real_transition(tmp_path, ret
     if retry_candidate == 'same':
         assert entry.kind == 'info'
         assert entry.text == 'workflow · start validation · GET /search · input q'
-        assert entry.details == ('Recovered after 1 failed attempt',)
-        assert 'error:' not in displayed and 'ambiguous duplicate' not in displayed
+        assert entry.details == ('Recovered after 1 failed attempt', updated.text)
+        assert 'ambiguous duplicate' in displayed  # Original diagnostic remains inspectable.
         assert 'ambiguous duplicate' in updated.text
     else:
         assert entry.kind == 'error'

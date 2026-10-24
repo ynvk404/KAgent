@@ -65,6 +65,29 @@ plus a new immutable snapshot; registration alone does not establish terminal
 eligibility. When probing stops, use the remaining budget for honest finalization;
 Continue does not authorize a retest or reset declaration/recovery allowances.
 
+Read the applicable payload guidance before the first confirmation probe, not
+after spending syntax adjustments. Use its published continuation only until
+the chosen technique is visible; unrelated later sections are not prerequisites.
+Before HTTP, choose a benign seed and describe the expected oracle and the
+prefix/predicate/suffix hypothesis. Do not use an arbitrary nonmatching seed for
+an AND-filter test. Earlier analysis observations inform that plan but remain
+unowned; capture the necessary benign control inside the active attempt before
+comparison. A quote-containing search match may be ordinary string matching,
+not an established breakout shape. Parser positions alone do not pin a LIKE
+literal or balance its quotes and parentheses.
+
+Exhausted syntax adjustments are a finalization checkpoint: use another technique
+only if it has a distinct evidence-supported plan within the existing bounds.
+Otherwise submit `insufficient-evidence` promptly, with the missing oracle/context
+and observed limitations. Do not spend finalization turns rereading unchanged
+responses or payload sections to prepare another syntax adjustment. Reuse the
+already visible complete captures; read only a genuinely missing range. Keep
+engine/context notes separate from effect declarations; `record_attempt_state`
+is not a general notes log. Reserve existing turns for proof writing, registration
+and `record_result`; missing proof never prevents an honest unresolved result.
+An unregistered proof file is a local artifact, not accepted evidence. Verify
+the returned `result_id`, `evidence_refs` and outcome before reporting them.
+
 ## Runtime completion contract
 
 The runtime derives validation completion from the current objective and target,
@@ -837,10 +860,13 @@ and submit insufficient-evidence if it is insufficient. Do not generate fresh
 probes just to repair the manifest; continue validation only for a separately
 identified missing validation step.
 
-If the applicable bounded Phase 2 tests complete without a clear, repeatable
+If the applicable, context-compatible bounded Phase 2 tests complete with an
+established oracle but without a clear, repeatable
 signal — including when 2d was unavailable and therefore not attempted — record
 `not-confirmed` with usable primary evidence and registered proof. This is a
 bounded negative result, not proof that the endpoint has no SQL injection.
+An unresolved oracle or predicate compatibility remains `insufficient-evidence`,
+even when the syntax-adjustment allowance is exhausted and all captures are complete.
 If testing is blocked, unfinished, or its required sources/proof are unavailable,
 use the corresponding unresolved outcome below rather than forcing a terminal
 assessment or escalating technique/payload variety.
@@ -890,11 +916,11 @@ have different meanings:
 
 - `confirmed` with `SQLI-2` in `techniques` — an applicable technique actually available in this environment (boolean, error-based, bounded UNION-based, time-based, or OOB only when its capability and authorization gates pass) produced a clear, repeatable positive signal, bounded per "Bound the proof" above;
 - `confirmed` with `SQLI-3` in `techniques` — SQLI-2 plus a minimal, authorized impact probe from Phase 3 succeeded;
-- `not-confirmed` — the applicable confirmation techniques available in this environment were tried as required by the workflow (per the "stop at the first clear signal" rule — this does not mean every technique must be run against every candidate), and none produced a clear, repeatable SQL injection signal. OOB is included only when its capability check passed and the user authorized it;
+- `not-confirmed` — applicable, context-compatible bounded tests completed with an established oracle and none produced a clear, repeatable SQL injection signal. This does not mean every technique must be run. Unresolved predicate compatibility or syntax context requires `insufficient-evidence`; exhausting syntax adjustments alone does not complete a negative test. OOB is included only when its capability check passed and the user authorized it;
 - `blocked` — a probe was intercepted by a WAF, rate-limiter, or challenge page before reaching the application (step 2c); the application itself was never actually tested;
 - `deferred` — work is postponed, or behavior indicates NoSQL/operator injection
   rather than SQL injection (per Scope, above); put the reason in `deferred_reason`;
-- `insufficient-evidence` — required sources or reproducible proof are unavailable;
+- `insufficient-evidence` — the oracle, predicate compatibility or necessary context remains unresolved, or required sources or reproducible proof are unavailable;
   explain the limitation. This closes the attempt as unresolved, without claiming
   a negative test or completed validation.
 

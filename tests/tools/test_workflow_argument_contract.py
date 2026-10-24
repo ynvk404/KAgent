@@ -74,3 +74,50 @@ async def test_legacy_input_ownership_assertions_never_override_runtime():
         output = await tool.run({**args, **change}, None, AlwaysAllow())
         assert output.startswith('error:')
         assert state.to_dict() == before
+
+
+@pytest.mark.parametrize('mode', [None, 'direct', 'whole_target'])
+def test_field_local_membership_matches_runtime_and_action_projection(mode):
+    from src.tools.workflow.action_view import ActionView
+    tool = WorkflowTool(WorkflowState())
+    view = ActionView.for_objective(mode)
+    spec = {'function': {'name': 'workflow', 'parameters': tool.schema()}}
+    projected = view.project_tools([spec])
+    assert projected is not None
+    schema = projected[0]['function']['parameters']
+    for field, definition in schema['properties'].items():
+        if field == 'action':
+            continue
+        guidance = definition['description'].partition('Action use: ')[2]
+        allowed = [action for action in view.available if field in ACTION_INPUTS[action]]
+        assert guidance.partition('.')[0] == (', '.join(allowed) or 'none; omit')
+        required = [action for action in allowed if field in ACTION_REQUIRED.get(action, ())]
+        if required:
+            assert 'Required for: ' + ', '.join(required) + '.' in guidance
+    assert 'record_result only' not in schema['properties']['attempt_id']['description']
+    for field in ('mutation_state', 'effect_basis'):
+        assert schema['properties'][field]['description'].partition('Action use: ')[2] == 'record_attempt_state.' + (
+            ' Required for: record_attempt_state.' if field in ACTION_REQUIRED['record_attempt_state'] else '')
+
+
+@pytest.mark.parametrize('field,value', [
+    ('observation_ids', ['obs_a', 'obs_a']), ('observation_ids', ['obs_a'] * 33),
+    ('evidence_refs', ['ev_a', 'ev_a']), ('evidence_refs', ['ev_' + str(i) for i in range(17)]),
+    ('effect_basis', 'x' * 2001), ('effect_basis', '   '), ('observation_ids', [' obs_a']),
+])
+def test_static_bounds_agree_with_rejection_contract(field, value):
+    from jsonschema import Draft202012Validator
+    schema = WorkflowTool(WorkflowState()).schema()
+    assert list(Draft202012Validator(schema['properties'][field]).iter_errors(value))
+
+
+async def test_record_result_rejects_attempt_state_fields_without_mutation():
+    state = WorkflowState()
+    tool = WorkflowTool(state)
+    before = state.to_dict()
+    output = await tool.run({'action': 'record_result', 'candidate_id': 'fixture',
+        'skill_name': 'sql-injection', 'outcome': 'not-confirmed',
+        'mutation_state': 'unknown', 'effect_basis': 'fixture'}, None, AlwaysAllow())
+    assert isinstance(output, ToolOutput) and output.error_kind == 'invalid_args'
+    assert 'does not accept effect_basis, mutation_state' in output
+    assert state.to_dict() == before
