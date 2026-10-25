@@ -981,6 +981,36 @@ def complete_required_phases(state: WorkflowState) -> None:
         )
 
 
+@pytest.mark.parametrize('result_reason,candidate_reason,has_result,expected', [
+    (None, 'Older candidate reason', True, 'insufficient-evidence'),
+    ('Explicit result reason', 'Older candidate reason', True, 'Explicit result reason'),
+    (None, 'Candidate dependency', False, 'Candidate dependency'),
+    (None, None, False, 'condition not recorded'),
+])
+def test_deferred_blocker_uses_latest_result_reason_or_outcome_without_mutation(
+    result_reason, candidate_reason, has_result, expected,
+):
+    from copy import deepcopy
+    state = whole_target_state()
+    complete_required_phases(state)
+    candidate, _ = state.add_candidate(make_candidate(
+        objective_id='objective-current', target='https://target.test',
+        status='deferred', deferred_reason=candidate_reason,
+    ))
+    if has_result:
+        state.add_validation_result(ValidationResult(candidate.id, 'sql-injection',
+            'insufficient-evidence', deferred_reason=result_reason, mutation_performed=False))
+    before = deepcopy(state.to_dict())
+    status, actionable, blockers = state.whole_target_status(
+        target_origin='https://target.test',
+        available_phases=frozenset({'recon', 'enumeration', 'input_analysis'}),
+        validator_classes=frozenset({'sql-injection'}), coverage_sync_available=True,
+    )
+    assert status == 'blocked' and actionable == ()
+    assert blockers == (f'candidate deferred:{candidate.id}:{expected}',)
+    assert state.to_dict() == before and not state.eligible_for_finding(candidate.id)
+
+
 def test_workflow_objective_round_trip_and_legacy_state_without_objective():
     state = whole_target_state()
     restored = WorkflowState.from_dict(state.to_dict())

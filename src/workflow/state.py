@@ -2007,7 +2007,7 @@ class WorkflowState:
                     blockers.append(f"candidate validator unavailable:{candidate.id}")
                 continue
             if candidate.status == "deferred":
-                reason = result.deferred_reason if result else candidate.deferred_reason
+                reason = (result.deferred_reason or result.outcome) if result else candidate.deferred_reason
                 blockers.append(f"candidate deferred:{candidate.id}:{reason or 'condition not recorded'}")
                 continue
             if candidate.status == "dismissed" and (

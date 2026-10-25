@@ -282,8 +282,10 @@ class AskUserTool(Tool):
         # Validate the whole batch before showing its first question. Dependency
         # identity binds an answer to existing inputs, never to an inferred scope.
         identities = []
+        audit_texts = []
         for item, question in zip(args["questions"], questions):
             identity: Any = item
+            audit_text = question.question
             if question.input_ids:
                 boundary = policy.generic_validation if policy else None
                 state = boundary.state if boundary else None
@@ -299,30 +301,39 @@ class AskUserTool(Tool):
                 from src.ui.render.sanitize import sanitize_text
                 from urllib.parse import urlsplit
                 affected = []
+                details = []
                 for iid in question.input_ids:
                     row = rows[iid]
-                    affected.append(sanitize_text(f'{row.method or "unknown method"} '
+                    provenance = input_provenance(state, row)
+                    label = {
+                        'unverified': 'unverified request contract',
+                        'manual-document-attribution': 'document-attributed; request unverified',
+                        'request-linked': 'request-linked; field consumption unverified',
+                    }[provenance['kind']]
+                    request_identity = sanitize_text(f'{iid}: {row.method or "unknown method"} '
                         f'{urlsplit(row.endpoint or "").path or "/"} · input {row.parameter or "unknown"} '
-                        f'({row.location or "unknown location"})'))
-                basis = list(dict.fromkeys(sanitize_text(rows[iid].disposition_reason or 'Dependency unspecified.')
-                                            for iid in question.input_ids))
-                uncertainty = any(input_provenance(state, rows[iid])['kind'] == 'unverified'
-                                  for iid in question.input_ids)
+                        f'({row.location or "unknown location"})')
+                    affected.append(request_identity + ' — ' + label)
+                    details.append(request_identity + '\nReason: '
+                        + sanitize_text(row.disposition_reason or 'Dependency unspecified.')
+                        + '\nProvenance: ' + sanitize_text(json.dumps(provenance, ensure_ascii=False)))
                 # Provenance describes where an input came from, not whether
                 # authentication is necessary. The Agent interprets evidence;
                 # the operator may clarify access even without a source link.
-                question.question = ('Affected inputs: ' + '; '.join(affected) + '\n'
-                    'Agent-reported basis for operator involvement: ' + sanitize_text(question.dependency_basis or '') + '\n'
-                    'Agent-reported dependency: ' + '; '.join(basis) + '\n'
-                    + ('Input provenance is unverified; ' if uncertainty else 'Input source references are available; ')
-                    + 'authentication requirements are unknown to the runtime. '
-                    'Clarify access requirements before assuming credentials are necessary.\n'
-                    + question.question + '\nExclude removes only the inputs listed above from this assessment; '
-                    'they remain untested. Keeping them blocked preserves the unresolved work. '
-                    'The answer does not grant execution permission.')
+                question.question = (sanitize_text(question.question) + '\n'
+                    + 'Agent-reported dependency: ' + str(question.dependency_kind) + '\n'
+                    + 'Affected inputs:\n' + '\n'.join(affected) + '\n'
+                    + 'Input provenance does not establish access; authentication requirements are unknown to the runtime.\n'
+                    + 'Exclude applies only to these IDs; they remain untested. Keep blocked preserves unresolved work. '
+                    + 'The answer does not grant execution permission.')
+                # Keep full reasons/basis and per-input provenance in the existing
+                # answer history, independently of the compact operator display.
+                audit_text = (question.question + '\nAgent-reported basis for operator involvement: '
+                    + sanitize_text(question.dependency_basis or '') + '\n' + '\n'.join(details))
             identities.append(identity)
+            audit_texts.append(audit_text)
         answers = []
-        for identity, question in zip(identities, questions):
+        for identity, question, audit_text in zip(identities, questions, audit_texts):
             context = (policy.session_id or policy.engagement.http_permissions.session_id
                        if policy and question.input_ids else policy.stamp() if policy else None)
             key = hashlib.sha256(json.dumps([context, identity],
@@ -336,7 +347,7 @@ class AskUserTool(Tool):
                     if len(policy.input_questions) >= 128:
                         raise ExecutionBlocked("blocked: input-question-capacity; operator retry required")
                     policy.input_questions[key] = None
-                    policy.input_question_texts[key] = question.question
+                    policy.input_question_texts[key] = audit_text
                 choice = await self.prompter.ask(question, signal)
                 if policy is not None:
                     policy.input_questions[key] = choice

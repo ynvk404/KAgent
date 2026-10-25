@@ -339,6 +339,53 @@ def test_no_validation_handoff_is_injected_without_relevant_work(offline):
     assert not any(m.content.startswith(PREFIX) for m in view.blocks)
 
 
+async def test_failed_true_marker_prompts_scripted_oracle_reassessment_without_false(offline, monkeypatch):
+    """Scripted compliance with delivered guidance, not a model reasoning score."""
+    from tests.security.test_execution_policy import REAL_CLIENT
+    rt, sent = offline
+    cid = await candidate_for(rt)
+
+    def respond(request):
+        sent.append(request)
+        control = request.url.params['q'] == 'benign-control'
+        return httpx.Response(200, content=b'{"data":["known-marker"]}' if control else b'{"data":[]}', request=request)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: REAL_CLIENT(
+        transport=httpx.MockTransport(respond), **kw))
+
+    def check(request):
+        current = hint(request)
+        assert len(current) < 2200
+        if len(model.calls) < 5:
+            assert 'TRUE preserves benign marker before FALSE; do not batch' in current
+            assert 'failed TRUE: reassess context/oracle' in current
+        assert sum(m.content.startswith(PREFIX) for m in request.messages) == 1
+
+    def script():
+        yield 'load_skill', {'name': 'sql-injection'}
+        yield workflow('start_validation', candidate_id=cid)
+        control = yield 'http', {'url': '/fixture?q=benign-control', 'phase': 'validation'}
+        assert 'known-marker' in control
+        actual = yield 'http', {'url': '/fixture?q=intended-true', 'phase': 'validation'}
+        assert '{"data":[]}' in actual and 'known-marker' not in actual
+        # The scripted evaluator responds to the missing marker by revising its
+        # oracle rather than sending dependent FALSE or claiming a negative.
+        accepted = json.loads((yield workflow('record_result', candidate_id=cid,
+            skill_name='sql-injection', outcome='insufficient-evidence',
+            notes='Reassessment: intended TRUE lost the benign marker; SQL context/oracle unresolved; FALSE unexecuted.',
+            deferred_reason='No discriminating bounded test selected; compatibility unresolved.')))
+        assert accepted['ok'] and not accepted['eligible_for_confirm_finding']
+
+    model = InspectModel(script(), check)
+    await execute(rt, model, steps=6)
+    assert model.consumed and [r.url.params['q'] for r in sent] == ['benign-control', 'intended-true']
+    result = rt.workflow.latest_result(cid)
+    assert result is not None and result.outcome == 'insufficient-evidence'
+    assert result.confirmation is None and 'Reassessment:' in (result.notes or '')
+    assert not rt.workflow.eligible_for_finding(cid) and not rt.workflow.persisted_findings
+    assert not any(m.content.startswith(PREFIX) for m in rt.agent.history)
+
+
 @pytest.mark.parametrize('outcome', ['blocked', 'browser-required', 'authorization-required'])
 async def test_unresolved_dependency_is_not_a_recommendation_to_retry_probes(offline, outcome):
     rt, _ = offline

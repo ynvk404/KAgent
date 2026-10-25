@@ -117,3 +117,40 @@ async def test_loaded_lan02_evidence_handoff_guidance(skills, name, obligations)
     loaded = ' '.join((await LoadSkillTool(skills).run({'name': name})).split()).lower()
     for obligation in obligations:
         assert obligation.lower() in loaded
+
+
+async def test_sql_decision_checkpoint_is_early_and_conditions_boolean_sequencing(skills):
+    loaded = ' '.join((await LoadSkillTool(skills).run({'name': 'sql-injection'})).split())
+    checkpoint = loaded.split('## Decision checkpoint', 1)[1].split('## Runtime completion contract', 1)[0]
+    for rule in ('observed facts from assumptions', 'prefix', 'suffix', 'parentheses',
+                 'known match', 'before dispatching dependent FALSE', 'do not blindly batch',
+                 'If TRUE loses that marker', 'reassess context compatibility and the oracle',
+                 'Equal empty responses do not establish SQLi absence',
+                 'Suitable existing observations need no extra compatibility request',
+                 'Boolean testing is not required for every Candidate',
+                 'three adjustments after the initial signal', 'Continue never resets',
+                 'Same-shape predicate flips', 'Do not exhaust unused allowance'):
+        assert rule in checkpoint
+    assert len(checkpoint.split('Exhausted syntax adjustments', 1)[0]) < 3200
+
+
+@pytest.mark.parametrize('name', ['web-enumeration', 'web-input-analysis'])
+async def test_source_first_handoff_preserves_request_and_operator_distinctions(skills, name):
+    loaded = ' '.join((await LoadSkillTool(skills).run({'name': name})).split()).lower()
+    for rule in ('bound `ask_user` calls/results', 'transitions', 'exact input ids',
+                 'unexecuted post', 'behaviorally probed', 'validation result', 'finding',
+                 'deterministic', 'hypothes', 'declared response length', 'retained bytes',
+                 'inspected', 'http solely to repair prose'):
+        assert rule in loaded
+    if name == 'web-enumeration':
+        for rule in ('likely http method', 'request contract', 'controllability',
+                     'response schemas do not establish request fields',
+                     'arrays and objects are supported inputs', 'json-containing string stays a string',
+                     'serialization', 'request headers', 'actual named form controls'):
+            assert rule in loaded
+    else:
+        for rule in ('authentication endpoint', 'protected endpoint', 'unknown request contract',
+                     'submitting credentials differs from requiring an existing authenticated session',
+                     'missing schema is a discovery gap', 'separate questions', 'csrf', 'captcha',
+                     'client-authentication', 'genuine unmet prerequisite'):
+            assert rule in loaded

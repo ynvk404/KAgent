@@ -156,6 +156,25 @@ reads or uses that specific input.
 
 ## 2. Classify context for each candidate
 
+Before declaring an access dependency, distinguish the operation's role:
+
+- **Authentication endpoint:** accepts credentials to attempt authentication;
+  submitting credentials differs from requiring an existing authenticated session.
+  Credential-shaped fields alone do not require operator-supplied credentials.
+- **Protected endpoint:** requires prior authenticated/authorized access when
+  supported by evidence for that exact operation. A sibling's bearer requirement
+  does not transfer to an authentication endpoint or another request.
+- **Unknown request contract:** method, body schema or media type is insufficiently
+  grounded. Missing schema is a discovery gap, not proof of an access prerequisite
+  or a need for operator credentials. An inferred POST does not establish its fields.
+
+Review available documentation, form controls, call sites and HTTP observations
+first. Use existing bounded authorized investigation when it can resolve a useful
+gap, or retain uncertainty during passive triage. Never fabricate credentials,
+body schemas, tokens or sessions, and do not automatically probe authentication
+endpoints. Respect evidenced CSRF, CAPTCHA, client-authentication and authorization
+requirements; `blocked` remains appropriate for a genuine unmet prerequisite.
+
 For each parameter, determine where and how it may be used, based on what
 `web-enumeration` observed (request schema, route source, auth state, and
 response context). Treat names and locations as hypotheses, not evidence that
@@ -366,11 +385,15 @@ Candidates even when the phase cannot close. Read previous operator answers;
 do not re-ask a decided dependency or pressure exclusion. Bind a dependency
 question with questions[].input_ids containing its exact blocked IDs. Supply
 `dependency_kind` (`access`, `request_context`, or `scope`) and a concrete
-`dependency_basis` explaining why operator involvement is needed. Unverified
-method/body provenance requires request-context clarification, not an assumed
-access prerequisite. A scope decision must be independent of an unverified
-authentication claim. Offer "keep blocked", and apply only the actual answer. This answer never commits a
-disposition automatically. Resume preserves these session-specific decisions.
+`dependency_basis` explaining why operator involvement is needed. Investigate
+missing request context within existing bounds before declaring an operator
+dependency; use `ask_user` only when operator information or authorization is
+genuinely needed. Keep unrelated request-context and access dependencies in
+separate questions, even for similar field names. A scope decision must be
+independent of an unverified authentication claim. Offer "keep blocked", and apply
+only the actual answer to the exact input IDs, never sibling or unrecorded fields.
+This answer never commits a disposition automatically. Resume preserves these
+session-specific decisions.
 
 Before `complete_skill`, inspect current readiness and dispositions. Missing
 credentials do not require guessing a login, fabricating a bearer token or
@@ -448,20 +471,33 @@ Do not include documentation GETs as POST request/control observations.
 An identical invalid-login response proves neither field-specific control nor a
 SQL query; ordinary search variability alone is not an SQLi hypothesis.
 
-Immediately before `file_write`, reconcile claims with their source/reference:
-effective method/endpoint, HTTP status, response media type, redacted body marker,
-capture flags and claim confidence. Observations/documents actually read take
-precedence over conflicting LLM summaries or inventory prose. Distinguish direct
-observation, observed from specification, inference/hypothesis and unknown without
-new Workflow fields. Request Content-Type is not response Content-Type; preserve
-an error's actual text/format rather than inventing a JSON envelope. JSON results
-do not show a SQL statement; parser diagnostics do not show full queries or
-controlled evaluation. Metadata-only capture, 200/HTML or a filename does not
-prove body review, operation success or SPA calibration.
+Immediately before `file_write`, reconcile method/endpoint, HTTP status, response
+media type, redacted body markers, capture flags and claim confidence with their
+source/reference. Reuse relevant structured data. Workflow supplies canonical IDs,
+dispositions, Candidates, accepted Validation Results and Findings; bound `ask_user` calls/results
+and matching transitions supply operator decisions; executed HTTP observations
+supply method, path, status, exact response field names, media type, redacted body
+markers and capture facts; inspected specifications/source supply documented request
+contracts. Label SQL implementation explanations as hypotheses. These primary records
+take precedence over conflicting LLM summaries or inventory prose. Retrieve only
+missing details through permitted interfaces, without HTTP solely to repair prose.
 
-Keep retained completeness, ranges read and content still in context separate;
-Content-Length is not bytes inspected. Reuse trustworthy visible evidence, listing
-metadata/reading ranges only when missing and permitted. Otherwise record the
+Distinguish path versus operation versus executed request: an observed GET status
+does not attest an unexecuted POST. Recorded, analyzed, behaviorally probed and
+excluded inputs are different sets; analyzed does not imply tested. Exclusions
+cover only exact bound input IDs, never sibling or unrecorded fields. Keep Candidate,
+Validation Result and Finding separate. Use deterministic counts when available,
+not unsupported precision. Distinguish observed, documented, inferred/hypothesis and
+unknown without new Workflow fields. Request Content-Type is not response Content-Type;
+preserve an error's actual text/format rather than inventing a JSON envelope. JSON
+results do not show a SQL statement; parser diagnostics do not show full queries or
+controlled evaluation. Metadata-only capture, 200/HTML or a filename does not prove
+body review, operation success or SPA calibration. Keep reporting concise; no new
+ledger or mandatory per-sentence citations.
+
+Keep declared response length, captured/retained bytes, ranges read and content
+still in context separate; Content-Length is not bytes inspected. Reuse trustworthy
+visible evidence, listing metadata/reading ranges only when missing and permitted. Otherwise record the
 limitation, without refetch, cap increases, cache-busters or shell recovery. Keep
 this canonical artifact concise, redacted and attributed, without per-response
 artifacts or extra ledgers. Write

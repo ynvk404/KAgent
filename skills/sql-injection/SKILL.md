@@ -75,16 +75,47 @@ Continue does not authorize a retest or reset declaration/recovery allowances.
 Read the applicable payload guidance before the first confirmation probe, not
 after spending syntax adjustments. Use its published continuation only until
 the chosen technique is visible; unrelated later sections are not prerequisites.
-Before each HTTP probe, check a short hypothesis, its supporting evidence,
-expected observation and what would falsify it against current context;
-no extra Workflow action, ledger, artifact or full query reconstruction is required. Choose a benign
-seed and explain the expected oracle and prefix/predicate/suffix hypothesis.
-Do not use an arbitrary nonmatching seed for an AND-filter test. Earlier analysis
-observations inform planning only and remain unowned: do not copy their IDs into
-terminal proof or imply ownership. Capture a necessary benign control inside the
-active attempt only for an identified comparison. A quote-containing search match
-may be ordinary string matching, not an established breakout shape. Parser
-positions alone do not pin a LIKE literal or balance its quotes and parentheses.
+
+## Decision checkpoint — before a probe and after its response
+
+**Observation → Hypothesis → Oracle → Expected Result → Falsifier → Next Decision.**
+Before each HTTP probe, check the control, hypothesis, expected marker and
+falsifier; reassess after the response. Keep this compact in reasoning; no new
+Workflow action, ledger, artifact or full query reconstruction is required.
+
+1. **Ground the control and hypothesis.** Identify the known benign response and
+   its stable marker, the initial signal, and the proposed SQL behavior. Separate
+   observed facts from assumptions: parser diagnostics do not reveal the complete
+   statement or implementation mechanism. Earlier Input Analysis observations
+   inform planning but remain unowned; reuse suitable owned controls instead of
+   forcing extra requests. Capture a necessary control inside the active attempt
+   only for an identified comparison.
+2. **Check compatibility and information gain.** For competing plausible shapes,
+   consider the prefix, inserted input expression and suffix together: quotes,
+   parentheses, wildcards, grouping and comments. A quoted input or matching
+   quote-containing search value does not establish a working predicate breakout.
+   Predict the observable marker under each hypothesis and what would falsify it.
+   Shapes with the same prediction supply no new information; choose a
+   discriminating bounded probe or leave the oracle unresolved.
+3. **Sequence conditional Boolean tests.** Choose a known match for an AND-filter.
+   Do not use an arbitrary nonmatching seed for an AND-filter test. If compatibility is unresolved, first check
+   whether intended TRUE preserves the expected benign marker before dispatching
+   dependent FALSE; do not blindly batch the pair. If TRUE loses that marker,
+   reassess context compatibility and the oracle. Equal empty responses do not
+   establish SQLi absence. A trailing wildcard can change an equality's truth
+   value; a parser position does not settle quote or parenthesis balance. Report
+   the pair as unexecuted if FALSE was not sent. Suitable existing observations
+   need no extra compatibility request; established pairs retain all repetition
+   and confirmation requirements. Boolean testing is not required for every Candidate.
+4. **Reconcile bounds, then reassess.** Count executed syntax-shape changes,
+   including relevant Input Analysis history and the first confirmation request
+   if its shape changed, before choosing another shape. Keep the existing three
+   adjustments after the initial signal, shared across attempts, phases and
+   techniques; Continue never resets them. Same-shape predicate flips and valid
+   repetitions do not spend an adjustment. After an inconclusive response, compare
+   the prediction with the actual observation and revise the hypothesis/oracle
+   before another probe. Do not exhaust unused allowance without a useful test;
+   an honest `insufficient-evidence` is valid.
 
 Exhausted syntax adjustments are a finalization checkpoint: use another technique
 only if it has a distinct evidence-supported plan within the existing bounds.
@@ -97,29 +128,6 @@ is not a general notes log. Reserve existing turns for proof writing, registrati
 and `record_result`; missing proof never prevents an honest unresolved result.
 An unregistered proof file is a local artifact, not accepted evidence. Verify
 the returned `result_id`, `evidence_refs` and outcome before reporting them.
-
-**Observation → Hypothesis → Oracle → Expected Result → Falsifier → Next Decision.**
-Use this as a compact decision check, not a new reporting step. Separate the
-captured diagnostic from competing SQL-shape hypotheses. For each plausible
-shape, account for the prefix, inserted expression and suffix, including wildcard,
-quote and parenthesis boundaries. Identify an observable marker and predict how
-the proposed probe would distinguish those hypotheses. If all predict the same
-response, the variation supplies no new information; choose a discriminating
-bounded test or leave the oracle unresolved. After the response, compare it with
-the prediction before deciding whether to continue, revise or stop. Keep the
-existing three-adjustment allowance and all confirmation criteria.
-
-For example: a known match returns rows, a quote triggers a SQLite diagnostic,
-and an intended TRUE expression returns `200 data:[]`. A quoted `LIKE` context
-is a hypothesis, not an observed implementation. A possible trailing wildcard
-can change an equality's truth value; alternative grouping/suffix shapes remain
-open. The oracle would need a context-compatible predicate that preserves the
-known match on TRUE and excludes it on FALSE. An empty intended TRUE falsifies
-that proposed oracle, not SQLi itself. A parser position at `)` does not settle
-outer parenthesis balance; adding whitespace to the same SQLite line comment
-has the same prediction unless new evidence distinguishes it. Do not send an
-equivalent variation to fill a pair. If no useful permitted test remains, report
-the pair as unexecuted and the result unresolved, without inventing a FALSE.
 
 ## Runtime completion contract
 
@@ -783,6 +791,12 @@ not for every SQLi technique.
   surrounding prefix/suffix is applied. In `LIKE '%input%'`, a generic quoted
   equality can acquire a trailing `%` and cease to be TRUE. Account for wildcard,
   quote and parenthesis boundaries before treating a corpus example as a pair.
+- When compatibility is unresolved, establish intended TRUE against the known
+  benign marker first, then decide whether dependent FALSE is meaningful. Do not
+  batch both while their interpretation depends on unresolved syntax assumptions.
+  If TRUE fails to preserve the expected marker, explicitly reassess the context
+  and oracle; this falsifies the proposed comparison, not SQLi. Reuse suitable
+  existing observations; this is not a mandatory extra request for compatible pairs.
 - HTTP 200 with identical TRUE/FALSE bodies does not prove that either predicate
   was evaluated as intended. If the seed/oracle is not established, the equal
   pair remains unresolved rather than automatically becoming a completed negative.

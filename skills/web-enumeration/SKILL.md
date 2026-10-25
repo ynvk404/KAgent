@@ -131,6 +131,15 @@ repeat full reconnaissance or technology fingerprinting here.
 
 ## Incremental structured handoff (throughout steps 1–6)
 
+Keep five distinct claims: an endpoint clue, a likely HTTP method, a documented
+or observed request contract, its individual input fields, and later behavioral
+controllability. Reasonable inference is useful when labelled: a Login route may
+suggest POST, but that inference supplies neither JSON fields nor request media
+type. Establish fields from an inspected request schema, actual named form
+controls, a network call site or an executed request, not a route/function name,
+isolated variable, response schema or GET handler error. Registration records
+structure; Input Analysis establishes controllability when needed for a Candidate.
+
 For documentation, first read enough of the relevant endpoint, request body and
 reachable schema definitions under the existing bounded-reading rules before
 declaring an input type. Reuse facts already in context. An unresolved `$ref`
@@ -331,6 +340,15 @@ parameters, each operation's `requestBody.content` media type/schema, and any
 operation-level security requirement. Record their provenance as `observed
 from the specification`; do not say they are reachable until requested.
 
+Inspect operation request parameters and request-body schema properties, including
+arrays, objects, nested properties and resolvable references, with their types,
+required/optional state and media types. For Swagger 2, inspect body parameters
+and `consumes` as applicable. Response schemas do not establish request fields.
+Composite arrays and objects are supported inputs; do not omit them for lacking
+a scalar sink. A documented JSON-containing string stays a string. Preserve
+unknown optional fields as unknown, without inventing values or requirements.
+Documented fields need no live POST merely to be registered.
+
 Read operation keys from the retained `.paths` object and record supported
 request shapes incrementally. Reuse the same retained response for parsing;
 do not fetch a specification again merely to list its paths.
@@ -455,8 +473,9 @@ or import reference rather than resolving it from product knowledge. Keep surrou
 alone is insufficient. Apply the large-response strategy if content is cut.
 Trace visible method, URL construction, query parameters and field assignments
 at a call site, including separate frontend object construction passed to a
-service. Record those sourced fields incrementally; if the service's transport
-binding or media type is unresolved, retain that limitation instead of guessing
+service, serialization and relevant request headers. Record those sourced fields
+incrementally; if the service's transport binding or media type is unresolved,
+retain that limitation instead of guessing
 POST or claiming no field-level evidence exists. Appending a guessed parameter
 without an error does not establish that the server consumes it.
 
@@ -528,16 +547,28 @@ status for each route rather than grouping handler errors with auth failures.
 A manual attribution locator must copy the visible binding/schema path; a valid
 source hash does not verify that locator or operation count.
 
-Immediately before `file_write`, reconcile each claim with its source/reference:
-effective method/endpoint, HTTP status, response media type, redacted body marker,
-capture flags and claim confidence. Observations/documents actually read take
-precedence over conflicting LLM summaries. Distinguish direct observation, observed
-from specification, inference/hypothesis and unknown in prose, not new Workflow
-fields. Status 200, HTML media type, a filename or metadata-only capture does not
-prove body review, SPA calibration or operation success. A partial body supports
-only its inspected markers; unknown content stays a limitation under the bounded
-reading rules. Keep the attributed inventory concise and redacted; no mandatory
-per-response artifact or extra ledger.
+Immediately before `file_write`, reconcile method/endpoint, HTTP status, response
+media type, redacted body markers, capture flags and claim confidence with their
+source/reference. Reuse relevant structured records: canonical IDs, dispositions
+and counts from Workflow; operator decisions from bound `ask_user` calls/results and matching
+disposition transitions; executed methods, statuses, response field spellings and
+capture facts from HTTP observations; documented contracts from specifications or
+source actually inspected. Label technical interpretation as hypothesis. Previous
+Markdown cannot override conflicting primary records; observations/documents take
+precedence over conflicting LLM summaries. Retrieve only missing details
+through permitted interfaces; do not send HTTP solely to repair prose.
+
+Distinguish a path, a documented HTTP operation and an executed request; a GET
+status does not attest an unexecuted POST. Separate recorded, analyzed, behaviorally
+probed and excluded inputs; Candidate, accepted Validation Result and Finding are
+different records. Exclusions cover exact input IDs, never sibling or unrecorded
+fields. Derive deterministic totals when available, naming the counting unit;
+otherwise omit unsupported precision. Distinguish observed, documented, inferred
+and unknown. Status 200, HTML, a filename or metadata-only capture does not prove
+body review, SPA calibration or operation success. Declared response length,
+captured/retained bytes and inspected ranges are separate facts; a partial body
+supports only inspected markers. Keep the attributed inventory concise and redacted,
+without mandatory per-sentence citations, per-response artifacts or extra ledgers.
 
 Write the inventory to:
 

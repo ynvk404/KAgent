@@ -348,3 +348,25 @@ async def test_shipped_payload_reader_rejects_traversal(
     )
 
     assert out == 'error: path "../SKILL.md" escapes <skill>/payloads/'
+
+
+async def test_boolean_examples_keep_context_annotations_in_bounded_reader(shipped_payload_tool, noop_prompter):
+    args = {'skill': 'sql-injection', 'file': 'payloads.txt', 'limit': 150}
+    pages = []
+    for _ in range(3):
+        page = str(await shipped_payload_tool.run(args, None, noop_prompter))
+        pages.append(page)
+        if "1' AND '1'='2" in page:
+            break
+        next_call = json.loads(page.splitlines()[0].split('Next page: ', 1)[1])
+        assert next_call['tool'] == 'read_payloads'
+        args = next_call['arguments']
+    text = '\n'.join(pages)
+    for rule in ('TRUE preserves the known benign marker before dependent FALSE',
+                 'Being inside quotes is insufficient', 'prefix/suffix', 'parentheses',
+                 'Equal empty/error responses are inconclusive', 'reassess the', 'context/oracle'):
+        assert rule in text
+    for expression in ('1 AND 1=1', '1 AND 1=2', "1' AND '1'='1", "1' AND '1'='2"):
+        line = next(line for line in text.splitlines() if line.startswith(expression + ' '))
+        assert '# purpose:' in line and 'applies:' in line and 'limit:' in line
+        assert any(term in line for term in ('benign marker', 'its marker'))

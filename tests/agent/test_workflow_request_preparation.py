@@ -85,6 +85,18 @@ def test_guidance_budget_and_conditional_contract(mode, status):
     assert "not permission" in guidance and "sync_coverage" in guidance
 
 
+def test_unknown_request_contract_is_a_discovery_gap_before_operator_dependency():
+    context = PlannerContext(objective_mode='whole_target',
+        completed_phases=frozenset({'recon', 'enumeration'}), blocked_input_count=1)
+    guidance = render_action_guidance(ActionView.for_objective('whole_target'), context)
+    assert 'an unverified method/body is a discovery gap' in guidance
+    assert 'not an access prerequisite or automatic operator question' in guidance
+    assert 'authentication endpoint accepts credentials' in guidance
+    assert 'protected operation requires prior access' in guidance
+    assert 'passive triage' in guidance and 'only when operator information/authorization is needed' in guidance
+    assert 'separate unrelated dependencies' in guidance and 'exact input_ids' in guidance
+
+
 @pytest.mark.parametrize("mode", ["whole_target", "direct"])
 @pytest.mark.parametrize("stopped", [False, True])
 async def test_owned_handoff_guidance_reaches_model_without_changing_runtime(runtime, tmp_path, mode, stopped):
