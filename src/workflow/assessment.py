@@ -125,6 +125,18 @@ def usable_source(row) -> bool:
             and row.get("execution_status") == "completed")
 
 
+def source_usability(row) -> dict[str, Any]:
+    """Capture eligibility only; never a vulnerability or effects assessment."""
+    reasons = []
+    if row.get('truncated') is True:
+        reasons.append('truncated')
+    if row.get('complete') is not True:
+        reasons.append('incomplete')
+    if row.get('execution_status') != 'completed':
+        reasons.append('execution unfinished')
+    return {'terminal_usable': usable_source(row), 'unusable_reasons': reasons}
+
+
 def require_cleanup_evidence(rows):
     """A declaration cannot substitute for an owned action and later readback."""
     sources = [entry["source"] for entry in rows if usable_source(entry["source"])]
@@ -137,8 +149,8 @@ def require_cleanup_evidence(rows):
 class EvidenceAdmissibilityError(EvidenceSubmissionError):
     """A manifest repair error, distinct from a missing validation step."""
 
-    def __init__(self, message: str):
-        super().__init__("UNUSABLE_PRIMARY_SOURCE", message)
+    def __init__(self, message: str, observation_id: str):
+        super().__init__("UNUSABLE_PRIMARY_SOURCE", message, offending_observation_ids=[observation_id])
 
 
 def require_usable_source(row):
@@ -163,7 +175,7 @@ def require_usable_source(row):
         "Do not edit registered snapshots in place. "
         "Do not add probes just to repair a manifest when existing evidence suffices. "
         "If evidence is insufficient, submit insufficient-evidence; continue validation only "
-        "for a separately identified missing validation step."
+        "for a separately identified missing validation step.", row['id']
     )
 
 

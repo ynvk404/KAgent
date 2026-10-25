@@ -274,20 +274,10 @@ def runtime_facts(agent: Any, event: AgentEvent | None, calls: tuple[PendingCall
                 elif owned["recovery"]["rejections"] or owned["recovery"]["repair_turns"]:
                     work += " recovery"
         parts = (["Blocked", work] if blockers else [work])
-        inventory = [row for row in records if row.kind == "input"]
-        if inventory:
-            reviewed = sum(row.disposition in {"analyzed", "dropped"} for row in inventory)
-            parts.append(f"{reviewed}/{len(inventory)} inputs reviewed")
-            blocked = sum(row.disposition == "blocked" for row in inventory)
-            if blocked:
-                parts.append(f"{blocked} {'input' if blocked == 1 else 'inputs'} blocked")
-        active = sum(candidate.status == "validating" for candidate in candidates)
-        if active:
-            parts.append(f"{active} {'validation' if active == 1 else 'validations'} active")
-        if validations:
-            parts.append(f"{validations} {'validation' if validations == 1 else 'validations'} accepted")
-        if goals:
-            parts.append(f"{goals} {'goal' if goals == 1 else 'goals'} pending")
+        # Progress summarizes current work; detailed dispositions/results stay
+        # in their records. Exclusions and accepted negatives are not findings.
+        findings = sum(workflow.finding_is_persisted(candidate.id) for candidate in candidates)
+        parts.append(f"{findings} {'finding' if findings == 1 else 'findings'}")
         if parts:
             overview = "Workflow · " + " · ".join(dict.fromkeys(parts))
         completion_supported = all(phase in completed for phase in REQUIRED_WHOLE_TARGET_PHASES) and not pending

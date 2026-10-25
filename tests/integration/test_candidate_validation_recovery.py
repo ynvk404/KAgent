@@ -23,7 +23,8 @@ ASSESSMENT = {"hypothesis": "category is evaluated in a SQL predicate",
               "criteria": "Two complete TRUE/FALSE pairs with stable distinct content",
               "limitations": "Offline fixture; no database extraction or live verification",
               "observed_impact": "Controlled predicates change the returned fixture products.",
-              "severity": "medium", "completed_attempt": True}
+              "severity": "medium", "completed_attempt": True, "oracle_status": "established",
+              "oracle_basis": "Offline controlled handler evaluates the fixture predicates and controls under the tested context."}
 
 
 class ScriptedClient(Client):

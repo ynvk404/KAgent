@@ -16,7 +16,7 @@ def expert_attempt_preparation(skill: str, candidate_id: str) -> str:
         'the same path are different request identities; payload variations are observations. '
         f'Then call workflow(action="start_validation", candidate_id="{candidate_id}", ...) successfully '
         'before probes → evidence → result. Association grants no execution permission. '
-        'An owned active attempt follows resume/recovery with its immutable declaration and budget instead.'
+        'Owned active attempts keep their immutable declaration and recovery budget.'
     )
 
 
@@ -33,6 +33,11 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
         f"repair_turns={recovery['repair_turns']}/{recovery['repair_turn_limit']}. "
         'Continue/compaction and reopening the same objective do not reset these counters.',
     ]
+    effects = handoff.get('effects', {})
+    if handoff['owned_active'] and effects.get('declaration_required'):
+        lines.append('Effects declaration required after the latest target dispatch. A later request invalidates an earlier '
+                     'no-mutation/cleanup declaration. Finish only necessary validation, then record_attempt_state from usable '
+                     'owned observations before finalization. Unknown effects do not prove a write occurred.')
     if action == 'preserve_result':
         lines.append('Preserve the terminal result; finish accepted-result coverage/finding persistence if pending. '
                      'Fresh probing requires an explicit retest or the existing evidence-revalidation path through runtime gates.')
@@ -77,7 +82,7 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
                 lines.append('Reconcile used/remaining syntax allowance and the actual stop reason; never call it exhausted while unused. '
                              'Keep Candidate status, ValidationResult outcome, goal status and finding eligibility separate; '
                              'Phase 3 unmet prerequisites do not turn insufficient-evidence into not-confirmed.')
-            lines.append('Boolean confirmation only: two complete TRUE/FALSE repetitions, four distinct owned observations '
+            lines.append('Boolean confirmation (conditional): two complete TRUE/FALSE repetitions, four distinct owned observations '
                          'and structured confirmation. '
                          'Syntax shapes: at most three after the initial signal (Input Analysis included). '
                          'First confirmation change counts; phases/recapture never reset allowance. '

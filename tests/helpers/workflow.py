@@ -115,6 +115,7 @@ def adopt_fixture_assessment(state, result, *, policy=None, assessment=None):
     result.assessment = {"hypothesis": "Fixture hypothesis", "criteria": "Bounded fixture criteria",
         "limitations": "Offline fixture only", "completed_attempt": True,
         "observed_impact": "The linked evidence demonstrates the behavior.", "severity": "medium",
+        'oracle_status': 'established', 'oracle_basis': 'Controlled synthetic consumer fixture supplies the applicable comparison.',
         **(assessment or {}), "artifacts": [state.evidence[ref].to_dict() for ref in result.evidence_refs],
         "attempt": {k:v for k,v in attempt.items() if k != "status"}}
     result.assessment_binding = seal(result)
@@ -165,7 +166,8 @@ async def run_workflow_fixture(tool, args, signal, prompter):
     oid = store.capture(action, 200, b"Recorded transport fixture bytes", complete=True, owner=owner)
     args.update(attempt_id=attempt["id"], observation_ids=[oid], assessment={
         "hypothesis": "Fixture hypothesis", "criteria": "Bounded fixture criteria", "limitations": "Offline fixture",
-        "completed_attempt": True, "observed_impact": "Fixture response observed.", "severity": "medium"})
+        "completed_attempt": True, "observed_impact": "Fixture response observed.", "severity": "medium",
+        'oracle_status': 'established', 'oracle_basis': 'Controlled synthetic consumer fixture supplies the applicable comparison.'})
     return await runner(args, signal, prompter)
 
 

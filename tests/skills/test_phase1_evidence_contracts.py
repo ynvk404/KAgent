@@ -91,11 +91,12 @@ async def test_sql_terminal_example_uses_production_assessment_contract(runtime,
               'hypothesis': 'A bounded fixture input could affect a SQL query',
               'criteria': 'Compare complete fixture control and probe responses',
               'limitations': 'Synthetic contract check; no SQLi semantics established',
-              'observed_impact': 'The bounded fixture test did not establish SQL injection'}
+              'observed_impact': 'The bounded fixture test did not establish SQL injection',
+              'oracle_basis': 'Synthetic controls make this fixture comparison applicable and interpretable.'}
     submission = eval(compile(ast.Expression(expressions[0].value), '<skill-example>', 'eval'),
                       {'__builtins__': {}}, values)
     # Required assessment fields and completed_attempt are enforced by production.
-    for key in ('hypothesis', 'criteria', 'limitations', 'observed_impact', 'severity', 'completed_attempt'):
+    for key in ('hypothesis', 'criteria', 'limitations', 'observed_impact', 'severity', 'completed_attempt', 'oracle_status', 'oracle_basis'):
         incomplete = {**submission, 'assessment': {
             k: v for k, v in submission['assessment'].items() if k != key}}
         assert (await registry.execute('workflow', incomplete, None, p)).startswith('error:')

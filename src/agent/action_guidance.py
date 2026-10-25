@@ -82,7 +82,10 @@ def render_action_guidance(view: ActionView, context: PlannerContext, *, owned_a
                 lines.append(
                     'Blocked inputs prevent complete_skill, not validation of an independent analyzed Candidate with a canonical handoff. Finish other pending triage; '
                     'do not guess credentials or tokens to clear readiness. Use ask_user once for missing input or an '
-                    'operator exclusion; only an actual exclusion justifies dropped for that dependency. '
+                    'operator exclusion; bind input_ids, dependency_kind and a concrete dependency_basis. '
+                    'Inspect get_input.provenance: unverified method/body is a request_context question, not an access prerequisite. '
+                    'A scope question is an independent coverage decision, never a relabeled authentication assumption. '
+                    'Only an actual exclusion justifies dropped for that dependency. '
                     'Otherwise keep blocked and report incomplete. Update the artifact before completion; '
                     'an exclusion is untested work, not a negative result or new authority.')
         if phase != "recon":

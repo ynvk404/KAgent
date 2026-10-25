@@ -132,7 +132,8 @@ class CaptureAwareClient(Client):
                     'criteria': 'Observe the fixture marker/error for this single bounded probe.',
                     'limitations': 'One mocked request; no general absence claim.',
                     'observed_impact': 'Fixture marker unchanged.', 'severity': 'info',
-                    'completed_attempt': True}})
+                    'completed_attempt': True, 'oracle_status': 'established',
+                    'oracle_basis': 'Controlled MockTransport fixture defines a stable marker comparison; not evidence of a real SQL oracle.'}})
         data = json.loads(last.content)
         assert data['ok'] and data['result']['outcome'] == 'not-confirmed'
         return self.done('One selected request tested with one bounded probe; SQLi not confirmed. Other requests were not assessed.')

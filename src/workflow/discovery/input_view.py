@@ -13,6 +13,22 @@ DEFAULT_INPUT_LIMIT = 20
 MAX_INPUT_LIMIT = 25
 
 
+def input_provenance(state: WorkflowState, item: AttackSurfaceInput) -> dict[str, Any]:
+    """Explicit uncertainty from existing references, without body reads or new authority."""
+    documents = [link.source_id for link in state.discovery_provenance.values()
+                 if link.input_id == item.id and link.locator.startswith('manual:')]
+    request_linked = bool(item.baseline_request_ref or item.source_ref and any(
+        source.retained_ref == item.source_ref and source.kind in {'http', 'capture'}
+        for source in state.discovery_sources.values()))
+    kind = ('request-linked' if request_linked else
+            'manual-document-attribution' if documents else 'unverified')
+    return {'kind': kind, 'document_source_ids': sorted(set(documents))[:8],
+            'authentication_requirement': 'unknown',
+            'note': ('References do not verify field consumption or an authentication prerequisite. '
+                     'Verify exact method, field, media type and documented type before analysis; '
+                     'a GET error does not establish POST semantics. Missing credentials alone are not an exclusion.')}
+
+
 def ordered_inputs(state: WorkflowState) -> list[AttackSurfaceInput]:
     priority = {"pending": 0, "blocked": 1, "analyzed": 2, "dropped": 3}
     return sorted(state.objective_inputs(), key=lambda row: (priority[row.disposition], row.id))

@@ -21,7 +21,7 @@ from src.coverage.store import CoverageStore, CoverageStatus
 from src.coverage.context import project_candidate_coverage
 from src.target.target import Target
 from src.target.input_admission import admit_input_fields, identity_text, canonical_endpoint
-from src.workflow.discovery.input_view import input_page, input_summary
+from src.workflow.discovery.input_view import input_page, input_summary, input_provenance
 from src.workflow.discovery.inventory import (
     BOUND_NAMES, MAX_SOURCE_REASON_LENGTH, MAX_PROCESSING_BOUND, REFERENCE_HEX_PATTERN,
 )
@@ -47,7 +47,8 @@ from src.workflow.state import (
 from src.workflow.evidence.artifacts import EvidenceArtifact, verify_evidence_reads, check_proof_references
 from src.workflow.evidence.source import EvidenceSource
 from src.workflow.assessment import (start_attempt, references, resolve_sources, candidate_binding,
-                                     seal, accepted_result, check_excerpts, DuplicateRequestAssociation, MAX_SOURCES)
+                                     seal, accepted_result, check_excerpts, DuplicateRequestAssociation, MAX_SOURCES,
+                                     source_usability)
 import uuid
 from src.workflow.evidence.errors import EvidenceSubmissionError
 from src.skills.registry import (
@@ -245,7 +246,7 @@ class WorkflowTool(Tool):
                         "url": {"type": "string", "minLength": 1, "maxLength": 2000},
                         "required": {"type": "boolean"}},
                     "required": ['role', 'method', 'url'], "additionalProperties": False}},
-                "assessment": {"type": "object"},
+                "assessment": {"type": "object", 'description': 'Bounded Agent assessment, not runtime SQL interpretation. SQLi not-confirmed requires completed_attempt=true, oracle_status=established and an observation-grounded oracle_basis explaining technique/context compatibility. Unknown or inconclusive oracle requires reassessment or insufficient-evidence; equal intended Boolean sides alone are not a completed negative.'},
                 "input_id": optional_string,
                 "discovery_source_id": {"type": "string", "pattern": "^ds_" + REFERENCE_HEX_PATTERN + "$",
                     "description": 'Exact current ds_ ID from workflow(list, view="sources"); copy all 64 lowercase hex digits. Never convert obs_ or guess an ID.'},
@@ -769,6 +770,7 @@ class WorkflowTool(Tool):
                     "observation_id": ref, "method": item.method, "request_url": redact(item.url),
                     "request_media_type": (item.source_details or {}).get("request_media_type"),
                     "status": item.status, "response_media_type": media,
+                    "retained_body_bytes": len(item.body), "response_hash": item.response_hash,
                     "complete": item.complete, "truncated": item.truncated,
                     "execution_status": item.execution_status, "terminal_evidence": False,
                 })
@@ -949,7 +951,8 @@ class WorkflowTool(Tool):
             return "error: input endpoint does not belong to the active target origin"
         # Constructors enforce canonical redaction and the 4000-character
         # sample bound. This opt-in read never hydrates runtime captures.
-        return json.dumps({"ok": True, "input": item.to_dict()}, indent=2)
+        return json.dumps({"ok": True, "input": item.to_dict(),
+                           'provenance': input_provenance(self.state, item)}, indent=2)
 
     def _record_input(self, args: dict[str, Any], prompter=None) -> str:
         objective = self.state.objective
@@ -1038,6 +1041,7 @@ class WorkflowTool(Tool):
         except (TypeError, ValueError) as err:
             return f"error: {err}"
         return json.dumps({"ok": True, "created": created, "input": stored.to_dict(),
+                           'provenance': input_provenance(self.state, stored),
                            **({'source_attribution': attribution.to_dict(),
                                'attribution_kind': 'manual_declaration'} if attribution else {})}, indent=2)
 
@@ -1272,7 +1276,7 @@ class WorkflowTool(Tool):
 
     def validation_handoff(self, candidate_id: str, policy=None) -> dict[str, Any] | None:
         """Bounded lifecycle metadata, never observations, admission or authority."""
-        from src.workflow.assessment import attempt_owner
+        from src.workflow.assessment import attempt_owner, attempt_effects
         from src.workflow.evidence.recovery import (
             current_budget, MAX_EVIDENCE_REJECTIONS, MAX_TERMINAL_REPAIR_TURNS,
         )
@@ -1299,6 +1303,11 @@ class WorkflowTool(Tool):
                                  and latest.objective_id != objective.id)
                         and candidate.status not in {'queued', 'validating'})
         stopped = bool(attempt and attempt.get('probing_stopped'))
+        effects = attempt.get('effects', {}) if attempt else {}
+        declaration = effects.get('declaration')
+        dispatches = effects.get('dispatches', [])
+        metadata = (attempt_effects(self.state, attempt, policy.observations if policy else self.observations)
+                    if attempt else {'mutation_performed': None, 'cleanup_state': 'unknown'})
         prerequisite = self.validation_admission_error(candidate_id, policy)
         if terminal:
             action = 'preserve_result'
@@ -1317,6 +1326,13 @@ class WorkflowTool(Tool):
             'owned_active': owned, 'probing_stopped': stopped,
             'latest_outcome': latest.outcome if latest else None,
             'next_action': action, 'prerequisite_error': prerequisite,
+            'effects': {
+                'declaration_current': bool(owned and declaration is not None),
+                'declaration_required': bool(owned and dispatches and declaration is None),
+                'completed_dispatches': sum(row.get('status') == 'completed' for row in dispatches),
+                'mutation_performed': metadata['mutation_performed'],
+                'cleanup_state': metadata['cleanup_state'],
+            },
             'recovery': {
                 'status': 'exhausted' if exhausted else 'available',
                 'rejections': budget['rejections'] if budget else 0,
@@ -1581,7 +1597,8 @@ class WorkflowTool(Tool):
                 check_proof_references(await artifact.read_verified_async(self.evidence_root, sensitive_read_approved=True), candidate_id, ids)
                 previous = self.state.evidence_sources.get(artifact.id)
                 if previous is not None and previous != ids:
-                    raise EvidenceSubmissionError("IMMUTABLE_PARENT_CONFLICT", "immutable derived evidence source association changed")
+                    raise EvidenceSubmissionError("IMMUTABLE_PARENT_CONFLICT", "immutable derived evidence source association changed",
+                        offending_observation_ids=[ref for ref in ids if ref not in previous])
                 await run_sync(source_binding.validate)
                 ensure_current()
                 self.state.add_evidence(artifact)
@@ -1601,7 +1618,21 @@ class WorkflowTool(Tool):
                 next_action='First create the parent directory and write minimal redacted proof with file_write outside artifacts/findings. Then record_evidence with that existing evidence_path and the current Attempt owned observation_ids. Copy returned evidence.id (ev_...) into record_result.evidence_refs. Registration does not create the source file or a Finding.')
         except (OSError, ValueError) as err:
             return f"error: {err}"
-        return json.dumps({"ok": True, "evidence": artifact.to_dict(), "evidence_kind": "derived", "primary_parents": ids}, indent=2)
+        unusable = [{'observation_id': row['source']['id'],
+                     'reasons': source_usability(row['source'])['unusable_reasons']}
+                    for row in selected if not source_usability(row['source'])['terminal_usable']]
+        return json.dumps({"ok": True, "evidence": artifact.to_dict(), "evidence_kind": "derived", "primary_parents": ids,
+            'terminal_assessment_accepted': False,
+            'terminal_readiness': {
+                'status': 'unusable-primary-sources' if unusable else 'usable-primary-sources' if selected else 'no-primary-sources',
+                'unusable_sources': unusable,
+                'usable_observation_ids': [row['source']['id'] for row in selected
+                                           if source_usability(row['source'])['terminal_usable']],
+                'next_action': ('Rewrite proof using usable retained sources; keep unusable history in the ledger or a separate artifact. '
+                                'Register the corrected source as a new immutable snapshot and replace evidence_refs.' if unusable else
+                                'Registration saved a snapshot only. Reconcile effects after the last request and submit record_result; '
+                                'the runtime still checks ownership, all required sources, assessment and proof integrity.'),
+            }}, indent=2)
 
     def _record_attempt_state(self, args, policy):
         from src.workflow.assessment import attempt_owner, attempt_effects, require_idle_attempt, require_usable_source, require_cleanup_evidence
@@ -1832,6 +1863,13 @@ class WorkflowTool(Tool):
                     raise ValueError("invalid assessment severity")
                 if result.outcome == "not-confirmed" and assessment.get("completed_attempt") is not True:
                     raise ValueError("negative assessment requires declared completed bounded attempt")
+                if result.outcome == 'not-confirmed' and candidate.candidate_class == 'sql-injection' and (
+                        assessment.get('oracle_status') != 'established'
+                        or not isinstance(assessment.get('oracle_basis'), str)
+                        or not assessment['oracle_basis'].strip()):
+                    raise EvidenceSubmissionError('UNRESOLVED_ORACLE',
+                        'SQLi negative assessment requires an established, observation-grounded applicable oracle',
+                        validation_step=True)
                 if generic and (attempt is None or not isinstance(attempt.get("criteria"), dict)
                         or not all(isinstance(attempt["criteria"].get(k), str) and attempt["criteria"][k].strip()
                                    for k in ("hypothesis", "criteria", "limitations"))):
@@ -1854,7 +1892,9 @@ class WorkflowTool(Tool):
             if any(not self.state.evidence[ref].is_available_for_resume(self.evidence_root) for ref in refs):
                 raise ValueError("evidence integrity changed during result submission")
             if any(parent not in ids for ref in refs for parent in self.state.evidence_sources.get(ref, [])):
-                raise EvidenceSubmissionError("DERIVED_PARENT_MISMATCH", "derived evidence requires its declared primary source parents")
+                raise EvidenceSubmissionError("DERIVED_PARENT_MISMATCH", "derived evidence requires its declared primary source parents",
+                    offending_observation_ids=list(dict.fromkeys(parent for ref in refs
+                        for parent in self.state.evidence_sources.get(ref, []) if parent not in ids)))
             # Sources are checked again after every evidence permission await.
             result.assessment_contract_version = 2
             result.assessment_source = "agent"
@@ -2621,6 +2661,8 @@ class WorkflowTool(Tool):
                 "execution_status": item.execution_status, "producer": item.producer,
                 "source_kind": item.source_kind,
                 "truncated": item.truncated, "retained_body_bytes": len(item.body),
+                **source_usability({'complete': item.complete, 'truncated': item.truncated,
+                                    'execution_status': item.execution_status}),
                 "read_available": attempt.get("status") in {"active", "completed"}
                                   and "read_http_observation" not in policy.revoked})
         return rows

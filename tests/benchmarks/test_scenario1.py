@@ -334,7 +334,8 @@ def test_metrics_and_status_separation():
 ASSESSMENT = {'hypothesis': 'Marker reaches an executable response position',
               'criteria': 'Compare bounded baseline and harmless marker response',
               'limitations': 'Only this designated input was tested', 'observed_impact': 'Bounded fixture response',
-              'severity': 'low', 'completed_attempt': True}
+              'severity': 'low', 'completed_attempt': True, 'oracle_status': 'established',
+              'oracle_basis': 'Controlled synthetic handler and baseline establish the applicable fixture comparison.'}
 
 
 class ScriptedClient(Client):

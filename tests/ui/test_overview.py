@@ -298,9 +298,10 @@ async def test_progress_preserves_all_snapshot_fields_without_assessment_conclus
     workflow.set_candidate_status(active.id, "validating")
     async with app.run_test(size=(120, 32)):
         text = " ".join(_render_obj(_get_panel(app), 116).replace("│", "").split())
-        for part in ("Progress:", "Recon repair", "Blocked", "1/2 inputs reviewed",
-                     "1 input blocked", "1 validation active", "1 validation accepted", "1 goal pending"):
+        for part in ("Progress:", "Recon repair", "Blocked", "0 findings"):
             assert part in text
+        assert app.state.latest_facts is not None
+        assert app.state.latest_facts.validations == 1 and app.state.latest_facts.goals == 1
         assert not app.state.transcript
         assert "Status:" not in text
 

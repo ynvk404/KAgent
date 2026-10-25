@@ -5220,6 +5220,7 @@ class Agent:
         request: ChatRequest | None = None,
         strict_retention: bool = False,
     ) -> None:
+        cached_size: int | None = None
         if self._bounded_working is not working:
             self._bounded_working = working
             self._bounded_results.clear()
@@ -5244,6 +5245,8 @@ class Agent:
             return ''
 
         def replace_result(index: int, content: str, *, elided: bool = False) -> None:
+            nonlocal cached_size
+            cached_size = None
             message = working[index]
             source = original(message)
             if elided:
@@ -5313,7 +5316,10 @@ class Agent:
             emit({"type": "decision", "summary": storage_notice})
 
         def size() -> int:
-            return estimate_request(request, self.client.name()).estimated_total
+            nonlocal cached_size
+            if cached_size is None:
+                cached_size = estimate_request(request, self.client.name()).estimated_total
+            return cached_size
 
         if threshold <= 0 or size() < threshold:
             self._context_diagnostics(request, before, fixed_floor, emit,

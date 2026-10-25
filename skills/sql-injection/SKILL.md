@@ -243,7 +243,8 @@ bounded negative test, use actual returned references and evidence-derived text:
  "outcome": "not-confirmed", "observation_ids": sources,
  "evidence_refs": [evidence_id], "assessment": {
      "hypothesis": hypothesis, "criteria": criteria, "limitations": limitations,
-     "observed_impact": observed_impact, "severity": "info", "completed_attempt": True}}
+     "observed_impact": observed_impact, "severity": "info", "completed_attempt": True,
+     "oracle_status": "established", "oracle_basis": oracle_basis}}
 ```
 
 `sources` contains usable current owned observations; `evidence_id` is the `ev_`
@@ -279,6 +280,13 @@ returned IDs; do not repeat unchanged invalid calls or issue HTTP to fix JSON.
 When complete, correctly owned sources already meet this playbook's evidence
 contract, prioritize proof registration → result submission → required finding
 persistence. Probe again only for an identified missing validation step.
+
+For `not-confirmed`, the Runtime requires `assessment.oracle_status: established`
+and an observation-grounded `assessment.oracle_basis` explaining why the selected
+test is applicable and interpretable. These are your assessment, not Runtime SQL
+verification. Unknown/inconclusive compatibility stays unresolved; reassess the
+strategy within existing bounds rather than filling a Boolean pair or cycling
+techniques. The Runtime imposes no technique order.
 
 For a boolean-based confirmed result under this playbook, include structured
 `confirmation` evidence. Use `kind: boolean-differential`, one shared

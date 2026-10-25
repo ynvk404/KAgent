@@ -94,6 +94,11 @@ does not retrieve raw captures or live credentials. Marker-free samples remain
 samples: do not automatically insert `{INJECTION_POINT}` or treat a sanitized
 sample as an executable mutation template or captured replay baseline.
 
+Before triage, check canonical input names and types against the available source
+information, reusing context and retrieving only missing details. If an actual
+discrepancy is found, follow the existing correction/recovery instructions below;
+do not treat incomplete source interpretation as complete.
+
 Prefer `record_candidate(input_id=...)` for a stored input and inherit its
 verified request identity. Do not guess an endpoint spelling, change `product`
 to `products`, or reuse an unrelated HTTP source_ref. Method, normalized origin
@@ -359,8 +364,12 @@ resolved, set the same input back to `pending` and analyze it in this objective.
 Write/update the canonical handoff with current dispositions and grounded
 Candidates even when the phase cannot close. Read previous operator answers;
 do not re-ask a decided dependency or pressure exclusion. Bind a dependency
-question with questions[].input_ids containing its exact blocked IDs, offer
-"keep blocked", and apply only the actual answer. This answer never commits a
+question with questions[].input_ids containing its exact blocked IDs. Supply
+`dependency_kind` (`access`, `request_context`, or `scope`) and a concrete
+`dependency_basis` explaining why operator involvement is needed. Unverified
+method/body provenance requires request-context clarification, not an assumed
+access prerequisite. A scope decision must be independent of an unverified
+authentication claim. Offer "keep blocked", and apply only the actual answer. This answer never commits a
 disposition automatically. Resume preserves these session-specific decisions.
 
 Before `complete_skill`, inspect current readiness and dispositions. Missing

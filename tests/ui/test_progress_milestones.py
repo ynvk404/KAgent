@@ -368,7 +368,7 @@ def test_whole_target_overview_uses_only_recorded_state_and_completion_needs_run
         dispatch(app, ToolResultEvent(id=phase,name='workflow',result='{"ok":true}'))
         assert not any(entry.text.startswith('Workflow ·') for entry in app.state.transcript)
         expected = {'recon': 'Enumeration', 'enumeration': 'Input Analysis', 'input_analysis': 'Validation'}[phase]
-        assert app.state.latest_facts and app.state.latest_facts.overview == 'Workflow · ' + expected
+        assert app.state.latest_facts and app.state.latest_facts.overview == 'Workflow · ' + expected + ' · 0 findings'
         assert phase in workflow.completed_phases()  # Detail remains in Workflow.
         assert not any(entry.text.startswith('Workflow completed') for entry in app.state.transcript)
     snapshot = copy.deepcopy(workflow.to_dict())
@@ -586,7 +586,7 @@ def test_planner_same_validator_resolves_scoped_candidate_context_and_keeps_dedu
     assert workflow.to_dict() == before
 
 
-def test_compact_progress_keeps_counts_negative_acceptance_and_pending_goals(tmp_path):
+def test_compact_progress_keeps_negative_acceptance_and_pending_goals_out_of_headline(tmp_path):
     from src.ui.core.outcomes import runtime_facts
     from src.ui.widgets.banner import Banner
     from src.workflow.state import AttackSurfaceInput, RequestedGoal
@@ -603,7 +603,7 @@ def test_compact_progress_keeps_counts_negative_acceptance_and_pending_goals(tmp
     workflow.objective.requested_goals.append(RequestedGoal('ssrf'))
     before = copy.deepcopy(workflow.to_dict())
     facts = runtime_facts(app.agent, None, ())
-    assert facts.overview == 'Workflow · Validation · 2/2 inputs reviewed · 2 validations accepted · 1 goal pending'
+    assert facts.overview == 'Workflow · Validation · 0 findings'
     assert facts.validations == 2 and facts.goals == 1 and not facts.completion_supported
     assert 'confirmed' not in facts.overview and 'completed' not in facts.overview
     lines = Banner(BannerData('fixture', 'fixture', '.'))._detail_lines(assessment_progress=facts.overview)

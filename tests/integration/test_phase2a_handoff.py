@@ -234,7 +234,9 @@ async def test_exact_lookup_recovers_full_bound_after_compaction_and_session_res
     compacted = remove_workflow_duplicates(memory, state)
     assert compacted.todos == []
     lookup = json.loads(await call(registry, "get_input", input_id=item["id"]))
-    assert lookup == {"ok": True, "input": item}
+    assert lookup['ok'] and lookup['input'] == item
+    assert lookup['provenance']['kind'] == 'unverified'
+    assert lookup['provenance']['authentication_requirement'] == 'unknown'
     assert len(lookup["input"]["sample_payload"]) == size
     session = Store.new_with_id(tmp_path, "handoff2-resume")
     await session.save([], target=Target(ORIGIN), memory=compacted, workflow=state)

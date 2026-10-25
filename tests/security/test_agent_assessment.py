@@ -22,7 +22,8 @@ ASSESSMENT = {"hypothesis": "A bounded fixture response supports this candidate"
               "criteria": "Compare designated fixture behavior under the playbook",
               "limitations": "One bounded fixture attempt; no universal absence claim",
               "completed_attempt": True, "observed_impact": "Fixture response observed.",
-              "severity": "low"}
+              "severity": "low", "oracle_status": "established",
+              "oracle_basis": "Controlled synthetic fixture supplies an applicable interpretable comparison; not live SQL evidence."}
 
 
 async def setup(runtime, tmp_path, *, candidate_class="xss", related=None, method="GET", payload="fixture", mode: WorkflowMode="whole_target", extra_skills=()):

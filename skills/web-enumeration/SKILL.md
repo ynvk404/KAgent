@@ -47,7 +47,7 @@ endpoints, parameters, forms, API surfaces, and relevant static/JS resources
 class conclusions.
 
 Whole-target flow: reuse sources → read and establish structure → `record_input`
-→ reconcile canonical records → inventory and coverage → `complete_skill` →
+→ check canonical inputs → inventory and coverage → `complete_skill` →
 Input Analysis. Native HTTP obtains a new source only when needed; Content
 Discovery fills a concrete path gap. In Direct mode, discover only what the
 specific request needs; do not force all phases or whole-target source actions.
@@ -94,8 +94,9 @@ request structure. No branch, Swagger document or bundle set is mandatory.
 After a bounded review, ask what new request structure was gained. Switch
 branches or hand off when further reading only repeats metadata/vendor text.
 Keep valuable unpursued clues and their omission reason; do not declare them
-absent. Register evidenced inputs immediately, including arrays: they do not
-require a scalar sink or a vulnerability hypothesis. Auth requirements belong
+absent. Register evidenced inputs promptly under the structured handoff contract
+below, including arrays: they do not require a scalar sink or a vulnerability
+hypothesis. Auth requirements belong
 in discovery limitations; Input Analysis decides whether a real prerequisite
 prevents triage. Do not send a documented create/update operation just to prove
 its fields exist or obtain a receipt.
@@ -130,9 +131,16 @@ repeat full reconnaissance or technology fingerprinting here.
 
 ## Incremental structured handoff (throughout steps 1–6)
 
+For documentation, first read enough of the relevant endpoint, request body and
+reachable schema definitions under the existing bounded-reading rules before
+declaring an input type. Reuse facts already in context. An unresolved `$ref`
+alone does not mean object. If the type remains unknown after reasonable bounded
+reading, omit `input_type` when the required request attributes are grounded,
+and retain the limitation.
+
 As soon as an endpoint and input are supported by an observed request, form,
-API schema, or network call site, call `workflow(action="record_input", ...)`
-immediately, before fetching another resource. Do not wait for the final
+API schema, or network call site under this rule, call
+`workflow(action="record_input", ...)` promptly. Do not wait for the final
 inventory or for an entire Swagger document, directory listing, or bundle.
 Reuse sufficiently specific evidence from recon. A route name or a GET error
 on a login path does not establish a POST body field: record only the method,
@@ -369,6 +377,14 @@ This is a caller declaration, not a machine extraction receipt or verification
 that the field exists. It proves neither reachability, accepted request shape,
 authentication nor testing. Metadata grants no bytes, replay or evidence rights.
 
+Before handoff, check discovered input names and types against canonical state,
+reusing information already in context; use `list`/`get_input` only for missing
+details. Record newly discovered fields, including arrays; a string containing
+JSON remains a string. Preserve unresolved references and incomplete interpretation
+as limitations: complete retained bytes or corrected inventory prose alone do not
+establish agreement. For an actual discrepancy, use the existing correction/recovery
+instructions below.
+
 `source_ref`, `baseline_request_ref` and `auth_context_ref` keep their separate
 request-context contracts; the GET document capture is not POST request context.
 Documented inputs do not require request captures. Keep all documented endpoints
@@ -386,8 +402,11 @@ Keep a concrete path unless documentation or compatible observed paths establish
 a template. Never remove source_ref on retry to turn a concrete capture into
 wildcard/template authority. An unexpected path does not prove an endpoint works, and HTTP
 500 alone does not prove it absent. Do not silently change `product` to
-`products`. If an input is wrong, use the existing disposition/correction and
-replacement flow with the actual evidence; never rewrite history or fake a ref.
+`products`. If an already recorded input is wrong, use the existing
+disposition/replacement flow with actual evidence and honest attribution. This is
+exceptional recovery: a name/type change has a different canonical identity.
+Preserve terminal analyzed/dropped records, Candidate links and provenance;
+never rewrite IDs, history or refs.
 
 Selected unresolved sources still block completion. Use set_source_disposition
 with actual IDs/retained_ref, source_limitations and real source_bounds; never

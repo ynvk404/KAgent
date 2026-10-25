@@ -21,6 +21,8 @@ class Question:
     options: list[Option] = field(default_factory=list)
     header: Optional[str] = None
     input_ids: tuple[str, ...] = ()
+    dependency_kind: str | None = None
+    dependency_basis: str | None = None
 
 
 class AskPrompter(Protocol):
@@ -85,6 +87,10 @@ class AskUserTool(Tool):
                                 "items": {"type": "string"},
                                 "description": "Exact current blocked Workflow input IDs for this dependency question. Rewording does not ask it again; answers do not commit exclusions or grant permission.",
                             },
+                            'dependency_kind': {'type': 'string', 'enum': ['access', 'request_context', 'scope'],
+                                'description': 'Required with input_ids. access asks about an evidenced access prerequisite; request_context asks for unknown request/schema information; scope asks for an independent assessment coverage decision. Never relabel an assumed authentication dependency as a scope decision.'},
+                            'dependency_basis': {'type': 'string', 'minLength': 1, 'maxLength': 600,
+                                'description': 'Required with input_ids. State the concrete observed/documented/operator-supplied basis and why operator involvement is needed. A field name, GET error or missing account alone does not establish an access prerequisite.'},
                             "question": {
                                 "type": "string",
                                 "description": "The question to show the user.",
@@ -254,6 +260,11 @@ class AskUserTool(Tool):
                     or len(set(ids)) != len(ids)):
                 raise ValueError("input_ids must be unique bounded Workflow input IDs")
             question.input_ids = tuple(sorted(ids))
+            if ids:
+                kind, basis = item.get('dependency_kind'), item.get('dependency_basis')
+                if kind not in {'access', 'request_context', 'scope'} or not isinstance(basis, str) or not 1 <= len(basis.strip()) <= 600:
+                    raise ValueError('input_ids require dependency_kind (access/request_context/scope) and a concrete dependency_basis; do not infer authentication from a field name or GET error')
+                question.dependency_kind, question.dependency_basis = kind, basis.strip()
             questions.append(question)
         return questions
 
@@ -281,8 +292,33 @@ class AskUserTool(Tool):
                 if (objective is None or objective.mode != "whole_target"
                         or any(iid not in rows or rows[iid].disposition != "blocked" for iid in question.input_ids)):
                     raise ValueError("input_ids require exact current blocked objective inputs")
+                assert state is not None
                 identity = [objective.id, objective.target_origin,
                             [(iid, rows[iid].disposition_reason) for iid in question.input_ids]]
+                from src.workflow.discovery.input_view import input_provenance
+                from src.ui.render.sanitize import sanitize_text
+                from urllib.parse import urlsplit
+                affected = []
+                for iid in question.input_ids:
+                    row = rows[iid]
+                    affected.append(sanitize_text(f'{row.method or "unknown method"} '
+                        f'{urlsplit(row.endpoint or "").path or "/"} · input {row.parameter or "unknown"} '
+                        f'({row.location or "unknown location"})'))
+                basis = list(dict.fromkeys(sanitize_text(rows[iid].disposition_reason or 'Dependency unspecified.')
+                                            for iid in question.input_ids))
+                uncertainty = any(input_provenance(state, rows[iid])['kind'] == 'unverified'
+                                  for iid in question.input_ids)
+                if question.dependency_kind == 'access' and uncertainty:
+                    raise ValueError('input provenance is unverified; establish the actual request and access prerequisite before asking for credentials or exclusion. Use request_context for unknown method/body/schema, or scope only for an independent operator coverage decision.')
+                question.question = ('Affected inputs: ' + '; '.join(affected) + '\n'
+                    'Operator involvement: ' + sanitize_text(question.dependency_basis or '') + '\n'
+                    'Agent-reported dependency: ' + '; '.join(basis) + '\n'
+                    + ('Input provenance is unverified; authentication requirements are unknown. '
+                       'Establish request context before assuming credentials are necessary.\n' if uncertainty else
+                       'Source references do not verify authentication enforcement.\n')
+                    + question.question + '\nExclude removes only the inputs listed above from this assessment; '
+                    'they remain untested. Keeping them blocked preserves the unresolved work. '
+                    'The answer does not grant execution permission.')
             identities.append(identity)
         answers = []
         for identity, question in zip(identities, questions):

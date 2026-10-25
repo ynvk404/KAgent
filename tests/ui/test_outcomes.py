@@ -402,7 +402,8 @@ def test_whole_target_inventory_is_aggregated_and_exact_origin_scoped(tmp_path):
         inventory = [entry.text for entry in app.state.transcript if entry.text.startswith('Attack surface recorded:')]
         assert len(inventory) == 1 and f'{i+1} input' in inventory[0]
     assert len(app.state.transcript) == 1 and app.state.transcript[0].text.startswith('Attack surface recorded:')
-    assert app.state.latest_facts and '0/30 inputs reviewed' in app.state.latest_facts.overview
+    assert app.state.latest_facts and '0 findings' in app.state.latest_facts.overview
+    assert len([row for row in app.state.latest_facts.records if row.kind == 'input']) == 30
     from src.workflow.state import AttackSurfaceInput
     foreign = AttackSurfaceInput('foreign', 'http://other.lab:3000', method='GET', endpoint='/outside', parameter='secret', location='query')
     workflow.attack_surface_inputs[foreign.id] = foreign

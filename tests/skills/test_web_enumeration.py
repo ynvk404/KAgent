@@ -470,7 +470,12 @@ def test_input_recording_is_incremental_and_keeps_analysis_boundary():
     _, body, _ = read_skill()
     early = collapse_ws(body[:body.index('## 1. Build the target baseline')])
     assert 'record_input' in early
-    assert 'immediately, before fetching another resource' in early
+    for requirement in ('relevant endpoint, request body', 'reachable schema definitions',
+                        'before declaring an input type', 'reasonable bounded reading',
+                        'omit `input_type`', 'required request attributes are grounded',
+                        'an unresolved `$ref` alone does not mean object', 'promptly'):
+        assert requirement.lower() in early.lower()
+    assert 'immediately, before fetching another resource' not in early
     assert 'Do not wait for the final inventory' in early
     assert 'Record each newly established input once' in early
     assert 'Do not call `record_candidate`' in early
