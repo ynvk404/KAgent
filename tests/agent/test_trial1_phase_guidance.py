@@ -1,5 +1,6 @@
 """Advice respects owned work and the bounded per-input admission contract."""
 from dataclasses import replace
+import re
 
 import pytest
 
@@ -122,5 +123,8 @@ def test_every_new_expert_route_prepares_skill_and_associations_before_start(bra
     for contract in ('prepare the primary request', 'existing Candidate, inventory and context',
                      'candidate_id alone', 'no supplementary associations', 'consistent role',
                      'Different methods', 'payload variations are observations', 'Do not guess endpoints',
-                     'no execution permission', 'immutable declaration and budget'):
+                     'no execution permission'):
         assert contract in text
+    # Preserve both obligations in the owned-attempt instruction while allowing
+    # a qualifier such as "recovery" before "budget".
+    assert re.search(r'owned active attempts?[^.]*\bimmutable declaration\b[^.]*\bbudget\b', text, re.IGNORECASE)

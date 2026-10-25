@@ -32,14 +32,30 @@ async def test_dependency_question_names_inputs_and_exclusion_scope(runtime):
     assert item.disposition == 'blocked' and not state.validation_results
 
 
-async def test_unverified_input_cannot_be_presented_as_an_access_prerequisite(runtime):
+async def test_unverified_access_assumption_is_labelled_as_agent_report(runtime):
     prompter, _, state, item = dependency(runtime)
     operator = Operator()
-    with pytest.raises(ValueError, match='unverified'):
-        await AskUserTool(operator).run({'questions': [{'question': 'Supply valid credentials or exclude?',
-            'input_ids': [item.id], 'dependency_kind': 'access',
-            'dependency_basis': 'Assumed from a credential-shaped field.'}]}, None, prompter)
-    assert not operator.questions and item.disposition == 'blocked'
+    before = state.to_dict()
+    await AskUserTool(operator).run({'questions': [{'question': 'Is authenticated access needed for this input?',
+        'input_ids': [item.id], 'dependency_kind': 'access',
+        'dependency_basis': 'Assumed from a credential-shaped field; needs operator clarification.'}]}, None, prompter)
+    shown = operator.questions[0].question
+    assert 'unverified' in shown and 'authentication requirements are unknown' in shown
+    assert 'Agent-reported' in shown and 'does not grant execution permission' in shown
+    assert state.to_dict() == before and item.disposition == 'blocked'
+
+
+@pytest.mark.parametrize('kind,basis', [('access', ''), ('access', ' '), ('access', 'x' * 601),
+                                        ('authentication-confirmed', 'A claimed dependency.')])
+async def test_input_question_still_requires_a_bounded_dependency_declaration(runtime, kind, basis):
+    prompter, policy, _, item = dependency(runtime)
+    operator = Operator()
+    with pytest.raises(ValueError, match='dependency_kind'):
+        await AskUserTool(operator).run({'questions': [
+            {'question': 'An otherwise valid question'},
+            {'question': 'Clarify this input', 'input_ids': [item.id],
+             'dependency_kind': kind, 'dependency_basis': basis}]}, None, prompter)
+    assert not operator.questions and not policy.input_questions
 
 
 async def test_cross_endpoint_source_is_rejected_instead_of_relabelled(tmp_path):

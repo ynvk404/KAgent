@@ -16,6 +16,22 @@ from tests.helpers.burp_selection import make_runtime
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX process groups")
 
 
+async def _assert_descendant_exited(pid: int, *, timeout: float = 2.0) -> None:
+    # EOF and reaping of the direct child do not synchronize the orphan's final
+    # /proc state. Require it to exit within a bound; a live process never passes.
+    status = Path(f'/proc/{pid}/stat')
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        try:
+            state = status.read_text().rsplit(')', 1)[1].split()[0]
+        except FileNotFoundError:
+            return
+        if state == 'Z':
+            return  # Terminated; reaping an orphan belongs to its new parent.
+        assert asyncio.get_running_loop().time() < deadline, f'descendant {pid} still live: state={state}'
+        await asyncio.sleep(.01)
+
+
 @pytest.mark.parametrize("ending", ["timeout", "cancel", "cancel-again", "abort"])
 async def test_exited_leader_with_term_resistant_child_closes_pipes(tmp_path, ending, monkeypatch):
     marker = tmp_path / "child.pid"
@@ -78,9 +94,7 @@ while True:
         # An orphan may briefly remain a zombie until its init reaps it, but
         # must no longer execute or hold the output descriptors.
         child = int(marker.read_text())
-        status = Path(f"/proc/{child}/stat")
-        if status.exists():
-            assert status.read_text().split()[2] == "Z"
+        await _assert_descendant_exited(child)
         assert processes[0].returncode == 0 and task.done()
         assert processes[0].stdout is not None and processes[0].stdout.at_eof()
         assert processes[0].stderr is not None and processes[0].stderr.at_eof()
@@ -95,9 +109,17 @@ while True:
 
 @pytest.mark.parametrize("tool_type", [ShellTool, BashTool])
 @pytest.mark.parametrize("cancel_again", [False, True])
+@pytest.mark.parametrize("descriptor_load", [0, 32768])
 async def test_cancellation_during_spawn_keeps_receipt_until_group_cleanup(
-    tmp_path, monkeypatch, tool_type, cancel_again,
+    tmp_path, monkeypatch, tool_type, cancel_again, descriptor_load,
 ):
+    if descriptor_load:
+        if not sys.platform.startswith('linux'):
+            pytest.skip('Linux /proc exit-state regression')
+        import resource
+        descriptor_limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        if descriptor_limit != resource.RLIM_INFINITY and descriptor_limit < descriptor_load + 64:
+            pytest.skip('Descriptor exit-window fixture exceeds the process descriptor limit')
     rt = make_runtime(tmp_path)
     tool = tool_type()
     rt.registry.register(tool)
@@ -107,6 +129,13 @@ import os, signal, time
 child = os.fork()
 if not child:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if {descriptor_load}:
+        # Keep output open through high-numbered duplicates. Kernel teardown
+        # can close these pipes before finishing release of the other files.
+        held_fds = [os.open(os.devnull, os.O_RDONLY) for _ in range({descriptor_load})]
+        output_fds = [os.dup(1), os.dup(2)]
+        os.close(1)
+        os.close(2)
     with open({str(marker)!r}, 'w') as stream:
         stream.write(str(os.getpid()))
 while True:
@@ -148,9 +177,7 @@ while True:
         assert processes[0].returncode is not None
         assert processes[0].stdout is not None and processes[0].stderr is not None
         assert processes[0].stdout.at_eof() and processes[0].stderr.at_eof()
-        status = Path(f"/proc/{int(marker.read_text())}/stat")
-        if status.exists():
-            assert status.read_text().split()[2] == "Z"
+        await _assert_descendant_exited(int(marker.read_text()))
         assert rt.policy.active == 0 and not rt.policy._active_receipts
     finally:
         release.set()
@@ -163,3 +190,35 @@ while True:
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await asyncio.gather(*(process.wait() for process in processes))
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux /proc state check')
+@pytest.mark.parametrize('terminate', [False, True])
+async def test_descendant_exit_check_waits_and_rejects_a_live_process(terminate):
+    proc = await asyncio.create_subprocess_exec(sys.executable, '-c',
+        'import sys; print("ready", flush=True); sys.stdin.buffer.read(1)',
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+    checker = None
+    try:
+        assert proc.stdout is not None and proc.stdin is not None
+        assert await asyncio.wait_for(proc.stdout.readline(), 2) == b'ready\n'
+        checker = asyncio.create_task(_assert_descendant_exited(proc.pid, timeout=2 if terminate else .1))
+        if terminate:
+            done, _ = await asyncio.wait({checker}, timeout=.02)
+            assert not done and proc.returncode is None
+            proc.stdin.write(b'exit')
+            await proc.stdin.drain()
+            proc.stdin.close()
+            await asyncio.wait_for(checker, 2)
+            assert await proc.wait() == 0
+        else:
+            with pytest.raises(AssertionError, match='still live'):
+                await checker
+            assert proc.returncode is None
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+        await proc.wait()
+        if checker is not None:
+            checker.cancel()
+            await asyncio.gather(checker, return_exceptions=True)

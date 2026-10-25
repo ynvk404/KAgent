@@ -88,7 +88,7 @@ class AskUserTool(Tool):
                                 "description": "Exact current blocked Workflow input IDs for this dependency question. Rewording does not ask it again; answers do not commit exclusions or grant permission.",
                             },
                             'dependency_kind': {'type': 'string', 'enum': ['access', 'request_context', 'scope'],
-                                'description': 'Required with input_ids. access asks about an evidenced access prerequisite; request_context asks for unknown request/schema information; scope asks for an independent assessment coverage decision. Never relabel an assumed authentication dependency as a scope decision.'},
+                                'description': 'Required with input_ids. access clarifies access requirements or asks for missing access context based on the stated evidence; request_context asks for unknown request/schema information; scope asks for an independent assessment coverage decision. Runtime does not verify authentication requirements from provenance or this label. Never relabel an assumed authentication dependency as a scope decision.'},
                             'dependency_basis': {'type': 'string', 'minLength': 1, 'maxLength': 600,
                                 'description': 'Required with input_ids. State the concrete observed/documented/operator-supplied basis and why operator involvement is needed. A field name, GET error or missing account alone does not establish an access prerequisite.'},
                             "question": {
@@ -308,14 +308,15 @@ class AskUserTool(Tool):
                                             for iid in question.input_ids))
                 uncertainty = any(input_provenance(state, rows[iid])['kind'] == 'unverified'
                                   for iid in question.input_ids)
-                if question.dependency_kind == 'access' and uncertainty:
-                    raise ValueError('input provenance is unverified; establish the actual request and access prerequisite before asking for credentials or exclusion. Use request_context for unknown method/body/schema, or scope only for an independent operator coverage decision.')
+                # Provenance describes where an input came from, not whether
+                # authentication is necessary. The Agent interprets evidence;
+                # the operator may clarify access even without a source link.
                 question.question = ('Affected inputs: ' + '; '.join(affected) + '\n'
-                    'Operator involvement: ' + sanitize_text(question.dependency_basis or '') + '\n'
+                    'Agent-reported basis for operator involvement: ' + sanitize_text(question.dependency_basis or '') + '\n'
                     'Agent-reported dependency: ' + '; '.join(basis) + '\n'
-                    + ('Input provenance is unverified; authentication requirements are unknown. '
-                       'Establish request context before assuming credentials are necessary.\n' if uncertainty else
-                       'Source references do not verify authentication enforcement.\n')
+                    + ('Input provenance is unverified; ' if uncertainty else 'Input source references are available; ')
+                    + 'authentication requirements are unknown to the runtime. '
+                    'Clarify access requirements before assuming credentials are necessary.\n'
                     + question.question + '\nExclude removes only the inputs listed above from this assessment; '
                     'they remain untested. Keeping them blocked preserves the unresolved work. '
                     'The answer does not grant execution permission.')

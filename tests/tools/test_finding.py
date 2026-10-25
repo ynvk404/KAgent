@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from src.findings.store import Finding, Store, slugify
+from src.findings.store import Finding, Store, read_report, slugify
 from src.findings.classification import classify
 from src.permission.permission import AlwaysAllow
 from src.redaction.redact import apply as redact
@@ -145,35 +145,46 @@ async def test_confirmed_structured_result_is_eligible(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("field", "claim", "message"),
+    ("field", "value"),
     [
         (
             "observed_impact",
             "The payload returned every row and executes arbitrary SQL.",
-            "unverified broad-impact claim",
         ),
         (
             "response_excerpt",
             "The full table was returned.",
-            "observed row count",
         ),
         (
             "potential_impact",
-            "The injection executes arbitrary SQL against the database.",
-            "conditionally",
+            "The injection cannot execute arbitrary SQL.",
+        ),
+        (
+            "potential_impact",
+            "Under elevated database privileges, the injection executes arbitrary SQL.",
         ),
     ],
 )
-async def test_finding_rejects_unbounded_or_unconditional_impact_claims(
-    tmp_path, field, claim, message,
+async def test_finding_does_not_reject_arguments_by_impact_vocabulary(
+    tmp_path, field, value,
 ):
-    tool, _ = _tool(tmp_path)
-    args = _valid_args(tool, **{field: claim})
+    tool, store = _tool(tmp_path)
+    args = _valid_args(tool, severity="critical", **{field: value})
+    state = _workflow(tool)
+    candidate_id = args["candidate_id"]
+    latest = state.latest_result(candidate_id)
+    assert latest is not None
 
-    with pytest.raises(ValueError, match=message):
-        await tool.run(args, None, AlwaysAllow())
+    result = await tool.run(args, None, AlwaysAllow())
 
-    assert not (tmp_path / "findings").exists()
+    # Vocabulary alone grants no semantic authority. Adopted fields must still
+    # come from the accepted assessment, including when caller text is discarded.
+    saved = read_report(store.report_for_candidate(candidate_id))
+    assert "written to" in result and state.finding_is_persisted(candidate_id)
+    assert saved.severity == latest.assessment["severity"]
+    assert saved.observed_impact == latest.assessment["observed_impact"]
+    assert saved.responseExcerpt == (latest.assessment.get("response_excerpt") or None)
+    assert saved.potential_impact == args["potential_impact"]
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 """Offline native production dispatch; no target or model is contacted."""
 from dataclasses import replace
+import hashlib
 import uuid
 import json
 from pathlib import Path
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import httpx
 
 from src.coverage.store import CoverageStore
 from src.findings.store import Store, read_report
@@ -16,7 +18,7 @@ from src.tools.workflow.workflow_tool import WorkflowTool
 from src.tools.workflow.finding import ConfirmFindingTool
 from src.workflow.assessment import accepted_result, digest, source_row, seal, candidate_binding
 from src.workflow.state import Candidate, WorkflowState, WorkflowObjective, WorkflowMode
-from tests.security.test_execution_policy import runtime, ORIGIN
+from tests.security.test_execution_policy import runtime, REAL_CLIENT, ORIGIN
 
 ASSESSMENT = {"hypothesis": "A bounded fixture response supports this candidate",
               "criteria": "Compare designated fixture behavior under the playbook",
@@ -144,6 +146,84 @@ async def test_eviction_resume_and_new_attempt_cannot_borrow(runtime, tmp_path):
     out = await registry.execute("workflow", {**args, "attempt_id": started["validation_context"]["attempt_id"]}, None, p)
     assert out.startswith("error:")
     assert len(state.validation_results) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "observed_impact,response_body",
+    [
+        pytest.param(
+            "Arbitrary SQL was not demonstrated; the fixture response was observed.",
+            b"fixture",
+            id="negated-observed-impact",
+        ),
+        pytest.param(
+            "The response contains the literal text 'full table export disabled'.",
+            b"full table export disabled",
+            id="full-table-observed-text",
+        ),
+        pytest.param(
+            "The fixture's export message was returned.",
+            b"full table export disabled",
+            id="authentic-full-table-excerpt",
+        ),
+        pytest.param(
+            "The fixture's authorization message was returned.",
+            b"every row requires authorization",
+            id="authentic-every-row-excerpt",
+        ),
+    ],
+)
+async def test_finding_adopts_assessment_without_impact_vocabulary_gate(
+    runtime, tmp_path, monkeypatch, observed_impact, response_body,
+):
+    # The controlled HTTP fixture establishes the quoted bytes, not SQL impact.
+    def handler(request):
+        return httpx.Response(200, content=response_body, request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: REAL_CLIENT(
+        transport=httpx.MockTransport(handler), **kwargs))
+    state, candidate, _, args, oid = await setup(runtime, tmp_path, candidate_class="sqli")
+    registry, prompter, policy, *_ = runtime
+    body = policy.observations._items[oid].body
+    assert body == response_body
+    args["assessment"].update(
+        observed_impact=observed_impact,
+        response_excerpt=body.decode(),
+        excerpts=[{"source_id": oid, "start": 0, "end": len(body),
+                   "sha256": hashlib.sha256(body).hexdigest()}],
+    )
+    linked = json.loads(await registry.execute("workflow", {
+        "action": "record_evidence", "candidate_id": candidate.id,
+        "evidence_path": "proof.md", "observation_ids": [oid],
+    }, None, prompter))
+    args["evidence_refs"] = [linked["evidence"]["id"]]
+    assert state.evidence_sources[args["evidence_refs"][0]] == [oid]
+    recorded = json.loads(await registry.execute("workflow", args, None, prompter))
+    assert recorded["result"]["outcome"] == "confirmed"
+    latest = state.latest_result(candidate.id)
+    assert latest is not None and accepted_result(state, candidate, latest, policy)
+    assert state.eligible_for_finding(candidate.id)
+
+    store = Store(project_directory=tmp_path)
+    registry.register(ConfirmFindingTool(store, workflow=state))
+    result = await registry.execute("confirm_finding", {
+        "candidate_id": candidate.id, "title": "Offline fixture finding",
+        "url": ORIGIN + "/fixture", "severity": "critical",
+        "observed_impact": "Caller wording is replaced by the accepted assessment.",
+        "response_excerpt": "Caller excerpt is replaced by the accepted assessment.",
+        "potential_impact": "No additional impact assessed.",
+    }, None, prompter)
+
+    saved = read_report(store.report_for_candidate(candidate.id))
+    assert "written to" in result and state.finding_is_persisted(candidate.id)
+    assert saved.severity == latest.assessment["severity"] == "low"
+    assert saved.observed_impact == latest.assessment["observed_impact"] == observed_impact
+    assert saved.responseExcerpt == latest.assessment["response_excerpt"] == body.decode()
+    assert saved.evidence_refs == latest.evidence_refs == args["evidence_refs"]
+    assert saved.confirmation_binding == latest.assessment_binding
+    assert saved.assessment_result_id == latest.result_id
+    assert saved.assessment_attempt_id == latest.attempt_id
 
 
 @pytest.mark.asyncio

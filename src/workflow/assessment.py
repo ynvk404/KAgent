@@ -168,9 +168,10 @@ def require_usable_source(row):
         f"evidence-admissibility: source {row['id']} unusable ({', '.join(reasons)}). "
         "Terminal assessment requires completed usable primary evidence. "
         "Read this rejection; select only usable observations supporting the assessment. "
-        "When parents change, correct the source proof and dependent claims/excerpts, "
+        "When proof or parents change, correct the source proof and dependent claims/excerpts, "
         "then record_evidence again with the correct observation_ids for a new immutable snapshot. "
-        "Replace evidence_refs before resubmitting; removing a source ID alone cannot repair derived proof. "
+        "Replace evidence_refs only after registering a corrected snapshot; "
+        "never remove a cited proof parent without correcting dependent proof. "
         "Retry at most twice after the initial submission using existing evidence. "
         "Do not edit registered snapshots in place. "
         "Do not add probes just to repair a manifest when existing evidence suffices. "
@@ -308,6 +309,10 @@ def finish_dispatch(state, fact, *, status, observation_id=None):
 
 
 def require_idle_attempt(attempt, policy):
+    # Finalization requires settled transport facts, including without a live
+    # policy (for example restored bookkeeping). Read-only projections do not.
+    if any(row['status'] == 'dispatched' for row in attempt['effects']['dispatches']):
+        raise ValueError("attempt dispatch still in flight")
     if policy and any(row["invocation_id"] in policy._active_receipts
                       for row in attempt["effects"]["admissions"]):
         raise ValueError("attempt action still in flight")
@@ -329,8 +334,6 @@ def attempt_effects(state, attempt, observations=None):
                 or not isinstance(row.get("request_hash"), str)
                 or row.get("status") not in {"dispatched", "completed", "failed", "cancelled"}):
             raise ValueError("attempt bookkeeping unavailable")
-        if row["status"] == "dispatched":
-            raise ValueError("attempt dispatch still in flight")
     declaration = effects["declaration"]
     # A fresh/retested attempt cannot erase an acknowledged write whose
     # cleanup is still unresolved. Carry bookkeeping, never old source rights.

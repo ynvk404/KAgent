@@ -51,8 +51,11 @@ class EvidenceSubmissionError(ValueError):
                 "never evidence_path, snapshot path or obs_ IDs. Write proof first, register it, then copy the returned ID. "),
             "UNUSABLE_PRIMARY_SOURCE": (
                 "A truncated/incomplete primary response cannot support a terminal result, even if its prefix is convincing. "
-                "Keep unusable history in the owned ledger or a separate history artifact, outside the selected terminal proof. "
-                "Rewrite the source proof and dependent confirmation IDs using complete retained replacements, then register a new snapshot. "
+                "Unusable optional metadata may remain referenced, but required observations and terminal excerpts must be usable. "
+                "If proof or dependent claims rely on an unusable source, correct the source proof and dependent confirmation IDs "
+                "using complete retained replacements, then register a new snapshot. "
+                "If only a proposed assessment excerpt is invalid and the registered proof and parents remain correct, "
+                "correct that assessment without rewriting or rebinding the snapshot. "
                 "Local pagination cannot recover bytes never captured. If no sufficient usable source already exists, "
                 "identify the missing bounded validation step: obtain a complete, compact, non-sensitive response "
                 "through existing scope/permission/attempt gates (for example a minimal marker/count, no credentials or bulk data). "

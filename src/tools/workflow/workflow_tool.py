@@ -1621,17 +1621,24 @@ class WorkflowTool(Tool):
         unusable = [{'observation_id': row['source']['id'],
                      'reasons': source_usability(row['source'])['unusable_reasons']}
                     for row in selected if not source_usability(row['source'])['terminal_usable']]
+        required_unusable = any(row['source'].get('required', True)
+                                and not source_usability(row['source'])['terminal_usable'] for row in selected)
+        usable_ids = [row['source']['id'] for row in selected
+                      if source_usability(row['source'])['terminal_usable']]
         return json.dumps({"ok": True, "evidence": artifact.to_dict(), "evidence_kind": "derived", "primary_parents": ids,
             'terminal_assessment_accepted': False,
             'terminal_readiness': {
-                'status': 'unusable-primary-sources' if unusable else 'usable-primary-sources' if selected else 'no-primary-sources',
+                'status': ('unusable-primary-sources' if required_unusable or selected and not usable_ids else
+                           'usable-primary-sources' if usable_ids else 'no-primary-sources'),
                 'unusable_sources': unusable,
-                'usable_observation_ids': [row['source']['id'] for row in selected
-                                           if source_usability(row['source'])['terminal_usable']],
-                'next_action': ('Rewrite proof using usable retained sources; keep unusable history in the ledger or a separate artifact. '
-                                'Register the corrected source as a new immutable snapshot and replace evidence_refs.' if unusable else
+                'usable_observation_ids': usable_ids,
+                'next_action': ('Required sources are unusable. If proof or dependent claims rely on them, correct the source proof '
+                                'using usable retained sources and register a new immutable snapshot with its actual parents. '
+                                'Never edit or rebind a registered snapshot.' if required_unusable else
                                 'Registration saved a snapshot only. Reconcile effects after the last request and submit record_result; '
-                                'the runtime still checks ownership, all required sources, assessment and proof integrity.'),
+                                'the runtime still checks ownership, all required sources, assessment and proof integrity.'
+                                + (' Unusable optional metadata may remain registered, but cannot support terminal body claims or excerpts. '
+                                   'Change proof and register a new snapshot only if its content or parents need correction.' if unusable else '')),
             }}, indent=2)
 
     def _record_attempt_state(self, args, policy):

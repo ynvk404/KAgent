@@ -37,16 +37,6 @@ SEVERITIES: tuple[Severity, ...] = (
 FindingNotifier = Callable[[Finding, str], None]
 log = get_logger("tools.finding")
 
-_UNBOUNDED_OBSERVED_IMPACT = re.compile(
-    r"\b(?:arbitrary\s+(?:sql|queries|tables|columns|data)|stacked\s+quer(?:y|ies)|"
-    r"file\s+(?:read|write)|every\s+row|full\s+table)\b",
-    re.IGNORECASE,
-)
-_UNCONDITIONAL_POTENTIAL_IMPACT = re.compile(
-    r"\b(?:executes?|reads?|writes?|dumps?|returns?|exposes?)\s+"
-    r"(?:arbitrary|all|every)\b",
-    re.IGNORECASE,
-)
 
 class ConfirmFindingTool:
     def __init__(
@@ -254,28 +244,6 @@ class ConfirmFindingTool:
         if not potential_impact:
             raise ValueError("potential_impact is required")
 
-        response_excerpt = arg_string(args, "response_excerpt")
-        if _UNBOUNDED_OBSERVED_IMPACT.search(observed_impact):
-            raise ValueError(
-                'observed_impact contains an unverified broad-impact claim. Record only the behavior demonstrated by linked evidence.'
-            )
-        if re.search(r"\b(?:every\s+row|full\s+table)\b", response_excerpt, re.I):
-            raise ValueError(
-                "response_excerpt must report the observed row count, not claim "
-                "the full table without a verified total"
-            )
-        if (
-            _UNCONDITIONAL_POTENTIAL_IMPACT.search(potential_impact)
-            and not re.search(
-                r"\b(?:could|may|might|potentially|if|depending)\b",
-                potential_impact,
-                re.IGNORECASE,
-            )
-        ):
-            raise ValueError(
-                "potential_impact must express untested consequences conditionally"
-            )
-
         if self.workflow is None:
             raise ValueError("workflow state is required to confirm a finding")
 
@@ -331,10 +299,6 @@ class ConfirmFindingTool:
                                                policy.engagement.http_permissions.epoch, candidate)
             assert legacy is not None
             observed_impact, severity, response_excerpt = legacy.observed_impact, legacy.severity, legacy.response_excerpt
-        if _UNBOUNDED_OBSERVED_IMPACT.search(observed_impact):
-            raise ValueError("adopted observed impact contains an unverified broad-impact claim")
-        if re.search(r"\b(?:every\s+row|full\s+table)\b", response_excerpt, re.I):
-            raise ValueError("adopted response excerpt contains an unverified broad-impact claim")
         root = self.store.project_dir
         if not await verify_evidence_reads(
             evidence_artifacts, root, prompter, signal,
