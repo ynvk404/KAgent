@@ -102,8 +102,6 @@ class AppState:
     milestones: tuple[str, ...] = field(default=(), repr=False)
     delivered_results: tuple[str, ...] = field(default=(), repr=False)
     outcome_written: bool = False
-    deferred_outcome: str | None = None
-    deferred_facts: OutcomeFacts | None = field(default=None, repr=False)
     # One bounded correlation ledger, independent of visible activity. Keep
     # tombstones through Clear/Done/SetBusy/scope changes. Evicted or unknown
     # correlated results fail closed; they cannot acquire the current scope.
@@ -218,11 +216,6 @@ class Clear:
 
 
 @dataclass(frozen=True, slots=True)
-class FinalizeDeferredOutcome:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
 class AgentEventAction:
     event: AgentEvent
     facts: OutcomeFacts | None = None
@@ -242,7 +235,6 @@ Action = Union[
     SetSkillsPicker,
     Clear,
     AgentEventAction,
-    FinalizeDeferredOutcome,
 ]
 
 
@@ -280,7 +272,6 @@ def reducer(state: AppState, action: Action) -> AppState:
             if busy and not state.busy:
                 state = replace(state, milestones=(), delivered_results=(), call_history=_retire_calls(state), outcome_written=False,
                                 turn_number=state.turn_number + 1,
-                                deferred_outcome=None, deferred_facts=None,
                                 baseline=replace(facts, records=tuple(row for row in facts.records if row.kind != "capture")) if facts else None,
                                 latest_facts=facts,
                                 progress_rows=(), observed=(), activated_skills=(), skill_receipts=(),
@@ -326,7 +317,7 @@ def reducer(state: AppState, action: Action) -> AppState:
                 stream_chunks=(),
                 call_history=_retire_calls(state),
                 milestones=(), delivered_results=(), outcome_written=False,
-                presentation_scope="", deferred_outcome=None, deferred_facts=None,
+                presentation_scope="",
                 baseline=None, latest_facts=None, progress_rows=(), observed=(),
                 activated_skills=(), skill_receipts=(), running_skill=None, running_tool=None, planner_recommendation=None,
                 clear_message=sanitize_text(message) if message is not None else None,
@@ -338,11 +329,6 @@ def reducer(state: AppState, action: Action) -> AppState:
                     else state.active_skill
                 ),
             )
-
-        case FinalizeDeferredOutcome():
-            if state.deferred_outcome is None:
-                return state
-            return _finish_outcome(state, state.deferred_outcome, state.deferred_facts)
 
         case AgentEventAction(event=event, facts=facts):
             if isinstance(event, WorkflowProgressEvent):
@@ -372,13 +358,13 @@ def reducer(state: AppState, action: Action) -> AppState:
                     return state
                 return replace(state, presentation_scope=facts.scope, call_history=_retire_calls(state),
                                milestones=(), delivered_results=(), outcome_written=False,
-                               deferred_outcome=None, deferred_facts=None, baseline=None, latest_facts=facts,
+                               baseline=None, latest_facts=facts,
                                progress_rows=(), observed=(), activated_skills=(), skill_receipts=(), planner_recommendation=None,
                                running_tool=None, running_skill=None, active_skill=None,
                                phase=_phase_with_pending_request(state, "answering" if state.busy else "idle"))
             if facts and facts.scope != state.presentation_scope:
                 state = replace(state, presentation_scope=facts.scope, milestones=(),
-                                delivered_results=(), outcome_written=False, deferred_outcome=None, deferred_facts=None,
+                                delivered_results=(), outcome_written=False,
                                 baseline=replace(facts, records=tuple(row for row in facts.records if row.kind != "capture")),
                                 latest_facts=facts, progress_rows=(), observed=(), call_history=_retire_calls(state),
                                 active_skill=None, activated_skills=(), skill_receipts=(), running_tool=None,
@@ -666,8 +652,6 @@ def _apply_agent_event(state: AppState, ev: AgentEvent, facts: OutcomeFacts | No
         case DoneEvent():
             state = replace(state, busy=False, phase=_phase_with_pending_request(state, "idle"),
                             running_tool=None, running_skill=None, active_skill=None, call_history=_retire_calls(state))
-            if ev.stop_reason == "max_steps" and state.pending_ask is not None:
-                return replace(state, deferred_outcome=ev.stop_reason, deferred_facts=facts)
             if state.outcome_written:
                 return state
             return _finish_outcome(state, ev.stop_reason, facts)
@@ -734,7 +718,7 @@ def _finish_outcome(state: AppState, reason: str | None, facts: OutcomeFacts | N
         facts.incomplete if facts else 0, facts.goals if facts else 0,
         tuple(sanitize_text(item) for item in pending),
         tuple((sanitize_text(name), count) for name, count in operation_counts.items()))
-    return replace(state, outcome_written=True, deferred_outcome=None, deferred_facts=None,
+    return replace(state, outcome_written=True,
                    latest_turn_details=details, transcript=(*state.transcript,
                    TranscriptEntry(kind="error" if reason in {"runtime_error", "context_capacity", "client_error", "invalid_response"}
                                    else "warning" if residual or reason in {"workflow_blocked", "all_tools_refused", "cancelled", "max_steps"}

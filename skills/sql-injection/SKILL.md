@@ -75,9 +75,9 @@ Continue does not authorize a retest or reset declaration/recovery allowances.
 Read the applicable payload guidance before the first confirmation probe, not
 after spending syntax adjustments. Use its published continuation only until
 the chosen technique is visible; unrelated later sections are not prerequisites.
-Before each HTTP probe, state a short hypothesis, its supporting evidence,
-expected observation and what would falsify it in the existing ledger/checkpoint;
-no separate artifact or full query reconstruction is required. Choose a benign
+Before each HTTP probe, check a short hypothesis, its supporting evidence,
+expected observation and what would falsify it against current context;
+no extra Workflow action, ledger, artifact or full query reconstruction is required. Choose a benign
 seed and explain the expected oracle and prefix/predicate/suffix hypothesis.
 Do not use an arbitrary nonmatching seed for an AND-filter test. Earlier analysis
 observations inform planning only and remain unowned: do not copy their IDs into
@@ -97,6 +97,29 @@ is not a general notes log. Reserve existing turns for proof writing, registrati
 and `record_result`; missing proof never prevents an honest unresolved result.
 An unregistered proof file is a local artifact, not accepted evidence. Verify
 the returned `result_id`, `evidence_refs` and outcome before reporting them.
+
+**Observation → Hypothesis → Oracle → Expected Result → Falsifier → Next Decision.**
+Use this as a compact decision check, not a new reporting step. Separate the
+captured diagnostic from competing SQL-shape hypotheses. For each plausible
+shape, account for the prefix, inserted expression and suffix, including wildcard,
+quote and parenthesis boundaries. Identify an observable marker and predict how
+the proposed probe would distinguish those hypotheses. If all predict the same
+response, the variation supplies no new information; choose a discriminating
+bounded test or leave the oracle unresolved. After the response, compare it with
+the prediction before deciding whether to continue, revise or stop. Keep the
+existing three-adjustment allowance and all confirmation criteria.
+
+For example: a known match returns rows, a quote triggers a SQLite diagnostic,
+and an intended TRUE expression returns `200 data:[]`. A quoted `LIKE` context
+is a hypothesis, not an observed implementation. A possible trailing wildcard
+can change an equality's truth value; alternative grouping/suffix shapes remain
+open. The oracle would need a context-compatible predicate that preserves the
+known match on TRUE and excludes it on FALSE. An empty intended TRUE falsifies
+that proposed oracle, not SQLi itself. A parser position at `)` does not settle
+outer parenthesis balance; adding whitespace to the same SQLite line comment
+has the same prediction unless new evidence distinguishes it. Do not send an
+equivalent variation to fill a pair. If no useful permitted test remains, report
+the pair as unexecuted and the result unresolved, without inventing a FALSE.
 
 ## Runtime completion contract
 
@@ -796,8 +819,12 @@ predicates to satisfy the boolean confirmation schema.
 On an authentication endpoint, the TRUE member of this pair may naturally
 return the application's normal successful-login response, including a session
 token. The status/body differential may be used as SQLI-2 evidence, but the
-token is incidental evidence: do not replay it, decode it, request it again,
-or use it against another endpoint. Record only a redacted marker such as
+token is incidental evidence: do not replay it, decode it, or use it against
+another endpoint. Required repetitions of the same bounded TRUE/FALSE test
+may incidentally issue another token; this is not a limit of a single HTTP request
+and does not authorize extra requests just to obtain or characterize tokens.
+Honor actual operator limits and stop conditions; if they prevent the required
+repetitions, keep confirmation unresolved. Record only a redacted marker such as
 `token issued` plus the minimum non-sensitive identity fields already visible
 in the same response. Any further token or account characterization requires a
 separately authorized workflow.
@@ -1259,10 +1286,11 @@ a concrete query rewrite is not, since you don't have the application's real
 query.
 
 When a login differential naturally returns an administrative session token,
-describe the demonstrated impact as `obtained a valid administrative session
-token` or `administrative authentication bypass`. Do not claim full
-administrative access or account takeover unless a separately authorized
-workflow actually validated that access against administrative functionality.
+describe only the observed successful-login branch and `token issued` marker.
+Token validity and administrative privileges remain unverified unless separate
+authorized evidence establishes them; a response field, email or role label alone
+does not validate token usability or administrative access. Do not claim full
+administrative access or account takeover beyond what the evidence demonstrates.
 
 Do not call `confirm_finding` for `not-confirmed`, `blocked`, or `deferred`
 candidates, or for any other unresolved outcome such as `insufficient-evidence`,

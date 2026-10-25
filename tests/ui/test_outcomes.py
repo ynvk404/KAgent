@@ -11,7 +11,7 @@ from src.agent.events import DoneEvent, ToolCallEvent, ToolResultEvent, ErrorEve
 from src.permission.permission import AlwaysAllow
 from src.target.target import Target
 from src.tools.workflow.workflow_tool import WorkflowTool
-from src.ui.core.state import AgentEventAction, Clear, SetAsk, SetBusy, FinalizeDeferredOutcome
+from src.ui.core.state import AgentEventAction, Clear, SetAsk, SetBusy
 from src.workflow.state import Candidate, ValidationResult, WorkflowObjective
 from tests.helpers.workflow import adopt_fixture_assessment, record_completed_phase
 from tests.tools.test_finding import _tool, _valid_args
@@ -120,43 +120,159 @@ def test_truthful_final_outcome_is_once_per_turn(reason, label):
     assert len(app.state.transcript) == 2
 
 
-def test_max_steps_outcome_waits_for_operator():
+def test_max_steps_outcome_is_finalized_even_with_an_unrelated_user_request():
     app = make_app()
     app.dispatch(SetAsk(cast(Any, object())))
     dispatch(app, DoneEvent(stop_reason="max_steps"))
-    assert not app.state.transcript and app.state.phase == "waiting-user"
-    app.dispatch(SetAsk(None))
-    app.dispatch(FinalizeDeferredOutcome())
+    assert app.state.outcome_written and app.state.phase == "waiting-user"
     assert len(app.state.transcript) == 1
+    assert "Stopped at max steps" in app.state.transcript[0].text
+    details = app.state.latest_turn_details
+    assert details is not None and details.stop_reason == "max_steps"
+    app.dispatch(SetAsk(None))
+    dispatch(app, DoneEvent(stop_reason="max_steps"))
+    assert len(app.state.transcript) == 1 and app.state.phase == "idle"
+    assert app.state.latest_turn_details is details
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("decision", ["Stop", "Continue"])
-async def test_actual_max_steps_callback_defers_summary_and_preserves_continue(decision):
-    app, _, _ = timer_app()
+async def test_max_steps_stops_without_dialog_or_internal_continue(monkeypatch):
+    app, clock, intervals = timer_app()
     turns = []
+    actions = []
+    original_dispatch = app.dispatch
+    def record(action):
+        actions.append(action)
+        original_dispatch(action)
+    monkeypatch.setattr(app, "dispatch", record)
+
     async def run(value, *, signal, emit, opts=None):
         turns.append(value)
         if len(turns) == 1:
+            clock.advance(5)
+            emit(AssistantTextEvent(text="Evidence collected; work remains."))
             emit(ErrorEvent(err=MaxStepsError(5)))
             emit(DoneEvent(stop_reason="max_steps"))
         else:
-            emit(AssistantTextEvent(text="Finished continued work."))
+            emit(AssistantTextEvent(text="New user request answered."))
             emit(DoneEvent(stop_reason="final_response"))
     app.agent = cast(Agent, SimpleNamespace(is_running=lambda:False, run=run))
     await app.run_agent_turn("fixture")
-    assert app.state.pending_ask is not None
-    assert not any("Stopped at max steps" in entry.text for entry in app.state.transcript)
-    app.state.pending_ask.resolve(decision)
-    for _ in range(10):
-        await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert turns == ["fixture"]
+    assert not any(isinstance(action, SetAsk) for action in actions)
     assert app.state.pending_ask is None
-    if decision == "Continue":
-        assert len(turns) == 2
-        assert app.state.transcript[-1].text == "Turn completed."
-        assert any("Finished continued work." == entry.text for entry in app.state.transcript)
-    else:
-        assert len(turns) == 1 and app.state.transcript[-1].text == "Stopped at max steps."
+    assert app._get_active_modal() is None
+    assert app.state.phase == "idle" and not app.state.busy
+    assert (app.run_abort_event, app.run_task) == (None, None)
+    assert not app._elapsed_active and intervals[-1].stopped
+    assert app.status_bar.elapsed_seconds == 5
+    assert app.state.transcript[-1].kind == "warning"
+    assert app.state.transcript[-1].text == "Stopped at max steps."
+    details = app.state.latest_turn_details
+    assert details is not None and details.stop_reason == "max_steps"
+    assert any(entry.text == "Evidence collected; work remains." for entry in app.state.transcript)
+    assert not any("Turn completed" in entry.text or "Continue" in entry.text for entry in app.state.transcript)
+
+    app.submit("Show the saved results.")
+    assert app.run_task is not None
+    await app.run_task
+    assert turns == ["fixture", "Show the saved results."]
+    assert app.history == ["Show the saved results."]
+    assert app.state.phase == "idle" and not app.state.busy
+    assert app.run_abort_event is None and app.run_task is None
+    assert app.state.latest_turn_details is not None
+    assert app.state.latest_turn_details.turn_number == 2
+    assert app.state.latest_turn_details.stop_reason == "final_response"
+    assert app.state.transcript[-1].text == "Turn completed."
+    assert sum(entry.text == "Stopped at max steps." for entry in app.state.transcript) == 1
+    assert details.stop_reason == "max_steps"
+
+
+@pytest.mark.asyncio
+async def test_real_max_steps_and_new_prompt_preserve_persisted_workflow_and_evidence(tmp_path, monkeypatch):
+    from src.agent.agent import AgentOptions
+    from src.llm.core.types import ChatResponse, FunctionCall, Message, ToolCall
+    from src.session.store import Store
+    from src.skills.registry import Registry as Skills
+    from src.tools.common.registry import Registry as Tools
+    from src.workflow.evidence.recovery import current_budget
+    from tests.helpers.agent_fakes import EchoTool, FakeClient
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("KAGENT_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tool, finding_store = _tool(tmp_path)
+    await tool.run(_valid_args(tool), None, AlwaysAllow())
+    workflow = tool.workflow
+    assert workflow is not None
+    candidate = next(iter(workflow.candidates.values()))
+    budget = current_budget(workflow, candidate.id, create=True)
+    assert budget is not None
+    budget.update(rejections=2, repair_turns=3, closed=True)
+    workflow.add_candidate(Candidate(candidate_class="access-control"))
+    preserved_fields = ("candidates", "validation_results", "attempts", "evidence", "persisted_findings", "evidence_recovery")
+    snapshot = {key: copy.deepcopy(workflow.to_dict()[key]) for key in preserved_fields}
+    proof_files = {path: path.read_bytes() for path in tmp_path.glob("proof-*.txt")}
+    finding_files = {path: path.read_bytes() for path in finding_store.dir.glob("*.md")}
+    assert proof_files and finding_files and workflow.attempts
+    assert all(attempt["status"] == "completed" for attempt in workflow.attempts.values())
+
+    summary = "Evidence and findings saved; pending validation remains incomplete."
+    responses = []
+    for index in range(2):
+        responses.extend([
+            ChatResponse(Message("assistant", "", tool_calls=[ToolCall(
+                f"echo-{index}", FunctionCall("echo", '{"msg":"review"}'))]), "tool_calls"),
+            ChatResponse(Message("assistant", summary), "stop"),
+        ])
+    client, tools, echo = FakeClient(responses), Tools(), EchoTool()
+    tools.register(echo)
+    store = Store.new_with_id(str(tmp_path / "sessions"), "max-steps")
+    agent = Agent(AgentOptions(
+        client=client, tools=tools, skills=Skills(), prompter=AlwaysAllow(), store=store,
+        target=Target(), workflow=workflow, max_steps=1, streaming_enabled=False, auto_compact_threshold=0,
+    ))
+    app, _, _ = timer_app()
+    app.agent = agent
+    run = agent.run
+    prompts = []
+    terminal_events = []
+    async def observe(value, *, signal, emit, opts=None):
+        prompts.append(value)
+        def forward(event):
+            if event.type == "done":
+                terminal_events.append(event)
+            emit(event)
+        await run(value, signal=signal, emit=forward, opts=opts)
+    monkeypatch.setattr(agent, "run", observe)
+
+    for turn, prompt in enumerate(("Review the saved report.", "Show the saved evidence."), start=1):
+        app.submit(prompt)
+        assert app.run_task is not None
+        await app.run_task
+        await asyncio.sleep(0)
+        assert len(prompts) == turn and prompts[-1] == prompt
+        assert len(client.requests) == turn * 2 and echo.calls == turn
+        assert len(terminal_events) == turn
+        assert terminal_events[-1].stop_reason == "max_steps"
+        assert terminal_events[-1].agent_loop_llm_calls == 1
+        assert terminal_events[-1].final_synthesis_llm_calls == 1
+        assert agent.get_max_steps() == 1
+        assert app.state.phase == "idle" and not app.state.busy
+        assert app.state.pending_ask is None and app.run_abort_event is None and app.run_task is None
+        details = app.state.latest_turn_details
+        assert details is not None and details.stop_reason == "max_steps" and details.turn_number == turn
+        assert app.state.transcript[-1].text.startswith("Stopped at max steps")
+        assert sum(entry.text == summary for entry in app.state.transcript) == turn
+        # A user prompt may initialize a new objective; it must preserve the
+        # earlier attempts, results, evidence, findings and repair allowances.
+        assert {key: workflow.to_dict()[key] for key in preserved_fields} == snapshot
+        saved = store.load()
+        assert {key: saved.workflow.to_dict()[key] for key in preserved_fields} == snapshot
+        assert [message.content for message in saved.messages if message.role == "user"] == prompts
+        assert sum(message.content == summary for message in saved.messages) == turn
+        assert all(path.read_bytes() == content for path, content in {**proof_files, **finding_files}.items())
 
 
 def configure(app, tool, tmp_path):
@@ -240,7 +356,8 @@ def test_scoped_phase_completion_deduplicates_and_boundary_resets(tmp_path):
     assert not app.state.milestones and not app.state.pending_calls
 
 
-def test_final_scoped_residual_work_and_revision_change(tmp_path):
+@pytest.mark.parametrize("reason", ["workflow_blocked", "max_steps"])
+def test_final_scoped_residual_work_and_revision_change(tmp_path, reason):
     tool, _ = _tool(tmp_path)
     app = make_app()
     workflow, candidate = configure(app, tool, tmp_path)
@@ -251,8 +368,10 @@ def test_final_scoped_residual_work_and_revision_change(tmp_path):
     # An unrelated origin's candidate must not contaminate this turn's outcome.
     workflow.add_candidate(Candidate(candidate_class="xss", target="http://other.lab:3000"))
     snapshot = copy.deepcopy(workflow.to_dict())
-    dispatch(app, DoneEvent(stop_reason="workflow_blocked"))
+    dispatch(app, DoneEvent(stop_reason=reason))
     final = app.state.transcript[-1].text
+    if reason == "max_steps":
+        assert final.startswith("Stopped at max steps")
     assert "coverage synchronization pending" in final and "cleanup requires-user-action" in final
     assert "validation incomplete" not in final and workflow.to_dict() == snapshot
     replacement = adopt_fixture_assessment(workflow, ValidationResult(candidate.id, "test-skill", "confirmed",

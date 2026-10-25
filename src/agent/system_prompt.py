@@ -371,6 +371,20 @@ def build_system_prompt(opts: BuildOptions) -> str:
         "Narration only; preserve tool references.\n"
     )
 
+    # Target assessment guidance is irrelevant to an empty coding session.
+    if (opts.target and not opts.target.empty()) or (
+        opts.workflow and opts.workflow.objective and opts.workflow.objective.target_origin
+    ):
+        sb += (
+            "\n# Factual accuracy\n"
+            "Before artifacts/Workflow prose, narration or final synthesis, check read sources. Label observed, documented, "
+            "inferred, untested or unresolved; untested never proves absence. Match executed, not intended tests. Separate "
+            "request metadata/previews from response body. Verify method/status/response media type; keep SQL shape hypothetical. "
+            "Specify counting unit: paths, operations, HTTP requests (direct/discovery), inputs; no mixed totals. Exact IDs/current "
+            "canonical state override checkpoint prose. Empty evidence_refs do not mean raw observations absent; "
+            "registration/result/finding differ.\n"
+        )
+
     # Thêm cấu hình reasoning
     if opts.thinking_enabled:
         sb += (
@@ -664,6 +678,8 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
         )
     if recent_results:
         lines.append("- Recent validation results:")
+        lines.append("  evidence_refs list registered proof only; empty refs do not establish absence of raw observations. "
+                     "Use the original attempt's observation inventory for availability; a checkpoint artifact is not current state.")
         for result in recent_results:
             evidence = ",".join(_workflow_brief(value) for value in result.evidence_refs[:3]) or "none"
             lines.append(
@@ -671,7 +687,10 @@ def render_workflow(workflow: Optional["WorkflowState"]) -> str:
                 f"outcome={result.outcome} evidence_refs={evidence} "
                 f"assessment_source={result.assessment_source or 'legacy/unknown'} "
                 f"result_id={result.result_id or 'unknown'} attempt_id={result.attempt_id or 'unknown'} "
-                f"mutation={result.mutation_performed} cleanup_state={result.cleanup_state}"
+                f"mutation={result.mutation_performed} cleanup_state={result.cleanup_state} "
+                f"candidate_status={workflow.candidates[result.candidate_id].status if result.candidate_id in workflow.candidates else 'unknown'} "
+                f"attempt_status={workflow.attempts.get(result.attempt_id or '', {}).get('status', 'unknown')} "
+                f"finding_persisted={workflow.finding_is_persisted(result.candidate_id)}"
             )
         pending_findings = [
             candidate.id

@@ -391,6 +391,11 @@ COMPACTION_SYSTEM_PROMPT = (
     "separately. Keep only evidence references needed to continue. "
     "Preserve the whole-target objective and every requested goal, including pending, completed, deferred and blocked goals. "
     "Separate observed facts, hypotheses and verified blockers. A SQLite parser error without query text does not reveal constructed SQL. "
+    "Keep only the canonical requested goals; never add goals from generic playbooks, assistant plans or TODOs. "
+    "whole_target describes traversal, not permission to add vulnerability classes. "
+    "Preserve unresolved evidence references and distinguish raw observations from registered proof, accepted results and persisted findings. "
+    "Empty evidence_refs do not mean raw observations were lost. Intended or unexecuted probes are not executed comparisons. "
+    "Redacted previews/placeholders are saved representations, not the actual request bytes; never infer sent secret values from them. "
     "A reader offset failure is not redaction; credential rejection is not evidence of a missing-session prerequisite. "
     "Do not invent requests, timeouts or authority to restart an unresolved attempt."
 )
@@ -4958,6 +4963,18 @@ class Agent:
         if stop_reason == "final_response":
             instruction += "\n\n" + _PLAIN_SUMMARY_INSTRUCTION
         objective = self.workflow.objective
+        if not self.target.empty() or (objective and objective.target_origin):
+            instruction += (
+                "\n\nBefore final synthesis, reconcile claims with executed tool calls and actual observations, "
+                "not intended probes or earlier assistant prose. If no FALSE request was executed, the TRUE/FALSE "
+                "comparison is unexecuted; never describe equal pair bodies. When execution/content is unavailable, "
+                "state the gap rather than invent an action, response or negative result. Empty evidence_refs mean "
+                "no registered proof for that result, not absence of raw observations; do not claim source loss "
+                "without checking source availability. Distinguish Candidate suspicion, Attempt status, accepted "
+                "ValidationResult, registered evidence and a successfully persisted finding. Use current canonical "
+                "statuses and requested goals over artifact checkpoints or derived summaries. Unresolved/deferred "
+                "is neither confirmed nor a completed negative. Keep query-shape explanations hypothetical."
+            )
         pending_findings = [candidate.id for candidate in self.workflow.candidates.values()
                             if (objective is None or self.workflow.candidate_belongs_to_objective(candidate, objective))
                             and self.workflow.eligible_for_finding(candidate.id)

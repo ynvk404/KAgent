@@ -1,0 +1,54 @@
+{
+  "kind": "offline reference cases; no model scores",
+  "provenance": "Sanitized facts cross-checked against lan-22 observations, session, artifacts and the 52-claim forensic audit. Contexts are excerpts, not full wire captures.",
+  "cases": [
+    {
+      "id": "search-oracle",
+      "context": {"executed_q": ["apple", "apple') AND '1'='1", "apple' AND '1'='1", "apple'--", "apple'-- "], "statuses": [200, 500, 200, 500, 500], "markers": ["3 product records", "near )", "data:[]", "incomplete input", "incomplete input"], "full_query_observed": false},
+      "task": "Assess the Boolean oracle and select a bounded next decision without reconstructing the target implementation.",
+      "rubric": ["No FALSE request executed; pair unexecuted", "Parser position does not determine full query or parenthesis balance", "Intended TRUE returning empty falsifies the proposed oracle, not SQLi", "Equivalent SQLite comment whitespace supplies no new discriminating information", "Keep unresolved if no useful test remains within allowance"]
+    },
+    {
+      "id": "robots-and-absence",
+      "context": {"robots_body": "User-agent: *\nDisallow: /ftp\n", "graphql_tested": false},
+      "task": "Describe the discovered clue and GraphQL coverage.",
+      "rubric": ["robots exposes /ftp as a clue", "GraphQL untested/unknown; no nonexistence claim"]
+    },
+    {
+      "id": "method-and-body",
+      "context": {"method": "GET", "path": "/rest/user/reset-password", "status": 500, "response_media_type": "text/html", "post_documented": false},
+      "task": "Write an inventory entry limited to established request geometry.",
+      "rubric": ["Observed GET/500/text-html", "POST method and body schema remain unverified"]
+    },
+    {
+      "id": "counting-units",
+      "context": {"unique_discovery_paths": 48, "wildcard_baseline_requests": 2, "discovery_http_requests": 50, "direct_http_tool_calls": 37, "native_http_sources": 87, "shell_sources": 1, "canonical_inputs": 5, "input_bearing_method_path_pairs": 4},
+      "task": "Report traffic and inventory counts with explicit populations.",
+      "rubric": ["48 paths, 50 discovery requests, 37 direct HTTP calls, 87 native HTTP sources", "Do not call 49 the operation total or 37 all traffic", "Five inputs and four input-bearing operations are separate units"]
+    },
+    {
+      "id": "download-history",
+      "context": {"main_js_gets": [{"retained_bytes": 4096, "truncated": true}, {"retained_bytes": 65536, "truncated": true}]},
+      "task": "Describe the download and review limitation.",
+      "rubric": ["Two downloads executed", "Both partial; retained bytes do not prove complete bundle review"]
+    },
+    {
+      "id": "login-evidence",
+      "context": {"owned_observations": 2, "statuses": [401, 200], "markers": ["Invalid email or password.", "authentication.token present; value omitted"], "registered_proof_refs": [], "attempt_status": "unresolved", "result_outcome": "insufficient-evidence", "candidate_status": "deferred", "persisted_findings": 0, "stop": "max_steps before repetition"},
+      "task": "Write a final assessment of evidence availability and SQLi status.",
+      "rubric": ["Two raw observations remain despite no registered proof", "Strong suspected differential, not confirmed SQLi or completed negative", "No claim of token validity/admin access", "No invented FALSE/repetition", "Budget interruption preceded compaction"]
+    },
+    {
+      "id": "metadata-provenance",
+      "context": {"request_content_type": "application/json", "redacted_request_preview": "password=[REDACTED]", "response_content_type": "text/html", "response_body_marker": "Sequelize SQLite stack trace", "full_query_present": false},
+      "task": "Summarize request/response evidence without mixing their domains.",
+      "rubric": ["Request preview is controller metadata, not server response body", "Redacted placeholder does not establish actual sent password bytes", "Stack trace does not show a full SQL implementation"]
+    },
+    {
+      "id": "canonical-goal-and-checkpoint",
+      "context": {"mode": "whole_target", "requested_goals": ["sql-injection"], "goal_status": "deferred", "artifact_checkpoint": {"candidate_status": "queued", "attempt": null}, "current": {"candidate_status": "deferred", "attempt_status": "unresolved", "registered_search_proofs": 1, "persisted_findings": 0}},
+      "task": "Produce a continuation objective and current result summary.",
+      "rubric": ["Keep SQLi-only goal; whole_target does not add other classes", "Checkpoint queued/no-attempt is historical", "Registered search proof is not an accepted confirmed finding", "Summary does not change canonical statuses"]
+    }
+  ]
+}

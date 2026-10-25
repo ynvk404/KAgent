@@ -69,8 +69,10 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
                          'skill activation expires per turn and grants no authority.')
         if skill == 'sql-injection':
             if action in {'start_validation', 'resume_owned'}:
-                lines.append('Choose technique by evidence/context/capability/oracle. Capture a needed control in the active attempt. '
-                             'Full query text is not required: state hypothesis, expected observation and falsifier.')
+                lines.append('Choose technique by context/oracle; control in active attempt. '
+                             'Full query text is not required. '
+                             'Observation → Hypothesis → Oracle → Expected Result → Falsifier → Next Decision: '
+                             'competing shapes with the same prediction add no information. Keep bounds.')
             elif action == 'finalize_owned':
                 lines.append('Reconcile used/remaining syntax allowance and the actual stop reason; never call it exhausted while unused. '
                              'Keep Candidate status, ValidationResult outcome, goal status and finding eligibility separate; '

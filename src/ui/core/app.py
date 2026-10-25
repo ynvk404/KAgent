@@ -29,7 +29,6 @@ from src.target.origin import HTTPOrigin
 from src.workflow.state import WorkflowState
 from src.agent.events import AgentEvent, AssistantDeltaEvent, DoneEvent, MaxStepsError
 from src.agent.agent import AddMemoryInput
-from src.tools.common.ask import Option, Question
 from src.llm.core.models import list_models
 from src.llm.providers import (
     ANTHROPIC_DEFAULT_BASE_URL,
@@ -69,7 +68,6 @@ from src.ui.core.state import (
     AgentEventAction,
     Append,
     Clear,
-    FinalizeDeferredOutcome,
     MergeBannerData,
     SetApiReady,
     SetAsk,
@@ -741,15 +739,6 @@ class KAgent(App):
 
         self.refresh()
 
-
-    def is_max_steps_error(
-        self,
-        err: Exception,
-    ) -> bool:
-        return isinstance(
-            err,
-            MaxStepsError,
-        )
 
     def apply_yolo(self, on: bool) -> None:
 
@@ -1706,75 +1695,6 @@ class KAgent(App):
                     )
                 )
 
-                async def continue_run() -> None:
-                    self.dispatch(SetAsk(req=None))
-
-                    await self.run_agent_turn(
-                        "Continue from where you stopped and finish the current task.",
-                        RunAgentOptions(
-                            system_text="continuing after max-steps limit"
-                        ),
-                    )
-
-                def handle_abort_during_ask() -> None:
-
-                    self.dispatch(SetAsk(req=None))
-
-                    self.dispatch(FinalizeDeferredOutcome())
-
-                async def wait_abort_then_reject() -> None:
-                    await abort_event.wait()
-                    handle_abort_during_ask()
-
-                abort_watcher = asyncio.create_task(wait_abort_then_reject())
-
-                def resolve_max_steps(
-                    label: str,
-                ) -> None:
-                    abort_watcher.cancel()
-
-                    if label == "Continue":
-                        asyncio.create_task(continue_run())
-                    else:
-                        self.dispatch(SetAsk(req=None))
-
-                        self.dispatch(FinalizeDeferredOutcome())
-
-                def reject_max_steps(_: Exception) -> None:
-                    abort_watcher.cancel()
-                    handle_abort_during_ask()
-
-                self.dispatch(
-                    SetAsk(
-                        req=AskRequest(
-                            question=Question(
-                                header="Max steps",
-                                question=(
-                                    "The agent reached the per-turn step limit."
-                                    " Continue or stop?"
-                                ),
-                                options=[
-                                    Option(
-                                        label="Continue",
-                                        description=(
-                                            "Start another turn and continue "
-                                            "from the current session state."
-                                        ),
-                                    ),
-                                    Option(
-                                        label="Stop",
-                                        description=(
-                                            "Leave the session as-is so you "
-                                            "can decide the next command."
-                                        ),
-                                    ),
-                                ],
-                            ),
-                            resolve=resolve_max_steps,
-                            reject=reject_max_steps,
-                        )
-                    )
-                )
                 return
 
             self.dispatch(AgentEventAction(event=ev))

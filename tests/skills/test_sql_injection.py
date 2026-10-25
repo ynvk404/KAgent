@@ -258,7 +258,9 @@ class TestScopeBounds:
         self, skill_text: str
     ):
         assert "token is incidental evidence" in skill_text
-        assert "do not replay it, decode it, request it again" in skill_text
+        assert "do not replay it, decode it, or use it against" in _norm(skill_text)
+        assert "Required repetitions of the same bounded TRUE/FALSE test" in skill_text
+        assert "does not authorize extra requests just to obtain or characterize tokens" in _norm(skill_text)
         assert "[REDACTED_TOKEN]" in skill_text
         assert "without sending another request" in skill_text
 

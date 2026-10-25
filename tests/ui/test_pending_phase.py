@@ -21,7 +21,6 @@ from src.ui.bridges.perm_bridge import BridgedPermissionRequest, BridgedPrompter
 from src.ui.core.app import AbortEvent
 from src.ui.core.state import (
     AgentEventAction,
-    FinalizeDeferredOutcome,
     SetAsk,
     SetBusy,
     SetPerm,
@@ -168,17 +167,23 @@ def test_terminal_outcomes_remain_visible_without_pending_requests(reason: str, 
     assert state.transcript[-1].text.startswith(label)
 
 
-def test_max_steps_ask_stays_actionable_then_shows_terminal_outcome():
+def test_max_steps_finalizes_without_hiding_an_unrelated_pending_ask():
     state = reducer(reducer(seed(), SetBusy(True)), SetAsk(pending_ask()))
     state = reducer(state, AgentEventAction(DoneEvent(stop_reason="max_steps")))
     assert state.phase == "waiting-user"
-    assert state.deferred_outcome == "max_steps"
-    assert not state.outcome_written
+    assert state.pending_ask is not None
+    assert state.outcome_written and not state.busy
+    assert state.transcript[-1].text.startswith("Stopped at max steps")
+    assert "user input pending" in state.transcript[-1].text
+    details = state.latest_turn_details
+    assert details is not None and details.stop_reason == "max_steps"
+    transcript = state.transcript
 
     state = reducer(state, SetAsk(None))
-    state = reducer(state, FinalizeDeferredOutcome())
+    state = reducer(state, AgentEventAction(DoneEvent(stop_reason="max_steps")))
     assert state.phase == "idle"
-    assert state.transcript[-1].text.startswith("Stopped at max steps")
+    assert state.transcript == transcript
+    assert state.latest_turn_details is details
 
 
 def test_pending_permission_keeps_wait_label_without_hiding_terminal_message():

@@ -82,6 +82,57 @@ def visible_caret(app: KAgent, widget: Static) -> Offset:
 
 
 @pytest.mark.asyncio
+async def test_max_steps_returns_to_editable_input_and_accepts_next_prompt(app: KAgent, monkeypatch) -> None:
+    from src.agent.events import AssistantTextEvent, DoneEvent, ErrorEvent, MaxStepsError
+    from src.ui.core.state import SetAsk
+
+    app.run_agent_turn = KAgent.run_agent_turn.__get__(app, KAgent)
+    prompts = []
+    actions = []
+    original_dispatch = app.dispatch
+    def record(action):
+        actions.append(action)
+        original_dispatch(action)
+    monkeypatch.setattr(app, "dispatch", record)
+    async def run(value, *, signal, emit, opts=None):
+        prompts.append(value)
+        emit(AssistantTextEvent(text="Partial summary." if len(prompts) == 1 else "New request answered."))
+        if len(prompts) == 1:
+            emit(ErrorEvent(err=MaxStepsError(10)))
+            emit(DoneEvent(stop_reason="max_steps"))
+        else:
+            emit(DoneEvent(stop_reason="final_response"))
+    monkeypatch.setattr(app.agent, "run", AsyncMock(side_effect=run))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press(*"first", "enter")
+        await pilot.pause()
+        assert prompts == ["first"]
+        assert app.state.latest_turn_details is not None
+        assert app.state.latest_turn_details.stop_reason == "max_steps"
+        assert app.state.phase == "idle" and not app.state.busy
+        assert app.run_task is None and app.run_abort_event is None
+        assert app.state.pending_ask is None and app._get_active_modal() is None
+        assert not any(isinstance(action, SetAsk) for action in actions)
+        assert app.input.value == ""
+        assert not app.overlay_static.display
+        assert any(entry.text == "Partial summary." for entry in app.state.transcript)
+        assert app.state.transcript[-1].text == "Stopped at max steps."
+
+        await pilot.press(*"next")
+        assert app.input.value == "next" and app.input_static.value == "next"
+        assert app.cursor_position == visible_caret(app, app.input_static)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert prompts == ["first", "next"]
+        assert app.state.latest_turn_details.stop_reason == "final_response"
+        assert app.state.latest_turn_details.turn_number == 2
+        assert app.state.transcript[-1].text == "Turn completed."
+        assert sum(entry.text == "Stopped at max steps." for entry in app.state.transcript) == 1
+        assert app.input.value == "" and app.state.phase == "idle" and not app.state.busy
+
+
+@pytest.mark.asyncio
 async def test_terminal_cursor_starts_at_drawn_input_caret(app: KAgent) -> None:
     async with app.run_test(size=(100, 30)):
         assert app.cursor_position == visible_caret(app, app.input_static)
