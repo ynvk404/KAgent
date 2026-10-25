@@ -176,13 +176,15 @@ async def test_synthesis_refreshes_persisted_result_and_distinguishes_unregister
     assert not rt.workflow.eligible_for_finding(cid) and len(sent) == 1
 
 
-async def test_loaded_sqli_guidance_plans_before_probes_and_stops_after_exhaustion():
+async def test_loaded_sqli_guidance_plans_before_probes_and_finalizes_for_evidence_reasons():
     skills = Skills()
     skills.load_dir(Path(__file__).resolve().parents[2] / 'skills')
     loaded = ' '.join((await LoadSkillTool(skills).run({'name': 'sql-injection'})).split())
     for obligation in ('Read the applicable payload guidance before the first confirmation probe',
                        'Do not use an arbitrary nonmatching seed for an AND',
-                       'Exhausted syntax adjustments are a finalization checkpoint',
-                       'Do not spend finalization turns rereading',
+                       'Stop when evidence is sufficient',
+                       'no useful authorized test remains',
+                       'remaining uncertainty and real stop reason',
+                       'finalization turns rereading unchanged',
                        'An unregistered proof file'):
         assert obligation.lower() in loaded.lower()

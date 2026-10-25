@@ -19,9 +19,10 @@
 #   - Phase 2D section: out-of-band (DNS/HTTP callback) confirmation.
 #     Requires its OWN separate ask_user authorization (including the
 #     specific callback domain to use) — distinct from and in addition to
-#     Phase 3's authorization. Only use after 2a/2b/2c have all been tried
-#     and were inconclusive. Never use a public/shared third-party OOB
-#     service without explicit user confirmation that it's in scope.
+#     Phase 3's authorization. Only consider after applicable, context-compatible
+#     Phase 2 plans are exhausted/inconclusive, with no block under the 2c guard;
+#     this does not require trying every technique. Never use a public/shared
+#     third-party OOB service without explicit user confirmation that it's in scope.
 #
 #     IMPORTANT — CURRENT KAGENT CAPABILITY:
 #     KAgent currently does not expose an OOB callback/listener tool.
@@ -46,11 +47,28 @@
 # enumeration or data extraction — that stays out of scope for this
 # corpus regardless of phase.
 #
-# Annotation convention (applies to every payload in every section below):
-# each payload line is followed by a comment giving (a) its purpose, (b)
+# Representation / annotation convention (all sections): payload characters end
+# before the two-or-more-space alignment gap preceding "# purpose:". The gap and
+# annotation are not SQL input. Internal payload spaces remain significant.
+# read_payloads returns bounded text as written; it does not strip annotations,
+# substitute placeholders, encode input or execute examples. Runtime permissions,
+# the loader preface and SKILL.md remain authoritative; reading grants no authority.
+# Each payload line has a comment giving (a) its purpose, (b)
 # the condition under which it applies, and (c) any limit on what it may
 # be used for. This is kept consistent across Phase 1, 2, 2D, and 3 so the
 # level of context doesn't drop off in later sections.
+#
+# SQL input and URL-encoded transport are distinct representations. A wire %27
+# becomes a quote only after an evidenced percent-decode; literal SQL input %27
+# is not a quote. Wire %2527 needs another decode to become a quote. Do not treat
+# these as interchangeable or assume repeated decoding; preserve request identity.
+# Display notation --<space> means -- followed by one ASCII space (U+0020), not
+# literal angle brackets. For MySQL entries ending in bare --, explicitly include
+# that space in the constructed input when using it as a comment (wire --%20 in
+# a URL-encoded value); neither alignment padding nor invisible end-of-line
+# whitespace supplies it automatically. Comments begin only in a compatible SQL
+# lexical context outside literals/quoted identifiers; suffix/newline and remaining
+# parentheses still matter. Do not copy display notation or annotations as input.
 
 # ============================================================================
 # ========================== PHASE 1 — DETECTION =============================
@@ -65,7 +83,7 @@
 
 '                           # purpose: single quote, classic string-context break | applies: any string-context parameter | limit: syntax probe only, no query logic injected
 "                           # purpose: double quote, for double-quoted string contexts | applies: params rendered in double-quoted SQL strings | limit: syntax probe only
-')                          # purpose: closing paren + quote, for function-wrapped params, e.g. WHERE id=('$id') | applies: params passed through a SQL function wrapper | limit: syntax probe only
+')                          # purpose: quote + closing paren, e.g. WHERE id=('$id') | applies: compatible quoted, parenthesized input, not necessarily a function | limit: syntax probe only
 ")                          # purpose: double-quote variant of the above | applies: same as above, double-quoted variant | limit: syntax probe only
 `                           # purpose: backtick, MySQL identifier-quote context | applies: MySQL-suspected targets or unknown engine | limit: syntax probe only
 ;                           # purpose: statement terminator, some drivers/engines surface a distinct error | applies: any candidate; also used to gauge stacked-query support | limit: syntax probe only, do not chain a second statement here
@@ -106,8 +124,8 @@
 # --- Quoted-string vs. numeric context — evidence-supported selection ---
 # Per SKILL.md 1b, select from observed SQL evidence or a justified hypothesis,
 # not a numeric-looking field or quotes in ordinary application output. Do not
-# require both contexts. A discriminating quoted/numeric comparison uses the
-# same three syntax-shape adjustments after the initial signal, not a new budget.
+# require both contexts. Continue a discriminating quoted/numeric comparison
+# only when useful and authorized; earlier shape changes impose no numeric cap.
 # Record unresolved context in injection_context; it is not a validation outcome.
 
 # ============================================================================
@@ -116,7 +134,11 @@
 # Choose a technique from observed behavior, candidate context, capability and
 # oracle per SKILL.md Phase 2; no mandatory order or technique cycling. These
 # examples are not a sequence to execute. Each switch needs a distinct
-# evidence-supported plan and shares the existing syntax allowance.
+# evidence-supported plan within scope, permissions and runtime/operator limits.
+# Reassess observations against predictions; continue only for a useful
+# discriminating test, not to exhaust examples. Stop when evidence suffices,
+# no useful authorized test remains or execution is blocked; unresolved context
+# remains insufficient-evidence. A failed probe alone does not rule out all plans.
 # Boolean pairs and timing controls use their own comparison/repetition rules.
 # For controlled error-based or bounded UNION-based proof, follow the Phase 2
 # paths in SKILL.md: owned control, compatible expression/projection and a
@@ -125,6 +147,14 @@
 # fingerprints remain gated Phase 3. No drop-in error/UNION payload pack is supplied.
 
 # --- Boolean-based (when a meaningful differential is available) ------------
+# Literal 1 is illustrative, not a universally matching seed. In 1 AND 1=1,
+# the leading 1 is the seed; AND 1=1 is the predicate (1=2 is its FALSE form).
+# In 1' AND '1'='1 the seed is the first 1, the next quote attempts breakout,
+# and the remaining equality depends on the application's closing quote/suffix.
+# Numeric forms assume an unquoted expression; quoted forms assume a compatible
+# string boundary. Parenthesized positions also need compatible closing/opening
+# parentheses and grouping, not merely a copied quote. A known matching seed
+# establishes a benign match, not SQL breakout or predicate evaluation.
 # Adapt the seed and quote/parenthesis/prefix/suffix to observed context per
 # SKILL.md 2a. These are not drop-in LIKE-pattern probes: a trailing wildcard can
 # change an equality's truth value. If compatibility is unresolved, check intended
@@ -139,10 +169,28 @@
 1' AND '1'='2              # purpose: intended FALSE in the same quoted shape | applies: compatible TRUE established; should exclude its marker with unchanged prefix/suffix | limit: equal responses with unestablished TRUE are inconclusive, no data read
 1 OR 1=1                   # purpose: alternate intended TRUE form | applies: evidence supports an OR-compatible context/oracle; AND failure alone is insufficient | limit: confirmation only, no data read
 
+# --- Controlled error / bounded UNION interpretation (illustrative, not input) ---
+# Control -> hypothesis -> computed marker -> expected response -> falsifier -> repeatability.
+# Control: an owned benign response has no distinguishable computed marker.
+# Hypothesis: an already compatible expression is evaluated into a visible error
+# field, or an already compatible UNION projection has an observable output slot.
+# Computed marker: the non-sensitive expression 7 * 7 would yield 49; pick a result
+# distinguishable from ordinary output, absent in the control and not input echo.
+# Expected response: actually observe 49 in that error field/output slot rather
+# than the unevaluated text 7 * 7. Intending the computation is not observing it.
+# Falsifier: only parser errors/input echo, the marker already in ordinary rows,
+# no computed result, a type mismatch, hidden errors or uninterpretable output.
+# Those observations do not prove controlled evaluation. Unknown projection or
+# missing observable slot is a limitation, not a reason for column/type enumeration.
+# Repeatability and owned-evidence requirements are in SKILL.md's corresponding
+# Phase 2 paths; a success/error contrast is not a Boolean pair. No drop-in query
+# or mandatory Boolean test is implied by this explanatory computation.
+
 # --- Time-based, per engine (pick ONE engine per "Engine identification") ---
-# NOTE — stacked queries: every payload below that uses a leading `;` is a
-# stacked (multi-statement) form. It only works if the application's
-# driver/connection is configured to permit multiple statements per query
+# NOTE — stacked queries: these examples predominantly assume stacked-query
+# support: the semicolon after the seed introduces another statement/block.
+# DBMS identity alone does not establish compatibility. It only works if the
+# application's driver/connection permits multiple statements per query
 # — many are not (e.g. most PHP mysqli/PDO defaults, many ORMs). A stacked
 # payload that produces no delay and no error is NOT evidence against SQL
 # injection — it may simply mean stacked queries aren't permitted here. If
@@ -150,6 +198,13 @@
 # negative on its own. Select another bounded plan only with distinct context
 # and oracle support; do not force boolean or in-line timing variants to complete
 # a sequence. Missing compatibility/oracle remains unresolved.
+# The SQL input position and surrounding statement must permit the seed,
+# terminator and suffix; required functions/procedures and execution privileges
+# must be available. Oracle additionally needs a driver/input path accepting the
+# PL/SQL block, not merely an Oracle fingerprint. Use observable adapter elapsed_ms
+# and a meaningful equivalent zero-delay control under comparable conditions;
+# SKILL.md defines repetition and timing proof. A rejected function/block or no
+# observable delay can reflect incompatibility and is not automatically a SQLi negative.
 
 # MySQL
 1;SELECT SLEEP(5)--        # purpose: 5s delay | applies: MySQL, stacked queries permitted | limit: confirmation only, bounded fixed delay
@@ -163,9 +218,10 @@
 1;WAITFOR DELAY '0:0:5'--  # purpose: 5s delay | applies: MSSQL, stacked queries permitted | limit: confirmation only, bounded fixed delay
 1;WAITFOR DELAY '0:0:0'--  # purpose: 0s control | applies: same as above | limit: control only
 
-# Oracle (no native SLEEP; use DBMS_LOCK or a heavy deterministic wait
-# already scoped to a bounded, known cost — do NOT substitute an
-# unbounded/recursive query here)
+# Oracle: the existing DBMS_LOCK examples require EXECUTE privilege and compatible
+# PL/SQL block submission. Oracle 19c also documents the DBMS_SESSION.SLEEP
+# procedure; that does not supply a universal SQL-expression insertion point.
+# Reference: https://docs.oracle.com/en/database/oracle/oracle-database/19/arpls/DBMS_SESSION.html
 1;BEGIN DBMS_LOCK.SLEEP(5); END;--   # purpose: 5s delay | applies: Oracle, requires EXECUTE on DBMS_LOCK | limit: confirmation only, bounded fixed delay
 1;BEGIN DBMS_LOCK.SLEEP(0); END;--   # purpose: 0s control | applies: same as above | limit: control only
 # If DBMS_LOCK is unavailable or unauthorized (e.g. the probe errors with
@@ -189,8 +245,10 @@
 # They are retained only for future OOB capability support.
 # Never execute them through shell or another substitute mechanism.
 #
-# Requires its own, separate ask_user authorization, obtained AFTER 2a/2b/2c
-# have all been tried and were inconclusive. The authorization must include
+# Requires its own, separate ask_user authorization only after capability exists
+# and applicable, context-compatible Phase 2 plans are exhausted/inconclusive;
+# 2c is a WAF/rate-limit guard, not a mandatory confirmation technique.
+# The authorization must include
 # the specific callback domain to use — never substitute a public/shared
 # third-party OOB service without explicit confirmation it's in scope.
 #
@@ -199,10 +257,14 @@
 # attributed to the exact probe that caused it. Replace {CALLBACK_DOMAIN}
 # with the authorized domain provided by the user. Send once, then poll the
 # listener for a hit against that exact token within a reasonable window
-# (e.g. 30–60s). A matching callback = positive (SQLI-2). No callback =
-# negative for this technique. Do not retry the same payload repeatedly on
-# a negative result — a single well-formed attempt per candidate is enough
-# to conclude for this technique.
+# (e.g. 30–60s). A matching, attributable callback can support SQLI-2 under
+# SKILL.md. Missing capability or authorization means unattempted; incompatible
+# SQL/function/network context means this technique cannot be interpreted.
+# Callback absence alone is inconclusive. Only established SQL execution,
+# compatible outbound resolution, a working authorized listener, exact-token
+# observation and an adequate observation window make absence narrowly meaningful
+# for that callback technique. It does not rule out SQLi or by itself complete
+# not-confirmed. See SKILL.md 2d and result rules; do not repeat equivalent probes.
 
 # MySQL (requires FILE priv or a UDF path in some configs — try only the
 # basic form; do not chain into file read/write if it fails)
@@ -250,9 +312,12 @@
 # enumeration. Do not probe column counts broadly, and do not iterate
 # UNION SELECT NULL,NULL,... attempts to discover the column count — if the
 # column count isn't already known from the confirmed injection context,
-# treat that as this technique not being cleanly applicable here and fall
-# back to an error-based single-value read (e.g. the MSSQL CONVERT or
-# MySQL extractvalue forms below) instead of enumerating.
+# treat UNION as not cleanly applicable here. Unknown UNION projection does not
+# automatically make an error-based fingerprint applicable: MSSQL CONVERT or
+# MySQL extractvalue below needs its own compatible expression, available function
+# and observable error oracle, still under existing Phase 3 authorization. Missing
+# compatibility/oracle remains a limitation; it never justifies enumeration.
+# Existing sufficient impact evidence needs no extra impact request (SKILL.md Phase 3).
 
 1 UNION SELECT version()--                          # purpose: single-column version/banner read | applies: MySQL/Postgres, only when column count/shape already known from confirmed injection context | limit: one fingerprint value only, never used to enumerate columns
 1 AND 1=CONVERT(int, @@version)--                    # purpose: forces the version string into an error message | applies: MSSQL, error-based single-value read | limit: one fingerprint value only

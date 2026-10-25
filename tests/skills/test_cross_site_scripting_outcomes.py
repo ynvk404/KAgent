@@ -494,8 +494,8 @@ def test_fragment_transformation_requires_complete_same_context_variant():
     prose = ' '.join(loaded.split())
     for rule in ('neither `<html>` nor `<body>` wrappers are required',
                  'An incomplete executable payload must not be confirmed',
-                 'at most one bounded same-context close variant',
-                 'This consumes the close variant allowance'):
+                 'a prior close variant is not a stopping rule',
+                 'new observations support a different meaningful prediction'):
         assert rule in prose
     corpus = asyncio.run(ReadPayloadsTool(skills).run(
         {'skill': 'cross-site-scripting', 'file': 'payloads.txt'}, None, AlwaysAllow()))
@@ -521,7 +521,7 @@ def test_returned_syntax_checkpoint_uses_captured_bytes_before_confirmation(skil
         'Immediately before recording', 'actual captured response bytes',
         'every delimiter', 'intended payload', 'LLM-reconstructed HTML',
         "<script>document.title='proof'</script", 'lacks the final `>`',
-        'one bounded same-context compensating variant', 'inspect its actual response',
+        'a bounded same-context compensating adaptation', 'inspect its actual response',
         'another permitted confirmation condition', 'do not claim confirmed execution',
         'Deterministic HTTP-based confirmation remains sufficient',
     ):
@@ -563,3 +563,57 @@ def test_stored_and_dom_guidance_keeps_capability_effects_and_proof_distinct(ski
     assert 'without observed execution supports browser-required, not confirmed' in corpus
     assert 'unambiguous enough, confirmed' not in corpus
     assert 'missing browser execution stays browser-required' in corpus
+
+
+@pytest.fixture(scope="module")
+def payloads_text():
+    text = (Path(__file__).resolve().parents[2] / 'skills' /
+            'cross-site-scripting' / 'payloads.txt').read_text(encoding='utf-8')
+    # Prose contract assertions tolerate wrapping, not missing concepts.
+    return ' '.join(line.lstrip('# ').strip() for line in text.splitlines())
+
+
+def test_marker_substitution_distinguishes_candidate_suffix_from_full_marker(payloads_text):
+    for concept in (
+        'Substitution is manual', 'preserves placeholders and annotations',
+        'Do not fabricate timestamps/session metadata', "candidate's chosen marker",
+        'Illustrative substitution only, not a recorded timestamp',
+        'full detection marker xsspocdemo7', '{MARKER}=demo7', 'xsspoc-demo7',
+        'suffix is demo7, not the full xsspocdemo7',
+        'same suffix used for {TIMESTAMP}', 'record exact input/title strings',
+    ):
+        assert concept in payloads_text
+
+
+def test_corpus_context_and_transformations_do_not_infer_execution(payloads_text):
+    for concept in (
+        'css-style-attribute | css-style-block | fully-encoded | unknown',
+        'Unknown remains unresolved', 'encoding, escaping, sanitization and truncation',
+        'propagation', 'neutralized output', 'potentially executable syntax and observed execution',
+        'absence of HTML encoding is not confirmed execution',
+        'unobserved title change does not establish execution failure',
+        'Deterministic HTTP proof remains sufficient', 'complete returned syntax',
+        'Intended request syntax cannot replace captured response bytes',
+        'textarea/title', 'inert/incompatible context', 'actual value',
+        'incomplete returned tag does not establish breakout',
+        'captured source specifically shows script-tag stripping',
+        'src=x must actually fail image loading', 'anchor href may require a click/navigation',
+        'img src does not execute a javascript: URL as script',
+    ):
+        assert concept in payloads_text
+    assert 'failed to execute' not in payloads_text
+
+
+def test_corpus_stored_and_dom_notes_respect_existing_capability_checkpoint(payloads_text):
+    for concept in (
+        "SKILL.md step 3's Stored/SPA checkpoint", 'authority, isolation',
+        'readback and cleanup feasibility', 'Do not submit an executable mutation',
+        'required browser proof gap cannot be closed',
+        'Acceptance, persistence/readback and execution are different facts',
+        'stored markup or JSON readback is not execution evidence',
+        'cleanup needs separate authority and verification or honest limitations',
+        'cite the exact sink and taint path', 'browser-required, not confirmed',
+        'Ordinary innerHTML script insertion is not execution',
+        'adds no DOM variants or substitute execution',
+    ):
+        assert concept in payloads_text

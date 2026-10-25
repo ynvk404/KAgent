@@ -1,5 +1,6 @@
 """Loaded playbook instruction contracts; these do not verify LLM behavior."""
 from pathlib import Path
+import re
 
 import pytest
 
@@ -32,14 +33,14 @@ async def test_loaded_validation_guidance_binds_claims_to_captures_and_new_repai
 
 
 @pytest.mark.asyncio
-async def test_sql_diagnostics_revise_quote_hypothesis_within_existing_allowance(skills):
+async def test_sql_diagnostics_revise_quote_hypothesis_for_discriminating_tests(skills):
     loaded = ' '.join((await LoadSkillTool(skills).run({'name': 'sql-injection'})).split())
     for contract in ('inside a SQL string literal', 'unless later observations contradict it',
                      'ordinary application text do not establish SQL context',
                      'retain an ambiguous context', 'After consecutive probes',
                      'same expression-type error', 'before another request',
                      'type error is distinct from a syntax error',
-                     'do not restart the allowance or require every technique',
+                     'discriminating context-compatible hypothesis', 'do not require every technique',
                      'any terminal assessment', 'distinct executed observations',
                      'reusing an observation ID does not establish repeatability'):
         assert contract in loaded
@@ -49,8 +50,8 @@ async def test_sql_diagnostics_revise_quote_hypothesis_within_existing_allowance
 async def test_xss_context_and_transformation_remain_bounded_without_execution_inference(skills):
     loaded = ' '.join((await LoadSkillTool(skills).run({'name': 'cross-site-scripting'})).split())
     for contract in ('neither `<html>` nor `<body>` wrappers are required',
-                     'at most one bounded same-context close variant',
-                     'This consumes the close variant allowance', 'every delimiter',
+                     'a prior close variant is not a stopping rule',
+                     'new observations support a different meaningful prediction', 'every delimiter',
                      'Compare distinct captured requests', 'Content-Type, surrounding syntax',
                      'encoding, inert context and CSP',
                      'Neither raw reflection nor HTML fragment parsing alone establishes execution',
@@ -102,7 +103,7 @@ async def test_input_analysis_does_not_promote_json_markup_to_unsupported_xss_or
 @pytest.mark.parametrize('name,obligations', [
     ('sql-injection', ['without query text leaves SQL shape a hypothesis',
         'same error or the same empty result do not establish a differential',
-        'Changing technique names does not reset', 'raw wire encoding from decoded application input',
+        'Record only requests, timeouts and responses actually observed', 'raw wire encoding from decoded application input',
         'new immutable snapshot', 'Usable metadata is not impact proof']),
     ('cross-site-scripting', ['API negative applies only to the tested sink',
         'cannot exclude DOM or stored XSS', 'actual exposed and allowed browser capabilities',
@@ -128,10 +129,62 @@ async def test_sql_decision_checkpoint_is_early_and_conditions_boolean_sequencin
                  'Equal empty responses do not establish SQLi absence',
                  'Suitable existing observations need no extra compatibility request',
                  'Boolean testing is not required for every Candidate',
-                 'three adjustments after the initial signal', 'Continue never resets',
-                 'Same-shape predicate flips', 'Do not exhaust unused allowance'):
+                 'no numeric syntax-shape adjustment cap',
+                 'One unsuccessful probe does not rule out every useful hypothesis',
+                 'Avoid equivalent probes without information gain',
+                 'Sufficient evidence needs no additional requests',
+                 'scope, permissions and runtime/operator limits'):
         assert rule in checkpoint
-    assert len(checkpoint.split('Exhausted syntax adjustments', 1)[0]) < 3200
+    assert len(checkpoint.split('Stop when evidence is sufficient', 1)[0]) < 3200
+
+
+async def test_xss_early_checkpoint_grounds_adaptation_and_optional_detection(skills):
+    loaded = ' '.join((await LoadSkillTool(skills).run({'name': 'cross-site-scripting'})).split()).lower()
+    checkpoint = loaded.split('## decision checkpoint', 1)[1].split('## runtime completion contract', 1)[0]
+    for concept in ('input source', 'output/dom sink', 'execution context', 'transformations',
+                    'reflection, neutralization and execution', 'discriminating prediction',
+                    'encoding or transformation uncertainty', 'even after a prior close variant',
+                    'no numeric variant cap', 'redundant equivalent', 'payload spraying',
+                    'no corpus exhaustion or minimum variants', 'evidence is sufficient',
+                    'adequately ruled out', 'no useful authorized test remains', 'execution is blocked',
+                    'runtime/operator limits', 'browser-required'):
+        assert concept in checkpoint
+    assert len(checkpoint) < 1800
+
+
+@pytest.mark.parametrize('relative_path', [
+    'skills/sql-injection/SKILL.md', 'skills/sql-injection/payloads.txt',
+    'skills/cross-site-scripting/SKILL.md', 'skills/cross-site-scripting/payloads.txt',
+    'src/agent/validation_guidance.py',
+])
+def test_active_guidance_has_no_technique_adjustment_caps(relative_path):
+    # Check current policy, never rewrite expectations in historical evidence.
+    text = ' '.join((Path(__file__).resolve().parents[2] / relative_path).read_text().lower().split())
+    obsolete = (r'(?:cap|at most|limit of|maximum of).{0,45}(?:three|3).{0,60}(?:shape|adjustment)',
+                r'(?:three|3)[ -](?:syntax.shape )?adjustments? (?:after|limit|allowance)',
+                r'(?:at most|maximum of|permits|allowed|permitted) one.{0,50}(?:close.variant|compensating variant)',
+                r'one (?:close.variant|probe per sub.case)',
+                r'(?:consumes|replaces).{0,60}close.variant',
+                r'spend at most this one probe')
+    for cap in obsolete:
+        assert not re.search(cap, text), f'{relative_path}: obsolete cap {cap}'
+
+
+async def test_xss_css_breakout_and_detection_depend_on_context_not_probe_counts(skills):
+    text = ' '.join((await LoadSkillTool(skills).run({'name': 'cross-site-scripting'})).split()).lower()
+    context = text.split('## 2. determine', 1)[1].split('## 3. confirm', 1)[0]
+    assert 'reuse adequate existing observations' in context
+    assert 'only for unresolved encoding or transformation uncertainty' in context
+    assert 'no extra detection request' in context
+    css = context.split('**css context**', 1)[1].split('**fully encoded', 1)[0]
+    for concept in ('unsupported path', 'already discredited', 'distinct html breakout',
+                    'captured syntax and transformations', 'execution-evidence requirements',
+                    'without forcing a negative result'):
+        assert concept in css
+    corpus = ' '.join((Path(__file__).resolve().parents[2] / 'skills/cross-site-scripting/payloads.txt')
+                      .read_text().lower().split())
+    assert 'unresolved encoding/transformation uncertainty' in corpus
+    assert 'always run first' not in corpus and 'second detection request' not in corpus
 
 
 @pytest.mark.parametrize('name', ['web-enumeration', 'web-input-analysis'])

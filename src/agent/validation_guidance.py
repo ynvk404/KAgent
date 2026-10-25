@@ -77,16 +77,21 @@ def render_validation_guidance(handoff: dict[str, Any], route: ValidationRoute |
                              'Observation → Hypothesis → Oracle → Expected Result → Falsifier → Next Decision: '
                              'competing SQL prefix/input/suffix shapes with same prediction add no information. '
                              'If syntax unresolved: TRUE preserves benign marker before FALSE; do not batch. '
-                             'Inconclusive/failed TRUE: reassess context/oracle.')
+                             'Inconclusive/failed TRUE: reassess context/oracle. '
+                             'Continue useful discriminating tests within scope, permissions and runtime/operator limits; no numeric shape cap. '
+                             'Failed probes leave other hypotheses open. Avoid equivalent probes; sufficient evidence needs no extra requests.')
             elif action == 'finalize_owned':
-                lines.append('Reconcile used/remaining syntax allowance and the actual stop reason; never call it exhausted while unused. '
+                lines.append('Describe actual observations, hypotheses tested, remaining uncertainty and the real stop reason. '
                              'Keep Candidate status, ValidationResult outcome, goal status and finding eligibility separate; '
                              'Phase 3 unmet prerequisites do not turn insufficient-evidence into not-confirmed.')
             lines.append('Boolean confirmation (conditional): two complete TRUE/FALSE repetitions, four distinct owned observations '
-                         'and structured confirmation. Syntax shapes: at most three after the initial signal (Input Analysis included). '
-                         'First confirmation change counts; phases/recapture never reset allowance. '
-                         'Count executed changes, not same-shape flips/repetitions. No retrieval/ownership resends; bounded plans only, else unresolved.')
+                         'and structured confirmation. No retrieval/ownership resends; bounded plans only, else unresolved.')
         elif skill == 'cross-site-scripting':
+            if action in {'start_validation', 'resume_owned'}:
+                lines.append('Identify input source, output/DOM sink, execution context and observed transformations. '
+                             'Choose a minimal context-appropriate test for a discriminating prediction; reuse adequate observations. '
+                             'Separate reflection, neutralization and execution evidence; necessary but unavailable browser proof stays browser-required. '
+                             'New observations can justify further adaptation; avoid equivalent variants and finalize when evidence suffices.')
             lines.append('Raw HTML in JSON is an observation, not an XSS Candidate when rendering context or a compatible '
                          'source-to-sink path is unknown. Do not mutate to rescue an unsupported hypothesis. '
                          'Distinguish JSON readback, persistence, executable rendering and execution proof. '

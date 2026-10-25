@@ -386,6 +386,93 @@ async def test_failed_true_marker_prompts_scripted_oracle_reassessment_without_f
     assert not any(m.content.startswith(PREFIX) for m in rt.agent.history)
 
 
+@pytest.mark.parametrize('skill,candidate_class', [('sql-injection', 'sqli'), ('cross-site-scripting', 'xss')])
+async def test_scripted_grounded_adaptation_past_old_caps_then_local_finalization(offline, tmp_path, monkeypatch,
+                                                                               skill, candidate_class):
+    """Authored decisions through the real hook/dispatch, not a model capability test."""
+    from tests.security.test_execution_policy import REAL_CLIENT
+    rt, sent = offline
+    cid = await candidate_for(rt, candidate_class)
+    if candidate_class == 'sqli':
+        # Four shape changes after the initial signal. The fourth has a distinct
+        # computed-result oracle; earlier parser errors alone never confirm SQLi.
+        sequence = [
+            ('benign-control', 200, 'ordinary marker'),
+            ("'", 500, 'syntax error'),
+            ("seed' AND '1'='1", 200, 'empty result'),
+            ("seed') AND '1'='1", 500, 'unbalanced expression'),
+            ("seed')) AND '1'='1", 500, 'unbalanced expression'),
+            ('controlled-expression(7*7)', 500, 'evaluated marker: proof-49'),
+            ('controlled-expression(7*7)', 500, 'evaluated marker: proof-49'),
+        ]
+        outcome = 'confirmed'
+        reason = 'Owned control lacks the computed marker; repeated bounded evaluation supplies sufficient proof.'
+    else:
+        script = "<script>document.title='xsspoc-fixture'</script>"
+        handler = '<img src=x onerror="document.title=\'xsspoc-fixture\'">'
+        # A tag-specific transformation supports adaptation one; its observed
+        # truncation supports adaptation two. No browser execution is fabricated.
+        sequence = [(script, 200, 'script element removed'),
+                    (handler, 200, handler[:-1]), (handler + 'x', 200, handler)]
+        outcome = 'browser-required'
+        reason = 'Complete reflected event handler; actual triggering/execution still needs unavailable browser proof.'
+
+    replies = {value: (status, body) for value, status, body in sequence}
+
+    def respond(request):
+        sent.append(request)
+        status, body = replies[request.url.params['q']]
+        return httpx.Response(status, text=body, headers={'Content-Type': 'text/html'}, request=request)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: REAL_CLIENT(
+        transport=httpx.MockTransport(respond), **kw))
+    oids = []
+
+    def check(request):
+        current = hint(request)  # exactly one fresh reminder per model request
+        assert len(current) < 2200 and cid in current
+        assert 'at most three' not in current and 'one close variant' not in current
+        if 'Resume this owned active attempt' in current:
+            if candidate_class == 'sqli':
+                assert 'no numeric shape cap' in current and 'context/oracle' in current
+            else:
+                assert 'input source, output/DOM sink' in current
+                assert 'New observations can justify further adaptation' in current
+
+    def script_run():
+        yield 'load_skill', {'name': skill}
+        yield workflow('start_validation', candidate_id=cid)
+        for value, status, body in sequence:
+            actual = yield 'http', {'url': '/fixture?' + urlencode({'q': value}), 'phase': 'validation'}
+            assert f'HTTP/1.1 {status}' in actual and body in actual
+            assert rt.workflow.latest_result(cid) is None  # no automatic failure/variant heuristic
+            oids.append(next(reversed(rt.policy.observations._items)))
+        yield 'file_write', {'path': str(tmp_path / 'adaptation-proof.md'),
+            'content': 'Synthetic observations, including adverse evidence:\n'
+                       + '\n'.join(f'{oid}: {status} {body}' for oid, (_, status, body) in zip(oids, sequence))
+                       + '\nStop reason: ' + reason}
+        evidence = json.loads((yield workflow('record_evidence', candidate_id=cid,
+            evidence_path='adaptation-proof.md', observation_ids=oids)))['evidence']['id']
+        result = json.loads((yield workflow('record_result', candidate_id=cid, skill_name=skill,
+            outcome=outcome, observation_ids=oids, evidence_refs=[evidence],
+            mutation_performed=False, repeatable=candidate_class == 'sqli',
+            techniques=['error-based'] if candidate_class == 'sqli' else ['reflected'],
+            assessment={**ASSESSMENT, 'criteria': reason, 'observed_impact': reason,
+                        'limitations': 'Synthetic responses; no live target or browser.',
+                        'completed_attempt': candidate_class == 'sqli'},
+            deferred_reason=reason if candidate_class == 'xss' else None)))
+        assert result['ok']
+
+    model = InspectModel(script_run(), check)
+    await execute(rt, model, steps=len(sequence) + 6)
+    assert model.consumed and [request.url.params['q'] for request in sent] == [row[0] for row in sequence]
+    latest = rt.workflow.latest_result(cid)
+    assert latest is not None and latest.outcome == outcome
+    assert rt.workflow.eligible_for_finding(cid) is (candidate_class == 'sqli')
+    assert len(set(oids)) == len(sequence) and not rt.workflow.persisted_findings
+    assert not any(m.content.startswith(PREFIX) for m in rt.agent.history)
+
+
 @pytest.mark.parametrize('outcome', ['blocked', 'browser-required', 'authorization-required'])
 async def test_unresolved_dependency_is_not_a_recommendation_to_retry_probes(offline, outcome):
     rt, _ = offline

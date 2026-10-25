@@ -56,8 +56,7 @@ Parser sensitivity, controlled SQL evaluation and a confirmed finding are
 different evidence levels. A SQLite error without query text leaves SQL shape
 a hypothesis; do not claim that SELECT or constructed SQL was observed. TRUE
 and FALSE producing the same error or the same empty result do not establish
-a differential. Changing technique names does not reset the syntax-adjustment
-allowance. Record only requests, timeouts and responses actually observed.
+a differential. Record only requests, timeouts and responses actually observed.
 
 Distinguish raw wire encoding from decoded application input: `%27` and a literal
 quote may denote the same input after one justified decode. Do not repeatedly
@@ -72,8 +71,8 @@ plus a new immutable snapshot; registration alone does not establish terminal
 eligibility. When probing stops, use the remaining budget for honest finalization;
 Continue does not authorize a retest or reset declaration/recovery allowances.
 
-Read the applicable payload guidance before the first confirmation probe, not
-after spending syntax adjustments. Use its published continuation only until
+Read the applicable payload guidance before the first confirmation probe.
+Use its published continuation only until
 the chosen technique is visible; unrelated later sections are not prerequisites.
 
 ## Decision checkpoint — before a probe and after its response
@@ -107,21 +106,25 @@ Workflow action, ledger, artifact or full query reconstruction is required.
    the pair as unexecuted if FALSE was not sent. Suitable existing observations
    need no extra compatibility request; established pairs retain all repetition
    and confirmation requirements. Boolean testing is not required for every Candidate.
-4. **Reconcile bounds, then reassess.** Count executed syntax-shape changes,
-   including relevant Input Analysis history and the first confirmation request
-   if its shape changed, before choosing another shape. Keep the existing three
-   adjustments after the initial signal, shared across attempts, phases and
-   techniques; Continue never resets them. Same-shape predicate flips and valid
-   repetitions do not spend an adjustment. After an inconclusive response, compare
+4. **Interpret, then continue or stop.** After an inconclusive response, compare
    the prediction with the actual observation and revise the hypothesis/oracle
-   before another probe. Do not exhaust unused allowance without a useful test;
-   an honest `insufficient-evidence` is valid.
+   before another probe. Continue when another evidence-grounded, discriminating
+   test is useful and authorized within scope, permissions and runtime/operator
+   limits. There is no numeric syntax-shape adjustment cap across Input Analysis,
+   validation attempts or techniques; use their observations to inform the next
+   decision. One unsuccessful probe does not rule out every useful hypothesis.
+   Avoid equivalent probes without information gain, except required proof
+   repetitions or an identified stability question. The LLM decides whether
+   further investigation is worthwhile; no corpus exhaustion or minimum variants
+   are required. Sufficient evidence needs no additional requests.
 
-Exhausted syntax adjustments are a finalization checkpoint: use another technique
-only if it has a distinct evidence-supported plan within the existing bounds.
-Otherwise submit `insufficient-evidence` promptly, with the missing oracle/context
-and observed limitations. Do not spend finalization turns rereading unchanged
-responses or payload sections to prepare another syntax adjustment. Reuse the
+Stop when evidence is sufficient, the relevant hypothesis is adequately ruled
+out, no useful authorized test remains, or execution is blocked by runtime,
+operator or capability limits. If the oracle/context remains unresolved, submit
+`insufficient-evidence` with the actual observations, hypotheses tested, remaining
+uncertainty and real stop reason. Use another technique only for a distinct
+evidence-supported plan within the existing bounds. Do not spend finalization
+turns rereading unchanged responses or payload sections to prepare another probe. Reuse the
 already visible complete captures; read only a genuinely missing range. Keep
 engine/context notes separate from effect declarations; `record_attempt_state`
 is not a general notes log. Reserve existing turns for proof writing, registration
@@ -346,7 +349,7 @@ if that capability is added, without needing to redesign the skill.
 Phase 1: Detection / Baseline        — establish baseline, syntax signal
         ↓
 Phase 2: Validation                   — confirms SQLi (SQLI-1 / SQLI-2)
-        ↓ (only if 2a–2c inconclusive AND capability present AND explicitly authorized)
+        ↓ (only if applicable Phase 2 plans inconclusive AND no 2c block AND capability present AND explicitly authorized)
 Phase 2d: Out-of-band confirmation    — confirms SQLi via external channel (capability-gated)
         ↓
 Phase 3: Minimal Impact Validation    — only with explicit ask_user
@@ -373,7 +376,7 @@ is authoritative.
 | 1 (Detection/Baseline) | Scope confirmed (Preconditions) | — (standard precondition) | No — always run first |
 | 2 (Boolean, controlled error-based, bounded UNION-based, time-based) | A Phase 1 signal (or context strongly suggesting injection) + compatible context/oracle | Automatic — part of normal technique selection | Select an applicable plan; no mandatory sequence; stop at the first clear, repeatable signal |
 | 2c (WAF/rate-limit check) | — | — | Never — always applies whenever a block-like response is observed |
-| 2d (Out-of-band) | OOB capability present in `allowed-tools` + 2a–2c exhausted/inconclusive + separate `ask_user` authorization (incl. callback domain) | User, via `ask_user` | Effectively always skipped today — no OOB tool is currently available (capability check fails at step 1) |
+| 2d (Out-of-band) | OOB capability present in `allowed-tools` + applicable, context-compatible Phase 2 plans exhausted/inconclusive + no block under the 2c guard + separate `ask_user` authorization (incl. callback domain) | User, via `ask_user` | Effectively always skipped today — no OOB tool is currently available (capability check fails at step 1) |
 | 3 (Impact) | SQLI-2 already confirmed + separate `ask_user` authorization | User, via `ask_user` | Cannot be skipped into — requires explicit authorization every time, never inferred from Phase 2d authorization |
 
 ## Relationship to `payloads.txt`
@@ -505,11 +508,11 @@ in order:
    contains no such tool, so this check fails by default and Phase 2d is
    skipped entirely — do not attempt to work around this with `shell` or
    any other tool to fake a listener or a callback.
-2. **Applicable techniques exhausted:** 2a and 2b have been tried (as
-   required by the "stop at the first clear signal" rule in Phase 2 — not
-   every candidate needs both) and are inconclusive, and no blocking
-   condition was observed under 2c. 2c is a WAF/rate-limiting guard, not a
-   confirmation technique in itself — it doesn't need its own "signal" to
+2. **Applicable techniques exhausted:** applicable, context-compatible Phase 2
+   plans are exhausted/inconclusive under the context-driven selection rule;
+   do not require every technique or force incompatible Boolean/timing tests.
+   No blocking condition was observed under 2c. 2c is a WAF/rate-limiting guard,
+   not a confirmation technique in itself — it doesn't need its own "signal" to
    be satisfied, only the absence of a block.
 3. **Explicit authorization:** the user has authorized OOB testing via
    `ask_user`, including confirming the specific callback domain/listener
@@ -668,21 +671,15 @@ shape supported by the latest database error (or `unknown` / a justified
 hypothesis when ambiguous) and choose the next single probe
 that distinguishes the remaining possibilities. Do not walk a punctuation
 list (`--`, `-- `, `/*`, `')`, `'))`, and so on) one request at a time without
-using the returned parser position/message. Cap syntax-shape adjustments at
-three after the initial signal, which may already have occurred in Input Analysis.
-The first confirmation request counts if it changes quote/parenthesis/comment/
-wildcard structure. Phase changes, technique renaming and recapture do not reset
-the allowance; neither a new Attempt nor Continue may be used to reset it.
-Reconcile adjustments from executed requests, not self-labelled "adjustments",
-`proposal.values` or a mislabelled ledger. Account for pre-attempt requests in
-planning without adopting their unowned IDs as terminal proof. A benign control,
-TRUE/FALSE predicate flip within the same syntax shape, and valid repetition are
-not adjustments; a predicate flip that also changes syntax shape still counts.
-Calling a request a benign control cannot exempt a syntax-shape change. All
-techniques share this allowance, including error-based and bounded UNION-based.
-This is guidance bookkeeping, not a new Runtime counter/schema. If adjustments
-do not converge, use a different applicable bounded technique only with a distinct
-evidence-supported plan; otherwise record the appropriate unresolved outcome.
+using the returned parser position/message. Base reassessment on executed requests
+and actual responses, not self-labelled probes, `proposal.values` or a mislabelled
+ledger. Account for Input Analysis and earlier attempts in planning without
+adopting their unowned IDs as terminal proof. Continue adapting syntax only when
+observations support a meaningful hypothesis and a discriminating prediction;
+the number of earlier shape changes is not a stopping rule. Equivalent syntax
+changes without new information are not useful investigation. Use a different
+applicable bounded technique only with a distinct evidence-supported plan;
+otherwise record the appropriate unresolved outcome when no useful test remains.
 `inconclusive` is not an outcome.
 
 A SQL syntax-error fragment supports parser sensitivity, not the exact `LIKE`
@@ -701,8 +698,7 @@ not a reason to force a pair or cycle techniques.
 **Quoted vs. numeric context — use observed SQL evidence.** A numeric-looking
 input or a value rendered inside quotes elsewhere does not establish its SQL
 position. When both positions remain plausible, a bounded quoted-string-style
-and bare numeric comparison may help distinguish them; these requests count
-toward the same syntax-adjustment limit, not a new budget. Record the supported
+and bare numeric comparison may help distinguish them. Record the supported
 position or uncertainty in `injection_context`; do not force both variants when
 parser evidence already rules one out.
 
@@ -714,9 +710,8 @@ multiple shapes, retain an ambiguous context and state the alternatives.
 After consecutive probes return the same expression-type error, compare their
 captured diagnostics and reconsider the quote/input-position hypothesis before
 another request. A type error is distinct from a syntax error, a successful-write
-acknowledgement, and controlled SQL evaluation. Use the remaining syntax-shape
-adjustments only for a discriminating context-compatible probe; do not restart
-the allowance or require every technique.
+acknowledgement, and controlled SQL evaluation. Choose another probe only for a
+discriminating context-compatible hypothesis; do not require every technique.
 
 **Detecting second-order candidates.** Most Phase 1–2 probes are
 first-order: the payload is sent and its effect observed in the same
@@ -745,7 +740,8 @@ but context still suggests injection), continue into validation. Choose the leas
 intrusive applicable technique from observed behavior, candidate context, available
 capability and an observable oracle. Stop at the first clear, reproducible signal;
 do not run every technique. Switch techniques only for a distinct evidence-supported
-plan within the shared syntax allowance, not merely because the previous test failed.
+plan within scope, permissions and runtime/operator limits, not merely because
+the previous test failed.
 
 Select a technique using the SQL context supported by target evidence:
 
@@ -826,8 +822,8 @@ repetitions in the structured `confirmation` object passed to
 `workflow(action="record_result", ...)`. If the paired observations are equal,
 record that 2a was inconclusive; never preserve a signal claiming they differed.
 Identify whether the seed/oracle, predicate compatibility or another prerequisite
-is unresolved. Continue only with remaining budget and a new discriminating test;
-all syntax adjustments share the existing three-adjustment limit. Do not repeat
+is unresolved. Continue only when a new discriminating test is useful and
+authorized within runtime/operator limits. Do not repeat
 an effective request without a specific stability/repetition or missing-validation
 reason. Identical bodies/ETags alone do not establish caching or quote rewriting.
 If no useful bounded test remains, apply the outcome rules below: unfinished or
@@ -891,8 +887,8 @@ real-row reads, credentials or session material; fingerprint reads remain Phase 
 
 Prerequisites: a compatible SELECT/projection hypothesis, already known projection
 shape and an observable non-sensitive output slot. Do not discover column counts
-or types by a sequence of UNION guesses. With an owned benign control and the
-shared allowance, test only a bounded constant expression whose computed marker
+or types by a sequence of UNION guesses. With an owned benign control and a
+compatible projection, test only a bounded constant expression whose computed marker
 is distinguishable from reflected text and ordinary rows. A synthetic computation
 such as `7 * 7` illustrates evaluation; echoed `7 * 7` alone is not that oracle.
 Reproduce the evaluated result under the same context before SQLI-2 confirmation.
@@ -925,7 +921,8 @@ intervened.
 ### 2d. Out-of-band (OOB) confirmation — capability-gated, last resort
 
 **Do not start this section until the "Phase 2d capability check" above has
-passed (capability present, 2a–2c exhausted, and explicit `ask_user`
+passed (capability present, applicable, context-compatible Phase 2 plans
+exhausted/inconclusive, no block under the 2c guard, and explicit `ask_user`
 authorization including callback domain).** In the current environment,
 check 1 of that gate fails — there is no OOB callback/listener tool in
 `allowed-tools` — so this section does not execute; skip straight to
@@ -943,7 +940,16 @@ Procedure:
 1. Generate one unique, random subdomain label per probe (e.g. a short hex token) so any callback received can be attributed unambiguously.
 2. Send the probe once.
 3. Poll or check the callback listener (via the real OOB tool — never `shell`, never a fabricated/local stand-in) for a resolution/hit matching that exact token, within a reasonable wait window (e.g. 30–60s).
-4. A received callback matching the token is a clear positive and establishes **SQLI-2**. No callback is a negative for this technique specifically — record as `not-confirmed` (or combine with 2a–2c results) rather than retrying the same payload repeatedly.
+4. A received callback attributable to the exact SQL probe/token is a clear
+   positive and establishes **SQLI-2** under the applicable repeatability and
+   owned-evidence requirements. Callback absence alone is inconclusive: SQL
+   execution, compatible outbound resolution, a working authorized listener,
+   exact-token observation and an adequate observation window must be established
+   before absence is narrowly negative for that callback technique. It does not
+   rule out SQLi or by itself complete `not-confirmed`; apply the established-oracle
+   and result rules below. Missing capability/authorization means unattempted;
+   incompatible context or unavailable observation remains a limitation. Do not
+   retry equivalent probes merely because no callback appeared.
 
 Do not chain OOB payloads into data exfiltration via DNS (e.g. encoding
 query results character-by-character into subdomain labels) without
@@ -1019,7 +1025,7 @@ signal — including when 2d was unavailable and therefore not attempted — rec
 `not-confirmed` with usable primary evidence and registered proof. This is a
 bounded negative result, not proof that the endpoint has no SQL injection.
 An unresolved oracle or predicate compatibility remains `insufficient-evidence`,
-even when the syntax-adjustment allowance is exhausted and all captures are complete.
+even when all captures are complete.
 If testing is blocked, unfinished, or its required sources/proof are unavailable,
 use the corresponding unresolved outcome below rather than forcing a terminal
 assessment or escalating technique/payload variety.
@@ -1069,7 +1075,7 @@ have different meanings:
 
 - `confirmed` with `SQLI-2` in `techniques` — an applicable technique actually available in this environment (boolean, error-based, bounded UNION-based, time-based, or OOB only when its capability and authorization gates pass) produced a clear, repeatable positive signal, bounded per "Bound the proof" above;
 - `confirmed` with `SQLI-3` in `techniques` — SQLI-2 plus a minimal, authorized impact probe from Phase 3 succeeded;
-- `not-confirmed` — applicable, context-compatible bounded tests completed with an established oracle and none produced a clear, repeatable SQL injection signal. This does not mean every technique must be run. Unresolved predicate compatibility or syntax context requires `insufficient-evidence`; exhausting syntax adjustments alone does not complete a negative test. OOB is included only when its capability check passed and the user authorized it;
+- `not-confirmed` — applicable, context-compatible bounded tests completed with an established oracle and none produced a clear, repeatable SQL injection signal. This does not mean every technique must be run. Unresolved predicate compatibility or syntax context requires `insufficient-evidence`; the number of syntax changes does not complete a negative test. OOB is included only when its capability check passed and the user authorized it;
 - `blocked` — a probe was intercepted by a WAF, rate-limiter, or challenge page before reaching the application (step 2c); the application itself was never actually tested;
 - `deferred` — work is postponed, or behavior indicates NoSQL/operator injection
   rather than SQL injection (per Scope, above); put the reason in `deferred_reason`;
@@ -1174,9 +1180,9 @@ snapshot or reusing an observation ID does not establish repeatability.
 Before writing proof and calling `record_evidence` / `record_result`, reconcile
 the outcome and every countable claim against that owned ledger:
 successful exploit executions, complete positive repetitions, controls and errors.
-Reconcile syntax allowance used/remaining from executed requests since the initial
-signal across phases and techniques. Never write exhausted when allowance remains;
-state the actual stop reason without forcing its consumption. Intended probes are
+Describe actual observations, hypotheses tested, remaining uncertainty and the
+real reason for stopping across phases and techniques; do not force further
+requests when evidence is sufficient. Intended probes are
 not established controls or positives until the observations support those labels.
 Keep Candidate status, ValidationResult outcome, goal status and finding eligibility
 separate; quote canonical state when available. Phase 3 is not eligible without

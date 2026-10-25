@@ -76,16 +76,14 @@ async def test_sql_plan_is_falsifiable_and_empty_results_do_not_explain_evaluati
     assert re.search(r'pair.{0,65}(?:not executed|unexecuted|not performed)', pair)
 
 
-async def test_sql_adjustments_start_at_first_signal_and_use_executed_shapes(skills):
+async def test_sql_adaptation_uses_executed_observations_without_shape_allowances(skills):
     text = await loaded(skills, 'sql-injection')
     syntax = text.split('1b. syntax-sensitivity', 1)[1].split('detecting second-order', 1)[0]
-    assert re.search(r'three after the initial signal.{0,180}input analysis', syntax)
-    assert re.search(r'first confirmation.{0,100}(?:counts|consumes)', syntax)
-    assert re.search(r'(?:phase|recaptur).{0,170}(?:not|never).{0,65}reset', syntax)
-    assert re.search(r'executed requests.{0,180}proposal.values', syntax)
-    assert re.search(r'benign control.{0,120}predicate flip.{0,120}repetition.{0,160}(?:not|excluded)', syntax)
-    assert re.search(r'all techniques.{0,80}(?:share|same).{0,70}allowance', syntax)
-    assert re.search(r'benign control.{0,80}cannot exempt.{0,70}syntax.shape change', syntax)
+    assert re.search(r'executed requests.{0,150}actual responses.{0,100}proposal.values', syntax)
+    assert re.search(r'input analysis.{0,80}earlier attempts.{0,100}unowned ids', syntax)
+    assert re.search(r'observations support.{0,80}hypothesis.{0,80}discriminating prediction', syntax)
+    assert re.search(r'number.{0,80}shape changes.{0,60}not a stopping rule', syntax)
+    assert re.search(r'equivalent syntax.{0,60}without new information.{0,60}not useful', syntax)
 
 
 async def test_sql_control_capture_and_replay_reference_are_separate(skills):
@@ -97,10 +95,11 @@ async def test_sql_control_capture_and_replay_reference_are_separate(skills):
     assert re.search(r'missing validation step.{0,200}(?:manifest|retriev)', baseline)
 
 
-async def test_sql_write_checkpoint_reconciles_allowance_labels_and_status_layers(skills):
+async def test_sql_write_checkpoint_reconciles_observations_stop_reason_and_status_layers(skills):
     text = await loaded(skills, 'sql-injection')
     checkpoint = text.split('before writing proof and calling', 1)[1].split('standard result entry template', 1)[0]
-    assert re.search(r'(?:allowance|adjustment).{0,160}(?:used|remaining).{0,160}exhausted', checkpoint)
+    for concept in ('actual observations', 'hypotheses tested', 'remaining uncertainty', 'reason for stopping'):
+        assert concept in checkpoint
     assert re.search(r'intended.{0,100}(?:not|never).{0,100}(?:control|positive)', checkpoint)
     for layer in ('candidate status', 'validationresult outcome', 'goal status', 'finding eligibility'):
         assert layer in checkpoint
@@ -120,7 +119,8 @@ def test_sql_continuation_delivers_planning_or_local_closure(action):
     text = render_validation_guidance(handoff, ValidationRoute('expert', 'sql-injection'), frozenset()).lower()
     if action == 'finalize_owned':
         assert 'local finalization' in text and 'probing has stopped' in text
-        assert re.search(r'(?:used|remaining).{0,100}(?:allowance|adjustment)', text)
+        for concept in ('actual observations', 'hypotheses tested', 'remaining uncertainty', 'real stop reason'):
+            assert concept in text
         assert 'candidate status' in text and 'validationresult outcome' in text
         assert 'capture a necessary' not in text
     else:
@@ -152,7 +152,7 @@ def test_ledger_hint_uses_owned_attempt_branch(owned):
 
 
 @pytest.mark.parametrize('action,owned', [('start_validation', False), ('resume_owned', True), ('finalize_owned', True)])
-def test_sql_continuation_preserves_cross_phase_allowance_without_granting_probes(action, owned):
+def test_sql_continuation_drops_shape_counting_without_granting_probes(action, owned):
     handoff = {'next_action': action, 'candidate_id': 'can_fixture',
                'attempt_id': 'attempt_fixture' if owned else None,
                'attempt_status': 'active' if owned else None, 'owned_active': owned,
@@ -161,9 +161,13 @@ def test_sql_continuation_preserves_cross_phase_allowance_without_granting_probe
                             'repair_turns': 0, 'repair_turn_limit': 3}}
     route = ValidationRoute('expert', 'sql-injection')
     text = render_validation_guidance(handoff, route, frozenset()).lower()
-    assert re.search(r'initial signal.{0,100}input analysis', text)
-    assert re.search(r'first confirmation.{0,100}counts', text)
-    assert re.search(r'recaptur.{0,70}(?:not|never).{0,50}reset', text)
+    assert 'syntax allowance' not in text and 'at most three' not in text
+    assert 'current state, not authorization' in text
+    assert 'do not reset these counters' in text  # existing runtime recovery bounds
+    if action != 'finalize_owned':
+        assert 'no numeric shape cap' in text
+        assert 'scope, permissions and runtime/operator limits' in text
+        assert 'sufficient evidence needs no extra requests' in text
     if owned:
         if action == 'resume_owned':
             assert 'do not open a replacement' in text

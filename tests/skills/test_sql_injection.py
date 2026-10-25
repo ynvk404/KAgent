@@ -861,12 +861,12 @@ class TestContextAndEvidenceGuidance:
         ):
             assert requirement in section
 
-    def test_context_uncertainty_does_not_create_an_extra_probe_budget(self, skill_text):
+    def test_context_uncertainty_uses_discriminating_evidence_without_shape_counting(self, skill_text):
         section = _norm(skill_text.split("### 1b.", 1)[1]
                         .split("**Detecting second-order", 1)[0]).lower()
         assert "`unknown` / a justified hypothesis" in section
-        assert "three after the initial signal" in section
-        assert "same syntax-adjustment limit, not a new budget" in section
+        assert "number of earlier shape changes is not a stopping rule" in section
+        assert "observations support a meaningful hypothesis and a discriminating prediction" in section
         assert "do not force both variants" in section
 
     def test_error_confirmation_requires_controlled_evaluation_without_impact(self, skill_text):
@@ -931,7 +931,7 @@ def test_boolean_checkpoint_preserves_context_uncertainty_and_bounded_outcomes(s
         'full query reconstruction is not required', 'known match',
         'or tests may use a nonmatching seed', 'surrounding prefix/suffix',
         'trailing `%`', 'cease to be true', 'new discriminating test',
-        'existing three-adjustment limit', 'specific stability/repetition',
+        'authorized within runtime/operator limits', 'specific stability/repetition',
         'unfinished or unsupported context/proof stays unresolved',
         'completed bounded negative', 'do not force another technique',
     ):
@@ -1067,3 +1067,93 @@ def test_phase2_recognized_techniques_have_bounded_execution_paths(skill_text, p
     guidance = _norm(payloads_text.split('PHASE 2 — VALIDATION', 1)[1]
                      .split('PHASE 2D — OUT-OF-BAND', 1)[0]).lower()
     assert technique in guidance and 'skill.md' in guidance
+
+
+def test_corpus_explains_seed_substitution_before_boolean_interpretation(payloads_text):
+    section = _norm(payloads_text.split('# --- Boolean-based', 1)[1]
+                    .split('# --- Controlled error', 1)[0]).lower()
+    for concept in (
+        'literal 1 is illustrative', 'not a universally matching seed',
+        'leading 1 is the seed', 'and 1=1 is the predicate',
+        'numeric forms assume an unquoted expression', 'parenthesized positions',
+        'prefix/suffix', 'wildcard', 'not sql breakout or predicate evaluation',
+        'true preserves the known benign marker before dependent false',
+        'equal empty/error responses are inconclusive', 'reuse suitable existing observations',
+    ):
+        assert concept in section
+
+
+def test_corpus_representation_is_explicit_without_a_new_parser(payloads_text):
+    notes = _norm(payloads_text.split('# Representation / annotation convention', 1)[1]
+                  .split('# ===', 1)[0]).lower()
+    for concept in (
+        'two-or-more-space alignment gap', 'annotation are not sql input',
+        'internal payload spaces remain significant', 'does not strip annotations',
+        'substitute placeholders', 'runtime permissions', 'loader preface',
+        'literal sql input %27 is not a quote', 'wire %2527 needs another decode',
+        'preserve request identity', 'one ascii space (u+0020)', 'wire --%20',
+        'invisible end-of-line whitespace', 'outside literals/quoted identifiers',
+        'do not copy display notation or annotations as input',
+    ):
+        assert concept in notes
+
+
+def test_corpus_computed_evaluation_has_control_oracle_and_falsifiers(payloads_text):
+    notes = _norm(payloads_text.split('# --- Controlled error', 1)[1]
+                  .split('# --- Time-based', 1)[0]).lower()
+    for concept in (
+        'control -> hypothesis -> computed marker -> expected response -> falsifier -> repeatability',
+        'owned benign response', 'compatible expression', 'compatible union projection',
+        'observable output slot', '7 * 7 would yield 49', 'distinguishable from ordinary output',
+        'actually observe 49', 'not observing it', 'only parser errors/input echo',
+        'type mismatch', 'hidden errors', 'unknown projection', 'not a reason for column/type enumeration',
+        'repeatability and owned-evidence requirements are in skill.md', 'not a boolean pair',
+    ):
+        assert concept in notes
+
+
+def test_timing_reference_requires_execution_compatibility_not_engine_identity(payloads_text):
+    notes = _norm(payloads_text.split('# --- Time-based', 1)[1]
+                  .split('# ==================== PHASE 2D', 1)[0]).lower()
+    for concept in (
+        'dbms identity alone does not establish compatibility', 'driver/connection',
+        'sql input position and surrounding statement', 'execution privileges',
+        'oracle additionally needs', 'pl/sql block', 'adapter elapsed_ms',
+        'equivalent zero-delay control', 'rejected function/block',
+        'not automatically a sqli negative', 'oracle 19c', 'dbms_session.sleep',
+        'does not supply a universal sql-expression insertion point',
+        'do not substitute an expensive recursive/heavy query',
+    ):
+        assert concept in notes
+    assert 'heavy deterministic wait' not in notes and 'oracle (no native sleep' not in notes
+
+
+def test_phase3_unknown_projection_does_not_authorize_an_error_fingerprint(payloads_text):
+    notes = _norm(payloads_text.split('# Use only when the confirmed injection context', 1)[1]
+                  .split('1 UNION SELECT version()', 1)[0]).lower()
+    for concept in (
+        'unknown union projection does not automatically make an error-based fingerprint applicable',
+        'compatible expression', 'available function', 'observable error oracle',
+        'existing phase 3 authorization', 'never justifies enumeration',
+        'existing sufficient impact evidence needs no extra impact request',
+    ):
+        assert concept in notes
+
+
+def test_oob_gate_summaries_and_absence_interpretation_stay_consistent(skill_text, payloads_text):
+    matrix = skill_text.split('## Authorization matrix', 1)[1].split('## Relationship', 1)[0]
+    gate = skill_text.split('### Phase 2d capability check', 1)[1].split('**Phase 3', 1)[0]
+    procedure = skill_text.split('### 2d. Out-of-band', 1)[1].split('### Bound the proof', 1)[0]
+    for section in (matrix, gate, procedure, payloads_text):
+        notes = _norm(section).lower()
+        assert 'applicable, context-compatible phase 2 plans' in notes
+        assert '2a–2c exhausted' not in notes and 'have all been tried' not in notes
+        assert 'capability' in notes and 'authorization' in notes
+    for section in (procedure, payloads_text):
+        notes = _norm(section).lower()
+        for concept in ('callback absence alone is inconclusive', 'sql execution',
+                        'compatible outbound resolution', 'working authorized listener',
+                        'exact-token observation', 'adequate observation window',
+                        'does not rule out sqli or by itself complete', 'unattempted'):
+            assert concept in notes
+    assert 'not a confirmation technique' in _norm(gate).lower()

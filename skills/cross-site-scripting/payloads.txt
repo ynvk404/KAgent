@@ -11,8 +11,8 @@
 #     (encoded, inside a tag, inside an attribute, inside a script, etc.)
 #     before any execution is attempted.
 #
-#   - Phase 2 (below): CONTEXT-SPECIFIC EXECUTION MARKERS. These do execute
-#     JavaScript — call them what they are. The safety property they carry
+#   - Phase 2 (below): CONTEXT-SPECIFIC EXECUTION MARKERS. These attempt to execute
+#     JavaScript when the returned context supports it. The safety property they carry
 #     is that the *action* performed is harmless and self-contained
 #     (setting document.title to a known value), not that they avoid
 #     running code. Use only the entry matching the context you actually
@@ -20,9 +20,10 @@
 #     candidate.
 #
 # There is no Phase 3 or Phase 4 in this file. Stored XSS and DOM-based
-# XSS are not separate payload categories — they reuse whichever Phase 2
-# entry matches the observed context; what differs is workflow (where the
-# payload is submitted, when/to whom it renders back), which SKILL.md
+# XSS are not separate payload categories. Stored probes use the Phase 2 entry
+# matching the evidenced rendering context; DOM guidance below is recognition only.
+# What differs is workflow (where the payload is submitted, when/to whom it
+# renders back), which SKILL.md
 # handles, not this corpus. Do not add a new phase section here without a
 # corresponding ask_user-gated phase being defined in SKILL.md first.
 #
@@ -43,40 +44,61 @@
 # ============================================================================
 # ===================== PHASE 1 — CONTEXT DETECTION ==========================
 # ============================================================================
-# Plain text only. No HTML/JS metacharacters that would themselves prove
-# anything — the point is to see how the *marker itself* is transformed
-# (stripped or passed through) to establish input propagation. Use the
-# metacharacter probe to assess encoding before an execution attempt, then
-# select only the observed context's Phase 2 entry.
+# The baseline marker is plain text, without HTML/JS metacharacters. Its presence
+# establishes input propagation only; the optional metacharacter probe below
+# investigates transformations, not execution. Reuse adequate
+# existing observations. Use the metacharacter probe only when encoding or
+# transformation uncertainty remains; no extra detection request is required
+# when adequate evidence already exists. Select the observed context's Phase 2 entry.
 
-xsspoc{TIMESTAMP}                     # purpose: baseline marker with no special characters | applies: every candidate, always run first | limit: establishes propagation only, not encoding or execution
-xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four characters most output-encoding schemes transform (", ', <, >) | applies: every candidate, second detection request | limit: observe which characters survive unescaped; still not an execution attempt
+xsspoc{TIMESTAMP}                     # purpose: baseline marker with no special characters | applies: propagation/context not yet established by adequate observations | limit: establishes propagation only, not encoding or execution
+xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four characters most output-encoding schemes transform (", ', <, >) | applies: unresolved encoding/transformation uncertainty | limit: observe which characters survive unescaped; still not an execution attempt
 
-# Replace {TIMESTAMP} with a fresh value per candidate (e.g. unix epoch
-# seconds) so repeated runs against the same parameter don't collide with
-# stale reflected/stored values from a previous test.
+# Substitution is manual; read_payloads preserves placeholders and annotations.
+# Payload lines exclude the alignment gap before "# purpose:" and indented notes.
+# Replace {TIMESTAMP} with a fresh candidate suffix (actual runtime time if using
+# epoch seconds; an otherwise unique inert suffix also works). Do not fabricate
+# timestamps/session metadata. Reuse the candidate's chosen marker across its
+# observations; a fresh candidate/run needs a fresh value to avoid stale matches.
+# Illustrative substitution only, not a recorded timestamp: suffix demo7 gives
+# full detection marker xsspocdemo7; {MARKER}=demo7 in Phase 2 produces title
+# xsspoc-demo7. The suffix is demo7, not the full xsspocdemo7 marker. Preserve the
+# respective prefixes; record exact input/title strings so observations stay linked.
 #
 # Read the response around the marker and classify the context per
 # SKILL.md step 2 (html-body | html-attribute | js-string | url |
-# html-comment | fully-encoded) before moving to Phase 2. For URL/href/src
+# html-comment | css-style-attribute | css-style-block | fully-encoded | unknown).
+# Unknown remains unresolved; the list does not establish context. For URL/href/src
 # contexts, inspect the HTML-decoded attribute value, scheme validation and
 # canonicalization per SKILL.md step 2. HTML encoding alone does not establish
 # safety in a URL or event handler; unknown handling is not a tested negative.
+# Compare captured input and surrounding returned source for encoding, escaping,
+# sanitization and truncation. Propagation, reflection, neutralized output,
+# potentially executable syntax and observed execution are different facts;
+# absence of HTML encoding is not confirmed execution.
 
 # ============================================================================
 # ============== PHASE 2 — CONTEXT-SPECIFIC CONFIRMATION =====================
 # ============================================================================
-# One execution marker per observed context. Use only the entry matching
-# what Phase 1 showed. Each sets document.title to a value containing the
-# candidate's marker — visible proof of execution that reads nothing
-# sensitive and sends nothing off-session. Replace {MARKER} with the same
-# value used in Phase 1 for that candidate so the result is traceable.
+# Select a harmless execution marker for the observed context. Use the entry matching
+# what adequate captured observations showed. If executed, each sets document.title
+# to xsspoc-{MARKER}, reading nothing sensitive and sending nothing off-session.
+# Replace {MARKER} with the same suffix used for {TIMESTAMP} above, not the full
+# detection marker. An unobserved title change does not establish execution failure.
+# Inspect complete returned syntax and enclosing context, including Content-Type,
+# inert elements and CSP, under SKILL.md steps 3/5. Deterministic HTTP proof remains
+# sufficient when those conditions hold; missing necessary browser proof remains
+# browser-required. Intended request syntax cannot replace captured response bytes.
 # text/html fragments need no html/body wrappers. Raw reflection alone is
 # not complete executable proof. If evidence shows deterministic removal of
-# one trailing character, SKILL.md permits one same-context close variant:
-# append one inert trailing character to the selected marker, then inspect
-# the returned complete syntax. This replaces any other close variant; no
-# additional phase, spray, encoding trick or browser simulation is allowed.
+# one trailing character, a grounded same-context adaptation can test it:
+# append one inert trailing character to the selected execution payload, then inspect
+# the returned complete syntax. New observations may justify further adaptation
+# with a distinct prediction after a prior variant; there is no numeric variant cap.
+# Avoid equivalent probes and payload spraying. Stop when evidence suffices, the
+# hypothesis is adequately ruled out, no useful authorized test remains or execution
+# is blocked by scope, permissions or runtime/operator limits. No additional phase,
+# encoding trick or browser simulation is allowed.
 # Failed variants support not-confirmed only after a completed bounded test with
 # usable proof; missing browser execution stays browser-required, and missing
 # required captures/proof stays insufficient-evidence (SKILL.md step 5).
@@ -84,29 +106,33 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
 # --- HTML body context --------------------------------------------------
 <script>document.title='xsspoc-{MARKER}'</script>
     # purpose: direct script execution in an unescaped HTML body position
-    # applies: marker in Phase 1 rendered between tags, unescaped
+    # applies: ordinary HTML text between tags; not text inside textarea/title, a comment, template or another inert/incompatible context
     # limit: execution marker only — do not substitute a payload that reads document.cookie or similar
 
 <img src=x onerror="document.title='xsspoc-{MARKER}'">
     # purpose: event-handler-based close variant for HTML body context
-    # applies: ONLY if the <script> entry above specifically failed to execute while Phase 1 showed the marker otherwise landing unescaped — i.e. testing whether the app's sanitizer covers event-handler attributes as well as <script> tags, not evading a WAF or security control
-    # limit: this is the one close variant allowed by SKILL.md step 3 for this context — if this also fails, stop under SKILL.md step 5 rather than trying further tag/attribute combinations
+    # applies: captured source specifically shows script-tag stripping while other tags/attributes pass unescaped; tests that evidenced sanitization hypothesis, not an assumed execution failure or WAF bypass
+    # note: src=x must actually fail image loading for onerror to fire; HTTP reflection alone does not establish that event or execution
+    # limit: test the evidenced sanitization hypothesis; further adaptation needs new observations and a meaningful prediction under SKILL.md's checkpoint, not arbitrary tag/attribute combinations
 
 # --- HTML attribute context ---------------------------------------------
 "><script>document.title='xsspoc-{MARKER}'</script>
     # purpose: break out of a quoted attribute value, then execute
     # applies: marker in Phase 1 rendered inside a double-quoted attribute, unescaped
+    # note: the leading quote must close that actual value and > must reach an ordinary HTML parsing position; inspect the complete returned tag, suffix and any escaping
     # limit: match the observed attribute quote first; do not test both quote styles when it is known; apply SKILL.md step 5 if unresolved
 
 '><script>document.title='xsspoc-{MARKER}'</script>
     # purpose: single-quote variant of the attribute breakout above
     # applies: same as above, for single-quoted attribute values
-    # limit: use first for a known single-quoted attribute; if tried after a failed probe, it consumes SKILL.md step 3's one close-variant allowance
+    # note: a quote inside an escaped value, inert enclosing element or incomplete returned tag does not establish breakout
+    # limit: use for an observed single-quoted attribute; a failed probe alone does not justify changing quote style
 
 # --- JavaScript string context -------------------------------------------
 ';document.title='xsspoc-{MARKER}';//
     # purpose: break out of a single-quoted JS string literal, then execute
     # applies: marker in Phase 1 rendered inside a JS string (e.g. var x = 'MARKER';)
+    # note: check the actual quote, backslash escaping, line breaks and surrounding source; HTTP echo alone does not establish a valid executable statement
     # limit: HTTP-level evidence of this succeeding is usually not deterministic — per SKILL.md step 3, record browser-required unless the response makes the break-out and execution position unambiguous
 
 ";document.title='xsspoc-{MARKER}';//
@@ -119,6 +145,9 @@ xsspoc{TIMESTAMP}"'<>                 # purpose: marker followed by the four cha
 # after HTML attribute decoding, scheme validation and canonicalization. An
 # encoded attribute is not automatically safe; a verified safe-scheme restriction
 # can neutralize this vector. Unknown handling remains unresolved; do not spray.
+# An anchor href may require a click/navigation; an img src does not execute a
+# javascript: URL as script. Element, attribute, trigger and policy must all fit;
+# a javascript: string in an arbitrary href/src is not execution evidence.
 javascript:document.title='xsspoc-{MARKER}'
     # purpose: scheme-based execution when the value is placed directly into an href/src with no scheme validation
     # applies: only for the evidenced scheme-capable element/context described above
@@ -135,28 +164,28 @@ red;"><script>document.title='xsspoc-{MARKER}'</script><div style="
     # purpose: close the style attribute's quote and the tag itself, then execute, then reopen a dummy attribute so the rest of the page stays well-formed
     # applies: marker in Phase 1 rendered inside a style="..." attribute value, unescaped
     # limit: mechanically the same breakout as HTML attribute context, not the <style>-block entry below — do not use this against a marker that landed inside a <style> block instead
-    # note: modern browsers do not support CSS expression()-style execution; this is an HTML breakout, not CSS execution. Spend at most this one probe, then apply SKILL.md step 5.
+    # note: modern browsers do not support CSS expression()-style execution; this tests an HTML breakout. Avoid unsupported or discredited execution paths; captured syntax/transformations may justify a distinct grounded adaptation under SKILL.md's checkpoint.
 
 # --- CSS context: <style> block (e.g. <style>body{color:MARKER}</style>) ---
 color:red;}</style><script>document.title='xsspoc-{MARKER}'</script><style>{
     # purpose: close the surrounding <style> block and execute, then reopen a dummy style block so the rest of the page stays well-formed
     # applies: marker in Phase 1 rendered inside a <style>...</style> block, unescaped
     # limit: mechanically the same breakout as HTML comment context (close/reopen the enclosing construct), not the style-attribute entry above — do not use this against a marker that landed inside a style="..." attribute instead
-    # note: same legacy-browser caveat as above — spend at most this one probe, then apply SKILL.md step 5
+    # note: unsupported CSS execution does not rule out this HTML breakout; adapt only for a distinct prediction supported by captured syntax/transformations, then apply SKILL.md's evidence and outcome rules
 
 # Note on DOM-based candidates: if the sink is client-side (innerHTML,
 # document.write, eval, a postMessage handler, etc.) and you can already
 # cite the exact sink and taint path from source per SKILL.md step 3, source/sink
 # analysis without observed execution supports browser-required, not confirmed.
 # A live payload is unnecessary when missing browser proof cannot be resolved.
-# Ordinary innerHTML script insertion is not execution. If a live probe is useful, use
-# whichever entry above matches where the tainted value is written into
-# the DOM (e.g. the HTML body entry for an innerHTML sink rendering raw
-# HTML) — there is no separate DOM-specific payload set.
+# Ordinary innerHTML script insertion is not execution. No browser-execution tool
+# is available; this recognition note adds no DOM variants or substitute execution.
 #
-# Note on stored candidates: use the same context-matched entry above,
-# submitted to a resource you own or a designated test account. Record the
-# trigger path (storing endpoint -> rendering endpoint/audience) in
-# results.md's `order` field, and clean up the stored payload afterward
-# when the application supports deletion — record whether cleanup was
-# performed in results.md's `cleanup_performed` field.
+# Note on stored candidates: follow SKILL.md step 3's Stored/SPA checkpoint before
+# any stateful probe: authority, isolation, evidenced rendering context, readback
+# and cleanup feasibility on an owned resource/designated test account. Do not
+# submit an executable mutation when a required browser proof gap cannot be closed.
+# Acceptance, persistence/readback and execution are different facts; stored markup
+# or JSON readback is not execution evidence. Record store-to-render path/audience
+# in `order`; cleanup needs separate authority and verification or honest limitations
+# in mutation/cleanup bookkeeping (`cleanup_performed` in an optional results.md).

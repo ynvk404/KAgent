@@ -69,7 +69,8 @@ async def test_loaded_sql_guidance_has_a_discriminating_decision_chain():
     chain = skill.split('observation → hypothesis → oracle → expected result → falsifier → next decision', 1)[1]
     example = chain.split('## runtime completion contract', 1)[0]
     for concept in ('competing', 'prefix', 'suffix', 'parenthes', 'new information',
-                    'same prediction', 'known match', 'unexecuted', 'three'):
+                    'same prediction', 'known match', 'unexecuted', 'discriminating',
+                    'remaining uncertainty', 'real stop reason'):
         assert concept in example
     login = skill.split('on an authentication endpoint', 1)[1].split('### 2b.', 1)[0]
     assert 'required repetitions' in login and 'single http request' in login

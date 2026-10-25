@@ -56,7 +56,30 @@ choosing a truncated duplicate. Metadata usability does not prove XSS impact.
 Keep adverse evidence. If parents change, correct the source proof and dependent
 claims and register a new immutable snapshot; never edit or rebind an old one.
 Registration alone does not make a terminal result eligible. Reserve remaining
-budget for finalization after probing stops; Continue resets no allowance.
+budget for finalization after probing stops; Continue does not reset declaration
+or recovery allowances.
+
+## Decision checkpoint — before a probe and after its response
+
+**Observation → Hypothesis → Discriminating prediction → Minimal probe → Interpretation → Continue or stop.**
+Identify the input source, output/DOM sink, execution context and observed
+transformations. Separate reflection, neutralization and execution evidence.
+Use existing adequate observations; choose a minimally necessary, harmless,
+context-appropriate test only for an unresolved question with a discriminating
+prediction. A metacharacter detection request is useful only when encoding or
+transformation uncertainty remains; do not require it when evidence already
+answers that question.
+
+After the response, compare observation with prediction. Continue with a different
+adaptation when new observations support a meaningful hypothesis, even after a
+prior close variant. There is no numeric variant cap; avoid redundant equivalent
+variants and unproductive payload spraying. One inconclusive observation does not
+rule out all useful hypotheses. The LLM decides whether further investigation is
+worthwhile within scope, permissions and runtime/operator limits; no corpus
+exhaustion or minimum variants are required. Stop when evidence is sufficient,
+the relevant hypothesis is adequately ruled out, no useful authorized test remains,
+or execution is blocked. Apply the existing outcome rules; reflection alone is
+not execution, and missing necessary browser evidence remains `browser-required`.
 
 ## Runtime completion contract
 
@@ -227,7 +250,7 @@ not the number of phases:
 Context detection    — inert text marker, establishes where/how input lands
         ↓
 Context-specific
-confirmation          — one execution marker matched to the observed context
+confirmation          — harmless execution marker matched to the observed context
         ↓
 (if HTTP/source evidence is not deterministic)
 browser-required — recorded and stopped, not escalated
@@ -360,11 +383,14 @@ for the first — finish, record, then move to the next.
 
 ## 2. Determine the reflection context precisely
 
-The correct proof payload depends entirely on where the value lands. Send
-one request with the **detection marker** from `payloads.txt`'s
+The correct proof payload depends entirely on where the value lands. Reuse
+adequate existing observations. If propagation or context remains unresolved,
+send a request with the **detection marker** from `payloads.txt`'s
 `PHASE 1 — CONTEXT DETECTION` section — a plain, non-executing text string
 — and inspect exactly how it is embedded in the response before choosing a
-confirmation payload:
+confirmation payload. Use a metacharacter probe only for unresolved encoding or
+transformation uncertainty; adequate existing evidence needs no extra detection
+request:
 
 Prioritize captured HTTP observations from the target over payload examples
 or local resource contents. Identify the reflection context and encoding from
@@ -429,12 +455,14 @@ comments, attributes, inert elements and CSP before choosing the proof.
   - *`<style>` block*, e.g. `<style>body{color:MARKER}</style>` — breakout
     mechanics are the same as HTML comment context (close and reopen the
     enclosing construct).
-  Modern browsers no longer support `expression()`-style CSS execution, so
-  this context rarely yields a working execution marker either way —
-  classify it accurately when observed, but expect the Phase 2 entry for
-  it to often end in `not-confirmed` rather than force a result. Do not
-  spend more than one probe per sub-case confirming this context is
-  genuinely inert before moving on.
+  Modern browsers no longer support `expression()`-style CSS execution. Do not
+  repeatedly test that unsupported path or an execution path already discredited
+  by the observations. A distinct HTML breakout through the enclosing attribute
+  or `</style>` boundary may still be supported by the captured syntax and
+  transformations; assess that hypothesis with a context-appropriate test rather
+  than infer it is inert from CSS placement alone. Interpret the returned HTML
+  under step 3's execution-evidence requirements and stop when no useful test
+  remains, without forcing a negative result.
 - **Fully encoded/neutralized in the observed context** — a completed bounded
   test shows the input remains data there, permitting `not-confirmed` for that
   sink. HTML text encoding does not establish safety in JavaScript strings,
@@ -532,29 +560,28 @@ Do not retry blocked probes with encoding tricks, alternate payloads, or
 filter-bypass techniques. That is outside this skill's scope.
 
 If the response shows a clear deterministic transformation, such as removing
-exactly one trailing character, allow at most one bounded same-context close
-variant compensating for that observed transformation. For trailing-character
-removal, append one inert trailing character to the same execution marker and
-inspect whether the returned payload is now complete. This consumes the close
-variant allowance; do not also spray alternate vectors. It is not a new fuzzing
-or filter-bypass phase. Confirm only if the returned complete executable syntax
-and context meet the existing deterministic HTTP proof threshold; otherwise
-retain browser-required when execution remains browser-dependent.
+exactly one trailing character, a bounded same-context adaptation can test that
+specific hypothesis. For trailing-character removal, append one inert trailing
+character to the same execution marker and inspect whether the returned payload
+is now complete. Further adaptation is appropriate when new observations support
+a different meaningful prediction; a prior close variant is not a stopping rule.
+Confirm only if the returned complete executable syntax and context meet the
+existing deterministic HTTP proof threshold; otherwise retain browser-required
+when execution remains browser-dependent.
 
-If the first payload for the observed context doesn't execute, try at most
-one close variant for that same context (e.g. a different quote
-style, or — for HTML body/attribute contexts specifically — an
-event-handler-based marker if the `<script>` variant specifically appears
-stripped while other tags/attributes pass through unescaped). Both are
-listed under that context's entry in `payloads.txt`. This is different
-from filter-bypass: a close variant tests whether the *same context* is
-exploitable through an equivalent vector, which is squarely part of
-assessing sanitization coverage; it does not use encoding tricks, case
-obfuscation, or payload fragmentation aimed at evading a filter or WAF —
-those remain out of scope per step 3a. If no close variant works, stop and use
-step 5: `not-confirmed` needs a completed bounded test and usable proof; missing
-browser execution remains `browser-required`, and missing sources/proof remains
-`insufficient-evidence`. An unobserved effect is not a tested negative.
+Choose adaptations from the observed context and transformation, such as matching
+the actual quote style, or an event-handler-based marker for HTML body/attribute
+contexts when `<script>` specifically appears stripped while other tags/attributes
+pass through unescaped. Use `payloads.txt` as examples, not a sequence to exhaust.
+Avoid redundant equivalent variants; each adaptation must test a meaningful
+remaining hypothesis. This remains context-specific validation, not a fuzzing or
+filter-bypass phase: encoding tricks, case obfuscation or payload fragmentation
+aimed at evading a filter or WAF remain out of scope per step 3a.
+When evidence suffices or no useful authorized test remains, use step 5:
+`not-confirmed` needs a completed bounded test and usable proof; missing browser
+execution remains `browser-required`, and incomplete testing or missing
+sources/proof remains `insufficient-evidence`. An unobserved effect is not a
+tested negative.
 
 ## 4. Bound the proof — do not escalate into impact demonstration
 
@@ -569,7 +596,8 @@ particular, do not:
   page, etc.);
 - run automated XSS scanners or fuzzers to "see how bad it is."
 
-If step 3 never produces a clear signal, stop payload escalation and use step 5's
+If step 3 remains inconclusive, reassess under the decision checkpoint. Stop
+when no useful authorized test remains or execution is blocked, and use step 5's
 outcome rules. Distinguish a completed bounded negative from missing browser
 execution, incomplete testing or unavailable proof.
 
@@ -585,15 +613,15 @@ be confirmed merely from raw reflection in text/html.
 For example, a complete, untruncated response ending in
 `<script>document.title='proof'</script` lacks the final `>`. Do not call it a
 complete executable element because the intended request contained that
-character. Use the one bounded same-context compensating variant permitted in
-step 3 when deterministic trailing-character removal is observed, then inspect
+character. Use a bounded same-context compensating adaptation under step 3
+when deterministic trailing-character removal supports that test, then inspect
 its actual response. If complete executable syntax or another permitted
 confirmation condition is not established, do not claim confirmed execution.
 Deterministic HTTP-based confirmation remains sufficient when step 3's context
 and proof conditions hold; a browser is not universally required.
 
 Keep a compact observation ledger linking detection marker, execution marker
-and the one permitted close variant to their effective requests, observation
+and adaptations actually tested to their effective requests, observation
 IDs, HTTP statuses, body excerpts and capture flags. The runtime HTTP evidence
 envelope supplies a redacted effective request preview; if
 `request_preview_complete: false`, unseen request text remains unknown. Compare
@@ -631,9 +659,10 @@ Every candidate gets exactly one outcome:
   reliably from HTTP-level evidence alone (e.g. JS string context, DOM-based
   sinks) must be recorded as `browser-required` instead, not
   as `confirmed`.
-- `not-confirmed` — the candidate was actually tested and the observed
-  application behavior did not establish XSS, or the input was fully
-  encoded/neutralized.
+- `not-confirmed` — an applicable bounded test completed with usable proof
+  adequately ruling out the relevant execution hypothesis in the observed sink,
+  including input fully encoded/neutralized there. Inconclusive observations
+  alone do not complete a negative test.
 - `blocked` — an upstream WAF, rate limiter, CAPTCHA, or equivalent control
   intercepted the probe before application logic could be evaluated (step
   3a); the application itself was never actually tested.
@@ -642,8 +671,9 @@ Every candidate gets exactly one outcome:
   that cannot be established reliably with the available HTTP-level
   evidence, and no browser-execution capability is available in this
   runtime to close that gap (see "Workflow at a glance").
-- `insufficient-evidence` — no usable primary observations or required proof
-  are available to support a terminal assessment. Omit unavailable references,
+- `insufficient-evidence` — necessary context, transformations or test
+  interpretation remain unresolved, or no usable primary observations or required
+  proof are available to support a terminal assessment. Omit unavailable references,
   explain the limitation, and stop without claiming a negative or completion.
 - `deferred` / `authorization-required` — validation is postponed or blocked by
   missing authority; record the reason and keep the work outstanding.
